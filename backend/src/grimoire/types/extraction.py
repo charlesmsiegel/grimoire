@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from enum import StrEnum
+
+from pydantic import BaseModel, Field
 
 from .common import EntityKind, Json
 from .state import StateDelta
@@ -17,18 +18,16 @@ class FlagLevel(StrEnum):
     MISSING_MECHANIC = "missing_mechanic"
 
 
-@dataclass
-class ExtractionFlag:
+class ExtractionFlag(BaseModel):
     level: FlagLevel
     code: str  # short machine identifier
     message: str
     evidence: str = ""
-    related: list[str] = field(default_factory=list)
-    payload: Json = field(default_factory=dict)
+    related: list[str] = Field(default_factory=list)
+    payload: Json = Field(default_factory=dict)
 
 
-@dataclass
-class EntityCandidate:
+class EntityCandidate(BaseModel):
     """A newly named entity proposed by the Extractor.
 
     All candidates default to campaign-local scope; the user opts in to promote.
@@ -40,14 +39,13 @@ class EntityCandidate:
     role_hint: str = ""
     evidence: str = ""
     confidence: float = 0.0
-    suggested_card: Json = field(default_factory=dict)
+    suggested_card: Json = Field(default_factory=dict)
 
 
-@dataclass
-class ExtractionResult:
-    deltas: list[StateDelta] = field(default_factory=list)
-    candidates: list[EntityCandidate] = field(default_factory=list)
-    flags: list[ExtractionFlag] = field(default_factory=list)
+class ExtractionResult(BaseModel):
+    deltas: list[StateDelta] = Field(default_factory=list)
+    candidates: list[EntityCandidate] = Field(default_factory=list)
+    flags: list[ExtractionFlag] = Field(default_factory=list)
     confidence_overall: float = 0.0
-    extraction_strategies_run: list[str] = field(default_factory=list)
+    extraction_strategies_run: list[str] = Field(default_factory=list)
     duration_ms: int = 0

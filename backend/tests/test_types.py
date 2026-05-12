@@ -278,3 +278,106 @@ def test_resolved_entity_carries_source_chain() -> None:
     )
     assert resolved.source_chain[0].layer is gt.ResolutionLayer.LIBRARY_SNAPSHOT
     assert resolved.source_chain[0].version == 7
+
+
+# --------------------------------------------------------------------------- #
+# Pydantic serialization round-trips
+# --------------------------------------------------------------------------- #
+
+
+def test_state_delta_json_round_trip() -> None:
+    delta = gt.StateDelta(
+        kind=gt.DeltaKind.FACT_ADD,
+        target_scope=gt.Scope.CAMPAIGN_SQLITE,
+        target_id="fact-001",
+        after={"text": "winifred promised to teach julian to ride"},
+        confidence=0.9,
+        source="extractor",
+    )
+    payload = delta.model_dump_json()
+    restored = gt.StateDelta.model_validate_json(payload)
+    assert restored == delta
+
+
+def test_scene_round_trip_via_dict() -> None:
+    scene = gt.Scene(
+        id="s-0001",
+        campaign_id="by-night-london",
+        branch_id="main",
+        ordinal=1,
+        slug="elysium-opening",
+        file_path="data/campaigns/by-night-london/scenes/0001-elysium-opening.md",
+        present_pc_refs=["alistair-hyde-smythe"],
+        in_game_start=gt.InGameTime(moment=datetime(2024, 10, 31, 22, 0, tzinfo=UTC)),
+    )
+    payload = scene.model_dump(mode="json")
+    restored = gt.Scene.model_validate(payload)
+    assert restored == scene
+    assert restored.in_game_start is not None
+    assert restored.in_game_start.moment.year == 2024
+
+
+def test_turn_audit_nested_round_trip() -> None:
+    """TurnAudit nests many other models; tests that the whole graph survives."""
+    delta = gt.StateDelta(
+        kind=gt.DeltaKind.FACT_ADD,
+        target_scope=gt.Scope.CAMPAIGN_SQLITE,
+        target_id="fact-001",
+    )
+    audit = gt.TurnAudit(
+        turn_id="t-1",
+        campaign_id="by-night-london",
+        branch_id="main",
+        started_at=datetime.now(UTC),
+        extracted_deltas=[delta],
+        applied_deltas=[
+            gt.AppliedDelta(
+                id="d-1",
+                delta=delta,
+                campaign_id="by-night-london",
+                branch_id="main",
+                turn_id="t-1",
+                applied_at=datetime.now(UTC),
+            )
+        ],
+    )
+    payload = audit.model_dump_json()
+    restored = gt.TurnAudit.model_validate_json(payload)
+    assert restored.turn_id == "t-1"
+    assert restored.extracted_deltas[0].kind is gt.DeltaKind.FACT_ADD
+    assert restored.applied_deltas[0].delta.target_id == "fact-001"
+
+
+def test_entity_ref_is_frozen_and_hashable() -> None:
+    ref = gt.EntityRef.parse("library:settings/wod-london/characters/alistair")
+    assert hash(ref) == hash(ref)
+    with pytest.raises((ValueError, TypeError)):
+        ref.asset_id = "something-else"  # type: ignore[misc]
+
+
+def test_composition_validates_field_types() -> None:
+    """Pydantic should reject the wrong type for `priority`."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        gt.SettingRef(setting_id="x", priority="not-an-int", include=[])  # type: ignore[arg-type]
+
+
+def test_completion_chunk_round_trip_with_usage() -> None:
+    chunk = gt.CompletionChunk(
+        delta="",
+        is_final=True,
+        usage=gt.TokenUsage(input_tokens=100, output_tokens=42, total_tokens=142),
+    )
+    payload = chunk.model_dump()
+    restored = gt.CompletionChunk.model_validate(payload)
+    assert restored.usage is not None
+    assert restored.usage.total_tokens == 142
+
+
+def test_generation_request_bytes_round_trip() -> None:
+    """bytes fields survive JSON round-trip via base64 encoding."""
+    req = gt.GenerationRequest(prompt="oil painting, candlelit", init_image=b"\x00\x01\x02")
+    payload = req.model_dump_json()
+    restored = gt.GenerationRequest.model_validate_json(payload)
+    assert restored.init_image == b"\x00\x01\x02"

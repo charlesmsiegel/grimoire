@@ -2,68 +2,62 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime
 
-from .common import BranchId, CampaignId, Json
-from .time import InGameTime
+from pydantic import BaseModel, Field
+
+from .common import BranchId, CampaignId, InGameTime, Json
 
 
-@dataclass
-class ExportCapabilities:
+class ExportCapabilities(BaseModel):
     supports_images: bool = True
     supports_appendices: bool = True
     supports_filters: bool = True
-    supported_style_presets: list[str] = field(default_factory=list)
+    supported_style_presets: list[str] = Field(default_factory=list)
 
 
-@dataclass
-class ExportSelection:
+class ExportSelection(BaseModel):
     branch_id: BranchId
     scene_ids: list[str] | None = None
     date_range: tuple[InGameTime, InGameTime] | None = None
     include_images: bool = True
-    include_appendices: list[str] = field(default_factory=list)
+    include_appendices: list[str] = Field(default_factory=list)
     include_drafts: bool = False
     include_review_queue: bool = False
-    filters: Json = field(default_factory=dict)
+    filters: Json = Field(default_factory=dict)
 
 
-@dataclass
-class ExportOptions:
+class ExportOptions(BaseModel):
     title: str = ""
     subtitle: str | None = None
     author: str | None = None
     cover_image: bytes | None = None
     style_preset: str = "novel"
-    extra: Json = field(default_factory=dict)
+    extra: Json = Field(default_factory=dict)
 
 
-@dataclass
-class ExportResult:
+class ExportResult(BaseModel):
     format: str
     size_bytes: int
     scene_count: int = 0
     word_count: int = 0
     image_count: int = 0
     file_path: str | None = None
-    bytes: bytes | None = None
-    warnings: list[str] = field(default_factory=list)
+    payload: bytes | None = None  # in-memory artifact when not written to disk
+    warnings: list[str] = Field(default_factory=list)
     created_at: datetime | None = None
 
 
-@dataclass
-class ExportPreview:
+class ExportPreview(BaseModel):
     adapter_id: str
     scene_count: int
     word_count: int
     image_count: int
     estimated_size_bytes: int
-    warnings: list[str] = field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
-@dataclass
-class ExportRecord:
+class ExportRecord(BaseModel):
     id: str
     campaign_id: CampaignId
     adapter_id: str

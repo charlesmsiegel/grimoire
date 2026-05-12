@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from enum import StrEnum
 
-from .common import CharacterRef, Json, JsonSchema, MechanicsModuleId
-from .time import Duration
+from pydantic import BaseModel, Field
+
+from .common import CharacterRef, Duration, Json, JsonSchema, MechanicsModuleId
 
 
-@dataclass
-class ResourceCost:
+class ResourceCost(BaseModel):
     resource: str  # 'blood', 'spell_slot:3', 'willpower'
     amount: float
     note: str = ""
 
 
-@dataclass
-class Capability:
+class Capability(BaseModel):
     """A mechanical thing an entity can do.
 
     Used by Context Builder (spotlight context), Extractor (event matching),
@@ -30,11 +28,10 @@ class Capability:
     description: str = ""
     cost: ResourceCost | None = None
     effect: str = ""
-    metadata: Json = field(default_factory=dict)
+    metadata: Json = Field(default_factory=dict)
 
 
-@dataclass
-class PowerDefinition:
+class PowerDefinition(BaseModel):
     """The system's vocabulary entry for a named power."""
 
     id: str
@@ -44,19 +41,17 @@ class PowerDefinition:
     description: str = ""
     cost: ResourceCost | None = None
     effect: str = ""
-    metadata: Json = field(default_factory=dict)
+    metadata: Json = Field(default_factory=dict)
 
 
-@dataclass
-class RollModifier:
+class RollModifier(BaseModel):
     label: str
     delta: int = 0
     multiplier: float = 1.0
-    metadata: Json = field(default_factory=dict)
+    metadata: Json = Field(default_factory=dict)
 
 
-@dataclass
-class Roll:
+class Roll(BaseModel):
     id: str
     kind: str  # 'dice-pool', 'attack', 'contested', ...
     pool: int
@@ -64,23 +59,21 @@ class Roll:
     actor_ref: CharacterRef | None = None
     target_ref: CharacterRef | None = None
     difficulty: int | None = None
-    modifiers: list[RollModifier] = field(default_factory=list)
-    metadata: Json = field(default_factory=dict)
+    modifiers: list[RollModifier] = Field(default_factory=list)
+    metadata: Json = Field(default_factory=dict)
 
 
-@dataclass
-class RollResult:
+class RollResult(BaseModel):
     roll_id: str
     dice: list[int]
     successes: int
     botched: bool = False
     outcome: str = ""
-    proposed_deltas: list[Json] = field(default_factory=list)  # StateDelta at runtime
+    proposed_deltas: list[Json] = Field(default_factory=list)  # StateDelta at runtime
     narration_hint: str = ""
 
 
-@dataclass
-class ProposedRoll:
+class ProposedRoll(BaseModel):
     """A roll the mechanics module suggests should be resolved pre-LLM."""
 
     label: str
@@ -91,12 +84,11 @@ class ProposedRoll:
     target_ref: CharacterRef | None = None
     rationale: str = ""
     high_stakes: bool = False
-    modifiers: list[RollModifier] = field(default_factory=list)
-    metadata: Json = field(default_factory=dict)
+    modifiers: list[RollModifier] = Field(default_factory=list)
+    metadata: Json = Field(default_factory=dict)
 
 
-@dataclass
-class MechanicsResult:
+class MechanicsResult(BaseModel):
     """A resolved roll's payload, attached to a turn for the Context Builder."""
 
     roll: Roll
@@ -104,8 +96,7 @@ class MechanicsResult:
     summary: str = ""
 
 
-@dataclass
-class NarratedEvent:
+class NarratedEvent(BaseModel):
     """A mechanical event the Extractor identified in prose."""
 
     kind: str  # 'power_use', 'damage_taken', 'wound', 'death', 'item_used', 'spell_cast'
@@ -113,34 +104,31 @@ class NarratedEvent:
     target_ref: CharacterRef | None = None
     description: str = ""
     evidence: str = ""
-    metadata: Json = field(default_factory=dict)
+    metadata: Json = Field(default_factory=dict)
 
 
-@dataclass
-class CreationStep:
+class CreationStep(BaseModel):
     id: str
     title: str
-    schema: JsonSchema
+    step_schema: JsonSchema
     description: str = ""
     optional: bool = False
 
 
-@dataclass
-class TickContext:
+class TickContext(BaseModel):
     """Context passed to `MechanicsModule.time_tick`."""
 
     campaign_id: str
     branch_id: str
     duration: Duration
-    extras: Json = field(default_factory=dict)
+    extras: Json = Field(default_factory=dict)
 
 
 class ApiVersion(StrEnum):
     V1 = "1"
 
 
-@dataclass
-class ModuleManifest:
+class ModuleManifest(BaseModel):
     """A mechanics module's manifest.yaml in typed form."""
 
     id: MechanicsModuleId
@@ -150,7 +138,7 @@ class ModuleManifest:
     author: str = ""
     homepage: str = ""
     description: str = ""
-    sheet_kinds: list[str] = field(default_factory=list)
-    content_kinds: list[str] = field(default_factory=list)
-    capabilities: list[str] = field(default_factory=list)
-    ui: Json = field(default_factory=dict)
+    sheet_kinds: list[str] = Field(default_factory=list)
+    content_kinds: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
+    ui: Json = Field(default_factory=dict)

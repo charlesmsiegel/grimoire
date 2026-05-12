@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+
+from pydantic import BaseModel, Field
 
 from .common import CampaignId, EventId, Json, SceneId, SubscriptionId, TurnId
 
@@ -79,26 +80,23 @@ class EventType(StrEnum):
     THREAD_PAID_OFF = "thread_paid_off"
 
 
-@dataclass
-class Event:
+class Event(BaseModel):
     type: EventType
     timestamp: datetime
-    payload: Json = field(default_factory=dict)
+    payload: Json = Field(default_factory=dict)
     campaign_id: CampaignId | None = None
     turn_id: TurnId | None = None
     scene_id: SceneId | None = None
     source_module: str = ""
 
 
-@dataclass
-class Subscription:
+class Subscription(BaseModel):
     id: SubscriptionId
     event_type: EventType | str | None  # None = wildcard
     active: bool = True
 
 
-@dataclass
-class SubmitResult:
+class SubmitResult(BaseModel):
     accepted: bool
     turn_id: TurnId | None = None
     auto_responding: bool = False
@@ -106,8 +104,7 @@ class SubmitResult:
     reason: str = ""
 
 
-@dataclass
-class TurnStatus:
+class TurnStatus(BaseModel):
     turn_id: TurnId
     campaign_id: CampaignId
     started_at: datetime
@@ -115,40 +112,35 @@ class TurnStatus:
     progress_pct: float | None = None
 
 
-@dataclass
-class RegenerateResult:
+class RegenerateResult(BaseModel):
     turn_id: TurnId
     accepted: bool
     reason: str = ""
 
 
-@dataclass
-class UndoResult:
-    turns_undone: list[TurnId] = field(default_factory=list)
-    reversed_delta_ids: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
+class UndoResult(BaseModel):
+    turns_undone: list[TurnId] = Field(default_factory=list)
+    reversed_delta_ids: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
-@dataclass
-class RetconResult:
+class RetconResult(BaseModel):
     post_id: str
     original_text: str
     new_text: str
-    reversed_delta_ids: list[str] = field(default_factory=list)
-    new_delta_ids: list[str] = field(default_factory=list)
-    downstream_flagged_turns: list[TurnId] = field(default_factory=list)
+    reversed_delta_ids: list[str] = Field(default_factory=list)
+    new_delta_ids: list[str] = Field(default_factory=list)
+    downstream_flagged_turns: list[TurnId] = Field(default_factory=list)
 
 
-@dataclass
-class ForkResult:
+class ForkResult(BaseModel):
     new_branch_id: str
     from_turn_id: TurnId
     label: str
     created_at: datetime
 
 
-@dataclass
-class EventRecord:
+class EventRecord(BaseModel):
     """Stored form of an event for replay / observability."""
 
     id: EventId
