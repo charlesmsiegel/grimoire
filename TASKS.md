@@ -32,7 +32,7 @@ Migration runner with `schema_version` table, WAL enabled, FTS5 + sqlite-vec ext
 **Blocked by:** 1
 Wrapper around a JSON Schema validator for: mechanics sheet schemas (per entity kind), plugin manifest `config_schema` forms, mechanics manifest validation, plugin manifest validation. Same validator surfaces consistent errors for the UI.
 
-### 7. [ ] Implement plugin discovery and manifest validation
+### 7. [x] Implement plugin discovery and manifest validation
 **Blocked by:** 1, 6
 Spec 15. Scan `data/plugins/` for subdirs with `manifest.yaml`, validate manifest, dynamic-import `plugin.py`, instantiate declared classes, validate against the protocol for each implemented kind, register into per-kind registries. Per-plugin venv (optional, configurable). Rescan API. Config storage at `data/config/plugins/<id>.yaml` with keyring secret encryption. Health checks. No specific provider implementations yet — just the loader and registries.
 
@@ -42,7 +42,7 @@ Spec 14. SPA shell with Library / Campaigns top-level nav. Routing. Theme + dark
 
 ## Wave 2 — Storage and infra
 
-### 8. [ ] Build State Store schema and write APIs
+### 8. [x] Build State Store schema and write APIs
 **Blocked by:** 2, 5
 Spec 03. Migrations for every table: `library_index` (+ FTS), `campaign_content_index`, `library_snapshots`, `campaigns` + `campaign_setting_refs` + `campaign_pcs`, `branches`, `character/location/faction_state`, `scenes` + `posts`, `facts` + `commitments` + `relationships` + `knowledge_state`, `calendar`, `images`, `deltas` + `review_queue`, `embeddings` (sqlite-vec), `llm_requests`, `embedding_cache`, `turn_audits` + `cost_records` + `metric_samples` + `log_events` + `error_records`. Implement read APIs (resolve cascade, `vector_search`, `keyword_search`, `get_delta_log`) and write APIs (`apply_delta`, `reverse_delta`, `queue_for_review`, file-write mediators that update indexes synchronously). Snapshot writing on bind, undo/retcon/branch fork copy-on-write.
 
