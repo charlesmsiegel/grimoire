@@ -1,41 +1,30 @@
-import { useEffect, useState } from "react";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 
-interface HealthResponse {
-  status: string;
-  version: string;
-  data_root: string;
-}
+import { CampaignView } from "./routes/CampaignView";
+import { CampaignsView } from "./routes/CampaignsView";
+import { HomeRedirect } from "./routes/HomeRedirect";
+import { LibraryView } from "./routes/LibraryView";
+import { NotFound } from "./routes/NotFound";
+import { AppShell } from "./shell/AppShell";
+import { StoreProvider } from "./state/store";
+import { ThemeProvider } from "./state/theme";
 
 export function App() {
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("/api/health")
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json() as Promise<HealthResponse>;
-      })
-      .then(setHealth)
-      .catch((e: Error) => setError(e.message));
-  }, []);
-
   return (
-    <main>
-      <h1>Grimoire</h1>
-      {error && <p>Backend unreachable: {error}</p>}
-      {health && (
-        <dl>
-          <dt>Status</dt>
-          <dd>{health.status}</dd>
-          <dt>Version</dt>
-          <dd>{health.version}</dd>
-          <dt>Data root</dt>
-          <dd>
-            <code>{health.data_root}</code>
-          </dd>
-        </dl>
-      )}
-    </main>
+    <ThemeProvider>
+      <StoreProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route index element={<HomeRedirect />} />
+              <Route path="library/*" element={<LibraryView />} />
+              <Route path="campaigns" element={<CampaignsView />} />
+              <Route path="campaigns/:campaignId/*" element={<CampaignView />} />
+              <Route path="*" element={<NotFound />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </StoreProvider>
+    </ThemeProvider>
   );
 }
