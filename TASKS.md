@@ -64,7 +64,7 @@ Spec 14 §Sheet widget library. TypeScript React components: `text`, `textarea`,
 
 ## Wave 3 — Domain modules
 
-### 10. [ ] Implement Library indexer and Library protocol
+### 10. [x] Implement Library indexer and Library protocol
 **Blocked by:** 4, 8, 9
 Spec 18. `Library` protocol: `list_settings`/`get_setting`/`list_in_setting`/`get_entity`/`list_style_guides`/`list_image_presets`/`list_greetings`/`variants_of`/`create_entity`/`update_entity`/`delete_entity`/`promote_to_library`/`get_composition`/`set_composition`/`upgrade_setting_ref`/`resolve`/`dependents`. Initial scan on startup populates `library_index` from `data/library/`. Snapshot writing for pinned setting refs. Override file write/read at `campaigns/<id>/overrides/settings/<setting>/<kind>/<id>.yaml`. Read cascade: campaign emergent → campaign override → library snapshot (pinned) or library index (`track_latest`) → fail.
 
