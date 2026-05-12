@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+
+from pydantic import BaseModel, Field
 
 from .common import BranchId, CampaignId, GenJobId, Json, TurnId
 from .context import ContextSource
@@ -15,30 +16,27 @@ from .state import AppliedDelta, ContextTier, ReviewItem, StateDelta
 from .time import TimeAdvanceResult
 
 
-@dataclass
-class CompositionSnapshot:
+class CompositionSnapshot(BaseModel):
     """What library state a turn saw, captured at turn time."""
 
     mechanics_module: str | None
-    setting_refs: list[Json] = field(default_factory=list)
+    setting_refs: list[Json] = Field(default_factory=list)
     style_guide_id: str | None = None
     image_preset_id: str | None = None
 
 
-@dataclass
-class ContextSummary:
+class ContextSummary(BaseModel):
     total_tokens: int
-    per_tier: dict[ContextTier, int] = field(default_factory=dict)
+    per_tier: dict[ContextTier, int] = Field(default_factory=dict)
     source_count: int = 0
-    spotlight_characters: list[str] = field(default_factory=list)
+    spotlight_characters: list[str] = Field(default_factory=list)
 
 
-@dataclass
-class WarningRecord:
+class WarningRecord(BaseModel):
     timestamp: datetime
     module: str
     message: str
-    payload: Json = field(default_factory=dict)
+    payload: Json = Field(default_factory=dict)
 
 
 class LogLevel(StrEnum):
@@ -48,20 +46,18 @@ class LogLevel(StrEnum):
     ERROR = "ERROR"
 
 
-@dataclass
-class LogEvent:
+class LogEvent(BaseModel):
     timestamp: datetime
     level: LogLevel
     module: str
     operation: str
-    payload: Json = field(default_factory=dict)
+    payload: Json = Field(default_factory=dict)
     turn_id: TurnId | None = None
     duration_ms: int | None = None
     error: str | None = None
 
 
-@dataclass
-class LogQuery:
+class LogQuery(BaseModel):
     since: datetime | None = None
     until: datetime | None = None
     levels: list[LogLevel] | None = None
@@ -72,8 +68,7 @@ class LogQuery:
     limit: int = 500
 
 
-@dataclass
-class ErrorRecord:
+class ErrorRecord(BaseModel):
     timestamp: datetime
     module: str
     operation: str
@@ -81,13 +76,12 @@ class ErrorRecord:
     message: str
     turn_id: TurnId | None = None
     traceback: str | None = None
-    context: Json = field(default_factory=dict)
+    context: Json = Field(default_factory=dict)
     user_visible: bool = False
     user_action_taken: str | None = None
 
 
-@dataclass
-class TurnAudit:
+class TurnAudit(BaseModel):
     turn_id: TurnId
     campaign_id: CampaignId
     branch_id: BranchId
@@ -96,23 +90,23 @@ class TurnAudit:
     duration_ms: int | None = None
 
     player_input: str = ""
-    options: Json = field(default_factory=dict)
+    options: Json = Field(default_factory=dict)
 
     composition_snapshot: CompositionSnapshot | None = None
     scene_id: str = ""
     scene_break_decision: SceneBreakDecision | None = None
 
     context_summary: ContextSummary | None = None
-    context_sources: list[ContextSource] = field(default_factory=list)
-    context_budget_used: dict[ContextTier, int] = field(default_factory=dict)
+    context_sources: list[ContextSource] = Field(default_factory=list)
+    context_budget_used: dict[ContextTier, int] = Field(default_factory=dict)
     context_messages_hash: str = ""
 
-    proposed_rolls: list[ProposedRoll] = field(default_factory=list)
-    resolved_rolls: list[MechanicsResult] = field(default_factory=list)
+    proposed_rolls: list[ProposedRoll] = Field(default_factory=list)
+    resolved_rolls: list[MechanicsResult] = Field(default_factory=list)
 
     llm_provider: str = ""
     llm_model: str = ""
-    llm_params: Json = field(default_factory=dict)
+    llm_params: Json = Field(default_factory=dict)
     llm_prompt_tokens: int = 0
     llm_completion_tokens: int = 0
     llm_cost_usd: float | None = None
@@ -122,73 +116,66 @@ class TurnAudit:
 
     response_text: str = ""
 
-    extraction_strategies_run: list[str] = field(default_factory=list)
+    extraction_strategies_run: list[str] = Field(default_factory=list)
     extraction_duration_ms: int = 0
-    extracted_deltas: list[StateDelta] = field(default_factory=list)
-    extraction_flags: list[ExtractionFlag] = field(default_factory=list)
+    extracted_deltas: list[StateDelta] = Field(default_factory=list)
+    extraction_flags: list[ExtractionFlag] = Field(default_factory=list)
 
-    applied_deltas: list[AppliedDelta] = field(default_factory=list)
-    queued_for_review: list[ReviewItem] = field(default_factory=list)
+    applied_deltas: list[AppliedDelta] = Field(default_factory=list)
+    queued_for_review: list[ReviewItem] = Field(default_factory=list)
 
     scene_appended: bool = False
     scene_closed: bool = False
 
-    images_scheduled: list[GenJobId] = field(default_factory=list)
+    images_scheduled: list[GenJobId] = Field(default_factory=list)
     time_advanced: TimeAdvanceResult | None = None
 
-    errors: list[ErrorRecord] = field(default_factory=list)
-    warnings: list[WarningRecord] = field(default_factory=list)
+    errors: list[ErrorRecord] = Field(default_factory=list)
+    warnings: list[WarningRecord] = Field(default_factory=list)
 
 
-@dataclass
-class ReplaySubstitution:
+class ReplaySubstitution(BaseModel):
     model: str | None = None
     temperature: float | None = None
     extra_context: str | None = None
     prompt_edit: str | None = None
 
 
-@dataclass
-class ReplayOptions:
+class ReplayOptions(BaseModel):
     on_fork: bool = True
     substitute: ReplaySubstitution | None = None
 
 
-@dataclass
-class ReplayResult:
+class ReplayResult(BaseModel):
     turn_id: TurnId
     new_response_text: str
-    delta_diff: list[Json] = field(default_factory=list)
+    delta_diff: list[Json] = Field(default_factory=list)
     forked_branch_id: str | None = None
-    warnings: list[str] = field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
-@dataclass
-class CostTotal:
+class CostTotal(BaseModel):
     total_usd: float
     input_tokens: int = 0
     output_tokens: int = 0
     call_count: int = 0
 
 
-@dataclass
-class DailyCost:
+class DailyCost(BaseModel):
     date: datetime
     total_usd: float
     call_count: int = 0
 
 
-@dataclass
-class HealthTarget:
+class HealthTarget(BaseModel):
     id: str
     kind: str  # 'llm_provider', 'embedding_provider', 'imagegen_backend', 'plugin', 'module'
 
 
-@dataclass
-class MetricSample:
+class MetricSample(BaseModel):
     timestamp: datetime
     module: str
     operation: str
     duration_ms: float
     success: bool
-    payload: Json = field(default_factory=dict)
+    payload: Json = Field(default_factory=dict)

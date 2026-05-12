@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from enum import StrEnum
+
+from pydantic import BaseModel, Field
 
 from .common import HealthStatus, Json, JsonSchema, PluginId
 
@@ -25,25 +26,23 @@ class PluginLifecycle(StrEnum):
     UNLOADED = "unloaded"
 
 
-@dataclass
-class PluginManifest:
+class PluginManifest(BaseModel):
     id: PluginId
     name: str
     version: str
     api_version: str
-    implements: list[PluginKind] = field(default_factory=list)
-    classes: dict[str, str] = field(default_factory=dict)
-    config_schema: JsonSchema = field(default_factory=dict)
-    requirements: list[str] = field(default_factory=list)
+    implements: list[PluginKind] = Field(default_factory=list)
+    classes: dict[str, str] = Field(default_factory=dict)
+    config_schema: JsonSchema = Field(default_factory=dict)
+    requirements: list[str] = Field(default_factory=list)
     author: str = ""
     homepage: str = ""
     description: str = ""
     isolated_venv: bool = False
-    raw: Json = field(default_factory=dict)
+    raw: Json = Field(default_factory=dict)
 
 
-@dataclass
-class PluginStatus:
+class PluginStatus(BaseModel):
     id: PluginId
     lifecycle: PluginLifecycle
     health: HealthStatus | None = None
@@ -51,9 +50,8 @@ class PluginStatus:
     config_present: bool = False
 
 
-@dataclass
-class RescanReport:
-    discovered: list[PluginId] = field(default_factory=list)
-    loaded: list[PluginId] = field(default_factory=list)
-    failed: list[tuple[PluginId, str]] = field(default_factory=list)
-    removed: list[PluginId] = field(default_factory=list)
+class RescanReport(BaseModel):
+    discovered: list[PluginId] = Field(default_factory=list)
+    loaded: list[PluginId] = Field(default_factory=list)
+    failed: list[tuple[PluginId, str]] = Field(default_factory=list)
+    removed: list[PluginId] = Field(default_factory=list)

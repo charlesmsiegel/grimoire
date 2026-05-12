@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from enum import StrEnum
+
+from pydantic import BaseModel, Field
 
 from .common import (
     BranchId,
     CampaignId,
     CharacterRef,
     CommitmentId,
+    Duration,
     FactId,
+    InGameTime,
     Json,
     PostId,
 )
-from .time import Duration, InGameTime
 
 
 class FactSource(StrEnum):
@@ -31,17 +33,15 @@ class FactScope(StrEnum):
     WORLD = "world"
 
 
-@dataclass
-class FactSubject:
-    character_ids: list[str] = field(default_factory=list)
-    location_ids: list[str] = field(default_factory=list)
-    faction_ids: list[str] = field(default_factory=list)
-    item_ids: list[str] = field(default_factory=list)
+class FactSubject(BaseModel):
+    character_ids: list[str] = Field(default_factory=list)
+    location_ids: list[str] = Field(default_factory=list)
+    faction_ids: list[str] = Field(default_factory=list)
+    item_ids: list[str] = Field(default_factory=list)
     scope: FactScope = FactScope.PUBLIC
 
 
-@dataclass
-class Fact:
+class Fact(BaseModel):
     id: FactId
     campaign_id: CampaignId
     branch_id: BranchId
@@ -50,14 +50,14 @@ class Fact:
     established_at_in_game: InGameTime | None
     confidence: float
     source: FactSource
-    about: FactSubject = field(default_factory=FactSubject)
+    about: FactSubject = Field(default_factory=FactSubject)
     speaker_id: CharacterRef | None = None
-    keywords: list[str] = field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
     embedding: list[float] | None = None
     retired: bool = False
     retired_in_post: PostId | None = None
-    contradicts: list[FactId] = field(default_factory=list)
-    tags: list[str] = field(default_factory=list)
+    contradicts: list[FactId] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
 
 
 class CommitmentKind(StrEnum):
@@ -77,8 +77,7 @@ class CommitmentStatus(StrEnum):
     REOPENED = "reopened"
 
 
-@dataclass
-class Commitment:
+class Commitment(BaseModel):
     id: CommitmentId
     campaign_id: CampaignId
     branch_id: BranchId
@@ -92,12 +91,11 @@ class Commitment:
     status: CommitmentStatus = CommitmentStatus.OPEN
     weight: int = 1
     resolved_in_post: PostId | None = None
-    tags: list[str] = field(default_factory=list)
-    related_fact_ids: list[FactId] = field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    related_fact_ids: list[FactId] = Field(default_factory=list)
 
 
-@dataclass
-class KnowledgeEntry:
+class KnowledgeEntry(BaseModel):
     fact_id: FactId
     character_id: CharacterRef
     knows: bool
@@ -105,8 +103,7 @@ class KnowledgeEntry:
     source: str = ""  # 'told by X', 'witnessed', 'deduced'
 
 
-@dataclass
-class ContradictionReport:
+class ContradictionReport(BaseModel):
     id: str
     new_fact: Fact
     existing_fact: Fact
@@ -114,25 +111,22 @@ class ContradictionReport:
     rationale: str = ""
 
 
-@dataclass
-class AgingReport:
+class AgingReport(BaseModel):
     """Result of `Continuity.age(to_time)`."""
 
     to_time: InGameTime
-    now_overdue: list[Commitment] = field(default_factory=list)
-    newly_stale: list[Commitment] = field(default_factory=list)
-    reopened: list[Commitment] = field(default_factory=list)
+    now_overdue: list[Commitment] = Field(default_factory=list)
+    newly_stale: list[Commitment] = Field(default_factory=list)
+    reopened: list[Commitment] = Field(default_factory=list)
 
 
-@dataclass
-class Relationship:
+class Relationship(BaseModel):
     from_ref: CharacterRef
     to_ref: CharacterRef
-    types: list[str] = field(default_factory=list)
-    state: Json = field(default_factory=dict)
-    history: list[Json] = field(default_factory=list)
+    types: list[str] = Field(default_factory=list)
+    state: Json = Field(default_factory=dict)
+    history: list[Json] = Field(default_factory=list)
 
 
-@dataclass
-class StaleCommitmentQuery:
+class StaleCommitmentQuery(BaseModel):
     threshold: Duration

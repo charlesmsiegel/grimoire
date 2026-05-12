@@ -1,10 +1,18 @@
-"""Shared primitives referenced across modules."""
+"""Shared primitives referenced across modules.
+
+These are the foundational types that other modules build on. Keeping
+`InGameTime` and `Duration` here (rather than in `time.py`) avoids a circular
+dependency: `time.TimeAdvanceResult` references `Continuity.Commitment` and
+`State.StateDelta`, and both of those need to talk about in-game time.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 JsonSchema = dict[str, Any]
 Json = dict[str, Any]
@@ -29,14 +37,15 @@ class EntityKind(StrEnum):
     IMAGE_PRESET = "image_preset"
 
 
-@dataclass(frozen=True)
-class EntityRef:
+class EntityRef(BaseModel):
     """Reference to an entity that may be resolved through the campaign cascade.
 
     Examples:
         library:settings/wod-london/characters/alistair-hyde-smythe
         campaign:emergent/characters/the-bartender
     """
+
+    model_config = ConfigDict(frozen=True)
 
     scope: Scope
     kind: EntityKind
@@ -89,18 +98,49 @@ class HealthLevel(StrEnum):
     UNCONFIGURED = "unconfigured"
 
 
-@dataclass
-class HealthStatus:
+class HealthStatus(BaseModel):
     level: HealthLevel
     target_id: str
     message: str = ""
     checked_at: str | None = None  # ISO 8601 timestamp
-    details: Json = field(default_factory=dict)
+    details: Json = Field(default_factory=dict)
 
 
-@dataclass
-class ValidationResult:
+class ValidationResult(BaseModel):
+    """Result of validating sheets, events, plugin config, etc.
+
+    `proposed_deltas` is typed `list[Any]` to avoid a circular import with
+    `state.StateDelta`; consumers narrow it at the call site.
+    """
+
     valid: bool
-    errors: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    proposed_deltas: list[Any] = field(default_factory=list)  # list[StateDelta] at runtime
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    proposed_deltas: list[Any] = Field(default_factory=list)
+
+
+class InGameTime(BaseModel):
+    """A point in a campaign's in-game calendar.
+
+    Wraps a `datetime`. Calendars may be Earth-Gregorian or setting-defined;
+    setting-specific calendar metadata lives on the `SettingMeta`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    moment: datetime
+    calendar_id: str | None = None  # setting calendar id; None = Gregorian
+
+
+class Duration(BaseModel):
+    """A span of in-game time.
+
+    Stored as an ISO 8601 duration string plus a resolved `timedelta` so the
+    callable surface stays simple. Months/years cannot be exactly represented
+    by `timedelta`; the canonical form is `iso8601`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    iso8601: str
+    delta: timedelta = Field(default_factory=timedelta)

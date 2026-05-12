@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from enum import StrEnum
+
+from pydantic import BaseModel, Field
 
 from .common import Json
 
@@ -15,27 +16,24 @@ class MessageRole(StrEnum):
     TOOL = "tool"
 
 
-@dataclass
-class Message:
+class Message(BaseModel):
     role: MessageRole
     content: str
     name: str | None = None  # for tool messages
-    metadata: Json = field(default_factory=dict)
+    metadata: Json = Field(default_factory=dict)
 
 
-@dataclass
-class ModelParams:
+class ModelParams(BaseModel):
     temperature: float = 1.0
     max_tokens: int = 4096
     top_p: float | None = None
     top_k: int | None = None
-    stop_sequences: list[str] = field(default_factory=list)
+    stop_sequences: list[str] = Field(default_factory=list)
     seed: int | None = None
-    extra: Json = field(default_factory=dict)
+    extra: Json = Field(default_factory=dict)
 
 
-@dataclass
-class ProviderCapabilities:
+class ProviderCapabilities(BaseModel):
     streaming: bool = False
     tools: bool = False
     vision: bool = False
@@ -43,15 +41,13 @@ class ProviderCapabilities:
     embeddings: bool = False
 
 
-@dataclass
-class TokenUsage:
+class TokenUsage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
 
 
-@dataclass
-class ModelInfo:
+class ModelInfo(BaseModel):
     id: str
     name: str
     context_window: int = 0
@@ -60,53 +56,47 @@ class ModelInfo:
     capabilities: ProviderCapabilities | None = None
 
 
-@dataclass
-class CompletionRequest:
+class CompletionRequest(BaseModel):
     model: str
     messages: list[Message]
     system: str | None = None
     max_tokens: int = 4096
     temperature: float = 1.0
-    stop_sequences: list[str] = field(default_factory=list)
-    metadata: Json = field(default_factory=dict)
+    stop_sequences: list[str] = Field(default_factory=list)
+    metadata: Json = Field(default_factory=dict)
 
 
-@dataclass
-class CompletionResponse:
+class CompletionResponse(BaseModel):
     text: str
     model: str
     finish_reason: str  # 'stop', 'length', 'content_filter', 'tool_use'
-    usage: TokenUsage = field(default_factory=TokenUsage)
-    raw: Json = field(default_factory=dict)
+    usage: TokenUsage = Field(default_factory=TokenUsage)
+    raw: Json = Field(default_factory=dict)
     cost_estimate_usd: float | None = None
     latency_ms: int = 0
 
 
-@dataclass
-class CompletionChunk:
+class CompletionChunk(BaseModel):
     delta: str
     is_final: bool = False
     usage: TokenUsage | None = None
 
 
-@dataclass
-class RetryPolicy:
+class RetryPolicy(BaseModel):
     max_retries: int = 3
     initial_delay_ms: int = 500
     backoff_factor: float = 2.0
-    retry_on: list[str] = field(
+    retry_on: list[str] = Field(
         default_factory=lambda: ["TimeoutError", "RateLimitError", "TransientError"]
     )
 
 
-@dataclass
-class TimeoutPolicy:
+class TimeoutPolicy(BaseModel):
     total_seconds: float = 120
     first_token_seconds: float = 30
 
 
-@dataclass
-class LLMCallRecord:
+class LLMCallRecord(BaseModel):
     """Audit record for one LLM call. Persisted by Observability."""
 
     id: str

@@ -29,10 +29,12 @@ from .common import (
     CampaignId,
     CharacterRef,
     CommitmentId,
+    Duration,
     EntityKind,
     EventId,
     FactId,
     HealthStatus,
+    InGameTime,
     JsonSchema,
     LocationRef,
     MechanicsModuleId,
@@ -144,8 +146,6 @@ from .state import (
     StateSnapshot,
 )
 from .time import (
-    Duration,
-    InGameTime,
     ScheduledEvent,
     TimeAdvanceReason,
     TimeAdvanceResult,

@@ -29,6 +29,7 @@ from .common import (
     CampaignId,
     CharacterRef,
     CommitmentId,
+    Duration,
     EntityKind,
     EntityRef,
     EventId,
@@ -37,6 +38,7 @@ from .common import (
     GenJobId,
     HealthLevel,
     HealthStatus,
+    InGameTime,
     ItemRef,
     Json,
     JsonSchema,
@@ -263,9 +265,7 @@ from .state import (
     StateSnapshot,
 )
 from .time import (
-    Duration,
     FactionTickSummary,
-    InGameTime,
     NpcTickSummary,
     ScheduledEvent,
     TimeAdvanceReason,

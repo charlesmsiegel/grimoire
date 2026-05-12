@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+
+from pydantic import BaseModel, Field
 
 from .common import CampaignId, GenJobId, Json
 
 
-@dataclass
-class LoraSpec:
+class LoraSpec(BaseModel):
     id: str
     weight: float = 1.0
 
 
-@dataclass
-class BackendCapabilities:
+class BackendCapabilities(BaseModel):
     text_to_image: bool = True
     image_to_image: bool = False
     inpainting: bool = False
@@ -28,8 +27,7 @@ class BackendCapabilities:
     supports_seed: bool = True
 
 
-@dataclass
-class BackendInfo:
+class BackendInfo(BaseModel):
     id: str
     name: str
     capabilities: BackendCapabilities
@@ -37,8 +35,7 @@ class BackendInfo:
     plugin_id: str | None = None
 
 
-@dataclass
-class GenerationRequest:
+class GenerationRequest(BaseModel):
     prompt: str
     width: int = 1024
     height: int = 1024
@@ -50,18 +47,17 @@ class GenerationRequest:
     model: str | None = None
     init_image: bytes | None = None
     init_image_strength: float | None = None
-    loras: list[LoraSpec] = field(default_factory=list)
-    extra: Json = field(default_factory=dict)
+    loras: list[LoraSpec] = Field(default_factory=list)
+    extra: Json = Field(default_factory=dict)
 
 
-@dataclass
-class GenerationResult:
+class GenerationResult(BaseModel):
     image_bytes: bytes
     thumbnail_bytes: bytes
     backend: str
     model: str
     seed: int
-    actual_params: Json = field(default_factory=dict)
+    actual_params: Json = Field(default_factory=dict)
     duration_ms: int = 0
     error: str | None = None
 
@@ -74,8 +70,7 @@ class JobStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-@dataclass
-class GenerationJob:
+class GenerationJob(BaseModel):
     id: GenJobId
     campaign_id: CampaignId
     backend: str
@@ -91,15 +86,14 @@ class GenerationJob:
     error: str | None = None
 
 
-@dataclass
-class ImageMetadata:
+class ImageMetadata(BaseModel):
     id: str
     campaign_id: CampaignId
     file_path: str
     thumbnail_path: str | None = None
     prompt: str = ""
     negative_prompt: str = ""
-    params: Json = field(default_factory=dict)
+    params: Json = Field(default_factory=dict)
     backend: str = ""
     model: str = ""
     seed: int | None = None
@@ -107,4 +101,4 @@ class ImageMetadata:
     post_id: str | None = None
     created_at: datetime | None = None
     user_starred: bool = False
-    tags: list[str] = field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)

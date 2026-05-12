@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+
+from pydantic import BaseModel, Field
 
 from .common import (
     BranchId,
@@ -45,8 +46,7 @@ class DeltaKind(StrEnum):
     OTHER = "other"
 
 
-@dataclass
-class StateDelta:
+class StateDelta(BaseModel):
     """A proposed state change. Source-attributed and reversible.
 
     Produced by the Extractor (LLM output → deltas), the Mechanics module
@@ -59,17 +59,16 @@ class StateDelta:
     target_id: str  # composite identifier (entity id, fact id, scene id, etc.)
     target_table: str | None = None  # for sqlite targets
     target_path: str | None = None  # for file targets
-    after: Json = field(default_factory=dict)
+    after: Json = Field(default_factory=dict)
     before: Json | None = None  # populated when applied (for reversal)
     confidence: float = 1.0
     source: str = ""  # "extractor", "mechanics:wod-mechanics", "user", ...
     evidence: str = ""
     notes: str = ""
-    extra: Json = field(default_factory=dict)
+    extra: Json = Field(default_factory=dict)
 
 
-@dataclass
-class AppliedDelta:
+class AppliedDelta(BaseModel):
     """A `StateDelta` after it has been recorded in the delta log."""
 
     id: str
@@ -88,15 +87,14 @@ class ReviewStatus(StrEnum):
     EDITED = "edited"
 
 
-@dataclass
-class ReviewItem:
+class ReviewItem(BaseModel):
     id: str
     delta: StateDelta
     campaign_id: CampaignId
     status: ReviewStatus = ReviewStatus.PENDING
     reviewed_at: datetime | None = None
     reviewer_notes: str = ""
-    contradicts: list[str] = field(default_factory=list)  # fact ids etc.
+    contradicts: list[str] = Field(default_factory=list)  # fact ids etc.
 
 
 class ContextTier(StrEnum):
@@ -106,8 +104,7 @@ class ContextTier(StrEnum):
     ARCHIVE = "archive"
 
 
-@dataclass
-class CharacterState:
+class CharacterState(BaseModel):
     character_ref: CharacterRef
     campaign_id: CampaignId
     branch_id: BranchId
@@ -115,7 +112,7 @@ class CharacterState:
     emotional_state: str = ""
     physical_state: str = ""
     immediate_intent: str = ""
-    knowledge_state: Json = field(default_factory=dict)
+    knowledge_state: Json = Field(default_factory=dict)
     last_action: str | None = None
     last_screen_time_turn: TurnId | None = None
     visible_to_pc: bool = False
@@ -125,48 +122,45 @@ class CharacterState:
     updated_at_turn: TurnId | None = None
 
 
-@dataclass
-class LocationState:
+class LocationState(BaseModel):
     location_ref: LocationRef
     campaign_id: CampaignId
     branch_id: BranchId
-    weather: Json = field(default_factory=dict)
+    weather: Json = Field(default_factory=dict)
     time_of_day: str = ""
-    occupants: list[CharacterRef] = field(default_factory=list)
+    occupants: list[CharacterRef] = Field(default_factory=list)
     condition: str = ""
-    transient_features: Json = field(default_factory=dict)
+    transient_features: Json = Field(default_factory=dict)
     updated_at_turn: TurnId | None = None
 
 
-@dataclass
-class FactionState:
+class FactionState(BaseModel):
     faction_ref: FactionRef
     campaign_id: CampaignId
     branch_id: BranchId
-    state: Json = field(default_factory=dict)
+    state: Json = Field(default_factory=dict)
     updated_at_turn: TurnId | None = None
 
 
-@dataclass
-class StateSnapshot:
+class StateSnapshot(BaseModel):
     """A compact view of relevant state at one point. Used by the Extractor."""
 
     campaign_id: CampaignId
     branch_id: BranchId
     scene_id: str | None
-    character_states: list[CharacterState] = field(default_factory=list)
-    location_states: list[LocationState] = field(default_factory=list)
-    open_commitments: list[Json] = field(default_factory=list)
-    recent_facts: list[Json] = field(default_factory=list)
+    character_states: list[CharacterState] = Field(default_factory=list)
+    location_states: list[LocationState] = Field(default_factory=list)
+    open_commitments: list[Json] = Field(default_factory=list)
+    recent_facts: list[Json] = Field(default_factory=list)
 
 
-@dataclass
-class SearchResult:
+class SearchResult(BaseModel):
     """A vector or keyword search result."""
 
-    ref: str  # composite id; e.g. 'campaign:scene:0003' or 'library:settings/.../characters/...'
+    # composite id; e.g. 'campaign:scene:0003' or 'library:settings/.../characters/...'
+    ref: str
     scope: Scope
     source_kind: str  # 'post', 'scene_summary', 'character', 'lore', 'fact'
     text: str
     score: float
-    metadata: Json = field(default_factory=dict)
+    metadata: Json = Field(default_factory=dict)
