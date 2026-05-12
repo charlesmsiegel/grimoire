@@ -102,7 +102,7 @@ Spec 08. Behavior layer over Setting's character storage. Voice anchors + dialog
 **Blocked by:** 8, 13, 16, 18
 Spec 04. Parallel strategies: rule-based (regex/patterns for time markers, inventory verbs, mechanical echoes), structured LLM (Haiku-tier with JSON output schema covering `facts`/`character_updates`/`new_characters`/`scene_changes`/`time_advances`/`commitments`/`inventory_changes`/`mechanical_events`/`relationship_changes`/`commitment_resolutions`), heuristic flags. Confidence scoring + auto-apply (≥0.85) / review queue (0.60–0.85) / drop (<0.60). Entity candidates default campaign-local (never library). Library-targeted change detection proposes campaign override, not library edit. Mechanical event validation via `Mechanics.validate_narrated_event`. Also processes user-authored text.
 
-### 21. [ ] Build Time Engine
+### 21. [x] Build Time Engine
 **Blocked by:** 11, 12, 13, 16, 18
 Spec 07. `advance(duration, reason)` and `skip_to(target)`. NPC tick architecture: significance filter (major/spotlight/PC-commitment/household + recent appearances), shared-events pre-pass for inter-NPC coherence, per-NPC structured LLM tick (`npc_tick` task) with knowledge/secrecy split. Faction ticks at month granularity. Weather/atmosphere via Setting. Scheduled events (holidays, recurring schedules, plot beats). Commitment aging via `Continuity.age()`. `Mechanics.time_tick` fan-out per character. Digest generation (structured + optional narrative prose).
 
