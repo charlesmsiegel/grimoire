@@ -108,7 +108,7 @@ Spec 07. `advance(duration, reason)` and `skip_to(target)`. NPC tick architectur
 
 ## Wave 5 — Top-level + Producers
 
-### 20. [ ] Build Context Builder
+### 20. [x] Build Context Builder
 **Blocked by:** 11, 12, 13, 16, 17, 18
 Spec 02. `build(player_input, campaign_id, mechanics_results)` returns `AssembledPrompt` with `messages`, `params`, `budget_used`, `sources`, `summary`. Pipeline: resolve composition → scene state → cast (with tier promotion via Characters) → setting (location, adjacent, weather, factions via Setting) → continuity (facts, commitments via Continuity) → archive retrieval (vector + keyword, scoped to campaign-local + referenced library assets) → budget allocation per tier → canonical message ordering. Style guide + content boundaries from composition. Voice anchor injection for spotlighted speakers. Mechanics result injection as authoritative. Source attribution (scope, library asset id, override applied).
 
