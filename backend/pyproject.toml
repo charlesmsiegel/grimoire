@@ -47,3 +47,9 @@ quote-style = "double"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+markers = [
+    "conformance: plugin conformance contract tests (spec 17 §L2)",
+    "integration: cross-module integration tests (spec 17 §L3)",
+    "frozen_campaign: regression tests over a frozen SQLite snapshot (spec 17 §L4)",
+    "perf: performance regression benchmarks (spec 17 §Performance regression tests)",
+]

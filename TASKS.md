@@ -84,7 +84,7 @@ Spec 10. Scene markdown + YAML sidecar pair storage at `data/campaigns/<id>/scen
 **Blocked by:** 8, 13
 Spec 11. Fact ledger (`add`/`retire`/`update`/`get`/`facts_about`/`search`/`recent` — vector + keyword). Contradiction detection (top-K similar + LLM judgment) with explicit resolution flow. Commitment ledger (`add`/`resolve`/`get`/`open`/`overdue`/`stale`) with status lifecycle (OPEN→PAID/BROKEN/OVERDUE/STALE). Knowledge state per character per fact. Aging (commitments come due / go stale) when Time Engine calls `age()`.
 
-### 28. [ ] Build testing infrastructure
+### 28. [x] Build testing infrastructure
 **Blocked by:** 7, 13, 16
 Spec 17. `TestApp` harness with fixture loading. `MockLLMGateway` with per-task response queues that fail-loud on exhaustion. `RecordReplayLLM` (record/replay/passthrough) writing fixtures to `tests/fixtures/llm/by_hash/`. Plugin conformance suites per kind (mechanics, llm_provider, embedding_provider, imagegen_backend, export_adapter) with per-kind test lists. Frozen-campaign harness (load anonymized SQLite snapshot, run N turns, assert invariants). Performance regression benchmark suite with 20% threshold. CI pipeline definition (lint → unit → conformance → integration → frozen-campaign → perf).
 

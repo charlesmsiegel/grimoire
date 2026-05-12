@@ -6,8 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Layered backend test pipeline per spec 17 §CI pipeline. Each layer
+# runs as a discrete pytest invocation so failures surface where they
+# happened. Layers fan out to one another only when the previous step
+# passed.
 jobs:
-  backend:
+  backend-lint:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -22,13 +26,79 @@ jobs:
       - run: uv sync --all-extras --dev
       - run: uv run ruff check
       - run: uv run ruff format --check
-      - run: uv run pytest
+
+  backend-unit:
+    runs-on: ubuntu-latest
+    needs: backend-lint
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest -m "not conformance and not integration and not frozen_campaign and not perf"
+
+  backend-conformance:
+    runs-on: ubuntu-latest
+    needs: backend-unit
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest -m conformance
+
+  backend-integration:
+    runs-on: ubuntu-latest
+    needs: backend-conformance
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest -m integration
+
+  backend-frozen-campaign:
+    runs-on: ubuntu-latest
+    needs: backend-integration
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest -m frozen_campaign
+
+  backend-perf:
+    runs-on: ubuntu-latest
+    needs: backend-frozen-campaign
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest -m perf
 
   frontend:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -40,8 +110,13 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+        working-directory: frontend
         continue-on-error: true
       - run: pnpm install
+        working-directory: frontend
       - run: pnpm lint
+        working-directory: frontend
       - run: pnpm typecheck
+        working-directory: frontend
       - run: pnpm build
+        working-directory: frontend
