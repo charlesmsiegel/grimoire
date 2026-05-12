@@ -51,8 +51,24 @@ class PluginsConfig:
     def for_data_root(cls, data_root: Path) -> PluginsConfig:
         return cls(
             root=data_root / "plugins",
+            bundled_root=_default_bundled_root(),
             config_store=ConfigStoreConfig(root=data_root / "config" / "plugins"),
         )
+
+
+def _default_bundled_root() -> Path | None:
+    """Locate the in-repo `bundled_plugins/` directory if it's present.
+
+    Bundled plugins ship with the backend source tree at
+    `backend/bundled_plugins/`. When the package is installed in-place
+    (the normal dev layout) the directory is two levels above
+    `grimoire/plugins/`. Returns `None` if the directory isn't there,
+    leaving `PluginsConfig.bundled_root` unset.
+    """
+    here = Path(__file__).resolve()
+    # backend/src/grimoire/plugins/config.py → backend / bundled_plugins
+    candidate = here.parents[3] / "bundled_plugins"
+    return candidate if candidate.is_dir() else None
 
 
 __all__ = [

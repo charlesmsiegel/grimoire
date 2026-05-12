@@ -72,7 +72,7 @@ Spec 18. `Library` protocol: `list_settings`/`get_setting`/`list_in_setting`/`ge
 **Blocked by:** 7, 13
 Spec 05 + 15. `llm-anthropic` (cloud, streaming, tools-capable) and `llm-llamacpp` (local via `llama-cpp-python` pointing at a GGUF file). Each plugin includes `manifest.yaml` + `plugin.py` + `config_schema` + `requirements.txt`. Both implement the `LLMProvider` protocol (`complete`/`stream`/`list_models`/`health_check`). Ship under `data/plugins/` (or bundled-plugins root).
 
-### 15. [ ] Implement bundled embedding provider plugins
+### 15. [x] Implement bundled embedding provider plugins
 **Blocked by:** 7, 13
 Spec 05 + 15. `embed-sentence-transformers` (local, default `all-mpnet-base-v2`, runs in thread pool) and `embed-openai` (cloud, configurable model and dimensions). Implement `EmbeddingProvider` protocol (`embed`/`health_check`). Ship under `data/plugins/`.
 
