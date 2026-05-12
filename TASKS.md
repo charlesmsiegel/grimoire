@@ -54,7 +54,7 @@ Spec 03/18. Monitor `data/library/` and `data/campaigns/` with Python `watchdog`
 **Blocked by:** 2, 7, 8
 Spec 05. Routing per task (`main` / `drift_check` / `extractor` / `npc_tick` / `scene_summary` / `running_summary` / `validation` + per-task embedding routes). Provider/embedding lookup via the Plugins module. `complete`/`stream`/`embed` with retries + timeouts + fallback. Token + cost tracking written to `llm_requests`. Embedding cache by `(text_hash, model_id)`. Health monitoring. Estimation API. Per-campaign route overrides.
 
-### 16. [ ] Build Mechanics API surface and module loader
+### 16. [x] Build Mechanics API surface and module loader
 **Blocked by:** 2, 4, 6, 8
 Spec 06. Define `MechanicsModule` protocol (`sheet_schema`, `validate_sheet`, `initialize_sheet`, `content_schema`, `capabilities_of`, `power_definitions`, `evaluate_pre_roll`, `resolve_roll`, `validate_narrated_event`, `character_creation_steps`, `time_tick`, `system_summary`). Manifest validation + discovery under `data/mechanics/`. Façade `Mechanics` callable from other modules (`active_module`/`sheet_schema`/`get_sheet`/`update_sheet`/`capabilities_of`/`evaluate_pre_roll`/`resolve_roll`/`validate_narrated_event`/`time_tick`). Sheet read/write delegates to State Store (campaign-local YAML files). Deterministic RNG per branch. Trivial empty results when `mechanics: null`. No mechanics modules ship by default — this is the API contract only.
 
