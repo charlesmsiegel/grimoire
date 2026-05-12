@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from grimoire.storage import Database, apply_migrations
+from grimoire.storage.migrations import (
+    DEFAULT_MIGRATIONS_DIR,
+    current_version,
+    discover_migrations,
+)
+
+
+@pytest.fixture
+async def db(tmp_path: Path):
+    database = Database(tmp_path / "test.sqlite", pool_size=2)
+    await database.connect()
+    try:
+        yield database
+    finally:
+        await database.close()
+
+
+async def test_connection_loads_sqlite_vec_and_enables_wal(db: Database) -> None:
+    row = await db.fetchone("SELECT vec_version() AS v")
+    assert row is not None
+    assert isinstance(row["v"], str) and row["v"].startswith("v")
+
+    mode = await db.fetchone("PRAGMA journal_mode")
+    assert mode is not None
+    assert mode[0].lower() == "wal"
+
+    fks = await db.fetchone("PRAGMA foreign_keys")
+    assert fks is not None
+    assert int(fks[0]) == 1
+
+
+async def test_fts5_is_available(db: Database) -> None:
+    await db.execute("CREATE VIRTUAL TABLE search USING fts5(body)")
+    await db.execute("INSERT INTO search(body) VALUES ('hello world')")
+    row = await db.fetchone("SELECT body FROM search WHERE search MATCH 'hello'")
+    assert row is not None
+    assert row["body"] == "hello world"
+
+
+async def test_migration_runner_creates_schema_version(db: Database) -> None:
+    applied = await apply_migrations(db)
+    assert applied == []
+    assert await current_version(db) == 0
+
+    row = await db.fetchone(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
+    )
+    assert row is not None
+
+
+async def test_migration_runner_applies_pending(tmp_path: Path) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "001_first.sql").write_text(
+        "CREATE TABLE widgets (id INTEGER PRIMARY KEY, name TEXT);"
+    )
+    (migrations_dir / "002_second.sql").write_text(
+        "ALTER TABLE widgets ADD COLUMN qty INTEGER NOT NULL DEFAULT 0;"
+    )
+
+    database = Database(tmp_path / "db.sqlite", pool_size=1)
+    await database.connect()
+    try:
+        applied = await apply_migrations(database, directory=migrations_dir)
+        assert [m.version for m in applied] == [1, 2]
+        assert await current_version(database) == 2
+
+        again = await apply_migrations(database, directory=migrations_dir)
+        assert again == []
+
+        cols = await database.fetchall("PRAGMA table_info(widgets)")
+        names = {row["name"] for row in cols}
+        assert names == {"id", "name", "qty"}
+    finally:
+        await database.close()
+
+
+async def test_migration_runner_rolls_back_on_failure(tmp_path: Path) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "001_ok.sql").write_text("CREATE TABLE t (id INTEGER PRIMARY KEY);")
+    (migrations_dir / "002_broken.sql").write_text("CREATE TABLE t (id INTEGER PRIMARY KEY);")
+
+    database = Database(tmp_path / "db.sqlite", pool_size=1)
+    await database.connect()
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            await apply_migrations(database, directory=migrations_dir)
+        assert await current_version(database) == 1
+    finally:
+        await database.close()
+
+
+async def test_migration_gap_rejected(tmp_path: Path) -> None:
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "001_a.sql").write_text("CREATE TABLE a (id INTEGER);")
+    (migrations_dir / "003_c.sql").write_text("CREATE TABLE c (id INTEGER);")
+
+    database = Database(tmp_path / "db.sqlite", pool_size=1)
+    await database.connect()
+    try:
+        with pytest.raises(ValueError, match="gap"):
+            await apply_migrations(database, directory=migrations_dir)
+    finally:
+        await database.close()
+
+
+def test_discover_migrations_ignores_non_sql_files(tmp_path: Path) -> None:
+    (tmp_path / "001_ok.sql").write_text("-- ok")
+    (tmp_path / "README.md").write_text("notes")
+    (tmp_path / "002.sql").write_text("-- missing name, ignored")
+    (tmp_path / "002_also_ok.sql").write_text("-- ok")
+
+    migrations = discover_migrations(tmp_path)
+    assert [(m.version, m.name) for m in migrations] == [(1, "ok"), (2, "also_ok")]
+
+
+def test_default_migrations_dir_exists() -> None:
+    assert DEFAULT_MIGRATIONS_DIR.is_dir()
