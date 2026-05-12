@@ -112,7 +112,7 @@ Spec 07. `advance(duration, reason)` and `skip_to(target)`. NPC tick architectur
 **Blocked by:** 11, 12, 13, 16, 17, 18
 Spec 02. `build(player_input, campaign_id, mechanics_results)` returns `AssembledPrompt` with `messages`, `params`, `budget_used`, `sources`, `summary`. Pipeline: resolve composition → scene state → cast (with tier promotion via Characters) → setting (location, adjacent, weather, factions via Setting) → continuity (facts, commitments via Continuity) → archive retrieval (vector + keyword, scoped to campaign-local + referenced library assets) → budget allocation per tier → canonical message ordering. Style guide + content boundaries from composition. Voice anchor injection for spotlighted speakers. Mechanics result injection as authoritative. Source attribution (scope, library asset id, override applied).
 
-### 22. [ ] Build Orchestrator + turn loop
+### 22. [x] Build Orchestrator + turn loop
 **Blocked by:** 3, 13, 16, 17, 19, 20
 Spec 01. `submit_post(campaign_id, pc_ref, text)` and `advance(campaign_id, scene_id)` entry points. Per-campaign turn lock; multiple campaigns can run in parallel. Canonical turn flow: scene break check → mechanics `evaluate_pre_roll` → Context Builder `build` → LLM Gateway `stream` → Extractor `extract` (with Mechanics + Continuity checks) → State Store apply deltas → Scene Manager append response. Stream chunks forward to Frontend via WebSocket. Background work fan-out (ImageGen, time advance, drift checks, NPC ticks) after `turn_complete`. Undo/retcon/fork at turn level. Error handling per step with rollback. Owns the event bus.
 
