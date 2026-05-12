@@ -8,6 +8,7 @@ module, and persists sheet writes through the State Store.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -126,7 +127,7 @@ class MechanicsService:
 
         self._failed = new_failed
         return RescanReport(
-            discovered=[d.raw_manifest.get("id", d.module_dir.name) for d in discovered],
+            discovered=[_id_or_dirname(d) for d in discovered],
             loaded=loaded,
             failed=failed,
             removed=removed,
@@ -393,10 +394,25 @@ class MechanicsService:
             (target_id,),
         )
         if row is None:
-            # Tolerate missing branch row: fall back to a stable hash of
-            # the id so resolution still deterministic.
-            return abs(hash(target_id)) & 0x7FFFFFFF
+            # Built-in hash() is per-process randomized, which would
+            # defeat replay determinism — derive the fallback from
+            # SHA-256 instead.
+            digest = hashlib.sha256(target_id.encode("utf-8")).digest()
+            return int.from_bytes(digest[:8], "big") & 0x7FFFFFFFFFFFFFFF
         return int(row["rng_seed"])
+
+
+def _id_or_dirname(discovered: Any) -> str:
+    """``raw_manifest["id"]`` if it's a non-empty string, else the dir name.
+
+    ``dict.get(key, default)`` only uses ``default`` when the key is absent
+    — a manifest with ``id: null`` would otherwise yield ``None``.
+    """
+    raw = getattr(discovered, "raw_manifest", None) or {}
+    value = raw.get("id") if isinstance(raw, dict) else None
+    if isinstance(value, str) and value:
+        return value
+    return discovered.module_dir.name
 
 
 def _parse_entity_ref(

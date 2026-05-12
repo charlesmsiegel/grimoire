@@ -239,6 +239,59 @@ async def test_resolve_roll_differs_across_branches(
     assert _dice(main) != _dice(alt)
 
 
+async def test_branch_seed_fallback_is_stable_across_processes(
+    service: MechanicsService, store: StateStore, mechanics_root: Path
+) -> None:
+    """When the branch row is missing, the seed must still be deterministic.
+
+    Python's built-in ``hash()`` is randomised per-process via PYTHONHASHSEED,
+    so the fallback must not rely on it.
+    """
+    import subprocess
+    import sys
+
+    write_module(mechanics_root, "wod")
+    await service.rescan()
+    await _seed(store, "wod")
+    roll = Roll(id="r1", kind="dice-pool", pool=5, seed=7, difficulty=6)
+    first = await service.resolve_roll("c1", roll, branch_id="c1:never-forked")
+    in_process_dice = _dice(first)
+
+    # Re-derive in a child process with a different PYTHONHASHSEED to
+    # prove the fallback doesn't lean on the randomised builtin hash.
+    script = (
+        "from grimoire.mechanics.rng import derive_roll_seed;"
+        "import hashlib;"
+        "tid = 'c1:never-forked';"
+        "digest = hashlib.sha256(tid.encode()).digest();"
+        "bs = int.from_bytes(digest[:8], 'big') & 0x7FFFFFFFFFFFFFFF;"
+        "print(derive_roll_seed(bs, 7, 'r1'))"
+    )
+    out = subprocess.check_output(
+        [sys.executable, "-c", script],
+        env={"PYTHONHASHSEED": "12345", "PATH": ""},
+        text=True,
+    )
+    expected_seed = int(out.strip())
+    # Reproduce the test mechanics module's `resolve_roll`:
+    expected_dice = [((expected_seed >> i) & 0xFF) % 10 + 1 for i in range(5)]
+    assert in_process_dice == expected_dice
+
+
+async def test_rescan_discovered_uses_dir_name_when_manifest_id_null(
+    service: MechanicsService, mechanics_root: Path
+) -> None:
+    """`id: null` in manifest must not leak ``None`` into RescanReport."""
+    write_module(
+        mechanics_root,
+        "well-formed",
+        manifest={"id": None, "name": "Anonymous"},
+    )
+    report = await service.rescan()
+    assert all(isinstance(x, str) for x in report.discovered)
+    assert "well-formed" in report.discovered
+
+
 async def test_resolve_roll_null_module_returns_no_dice(
     service: MechanicsService, store: StateStore
 ) -> None:
