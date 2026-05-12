@@ -1,0 +1,835 @@
+"""ImageGen service — facade over backends, queue, storage, cache.
+
+Implements spec 12. Holds:
+
+- A :class:`BackendRegistry` (the integrated diffusers backend plus any
+  plugin-provided backends).
+- A per-backend serial job queue (multiple backends run in parallel).
+- An in-memory cache keyed by spec-12 ``(prompt, negative, params, seed,
+  model)``; random-seed jobs bypass cache.
+- An image filesystem layout under
+  ``data/campaigns/<id>/images/<image-id>.{png,yaml}`` plus a JPG
+  thumbnail at ``thumbnails/<image-id>.jpg``.
+- An SQLite ``images`` index row per generated image.
+- Event emission (``imagegen_job_queued`` / ``_started`` / ``image_ready``
+  / ``_failed`` / ``imagegen_backend_health_changed``).
+
+The Orchestrator (task 22) creates one :class:`ImageGenService` and wires
+it to the rest of the modules; the FastAPI surface (task 31) exposes its
+methods over HTTP/WS.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import logging
+import uuid
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from grimoire.event_bus import Event, EventBus
+from grimoire.files import write_yaml
+from grimoire.imagegen.backend import cache_key_for_request
+from grimoire.imagegen.prompt import ComposedPrompt, PromptComposer
+from grimoire.state_store import StateStore
+from grimoire.state_store.paths import campaigns_root, image_metadata_path
+from grimoire.types.common import HealthLevel, HealthStatus
+from grimoire.types.imagegen import (
+    BackendCapabilities,
+    BackendInfo,
+    GenerationJob,
+    GenerationRequest,
+    GenerationResult,
+    ImageMetadata,
+    JobStatus,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Trigger policy
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class TriggerConfig:
+    mode: str = "per_scene"  # 'per_scene' | 'per_post' | 'every_n_posts' | 'manual_only'
+    every_n: int = 5
+    on_scene_open: bool = True
+    on_new_location: bool = True
+    on_new_character_appearance: bool = True
+    auto_during_combat: bool = False
+
+    @classmethod
+    def from_config(cls, raw: dict | None) -> TriggerConfig:
+        if not raw:
+            return cls()
+        return cls(
+            mode=str(raw.get("trigger_mode") or raw.get("mode") or "per_scene"),
+            every_n=int(raw.get("trigger_n") or raw.get("every_n") or 5),
+            on_scene_open=bool(raw.get("trigger_on_scene_open", True)),
+            on_new_location=bool(raw.get("trigger_on_new_location", True)),
+            on_new_character_appearance=bool(
+                raw.get("trigger_on_new_character_appearance", True)
+            ),
+            auto_during_combat=bool(raw.get("auto_illustrate_during_combat", False)),
+        )
+
+
+def should_illustrate(
+    config: TriggerConfig,
+    *,
+    is_scene_open: bool = False,
+    is_new_location: bool = False,
+    is_new_character: bool = False,
+    is_in_combat: bool = False,
+    post_index: int | None = None,
+) -> bool:
+    """Pure decision: should ImageGen queue a job for this hook?
+
+    The Orchestrator passes the boolean signals; we apply the per-campaign
+    trigger policy.
+    """
+    if config.mode == "manual_only":
+        return False
+    if is_in_combat and not config.auto_during_combat:
+        return False
+    if config.mode == "per_post":
+        return True
+    if config.mode == "per_scene":
+        return (
+            (config.on_scene_open and is_scene_open)
+            or (config.on_new_location and is_new_location)
+            or (config.on_new_character_appearance and is_new_character)
+        )
+    if config.mode == "every_n_posts":
+        if post_index is None or config.every_n <= 0:
+            return False
+        return (post_index % config.every_n) == 0
+    return False
+
+
+# --------------------------------------------------------------------------- #
+# Backend registry
+# --------------------------------------------------------------------------- #
+
+
+class _BackendHandle:
+    """A backend plus its dedicated serial worker."""
+
+    __slots__ = ("_pending_jobs", "backend", "queue", "task")
+
+    def __init__(self, backend: Any) -> None:
+        self.backend = backend
+        self.queue: asyncio.Queue[_QueueEntry] = asyncio.Queue()
+        self.task: asyncio.Task[None] | None = None
+        # Track pending job ids so cancellation can short-circuit work
+        # before it's pulled off the queue.
+        self._pending_jobs: set[str] = set()
+
+
+@dataclass(frozen=True, slots=True)
+class _QueueEntry:
+    job_id: str
+
+
+class BackendRegistry:
+    """Holds the integrated + plugin backends, keyed by id.
+
+    Plugin backends can be registered/unregistered at runtime — the
+    Plugins module hands them in via :meth:`register`.
+    """
+
+    def __init__(self) -> None:
+        self._backends: dict[str, Any] = {}
+
+    def register(self, backend: Any) -> None:
+        if not hasattr(backend, "id") or not backend.id:
+            raise ValueError("backend must expose a non-empty `id`")
+        self._backends[backend.id] = backend
+
+    def unregister(self, backend_id: str) -> None:
+        self._backends.pop(backend_id, None)
+
+    def get(self, backend_id: str) -> Any | None:
+        return self._backends.get(backend_id)
+
+    def all(self) -> list[Any]:
+        return list(self._backends.values())
+
+    def ids(self) -> list[str]:
+        return list(self._backends.keys())
+
+    def __contains__(self, backend_id: str) -> bool:
+        return backend_id in self._backends
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+
+
+def _new_image_id() -> str:
+    return f"img_{uuid.uuid4().hex[:12]}"
+
+
+def _new_job_id() -> str:
+    return f"job_{uuid.uuid4().hex[:12]}"
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _backend_info(
+    backend: Any, *, is_integrated: bool, plugin_id: str | None = None
+) -> BackendInfo:
+    caps = getattr(backend, "capabilities", None) or BackendCapabilities()
+    return BackendInfo(
+        id=getattr(backend, "id", ""),
+        name=getattr(backend, "name", getattr(backend, "id", "")),
+        capabilities=caps,
+        is_integrated=is_integrated,
+        plugin_id=plugin_id,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Service
+# --------------------------------------------------------------------------- #
+
+
+class ImageGenService:
+    """Concrete ImageGen implementing :class:`grimoire.types.ImageGenProtocol`."""
+
+    def __init__(
+        self,
+        *,
+        store: StateStore,
+        registry: BackendRegistry,
+        default_backend_id: str,
+        event_bus: EventBus | None = None,
+        composer: PromptComposer | None = None,
+        plugin_backend_ids: Iterable[str] | None = None,
+        thumbnail_subdir: str = "thumbnails",
+    ) -> None:
+        self.store = store
+        self.data_root = store.data_root
+        self.registry = registry
+        self.default_backend_id = default_backend_id
+        self.event_bus = event_bus
+        self.composer = composer
+        self._plugin_ids = set(plugin_backend_ids or ())
+        self._thumbnail_subdir = thumbnail_subdir
+        self._jobs: dict[str, GenerationJob] = {}
+        self._results: dict[str, GenerationResult] = {}
+        self._image_ids_by_job: dict[str, str] = {}
+        self._cache: dict[str, str] = {}  # cache_key -> image_id
+        self._handles: dict[str, _BackendHandle] = {}
+        self._campaign_backend: dict[str, str] = {}
+        self._lock = asyncio.Lock()
+        self._closed = False
+        self._last_health: dict[str, HealthLevel] = {}
+
+        for backend in self.registry.all():
+            self._ensure_handle(backend.id)
+
+    # ------------------------------------------------------------------ #
+    # Lifecycle
+    # ------------------------------------------------------------------ #
+
+    async def aclose(self) -> None:
+        """Cancel workers and drain queues. Safe to call repeatedly."""
+        self._closed = True
+        handles = list(self._handles.values())
+        for handle in handles:
+            if handle.task is not None and not handle.task.done():
+                handle.task.cancel()
+        for handle in handles:
+            if handle.task is None:
+                continue
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await handle.task
+        self._handles.clear()
+
+    def _ensure_handle(self, backend_id: str) -> _BackendHandle:
+        handle = self._handles.get(backend_id)
+        if handle is not None:
+            return handle
+        backend = self.registry.get(backend_id)
+        if backend is None:
+            raise KeyError(f"no backend registered with id {backend_id!r}")
+        handle = _BackendHandle(backend)
+        handle.task = asyncio.create_task(self._worker(backend_id), name=f"imagegen-{backend_id}")
+        self._handles[backend_id] = handle
+        return handle
+
+    # ------------------------------------------------------------------ #
+    # Backend management
+    # ------------------------------------------------------------------ #
+
+    async def list_backends(self) -> list[BackendInfo]:
+        out: list[BackendInfo] = []
+        for backend in self.registry.all():
+            out.append(
+                _backend_info(
+                    backend,
+                    is_integrated=backend.id not in self._plugin_ids,
+                    plugin_id=backend.id if backend.id in self._plugin_ids else None,
+                )
+            )
+        return out
+
+    async def active_backend(self, campaign_id: str) -> BackendInfo:
+        backend_id = self._campaign_backend.get(campaign_id) or self.default_backend_id
+        backend = self.registry.get(backend_id)
+        if backend is None:
+            # The configured backend was removed — fall back to default.
+            backend = self.registry.get(self.default_backend_id)
+            if backend is None:
+                raise RuntimeError("no image-gen backends registered")
+        return _backend_info(
+            backend,
+            is_integrated=backend.id not in self._plugin_ids,
+            plugin_id=backend.id if backend.id in self._plugin_ids else None,
+        )
+
+    async def set_active_backend(self, campaign_id: str, backend_id: str) -> None:
+        if backend_id not in self.registry:
+            raise KeyError(f"no backend registered with id {backend_id!r}")
+        self._campaign_backend[campaign_id] = backend_id
+        self._ensure_handle(backend_id)
+
+    # ------------------------------------------------------------------ #
+    # Generation
+    # ------------------------------------------------------------------ #
+
+    async def queue_generation(
+        self,
+        campaign_id: str,
+        scene_id: str | None,
+        post_id: str | None,
+        request: GenerationRequest | None = None,
+        priority: int = 5,
+    ) -> str:
+        if request is None:
+            request = await self._compose_request(
+                campaign_id=campaign_id, scene_id=scene_id, post_id=post_id
+            )
+        backend_id = self._campaign_backend.get(campaign_id, self.default_backend_id)
+        if backend_id not in self.registry:
+            raise KeyError(f"no backend registered with id {backend_id!r}")
+        self._ensure_handle(backend_id)
+        job_id = _new_job_id()
+        job = GenerationJob(
+            id=job_id,
+            campaign_id=campaign_id,
+            backend=backend_id,
+            request=request,
+            status=JobStatus.QUEUED,
+            priority=priority,
+            queued_at=_now(),
+            scene_id=scene_id,
+            post_id=post_id,
+        )
+        async with self._lock:
+            self._jobs[job_id] = job
+            handle = self._handles[backend_id]
+            handle._pending_jobs.add(job_id)
+        await handle.queue.put(_QueueEntry(job_id=job_id))
+        await self._emit(
+            "imagegen_job_queued",
+            {"job_id": job_id, "campaign_id": campaign_id, "backend": backend_id},
+        )
+        return job_id
+
+    async def generate_sync(
+        self,
+        campaign_id: str,
+        request: GenerationRequest,
+    ) -> GenerationResult:
+        backend_id = self._campaign_backend.get(campaign_id, self.default_backend_id)
+        backend = self.registry.get(backend_id)
+        if backend is None:
+            raise KeyError(f"no backend registered with id {backend_id!r}")
+        cached = self._lookup_cache(request, backend=backend)
+        if cached is not None:
+            return cached
+        result = await backend.generate(request)
+        self._store_in_cache(request, backend=backend, result=result)
+        return result
+
+    # ------------------------------------------------------------------ #
+    # Queue
+    # ------------------------------------------------------------------ #
+
+    async def list_jobs(
+        self,
+        campaign_id: str,
+        status: JobStatus | None = None,
+    ) -> list[GenerationJob]:
+        async with self._lock:
+            jobs = [
+                job for job in self._jobs.values()
+                if job.campaign_id == campaign_id and (status is None or job.status == status)
+            ]
+        jobs.sort(key=lambda j: (-j.priority, j.queued_at or _now()))
+        return jobs
+
+    async def cancel_job(self, job_id: str) -> None:
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise KeyError(f"no such job {job_id!r}")
+            if job.status not in (JobStatus.QUEUED, JobStatus.RUNNING):
+                return
+            job.status = JobStatus.CANCELLED
+            job.finished_at = _now()
+            handle = self._handles.get(job.backend)
+            if handle is not None:
+                handle._pending_jobs.discard(job_id)
+        await self._emit("imagegen_job_failed", {"job_id": job_id, "reason": "cancelled"})
+
+    async def prioritize_job(self, job_id: str, priority: int) -> None:
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise KeyError(f"no such job {job_id!r}")
+            self._jobs[job_id] = job.model_copy(update={"priority": priority})
+
+    # ------------------------------------------------------------------ #
+    # Re-roll / variation
+    # ------------------------------------------------------------------ #
+
+    async def reroll(self, image_id: str) -> str:
+        meta = await self.get_image(image_id)
+        request = self._request_from_metadata(meta, new_seed=True)
+        return await self.queue_generation(
+            campaign_id=meta.campaign_id,
+            scene_id=meta.scene_id,
+            post_id=meta.post_id,
+            request=request,
+        )
+
+    async def variation(self, image_id: str, strength: float) -> str:
+        meta = await self.get_image(image_id)
+        source_path = Path(meta.file_path)
+        if not source_path.is_absolute():
+            source_path = self.data_root / source_path
+        init_bytes = source_path.read_bytes() if source_path.exists() else None
+        request = self._request_from_metadata(meta, new_seed=True)
+        request = request.model_copy(
+            update={"init_image": init_bytes, "init_image_strength": float(strength)}
+        )
+        return await self.queue_generation(
+            campaign_id=meta.campaign_id,
+            scene_id=meta.scene_id,
+            post_id=meta.post_id,
+            request=request,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Storage
+    # ------------------------------------------------------------------ #
+
+    async def list_images(
+        self,
+        campaign_id: str,
+        scene_id: str | None = None,
+        starred_only: bool = False,
+    ) -> list[ImageMetadata]:
+        query = "SELECT * FROM images WHERE campaign_id = ?"
+        params: list[Any] = [campaign_id]
+        if scene_id is not None:
+            query += " AND scene_id = ?"
+            params.append(scene_id)
+        if starred_only:
+            query += " AND user_starred = 1"
+        query += " ORDER BY created_at DESC, id DESC"
+        rows = await self.store.db.fetchall(query, tuple(params))
+        return [_image_metadata_from_row(row) for row in rows]
+
+    async def get_image(self, image_id: str) -> ImageMetadata:
+        row = await self.store.db.fetchone("SELECT * FROM images WHERE id = ?", (image_id,))
+        if row is None:
+            raise KeyError(f"image {image_id!r} not found")
+        return _image_metadata_from_row(row)
+
+    async def star_image(self, image_id: str, starred: bool) -> None:
+        # Make sure the image exists first; raises KeyError if not.
+        await self.get_image(image_id)
+        await self.store.db.execute(
+            "UPDATE images SET user_starred = ? WHERE id = ?",
+            (1 if starred else 0, image_id),
+        )
+
+    async def delete_image(self, image_id: str) -> None:
+        meta = await self.get_image(image_id)
+        await self.store.db.execute("DELETE FROM images WHERE id = ?", (image_id,))
+        for raw in (meta.file_path, meta.thumbnail_path):
+            if not raw:
+                continue
+            path = Path(raw)
+            if not path.is_absolute():
+                path = self.data_root / path
+            if path.exists():
+                try:
+                    path.unlink()
+                except OSError:
+                    logger.warning("failed to remove image asset %s", path, exc_info=True)
+        sidecar = image_metadata_path(self.data_root, meta.campaign_id, image_id)
+        if sidecar.exists():
+            try:
+                sidecar.unlink()
+            except OSError:
+                logger.warning("failed to remove image sidecar %s", sidecar, exc_info=True)
+        await self.store.db.execute(
+            "DELETE FROM campaign_content_index WHERE id = ?",
+            (f"campaigns/{meta.campaign_id}/images/{image_id}",),
+        )
+
+    # ------------------------------------------------------------------ #
+    # Health
+    # ------------------------------------------------------------------ #
+
+    async def health_check(self, backend_id: str) -> HealthStatus:
+        backend = self.registry.get(backend_id)
+        if backend is None:
+            status = HealthStatus(
+                level=HealthLevel.UNCONFIGURED,
+                target_id=backend_id,
+                message="backend not registered",
+            )
+        else:
+            status = await backend.health_check()
+        prev = self._last_health.get(backend_id)
+        if prev != status.level:
+            self._last_health[backend_id] = status.level
+            await self._emit(
+                "imagegen_backend_health_changed",
+                {"backend_id": backend_id, "level": status.level.value, "message": status.message},
+            )
+        return status
+
+    # ------------------------------------------------------------------ #
+    # Internals
+    # ------------------------------------------------------------------ #
+
+    async def _compose_request(
+        self,
+        *,
+        campaign_id: str,
+        scene_id: str | None,
+        post_id: str | None,
+    ) -> GenerationRequest:
+        composed: ComposedPrompt | None = None
+        if self.composer is not None:
+            post_body: str | None = None
+            if post_id is not None:
+                post_body = await self._fetch_post_body(post_id)
+            preset_id = await self._campaign_image_preset_id(campaign_id)
+            composed = await self.composer.compose(
+                campaign_id=campaign_id,
+                scene_id=scene_id,
+                post_body=post_body,
+                image_preset_id=preset_id,
+            )
+        prompt = composed.prompt if composed else ""
+        negative = composed.negative_prompt if composed else None
+        params = composed.params if composed else {}
+        return GenerationRequest(
+            prompt=prompt or "a scene",
+            negative_prompt=negative,
+            width=int(params.get("width", 1024)),
+            height=int(params.get("height", 1024)),
+            steps=int(params.get("steps", 28)),
+            cfg_scale=float(params.get("cfg_scale", 6.5)),
+            sampler=str(params.get("sampler", "DPM++ 2M Karras")),
+        )
+
+    async def _fetch_post_body(self, post_id: str) -> str | None:
+        row = await self.store.db.fetchone(
+            "SELECT body_excerpt FROM posts WHERE id = ?", (post_id,)
+        )
+        if row is None:
+            return None
+        return row["body_excerpt"] or None
+
+    async def _campaign_image_preset_id(self, campaign_id: str) -> str | None:
+        row = await self.store.db.fetchone(
+            "SELECT image_preset_id FROM campaigns WHERE id = ?", (campaign_id,)
+        )
+        if row is None:
+            return None
+        return row["image_preset_id"]
+
+    def _request_from_metadata(self, meta: ImageMetadata, *, new_seed: bool) -> GenerationRequest:
+        params = meta.params or {}
+        return GenerationRequest(
+            prompt=meta.prompt or "",
+            negative_prompt=meta.negative_prompt or None,
+            width=int(params.get("width", 1024)),
+            height=int(params.get("height", 1024)),
+            steps=int(params.get("steps", 28)),
+            cfg_scale=float(params.get("cfg_scale", 6.5)),
+            sampler=str(params.get("sampler", "")),
+            seed=None if new_seed else meta.seed,
+            model=meta.model or None,
+        )
+
+    def _lookup_cache(
+        self,
+        request: GenerationRequest,
+        *,
+        backend: Any,
+    ) -> GenerationResult | None:
+        if request.seed is None:
+            return None
+        key = cache_key_for_request(request, model=getattr(backend, "base_model", None))
+        image_id = self._cache.get(key)
+        if image_id is None:
+            return None
+        return self._results.get(image_id)
+
+    def _store_in_cache(
+        self,
+        request: GenerationRequest,
+        *,
+        backend: Any,
+        result: GenerationResult,
+        image_id: str | None = None,
+    ) -> None:
+        if request.seed is None:
+            return
+        key = cache_key_for_request(request, model=getattr(backend, "base_model", None))
+        # Use the actually-applied seed (not the requested None) for downstream
+        # reuse — but only when the caller provided one.
+        ident = image_id or f"_inline_{key}"
+        self._cache[key] = ident
+        self._results[ident] = result
+
+    async def _worker(self, backend_id: str) -> None:
+        handle = self._handles[backend_id]
+        backend = handle.backend
+        while not self._closed:
+            try:
+                entry = await handle.queue.get()
+            except asyncio.CancelledError:
+                break
+            job_id = entry.job_id
+            async with self._lock:
+                job = self._jobs.get(job_id)
+                if job is None or job.status != JobStatus.QUEUED:
+                    handle._pending_jobs.discard(job_id)
+                    handle.queue.task_done()
+                    continue
+                handle._pending_jobs.discard(job_id)
+                job.status = JobStatus.RUNNING
+                job.started_at = _now()
+            await self._emit(
+                "imagegen_job_started",
+                {"job_id": job_id, "campaign_id": job.campaign_id, "backend": backend_id},
+            )
+            try:
+                result = await self._run_job(backend, job)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.exception("imagegen job %s failed", job_id)
+                async with self._lock:
+                    job.status = JobStatus.FAILED
+                    job.finished_at = _now()
+                    job.error = str(exc)
+                await self._emit(
+                    "imagegen_job_failed",
+                    {"job_id": job_id, "campaign_id": job.campaign_id, "reason": str(exc)},
+                )
+            else:
+                async with self._lock:
+                    job.status = JobStatus.COMPLETE
+                    job.finished_at = _now()
+                    job.result = result
+            finally:
+                handle.queue.task_done()
+
+    async def _run_job(self, backend: Any, job: GenerationJob) -> GenerationResult:
+        request = job.request
+        cached = self._lookup_cache(request, backend=backend)
+        if cached is not None:
+            key = cache_key_for_request(request, model=getattr(backend, "base_model", None))
+            existing_image_id = self._cache.get(key)
+            if existing_image_id and not existing_image_id.startswith("_inline_"):
+                self._image_ids_by_job[job.id] = existing_image_id
+                await self._emit(
+                    "image_ready",
+                    {
+                        "image_id": existing_image_id,
+                        "campaign_id": job.campaign_id,
+                        "cached": True,
+                    },
+                )
+                return cached
+
+        result = await backend.generate(request)
+        image_id = _new_image_id()
+        await self._persist_result(
+            image_id=image_id,
+            job=job,
+            result=result,
+        )
+        self._store_in_cache(request, backend=backend, result=result, image_id=image_id)
+        self._image_ids_by_job[job.id] = image_id
+        await self._emit(
+            "image_ready",
+            {
+                "image_id": image_id,
+                "campaign_id": job.campaign_id,
+                "scene_id": job.scene_id,
+                "post_id": job.post_id,
+                "cached": False,
+            },
+        )
+        return result
+
+    async def _persist_result(
+        self,
+        *,
+        image_id: str,
+        job: GenerationJob,
+        result: GenerationResult,
+    ) -> None:
+        campaign_dir = campaigns_root(self.data_root) / job.campaign_id / "images"
+        campaign_dir.mkdir(parents=True, exist_ok=True)
+        png_path = campaign_dir / f"{image_id}.png"
+        png_path.write_bytes(result.image_bytes)
+        thumb_dir = campaign_dir / self._thumbnail_subdir
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+        thumb_path = thumb_dir / f"{image_id}.jpg"
+        thumb_path.write_bytes(result.thumbnail_bytes or result.image_bytes)
+
+        now_iso = _now().isoformat()
+        metadata_payload = {
+            "id": image_id,
+            "campaign_id": job.campaign_id,
+            "scene_id": job.scene_id,
+            "post_id": job.post_id,
+            "prompt": job.request.prompt,
+            "negative_prompt": job.request.negative_prompt or "",
+            "seed": result.seed,
+            "sampler": job.request.sampler,
+            "steps": job.request.steps,
+            "cfg_scale": job.request.cfg_scale,
+            "width": job.request.width,
+            "height": job.request.height,
+            "backend": result.backend,
+            "model": result.model,
+            "created_at": now_iso,
+            "duration_ms": result.duration_ms,
+            "user_starred": False,
+            "tags": [],
+            "file": png_path.name,
+            "thumbnail": f"{self._thumbnail_subdir}/{image_id}.jpg",
+        }
+        write_yaml(image_metadata_path(self.data_root, job.campaign_id, image_id), metadata_payload)
+
+        branch_id = f"{job.campaign_id}:main"
+        params_json = json.dumps(result.actual_params, sort_keys=True, default=str)
+        rel_png = str(png_path.relative_to(self.data_root))
+        rel_thumb = str(thumb_path.relative_to(self.data_root))
+        await self.store.db.execute(
+            """
+            INSERT OR REPLACE INTO images (
+              id, campaign_id, branch_id, scene_id, post_id, file_path,
+              thumbnail_path, prompt, negative_prompt, params, backend, model,
+              seed, created_at, user_starred, tags
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                image_id,
+                job.campaign_id,
+                branch_id,
+                job.scene_id,
+                job.post_id,
+                rel_png,
+                rel_thumb,
+                job.request.prompt,
+                job.request.negative_prompt or "",
+                params_json,
+                result.backend,
+                result.model,
+                int(result.seed),
+                now_iso,
+                0,
+                json.dumps([]),
+            ),
+        )
+
+    async def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
+        if self.event_bus is None:
+            return
+        try:
+            await self.event_bus.emit(Event(type=event_type, payload=payload))
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("imagegen event emission failed: %s", event_type)
+
+
+# --------------------------------------------------------------------------- #
+# Row → model adapter
+# --------------------------------------------------------------------------- #
+
+
+def _image_metadata_from_row(row: Any) -> ImageMetadata:
+    keys = row.keys() if hasattr(row, "keys") else row
+    data = {key: row[key] for key in keys}
+    params_raw = data.get("params")
+    params: dict[str, Any] = {}
+    if isinstance(params_raw, str) and params_raw:
+        try:
+            params = json.loads(params_raw)
+        except json.JSONDecodeError:
+            params = {}
+    elif isinstance(params_raw, dict):
+        params = params_raw
+    tags_raw = data.get("tags")
+    tags: list[str] = []
+    if isinstance(tags_raw, str) and tags_raw:
+        try:
+            tags = list(json.loads(tags_raw))
+        except json.JSONDecodeError:
+            tags = []
+    elif isinstance(tags_raw, list):
+        tags = list(tags_raw)
+    created_at_raw = data.get("created_at")
+    created_at: datetime | None
+    if isinstance(created_at_raw, datetime):
+        created_at = created_at_raw
+    elif isinstance(created_at_raw, str) and created_at_raw:
+        try:
+            created_at = datetime.fromisoformat(created_at_raw)
+        except ValueError:
+            created_at = None
+    else:
+        created_at = None
+    return ImageMetadata(
+        id=str(data["id"]),
+        campaign_id=str(data["campaign_id"]),
+        file_path=str(data.get("file_path") or ""),
+        thumbnail_path=data.get("thumbnail_path"),
+        prompt=str(data.get("prompt") or ""),
+        negative_prompt=str(data.get("negative_prompt") or ""),
+        params=params,
+        backend=str(data.get("backend") or ""),
+        model=str(data.get("model") or ""),
+        seed=data.get("seed"),
+        scene_id=data.get("scene_id"),
+        post_id=data.get("post_id"),
+        created_at=created_at,
+        user_starred=bool(data.get("user_starred") or 0),
+        tags=tags,
+    )
