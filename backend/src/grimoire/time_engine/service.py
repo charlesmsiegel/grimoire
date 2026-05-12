@@ -267,7 +267,9 @@ class TimeEngineService:
     # Scheduled events
     # ------------------------------------------------------------------ #
 
-    async def schedule_event(self, event: ScheduledEvent) -> EventId:
+    async def schedule_event(
+        self, event: ScheduledEvent, *, branch_id: str | None = None
+    ) -> EventId:
         """Persist a scheduled event. Returns the (possibly generated) id."""
         eid = event.id or _new_id("evt")
         await self._store.db.execute(
@@ -287,7 +289,7 @@ class TimeEngineService:
             (
                 eid,
                 event.campaign_id,
-                _branch_for(event.campaign_id, None),
+                _branch_for(event.campaign_id, branch_id),
                 event.at.moment.isoformat(),
                 event.kind,
                 event.label,
@@ -507,14 +509,16 @@ class TimeEngineService:
         # Convert Continuity commitments (dataclasses) into the shared-type
         # form the result carries. Days come from Continuity; we project them
         # back onto datetimes using the calendar epoch when available.
+        # `commitments_due` surfaces commitments that went stale this tick
+        # (open too long with no resolution); `commitments_overdue` surfaces
+        # commitments whose explicit `due_by` just passed.
         commitments_overdue = [
             _shared_commitment(c, campaign_id, branch_id, epoch, commit_anchor)
             for c in aging.became_overdue
         ]
         commitments_due = [
             _shared_commitment(c, campaign_id, branch_id, epoch, commit_anchor)
-            for c in aging.became_overdue
-            if c.due_by is not None
+            for c in aging.became_stale
         ]
 
         result = TimeAdvanceResult(
