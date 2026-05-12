@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import deque
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -39,6 +41,63 @@ from grimoire.watcher.classifier import WatchedFile, classify_path
 logger = logging.getLogger(__name__)
 
 
+# Kinds whose body is prose and should be embedded for retrieval.
+# Structured-only files (settings, image presets, sheets, image metadata,
+# scene sidecars, campaign configs) are skipped — embedding them adds noise
+# without buying recall on the surfaces that query the vector index.
+_EMBEDDABLE_KINDS: frozenset[str] = frozenset(
+    {"library_entity", "library_style_guide", "emergent", "scene_body"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingJob:
+    """A unit of pending embedding work produced by the watcher.
+
+    Consumed by a worker that fans out to the embedding provider plugin and
+    writes vectors via :meth:`StateStore.add_embedding`. The job is kept small
+    on purpose — the consumer re-reads metadata it needs from SQLite.
+    """
+
+    ref: str
+    scope: str  # "library" | "campaign"
+    source_kind: str  # entity kind (character, lore, scene, ...)
+    text: str
+    campaign_id: str | None = None
+
+
+class EmbeddingQueue:
+    """In-memory FIFO of pending embedding jobs.
+
+    The watcher pushes jobs whenever a real content change is indexed. A
+    downstream worker drains the queue and computes vectors out-of-band so the
+    initial scan (which can touch thousands of files) stays fast. The queue is
+    intentionally minimal — it has no persistence and is rebuilt from
+    SQLite-vs-files diffing on restart.
+    """
+
+    def __init__(self) -> None:
+        self._items: deque[EmbeddingJob] = deque()
+
+    def enqueue(self, job: EmbeddingJob) -> None:
+        self._items.append(job)
+
+    @property
+    def pending(self) -> int:
+        return len(self._items)
+
+    def __len__(self) -> int:  # convenience for tests
+        return len(self._items)
+
+    def drain(self) -> list[EmbeddingJob]:
+        out = list(self._items)
+        self._items.clear()
+        return out
+
+    def peek(self) -> list[EmbeddingJob]:
+        return list(self._items)
+
+
 class FileWatcher:
     """Reindex on file change; emit ``*_file_changed`` events on the bus.
 
@@ -55,6 +114,7 @@ class FileWatcher:
         store: StateStore,
         bus: EventBus,
         loop: asyncio.AbstractEventLoop | None = None,
+        embedding_queue: EmbeddingQueue | None = None,
     ) -> None:
         self.data_root = Path(data_root).resolve()
         self.store = store
@@ -62,6 +122,12 @@ class FileWatcher:
         self._loop = loop
         self._observer: Observer | None = None
         self._known_hashes: dict[Path, str | None] = {}
+        self.embedding_queue = embedding_queue or EmbeddingQueue()
+        # Paths the app is about to write, keyed to the content_hash the app
+        # expects to land on disk. Used to distinguish "watcher saw our own
+        # write" (silent reindex) from "external user wrote during/after our
+        # write" (last-write-wins with a conflict warning).
+        self._expected_writes: dict[Path, str] = {}
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -103,9 +169,18 @@ class FileWatcher:
     # ------------------------------------------------------------------ #
 
     async def scan_now(self) -> None:
-        """Walk both roots and bring SQLite indexes in line with the filesystem."""
+        """Walk both roots and bring SQLite indexes in line with the filesystem.
+
+        Emits ``library_indexed`` once at completion so consumers (frontend
+        progress UI, embedding worker) can react to the steady-state index.
+        Live filesystem events are not emitted during the scan — they would
+        produce a thundering herd of changes for state that's just being
+        catching up to disk.
+        """
         seen_library: set[str] = set()
         seen_content: set[str] = set()
+        library_files = 0
+        campaign_files = 0
 
         library_root = self.data_root / "library"
         if library_root.exists():
@@ -114,6 +189,7 @@ class FileWatcher:
                 if watched is None:
                     continue
                 await self._reindex(watched, emit=False)
+                library_files += 1
                 if watched.library_id is not None and watched.scope == "library":
                     seen_library.add(watched.library_id)
 
@@ -124,12 +200,24 @@ class FileWatcher:
                 if watched is None:
                     continue
                 await self._reindex(watched, emit=False)
+                campaign_files += 1
                 cid = watched.content_index_id
                 if cid is not None:
                     seen_content.add(cid)
 
         await self._drop_orphan_library_rows(seen_library)
         await self._drop_orphan_content_rows(seen_content)
+
+        await self.bus.emit(
+            Event(
+                type="library_indexed",
+                payload={
+                    "library_files": library_files,
+                    "campaign_files": campaign_files,
+                    "embedding_queue_depth": self.embedding_queue.pending,
+                },
+            )
+        )
 
     async def process_path(self, path: Path) -> None:
         """Process a single filesystem event for ``path``.
@@ -140,6 +228,23 @@ class FileWatcher:
         if watched is None:
             return
         await self._reindex(watched, emit=True)
+
+    # ------------------------------------------------------------------ #
+    # Write coordination (conflict detection)
+    # ------------------------------------------------------------------ #
+
+    def register_expected_write(self, path: Path, expected_hash: str) -> None:
+        """Tell the watcher the app is about to land ``expected_hash`` at ``path``.
+
+        Called by file-write mediators in :class:`StateStore` immediately
+        before flushing to disk. The watcher uses this to decide whether the
+        next event for ``path`` is the app's own write (silent) or an external
+        edit that raced with it (last-write-wins + conflict warning).
+        """
+        self._expected_writes[Path(path).resolve()] = expected_hash
+
+    def clear_expected_write(self, path: Path) -> None:
+        self._expected_writes.pop(Path(path).resolve(), None)
 
     # ------------------------------------------------------------------ #
     # Internal: reindex + emit
@@ -161,6 +266,14 @@ class FileWatcher:
 
         change_type = _change_type(prior, new_hash, path in self._known_hashes)
 
+        # Conflict detection: if the app pre-registered a write here, compare
+        # what we expected to land vs what's actually on disk. A mismatch
+        # means an external editor raced with the app and last-write-wins
+        # gave the user's edit priority — we keep going (reindexing the file
+        # on disk) but surface the conflict downstream.
+        expected = self._expected_writes.pop(path, None)
+        conflict = expected is not None and expected != new_hash
+
         if new_hash is None:
             self._known_hashes.pop(path, None)
             await self._apply_delete(watched)
@@ -168,9 +281,44 @@ class FileWatcher:
             self._known_hashes[path] = new_hash
             assert parsed is not None
             await self._apply_upsert(watched, parsed.frontmatter, parsed.body)
+            if watched.kind in _EMBEDDABLE_KINDS and parsed.body.strip():
+                self._enqueue_embedding(watched, parsed.frontmatter, parsed.body)
 
         if emit:
-            await self._emit(watched, change_type=change_type, content_hash_value=new_hash)
+            await self._emit(
+                watched,
+                change_type=change_type,
+                content_hash_value=new_hash,
+                conflict=conflict,
+            )
+
+    def _enqueue_embedding(
+        self,
+        watched: WatchedFile,
+        frontmatter: dict,
+        body: str,
+    ) -> None:
+        if watched.scope == "library":
+            ref = watched.library_id
+        else:
+            ref = watched.content_index_id or (
+                f"campaigns/{watched.campaign_id}/scenes/{watched.scene_basename}"
+                if watched.kind == "scene_body"
+                else None
+            )
+        if ref is None:
+            return
+        name = frontmatter.get("name") or frontmatter.get("title") or ""
+        text = f"{name}\n\n{body}" if name else body
+        self.embedding_queue.enqueue(
+            EmbeddingJob(
+                ref=ref,
+                scope=watched.scope,
+                source_kind=watched.entity_kind or watched.kind,
+                text=text,
+                campaign_id=watched.campaign_id,
+            )
+        )
 
     async def _apply_upsert(
         self,
@@ -239,6 +387,7 @@ class FileWatcher:
         *,
         change_type: str,
         content_hash_value: str | None,
+        conflict: bool = False,
     ) -> None:
         payload: dict = {
             "scope": watched.scope,
@@ -246,7 +395,7 @@ class FileWatcher:
             "path": str(watched.path),
             "change_type": change_type,
             "content_hash": content_hash_value,
-            "conflict": False,
+            "conflict": conflict,
         }
         if watched.library_id is not None:
             payload["library_id"] = watched.library_id
