@@ -248,9 +248,47 @@ async def test_external_overwrite_is_last_write_wins(
     assert row["body"] == "external rewrite"
     payload = collector.of_type("library_file_changed")[-1].payload
     assert payload["change_type"] == "modified"
-    # Conflict warning surface is reserved on the payload even if v1 doesn't
-    # set it; the field is always present so subscribers can branch on it.
-    assert "conflict" in payload
+    # The conflict-warning field is always present so subscribers can branch
+    # on it; v1 reports False for plain external rewrites.
+    assert payload["conflict"] is False
+
+
+async def test_deleting_override_does_not_wipe_library_embeddings(
+    watcher: FileWatcher,
+    store: StateStore,
+) -> None:
+    """Regression: a campaign override file and its underlying library entity
+    share the same ``library_id`` in the classifier. Deleting the override
+    must not delete embeddings keyed on the library ref."""
+    library_id = "settings/wod-london/characters/winifred"
+    await store.add_embedding(
+        ref=library_id,
+        scope="library",
+        source_kind="character",
+        text="winifred is a Toreador elder.",
+        vector=[1.0, 0.0, 0.0],
+        model="test",
+    )
+
+    override = (
+        store.data_root
+        / "campaigns"
+        / "c1"
+        / "overrides"
+        / "settings"
+        / "wod-london"
+        / "characters"
+        / "winifred.yaml"
+    )
+    _write_yaml(override, "voice: gruff\n")
+    await watcher.process_path(override)
+
+    override.unlink()
+    await watcher.process_path(override)
+
+    # The library embedding must survive — it isn't keyed on the override ref.
+    rows = await store.db.fetchall("SELECT ref FROM embeddings WHERE ref = ?", (library_id,))
+    assert len(rows) == 1
 
 
 async def test_malformed_yaml_is_logged_not_raised(
