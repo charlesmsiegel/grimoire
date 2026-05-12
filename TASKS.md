@@ -94,7 +94,7 @@ Spec 17. `TestApp` harness with fixture loading. `MockLLMGateway` with per-task 
 **Blocked by:** 10
 Spec 09. CRUD for items/locations/lore/factions/greetings within a setting (delegates to Library writes). Per-campaign composition resolution with `include` filters. Location adjacency / `path_between` / `locations_within`. Cross-setting variant lookup by shared `asset_id`. Lore keyword search for archive-tier triggers. Procedural weather (seeded per campaign, deterministic). Calendar / season / holiday queries. Faction state CRUD (campaign-scoped, SQLite). `promote_to_library` for non-character kinds. `setting.yaml` CRUD + `fork_setting` (directory copy).
 
-### 12. [ ] Build Characters module
+### 12. [x] Build Characters module
 **Blocked by:** 11, 16
 Spec 08. Behavior layer over Setting's character storage. Voice anchors + dialogue sample rotation. Drift detection (LLM call against recent dialogue; produces `drift_score` + corrective context). Context tier recommendation (lock-in / spotlight / background / archive) with user pins. PC role tracking + multi-PC coordination (`list_pcs`/`add_pc`/`remove_pc`/`set_active_pc`/`current_scene_for_pc`/`should_auto_respond`/`present_pcs_in_scene`). Cross-setting variant lookup. Compressed card views (full/compressed/voice-only/capsule). Campaign-scoped relationships + relationship state. Capability surfacing via Mechanics. `promote_to_library` wrapper. Imports: SillyTavern v2/v3 cards, charx, plaintext.
 
