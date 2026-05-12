@@ -1,0 +1,25 @@
+id: export-transcript
+name: "Plain-Text Transcript Export"
+version: "1.0.0"
+api_version: "1"
+author: "Grimoire core"
+description: |
+  Emits the campaign's prose as a plain-text transcript, scene by scene,
+  with minimal author labels. Useful for editing in a word processor or
+  feeding into TTS.
+
+implements:
+  - export_adapter
+
+classes:
+  export_adapter: TranscriptAdapter
+
+config_schema:
+  type: object
+  properties:
+    data_root:
+      type: string
+      title: Campaign data root
+  additionalProperties: false
+
+requirements: []
