@@ -331,12 +331,28 @@ def _build_book(snapshot: CampaignSnapshot, now: datetime) -> _BuiltBook:
         )
         book.items.append(front)
 
+    # Images: attach every referenced image up front so chapter / gallery
+    # rendering can resolve each one to the actual href written to the zip
+    # (extension is derived from sniffed bytes, not assumed to be .png).
+    image_hrefs: dict[str, str] = {}
+    for part in snapshot.scenes:
+        for img in part.images:
+            attached = _attach_image(book, img, snapshot.data_root)
+            if attached is not None:
+                image_hrefs[img.id] = attached
+    for img in snapshot.images:
+        if img.id in image_hrefs:
+            continue
+        attached = _attach_image(book, img, snapshot.data_root)
+        if attached is not None:
+            image_hrefs[img.id] = attached
+
     # Chapters --------------------------------------------------------------
     chapter_items: list[_ManifestItem] = []
     for index, part in enumerate(snapshot.scenes, start=1):
         chapter_id = f"chapter-{index:04d}"
         href = f"chapters/{chapter_id}.xhtml"
-        xhtml = _render_chapter(index, part, options)
+        xhtml = _render_chapter(index, part, options, image_hrefs)
         chapter_items.append(
             _ManifestItem(
                 id=chapter_id,
@@ -346,12 +362,10 @@ def _build_book(snapshot: CampaignSnapshot, now: datetime) -> _BuiltBook:
                 payload=xhtml.encode("utf-8"),
             )
         )
-        for img in part.images:
-            _attach_image(book, img, snapshot.data_root)
     book.items.extend(chapter_items)
 
     # Appendices ------------------------------------------------------------
-    appendix_items = _render_appendices(snapshot, options)
+    appendix_items = _render_appendices(snapshot, options, image_hrefs)
     book.items.extend(appendix_items)
 
     # Nav document ----------------------------------------------------------
@@ -387,13 +401,20 @@ def _add_cover_image(book: _BuiltBook, payload: bytes) -> str:
 
 
 def _attach_image(book: _BuiltBook, image: ImageMetadata, data_root: Path | None) -> str | None:
+    """Add an image to the package and return the href it was written to.
+
+    Returns ``None`` when the underlying file is missing so callers can
+    skip rendering a broken ``<img>`` tag instead of pointing at a path
+    that doesn't exist in the zip.
+    """
+
     payload = _read_image_bytes(image, data_root)
     if payload is None:
         return None
     media_type = _guess_image_type(payload, fallback="image/png")
     href = f"images/{image.id}{_extension_for(media_type)}"
     if any(item.href == href for item in book.items):
-        return next(item.id for item in book.items if item.href == href)
+        return href
     item_id = f"img-{image.id}"
     book.items.append(
         _ManifestItem(
@@ -403,7 +424,7 @@ def _attach_image(book: _BuiltBook, image: ImageMetadata, data_root: Path | None
             payload=payload,
         )
     )
-    return item_id
+    return href
 
 
 def _read_image_bytes(image: ImageMetadata, data_root: Path | None) -> bytes | None:
@@ -495,15 +516,19 @@ def _scene_header(index: int, scene: Scene) -> str:
     return "\n".join(parts)
 
 
-def _render_chapter(index: int, part: ScenePart, options: ExportOptions) -> str:
+def _render_chapter(
+    index: int,
+    part: ScenePart,
+    options: ExportOptions,
+    image_hrefs: dict[str, str],
+) -> str:
     body_parts: list[str] = [_scene_header(index, part.scene)]
     include_mech = bool((options.extra or {}).get("include_mechanics_footnotes", False))
     for img in part.images[:3]:  # cap inline illustrations per spec
-        if img.id:
+        href = image_hrefs.get(img.id)
+        if href:
             body_parts.append(
-                f'<figure><img alt="{html.escape(img.prompt or img.id)}" '
-                f'src="../images/{img.id}{_extension_for("image/png")}"/>'
-                f"</figure>"
+                f'<figure><img alt="{html.escape(img.prompt or img.id)}" src="../{href}"/></figure>'
             )
     for post in part.posts:
         css = None
@@ -521,7 +546,11 @@ def _render_chapter(index: int, part: ScenePart, options: ExportOptions) -> str:
         if include_mech and "[" in post.body and "]" in post.body:
             body_parts.append('<p class="mech">' + html.escape(post.body) + "</p>")
 
-    return _xhtml_doc(part.scene.title or f"Chapter {index}", "\n".join(body_parts))
+    return _xhtml_doc(
+        part.scene.title or f"Chapter {index}",
+        "\n".join(body_parts),
+        stylesheet="../styles/main.css",
+    )
 
 
 def _render_title_page(options: ExportOptions) -> str:
@@ -555,7 +584,11 @@ def _render_copyright_page(options: ExportOptions, now: datetime) -> str:
     return _xhtml_doc("Copyright", "\n".join(parts))
 
 
-def _render_appendices(snapshot: CampaignSnapshot, options: ExportOptions) -> list[_ManifestItem]:
+def _render_appendices(
+    snapshot: CampaignSnapshot,
+    options: ExportOptions,
+    image_hrefs: dict[str, str],
+) -> list[_ManifestItem]:
     items: list[_ManifestItem] = []
     appendices = set(snapshot.selection.include_appendices)
 
@@ -576,7 +609,11 @@ def _render_appendices(snapshot: CampaignSnapshot, options: ExportOptions) -> li
     if "calendar" in appendices and snapshot.scenes:
         items.append(_appendix_item("calendar", "Calendar", _render_calendar(snapshot.scenes)))
     if "gallery" in appendices and snapshot.images:
-        items.append(_appendix_item("gallery", "Image Gallery", _render_gallery(snapshot.images)))
+        items.append(
+            _appendix_item(
+                "gallery", "Image Gallery", _render_gallery(snapshot.images, image_hrefs)
+            )
+        )
     if (options.extra or {}).get("include_prompts_appendix") and snapshot.images:
         items.append(
             _appendix_item(
@@ -590,7 +627,11 @@ def _render_appendices(snapshot: CampaignSnapshot, options: ExportOptions) -> li
 
 def _appendix_item(slug: str, title: str, body_html: str) -> _ManifestItem:
     wrapped = '<section class="appendix">\n' + body_html + "\n</section>\n"
-    payload = _xhtml_doc(title, f'<h1 class="chapter">{html.escape(title)}</h1>\n' + wrapped)
+    payload = _xhtml_doc(
+        title,
+        f'<h1 class="chapter">{html.escape(title)}</h1>\n' + wrapped,
+        stylesheet="../styles/main.css",
+    )
     return _ManifestItem(
         id=f"appendix-{slug}",
         href=f"appendices/{slug}.xhtml",
@@ -682,12 +723,17 @@ def _render_calendar(scenes: list[ScenePart]) -> str:
     return "\n".join(rows)
 
 
-def _render_gallery(images: list[ImageMetadata]) -> str:
+def _render_gallery(images: list[ImageMetadata], image_hrefs: dict[str, str]) -> str:
     rows = ['<div class="gallery">']
     for img in images:
+        href = image_hrefs.get(img.id)
+        if not href:
+            # Image bytes were unreadable; skip the figure rather than emit
+            # a dangling reference that EPUBCheck (and readers) will flag.
+            continue
         rows.append(
             f'<figure><img alt="{html.escape(img.prompt or img.id)}" '
-            f'src="../images/{img.id}{_extension_for("image/png")}"/>'
+            f'src="../{href}"/>'
             f"<figcaption>{html.escape(img.prompt or '')}</figcaption></figure>"
         )
     rows.append("</div>")

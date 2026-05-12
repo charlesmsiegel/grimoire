@@ -236,3 +236,89 @@ async def test_epub_validate_without_binary_records_warning(tmp_path: Path) -> N
         out,
     )
     assert any("not found" in w for w in result.warnings)
+
+
+async def test_epub_chapters_and_appendices_link_stylesheet_with_parent_path(
+    tmp_path: Path,
+) -> None:
+    scene = make_scene(post_count=1)
+    sources = make_sources(
+        scenes=[scene],
+        posts={scene.id: [make_post(scene.id, 1, "Body.")]},
+        characters=[make_character()],
+    )
+    adapter = EpubAdapter(sources)
+    out = tmp_path / "h.epub"
+    await adapter.export(
+        "campaign-a",
+        _selection(include_appendices=["cast"]),
+        _options(),
+        out,
+    )
+    with zipfile.ZipFile(out) as zf:
+        chapter = next(n for n in zf.namelist() if n.startswith("OEBPS/chapters/"))
+        chapter_html = zf.read(chapter).decode("utf-8")
+        assert 'href="../styles/main.css"' in chapter_html
+        appendix_html = zf.read("OEBPS/appendices/cast.xhtml").decode("utf-8")
+        assert 'href="../styles/main.css"' in appendix_html
+        nav_html = zf.read("OEBPS/nav.xhtml").decode("utf-8")
+        assert 'href="styles/main.css"' in nav_html
+
+
+async def test_epub_inline_image_uses_actual_extension_for_non_png(
+    tmp_path: Path,
+) -> None:
+    jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xd9"
+    scene = make_scene(post_count=1)
+    image_path = tmp_path / "thumb.jpg"
+    image_path.write_bytes(jpeg_bytes)
+    image = make_image(image_id="thumb", file_path=image_path, scene_id=scene.id)
+    sources = make_sources(
+        scenes=[scene],
+        posts={scene.id: [make_post(scene.id, 1, "Look at this.")]},
+        images=[image],
+    )
+    adapter = EpubAdapter(sources)
+    out = tmp_path / "i.epub"
+    await adapter.export(
+        "campaign-a",
+        _selection(include_appendices=[]),
+        _options(),
+        out,
+    )
+    with zipfile.ZipFile(out) as zf:
+        names = zf.namelist()
+        assert "OEBPS/images/thumb.jpg" in names
+        assert "OEBPS/images/thumb.png" not in names
+        chapter = next(n for n in names if n.startswith("OEBPS/chapters/"))
+        chapter_html = zf.read(chapter).decode("utf-8")
+        assert "thumb.jpg" in chapter_html
+        assert "thumb.png" not in chapter_html
+
+
+async def test_epub_gallery_images_are_attached_even_without_scene_link(
+    tmp_path: Path,
+) -> None:
+    scene = make_scene(post_count=1)
+    image_path = tmp_path / "standalone.png"
+    image_path.write_bytes(PNG_1x1)
+    standalone = make_image(image_id="standalone", file_path=image_path, scene_id=None)
+    sources = make_sources(
+        scenes=[scene],
+        posts={scene.id: [make_post(scene.id, 1, "Words.")]},
+        images=[standalone],
+    )
+    adapter = EpubAdapter(sources)
+    out = tmp_path / "j.epub"
+    await adapter.export(
+        "campaign-a",
+        _selection(include_appendices=["gallery"]),
+        _options(),
+        out,
+    )
+    with zipfile.ZipFile(out) as zf:
+        assert "OEBPS/images/standalone.png" in zf.namelist()
+        gallery = zf.read("OEBPS/appendices/gallery.xhtml").decode("utf-8")
+        assert 'src="../images/standalone.png"' in gallery
+        opf = zf.read("OEBPS/content.opf").decode("utf-8")
+        assert "images/standalone.png" in opf
