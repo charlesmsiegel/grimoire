@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -173,6 +174,18 @@ class BackendRegistry:
 # --------------------------------------------------------------------------- #
 
 
+# `CampaignId` is just `str` at the type layer; enforce a safe filesystem
+# shape here so a malicious value can't escape ``data/campaigns/``.
+_SAFE_CAMPAIGN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,127}$")
+
+
+def _validate_campaign_id(campaign_id: str) -> None:
+    if not isinstance(campaign_id, str) or not _SAFE_CAMPAIGN_ID.fullmatch(campaign_id):
+        raise ValueError(
+            f"unsafe campaign_id {campaign_id!r}: must match [A-Za-z0-9][A-Za-z0-9_.-]{{0,127}}"
+        )
+
+
 def _new_image_id() -> str:
     return f"img_{uuid.uuid4().hex[:12]}"
 
@@ -316,6 +329,7 @@ class ImageGenService:
         request: GenerationRequest | None = None,
         priority: int = 5,
     ) -> str:
+        _validate_campaign_id(campaign_id)
         if request is None:
             request = await self._compose_request(
                 campaign_id=campaign_id, scene_id=scene_id, post_id=post_id
@@ -352,15 +366,16 @@ class ImageGenService:
         campaign_id: str,
         request: GenerationRequest,
     ) -> GenerationResult:
+        _validate_campaign_id(campaign_id)
         backend_id = self._campaign_backend.get(campaign_id, self.default_backend_id)
         backend = self.registry.get(backend_id)
         if backend is None:
             raise KeyError(f"no backend registered with id {backend_id!r}")
-        cached = self._lookup_cache(request, backend=backend)
+        cached = self._lookup_cache(campaign_id, request, backend=backend)
         if cached is not None:
             return cached
         result = await backend.generate(request)
-        self._store_in_cache(request, backend=backend, result=result)
+        self._store_in_cache(campaign_id, request, backend=backend, result=result)
         return result
 
     # ------------------------------------------------------------------ #
@@ -396,11 +411,14 @@ class ImageGenService:
         await self._emit("imagegen_job_failed", {"job_id": job_id, "reason": "cancelled"})
 
     async def prioritize_job(self, job_id: str, priority: int) -> None:
+        # Mutate the existing job in place — the worker holds a local
+        # reference across its long `await _run_job` and would otherwise
+        # update an orphaned object if we swapped the dict entry.
         async with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 raise KeyError(f"no such job {job_id!r}")
-            self._jobs[job_id] = job.model_copy(update={"priority": priority})
+            job.priority = priority
 
     # ------------------------------------------------------------------ #
     # Re-roll / variation
@@ -582,15 +600,26 @@ class ImageGenService:
             model=meta.model or None,
         )
 
+    def _cache_key(self, campaign_id: str, request: GenerationRequest, *, backend: Any) -> str:
+        """Cache key scoped to a single campaign.
+
+        The bare :func:`cache_key_for_request` key is namespaced with the
+        campaign id so a hit in campaign A never bleeds into campaign B
+        (images and their DB rows are campaign-private).
+        """
+        body = cache_key_for_request(request, model=getattr(backend, "base_model", None))
+        return f"{campaign_id}|{body}"
+
     def _lookup_cache(
         self,
+        campaign_id: str,
         request: GenerationRequest,
         *,
         backend: Any,
     ) -> GenerationResult | None:
         if request.seed is None:
             return None
-        key = cache_key_for_request(request, model=getattr(backend, "base_model", None))
+        key = self._cache_key(campaign_id, request, backend=backend)
         image_id = self._cache.get(key)
         if image_id is None:
             return None
@@ -598,6 +627,7 @@ class ImageGenService:
 
     def _store_in_cache(
         self,
+        campaign_id: str,
         request: GenerationRequest,
         *,
         backend: Any,
@@ -606,7 +636,7 @@ class ImageGenService:
     ) -> None:
         if request.seed is None:
             return
-        key = cache_key_for_request(request, model=getattr(backend, "base_model", None))
+        key = self._cache_key(campaign_id, request, backend=backend)
         # Use the actually-applied seed (not the requested None) for downstream
         # reuse — but only when the caller provided one.
         ident = image_id or f"_inline_{key}"
@@ -642,28 +672,41 @@ class ImageGenService:
             except Exception as exc:
                 logger.exception("imagegen job %s failed", job_id)
                 async with self._lock:
-                    job.status = JobStatus.FAILED
-                    job.finished_at = _now()
-                    job.error = str(exc)
-                await self._emit(
-                    "imagegen_job_failed",
-                    {"job_id": job_id, "campaign_id": job.campaign_id, "reason": str(exc)},
-                )
+                    # Preserve CANCELLED if cancel_job raced us — the
+                    # caller already saw `imagegen_job_failed`.
+                    if job.status != JobStatus.CANCELLED:
+                        job.status = JobStatus.FAILED
+                        job.finished_at = _now()
+                        job.error = str(exc)
+                if job.status == JobStatus.FAILED:
+                    await self._emit(
+                        "imagegen_job_failed",
+                        {
+                            "job_id": job_id,
+                            "campaign_id": job.campaign_id,
+                            "reason": str(exc),
+                        },
+                    )
             else:
                 async with self._lock:
-                    job.status = JobStatus.COMPLETE
-                    job.finished_at = _now()
-                    job.result = result
+                    # cancel_job may have flipped status to CANCELLED
+                    # while the backend was still running; respect it.
+                    if job.status != JobStatus.CANCELLED:
+                        job.status = JobStatus.COMPLETE
+                        job.finished_at = _now()
+                        job.result = result
             finally:
                 handle.queue.task_done()
 
     async def _run_job(self, backend: Any, job: GenerationJob) -> GenerationResult:
         request = job.request
-        cached = self._lookup_cache(request, backend=backend)
+        cached = self._lookup_cache(job.campaign_id, request, backend=backend)
         if cached is not None:
-            key = cache_key_for_request(request, model=getattr(backend, "base_model", None))
+            key = self._cache_key(job.campaign_id, request, backend=backend)
             existing_image_id = self._cache.get(key)
             if existing_image_id and not existing_image_id.startswith("_inline_"):
+                if job.status == JobStatus.CANCELLED:
+                    return cached
                 self._image_ids_by_job[job.id] = existing_image_id
                 await self._emit(
                     "image_ready",
@@ -676,13 +719,20 @@ class ImageGenService:
                 return cached
 
         result = await backend.generate(request)
+        # The job may have been cancelled while the backend was running.
+        # Skip persistence + `image_ready` so the caller doesn't see a
+        # completed image for a job they explicitly cancelled.
+        if job.status == JobStatus.CANCELLED:
+            return result
         image_id = _new_image_id()
         await self._persist_result(
             image_id=image_id,
             job=job,
             result=result,
         )
-        self._store_in_cache(request, backend=backend, result=result, image_id=image_id)
+        self._store_in_cache(
+            job.campaign_id, request, backend=backend, result=result, image_id=image_id
+        )
         self._image_ids_by_job[job.id] = image_id
         await self._emit(
             "image_ready",
@@ -703,7 +753,15 @@ class ImageGenService:
         job: GenerationJob,
         result: GenerationResult,
     ) -> None:
+        # Re-validate here even though queue/sync entry points already
+        # check — `_persist_result` writes to disk, so we want a guard
+        # right next to the write in case a future caller skips the
+        # earlier validation.
+        _validate_campaign_id(job.campaign_id)
         campaign_dir = campaigns_root(self.data_root) / job.campaign_id / "images"
+        resolved_dir = campaign_dir.resolve()
+        if not resolved_dir.is_relative_to(self.data_root.resolve()):
+            raise ValueError(f"campaign_id {job.campaign_id!r} resolves outside data_root")
         campaign_dir.mkdir(parents=True, exist_ok=True)
         png_path = campaign_dir / f"{image_id}.png"
         png_path.write_bytes(result.image_bytes)

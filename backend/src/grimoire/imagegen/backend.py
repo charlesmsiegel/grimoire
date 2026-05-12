@@ -46,9 +46,14 @@ def cache_key_for_request(request: GenerationRequest, *, model: str | None = Non
     Spec 12 §Caching: ``(prompt_hash, negative_hash, params_hash, seed,
     model)`` is the cache key. Random-seed generations (``seed is None``)
     bypass cache — callers should not look up by key in that case.
+
+    The img2img source bytes (``init_image``) are hashed in so that two
+    seeded requests with the same prompt/params but different sources
+    don't collide.
     """
     prompt_hash = hashlib.sha256(request.prompt.encode("utf-8")).hexdigest()[:16]
     neg_hash = hashlib.sha256((request.negative_prompt or "").encode("utf-8")).hexdigest()[:16]
+    init_hash = hashlib.sha256(request.init_image or b"").hexdigest()[:16]
     params = (
         request.width,
         request.height,
@@ -60,7 +65,7 @@ def cache_key_for_request(request: GenerationRequest, *, model: str | None = Non
     )
     params_hash = hashlib.sha256(repr(params).encode("utf-8")).hexdigest()[:16]
     effective_model = model or request.model or ""
-    return f"{prompt_hash}:{neg_hash}:{params_hash}:{request.seed}:{effective_model}"
+    return f"{prompt_hash}:{neg_hash}:{params_hash}:{init_hash}:{request.seed}:{effective_model}"
 
 
 # --------------------------------------------------------------------------- #

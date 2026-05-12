@@ -393,3 +393,123 @@ def test_synthesize_png_dimensions_are_clamped() -> None:
     # synthesize_png clamps oversized requests so tests never blow up.
     png = synthesize_png(5000, 5000, seed=0)
     assert png.startswith(b"\x89PNG")
+
+
+# --------------------------------------------------------------------------- #
+# Review regression tests
+# --------------------------------------------------------------------------- #
+
+
+async def test_cancel_running_job_skips_persist_and_complete(store) -> None:
+    """Cancelling a RUNNING job must not result in a persisted image or
+    a final ``COMPLETE`` status overwriting the cancellation."""
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class GatedBackend(InMemoryDiffusersBackend):
+        id = "gated"
+        name = "Gated stub"
+
+        async def generate(self, request):  # type: ignore[override]
+            started.set()
+            await release.wait()
+            return await super().generate(request)
+
+    reg = BackendRegistry()
+    reg.register(GatedBackend())
+    svc = ImageGenService(
+        store=store,
+        registry=reg,
+        default_backend_id="gated",
+        event_bus=EventBus(),
+    )
+    await store.upsert_campaign(campaign_id="camp-x", name="X")
+    try:
+        job_id = await svc.queue_generation("camp-x", None, None, request=_request("racey"))
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+        await svc.cancel_job(job_id)
+        release.set()
+        await _wait_for(lambda: svc._jobs[job_id].finished_at is not None)
+        assert svc._jobs[job_id].status == JobStatus.CANCELLED
+        # No persisted image despite the backend completing.
+        assert await svc.list_images("camp-x") == []
+    finally:
+        release.set()
+        await svc.aclose()
+
+
+async def test_init_image_bytes_are_part_of_cache_key(service) -> None:
+    """Two seeded img2img requests with different sources must not collide."""
+    svc, _ = service
+    backend = svc.registry.get("diffusers-memory")
+
+    req_a = GenerationRequest(
+        prompt="img2img",
+        width=32,
+        height=32,
+        steps=1,
+        cfg_scale=1.0,
+        seed=5,
+        init_image=b"AAAA",
+        init_image_strength=0.5,
+    )
+    req_b = req_a.model_copy(update={"init_image": b"BBBB"})
+
+    res_a = await backend.generate(req_a)
+    res_b = await backend.generate(req_b)
+    svc._store_in_cache("camp-1", req_a, backend=backend, result=res_a)
+    svc._store_in_cache("camp-1", req_b, backend=backend, result=res_b)
+    hit_a = svc._lookup_cache("camp-1", req_a, backend=backend)
+    hit_b = svc._lookup_cache("camp-1", req_b, backend=backend)
+    assert hit_a is res_a
+    assert hit_b is res_b
+    assert hit_a is not hit_b
+
+
+async def test_cache_does_not_leak_across_campaigns(store) -> None:
+    """Same seeded request submitted by two campaigns must not share an image."""
+    reg = BackendRegistry()
+    reg.register(InMemoryDiffusersBackend())
+    svc = ImageGenService(
+        store=store,
+        registry=reg,
+        default_backend_id="diffusers-memory",
+        event_bus=EventBus(),
+    )
+    await store.upsert_campaign(campaign_id="camp-a", name="A")
+    await store.upsert_campaign(campaign_id="camp-b", name="B")
+    try:
+        job_a = await svc.queue_generation("camp-a", None, None, request=_request("shared"))
+        await _wait_for(lambda: svc._jobs[job_a].status == JobStatus.COMPLETE)
+        job_b = await svc.queue_generation("camp-b", None, None, request=_request("shared"))
+        await _wait_for(lambda: svc._jobs[job_b].status == JobStatus.COMPLETE)
+
+        images_a = await svc.list_images("camp-a")
+        images_b = await svc.list_images("camp-b")
+        assert len(images_a) == 1
+        assert len(images_b) == 1
+        assert images_a[0].id != images_b[0].id
+    finally:
+        await svc.aclose()
+
+
+async def test_unsafe_campaign_id_is_rejected(service) -> None:
+    """Path-traversal-shaped campaign ids never reach the filesystem."""
+    svc, _ = service
+    for bad in ("../etc", "..", "abc/def", "", "a\x00b", "."):
+        with pytest.raises(ValueError):
+            await svc.queue_generation(bad, None, None, request=_request("x"))
+        with pytest.raises(ValueError):
+            await svc.generate_sync(bad, _request("x"))
+
+
+async def test_prioritize_job_mutates_in_place(service) -> None:
+    """``prioritize_job`` must update the live job record the worker holds,
+    not swap the dict entry for a copy that the worker won't see."""
+    svc, _ = service
+    job_id = await svc.queue_generation("camp-1", None, None, request=_request("priority probe"))
+    live = svc._jobs[job_id]
+    await svc.prioritize_job(job_id, 9)
+    assert live.priority == 9
+    assert svc._jobs[job_id] is live
