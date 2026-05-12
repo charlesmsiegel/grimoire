@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+dist/
+build/
+
+# Node / frontend
+node_modules/
+.vite/
+*.tsbuildinfo
+
+# Use pnpm-lock.yaml only; npm's lockfile is generated when contributors
+# run `npm install` instead of `pnpm install` and should not be tracked.
+package-lock.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Application data — local user content, not source-controlled
+# (Only the directory layout is tracked via .gitkeep files)
+data/library/settings/*/
+data/library/style-guides/*
+data/library/image-presets/*
+data/campaigns/*/
+data/campaigns.sqlite*
+data/mechanics/*/
+data/plugins/*/
+data/config/*
+data/cache/
+
+!**/.gitkeep
