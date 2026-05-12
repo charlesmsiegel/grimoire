@@ -252,6 +252,10 @@ class FileWatcher:
 
     async def _reindex(self, watched: WatchedFile, *, emit: bool) -> None:
         path = watched.path
+        # Consume any pending write expectation up front so it can't survive
+        # early returns (parse error, spurious-event dedup) and falsely flag
+        # the next real edit as a conflict.
+        expected = self._expected_writes.pop(path, None)
         try:
             parsed = _parse_file(watched)
         except (FrontmatterError, YamlError, OSError) as exc:
@@ -266,12 +270,10 @@ class FileWatcher:
 
         change_type = _change_type(prior, new_hash, path in self._known_hashes)
 
-        # Conflict detection: if the app pre-registered a write here, compare
-        # what we expected to land vs what's actually on disk. A mismatch
-        # means an external editor raced with the app and last-write-wins
-        # gave the user's edit priority — we keep going (reindexing the file
-        # on disk) but surface the conflict downstream.
-        expected = self._expected_writes.pop(path, None)
+        # A conflict means the app pre-registered a write here but the file
+        # on disk landed on different content — an external editor raced and
+        # last-write-wins gave the user's edit priority. We still reindex
+        # what's on disk; the warning surfaces downstream.
         conflict = expected is not None and expected != new_hash
 
         if new_hash is None:

@@ -214,6 +214,53 @@ async def test_expected_write_mismatched_flags_conflict(
     assert payload["conflict"] is False
 
 
+async def test_expectation_consumed_even_when_parse_fails(
+    watcher: FileWatcher,
+    store: StateStore,
+    bus: EventBus,
+) -> None:
+    """A registered write must be cleared even if parsing the file errors,
+    otherwise the stale expectation poisons the next real event for that
+    path."""
+    collector = EventCollector(bus, "library_file_changed")
+    target = store.data_root / "library" / "image-presets" / "broken.yaml"
+    watcher.register_expected_write(target, "expected-hash")
+
+    # Malformed YAML triggers a YamlError and process_path returns early.
+    target.parent.mkdir(parents=True)
+    target.write_text("name: : not\n  - valid\n", encoding="utf-8")
+    await watcher.process_path(target)
+
+    # Subsequent valid edit should NOT be flagged as a conflict, because the
+    # expectation was consumed by the failed parse rather than leaking.
+    target.write_text("name: Oil\nprompt_suffix: in oil\n", encoding="utf-8")
+    await watcher.process_path(target)
+    payload = collector.of_type("library_file_changed")[-1].payload
+    assert payload["conflict"] is False
+
+
+async def test_expectation_consumed_even_on_spurious_event(
+    watcher: FileWatcher,
+    store: StateStore,
+    bus: EventBus,
+) -> None:
+    """A registered write must also be consumed when the resulting event is
+    deduped as spurious (content unchanged)."""
+    collector = EventCollector(bus, "library_file_changed")
+    target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "f.md"
+    _write_markdown(target, "name: winifred", "v1")
+    await watcher.process_path(target)
+    # Now register a write and re-process with the same content — spurious.
+    watcher.register_expected_write(target, "stale-hash")
+    await watcher.process_path(target)
+
+    # Next genuine edit must NOT inherit the stale expectation.
+    _write_markdown(target, "name: winifred", "v2")
+    await watcher.process_path(target)
+    payload = collector.of_type("library_file_changed")[-1].payload
+    assert payload["conflict"] is False
+
+
 async def test_clear_expected_write_drops_pending_expectation(
     watcher: FileWatcher,
     store: StateStore,
