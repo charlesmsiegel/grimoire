@@ -156,10 +156,9 @@ class LLMProviderConformance:
         model = paid[0]
         prompt_tokens = 1000
         completion_tokens = 1000
-        cost = (
-            prompt_tokens / 1000.0 * (model.input_cost_per_1k or 0.0)
-            + completion_tokens / 1000.0 * (model.output_cost_per_1k or 0.0)
-        )
+        cost = prompt_tokens / 1000.0 * (
+            model.input_cost_per_1k or 0.0
+        ) + completion_tokens / 1000.0 * (model.output_cost_per_1k or 0.0)
         if cost <= 0:
             raise AssertionError(
                 f"paid model {model.id!r} produced non-positive cost estimate "
