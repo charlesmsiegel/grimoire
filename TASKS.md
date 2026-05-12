@@ -80,7 +80,7 @@ Spec 05 + 15. `embed-sentence-transformers` (local, default `all-mpnet-base-v2`,
 **Blocked by:** 4, 8, 9
 Spec 10. Scene markdown + YAML sidecar pair storage at `data/campaigns/<id>/scenes/NNNN-slug.{md,yaml}`. Append posts with author labeling. Active scene per campaign + per-PC. Scene boundary detection (time gap / location / cast / tonal / explicit / user signal) with confidence thresholds. Multi-PC advance decision (auto-respond if ≤1 PC, wait for advance if 2+). `on_advance_requested` marks `last_advance_at_post`. Running summary regen every N posts. Scene close + key beats + threads. Thread tracking (introduced/paid_off). Edit/delete post triggering retcon. Fork copy-on-write of scenes for branches.
 
-### 18. [ ] Build Continuity module
+### 18. [x] Build Continuity module
 **Blocked by:** 8, 13
 Spec 11. Fact ledger (`add`/`retire`/`update`/`get`/`facts_about`/`search`/`recent` — vector + keyword). Contradiction detection (top-K similar + LLM judgment) with explicit resolution flow. Commitment ledger (`add`/`resolve`/`get`/`open`/`overdue`/`stale`) with status lifecycle (OPEN→PAID/BROKEN/OVERDUE/STALE). Knowledge state per character per fact. Aging (commitments come due / go stale) when Time Engine calls `age()`.
 
