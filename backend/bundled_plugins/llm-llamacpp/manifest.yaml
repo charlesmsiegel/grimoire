@@ -1,0 +1,65 @@
+id: llm-llamacpp
+name: "llama.cpp LLM Provider"
+version: "1.0.0"
+api_version: "1"
+author: "Grimoire core"
+homepage: "https://github.com/abetlen/llama-cpp-python"
+description: |
+  Runs a local GGUF model via `llama-cpp-python`. Useful for fully offline
+  campaigns or routing cheaper tasks (extractor, drift checks) to a local
+  model while keeping `main` on a cloud provider.
+
+implements:
+  - llm_provider
+
+classes:
+  llm_provider: LlamaCppLLMProvider
+
+config_schema:
+  type: object
+  properties:
+    model_path:
+      type: string
+      title: Model path
+      description: Absolute path to a GGUF model file on disk.
+    n_ctx:
+      type: integer
+      title: Context window
+      description: Maximum context size in tokens. Must fit in RAM/VRAM.
+      default: 8192
+      minimum: 512
+    n_threads:
+      type: integer
+      title: CPU threads
+      description: Threads for CPU inference. Leave unset for the library default.
+      minimum: 1
+    n_gpu_layers:
+      type: integer
+      title: GPU layers
+      description: Number of layers to offload to GPU. 0 = CPU only.
+      default: 0
+      minimum: 0
+    chat_format:
+      type: string
+      title: Chat format
+      description: |
+        Optional chat template name (e.g. "llama-3", "chatml"). When set the
+        library applies the template; otherwise plain prompt building is used.
+    seed:
+      type: integer
+      title: RNG seed
+      description: Fix the sampling seed for reproducible runs.
+    model_id:
+      type: string
+      title: Display id
+      description: Identifier reported by `list_models`. Defaults to the file name.
+  required: [model_path]
+  additionalProperties: false
+
+requirements:
+  - "llama-cpp-python>=0.3.0"
+
+notes: |
+  Download a GGUF model and point `model_path` at it. The model is loaded
+  lazily on the first request so app startup stays fast. For GPU offload
+  install llama-cpp-python with the appropriate CUDA/Metal extras.
