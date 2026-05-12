@@ -38,6 +38,21 @@ def assert_protocol_attrs(instance: object, names: Iterable[str]) -> None:
     assert not missing, f"missing protocol members: {missing}"
 
 
+def load_bundled(plugin_id: str, config: dict | None = None):
+    """Discover and load a single bundled plugin by id via the real loader.
+
+    Returns the `LoadResult` from `grimoire.plugins.loader.load_plugin`.
+    """
+    from grimoire.plugins.discovery import discover
+    from grimoire.plugins.loader import load_plugin
+
+    discovered, errors = discover([], bundled_roots=[BUNDLED_PLUGINS_ROOT])
+    assert not errors, errors
+    matched = [d for d in discovered if d.plugin_dir.name == plugin_id]
+    assert matched, f"plugin {plugin_id!r} not discovered under {BUNDLED_PLUGINS_ROOT}"
+    return load_plugin(matched[0], config)
+
+
 @pytest.fixture(scope="session")
 def bundled_plugins_root() -> Path:
     assert BUNDLED_PLUGINS_ROOT.is_dir(), f"missing {BUNDLED_PLUGINS_ROOT}"
@@ -52,3 +67,13 @@ def st_module() -> object:
 @pytest.fixture
 def openai_module() -> object:
     return _import_plugin("embed-openai")
+
+
+@pytest.fixture
+def anthropic_module() -> object:
+    return _import_plugin("llm-anthropic")
+
+
+@pytest.fixture
+def llamacpp_module() -> object:
+    return _import_plugin("llm-llamacpp")
