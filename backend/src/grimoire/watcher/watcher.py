@@ -222,8 +222,11 @@ class FileWatcher:
                 raise
             else:
                 await conn.execute("COMMIT")
-        # Embeddings tied to this ref are now stale.
-        ref = watched.library_id or watched.content_index_id
+        # Embeddings tied to this ref are now stale. The classifier sets
+        # ``library_id`` on campaign overrides too (it points at the underlying
+        # library entity) so we route by ``scope`` to avoid wiping shared
+        # library embeddings when a single campaign override is removed.
+        ref = watched.library_id if watched.scope == "library" else watched.content_index_id
         if ref is not None:
             try:
                 await self.store.delete_embeddings(ref)
