@@ -120,7 +120,7 @@ Spec 01. `submit_post(campaign_id, pc_ref, text)` and `advance(campaign_id, scen
 **Blocked by:** 10, 11, 12, 17
 Spec 12. `IntegratedDiffusersBackend` (SDXL via HuggingFace `diffusers`, lazy weight download with user prompt on first use, GPU/CPU auto-detect, fp16 on CUDA). Generation job queue (per-backend serial, multiple backends parallel). Prompt composition from image preset + location + present cast image templates + scene visual extraction + mood. Image storage at `data/campaigns/<id>/images/<id>.png` + sidecar YAML; thumbnails 256×256 JPG. Cache by `(prompt_hash, negative_hash, params_hash, seed, model)`. Re-roll, variation (img2img), star/save, delete. Trigger config (`per_scene` / `per_post` / `every_n_posts` / `manual_only`).
 
-### 25. [ ] Implement Export EPUB adapter
+### 25. [x] Implement Export EPUB adapter
 **Blocked by:** 7, 11, 12, 17, 18
 Spec 13. EPUB 3 pipeline: front matter (title, copyright, TOC, dedication), scenes-as-chapters (with inline illustrations + post formatting + mechanics annotations), appendices (cast, setting, continuity ledger, calendar, image gallery — toggleable), bundle into EPUB package with stylesheet. Two style presets (Novel, Manuscript). EPUBCheck validation. Filter pipeline (strip OOC, mechanics, anonymize, content filter, POV consolidation). Per-scene and per-arc selection. Cover image support (user-provided or default).
 
