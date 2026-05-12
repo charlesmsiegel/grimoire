@@ -91,9 +91,17 @@ def apply_filters(text: str, ctx: FilterContext) -> str:
     return _normalize_whitespace(text)
 
 
+def anonymize_label(label: str | None, ctx: FilterContext) -> str | None:
+    """Return the pseudonym for a speaker label, if one is configured."""
+    if not label or not ctx.anonymize:
+        return label
+    return ctx.anonymize.get(label, label)
+
+
 __all__ = [
     "FilterContext",
     "anonymize",
+    "anonymize_label",
     "apply_filters",
     "strip_mechanics",
     "strip_narrator_scaffolding",

@@ -124,7 +124,7 @@ Spec 12. `IntegratedDiffusersBackend` (SDXL via HuggingFace `diffusers`, lazy we
 **Blocked by:** 7, 11, 12, 17, 18
 Spec 13. EPUB 3 pipeline: front matter (title, copyright, TOC, dedication), scenes-as-chapters (with inline illustrations + post formatting + mechanics annotations), appendices (cast, setting, continuity ledger, calendar, image gallery — toggleable), bundle into EPUB package with stylesheet. Two style presets (Novel, Manuscript). EPUBCheck validation. Filter pipeline (strip OOC, mechanics, anonymize, content filter, POV consolidation). Per-scene and per-arc selection. Cover image support (user-provided or default).
 
-### 26. [ ] Implement remaining export adapters
+### 26. [x] Implement remaining export adapters
 **Blocked by:** 7, 11, 12, 17, 18
 Spec 13. `markdown` bundle (directory tree with scenes + characters + setting + continuity + images), `single_markdown` concatenated file, `json` structured dump (full state, optional embeddings, pretty-print), `transcript` plain-text prose-only, `html` standalone with relative assets. Each implements `ExportAdapter` protocol with `options_schema`. Shared transformation/filter pass.
 

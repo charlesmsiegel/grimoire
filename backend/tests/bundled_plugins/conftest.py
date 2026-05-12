@@ -77,3 +77,28 @@ def anthropic_module() -> object:
 @pytest.fixture
 def llamacpp_module() -> object:
     return _import_plugin("llm-llamacpp")
+
+
+@pytest.fixture
+def export_markdown_module() -> object:
+    return _import_plugin("export-markdown")
+
+
+@pytest.fixture
+def export_single_markdown_module() -> object:
+    return _import_plugin("export-single-markdown")
+
+
+@pytest.fixture
+def export_json_module() -> object:
+    return _import_plugin("export-json")
+
+
+@pytest.fixture
+def export_transcript_module() -> object:
+    return _import_plugin("export-transcript")
+
+
+@pytest.fixture
+def export_html_module() -> object:
+    return _import_plugin("export-html")

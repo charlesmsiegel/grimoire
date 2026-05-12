@@ -1,0 +1,31 @@
+id: export-html
+name: "Standalone HTML Export"
+version: "1.0.0"
+api_version: "1"
+author: "Grimoire core"
+description: |
+  Renders a campaign as a single standalone HTML document with embedded
+  stylesheet and per-scene anchors. Optionally references generated
+  images via relative paths from an ``assets/`` directory alongside the
+  output file.
+
+implements:
+  - export_adapter
+
+classes:
+  export_adapter: HtmlExportAdapter
+
+config_schema:
+  type: object
+  properties:
+    data_root:
+      type: string
+      title: Campaign data root
+    embed_styles:
+      type: boolean
+      title: Embed stylesheet
+      description: When true the CSS is inlined in a <style> block; otherwise a sidecar file is written.
+      default: true
+  additionalProperties: false
+
+requirements: []
