@@ -98,7 +98,7 @@ Spec 09. CRUD for items/locations/lore/factions/greetings within a setting (dele
 **Blocked by:** 11, 16
 Spec 08. Behavior layer over Setting's character storage. Voice anchors + dialogue sample rotation. Drift detection (LLM call against recent dialogue; produces `drift_score` + corrective context). Context tier recommendation (lock-in / spotlight / background / archive) with user pins. PC role tracking + multi-PC coordination (`list_pcs`/`add_pc`/`remove_pc`/`set_active_pc`/`current_scene_for_pc`/`should_auto_respond`/`present_pcs_in_scene`). Cross-setting variant lookup. Compressed card views (full/compressed/voice-only/capsule). Campaign-scoped relationships + relationship state. Capability surfacing via Mechanics. `promote_to_library` wrapper. Imports: SillyTavern v2/v3 cards, charx, plaintext.
 
-### 19. [ ] Build Extractor
+### 19. [x] Build Extractor
 **Blocked by:** 8, 13, 16, 18
 Spec 04. Parallel strategies: rule-based (regex/patterns for time markers, inventory verbs, mechanical echoes), structured LLM (Haiku-tier with JSON output schema covering `facts`/`character_updates`/`new_characters`/`scene_changes`/`time_advances`/`commitments`/`inventory_changes`/`mechanical_events`/`relationship_changes`/`commitment_resolutions`), heuristic flags. Confidence scoring + auto-apply (≥0.85) / review queue (0.60–0.85) / drop (<0.60). Entity candidates default campaign-local (never library). Library-targeted change detection proposes campaign override, not library edit. Mechanical event validation via `Mechanics.validate_narrated_event`. Also processes user-authored text.
 
