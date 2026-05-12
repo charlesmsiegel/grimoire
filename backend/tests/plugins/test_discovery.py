@@ -69,13 +69,26 @@ def test_discover_flags_duplicate_ids(plugins_root: Path, tmp_path: Path) -> Non
     assert any("duplicate" in e.message for e in errors)
 
 
-def test_discover_bundled_root_scanned_first(plugins_root: Path, tmp_path: Path) -> None:
+def test_discover_includes_bundled_and_user_plugins(plugins_root: Path, tmp_path: Path) -> None:
     bundled_root = tmp_path / "bundled"
     bundled_root.mkdir()
     write_plugin(bundled_root, "alpha", manifest={"name": "Bundled"})
     write_plugin(plugins_root, "beta")
     discovered, _ = discover([plugins_root], bundled_roots=[bundled_root])
-    ids = [d.raw_manifest["id"] for d in discovered]
+    ids = sorted(d.raw_manifest["id"] for d in discovered)
     assert ids == ["alpha", "beta"]
     bundled = next(d for d in discovered if d.raw_manifest["id"] == "alpha")
     assert bundled.bundled is True
+
+
+def test_discover_user_plugin_overrides_bundled(plugins_root: Path, tmp_path: Path) -> None:
+    bundled_root = tmp_path / "bundled"
+    bundled_root.mkdir()
+    write_plugin(bundled_root, "alpha", manifest={"name": "Bundled copy"})
+    write_plugin(plugins_root, "alpha", manifest={"name": "User copy"})
+    discovered, errors = discover([plugins_root], bundled_roots=[bundled_root])
+    assert len(discovered) == 1
+    winner = discovered[0]
+    assert winner.bundled is False
+    assert winner.raw_manifest["name"] == "User copy"
+    assert any("duplicate" in e.message for e in errors)
