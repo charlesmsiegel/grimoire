@@ -290,3 +290,331 @@ a:focus-visible {
 .campaign-list a:hover {
   border-color: var(--accent);
 }
+
+/* ----- Sheet widget library ----- */
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.sheet-title {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.sheet-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sheet-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.sheet-field-label {
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+}
+
+.sheet-field-description {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+}
+
+.sheet-widget {
+  font: inherit;
+  color: inherit;
+}
+
+.sheet-text,
+.sheet-textarea,
+.sheet-number,
+.sheet-select {
+  width: 100%;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+
+.sheet-textarea {
+  font: inherit;
+  resize: vertical;
+}
+
+.sheet-multi-select {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.sheet-multi-select-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.875rem;
+}
+
+.sheet-boolean {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sheet-dot-rating {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.sheet-dot {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--fg-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sheet-dot.filled {
+  background: var(--fg);
+  border-color: var(--fg);
+}
+
+.sheet-dot.half {
+  background: linear-gradient(to right, var(--fg) 50%, transparent 50%);
+  border-color: var(--fg);
+}
+
+.sheet-dot-readout {
+  margin-left: var(--space-2);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+}
+
+.sheet-dice-pool {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sheet-dice-pool-field {
+  display: inline-flex;
+  flex-direction: column;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+}
+
+.sheet-dice-pool-field input {
+  width: 4rem;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+
+.sheet-health-track {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.sheet-health-cell {
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.sheet-health-cell .sheet-health-label {
+  display: none;
+}
+
+.sheet-power-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sheet-power-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sheet-power-item {
+  display: grid;
+  grid-template-columns: 1fr 4rem 1fr auto;
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.sheet-power-item input,
+.sheet-power-item textarea {
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+
+.sheet-power-item .sheet-power-description {
+  grid-column: 1 / -1;
+  resize: vertical;
+  font: inherit;
+}
+
+.sheet-grid-rating {
+  border-collapse: collapse;
+}
+
+.sheet-grid-rating th,
+.sheet-grid-rating td {
+  border: 1px solid var(--border);
+  padding: var(--space-1);
+  text-align: center;
+}
+
+.sheet-grid-rating input {
+  width: 3rem;
+  text-align: center;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.sheet-slot-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.sheet-slot {
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sheet-slot-index {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sheet-slot input {
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+
+.sheet-keyword-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sheet-keyword-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.sheet-keyword-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+  font-size: 0.875rem;
+}
+
+.sheet-keyword-chip button {
+  border: none;
+  padding: 0;
+  line-height: 1;
+  background: transparent;
+  color: var(--fg-muted);
+}
+
+.sheet-keyword-input {
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+
+.sheet-nested-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  margin: 0;
+}
+
+.sheet-nested-section legend {
+  padding: 0 var(--space-2);
+}
+
+.sheet-nested-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-weight: 600;
+}
+
+.sheet-nested-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.sheet-generic-fallback textarea {
+  width: 100%;
+  font-family: var(--font-mono);
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+
+.sheet-fallback-warning {
+  margin: 0 0 var(--space-1);
+  font-size: 0.75rem;
+  color: var(--warn);
+}

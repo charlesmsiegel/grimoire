@@ -58,7 +58,7 @@ Spec 05. Routing per task (`main` / `drift_check` / `extractor` / `npc_tick` / `
 **Blocked by:** 2, 4, 6, 8
 Spec 06. Define `MechanicsModule` protocol (`sheet_schema`, `validate_sheet`, `initialize_sheet`, `content_schema`, `capabilities_of`, `power_definitions`, `evaluate_pre_roll`, `resolve_roll`, `validate_narrated_event`, `character_creation_steps`, `time_tick`, `system_summary`). Manifest validation + discovery under `data/mechanics/`. Façade `Mechanics` callable from other modules (`active_module`/`sheet_schema`/`get_sheet`/`update_sheet`/`capabilities_of`/`evaluate_pre_roll`/`resolve_roll`/`validate_narrated_event`/`time_tick`). Sheet read/write delegates to State Store (campaign-local YAML files). Deterministic RNG per branch. Trivial empty results when `mechanics: null`. No mechanics modules ship by default — this is the API contract only.
 
-### 30. [ ] Build sheet widget library
+### 30. [x] Build sheet widget library
 **Blocked by:** 29
 Spec 14 §Sheet widget library. TypeScript React components: `text`, `textarea`, `number`, `select`, `multi-select`, `boolean`, `dot-rating`, `dice-pool`, `health-track`, `power-list`, `grid-rating`, `slot-list`, `keyword-list`, `nested-section`. Renderer that reads JSON Schema produced by a mechanics module and dispatches each property to the named widget; fallback to generic editor with warning for unknown widgets. Per-mechanics CSS isolation via `.mechanics-<module-id>` wrapper + PostCSS scope-prefixing plugin so themes can't leak between systems.
 
