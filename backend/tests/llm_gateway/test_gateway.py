@@ -13,6 +13,7 @@ from grimoire.llm_gateway.config import (
     TimeoutConfig,
 )
 from grimoire.llm_gateway.errors import (
+    InvalidRequestError,
     ProviderNotFoundError,
     RouteNotFoundError,
     TransientError,
@@ -276,3 +277,28 @@ async def test_total_tokens_filled_in_when_provider_omits(db, plugins) -> None:
     assert resp.usage.total_tokens == 10
     row = await db.fetchone("SELECT total_tokens FROM llm_requests")
     assert row["total_tokens"] == 10
+
+
+async def test_permanent_error_logs_zero_retries(db, plugins) -> None:
+    provider = FakeLLMProvider(id="anthropic", raise_sequence=[InvalidRequestError("bad")])
+    plugins.add_llm(provider)
+    gw = LLMGatewayService(plugins, db, _config())
+    with pytest.raises(InvalidRequestError):
+        await gw.complete("main", _request())
+    # PermanentError is raised on the first attempt; the audit row must
+    # reflect that no retries happened.
+    row = await db.fetchone("SELECT retries, error FROM llm_requests")
+    assert row["retries"] == 0
+    assert "InvalidRequestError" in row["error"]
+    assert provider.call_count == 1
+
+
+async def test_embed_logs_token_estimate_not_char_count(db, plugins) -> None:
+    embed = FakeEmbeddingProvider(id="embed-fake", model_id="m1")
+    plugins.add_embedding(embed)
+    cfg = _config(default_routes={"posts": "embed-fake.m1"})
+    gw = LLMGatewayService(plugins, db, cfg)
+    await gw.embed("posts", ["12345678"])  # 8 chars → ~2 tokens
+    row = await db.fetchone("SELECT prompt_tokens FROM llm_requests")
+    # Should be the chars//4 heuristic, not the raw character count.
+    assert row["prompt_tokens"] == 2
