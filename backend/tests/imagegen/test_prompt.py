@@ -31,17 +31,17 @@ def test_compose_prompt_parts_drops_blanks_and_preserves_order() -> None:
 
 
 def test_compose_negative_prompt_joins_with_commas() -> None:
-    assert compose_negative_prompt(
-        preset_negative="blurry, low quality",
-        character_negatives=["modern clothing", ""],
-    ) == "blurry, low quality, modern clothing"
+    assert (
+        compose_negative_prompt(
+            preset_negative="blurry, low quality",
+            character_negatives=["modern clothing", ""],
+        )
+        == "blurry, low quality, modern clothing"
+    )
 
 
 def test_extract_visual_elements_picks_sensory_sentences() -> None:
-    body = (
-        "Alistair stood at the window, watching the rain. He sighed. "
-        "Her dress was crimson silk."
-    )
+    body = "Alistair stood at the window, watching the rain. He sighed. Her dress was crimson silk."
     out = extract_visual_elements(body)
     assert any("rain" in s for s in out)
     assert any("crimson" in s for s in out) or any("dress" in s for s in out)

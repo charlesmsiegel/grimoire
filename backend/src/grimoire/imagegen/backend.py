@@ -235,9 +235,7 @@ class IntegratedDiffusersBackend:
 
     def __init__(self, config: dict | None = None) -> None:
         self.config = config or {}
-        self.base_model = self.config.get(
-            "base_model", "stabilityai/stable-diffusion-xl-base-1.0"
-        )
+        self.base_model = self.config.get("base_model", "stabilityai/stable-diffusion-xl-base-1.0")
         self.device = self.config.get("device", "auto")
         self.half_precision = bool(self.config.get("half_precision", True))
         self._pipe: Any | None = None
