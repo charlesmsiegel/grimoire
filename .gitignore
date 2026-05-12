@@ -23,6 +23,9 @@ package-lock.json
 .vscode/
 .idea/
 
+# Claude Code: personal permission overrides; project settings + hooks are tracked
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db
