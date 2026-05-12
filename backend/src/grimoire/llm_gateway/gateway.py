@@ -1,0 +1,529 @@
+"""`LLMGatewayService`: the concrete `LLMGateway` implementation.
+
+Coordinates the per-task routing resolver, the embedding cache, the
+retry/timeout policy, the `llm_requests` audit log, and provider lookups
+via the Plugins module.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import time
+from collections.abc import AsyncIterator
+
+from grimoire.llm_gateway.cache import EmbeddingCache
+from grimoire.llm_gateway.config import GatewayConfig
+from grimoire.llm_gateway.errors import (
+    GatewayError,
+    PermanentError,
+    ProviderNotFoundError,
+)
+from grimoire.llm_gateway.request_log import LLMRequestLog, request_hash
+from grimoire.llm_gateway.retry import RETRIABLE_EXCEPTIONS, run_with_retries
+from grimoire.llm_gateway.routing import Route, RouteResolver
+from grimoire.storage.db import Database
+from grimoire.types.common import CampaignId, HealthLevel, HealthStatus, TurnId
+from grimoire.types.llm import (
+    CompletionChunk,
+    CompletionRequest,
+    CompletionResponse,
+    TokenUsage,
+)
+from grimoire.types.protocols import EmbeddingProvider, LLMProvider, Plugins
+
+logger = logging.getLogger(__name__)
+
+
+class LLMGatewayService:
+    def __init__(
+        self,
+        plugins: Plugins,
+        db: Database,
+        config: GatewayConfig | None = None,
+    ) -> None:
+        self._plugins = plugins
+        self._db = db
+        self._config = config or GatewayConfig()
+        self._router = RouteResolver(
+            self._config.default_routes,
+            self._config.fallback_routes,
+        )
+        self._cache = EmbeddingCache(
+            db,
+            max_entries=self._config.embedding_cache.max_entries,
+        )
+        self._log = LLMRequestLog(
+            db,
+            log_response_text=self._config.observability.log_response_text,
+            response_excerpt_chars=self._config.observability.response_excerpt_chars,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Introspection
+    # ------------------------------------------------------------------ #
+
+    async def list_llm_providers(self) -> list[LLMProvider]:
+        return self._plugins.llm_providers()
+
+    async def list_embedding_providers(self) -> list[EmbeddingProvider]:
+        return self._plugins.embedding_providers()
+
+    async def list_routes(self, campaign_id: CampaignId | None = None) -> dict[str, str]:
+        return self._router.routes_for(campaign_id)
+
+    async def set_route(
+        self,
+        task: str,
+        route: str,
+        campaign_id: CampaignId | None = None,
+    ) -> None:
+        self._router.set_route(task, route, campaign_id)
+
+    # ------------------------------------------------------------------ #
+    # Completion
+    # ------------------------------------------------------------------ #
+
+    async def complete(
+        self,
+        task: str,
+        request: CompletionRequest,
+        campaign_id: CampaignId | None = None,
+        *,
+        turn_id: TurnId | None = None,
+    ) -> CompletionResponse:
+        primary = self._router.resolve(task, campaign_id)
+        fallback = self._router.fallback(task)
+        return await self._complete_one(
+            task=task,
+            route=primary,
+            request=request,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            fallback=fallback,
+        )
+
+    async def _complete_one(
+        self,
+        *,
+        task: str,
+        route: Route,
+        request: CompletionRequest,
+        campaign_id: CampaignId | None,
+        turn_id: TurnId | None,
+        fallback: Route | None,
+    ) -> CompletionResponse:
+        try:
+            response, _retries = await self._invoke_complete(
+                task=task,
+                route=route,
+                request=request,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                fallback_used=False,
+            )
+            return response
+        except PermanentError as exc:
+            await self._record_failure(
+                task=task,
+                route=route,
+                request=request,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                error=exc,
+                retries=self._config.retry.max_retries,
+                fallback_used=False,
+            )
+            raise
+        except RETRIABLE_EXCEPTIONS as exc:
+            await self._record_failure(
+                task=task,
+                route=route,
+                request=request,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                error=exc,
+                retries=self._config.retry.max_retries,
+                fallback_used=False,
+            )
+            if fallback is None or fallback.raw == route.raw:
+                raise
+            logger.warning(
+                "primary route %s exhausted retries for task %s; trying fallback %s",
+                route.raw,
+                task,
+                fallback.raw,
+            )
+            try:
+                response, _ = await self._invoke_complete(
+                    task=task,
+                    route=fallback,
+                    request=request,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    fallback_used=True,
+                )
+                return response
+            except (PermanentError, *RETRIABLE_EXCEPTIONS) as fallback_exc:
+                await self._record_failure(
+                    task=task,
+                    route=fallback,
+                    request=request,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    error=fallback_exc,
+                    retries=self._config.retry.max_retries,
+                    fallback_used=True,
+                )
+                raise
+
+    async def _invoke_complete(
+        self,
+        *,
+        task: str,
+        route: Route,
+        request: CompletionRequest,
+        campaign_id: CampaignId | None,
+        turn_id: TurnId | None,
+        fallback_used: bool,
+    ) -> tuple[CompletionResponse, int]:
+        provider = self._require_llm(route.provider_id)
+        scoped = request.model_copy(update={"model": route.model})
+        timeout = self._config.timeout.total_seconds
+
+        async def _call() -> CompletionResponse:
+            return await asyncio.wait_for(provider.complete(scoped), timeout=timeout)
+
+        started = time.monotonic()
+        response, retries = await run_with_retries(_call, policy=self._config.retry)
+        latency_ms = int((time.monotonic() - started) * 1000)
+        # Ensure usage totals are populated.
+        usage = response.usage
+        if usage.total_tokens == 0 and (usage.input_tokens or usage.output_tokens):
+            usage = TokenUsage(
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                total_tokens=usage.input_tokens + usage.output_tokens,
+            )
+            response = response.model_copy(update={"usage": usage})
+        if response.latency_ms == 0:
+            response = response.model_copy(update={"latency_ms": latency_ms})
+        if self._config.observability.log_all_requests:
+            await self._log.record(
+                task=task,
+                provider_id=route.provider_id,
+                model=route.model,
+                usage=response.usage,
+                cost_usd=response.cost_estimate_usd,
+                latency_ms=response.latency_ms or latency_ms,
+                retries=retries,
+                fallback_used=fallback_used,
+                request_hash=request_hash(scoped),
+                response_text=response.text,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+            )
+        return response, retries
+
+    async def _record_failure(
+        self,
+        *,
+        task: str,
+        route: Route,
+        request: CompletionRequest,
+        campaign_id: CampaignId | None,
+        turn_id: TurnId | None,
+        error: BaseException,
+        retries: int,
+        fallback_used: bool,
+    ) -> None:
+        if not self._config.observability.log_all_requests:
+            return
+        try:
+            scoped = request.model_copy(update={"model": route.model})
+            await self._log.record(
+                task=task,
+                provider_id=route.provider_id,
+                model=route.model,
+                retries=retries,
+                fallback_used=fallback_used,
+                request_hash=request_hash(scoped),
+                error=f"{type(error).__name__}: {error}",
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+            )
+        except Exception:
+            logger.exception("failed to record llm_requests row for failed call")
+
+    # ------------------------------------------------------------------ #
+    # Streaming
+    # ------------------------------------------------------------------ #
+
+    async def stream(
+        self,
+        task: str,
+        request: CompletionRequest,
+        campaign_id: CampaignId | None = None,
+        *,
+        turn_id: TurnId | None = None,
+    ) -> AsyncIterator[CompletionChunk]:
+        route = self._router.resolve(task, campaign_id)
+        provider = self._require_llm(route.provider_id)
+        scoped = request.model_copy(update={"model": route.model})
+        async for chunk in self._stream_one(
+            task=task,
+            route=route,
+            provider=provider,
+            request=scoped,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+        ):
+            yield chunk
+
+    async def _stream_one(
+        self,
+        *,
+        task: str,
+        route: Route,
+        provider: LLMProvider,
+        request: CompletionRequest,
+        campaign_id: CampaignId | None,
+        turn_id: TurnId | None,
+    ) -> AsyncIterator[CompletionChunk]:
+        first_token_timeout = self._config.timeout.first_token_seconds
+        total_timeout = self._config.timeout.total_seconds
+        started = time.monotonic()
+        stream = provider.stream(request)
+        usage: TokenUsage | None = None
+        text_parts: list[str] = []
+        first = True
+        try:
+            while True:
+                budget = (
+                    first_token_timeout if first else total_timeout - (time.monotonic() - started)
+                )
+                if budget <= 0:
+                    raise TimeoutError(f"stream exceeded total timeout of {total_timeout}s")
+                try:
+                    chunk = await asyncio.wait_for(_anext(stream), timeout=budget)
+                except StopAsyncIteration:
+                    break
+                first = False
+                text_parts.append(chunk.delta)
+                if chunk.usage is not None:
+                    usage = chunk.usage
+                yield chunk
+                if chunk.is_final:
+                    break
+        except (PermanentError, *RETRIABLE_EXCEPTIONS) as exc:
+            await self._record_failure(
+                task=task,
+                route=route,
+                request=request,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                error=exc,
+                retries=0,
+                fallback_used=False,
+            )
+            raise
+        finally:
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                with contextlib.suppress(Exception):
+                    await close()
+        latency_ms = int((time.monotonic() - started) * 1000)
+        if self._config.observability.log_all_requests:
+            await self._log.record(
+                task=task,
+                provider_id=route.provider_id,
+                model=route.model,
+                usage=usage,
+                latency_ms=latency_ms,
+                retries=0,
+                fallback_used=False,
+                request_hash=request_hash(request),
+                response_text="".join(text_parts),
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+            )
+
+    # ------------------------------------------------------------------ #
+    # Embeddings
+    # ------------------------------------------------------------------ #
+
+    async def embed(
+        self,
+        task: str,
+        texts: list[str],
+        campaign_id: CampaignId | None = None,
+        *,
+        turn_id: TurnId | None = None,
+    ) -> list[list[float]]:
+        if not texts:
+            return []
+        route = self._router.resolve(task, campaign_id)
+        provider = self._require_embedding(route.provider_id)
+        model_id = provider.model_id
+
+        cached: dict[str, list[float]] = {}
+        if self._config.embedding_cache.enabled:
+            cached = await self._cache.get_many(texts, model_id)
+
+        missing: list[str] = []
+        seen: set[str] = set()
+        for text in texts:
+            if text in cached or text in seen:
+                continue
+            missing.append(text)
+            seen.add(text)
+
+        new_vectors: dict[str, list[float]] = {}
+        if missing:
+            started = time.monotonic()
+
+            async def _call() -> list[list[float]]:
+                return await asyncio.wait_for(
+                    provider.embed(missing),
+                    timeout=self._config.timeout.total_seconds,
+                )
+
+            try:
+                vectors, retries = await run_with_retries(_call, policy=self._config.retry)
+            except (PermanentError, *RETRIABLE_EXCEPTIONS) as exc:
+                if self._config.observability.log_all_requests:
+                    await self._log.record(
+                        task=task,
+                        provider_id=route.provider_id,
+                        model=model_id,
+                        retries=self._config.retry.max_retries,
+                        error=f"{type(exc).__name__}: {exc}",
+                        campaign_id=campaign_id,
+                        turn_id=turn_id,
+                    )
+                raise
+            latency_ms = int((time.monotonic() - started) * 1000)
+            if len(vectors) != len(missing):
+                raise GatewayError(
+                    f"embedding provider {route.provider_id!r} returned "
+                    f"{len(vectors)} vectors for {len(missing)} inputs"
+                )
+            for text, vec in zip(missing, vectors, strict=True):
+                new_vectors[text] = vec
+            if self._config.embedding_cache.enabled:
+                await self._cache.set_many(list(new_vectors.items()), model_id)
+            if self._config.observability.log_all_requests:
+                await self._log.record(
+                    task=task,
+                    provider_id=route.provider_id,
+                    model=model_id,
+                    usage=TokenUsage(input_tokens=sum(len(t) for t in missing)),
+                    latency_ms=latency_ms,
+                    retries=retries,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                )
+
+        return [cached[text] if text in cached else new_vectors[text] for text in texts]
+
+    # ------------------------------------------------------------------ #
+    # Estimation
+    # ------------------------------------------------------------------ #
+
+    async def estimate_tokens(self, text: str, provider_id: str | None = None) -> int:
+        if provider_id is not None:
+            provider = self._plugins.get_llm_provider(provider_id)
+            if provider is not None:
+                fn = getattr(provider, "estimate_tokens", None)
+                if fn is not None:
+                    return int(await fn(text))
+        # Cheap default: ~4 chars per token. Good enough for budgeting.
+        return max(1, len(text) // 4)
+
+    async def estimate_cost(
+        self,
+        task: str,
+        request: CompletionRequest,
+        campaign_id: CampaignId | None = None,
+    ) -> float | None:
+        route = self._router.resolve(task, campaign_id)
+        provider = self._plugins.get_llm_provider(route.provider_id)
+        if provider is None:
+            return None
+        models = []
+        try:
+            models = await provider.list_models()
+        except Exception:
+            return None
+        info = next((m for m in models if m.id == route.model), None)
+        if info is None or (info.input_cost_per_1k is None and info.output_cost_per_1k is None):
+            return None
+        prompt_chars = sum(len(m.content) for m in request.messages) + (len(request.system or ""))
+        prompt_tokens = max(1, prompt_chars // 4)
+        completion_tokens = request.max_tokens
+        cost = 0.0
+        if info.input_cost_per_1k is not None:
+            cost += prompt_tokens / 1000.0 * info.input_cost_per_1k
+        if info.output_cost_per_1k is not None:
+            cost += completion_tokens / 1000.0 * info.output_cost_per_1k
+        return cost
+
+    # ------------------------------------------------------------------ #
+    # Health
+    # ------------------------------------------------------------------ #
+
+    async def health_check(self, provider_id: str) -> HealthStatus:
+        provider = self._plugins.get_llm_provider(
+            provider_id
+        ) or self._plugins.get_embedding_provider(provider_id)
+        if provider is None:
+            return HealthStatus(level=HealthLevel.UNCONFIGURED, target_id=provider_id)
+        probe = getattr(provider, "health_check", None)
+        if probe is None:
+            return HealthStatus(level=HealthLevel.HEALTHY, target_id=provider_id)
+        try:
+            result = await probe()
+        except Exception as exc:
+            return HealthStatus(
+                level=HealthLevel.UNHEALTHY,
+                target_id=provider_id,
+                message=f"{type(exc).__name__}: {exc}",
+            )
+        if isinstance(result, HealthStatus):
+            return result
+        return HealthStatus(level=HealthLevel.HEALTHY, target_id=provider_id)
+
+    async def health_check_all(self) -> dict[str, HealthStatus]:
+        ids: set[str] = set()
+        for p in self._plugins.llm_providers():
+            ids.add(p.id)
+        for p in self._plugins.embedding_providers():
+            ids.add(p.id)
+        results: dict[str, HealthStatus] = {}
+        for pid in sorted(ids):
+            results[pid] = await self.health_check(pid)
+        return results
+
+    # ------------------------------------------------------------------ #
+    # Internals
+    # ------------------------------------------------------------------ #
+
+    def _require_llm(self, provider_id: str) -> LLMProvider:
+        provider = self._plugins.get_llm_provider(provider_id)
+        if provider is None:
+            raise ProviderNotFoundError(provider_id, kind="llm")
+        return provider
+
+    def _require_embedding(self, provider_id: str) -> EmbeddingProvider:
+        provider = self._plugins.get_embedding_provider(provider_id)
+        if provider is None:
+            raise ProviderNotFoundError(provider_id, kind="embedding")
+        return provider
+
+
+async def _anext(iterator: AsyncIterator[CompletionChunk]) -> CompletionChunk:
+    return await iterator.__anext__()
+
+
+__all__ = ["LLMGatewayService"]
