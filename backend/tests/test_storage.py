@@ -46,14 +46,19 @@ async def test_fts5_is_available(db: Database) -> None:
 
 
 async def test_migration_runner_creates_schema_version(db: Database) -> None:
+    """Default migrations apply cleanly and a re-run is a no-op."""
     applied = await apply_migrations(db)
-    assert applied == []
-    assert await current_version(db) == 0
+    versions = [m.version for m in applied]
+    assert versions == sorted(versions) and versions, "default migrations must apply"
+    assert await current_version(db) == versions[-1]
 
     row = await db.fetchone(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
     )
     assert row is not None
+
+    second = await apply_migrations(db)
+    assert second == []
 
 
 async def test_migration_runner_applies_pending(tmp_path: Path) -> None:
