@@ -130,7 +130,7 @@ Spec 13. `markdown` bundle (directory tree with scenes + characters + setting + 
 
 ## Wave 6 — Surface + Observability
 
-### 24. [ ] Implement bundled ImageGen plugin backends
+### 24. [x] Implement bundled ImageGen plugin backends
 **Blocked by:** 7, 23
 Spec 12 + 15. `imagegen-a1111` (HTTP client for Automatic1111), `imagegen-comfyui` (HTTP with workflow loaders for new model architectures), `imagegen-dalle` (OpenAI DALL-E API). Each implements `ImageGenBackend` protocol (`generate`/`list_models`/`list_samplers`/`health_check`) with manifest + `config_schema`. Same protocol as integrated backend so they're swappable via routing.
 

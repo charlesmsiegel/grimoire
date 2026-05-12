@@ -102,3 +102,18 @@ def export_transcript_module() -> object:
 @pytest.fixture
 def export_html_module() -> object:
     return _import_plugin("export-html")
+
+
+@pytest.fixture
+def a1111_module() -> object:
+    return _import_plugin("imagegen-a1111")
+
+
+@pytest.fixture
+def comfyui_module() -> object:
+    return _import_plugin("imagegen-comfyui")
+
+
+@pytest.fixture
+def dalle_module() -> object:
+    return _import_plugin("imagegen-dalle")

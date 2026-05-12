@@ -1,0 +1,60 @@
+id: imagegen-a1111
+name: "Automatic1111 ImageGen Backend"
+version: "1.0.0"
+api_version: "1"
+author: "Grimoire core"
+homepage: "https://github.com/AUTOMATIC1111/stable-diffusion-webui"
+description: |
+  HTTP client for an Automatic1111 stable-diffusion-webui server.
+  Talks to the `/sdapi/v1/txt2img` and `/sdapi/v1/img2img` endpoints,
+  reads the list of installed models and samplers via the `/sdapi/v1`
+  introspection routes, and reports health via the `/internal/ping`
+  (falling back to `/` then `/sdapi/v1/options`) probe.
+
+implements:
+  - imagegen_backend
+
+classes:
+  imagegen_backend: A1111ImageGenBackend
+
+config_schema:
+  type: object
+  properties:
+    base_url:
+      type: string
+      title: Base URL
+      description: A1111 webui base URL, e.g. http://127.0.0.1:7860.
+      default: "http://127.0.0.1:7860"
+    api_key:
+      type: string
+      title: API key
+      description: Optional API key (if `--api-auth` is configured on the server).
+      secret: true
+    username:
+      type: string
+      title: Basic auth username
+      description: Optional HTTP basic auth username for `--api-auth`.
+    password:
+      type: string
+      title: Basic auth password
+      description: Optional HTTP basic auth password for `--api-auth`.
+      secret: true
+    timeout_seconds:
+      type: number
+      title: Request timeout (seconds)
+      default: 300
+      minimum: 1
+    default_sampler:
+      type: string
+      title: Default sampler
+      description: Sampler name used when a request does not specify one.
+      default: "DPM++ 2M Karras"
+  additionalProperties: false
+
+requirements:
+  - "httpx>=0.27"
+
+notes: |
+  Start a1111 with `--api` to expose the HTTP API. If the server is
+  behind authentication, set either `api_key` (Bearer header) or
+  `username`/`password` (HTTP Basic).
