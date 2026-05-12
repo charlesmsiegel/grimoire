@@ -8,6 +8,7 @@ applied inside a single transaction and recorded in ``schema_version``.
 from __future__ import annotations
 
 import re
+import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -100,16 +101,40 @@ async def apply_migrations(
     run: list[Migration] = []
     async with db.acquire() as conn:
         for migration in pending:
+            statements = _split_statements(migration.sql)
             try:
                 await conn.execute("BEGIN")
-                await conn.executescript(migration.sql)
+                for stmt in statements:
+                    await conn.execute(stmt)
                 await conn.execute(
                     "INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, ?)",
                     (migration.version, migration.name, datetime.now(UTC).isoformat()),
                 )
-                await conn.commit()
+                await conn.execute("COMMIT")
             except Exception:
-                await conn.rollback()
+                await conn.execute("ROLLBACK")
                 raise
             run.append(migration)
     return run
+
+
+def _split_statements(sql: str) -> list[str]:
+    """Split a migration script into individual SQL statements.
+
+    Uses ``sqlite3.complete_statement`` so quoted semicolons and ``BEGIN``
+    blocks inside triggers are respected. Statements are returned trimmed;
+    blank input yields an empty list.
+    """
+    statements: list[str] = []
+    buffer = ""
+    for line in sql.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            stmt = buffer.strip()
+            if stmt:
+                statements.append(stmt)
+            buffer = ""
+    trailing = buffer.strip()
+    if trailing:
+        statements.append(trailing)
+    return statements
