@@ -266,9 +266,7 @@ class WSCollector:
 
 @pytest.fixture
 def scene_manager(tmp_path: Path) -> SceneManager:
-    return SceneManager(
-        tmp_path, config=SceneManagerConfig(running_summary_every_n_posts=0)
-    )
+    return SceneManager(tmp_path, config=SceneManagerConfig(running_summary_every_n_posts=0))
 
 
 @pytest.fixture
