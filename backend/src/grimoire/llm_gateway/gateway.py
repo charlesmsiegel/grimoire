@@ -132,7 +132,7 @@ class LLMGatewayService:
                 campaign_id=campaign_id,
                 turn_id=turn_id,
                 error=exc,
-                retries=self._config.retry.max_retries,
+                retries=0,
                 fallback_used=False,
             )
             raise
@@ -165,7 +165,19 @@ class LLMGatewayService:
                     fallback_used=True,
                 )
                 return response
-            except (PermanentError, *RETRIABLE_EXCEPTIONS) as fallback_exc:
+            except PermanentError as fallback_exc:
+                await self._record_failure(
+                    task=task,
+                    route=fallback,
+                    request=request,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    error=fallback_exc,
+                    retries=0,
+                    fallback_used=True,
+                )
+                raise
+            except RETRIABLE_EXCEPTIONS as fallback_exc:
                 await self._record_failure(
                     task=task,
                     route=fallback,
@@ -391,7 +403,19 @@ class LLMGatewayService:
 
             try:
                 vectors, retries = await run_with_retries(_call, policy=self._config.retry)
-            except (PermanentError, *RETRIABLE_EXCEPTIONS) as exc:
+            except PermanentError as exc:
+                if self._config.observability.log_all_requests:
+                    await self._log.record(
+                        task=task,
+                        provider_id=route.provider_id,
+                        model=model_id,
+                        retries=0,
+                        error=f"{type(exc).__name__}: {exc}",
+                        campaign_id=campaign_id,
+                        turn_id=turn_id,
+                    )
+                raise
+            except RETRIABLE_EXCEPTIONS as exc:
                 if self._config.observability.log_all_requests:
                     await self._log.record(
                         task=task,
@@ -418,7 +442,7 @@ class LLMGatewayService:
                     task=task,
                     provider_id=route.provider_id,
                     model=model_id,
-                    usage=TokenUsage(input_tokens=sum(len(t) for t in missing)),
+                    usage=TokenUsage(input_tokens=max(1, sum(len(t) // 4 for t in missing))),
                     latency_ms=latency_ms,
                     retries=retries,
                     campaign_id=campaign_id,
