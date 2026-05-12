@@ -54,18 +54,19 @@ def discover(
     silently skipped.
 
     Later roots are not allowed to shadow earlier ones — if the same plugin
-    id appears twice, the later one is dropped with an error. Bundled roots
-    are scanned *before* user roots so a user copy in `data/plugins/` wins.
+    id appears twice, the later one is dropped with an error. User roots
+    are scanned *before* bundled roots so a user copy in `data/plugins/`
+    wins over the same id under the bundled tree.
     """
     discovered: list[DiscoveredPlugin] = []
     errors: list[DiscoveryError] = []
     seen_ids: dict[str, Path] = {}
 
     ordered: list[tuple[Path, bool]] = []
-    for root in bundled_roots or ():
-        ordered.append((root, True))
     for root in roots:
         ordered.append((root, False))
+    for root in bundled_roots or ():
+        ordered.append((root, True))
 
     for root, bundled in ordered:
         if not root.exists() or not root.is_dir():
