@@ -307,6 +307,32 @@ async def test_set_and_get_composition_round_trip(
     assert by_id["wod-nyc"].track_latest is True
 
 
+async def test_set_composition_preserves_campaign_config(
+    library: LibraryService, store: StateStore
+) -> None:
+    """Regression: set_composition must not wipe campaigns.config to NULL."""
+    await _seed_setting(store, "wod-london")
+    await store.upsert_campaign(
+        campaign_id="camp-1",
+        name="Camp",
+        config={"per_task_prompts": {"main": "be terse"}, "backup_policy": "daily"},
+    )
+
+    await library.set_composition(
+        "camp-1",
+        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=[])]),
+    )
+
+    row = await store.db.fetchone("SELECT config FROM campaigns WHERE id = ?", ("camp-1",))
+    assert row is not None
+    assert row["config"] is not None
+    import json as _json
+
+    config = _json.loads(row["config"])
+    assert config["per_task_prompts"]["main"] == "be terse"
+    assert config["backup_policy"] == "daily"
+
+
 async def test_set_composition_drops_removed_refs(
     library: LibraryService, store: StateStore
 ) -> None:
