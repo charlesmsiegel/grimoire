@@ -21,6 +21,8 @@ from grimoire.continuity.config import (
     ContradictionCheckConfig,
     KeywordRetrievalConfig,
 )
+from grimoire.continuity.hybrid_search import HybridFactSearchIndex, QueryEmbedder
+from grimoire.continuity.llm_judge import JudgeLLM, LLMContradictionJudge
 from grimoire.continuity.protocols import (
     Continuity,
     ContinuityStore,
@@ -34,6 +36,7 @@ from grimoire.continuity.service import (
     ContradictionReportNotFoundError,
     FactNotFoundError,
 )
+from grimoire.continuity.sqlite_store import SqliteContinuityStore
 from grimoire.continuity.store import (
     InMemoryContinuityStore,
     KeywordFactSearchIndex,
@@ -87,11 +90,16 @@ __all__ = [
     "FactSearchIndex",
     "FactSource",
     "FactSubject",
+    "HybridFactSearchIndex",
     "InGameTime",
     "InMemoryContinuityStore",
+    "JudgeLLM",
     "KeywordFactSearchIndex",
     "KeywordRetrievalConfig",
     "KnowledgeEntry",
+    "LLMContradictionJudge",
+    "QueryEmbedder",
     "RetirementReason",
+    "SqliteContinuityStore",
     "StubContradictionJudge",
 ]

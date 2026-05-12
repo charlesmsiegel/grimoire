@@ -1,0 +1,202 @@
+"""LLM-backed contradiction judgment.
+
+The judge takes a candidate fact and an existing fact, asks a small
+model whether they contradict, and parses the structured response into a
+:class:`ContradictionCandidate`. Used by `ContinuityService` instead of
+the always-uncertain :class:`StubContradictionJudge` once an LLM Gateway
+is wired up.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from typing import Protocol
+
+from grimoire.continuity.protocols import ContradictionJudge
+from grimoire.continuity.types import (
+    ContradictionCandidate,
+    ContradictionVerdict,
+    Fact,
+    FactSource,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class JudgeLLM(Protocol):
+    """Minimal seam over the LLM Gateway's ``complete`` call.
+
+    A real implementation accepts a `CompletionRequest`-shaped object and
+    returns something with a ``.text`` attribute. The seam keeps this
+    module independent of the gateway's pydantic types.
+    """
+
+    async def complete(self, task: str, request) -> object: ...
+
+
+PROMPT_TEMPLATE = """You are a continuity checker for a roleplaying campaign.
+
+Given two facts about the same fictional world, decide whether they
+CONTRADICT each other (i.e. they cannot both be true), are CONSISTENT
+(both can hold), or whether you cannot tell (UNCERTAIN).
+
+Respond as a single JSON object with these keys:
+  - verdict: one of "conflict", "no_conflict", "uncertain"
+  - confidence: a float in [0, 1]
+  - rationale: a short sentence (<= 30 words) explaining the call
+
+Existing fact (established in post {existing_post}):
+  "{existing_text}"
+
+Candidate fact (proposed in post {candidate_post}):
+  "{candidate_text}"
+
+Return only the JSON object.
+"""
+
+
+class LLMContradictionJudge(ContradictionJudge):
+    """LLM-backed implementation of :class:`ContradictionJudge`.
+
+    Parameters
+    ----------
+    gateway:
+        Anything implementing ``complete(task, request) -> response``
+        where ``response.text`` is a string. The real `LLMGatewayService`
+        satisfies this.
+    request_factory:
+        Callable taking ``(system, user)`` strings and returning a
+        gateway-shaped request object. Kept abstract so this module
+        doesn't import pydantic models from the gateway.
+    task:
+        LLM Gateway task name (route) to use. Defaults to ``"drift_check"``
+        which the spec earmarks as a small/cheap model.
+    """
+
+    def __init__(
+        self,
+        gateway: JudgeLLM,
+        request_factory,
+        *,
+        task: str = "drift_check",
+    ) -> None:
+        self._gateway = gateway
+        self._make_request = request_factory
+        self._task = task
+
+    async def judge(self, candidate: Fact, existing: Fact) -> ContradictionCandidate:
+        # Two facts established by the same character speaking in-fiction
+        # aren't comparable on the same "is it true" axis — testimony is
+        # subjective. Don't flag them.
+        if (
+            candidate.source is FactSource.CHARACTER_TESTIMONY
+            and existing.source is FactSource.CHARACTER_TESTIMONY
+            and candidate.speaker_id != existing.speaker_id
+        ):
+            return ContradictionCandidate(
+                existing_fact=existing,
+                similarity=0.0,
+                verdict=ContradictionVerdict.UNCERTAIN,
+                confidence=0.0,
+                rationale="distinct testimonies — judgement deferred",
+            )
+
+        user_prompt = PROMPT_TEMPLATE.format(
+            existing_post=existing.established_in_post or "?",
+            existing_text=_clip(existing.text),
+            candidate_post=candidate.established_in_post or "?",
+            candidate_text=_clip(candidate.text),
+        )
+        request = self._make_request(
+            "You return JSON only. No prose, no markdown fences.",
+            user_prompt,
+        )
+        try:
+            response = await self._gateway.complete(self._task, request)
+        except Exception as exc:
+            logger.warning("contradiction judge LLM call failed: %s", exc)
+            return ContradictionCandidate(
+                existing_fact=existing,
+                similarity=0.0,
+                verdict=ContradictionVerdict.UNCERTAIN,
+                confidence=0.0,
+                rationale=f"judge unavailable: {type(exc).__name__}",
+            )
+
+        raw = getattr(response, "text", None)
+        if not isinstance(raw, str):
+            return _uncertain(existing, "empty judge response")
+
+        parsed = _extract_json(raw)
+        if parsed is None:
+            return _uncertain(existing, "unparseable judge response")
+
+        verdict_raw = str(parsed.get("verdict") or "uncertain").lower()
+        try:
+            verdict = ContradictionVerdict(verdict_raw)
+        except ValueError:
+            verdict = ContradictionVerdict.UNCERTAIN
+        confidence_raw = parsed.get("confidence", 0.0)
+        try:
+            confidence = max(0.0, min(1.0, float(confidence_raw)))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        rationale = str(parsed.get("rationale") or "")[:280]
+
+        return ContradictionCandidate(
+            existing_fact=existing,
+            similarity=0.0,
+            verdict=verdict,
+            confidence=confidence,
+            rationale=rationale,
+        )
+
+
+def _uncertain(existing: Fact, rationale: str) -> ContradictionCandidate:
+    return ContradictionCandidate(
+        existing_fact=existing,
+        similarity=0.0,
+        verdict=ContradictionVerdict.UNCERTAIN,
+        confidence=0.0,
+        rationale=rationale,
+    )
+
+
+_JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _extract_json(text: str) -> dict | None:
+    """Best-effort JSON extraction.
+
+    Models sometimes wrap JSON in ```json fences or add a sentence before
+    or after. The first balanced ``{...}`` block is parsed; if that fails
+    we return ``None``.
+    """
+    candidate = text.strip()
+    if candidate.startswith("```"):
+        # strip a fenced code block
+        candidate = candidate.strip("`")
+        if candidate.startswith("json"):
+            candidate = candidate[4:]
+        candidate = candidate.strip()
+    match = _JSON_BLOCK_RE.search(candidate)
+    if not match:
+        return None
+    try:
+        result = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(result, dict):
+        return None
+    return result
+
+
+def _clip(text: str, limit: int = 500) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
+__all__ = ["JudgeLLM", "LLMContradictionJudge"]
