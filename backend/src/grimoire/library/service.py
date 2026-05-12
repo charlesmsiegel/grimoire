@@ -421,6 +421,7 @@ class LibraryService:
             inline_style_guide=composition.inline_style_guide,
             content_boundaries=composition.content_boundaries,
             greeting_id=camp_row["greeting_id"],
+            config=_maybe_json(camp_row["config"]),
         )
 
         existing = {r["setting_id"] for r in await self.store.list_setting_refs(campaign_id)}
