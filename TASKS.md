@@ -50,7 +50,7 @@ Spec 03. Migrations for every table: `library_index` (+ FTS), `campaign_content_
 **Blocked by:** 4, 8
 Spec 03/18. Monitor `data/library/` and `data/campaigns/` with Python `watchdog`. On change: parse, upsert into appropriate index (`library_index` or `campaign_content_index`), queue embedding, emit `library_file_changed` / `campaign_file_changed` / `scene_file_changed` / `sheet_file_changed`. Uses `content_hash` to detect actual content changes; tolerates last-write-wins races with a conflict warning.
 
-### 13. [ ] Build LLM Gateway core
+### 13. [x] Build LLM Gateway core
 **Blocked by:** 2, 7, 8
 Spec 05. Routing per task (`main` / `drift_check` / `extractor` / `npc_tick` / `scene_summary` / `running_summary` / `validation` + per-task embedding routes). Provider/embedding lookup via the Plugins module. `complete`/`stream`/`embed` with retries + timeouts + fallback. Token + cost tracking written to `llm_requests`. Embedding cache by `(text_hash, model_id)`. Health monitoring. Estimation API. Per-campaign route overrides.
 
