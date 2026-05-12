@@ -90,7 +90,7 @@ Spec 17. `TestApp` harness with fixture loading. `MockLLMGateway` with per-task 
 
 ## Wave 4 — Content + Integrators
 
-### 11. [ ] Build Setting module
+### 11. [x] Build Setting module
 **Blocked by:** 10
 Spec 09. CRUD for items/locations/lore/factions/greetings within a setting (delegates to Library writes). Per-campaign composition resolution with `include` filters. Location adjacency / `path_between` / `locations_within`. Cross-setting variant lookup by shared `asset_id`. Lore keyword search for archive-tier triggers. Procedural weather (seeded per campaign, deterministic). Calendar / season / holiday queries. Faction state CRUD (campaign-scoped, SQLite). `promote_to_library` for non-character kinds. `setting.yaml` CRUD + `fork_setting` (directory copy).
 
