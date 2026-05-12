@@ -84,17 +84,33 @@ async def test_migration_runner_applies_pending(tmp_path: Path) -> None:
 
 
 async def test_migration_runner_rolls_back_on_failure(tmp_path: Path) -> None:
+    """A migration whose later statement fails must leave NO trace.
+
+    Earlier statements in the same migration must roll back along with
+    schema_version, so on next startup the runner re-applies the whole
+    migration cleanly.
+    """
     migrations_dir = tmp_path / "migrations"
     migrations_dir.mkdir()
     (migrations_dir / "001_ok.sql").write_text("CREATE TABLE t (id INTEGER PRIMARY KEY);")
-    (migrations_dir / "002_broken.sql").write_text("CREATE TABLE t (id INTEGER PRIMARY KEY);")
+    (migrations_dir / "002_partial.sql").write_text(
+        "CREATE TABLE u (id INTEGER PRIMARY KEY);\n"
+        "CREATE TABLE t (id INTEGER PRIMARY KEY);\n"  # duplicate; fails
+    )
 
     database = Database(tmp_path / "db.sqlite", pool_size=1)
     await database.connect()
     try:
         with pytest.raises(sqlite3.OperationalError):
             await apply_migrations(database, directory=migrations_dir)
+
+        # Migration 001 stays applied; 002's first statement must NOT have
+        # leaked: table `u` should not exist and schema_version is still 1.
         assert await current_version(database) == 1
+        row = await database.fetchone(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='u'"
+        )
+        assert row is None
     finally:
         await database.close()
 

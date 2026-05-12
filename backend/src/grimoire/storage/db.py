@@ -51,7 +51,11 @@ class Database:
             self._closed = False
 
     async def _open_connection(self) -> aiosqlite.Connection:
-        conn = await aiosqlite.connect(self.path)
+        # ``isolation_level=None`` puts the underlying sqlite3 connection in
+        # autocommit mode so transactions must be started explicitly with
+        # BEGIN. This is required for migration atomicity: implicit BEGINs +
+        # ``executescript`` would silently commit mid-migration.
+        conn = await aiosqlite.connect(self.path, isolation_level=None)
         conn.row_factory = aiosqlite.Row
         await conn.execute("PRAGMA foreign_keys = ON")
         if self.enable_wal:
@@ -77,7 +81,6 @@ class Database:
     async def execute(self, sql: str, params: tuple = ()) -> None:
         async with self.acquire() as conn:
             await conn.execute(sql, params)
-            await conn.commit()
 
     async def fetchone(self, sql: str, params: tuple = ()) -> aiosqlite.Row | None:
         async with self.acquire() as conn, conn.execute(sql, params) as cursor:
