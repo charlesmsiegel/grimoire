@@ -151,12 +151,20 @@ class LLMProviderConformance:
         ]
         if not paid:
             raise skip("no paid models in catalog")
-        # Confirm at least one cost value is positive.
-        any_positive = any(
-            (m.input_cost_per_1k or 0) > 0 or (m.output_cost_per_1k or 0) > 0 for m in paid
+        # Compute the cost of a non-trivial request against a paid model
+        # and confirm the result is strictly positive.
+        model = paid[0]
+        prompt_tokens = 1000
+        completion_tokens = 1000
+        cost = (
+            prompt_tokens / 1000.0 * (model.input_cost_per_1k or 0.0)
+            + completion_tokens / 1000.0 * (model.output_cost_per_1k or 0.0)
         )
-        if not any_positive:
-            raise AssertionError("paid models should declare positive per-1k costs")
+        if cost <= 0:
+            raise AssertionError(
+                f"paid model {model.id!r} produced non-positive cost estimate "
+                f"({cost}) for 1k/1k tokens"
+            )
 
 
 __all__ = ["LLMProviderConformance"]
