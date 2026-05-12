@@ -278,9 +278,7 @@ class OrchestratorService:
         state = self._state_for(campaign_id)
         all_ids = await self._recent_turn_ids(campaign_id, 1)
         state.last_turn_id = all_ids[0] if all_ids else None
-        return UndoResult(
-            turns_undone=undone, reversed_delta_ids=reversed_ids, warnings=warnings
-        )
+        return UndoResult(turns_undone=undone, reversed_delta_ids=reversed_ids, warnings=warnings)
 
     async def retcon_post(self, post_id: PostId, new_text: str) -> RetconResult:
         """Replace a past post, reverse its deltas, re-run extraction."""
@@ -291,9 +289,7 @@ class OrchestratorService:
         reversed_ids: list[str] = []
         if post.turn_id:
             try:
-                reversed_ids = await self._reverse_turn_deltas(
-                    scene_file.campaign_id, post.turn_id
-                )
+                reversed_ids = await self._reverse_turn_deltas(scene_file.campaign_id, post.turn_id)
             except Exception as exc:
                 logger.warning("retcon: could not reverse deltas for %s: %s", post_id, exc)
         # Update the post body on disk.
@@ -682,9 +678,7 @@ class OrchestratorService:
 
     async def _recent_turn_ids(self, campaign_id: CampaignId, count: int) -> list[TurnId]:
         """Return the last ``count`` turn ids (most recent first)."""
-        log = await self._store.get_delta_log(
-            campaign_id=campaign_id, include_reversed=False
-        )
+        log = await self._store.get_delta_log(campaign_id=campaign_id, include_reversed=False)
         seen: list[TurnId] = []
         seen_set: set[TurnId] = set()
         for record in reversed(log):
@@ -697,9 +691,7 @@ class OrchestratorService:
                 break
         return seen
 
-    async def _reverse_turn_deltas(
-        self, campaign_id: CampaignId, turn_id: TurnId
-    ) -> list[str]:
+    async def _reverse_turn_deltas(self, campaign_id: CampaignId, turn_id: TurnId) -> list[str]:
         log = await self._store.get_delta_log(
             campaign_id=campaign_id, turn_id=turn_id, include_reversed=False
         )
@@ -749,9 +741,7 @@ class OrchestratorService:
     # ------------------------------------------------------------------ #
 
     async def _require_campaign(self, campaign_id: CampaignId) -> None:
-        row = await self._store.db.fetchone(
-            "SELECT id FROM campaigns WHERE id = ?", (campaign_id,)
-        )
+        row = await self._store.db.fetchone("SELECT id FROM campaigns WHERE id = ?", (campaign_id,))
         if row is None:
             raise UnknownCampaignError(campaign_id)
 
