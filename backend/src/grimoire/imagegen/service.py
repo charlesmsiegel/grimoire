@@ -75,9 +75,7 @@ class TriggerConfig:
             every_n=int(raw.get("trigger_n") or raw.get("every_n") or 5),
             on_scene_open=bool(raw.get("trigger_on_scene_open", True)),
             on_new_location=bool(raw.get("trigger_on_new_location", True)),
-            on_new_character_appearance=bool(
-                raw.get("trigger_on_new_character_appearance", True)
-            ),
+            on_new_character_appearance=bool(raw.get("trigger_on_new_character_appearance", True)),
             auto_during_combat=bool(raw.get("auto_illustrate_during_combat", False)),
         )
 
@@ -376,7 +374,8 @@ class ImageGenService:
     ) -> list[GenerationJob]:
         async with self._lock:
             jobs = [
-                job for job in self._jobs.values()
+                job
+                for job in self._jobs.values()
                 if job.campaign_id == campaign_id and (status is None or job.status == status)
             ]
         jobs.sort(key=lambda j: (-j.priority, j.queued_at or _now()))
