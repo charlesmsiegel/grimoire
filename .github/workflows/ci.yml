@@ -53,7 +53,11 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-extras --dev
-      - run: uv run pytest -m conformance
+      # Tolerate empty marker layers (pytest exit code 5) so the
+      # pipeline doesn't break before later tasks populate each bucket.
+      - run: |
+          uv run pytest -m conformance || code=$?
+          [ "${code:-0}" = "5" ] && exit 0 || exit "${code:-0}"
 
   backend-integration:
     runs-on: ubuntu-latest
@@ -67,7 +71,9 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-extras --dev
-      - run: uv run pytest -m integration
+      - run: |
+          uv run pytest -m integration || code=$?
+          [ "${code:-0}" = "5" ] && exit 0 || exit "${code:-0}"
 
   backend-frozen-campaign:
     runs-on: ubuntu-latest
@@ -81,7 +87,9 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-extras --dev
-      - run: uv run pytest -m frozen_campaign
+      - run: |
+          uv run pytest -m frozen_campaign || code=$?
+          [ "${code:-0}" = "5" ] && exit 0 || exit "${code:-0}"
 
   backend-perf:
     runs-on: ubuntu-latest
@@ -95,7 +103,9 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-extras --dev
-      - run: uv run pytest -m perf
+      - run: |
+          uv run pytest -m perf || code=$?
+          [ "${code:-0}" = "5" ] && exit 0 || exit "${code:-0}"
 
   frontend:
     runs-on: ubuntu-latest
