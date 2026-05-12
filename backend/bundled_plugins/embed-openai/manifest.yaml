@@ -1,0 +1,47 @@
+id: embed-openai
+name: OpenAI Embeddings
+version: 1.0.0
+api_version: "1"
+author: Grimoire
+description: >
+  Cloud embedding provider that calls the OpenAI `/v1/embeddings` endpoint.
+  Configurable model (default `text-embedding-3-small`) and optional
+  `dimensions` truncation parameter for the `text-embedding-3-*` family.
+implements:
+  - embedding_provider
+classes:
+  embedding_provider: OpenAIEmbeddingProvider
+requirements:
+  - httpx>=0.27
+config_schema:
+  type: object
+  required:
+    - api_key
+  properties:
+    api_key:
+      type: string
+      description: OpenAI API key.
+      secret: true
+    base_url:
+      type: string
+      description: Override the API base URL (Azure / proxies).
+      default: https://api.openai.com/v1
+    model:
+      type: string
+      description: Embedding model id.
+      default: text-embedding-3-small
+    dimensions:
+      type: integer
+      minimum: 1
+      description: >
+        Truncate the embedding to this length. Only supported by
+        `text-embedding-3-small` and `text-embedding-3-large`. When unset
+        the model's native dimension count is used.
+    organization:
+      type: string
+      description: Optional OpenAI organization header.
+    timeout_seconds:
+      type: number
+      minimum: 1
+      default: 30
+  additionalProperties: false

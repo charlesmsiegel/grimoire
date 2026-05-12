@@ -1,0 +1,38 @@
+id: embed-sentence-transformers
+name: Sentence-Transformers Embeddings
+version: 1.0.0
+api_version: "1"
+author: Grimoire
+description: >
+  Local embedding provider backed by the `sentence-transformers` library.
+  Loads a HuggingFace model on first use and runs `encode()` in a thread
+  pool so the event loop is never blocked.
+implements:
+  - embedding_provider
+classes:
+  embedding_provider: SentenceTransformersEmbeddingProvider
+requirements:
+  - sentence-transformers>=3.0
+  - torch>=2.0
+config_schema:
+  type: object
+  properties:
+    model:
+      type: string
+      description: HuggingFace model id loadable by SentenceTransformer.
+      default: sentence-transformers/all-mpnet-base-v2
+    device:
+      type: string
+      description: Torch device override ("cpu", "cuda", "mps"). Auto-detected when omitted.
+    normalize:
+      type: boolean
+      description: L2-normalise output vectors so cosine similarity equals dot product.
+      default: true
+    batch_size:
+      type: integer
+      minimum: 1
+      default: 32
+    cache_folder:
+      type: string
+      description: Local directory the model is downloaded to. Defaults to HuggingFace's cache.
+  additionalProperties: false
