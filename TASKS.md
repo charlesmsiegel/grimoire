@@ -46,7 +46,7 @@ Spec 14. SPA shell with Library / Campaigns top-level nav. Routing. Theme + dark
 **Blocked by:** 2, 5
 Spec 03. Migrations for every table: `library_index` (+ FTS), `campaign_content_index`, `library_snapshots`, `campaigns` + `campaign_setting_refs` + `campaign_pcs`, `branches`, `character/location/faction_state`, `scenes` + `posts`, `facts` + `commitments` + `relationships` + `knowledge_state`, `calendar`, `images`, `deltas` + `review_queue`, `embeddings` (sqlite-vec), `llm_requests`, `embedding_cache`, `turn_audits` + `cost_records` + `metric_samples` + `log_events` + `error_records`. Implement read APIs (resolve cascade, `vector_search`, `keyword_search`, `get_delta_log`) and write APIs (`apply_delta`, `reverse_delta`, `queue_for_review`, file-write mediators that update indexes synchronously). Snapshot writing on bind, undo/retcon/branch fork copy-on-write.
 
-### 9. [x] Wire watchdog file watcher
+### 9. [ ] Wire watchdog file watcher
 **Blocked by:** 4, 8
 Spec 03/18. Monitor `data/library/` and `data/campaigns/` with Python `watchdog`. On change: parse, upsert into appropriate index (`library_index` or `campaign_content_index`), queue embedding, emit `library_file_changed` / `campaign_file_changed` / `scene_file_changed` / `sheet_file_changed`. Uses `content_hash` to detect actual content changes; tolerates last-write-wins races with a conflict warning.
 
@@ -80,7 +80,7 @@ Spec 05 + 15. `embed-sentence-transformers` (local, default `all-mpnet-base-v2`,
 **Blocked by:** 4, 8, 9
 Spec 10. Scene markdown + YAML sidecar pair storage at `data/campaigns/<id>/scenes/NNNN-slug.{md,yaml}`. Append posts with author labeling. Active scene per campaign + per-PC. Scene boundary detection (time gap / location / cast / tonal / explicit / user signal) with confidence thresholds. Multi-PC advance decision (auto-respond if ≤1 PC, wait for advance if 2+). `on_advance_requested` marks `last_advance_at_post`. Running summary regen every N posts. Scene close + key beats + threads. Thread tracking (introduced/paid_off). Edit/delete post triggering retcon. Fork copy-on-write of scenes for branches.
 
-### 18. [x] Build Continuity module
+### 18. [ ] Build Continuity module
 **Blocked by:** 8, 13
 Spec 11. Fact ledger (`add`/`retire`/`update`/`get`/`facts_about`/`search`/`recent` — vector + keyword). Contradiction detection (top-K similar + LLM judgment) with explicit resolution flow. Commitment ledger (`add`/`resolve`/`get`/`open`/`overdue`/`stale`) with status lifecycle (OPEN→PAID/BROKEN/OVERDUE/STALE). Knowledge state per character per fact. Aging (commitments come due / go stale) when Time Engine calls `age()`.
 
