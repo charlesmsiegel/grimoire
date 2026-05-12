@@ -1,0 +1,491 @@
+"""Shared types and protocol stubs for Grimoire.
+
+This package is the single source of truth for cross-module dataclasses and
+`typing.Protocol` interfaces referenced throughout the specs. It contains pure
+type declarations — no behavior. Backend modules and tests both import from
+here so they stay in agreement on shape.
+"""
+
+from __future__ import annotations
+
+from .characters import (
+    AwarenessState,
+    Character,
+    CharacterData,
+    CharacterFilter,
+    CharacterRole,
+    DriftReport,
+    ImagePromptTemplate,
+    ImportResult,
+    PCEntry,
+    RelationshipEvent,
+    RelationshipState,
+    ResolvedCharacter,
+    StructuralRelationship,
+    VoiceAnchor,
+)
+from .common import (
+    BranchId,
+    CampaignId,
+    CharacterRef,
+    CommitmentId,
+    EntityKind,
+    EntityRef,
+    EventId,
+    FactId,
+    FactionRef,
+    GenJobId,
+    HealthLevel,
+    HealthStatus,
+    ItemRef,
+    Json,
+    JsonSchema,
+    LocationRef,
+    MechanicsModuleId,
+    PluginId,
+    PostId,
+    SceneId,
+    SceneRef,
+    Scope,
+    SubscriptionId,
+    TurnId,
+    ValidationResult,
+)
+from .composition import (
+    CampaignRef,
+    Composition,
+    Greeting,
+    LibraryEntity,
+    ResolutionLayer,
+    ResolutionSource,
+    ResolvedEntity,
+    ResolvedLocation,
+    SettingMeta,
+    SettingRef,
+    UpgradeReport,
+)
+from .context import AssembledPrompt, BudgetEstimate, ContextSource
+from .continuity import (
+    AgingReport,
+    Commitment,
+    CommitmentKind,
+    CommitmentStatus,
+    ContradictionReport,
+    Fact,
+    FactScope,
+    FactSource,
+    FactSubject,
+    KnowledgeEntry,
+    Relationship,
+    StaleCommitmentQuery,
+)
+from .export import (
+    ExportCapabilities,
+    ExportOptions,
+    ExportPreview,
+    ExportRecord,
+    ExportResult,
+    ExportSelection,
+)
+from .extraction import (
+    EntityCandidate,
+    ExtractionFlag,
+    ExtractionResult,
+    FlagLevel,
+)
+from .imagegen import (
+    BackendCapabilities,
+    BackendInfo,
+    GenerationJob,
+    GenerationRequest,
+    GenerationResult,
+    ImageMetadata,
+    JobStatus,
+    LoraSpec,
+)
+from .llm import (
+    CompletionChunk,
+    CompletionRequest,
+    CompletionResponse,
+    LLMCallRecord,
+    Message,
+    MessageRole,
+    ModelInfo,
+    ModelParams,
+    ProviderCapabilities,
+    RetryPolicy,
+    TimeoutPolicy,
+    TokenUsage,
+)
+from .mechanics import (
+    ApiVersion,
+    Capability,
+    CreationStep,
+    MechanicsResult,
+    ModuleManifest,
+    NarratedEvent,
+    PowerDefinition,
+    ProposedRoll,
+    ResourceCost,
+    Roll,
+    RollModifier,
+    RollResult,
+    TickContext,
+)
+from .observability import (
+    CompositionSnapshot,
+    ContextSummary,
+    CostTotal,
+    DailyCost,
+    ErrorRecord,
+    HealthTarget,
+    LogEvent,
+    LogLevel,
+    LogQuery,
+    MetricSample,
+    ReplayOptions,
+    ReplayResult,
+    ReplaySubstitution,
+    TurnAudit,
+    WarningRecord,
+)
+from .orchestrator import (
+    Event,
+    EventRecord,
+    EventType,
+    ForkResult,
+    RegenerateResult,
+    RetconResult,
+    SubmitResult,
+    Subscription,
+    TurnStatus,
+    UndoResult,
+)
+from .plugins import (
+    PluginKind,
+    PluginLifecycle,
+    PluginManifest,
+    PluginStatus,
+    RescanReport,
+)
+from .protocols import (
+    Characters as CharactersProtocol,
+)
+from .protocols import (
+    ContextBuilder as ContextBuilderProtocol,
+)
+from .protocols import (
+    Continuity as ContinuityProtocol,
+)
+from .protocols import (
+    CostTracker as CostTrackerProtocol,
+)
+from .protocols import (
+    EmbeddingProvider,
+    EventBus,
+    EventHandler,
+    ExportAdapter,
+    FileWatcher,
+    ImageGenBackend,
+    LLMProvider,
+    MechanicsModule,
+)
+from .protocols import (
+    Export as ExportProtocol,
+)
+from .protocols import (
+    Extractor as ExtractorProtocol,
+)
+from .protocols import (
+    HealthMonitor as HealthMonitorProtocol,
+)
+from .protocols import (
+    ImageGen as ImageGenProtocol,
+)
+from .protocols import (
+    Library as LibraryProtocol,
+)
+from .protocols import (
+    LLMGateway as LLMGatewayProtocol,
+)
+from .protocols import (
+    Mechanics as MechanicsProtocol,
+)
+from .protocols import (
+    Observability as ObservabilityProtocol,
+)
+from .protocols import (
+    Orchestrator as OrchestratorProtocol,
+)
+from .protocols import (
+    Plugins as PluginsProtocol,
+)
+from .protocols import (
+    SceneManager as SceneManagerProtocol,
+)
+from .protocols import (
+    Setting as SettingProtocol,
+)
+from .protocols import (
+    StateStore as StateStoreProtocol,
+)
+from .protocols import (
+    TimeEngine as TimeEngineProtocol,
+)
+from .protocols import (
+    TurnReplayer as TurnReplayerProtocol,
+)
+from .scene import (
+    AdvanceDecision,
+    AdvanceResult,
+    AuthorKind,
+    Post,
+    Scene,
+    SceneBreakDecision,
+    SceneCloseReport,
+    SceneContext,
+    SceneFile,
+    SceneInit,
+    SceneThreads,
+    Thread,
+)
+from .state import (
+    AppliedDelta,
+    CharacterState,
+    ContextTier,
+    DeltaKind,
+    FactionState,
+    LocationState,
+    ReviewItem,
+    ReviewStatus,
+    SearchResult,
+    StateDelta,
+    StateSnapshot,
+)
+from .time import (
+    Duration,
+    FactionTickSummary,
+    InGameTime,
+    NpcTickSummary,
+    ScheduledEvent,
+    TimeAdvanceReason,
+    TimeAdvanceResult,
+    WeatherChange,
+)
+
+__all__ = [  # noqa: RUF022 — grouped by topic for readability
+    # common
+    "BranchId",
+    "CampaignId",
+    "CharacterRef",
+    "CommitmentId",
+    "EntityKind",
+    "EntityRef",
+    "EventId",
+    "FactId",
+    "FactionRef",
+    "GenJobId",
+    "HealthLevel",
+    "HealthStatus",
+    "ItemRef",
+    "Json",
+    "JsonSchema",
+    "LocationRef",
+    "MechanicsModuleId",
+    "PluginId",
+    "PostId",
+    "SceneId",
+    "SceneRef",
+    "Scope",
+    "SubscriptionId",
+    "TurnId",
+    "ValidationResult",
+    # time
+    "Duration",
+    "FactionTickSummary",
+    "InGameTime",
+    "NpcTickSummary",
+    "ScheduledEvent",
+    "TimeAdvanceReason",
+    "TimeAdvanceResult",
+    "WeatherChange",
+    # composition
+    "CampaignRef",
+    "Composition",
+    "Greeting",
+    "LibraryEntity",
+    "ResolutionLayer",
+    "ResolutionSource",
+    "ResolvedEntity",
+    "ResolvedLocation",
+    "SettingMeta",
+    "SettingRef",
+    "UpgradeReport",
+    # scene
+    "AdvanceDecision",
+    "AdvanceResult",
+    "AuthorKind",
+    "Post",
+    "Scene",
+    "SceneBreakDecision",
+    "SceneCloseReport",
+    "SceneContext",
+    "SceneFile",
+    "SceneInit",
+    "SceneThreads",
+    "Thread",
+    # state
+    "AppliedDelta",
+    "CharacterState",
+    "ContextTier",
+    "DeltaKind",
+    "FactionState",
+    "LocationState",
+    "ReviewItem",
+    "ReviewStatus",
+    "SearchResult",
+    "StateDelta",
+    "StateSnapshot",
+    # continuity
+    "AgingReport",
+    "Commitment",
+    "CommitmentKind",
+    "CommitmentStatus",
+    "ContradictionReport",
+    "Fact",
+    "FactScope",
+    "FactSource",
+    "FactSubject",
+    "KnowledgeEntry",
+    "Relationship",
+    "StaleCommitmentQuery",
+    # characters
+    "AwarenessState",
+    "Character",
+    "CharacterData",
+    "CharacterFilter",
+    "CharacterRole",
+    "DriftReport",
+    "ImagePromptTemplate",
+    "ImportResult",
+    "PCEntry",
+    "RelationshipEvent",
+    "RelationshipState",
+    "ResolvedCharacter",
+    "StructuralRelationship",
+    "VoiceAnchor",
+    # mechanics
+    "ApiVersion",
+    "Capability",
+    "CreationStep",
+    "MechanicsResult",
+    "ModuleManifest",
+    "NarratedEvent",
+    "PowerDefinition",
+    "ProposedRoll",
+    "ResourceCost",
+    "Roll",
+    "RollModifier",
+    "RollResult",
+    "TickContext",
+    # llm
+    "CompletionChunk",
+    "CompletionRequest",
+    "CompletionResponse",
+    "LLMCallRecord",
+    "Message",
+    "MessageRole",
+    "ModelInfo",
+    "ModelParams",
+    "ProviderCapabilities",
+    "RetryPolicy",
+    "TimeoutPolicy",
+    "TokenUsage",
+    # imagegen
+    "BackendCapabilities",
+    "BackendInfo",
+    "GenerationJob",
+    "GenerationRequest",
+    "GenerationResult",
+    "ImageMetadata",
+    "JobStatus",
+    "LoraSpec",
+    # export
+    "ExportCapabilities",
+    "ExportOptions",
+    "ExportPreview",
+    "ExportRecord",
+    "ExportResult",
+    "ExportSelection",
+    # extraction
+    "EntityCandidate",
+    "ExtractionFlag",
+    "ExtractionResult",
+    "FlagLevel",
+    # context
+    "AssembledPrompt",
+    "BudgetEstimate",
+    "ContextSource",
+    # plugins
+    "PluginKind",
+    "PluginLifecycle",
+    "PluginManifest",
+    "PluginStatus",
+    "RescanReport",
+    # orchestrator
+    "Event",
+    "EventRecord",
+    "EventType",
+    "ForkResult",
+    "RegenerateResult",
+    "RetconResult",
+    "SubmitResult",
+    "Subscription",
+    "TurnStatus",
+    "UndoResult",
+    # observability
+    "CompositionSnapshot",
+    "ContextSummary",
+    "CostTotal",
+    "DailyCost",
+    "ErrorRecord",
+    "HealthTarget",
+    "LogEvent",
+    "LogLevel",
+    "LogQuery",
+    "MetricSample",
+    "ReplayOptions",
+    "ReplayResult",
+    "ReplaySubstitution",
+    "TurnAudit",
+    "WarningRecord",
+    # protocols (plugin-shaped)
+    "EmbeddingProvider",
+    "EventBus",
+    "EventHandler",
+    "ExportAdapter",
+    "FileWatcher",
+    "ImageGenBackend",
+    "LLMProvider",
+    "MechanicsModule",
+    # protocols (module-shaped)
+    "CharactersProtocol",
+    "ContextBuilderProtocol",
+    "ContinuityProtocol",
+    "CostTrackerProtocol",
+    "ExportProtocol",
+    "ExtractorProtocol",
+    "HealthMonitorProtocol",
+    "ImageGenProtocol",
+    "LLMGatewayProtocol",
+    "LibraryProtocol",
+    "MechanicsProtocol",
+    "ObservabilityProtocol",
+    "OrchestratorProtocol",
+    "PluginsProtocol",
+    "SceneManagerProtocol",
+    "SettingProtocol",
+    "StateStoreProtocol",
+    "TimeEngineProtocol",
+    "TurnReplayerProtocol",
+]
