@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import StrEnum
+
+
+class AuthorKind(StrEnum):
+    PC = "pc"
+    NARRATOR = "narrator"
+    NPC = "npc"
+    SYSTEM = "system"
+
+
+@dataclass
+class Post:
+    id: str
+    scene_id: str
+    order_in_scene: int
+    author_kind: AuthorKind
+    body: str
+    is_player: bool
+    created_at: datetime
+    turn_id: str
+    author_pc_ref: str | None = None
+    author_npc_ref: str | None = None
+
+    @property
+    def author_label(self) -> str:
+        if self.author_kind == AuthorKind.PC and self.author_pc_ref:
+            return f"pc:{self.author_pc_ref}"
+        if self.author_kind == AuthorKind.NPC and self.author_npc_ref:
+            return f"npc:{self.author_npc_ref}"
+        return self.author_kind.value
+
+
+@dataclass
+class Thread:
+    text: str
+    introduced_at_post: int | None = None
+    paid_off_at_post: int | None = None
+
+
+@dataclass
+class SceneThreads:
+    introduced: list[Thread] = field(default_factory=list)
+    paid_off: list[Thread] = field(default_factory=list)
+
+
+@dataclass
+class Scene:
+    id: str
+    campaign_id: str
+    branch_id: str
+    ordinal: int
+    slug: str
+    title: str
+
+    location_ref: str | None = None
+    in_game_start: datetime | None = None
+    in_game_end: datetime | None = None
+    greeting_id: str | None = None
+
+    pov_character_ref: str | None = None
+    present_character_refs: list[str] = field(default_factory=list)
+    present_pc_refs: list[str] = field(default_factory=list)
+
+    mood: str | None = None
+
+    post_count: int = 0
+    threads_introduced: list[str] = field(default_factory=list)
+    threads_paid_off: list[str] = field(default_factory=list)
+
+    tags: list[str] = field(default_factory=list)
+    closed: bool = False
+    closed_at_turn: str | None = None
+
+    last_advance_at_post: int = 0
+    running_summary: str | None = None
+    final_summary: str | None = None
+    key_beats: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SceneInit:
+    campaign_id: str
+    branch_id: str = "main"
+    title: str | None = None
+    slug: str | None = None
+    location_ref: str | None = None
+    in_game_start: datetime | None = None
+    greeting_id: str | None = None
+    pov_character_ref: str | None = None
+    present_character_refs: list[str] = field(default_factory=list)
+    present_pc_refs: list[str] = field(default_factory=list)
+    mood: str | None = None
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SceneBreakDecision:
+    is_break: bool
+    confidence: float
+    reason: str
+    proposed_new_scene: SceneInit | None = None
+
+
+@dataclass
+class AdvanceDecision:
+    auto_respond: bool
+    reason: str
+
+
+@dataclass
+class AdvanceResult:
+    scene: Scene
+    pending_posts: list[Post]
+
+
+@dataclass
+class SceneCloseReport:
+    scene: Scene
+    final_summary: str
+    key_beats: list[str]
+    threads_resolved: list[str]
+    threads_unresolved: list[str]
