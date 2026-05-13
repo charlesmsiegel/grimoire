@@ -68,7 +68,14 @@ class Database:
 
     @asynccontextmanager
     async def acquire(self) -> AsyncIterator[aiosqlite.Connection]:
-        """Acquire a connection from the pool for the duration of the block."""
+        """Acquire a connection from the pool for the duration of the block.
+
+        If the caller leaves the connection inside an open transaction (raw
+        BEGIN without COMMIT/ROLLBACK, or an exception inside _txn), the
+        connection is rolled back before returning to the pool. Without this
+        the next consumer's BEGIN would see "cannot start a transaction
+        within a transaction" or operate on partial state.
+        """
         if self._pool is None:
             raise RuntimeError("Database is not connected; call connect() first")
         conn = await self._pool.get()
@@ -76,6 +83,9 @@ class Database:
             yield conn
         finally:
             if not self._closed:
+                if conn.in_transaction:
+                    with contextlib.suppress(Exception):
+                        await conn.rollback()
                 self._pool.put_nowait(conn)
 
     async def execute(self, sql: str, params: tuple = ()) -> None:
