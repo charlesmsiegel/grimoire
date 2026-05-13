@@ -4,8 +4,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _default_data_root() -> Path:
-    # backend/src/grimoire/config.py → repo_root / data
-    return Path(__file__).resolve().parents[3] / "data"
+    # User-scoped, so multiple clones of the repo share one library / campaigns.
+    # Override with the GRIMOIRE_DATA_ROOT env var when you want a per-clone dir.
+    return Path.home() / ".grimoire"
 
 
 class Settings(BaseSettings):
