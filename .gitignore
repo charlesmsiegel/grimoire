@@ -26,6 +26,9 @@ package-lock.json
 # Claude Code: personal permission overrides; project settings + hooks are tracked
 .claude/settings.local.json
 
+# scripts/run.sh runtime state (PIDs, ports); consumed by scripts/shutdown.sh
+.grimoire-run.env
+
 # OS
 .DS_Store
 Thumbs.db

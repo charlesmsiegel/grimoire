@@ -1,9 +1,33 @@
 #!/usr/bin/env bash
 # Install all dependencies for grimoire (backend + frontend).
+# Backend and frontend installs run in parallel; their output is line-prefixed
+# so it stays legible when interleaved.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
+# shellcheck source=_lib.sh
+. "$REPO_ROOT/scripts/_lib.sh"
+
+usage() {
+    cat <<'EOF'
+Usage: scripts/install.sh [--sequential] [-h|--help]
+
+Installs Python (backend) and JS (frontend) dependencies.
+
+Options:
+  --sequential    Install backend then frontend (default: parallel).
+  -h, --help      Show this help.
+EOF
+}
+
+PARALLEL=1
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --sequential) PARALLEL=0; shift ;;
+        -h|--help)    usage; exit 0 ;;
+        *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
 
 need() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -14,32 +38,68 @@ need() {
 
 missing=0
 need python3 "Install Python 3.12+ from https://www.python.org/downloads/" || missing=1
-need uv "Install uv from https://docs.astral.sh/uv/getting-started/installation/" || missing=1
-need node "Install Node 20+ from https://nodejs.org/" || missing=1
-if [ "$missing" -ne 0 ]; then
-    exit 1
-fi
+need uv      "Install uv from https://docs.astral.sh/uv/getting-started/installation/" || missing=1
+need node    "Install Node 20+ from https://nodejs.org/" || missing=1
+[ "$missing" -eq 0 ] || exit 1
 
-# pnpm: prefer pnpm on PATH; otherwise activate via corepack (ships with Node).
-if command -v pnpm >/dev/null 2>&1; then
-    PNPM=(pnpm)
-elif command -v corepack >/dev/null 2>&1; then
+# Resolve pnpm (or activate corepack). pnpm_cmd is a space-separated command
+# token: e.g. "pnpm" or "corepack pnpm".
+if ! command -v pnpm >/dev/null 2>&1 && command -v corepack >/dev/null 2>&1; then
     echo "==> pnpm not found; activating via corepack"
     corepack enable >/dev/null 2>&1 || true
-    PNPM=(corepack pnpm)
-else
-    echo "error: neither 'pnpm' nor 'corepack' found on PATH." >&2
-    echo "       Install pnpm from https://pnpm.io/installation" >&2
-    exit 1
 fi
+pnpm_cmd="$(resolve_pnpm)" || exit 1
+# shellcheck disable=SC2206
+PNPM=($pnpm_cmd)
 
-echo "==> Backend: uv sync (creates .venv and installs deps)"
-cd "$REPO_ROOT/backend"
-uv sync
+# Prefix every line of a child's output so parallel logs stay legible.
+prefix_output() {
+    local tag="$1"
+    sed -u "s|^|[$tag] |" 2>/dev/null || sed "s|^|[$tag] |"
+}
 
-echo "==> Frontend: pnpm install"
-cd "$REPO_ROOT/frontend"
-"${PNPM[@]}" install
+run_backend() (
+    set -e
+    set -o pipefail
+    cd "$REPO_ROOT/backend"
+    uv sync 2>&1 | prefix_output backend
+)
+
+run_frontend() (
+    set -e
+    set -o pipefail
+    cd "$REPO_ROOT/frontend"
+    "${PNPM[@]}" install 2>&1 | prefix_output frontend
+)
+
+if [ "$PARALLEL" = "1" ]; then
+    echo "==> Installing backend and frontend in parallel"
+    run_backend &
+    backend_pid=$!
+    run_frontend &
+    frontend_pid=$!
+
+    set +e
+    wait "$backend_pid";  backend_status=$?
+    wait "$frontend_pid"; frontend_status=$?
+    set -e
+
+    failed=0
+    if [ "$backend_status" -ne 0 ]; then
+        echo "error: backend install failed (exit $backend_status)" >&2
+        failed=1
+    fi
+    if [ "$frontend_status" -ne 0 ]; then
+        echo "error: frontend install failed (exit $frontend_status)" >&2
+        failed=1
+    fi
+    [ "$failed" -eq 0 ] || exit 1
+else
+    echo "==> Backend: uv sync"
+    (cd "$REPO_ROOT/backend" && uv sync)
+    echo "==> Frontend: pnpm install"
+    (cd "$REPO_ROOT/frontend" && "${PNPM[@]}" install)
+fi
 
 echo
 echo "Install complete. Run scripts/run.sh to start the app."
