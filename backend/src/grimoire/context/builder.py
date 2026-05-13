@@ -31,6 +31,7 @@ from typing import Any
 from grimoire.context.config import ContextBuilderConfig
 from grimoire.context.errors import LockInOverflowError
 from grimoire.context.tokens import TokenEstimator, cheap_estimator, estimate_tokens
+from grimoire.templates import render as render_template
 from grimoire.types.common import CampaignId
 from grimoire.types.composition import Composition
 from grimoire.types.context import AssembledPrompt, BudgetEstimate, ContextSource
@@ -886,31 +887,23 @@ class ContextBuilderService:
         )
 
     async def _system_block(self, ctx: _BuiltContext) -> str:
-        chunks: list[str] = []
-        if ctx.style_text:
-            chunks.append(f"# Style\n{ctx.style_text}")
-        if ctx.content_boundaries:
-            chunks.append(f"# Content boundaries\n{ctx.content_boundaries}")
-        if ctx.system_meta:
-            chunks.append(ctx.system_meta)
-        if ctx.voice_corrective:
-            chunks.append(f"# Voice corrective\n{ctx.voice_corrective}")
-        return "\n\n".join(c for c in chunks if c).strip()
+        return render_template(
+            "context_system_block",
+            style_text=ctx.style_text,
+            content_boundaries=ctx.content_boundaries,
+            system_meta=ctx.system_meta,
+            voice_corrective=ctx.voice_corrective,
+        ).strip()
 
     async def _lock_in_block(self, ctx: _BuiltContext) -> str:
-        chunks: list[str] = []
-        if ctx.scene_header:
-            chunks.append(f"# Scene\n{ctx.scene_header}")
-        if ctx.active_pc_card:
-            chunks.append(f"# Active PC\n{ctx.active_pc_card}")
-        if ctx.commitments_block:
-            chunks.append(ctx.commitments_block)
-        if ctx.mechanics_block:
-            chunks.append(ctx.mechanics_block)
-        verbatim = self._lock_in_verbatim_posts(ctx)
-        if verbatim:
-            chunks.append(f"# Recent posts (verbatim)\n{verbatim}")
-        return "\n\n".join(chunks).strip()
+        return render_template(
+            "context_lock_in_block",
+            scene_header=ctx.scene_header,
+            active_pc_card=ctx.active_pc_card,
+            commitments_block=ctx.commitments_block,
+            mechanics_block=ctx.mechanics_block,
+            verbatim_posts=self._lock_in_verbatim_posts(ctx),
+        ).strip()
 
     def _lock_in_verbatim_posts(self, ctx: _BuiltContext) -> str:
         # ctx.recent_posts_text is all rendered posts; we just slice the tail.
@@ -929,7 +922,7 @@ class ContextBuilderService:
         older = all_posts[: len(all_posts) - verbatim]
         if not older:
             return ""
-        return "# Recent posts (context)\n" + "\n\n".join(older)
+        return render_template("context_recent_older_block", posts=older)
 
     async def _pack_tier(
         self,
@@ -955,7 +948,7 @@ class ContextBuilderService:
             used += cost
         if not packed:
             return 0
-        content = f"# {label}\n" + "\n\n".join(packed)
+        content = render_template("context_tier_block", label=label, items=packed)
         messages.append(Message(role=MessageRole.SYSTEM, content=content))
         return used
 
@@ -1017,18 +1010,13 @@ def _parse_location_ref(ref: str | None) -> tuple[str | None, str | None]:
 
 
 def _render_location(location: Any) -> str:
-    name = getattr(location, "name", "")
-    description = getattr(location, "description", "")
-    body = getattr(location, "body", "")
-    parts = [f"# {name}"] if name else []
-    if description:
-        parts.append(description)
-    if body:
-        parts.append(body)
-    features = getattr(location, "permanent_features", None) or []
-    if features:
-        parts.append("Features: " + ", ".join(str(f) for f in features))
-    return "\n\n".join(p for p in parts if p).strip()
+    return render_template(
+        "context_location",
+        name=getattr(location, "name", ""),
+        description=getattr(location, "description", ""),
+        body=getattr(location, "body", ""),
+        features=getattr(location, "permanent_features", None) or [],
+    ).strip()
 
 
 def _hash_messages(messages: list[Message]) -> str:

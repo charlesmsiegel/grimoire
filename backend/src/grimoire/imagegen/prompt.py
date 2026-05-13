@@ -16,6 +16,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from grimoire.templates import render as render_template
+
 
 @dataclass(frozen=True)
 class ComposedPrompt:
@@ -49,7 +51,13 @@ def compose_prompt_parts(
     scene_elements: list[str] | None = None,
     mood: str = "",
 ) -> list[str]:
-    """Spec 12 §Prompt composition ordering."""
+    """Spec 12 §Prompt composition ordering.
+
+    Returns the ordered, non-empty fragments that go into the positive
+    prompt. The final string form is produced by the
+    ``imagegen_positive`` Jinja template (see :func:`compose_prompt`),
+    which can re-shape the fragments if a modder ships their own variant.
+    """
     parts: list[str] = []
     if preset_preamble:
         parts.append(preset_preamble.strip())
@@ -66,18 +74,35 @@ def compose_prompt_parts(
     return parts
 
 
+def compose_prompt(
+    *,
+    preset_preamble: str = "",
+    location_description: str = "",
+    character_prompts: list[str] | None = None,
+    scene_elements: list[str] | None = None,
+    mood: str = "",
+) -> str:
+    """Render the positive image prompt via the ``imagegen_positive`` template."""
+    return render_template(
+        "imagegen_positive",
+        preset_preamble=preset_preamble,
+        location_description=location_description,
+        character_prompts=character_prompts or [],
+        scene_elements=scene_elements or [],
+        mood=mood,
+    )
+
+
 def compose_negative_prompt(
     *,
     preset_negative: str = "",
     character_negatives: list[str] | None = None,
 ) -> str:
-    parts: list[str] = []
-    if preset_negative:
-        parts.append(preset_negative.strip())
-    for negative in character_negatives or []:
-        if negative and negative.strip():
-            parts.append(negative.strip())
-    return ", ".join(p for p in parts if p)
+    return render_template(
+        "imagegen_negative",
+        preset_negative=preset_negative,
+        character_negatives=character_negatives or [],
+    )
 
 
 _SENTENCE_SPLIT = re.compile(r"[.!?]\s+")
@@ -229,13 +254,20 @@ class PromptComposer:
             scene_elements=scene_elements,
             mood=scene_mood,
         )
+        prompt = compose_prompt(
+            preset_preamble=preset_preamble,
+            location_description=location_description,
+            character_prompts=character_prompts,
+            scene_elements=scene_elements,
+            mood=scene_mood,
+        )
         negative = compose_negative_prompt(
             preset_negative=preset_negative,
             character_negatives=character_negatives,
         )
 
         return ComposedPrompt(
-            prompt=", ".join(parts),
+            prompt=prompt,
             negative_prompt=negative,
             params=preset_params,
             parts=parts,

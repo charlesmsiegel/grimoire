@@ -21,6 +21,7 @@ from grimoire.continuity.types import (
     Fact,
     FactSource,
 )
+from grimoire.templates import render as render_template
 
 logger = logging.getLogger(__name__)
 
@@ -34,27 +35,6 @@ class JudgeLLM(Protocol):
     """
 
     async def complete(self, task: str, request) -> object: ...
-
-
-PROMPT_TEMPLATE = """You are a continuity checker for a roleplaying campaign.
-
-Given two facts about the same fictional world, decide whether they
-CONTRADICT each other (i.e. they cannot both be true), are CONSISTENT
-(both can hold), or whether you cannot tell (UNCERTAIN).
-
-Respond as a single JSON object with these keys:
-  - verdict: one of "conflict", "no_conflict", "uncertain"
-  - confidence: a float in [0, 1]
-  - rationale: a short sentence (<= 30 words) explaining the call
-
-Existing fact (established in post {existing_post}):
-  "{existing_text}"
-
-Candidate fact (proposed in post {candidate_post}):
-  "{candidate_text}"
-
-Return only the JSON object.
-"""
 
 
 class LLMContradictionJudge(ContradictionJudge):
@@ -103,16 +83,15 @@ class LLMContradictionJudge(ContradictionJudge):
                 rationale="distinct testimonies — judgement deferred",
             )
 
-        user_prompt = PROMPT_TEMPLATE.format(
+        user_prompt = render_template(
+            "continuity_judge_user",
             existing_post=existing.established_in_post or "?",
             existing_text=_clip(existing.text),
             candidate_post=candidate.established_in_post or "?",
             candidate_text=_clip(candidate.text),
         )
-        request = self._make_request(
-            "You return JSON only. No prose, no markdown fences.",
-            user_prompt,
-        )
+        system_prompt = render_template("continuity_judge_system")
+        request = self._make_request(system_prompt, user_prompt)
         try:
             response = await self._gateway.complete(self._task, request)
         except Exception as exc:
