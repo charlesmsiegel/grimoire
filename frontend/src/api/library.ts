@@ -7,18 +7,14 @@
  * hooks (see `useLibraryResource`).
  */
 
+import { ApiError } from "./client";
+
 const API_BASE = "/api";
 
-export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public body: string,
-    message?: string,
-  ) {
-    super(message ?? `HTTP ${status}: ${body || "request failed"}`);
-    this.name = "ApiError";
-  }
-}
+// Re-export so existing imports of `ApiError` from `./library` keep working;
+// the class identity is the canonical one from `./client` so `instanceof`
+// across module boundaries is consistent.
+export { ApiError };
 
 async function request<T>(
   method: string,
