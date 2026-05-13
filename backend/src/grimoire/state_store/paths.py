@@ -28,6 +28,7 @@ The composite ``library_id`` keys used in ``library_index.id`` look like
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,6 +45,25 @@ KIND_TO_DIR: dict[str, str] = {
 }
 
 DIR_TO_KIND: dict[str, str] = {v: k for k, v in KIND_TO_DIR.items()}
+
+# Allowlist of safe characters for any id that becomes a filesystem path
+# component (campaign_id, setting_id, asset_id, kind, mechanics_id, image_id).
+# Must start with an alphanumeric so a leading "." can't produce a dotfile,
+# and must not contain "/", "\", or null bytes — which together with the
+# leading-alnum rule also rules out "..".
+_SAFE_COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _validate_path_component(value: str, *, name: str) -> str:
+    """Reject ids that would let untrusted input escape the data root.
+
+    Every helper in this module that interpolates an id into a Path runs
+    its variable components through this guard. Returns ``value`` so call
+    sites can inline the check.
+    """
+    if not isinstance(value, str) or not _SAFE_COMPONENT_RE.match(value):
+        raise InvalidRefError(f"unsafe {name}: {value!r}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -87,7 +107,7 @@ def parse_library_id(library_id: str) -> LibraryRef:
     if parts[0] == "settings":
         if len(parts) < 2:
             raise InvalidRefError(f"malformed library_id: {library_id!r}")
-        setting_id = parts[1]
+        setting_id = _validate_path_component(parts[1], name="setting_id")
         if len(parts) == 2 or (len(parts) == 3 and parts[2] == "setting"):
             # `settings/<setting>` or `settings/<setting>/setting`
             return LibraryRef(
@@ -100,7 +120,7 @@ def parse_library_id(library_id: str) -> LibraryRef:
         if len(parts) < 4:
             raise InvalidRefError(f"malformed library_id: {library_id!r}")
         kind = _normalize_kind_segment(parts[2])
-        asset_id = parts[3]
+        asset_id = _validate_path_component(parts[3], name="asset_id")
         return LibraryRef(
             library_id=library_id,
             setting_id=setting_id,
@@ -116,7 +136,7 @@ def parse_library_id(library_id: str) -> LibraryRef:
             library_id=library_id,
             setting_id=None,
             kind=_normalize_kind_segment(parts[0]),
-            asset_id=parts[1],
+            asset_id=_validate_path_component(parts[1], name="asset_id"),
             path_segments=segments,
         )
 
@@ -161,7 +181,11 @@ def override_path(
     kind: str,
     asset_id: str,
 ) -> Path:
+    _validate_path_component(campaign_id, name="campaign_id")
+    _validate_path_component(setting_id, name="setting_id")
+    _validate_path_component(asset_id, name="asset_id")
     dir_name = KIND_TO_DIR.get(kind, kind)
+    _validate_path_component(dir_name, name="kind")
     return (
         campaigns_root(data_root)
         / campaign_id
@@ -179,7 +203,10 @@ def emergent_path(
     kind: str,
     asset_id: str,
 ) -> Path:
+    _validate_path_component(campaign_id, name="campaign_id")
+    _validate_path_component(asset_id, name="asset_id")
     dir_name = KIND_TO_DIR.get(kind, kind)
+    _validate_path_component(dir_name, name="kind")
     return campaigns_root(data_root) / campaign_id / "emergent" / dir_name / f"{asset_id}.md"
 
 
@@ -190,7 +217,11 @@ def sheet_path(
     asset_id: str,
     mechanics_id: str,
 ) -> Path:
+    _validate_path_component(campaign_id, name="campaign_id")
+    _validate_path_component(asset_id, name="asset_id")
+    _validate_path_component(mechanics_id, name="mechanics_id")
     dir_name = KIND_TO_DIR.get(kind, kind)
+    _validate_path_component(dir_name, name="kind")
     return (
         campaigns_root(data_root)
         / campaign_id
@@ -201,6 +232,8 @@ def sheet_path(
 
 
 def image_metadata_path(data_root: Path, campaign_id: str, image_id: str) -> Path:
+    _validate_path_component(campaign_id, name="campaign_id")
+    _validate_path_component(image_id, name="image_id")
     return campaigns_root(data_root) / campaign_id / "images" / f"{image_id}.yaml"
 
 
