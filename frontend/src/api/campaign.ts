@@ -98,7 +98,7 @@ export const campaignApi = {
   listPCs: (id: string) => api.get<PCEntry[]>(`/api/campaigns/${enc(id)}/pcs`),
 
   setActivePC: (id: string, characterRef: string) =>
-    api.post<{ ok: boolean }>(`/api/campaigns/${enc(id)}/pcs/${characterRef}/set-active`),
+    api.post<{ ok: boolean }>(`/api/campaigns/${enc(id)}/pcs/${enc(characterRef)}/set-active`),
 
   listScenes: (id: string) => api.get<ApiScene[]>(`/api/campaigns/${enc(id)}/scenes`),
 
