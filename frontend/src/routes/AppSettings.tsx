@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
+import { type PluginConfig, type TemplateSummary, pluginsApi, templatesApi } from "../api/library";
 import {
   type MechanicsModuleSummary,
   type PluginSummary,
@@ -24,11 +25,19 @@ import {
 } from "../api/wizard";
 import { useTheme } from "../state/useTheme";
 
-type Tab = "library" | "providers" | "mechanics" | "plugins" | "backup" | "appearance";
+type Tab =
+  | "library"
+  | "providers"
+  | "templates"
+  | "mechanics"
+  | "plugins"
+  | "backup"
+  | "appearance";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "library", label: "Library" },
   { id: "providers", label: "Providers" },
+  { id: "templates", label: "Prompts" },
   { id: "mechanics", label: "Mechanics" },
   { id: "plugins", label: "Plugins" },
   { id: "backup", label: "Backup" },
@@ -66,6 +75,7 @@ export function AppSettings() {
       <div className="tab-panel">
         {tab === "library" && <LibraryPathTab />}
         {tab === "providers" && <ProvidersTab />}
+        {tab === "templates" && <TemplatesTab />}
         {tab === "mechanics" && <MechanicsInventoryTab />}
         {tab === "plugins" && <PluginsInventoryTab />}
         {tab === "backup" && <BackupTab />}
@@ -108,6 +118,8 @@ function ProvidersTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedLlm, setSelectedLlm] = useState<string>(readDefaultLlm);
+  const [activeConfig, setActiveConfig] = useState<PluginConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,6 +141,31 @@ function ProvidersTab() {
       cancelled = true;
     };
   }, []);
+
+  // Fetch saved config when the selected LLM changes so the status badge
+  // reflects "Connected" (configured) vs "Not configured" — including which
+  // secret fields are set.
+  useEffect(() => {
+    if (!selectedLlm) {
+      setActiveConfig(null);
+      return;
+    }
+    let cancelled = false;
+    setConfigLoading(true);
+    void (async () => {
+      try {
+        const cfg = await pluginsApi.getConfig(selectedLlm);
+        if (!cancelled) setActiveConfig(cfg);
+      } catch {
+        if (!cancelled) setActiveConfig(null);
+      } finally {
+        if (!cancelled) setConfigLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLlm]);
 
   const llmPlugins = plugins.filter((p) => p.kind === "llm_provider");
   const embedPlugins = plugins.filter((p) => p.kind === "embedding_provider");
@@ -165,7 +202,11 @@ function ProvidersTab() {
               </p>
             </div>
           </div>
-          <ProviderStatusBadge plugin={activeLlm} configured={Boolean(selectedLlm)} />
+          <ProviderStatusBadge
+            plugin={activeLlm}
+            configured={Boolean(activeConfig?.configured)}
+            loading={configLoading}
+          />
         </header>
 
         <label className="provider-combobox">
@@ -192,6 +233,10 @@ function ProvidersTab() {
           <p className="wizard-error" role="alert">
             Load error: {activeLlm.load_error}
           </p>
+        )}
+
+        {activeLlm && activeConfig && (
+          <ProviderConfigSummary config={activeConfig} loading={configLoading} />
         )}
 
         <div className="provider-card-actions">
@@ -267,17 +312,67 @@ function ProvidersTab() {
 function ProviderStatusBadge({
   plugin,
   configured,
+  loading,
 }: {
   plugin: PluginSummary | undefined;
   configured: boolean;
+  loading?: boolean;
 }) {
-  if (plugin?.load_error) {
+  if (!plugin) {
+    return <span className="provider-status provider-status-idle">Not selected</span>;
+  }
+  if (plugin.load_error) {
     return <span className="provider-status provider-status-error">Error</span>;
   }
-  if (configured && plugin) {
+  if (loading) {
+    return <span className="provider-status provider-status-idle">Checking…</span>;
+  }
+  if (configured) {
     return <span className="provider-status provider-status-ok">Connected</span>;
   }
   return <span className="provider-status provider-status-idle">Not configured</span>;
+}
+
+function ProviderConfigSummary({ config, loading }: { config: PluginConfig; loading: boolean }) {
+  if (loading) return null;
+  const valueEntries = Object.entries(config.values).filter(
+    ([, v]) => v !== null && v !== "" && v !== undefined,
+  );
+  const secretEntries = Object.entries(config.secrets_set);
+  if (valueEntries.length === 0 && secretEntries.length === 0) return null;
+  return (
+    <dl className="provider-config-summary" aria-label="Saved configuration">
+      {valueEntries.map(([k, v]) => (
+        <div key={k} className="provider-config-row">
+          <dt>{k}</dt>
+          <dd title={formatConfigValue(v)}>{formatConfigValue(v)}</dd>
+        </div>
+      ))}
+      {secretEntries.map(([k, isSet]) => (
+        <div key={`secret-${k}`} className="provider-config-row">
+          <dt>{k}</dt>
+          <dd>
+            {isSet ? (
+              <span className="provider-config-secret-set">•••••• (set)</span>
+            ) : (
+              <span className="provider-config-secret-unset">(not set)</span>
+            )}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function formatConfigValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function SecondaryProviderCard({
@@ -433,6 +528,298 @@ function PluginsInventoryTab() {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function TemplatesTab() {
+  const [data, setData] = useState<{
+    templates: TemplateSummary[];
+    user_dir: string;
+    default_variant: string;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [variant, setVariant] = useState<string>("default");
+  const [body, setBody] = useState<string>("");
+  const [editable, setEditable] = useState<boolean>(false);
+  const [bodyLoading, setBodyLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [newVariantName, setNewVariantName] = useState("");
+
+  const refresh = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await templatesApi.list();
+      setData(result);
+      if (!selected && result.templates.length > 0) {
+        const first = result.templates[0]!;
+        setSelected(first.name);
+        setVariant(first.active || "default");
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const current = data?.templates.find((t) => t.name === selected) ?? null;
+
+  // Load body when (selected, variant) changes.
+  useEffect(() => {
+    if (!selected || !variant) {
+      setBody("");
+      setEditable(false);
+      return;
+    }
+    let cancelled = false;
+    setBodyLoading(true);
+    setStatus(null);
+    void (async () => {
+      try {
+        const text = await templatesApi.read(selected, variant);
+        if (!cancelled) {
+          setBody(text.body);
+          setEditable(text.editable);
+        }
+      } catch (err) {
+        if (!cancelled) setError(errorMessage(err));
+      } finally {
+        if (!cancelled) setBodyLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selected, variant]);
+
+  const onSelectTemplate = (name: string) => {
+    setSelected(name);
+    const t = data?.templates.find((x) => x.name === name);
+    setVariant(t?.active ?? "default");
+  };
+
+  const onSave = async () => {
+    if (!selected || !variant) return;
+    setSaving(true);
+    setStatus(null);
+    setError(null);
+    try {
+      await templatesApi.write(selected, variant, body);
+      setStatus("Saved.");
+      await refresh();
+      setEditable(true);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onSetActive = async () => {
+    if (!selected || !variant) return;
+    setSaving(true);
+    setStatus(null);
+    setError(null);
+    try {
+      await templatesApi.setActive(selected, variant);
+      setStatus(`Active variant set to ${variant}.`);
+      await refresh();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onDelete = async () => {
+    if (!selected || !variant || !editable) return;
+    if (!window.confirm(`Delete user variant "${variant}" of ${selected}?`)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await templatesApi.remove(selected, variant);
+      setStatus(`Deleted ${variant}.`);
+      setVariant("default");
+      await refresh();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onCreateVariant = async () => {
+    if (!selected) return;
+    const name = newVariantName.trim();
+    if (!name) return;
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name)) {
+      setError("Variant name must be letters/digits/_/- and start with a letter or digit.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      // Seed the new variant with the body the user is currently viewing.
+      await templatesApi.write(selected, name, body);
+      setStatus(`Created variant ${name}.`);
+      setNewVariantName("");
+      setVariant(name);
+      await refresh();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="settings-form templates-form">
+      <p className="wizard-step-help">
+        Pick a prompt template, choose a variant, and edit. Bundled defaults are read-only; saving
+        creates a new variant under your data directory. The active variant is used for new renders.
+      </p>
+
+      {loading && <p className="wizard-meta">Loading templates…</p>}
+      {error && (
+        <p className="wizard-error" role="alert">
+          {error}
+        </p>
+      )}
+
+      {data && (
+        <div className="templates-layout">
+          <aside className="templates-list">
+            <h3>Templates</h3>
+            <ul>
+              {data.templates.map((t) => (
+                <li key={t.name}>
+                  <button
+                    type="button"
+                    className={t.name === selected ? "templates-item active" : "templates-item"}
+                    onClick={() => onSelectTemplate(t.name)}
+                  >
+                    <span className="templates-item-name">{t.name}</span>
+                    <span className="templates-item-meta">
+                      {t.variants.length} {t.variants.length === 1 ? "variant" : "variants"}
+                      {t.active !== data.default_variant && (
+                        <span className="badge badge-ok"> {t.active}</span>
+                      )}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <small className="muted">User dir: {data.user_dir}</small>
+          </aside>
+
+          <section className="templates-editor">
+            {!current ? (
+              <p className="wizard-meta">Select a template to edit.</p>
+            ) : (
+              <>
+                <header className="templates-editor-head">
+                  <div>
+                    <h3>{current.name}</h3>
+                    <p className="provider-card-sub">
+                      Active variant: <strong>{current.active}</strong>
+                    </p>
+                  </div>
+                  <div className="templates-editor-actions">
+                    <label className="provider-combobox templates-variant-picker">
+                      <span className="provider-combobox-label">Variant</span>
+                      <select value={variant} onChange={(e) => setVariant(e.target.value)}>
+                        {current.variants.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                            {current.editable.includes(v) ? "  ·  user" : "  ·  bundled"}
+                            {v === current.active ? "  ·  active" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </header>
+
+                {bodyLoading ? (
+                  <p className="wizard-meta">Loading…</p>
+                ) : (
+                  <textarea
+                    className="templates-body"
+                    value={body}
+                    onChange={(e) => setBody(e.target.value)}
+                    spellCheck={false}
+                    rows={18}
+                    aria-label={`${current.name} / ${variant} template body`}
+                  />
+                )}
+
+                {!editable && (
+                  <p className="wizard-meta">
+                    Bundled variant — read-only. Save below to create an editable user copy.
+                  </p>
+                )}
+
+                <div className="templates-action-row">
+                  {editable ? (
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => void onSave()}
+                      disabled={saving}
+                    >
+                      {saving ? "Saving…" : "Save"}
+                    </button>
+                  ) : (
+                    <div className="templates-create-variant">
+                      <input
+                        type="text"
+                        placeholder="new-variant-name"
+                        value={newVariantName}
+                        onChange={(e) => setNewVariantName(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => void onCreateVariant()}
+                        disabled={saving || !newVariantName.trim()}
+                      >
+                        Save as new variant
+                      </button>
+                    </div>
+                  )}
+                  {variant !== current.active && (
+                    <button type="button" onClick={() => void onSetActive()} disabled={saving}>
+                      Make active
+                    </button>
+                  )}
+                  {editable && (
+                    <button
+                      type="button"
+                      onClick={() => void onDelete()}
+                      disabled={saving}
+                      className="templates-delete"
+                    >
+                      Delete variant
+                    </button>
+                  )}
+                </div>
+
+                {status && <p className="library-ok">{status}</p>}
+              </>
+            )}
+          </section>
+        </div>
+      )}
     </div>
   );
 }
