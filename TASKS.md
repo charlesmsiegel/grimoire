@@ -134,7 +134,7 @@ Spec 13. `markdown` bundle (directory tree with scenes + characters + setting + 
 **Blocked by:** 7, 23
 Spec 12 + 15. `imagegen-a1111` (HTTP client for Automatic1111), `imagegen-comfyui` (HTTP with workflow loaders for new model architectures), `imagegen-dalle` (OpenAI DALL-E API). Each implements `ImageGenBackend` protocol (`generate`/`list_models`/`list_samplers`/`health_check`) with manifest + `config_schema`. Same protocol as integrated backend so they're swappable via routing.
 
-### 27. [ ] Build Observability module
+### 27. [x] Build Observability module
 **Blocked by:** 3, 8, 13, 22
 Spec 16. `TurnAudit` record assembled by subscribing to Orchestrator events: composition snapshot, scene context, assembled prompt + budget, mechanics results, LLM call metadata (provider/model/tokens/cost/latency/retries), response text, extraction strategies/duration/deltas/flags, applied deltas, queued reviews, side effects, errors. `CostTracker` (`record`/`total`/`by_day`/`by_task`/`by_model`). Performance metrics per module with rolling window. Health monitor (`probe_all` + `subscribe`). Debug log (`LogEvent` with module/operation/turn_id/payload). `ErrorRecord` with attribution. Turn replayer (fork mode by default, optional model/temperature/prompt substitution). Retention policy + nightly maintenance.
 
