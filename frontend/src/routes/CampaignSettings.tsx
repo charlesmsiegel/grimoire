@@ -64,7 +64,9 @@ export function CampaignSettings() {
     setError(null);
     void (async () => {
       try {
-        const data = await api.get<CampaignRecord>(`/campaigns/${encodeURIComponent(campaignId)}`);
+        const data = await api.get<CampaignRecord>(
+          `/api/campaigns/${encodeURIComponent(campaignId)}`,
+        );
         if (!cancelled) {
           setCampaign(data);
           setLoading(false);

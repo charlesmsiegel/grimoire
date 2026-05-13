@@ -204,19 +204,19 @@ export async function fetchSettingCharacters(settingId: string): Promise<Charact
 }
 
 export async function fetchCampaigns(): Promise<CampaignSummaryPayload[]> {
-  const result = await api.get<unknown>("/campaigns");
+  const result = await api.get<unknown>("/api/campaigns");
   return Array.isArray(result) ? (result as CampaignSummaryPayload[]) : [];
 }
 
 export async function createCampaign(input: CampaignCreateInput): Promise<CampaignSummaryPayload> {
-  return api.post<CampaignSummaryPayload>("/campaigns", input);
+  return api.post<CampaignSummaryPayload>("/api/campaigns", input);
 }
 
 export async function addCampaignPC(
   campaignId: string,
   pc: { character_ref: string; name: string; owner?: string },
 ): Promise<unknown> {
-  return api.post<unknown>(`/campaigns/${encodeURIComponent(campaignId)}/pcs`, pc);
+  return api.post<unknown>(`/api/campaigns/${encodeURIComponent(campaignId)}/pcs`, pc);
 }
 
 export async function patchCampaign(
@@ -232,5 +232,5 @@ export async function patchCampaign(
     greeting_id: string | null;
   }>,
 ): Promise<unknown> {
-  return api.patch<unknown>(`/campaigns/${encodeURIComponent(campaignId)}`, patch);
+  return api.patch<unknown>(`/api/campaigns/${encodeURIComponent(campaignId)}`, patch);
 }
