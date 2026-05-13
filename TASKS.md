@@ -152,7 +152,7 @@ Spec 14. Settings list and detail (with tabs for each entity kind + Meta + Depen
 **Blocked by:** 29, 30, 31
 Spec 14. Top bar with active PC switcher. Scene header (location, in-game time, present cast, source badges). Scene pane: posts in order with author labels, inline generated images, mechanical event chips, source badges on entity references, drift warning banners. Side panel: present cast, active threads, capabilities (active PCs), mechanics rolls/slots, quick actions (regen, undo, end scene, skip time, manual fact). Input area with PC selector + Submit + Advance button (only when scene has 2+ PCs and there's something to advance). Real-time updates via WS (token streaming, `advance_disabled`/`enabled`, `drift_detected`, contradictions, `image_ready`).
 
-### 34. [ ] Build frontend Cast/World/Timeline/Mechanics/Composition/Images views
+### 34. [x] Build frontend Cast/World/Timeline/Mechanics/Composition/Images views
 **Blocked by:** 29, 30, 31
 Spec 14. Cast view: resolved characters by tier or source, filters, character detail (resolved card, source chain, voice anchor with samples, mechanical sheet rendered via widget library, capabilities, relationships, recent scenes, edit override / library / promote actions). World view: items / locations / lore / factions / greetings tabs. Timeline view: scenes as cards along in-game timeline with threads as lines. Mechanics view: active module info, sheet list, missing-sheets panel, roll log, combat tracker hook, content browser. Composition view: editable refs with priority/include/`track_latest` + upgrade-available banner with diff preview. Images view: gallery + queue + per-character prompt templates.
 
