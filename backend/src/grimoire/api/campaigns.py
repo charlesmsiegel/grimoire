@@ -198,7 +198,7 @@ async def get_campaign(
         raise HTTPException(status_code=404, detail=f"campaign {campaign_id!r} not found")
     data = dict(row)
     try:
-        data["composition"] = to_payload(library.get_composition(campaign_id))
+        data["composition"] = to_payload(await library.get_composition(campaign_id))
     except Exception:
         data["composition"] = None
     return data
@@ -352,9 +352,7 @@ async def add_pc(
 ) -> Any:
     try:
         return to_payload(
-            await characters.add_pc(
-                campaign_id, payload.character_ref, payload.name, payload.owner
-            )
+            await characters.add_pc(campaign_id, payload.character_ref, payload.name, payload.owner)
         )
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
@@ -831,9 +829,7 @@ async def export_campaign(
 # --------------------------------------------------------------------------- #
 
 
-async def _require_review_owned(
-    state_store: Any, campaign_id: str, review_id: str
-) -> None:
+async def _require_review_owned(state_store: Any, campaign_id: str, review_id: str) -> None:
     """Reject the request if ``review_id`` is not scoped to ``campaign_id``.
 
     The store's approve/reject methods key only on review id, so the routes
