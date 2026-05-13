@@ -67,7 +67,7 @@ async def _seed_campaign(store: StateStore, *, mechanics: str | None = None) -> 
         campaign_id=CAMPAIGN,
         setting_id=SETTING,
         priority=1,
-        include=[],
+        include=None,
         track_latest=True,
     )
 

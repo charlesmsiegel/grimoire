@@ -42,7 +42,9 @@ router = APIRouter(prefix="/campaigns")
 class SettingRefPayload(BaseModel):
     setting_id: str
     priority: int = 1
-    include: list[str] = Field(default_factory=list)
+    # None / missing means "include every kind"; an explicit list (even empty)
+    # is treated literally — `[]` excludes everything from this setting.
+    include: list[str] | None = None
     track_latest: bool = False
     bound_at_version: int | None = None
 
@@ -178,7 +180,7 @@ async def create_campaign(
                 campaign_id=payload.id,
                 setting_id=ref.setting_id,
                 priority=ref.priority,
-                include=list(ref.include),
+                include=list(ref.include) if ref.include is not None else None,
                 track_latest=ref.track_latest,
                 bound_at_version=ref.bound_at_version,
             )
@@ -298,7 +300,7 @@ async def add_setting_ref(
             campaign_id=campaign_id,
             setting_id=ref.setting_id,
             priority=ref.priority,
-            include=list(ref.include),
+            include=list(ref.include) if ref.include is not None else None,
             track_latest=ref.track_latest,
             bound_at_version=ref.bound_at_version,
         )
