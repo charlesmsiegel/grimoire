@@ -137,9 +137,11 @@ export function CampaignCreate() {
     })();
   }, [step]);
 
-  // Cast — refetch whenever the composition changes and step is on PCs.
+  // Cast — refetch whenever the composition changes. Step 3 (PCs) and step 5
+  // (Starting scene) both consume the list, so we hydrate as soon as either
+  // is active. Once loaded for a given composition it persists across steps.
   useEffect(() => {
-    if (step !== 3) return;
+    if (step !== 3 && step !== 5) return;
     const settingIds = draft.settingRefs.map((r) => r.setting_id);
     if (settingIds.length === 0) {
       setCastBySetting(new Map());
@@ -342,6 +344,7 @@ export function CampaignCreate() {
           greetings={greetings.data}
           loading={greetings.loading}
           error={greetings.error}
+          castBySetting={castBySetting}
         />
       )}
 
