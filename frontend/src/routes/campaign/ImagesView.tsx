@@ -89,9 +89,7 @@ function Gallery({ campaignId }: { campaignId: string }) {
 
 function ImageTile({ image }: { image: ImageMetadata }) {
   const url = `/api/files/${encodeURI(image.file_path)}`;
-  const thumbUrl = image.thumbnail_path
-    ? `/api/files/${encodeURI(image.thumbnail_path)}`
-    : url;
+  const thumbUrl = image.thumbnail_path ? `/api/files/${encodeURI(image.thumbnail_path)}` : url;
   return (
     <li className="image-tile">
       <figure>
@@ -126,9 +124,9 @@ function Queue() {
   return (
     <div className="image-queue">
       <p className="muted">
-        Active and queued jobs stream here. The WebSocket bridge for image
-        events lands alongside the orchestrator integration in a follow-up
-        task; until then, queued jobs surface in the backend logs.
+        Active and queued jobs stream here. The WebSocket bridge for image events lands alongside
+        the orchestrator integration in a follow-up task; until then, queued jobs surface in the
+        backend logs.
       </p>
     </div>
   );
@@ -141,11 +139,7 @@ function Templates({ campaignId }: { campaignId: string }) {
       {(rows) => (
         <ul className="template-list">
           {rows.map((row) => (
-            <PromptTemplate
-              key={row.character.id}
-              campaignId={campaignId}
-              character={row}
-            />
+            <PromptTemplate key={row.character.id} campaignId={campaignId} character={row} />
           ))}
         </ul>
       )}
@@ -234,7 +228,11 @@ function PromptTemplate({
         <button type="button" onClick={test}>
           Test prompt
         </button>
-        <button type="button" disabled={!dirty} title="Persisting to the character card is wired in a follow-up task.">
+        <button
+          type="button"
+          disabled={!dirty}
+          title="Persisting to the character card is wired in a follow-up task."
+        >
           Save to card
         </button>
       </div>

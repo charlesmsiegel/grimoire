@@ -47,29 +47,20 @@ export const viewsApi = {
       `/api/campaigns/${enc(campaignId)}/composition/refs/${enc(settingId)}/upgrade`,
     ),
 
-  listImages: (
-    campaignId: string,
-    opts: { sceneId?: string; starredOnly?: boolean } = {},
-  ) =>
+  listImages: (campaignId: string, opts: { sceneId?: string; starredOnly?: boolean } = {}) =>
     api.get<ImageMetadata[]>(`/api/campaigns/${enc(campaignId)}/images`, {
       query: { scene_id: opts.sceneId, starred_only: opts.starredOnly },
     }),
   generateImage: (
     campaignId: string,
     body: { scene_id?: string; post_id?: string; request?: Record<string, unknown> },
-  ) =>
-    api.post<{ job_id: string }>(`/api/campaigns/${enc(campaignId)}/images/generate`, body),
+  ) => api.post<{ job_id: string }>(`/api/campaigns/${enc(campaignId)}/images/generate`, body),
 
   getSheet: (campaignId: string, kind: string, entityId: string) =>
     api.get<Record<string, unknown>>(
       `/api/campaigns/${enc(campaignId)}/sheets/${enc(kind)}/${enc(entityId)}`,
     ),
-  putSheet: (
-    campaignId: string,
-    kind: string,
-    entityId: string,
-    sheet: Record<string, unknown>,
-  ) =>
+  putSheet: (campaignId: string, kind: string, entityId: string, sheet: Record<string, unknown>) =>
     api.put<{ ok: true }>(
       `/api/campaigns/${enc(campaignId)}/sheets/${enc(kind)}/${enc(entityId)}`,
       sheet,

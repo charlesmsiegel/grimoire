@@ -92,10 +92,22 @@ function LibraryPathTab() {
   );
 }
 
+const LLM_DEFAULT_KEY = "grimoire.llm.default";
+
+function readDefaultLlm(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(LLM_DEFAULT_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 function ProvidersTab() {
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedLlm, setSelectedLlm] = useState<string>(readDefaultLlm);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,46 +130,187 @@ function ProvidersTab() {
     };
   }, []);
 
-  const sections: { kind: string; label: string }[] = [
-    { kind: "llm_provider", label: "LLM providers" },
-    { kind: "embedding_provider", label: "Embedding providers" },
-    { kind: "imagegen_backend", label: "ImageGen backends" },
-    { kind: "export_adapter", label: "Export adapters" },
-  ];
+  const llmPlugins = plugins.filter((p) => p.kind === "llm_provider");
+  const embedPlugins = plugins.filter((p) => p.kind === "embedding_provider");
+  const imageBackends = plugins.filter((p) => p.kind === "imagegen_backend");
+  const exportAdapters = plugins.filter((p) => p.kind === "export_adapter");
+
+  const onPickLlm = (id: string) => {
+    setSelectedLlm(id);
+    try {
+      window.localStorage.setItem(LLM_DEFAULT_KEY, id);
+    } catch {
+      // ignore
+    }
+  };
+
+  const activeLlm = llmPlugins.find((p) => p.id === selectedLlm);
 
   return (
-    <div className="settings-form">
-      {loading && <p className="wizard-meta">Loading…</p>}
+    <div className="settings-form providers-form">
+      {loading && <p className="wizard-meta">Loading providers…</p>}
       {error && <p className="wizard-error">{error}</p>}
-      {sections.map(({ kind, label }) => {
-        const list = plugins.filter((p) => p.kind === kind);
-        return (
-          <section key={kind} className="provider-section">
-            <h3>{label}</h3>
-            {list.length === 0 ? (
-              <p className="wizard-meta">None installed.</p>
-            ) : (
-              <ul className="provider-list">
-                {list.map((p) => (
-                  <li key={p.id} className={p.load_error ? "has-error" : undefined}>
-                    <Link to={`/library/plugins/${encodeURIComponent(p.id)}`}>
-                      <strong>{p.name ?? p.id}</strong>
-                      {p.version && <small> v{p.version}</small>}
-                    </Link>
-                    {p.load_error && <p className="wizard-error">Load error: {p.load_error}</p>}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        );
-      })}
+
+      {/* Primary LLM connection card — most-used setting, given top billing */}
+      <section className="provider-card provider-card-primary" aria-labelledby="llm-heading">
+        <header className="provider-card-head">
+          <div className="provider-card-title">
+            <span className="provider-card-icon" aria-hidden="true">
+              ✦
+            </span>
+            <div>
+              <h3 id="llm-heading">Language model</h3>
+              <p className="provider-card-sub">
+                Choose how Grimoire connects to a language model for narration, NPCs, and summaries.
+              </p>
+            </div>
+          </div>
+          <ProviderStatusBadge plugin={activeLlm} configured={Boolean(selectedLlm)} />
+        </header>
+
+        <label className="provider-combobox">
+          <span className="provider-combobox-label">Connection method</span>
+          <select
+            value={selectedLlm}
+            onChange={(e) => onPickLlm(e.target.value)}
+            disabled={loading || llmPlugins.length === 0}
+            aria-label="Select LLM connection"
+          >
+            <option value="">
+              {llmPlugins.length === 0 ? "No LLM providers installed" : "— Select a provider —"}
+            </option>
+            {llmPlugins.map((p) => (
+              <option key={p.id} value={p.id} disabled={Boolean(p.load_error)}>
+                {(p.name ?? p.id) + (p.version ? `  ·  v${p.version}` : "")}
+                {p.load_error ? "  ·  load error" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {activeLlm?.load_error && (
+          <p className="wizard-error" role="alert">
+            Load error: {activeLlm.load_error}
+          </p>
+        )}
+
+        <div className="provider-card-actions">
+          {activeLlm ? (
+            <Link
+              to={`/library/plugins/${encodeURIComponent(activeLlm.id)}`}
+              className="button-link primary"
+            >
+              Configure {activeLlm.name ?? activeLlm.id}
+            </Link>
+          ) : (
+            <span className="provider-card-hint">
+              Pick a connection method to enter API keys and default models.
+            </span>
+          )}
+          {llmPlugins.length > 0 && (
+            <Link to="/library/plugins" className="button-link">
+              Browse all providers
+            </Link>
+          )}
+        </div>
+
+        {llmPlugins.length > 1 && (
+          <details className="provider-disclose">
+            <summary>Compare installed providers ({llmPlugins.length})</summary>
+            <ul className="provider-list provider-list-compact">
+              {llmPlugins.map((p) => (
+                <li
+                  key={p.id}
+                  className={p.load_error ? "has-error" : undefined}
+                  data-active={p.id === selectedLlm || undefined}
+                >
+                  <button type="button" className="provider-row" onClick={() => onPickLlm(p.id)}>
+                    <span className="provider-row-name">{p.name ?? p.id}</span>
+                    {p.version && <span className="provider-row-version">v{p.version}</span>}
+                    {p.id === selectedLlm && <span className="badge badge-ok">Selected</span>}
+                    {p.load_error && <span className="badge badge-warn">Error</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </section>
+
+      {/* Secondary provider kinds */}
+      <div className="provider-secondary-grid">
+        <SecondaryProviderCard
+          title="Embeddings"
+          description="Vector index for memory and retrieval."
+          plugins={embedPlugins}
+        />
+        <SecondaryProviderCard
+          title="Image generation"
+          description="Backends that render scene illustrations."
+          plugins={imageBackends}
+        />
+        <SecondaryProviderCard
+          title="Export adapters"
+          description="Save plays as PDF, HTML, journal, etc."
+          plugins={exportAdapters}
+        />
+      </div>
+
       <p className="wizard-meta">
-        Click a provider to enter its API key, default model, and other settings. The form is
-        rendered from the plugin's <code>config_schema</code> and saved to the OS keyring where
-        possible.
+        Provider configuration (API keys, default models) lives in each plugin's detail page; keys
+        save to the OS keyring where possible.
       </p>
     </div>
+  );
+}
+
+function ProviderStatusBadge({
+  plugin,
+  configured,
+}: {
+  plugin: PluginSummary | undefined;
+  configured: boolean;
+}) {
+  if (plugin?.load_error) {
+    return <span className="provider-status provider-status-error">Error</span>;
+  }
+  if (configured && plugin) {
+    return <span className="provider-status provider-status-ok">Connected</span>;
+  }
+  return <span className="provider-status provider-status-idle">Not configured</span>;
+}
+
+function SecondaryProviderCard({
+  title,
+  description,
+  plugins,
+}: {
+  title: string;
+  description: string;
+  plugins: PluginSummary[];
+}) {
+  return (
+    <section className="provider-card provider-card-secondary">
+      <header>
+        <h4>{title}</h4>
+        <p className="provider-card-sub">{description}</p>
+      </header>
+      {plugins.length === 0 ? (
+        <p className="wizard-meta">None installed.</p>
+      ) : (
+        <ul className="provider-list">
+          {plugins.map((p) => (
+            <li key={p.id} className={p.load_error ? "has-error" : undefined}>
+              <Link to={`/library/plugins/${encodeURIComponent(p.id)}`}>
+                <strong>{p.name ?? p.id}</strong>
+                {p.version && <small> v{p.version}</small>}
+              </Link>
+              {p.load_error && <p className="wizard-error">Load error: {p.load_error}</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

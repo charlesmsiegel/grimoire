@@ -134,7 +134,8 @@ export const campaignApi = {
     fact: { subject_ref?: string; predicate: string; object_ref?: string; statement: string },
   ) => api.post<{ fact_id: string }>(`/api/campaigns/${enc(id)}/facts`, { fact, source: "user" }),
 
-  listCommitments: (id: string) => api.get<OpenCommitment[]>(`/api/campaigns/${enc(id)}/commitments`),
+  listCommitments: (id: string) =>
+    api.get<OpenCommitment[]>(`/api/campaigns/${enc(id)}/commitments`),
 
   listImages: (id: string, sceneId?: string) =>
     api.get<{ id: string; thumb_path?: string; image_path?: string; post_id?: string }[]>(

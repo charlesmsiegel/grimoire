@@ -270,10 +270,7 @@ export function CampaignCreate() {
       // doesn't trigger a remount of CampaignsView on navigate.
       dispatch({
         type: "set-campaigns",
-        campaigns: [
-          ...state.campaigns,
-          { id: created.id, name: created.name },
-        ],
+        campaigns: [...state.campaigns, { id: created.id, name: created.name }],
       });
       navigate(`/campaigns/${encodeURIComponent(draft.id)}`);
     } catch (err) {

@@ -60,9 +60,7 @@ export function TimelineView() {
                   <span>Status</span>
                   <select
                     value={statusFilter}
-                    onChange={(e) =>
-                      setStatusFilter(e.target.value as "all" | "open" | "closed")
-                    }
+                    onChange={(e) => setStatusFilter(e.target.value as "all" | "open" | "closed")}
                   >
                     <option value="all">All</option>
                     <option value="open">Open</option>

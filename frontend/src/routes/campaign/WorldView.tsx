@@ -141,9 +141,7 @@ function GreetingsTab({ campaignId }: { campaignId: string }) {
 
   if (composition.status !== "ok") {
     return (
-      <Loading state={composition}>
-        {() => <p className="muted">Loading composition…</p>}
-      </Loading>
+      <Loading state={composition}>{() => <p className="muted">Loading composition…</p>}</Loading>
     );
   }
 
@@ -155,9 +153,9 @@ function GreetingsTab({ campaignId }: { campaignId: string }) {
 function GreetingsAcrossSettings({ settingIds }: { settingIds: string[] }) {
   const state = useApi<Greeting[]>(
     () =>
-      Promise.all(settingIds.map((id) => viewsApi.listGreetingsForSetting(id).catch(() => []))).then(
-        (lists) => lists.flat(),
-      ),
+      Promise.all(
+        settingIds.map((id) => viewsApi.listGreetingsForSetting(id).catch(() => [])),
+      ).then((lists) => lists.flat()),
     [settingIds.join("|")],
   );
   if (settingIds.length === 0) {
@@ -190,13 +188,7 @@ function GreetingsAcrossSettings({ settingIds }: { settingIds: string[] }) {
   );
 }
 
-function EntityCard({
-  row,
-  children,
-}: {
-  row: ResolvedEntity;
-  children?: React.ReactNode;
-}) {
+function EntityCard({ row, children }: { row: ResolvedEntity; children?: React.ReactNode }) {
   return (
     <li className="entity-card-static">
       <header>
@@ -278,4 +270,3 @@ function readKeywords(fm: Record<string, unknown>): string[] {
   if (Array.isArray(raw)) return raw.filter((v): v is string => typeof v === "string");
   return [];
 }
-
