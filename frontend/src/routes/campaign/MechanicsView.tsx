@@ -29,9 +29,7 @@ export function MechanicsView() {
         <header className="route-header">
           <h2 id="mech-heading">Mechanics</h2>
         </header>
-        <Loading state={composition}>
-          {() => <p className="muted">Loading composition…</p>}
-        </Loading>
+        <Loading state={composition}>{() => <p className="muted">Loading composition…</p>}</Loading>
       </section>
     );
   }
@@ -74,8 +72,7 @@ export function MechanicsView() {
               )}
               {!active && (
                 <p className="error" role="alert">
-                  Module <code>{moduleId}</code> is referenced by the campaign but is not
-                  installed.
+                  Module <code>{moduleId}</code> is referenced by the campaign but is not installed.
                 </p>
               )}
             </article>
@@ -84,24 +81,22 @@ export function MechanicsView() {
       </Loading>
 
       <Loading state={characters} emptyMessage="No characters in this campaign yet.">
-        {(rows) => (
-          <SheetsPanel campaignId={campaignId} moduleId={moduleId} characters={rows} />
-        )}
+        {(rows) => <SheetsPanel campaignId={campaignId} moduleId={moduleId} characters={rows} />}
       </Loading>
 
       <section className="placeholder-panel">
         <h3>Roll log</h3>
         <p className="muted">
-          Mechanics roll outcomes from the orchestrator turn loop stream here once a campaign
-          starts producing rolls.
+          Mechanics roll outcomes from the orchestrator turn loop stream here once a campaign starts
+          producing rolls.
         </p>
       </section>
 
       <section className="placeholder-panel">
         <h3>Combat tracker</h3>
         <p className="muted">
-          Combat trackers are mechanics-defined. The active module did not declare an inline
-          combat panel, so this slot is idle until combat starts.
+          Combat trackers are mechanics-defined. The active module did not declare an inline combat
+          panel, so this slot is idle until combat starts.
         </p>
       </section>
 

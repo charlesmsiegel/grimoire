@@ -3,6 +3,7 @@ import { Outlet, useMatch, useNavigate } from "react-router-dom";
 
 import { SkipLink } from "../components/a11y";
 import { useKeyboardShortcuts, type ShortcutBinding } from "../hooks/useKeyboardShortcuts";
+import { useNavCollapsed } from "../hooks/useNavCollapsed";
 import { CampaignStreamProvider } from "../state/campaignStream";
 import { useCampaignStreamStatus } from "../state/useCampaignEvent";
 import { useStore } from "../state/useStore";
@@ -16,6 +17,7 @@ export function AppShell() {
   const navigate = useNavigate();
   const { cycle } = useTheme();
   const { state, dispatch } = useStore();
+  const { collapsed, toggle } = useNavCollapsed();
 
   const campaignMatch = useMatch("/campaigns/:campaignId/*");
   const campaignId = campaignMatch?.params.campaignId ?? null;
@@ -47,6 +49,15 @@ export function AppShell() {
         description: "Go to Campaigns",
       },
       {
+        key: "b",
+        ctrlOrMeta: true,
+        handler: (e) => {
+          e.preventDefault();
+          toggle();
+        },
+        description: "Toggle sidebar",
+      },
+      {
         key: "t",
         ctrlOrMeta: false,
         handler: (e) => {
@@ -56,16 +67,16 @@ export function AppShell() {
         description: "Cycle theme",
       },
     ],
-    [navigate, cycle],
+    [navigate, cycle, toggle],
   );
 
   useKeyboardShortcuts(shortcuts);
 
   return (
     <CampaignStreamProvider campaignId={campaignId}>
-      <div className="app-shell">
+      <div className={collapsed ? "app-shell nav-collapsed" : "app-shell"}>
         <SkipLink targetId={MAIN_ID} />
-        <NavSidebar />
+        <NavSidebar collapsed={collapsed} onToggle={toggle} />
         <main id={MAIN_ID} className="app-main" tabIndex={-1}>
           <Outlet />
         </main>

@@ -230,7 +230,11 @@ function CastInput({ value, onChange, candidates }: CastInputProps) {
           <ul id={listboxId} className="wizard-cast-suggestions" role="listbox">
             {matches.map((c) => (
               <li key={c.id} role="option">
-                <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => add(c.id)}>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => add(c.id)}
+                >
                   <strong>{c.name}</strong>
                   <small>
                     {c.id} · {c.source}

@@ -32,11 +32,7 @@ export function CompositionView() {
         {(comp) => (
           <Loading state={settings}>
             {(settingsList) => (
-              <CompositionEditor
-                campaignId={campaignId}
-                initial={comp}
-                catalog={settingsList}
-              />
+              <CompositionEditor campaignId={campaignId} initial={comp} catalog={settingsList} />
             )}
           </Loading>
         )}
@@ -141,8 +137,7 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
           <ul>
             {upgrades.map((u) => (
               <li key={u.setting_id}>
-                <strong>{u.setting_id}</strong> has new version {u.latest} (currently v
-                {u.bound}).
+                <strong>{u.setting_id}</strong> has new version {u.latest} (currently v{u.bound}).
                 <button type="button" disabled title="Diff preview ships in a follow-up task.">
                   Preview diff
                 </button>
@@ -184,19 +179,12 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
                   >
                     ▼
                   </button>
-                  <button
-                    type="button"
-                    aria-label="Remove"
-                    onClick={() => remove(ref.setting_id)}
-                  >
+                  <button type="button" aria-label="Remove" onClick={() => remove(ref.setting_id)}>
                     ⨯
                   </button>
                 </div>
               </div>
-              <IncludeEditor
-                settingRef={ref}
-                onChange={(patch) => update(ref.setting_id, patch)}
-              />
+              <IncludeEditor settingRef={ref} onChange={(patch) => update(ref.setting_id, patch)} />
             </li>
           ))}
         </ol>
@@ -251,16 +239,17 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
       </section>
 
       <div className="composition-actions">
-        <button
-          type="button"
-          className="primary"
-          disabled={!dirty || saving}
-          onClick={save}
-        >
+        <button type="button" className="primary" disabled={!dirty || saving} onClick={save}>
           {saving ? "Saving…" : dirty ? "Save changes" : "No changes"}
         </button>
         {dirty && (
-          <button type="button" onClick={() => { setComp(initial); setDirty(false); }}>
+          <button
+            type="button"
+            onClick={() => {
+              setComp(initial);
+              setDirty(false);
+            }}
+          >
             Discard
           </button>
         )}
@@ -340,10 +329,7 @@ interface UpgradeHint {
   latest: number;
 }
 
-function collectUpgrades(
-  refs: SettingRef[],
-  catalogById: Map<string, SettingMeta>,
-): UpgradeHint[] {
+function collectUpgrades(refs: SettingRef[], catalogById: Map<string, SettingMeta>): UpgradeHint[] {
   const out: UpgradeHint[] = [];
   for (const ref of refs) {
     if (ref.track_latest) continue;

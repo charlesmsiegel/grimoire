@@ -2,27 +2,63 @@ import { NavLink } from "react-router-dom";
 
 import { useAppState } from "../state/useStore";
 
-const navSections: { label: string; to: string; description: string }[] = [
-  { label: "Library", to: "/library", description: "Settings, style guides, plugins" },
-  { label: "Campaigns", to: "/campaigns", description: "Active plays and creation" },
-  { label: "Settings", to: "/settings", description: "App-level configuration" },
+interface NavSection {
+  label: string;
+  to: string;
+  description: string;
+  icon: string;
+}
+
+const navSections: NavSection[] = [
+  { label: "Library", to: "/library", description: "Settings, style guides, plugins", icon: "L" },
+  { label: "Campaigns", to: "/campaigns", description: "Active plays and creation", icon: "C" },
+  { label: "Settings", to: "/settings", description: "App-level configuration", icon: "S" },
 ];
 
-export function NavSidebar() {
+interface Props {
+  collapsed: boolean;
+  onToggle: () => void;
+}
+
+export function NavSidebar({ collapsed, onToggle }: Props) {
   const { campaigns, activeCampaignId } = useAppState();
 
   return (
-    <nav className="nav-sidebar" aria-label="Primary">
-      <h1 className="nav-brand">Grimoire</h1>
+    <nav className="nav-sidebar" aria-label="Primary" data-collapsed={collapsed || undefined}>
+      <div className="nav-header">
+        <h1 className="nav-brand">
+          <span className="nav-brand-mark" aria-hidden="true" />
+          <span className="nav-brand-text">Grimoire</span>
+        </h1>
+        <button
+          type="button"
+          className="nav-toggle"
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-pressed={collapsed}
+          title={collapsed ? "Expand sidebar (Ctrl+B)" : "Collapse sidebar (Ctrl+B)"}
+          onClick={onToggle}
+        >
+          <span aria-hidden="true" className="nav-toggle-icon">
+            {collapsed ? "›" : "‹"}
+          </span>
+        </button>
+      </div>
+
       <ul className="nav-sections">
         {navSections.map((s) => (
           <li key={s.to}>
             <NavLink
               to={s.to}
               className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+              title={collapsed ? s.label : undefined}
             >
-              <span>{s.label}</span>
-              <small>{s.description}</small>
+              <span className="nav-link-icon" aria-hidden="true">
+                {s.icon}
+              </span>
+              <span className="nav-link-body">
+                <span>{s.label}</span>
+                <small>{s.description}</small>
+              </span>
             </NavLink>
           </li>
         ))}
@@ -39,8 +75,12 @@ export function NavSidebar() {
                   className={({ isActive }) =>
                     isActive || activeCampaignId === c.id ? "nav-campaign active" : "nav-campaign"
                   }
+                  title={collapsed ? c.name : undefined}
                 >
-                  {c.name}
+                  <span className="nav-campaign-mark" aria-hidden="true">
+                    {(c.name ?? "?").slice(0, 1).toUpperCase()}
+                  </span>
+                  <span className="nav-campaign-text">{c.name}</span>
                 </NavLink>
               </li>
             ))}
