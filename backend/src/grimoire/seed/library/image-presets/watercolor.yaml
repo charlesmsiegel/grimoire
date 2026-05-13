@@ -1,0 +1,16 @@
+name: Watercolor
+description: Soft watercolor illustration — wet-on-wet washes, paper texture, gentle bleed.
+tags: [watercolor, illustration, soft]
+style_preamble: >-
+  watercolor illustration, wet-on-wet washes, gentle pigment bleed, visible
+  paper texture, soft edges, limited palette, hand-painted feel, light
+  pencil under-drawing, airy composition
+negative_prompt: >-
+  photograph, 3d render, digital art, harsh contrast, saturated, neon,
+  cartoon outlines, anime, watermark, text, signature
+default_params:
+  width: 1024
+  height: 1024
+  steps: 30
+  cfg_scale: 6.0
+  sampler: euler_a
