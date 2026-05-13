@@ -87,6 +87,9 @@ export class CampaignSocket {
   }
 
   private openSocket(): void {
+    // close() can run between scheduleReconnect()'s setTimeout and the
+    // callback firing; bail before opening a fresh connection in that case.
+    if (this.closedByUser) return;
     this.setStatus(this.reconnectAttempts === 0 ? "connecting" : "reconnecting");
     let ws: WebSocket;
     try {
@@ -134,6 +137,7 @@ export class CampaignSocket {
   }
 
   private scheduleReconnect(): void {
+    if (this.closedByUser) return;
     const base = Math.min(this.initialBackoff * 2 ** this.reconnectAttempts, this.maxBackoff);
     const jitter = base * 0.25 * Math.random();
     const delay = base + jitter;
@@ -141,6 +145,7 @@ export class CampaignSocket {
     this.setStatus("reconnecting");
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
+      if (this.closedByUser) return;
       this.openSocket();
     }, delay);
   }
