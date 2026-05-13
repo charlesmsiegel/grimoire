@@ -359,16 +359,10 @@ def _secret_property_names(schema: dict[str, Any]) -> set[str]:
     props = schema.get("properties") if isinstance(schema, dict) else None
     if not isinstance(props, dict):
         return set()
-    return {
-        name
-        for name, prop in props.items()
-        if isinstance(prop, dict) and prop.get("secret")
-    }
+    return {name for name, prop in props.items() if isinstance(prop, dict) and prop.get("secret")}
 
 
-def _is_configured(
-    schema: dict[str, Any], config: dict[str, Any], secret_names: set[str]
-) -> bool:
+def _is_configured(schema: dict[str, Any], config: dict[str, Any], secret_names: set[str]) -> bool:
     required = schema.get("required") if isinstance(schema, dict) else None
     if not isinstance(required, list):
         return bool(config)

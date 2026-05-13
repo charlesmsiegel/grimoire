@@ -49,9 +49,7 @@ def test_manifest_loads_and_protocol_satisfied() -> None:
 
 
 def test_ollama_preset_defaults(openai_compat_module) -> None:
-    provider = openai_compat_module.OpenAICompatibleLLMProvider(
-        config={"preset": "ollama"}
-    )
+    provider = openai_compat_module.OpenAICompatibleLLMProvider(config={"preset": "ollama"})
     assert provider._base_url == "http://localhost:11434/v1"
     assert provider._auth_scheme == "none"
 
@@ -65,9 +63,7 @@ def test_vllm_preset_defaults(openai_compat_module) -> None:
 
 
 def test_lmstudio_preset_defaults(openai_compat_module) -> None:
-    provider = openai_compat_module.OpenAICompatibleLLMProvider(
-        config={"preset": "lmstudio"}
-    )
+    provider = openai_compat_module.OpenAICompatibleLLMProvider(config={"preset": "lmstudio"})
     assert provider._base_url == "http://localhost:1234/v1"
 
 
@@ -79,9 +75,7 @@ def test_llamacpp_server_preset_defaults(openai_compat_module) -> None:
 
 
 def test_custom_preset_requires_base_url(openai_compat_module) -> None:
-    provider = openai_compat_module.OpenAICompatibleLLMProvider(
-        config={"preset": "custom"}
-    )
+    provider = openai_compat_module.OpenAICompatibleLLMProvider(config={"preset": "custom"})
     assert provider._base_url == ""
     # Health check should report unconfigured rather than crashing.
 
@@ -99,9 +93,7 @@ def test_custom_provider_id_and_display(openai_compat_module) -> None:
 
 
 def test_local_url_is_detected(openai_compat_module) -> None:
-    provider = openai_compat_module.OpenAICompatibleLLMProvider(
-        config={"preset": "ollama"}
-    )
+    provider = openai_compat_module.OpenAICompatibleLLMProvider(config={"preset": "ollama"})
     assert provider._is_local() is True
 
 
@@ -149,9 +141,7 @@ async def test_complete_round_trip(openai_compat_module) -> None:
 
 @pytest.mark.asyncio
 async def test_request_without_model_raises(openai_compat_module) -> None:
-    provider = openai_compat_module.OpenAICompatibleLLMProvider(
-        config={"preset": "ollama"}
-    )
+    provider = openai_compat_module.OpenAICompatibleLLMProvider(config={"preset": "ollama"})
     _install_mock_transport(provider, lambda r: httpx.Response(200, json={}))
     with pytest.raises(RuntimeError, match="no model"):
         await provider.complete(
@@ -177,9 +167,7 @@ async def test_stream_yields_deltas(openai_compat_module) -> None:
     )
     _install_mock_transport(
         provider,
-        lambda r: httpx.Response(
-            200, content=body, headers={"content-type": "text/event-stream"}
-        ),
+        lambda r: httpx.Response(200, content=body, headers={"content-type": "text/event-stream"}),
     )
     chunks = [
         c
@@ -195,9 +183,7 @@ async def test_stream_yields_deltas(openai_compat_module) -> None:
 
 @pytest.mark.asyncio
 async def test_list_models_parses_openai_shape(openai_compat_module) -> None:
-    provider = openai_compat_module.OpenAICompatibleLLMProvider(
-        config={"preset": "ollama"}
-    )
+    provider = openai_compat_module.OpenAICompatibleLLMProvider(config={"preset": "ollama"})
 
     def _handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/models")
@@ -234,9 +220,7 @@ async def test_list_models_accepts_plain_string_list(openai_compat_module) -> No
 
 @pytest.mark.asyncio
 async def test_health_check_unconfigured_without_base_url(openai_compat_module) -> None:
-    provider = openai_compat_module.OpenAICompatibleLLMProvider(
-        config={"preset": "custom"}
-    )
+    provider = openai_compat_module.OpenAICompatibleLLMProvider(config={"preset": "custom"})
     status = await provider.health_check()
     assert status.level == HealthLevel.UNCONFIGURED
 

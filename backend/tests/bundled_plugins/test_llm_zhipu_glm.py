@@ -52,9 +52,7 @@ def test_pay_as_you_go_endpoint(zhipu_glm_module) -> None:
 
 
 def test_coding_plan_endpoint(zhipu_glm_module) -> None:
-    provider = zhipu_glm_module.ZhipuGLMLLMProvider(
-        config={"api_key": "k", "plan": "coding-plan"}
-    )
+    provider = zhipu_glm_module.ZhipuGLMLLMProvider(config={"api_key": "k", "plan": "coding-plan"})
     assert provider._base_url == "https://api.z.ai/api/coding/paas/v4"
 
 
@@ -128,9 +126,7 @@ async def test_subscription_plan_reports_zero_cost(zhipu_glm_module) -> None:
             200,
             json={
                 "model": "glm-4.6",
-                "choices": [
-                    {"message": {"content": "ok"}, "finish_reason": "stop"}
-                ],
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
         ),
@@ -157,9 +153,7 @@ async def test_stream_parses_sse(zhipu_glm_module) -> None:
     )
     _install_mock_transport(
         provider,
-        lambda r: httpx.Response(
-            200, content=body, headers={"content-type": "text/event-stream"}
-        ),
+        lambda r: httpx.Response(200, content=body, headers={"content-type": "text/event-stream"}),
     )
     chunks = [
         c
