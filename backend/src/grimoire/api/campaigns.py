@@ -496,6 +496,22 @@ async def list_scenes(campaign_id: str, scenes: ScenesDep) -> Any:
         raise map_lookup_errors(exc) from exc
 
 
+async def _require_scene_owned(scenes: Any, campaign_id: str, scene_id: str) -> Any:
+    """Resolve ``scene_id`` and reject when it doesn't belong to ``campaign_id``.
+
+    ``SceneManager.get_scene`` looks up scenes by id across every campaign on
+    disk, so without this guard a caller could read/close another campaign's
+    scenes by guessing the id. Returns the resolved Scene for the caller.
+    """
+    scene = await scenes.get_scene(scene_id)
+    if getattr(scene, "campaign_id", None) != campaign_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"scene {scene_id!r} not found in campaign {campaign_id!r}",
+        )
+    return scene
+
+
 @router.get("/{campaign_id}/scenes/{scene_id}")
 async def get_scene(
     campaign_id: str,
@@ -503,9 +519,11 @@ async def get_scene(
     scenes: ScenesDep,
 ) -> Any:
     try:
-        scene = await scenes.get_scene(scene_id)
+        scene = await _require_scene_owned(scenes, campaign_id, scene_id)
         body = await scenes.load_scene_body(scene_id)
         posts = await scenes.get_posts(scene_id)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return {
@@ -522,7 +540,10 @@ async def end_scene(
     scenes: ScenesDep,
 ) -> Any:
     try:
+        await _require_scene_owned(scenes, campaign_id, scene_id)
         return to_payload(await scenes.close_scene(scene_id))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
