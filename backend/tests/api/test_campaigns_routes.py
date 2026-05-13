@@ -55,9 +55,7 @@ class FakeCharacters:
     async def list_pcs(self, campaign_id: str) -> list[dict]:
         return self.pcs.get(campaign_id, [])
 
-    async def add_pc(
-        self, campaign_id: str, character_ref: str, name: str, owner: str
-    ) -> dict:
+    async def add_pc(self, campaign_id: str, character_ref: str, name: str, owner: str) -> dict:
         entry = {
             "character_ref": character_ref,
             "name": name,
