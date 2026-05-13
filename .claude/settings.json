@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/guard-writes.py",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-writes.py\"",
             "shell": "bash",
             "timeout": 5
           }
