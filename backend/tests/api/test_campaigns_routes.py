@@ -1,0 +1,155 @@
+"""REST contract tests for campaign routes that don't require the full turn loop."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+class FakeOrchestrator:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    async def submit_post(
+        self, campaign_id: str, pc_ref: str, text: str, metadata: dict | None = None
+    ) -> Any:
+        from grimoire.types.orchestrator import SubmitResult
+
+        self.calls.append(("submit", campaign_id, pc_ref, text))
+        return SubmitResult(accepted=True, turn_id="t_123", auto_responding=True, reason="ok")
+
+    async def regenerate_last(self, campaign_id: str) -> Any:
+        from grimoire.types.orchestrator import RegenerateResult
+
+        return RegenerateResult(turn_id="t_999", accepted=True, reason="regen")
+
+    async def undo_turn(self, campaign_id: str, count: int) -> Any:
+        from grimoire.types.orchestrator import UndoResult
+
+        return UndoResult(turns_undone=[f"t_{i}" for i in range(count)])
+
+    async def fork(self, campaign_id: str, from_turn_id: str, label: str) -> Any:
+        from datetime import UTC, datetime
+
+        from grimoire.types.orchestrator import ForkResult
+
+        return ForkResult(
+            new_branch_id=f"{campaign_id}:{label}",
+            from_turn_id=from_turn_id,
+            label=label,
+            created_at=datetime.now(UTC),
+        )
+
+
+class FakeContinuity:
+    async def facts_about(self, **kwargs: Any) -> list[Any]:
+        return []
+
+    async def open_commitments(self, **kwargs: Any) -> list[Any]:
+        return []
+
+
+class FakeCharacters:
+    def __init__(self) -> None:
+        self.pcs: dict[str, list[dict]] = {}
+
+    def list_pcs(self, campaign_id: str) -> list[dict]:
+        return self.pcs.get(campaign_id, [])
+
+    def add_pc(self, campaign_id: str, character_ref: str, name: str, owner: str) -> dict:
+        entry = {
+            "character_ref": character_ref,
+            "name": name,
+            "owner": owner,
+            "active": False,
+        }
+        self.pcs.setdefault(campaign_id, []).append(entry)
+        return entry
+
+    def remove_pc(self, campaign_id: str, character_ref: str) -> None:
+        self.pcs[campaign_id] = [
+            p for p in self.pcs.get(campaign_id, []) if p["character_ref"] != character_ref
+        ]
+
+    def set_active_pc(self, campaign_id: str, character_ref: str) -> None:
+        for p in self.pcs.get(campaign_id, []):
+            p["active"] = p["character_ref"] == character_ref
+
+
+def test_submit_turn_dispatches_to_orchestrator(client, container) -> None:
+    fake = FakeOrchestrator()
+    container.orchestrator = fake
+    response = client.post(
+        "/api/campaigns/c1/turns",
+        json={"pc_ref": "pc-1", "text": "hi"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["turn_id"] == "t_123"
+    assert body["auto_responding"] is True
+    assert fake.calls == [("submit", "c1", "pc-1", "hi")]
+
+
+def test_regenerate(client, container) -> None:
+    container.orchestrator = FakeOrchestrator()
+    response = client.post("/api/campaigns/c1/turns/regenerate")
+    assert response.status_code == 200
+    assert response.json()["turn_id"] == "t_999"
+
+
+def test_undo(client, container) -> None:
+    container.orchestrator = FakeOrchestrator()
+    response = client.post("/api/campaigns/c1/turns/undo", json={"count": 3})
+    assert response.status_code == 200
+    assert len(response.json()["turns_undone"]) == 3
+
+
+def test_fork(client, container) -> None:
+    container.orchestrator = FakeOrchestrator()
+    response = client.post(
+        "/api/campaigns/c1/forks",
+        json={"from_turn_id": "t_5", "label": "side-arc"},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["new_branch_id"] == "c1:side-arc"
+
+
+def test_pcs_lifecycle(client, container) -> None:
+    container.characters = FakeCharacters()
+    response = client.get("/api/campaigns/c1/pcs")
+    assert response.status_code == 200
+    assert response.json() == []
+
+    response = client.post(
+        "/api/campaigns/c1/pcs",
+        json={"character_ref": "ref-1", "name": "Alistair", "owner": "tester"},
+    )
+    assert response.status_code == 201
+
+    response = client.get("/api/campaigns/c1/pcs")
+    body = response.json()
+    assert body[0]["character_ref"] == "ref-1"
+
+    response = client.post("/api/campaigns/c1/pcs/ref-1/set-active")
+    assert response.status_code == 200
+
+    response = client.delete("/api/campaigns/c1/pcs/ref-1")
+    assert response.status_code == 204
+
+    response = client.get("/api/campaigns/c1/pcs")
+    assert response.json() == []
+
+
+def test_facts_and_commitments(client, container) -> None:
+    container.continuity = FakeContinuity()
+    response = client.get("/api/campaigns/c1/facts")
+    assert response.status_code == 200
+    assert response.json() == []
+    response = client.get("/api/campaigns/c1/commitments")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_orchestrator_503_when_missing(client) -> None:
+    response = client.post("/api/campaigns/c1/turns", json={"pc_ref": "p", "text": "x"})
+    assert response.status_code == 503
