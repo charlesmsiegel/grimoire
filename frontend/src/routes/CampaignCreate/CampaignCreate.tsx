@@ -51,7 +51,7 @@ function errorMessage(err: unknown): string {
 
 export function CampaignCreate() {
   const navigate = useNavigate();
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
 
   const [draft, setDraft] = useState<WizardDraft>(() => emptyDraft());
   const [idEdited, setIdEdited] = useState(false);
@@ -251,7 +251,7 @@ export function CampaignCreate() {
         greeting_id: draft.greetingId,
         tags: draft.tags.length > 0 ? draft.tags : null,
       };
-      await createCampaign(input);
+      const created = await createCampaign(input);
       for (const pc of draft.pcs) {
         try {
           await addCampaignPC(draft.id, {
@@ -265,9 +265,15 @@ export function CampaignCreate() {
           console.warn(`Failed to add PC ${pc.character_ref}: ${errorMessage(err)}`);
         }
       }
+      // Append to the in-memory campaigns list rather than clearing it; the
+      // StatusBar and any other consumer read from this list and the wizard
+      // doesn't trigger a remount of CampaignsView on navigate.
       dispatch({
         type: "set-campaigns",
-        campaigns: [],
+        campaigns: [
+          ...state.campaigns,
+          { id: created.id, name: created.name },
+        ],
       });
       navigate(`/campaigns/${encodeURIComponent(draft.id)}`);
     } catch (err) {
