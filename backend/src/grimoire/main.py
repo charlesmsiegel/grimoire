@@ -14,6 +14,7 @@ from grimoire.api.container import ServiceContainer
 from grimoire.api.health import router as health_router
 from grimoire.api.library import router as library_router
 from grimoire.api.stream import StreamManager
+from grimoire.api.templates import router as templates_router
 from grimoire.api.ws import router as ws_router
 from grimoire.characters import CharactersService
 from grimoire.config import settings
@@ -99,8 +100,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             container.stream = StreamManager(event_bus=container.event_bus)
 
         data_root = settings.data_root
-        for sub in ("library", "mechanics", "plugins", "config/plugins"):
+        for sub in ("library", "mechanics", "plugins", "config/plugins", "templates"):
             (data_root / sub).mkdir(parents=True, exist_ok=True)
+
+        # User-supplied prompt template variants live under {data_root}/templates
+        # and take precedence over the bundled defaults so a user can drop in a
+        # new variant and select it without rebuilding the package.
+        from grimoire.templates import registry as template_registry
+
+        template_registry.register_search_path(data_root / "templates", prepend=True)
 
         if container.state_store is None:
             container.state_store = StateStore(db=db, data_root=data_root)
@@ -277,6 +285,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router, prefix="/api")
     app.include_router(library_router, prefix="/api")
+    app.include_router(templates_router, prefix="/api")
     app.include_router(campaigns_router, prefix="/api")
     # WebSocket routes mount under /ws so the Vite dev server's `ws: true`
     # proxy block forwards upgrade requests correctly. The HTTP health probe
