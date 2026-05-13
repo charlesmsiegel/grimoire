@@ -39,7 +39,7 @@ async def _bind_campaign(store: StateStore, campaign_id: str, setting_id: str) -
         campaign_id=campaign_id,
         setting_id=setting_id,
         priority=1,
-        include=[],
+        include=None,
         track_latest=True,
     )
 

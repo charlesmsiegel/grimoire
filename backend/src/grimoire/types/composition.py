@@ -14,7 +14,9 @@ from .common import CampaignId, EntityKind, Json, Scope
 class SettingRef(BaseModel):
     setting_id: str
     priority: int  # 1 = highest
-    include: list[str] = Field(default_factory=list)
+    # None / missing means "include every kind"; an explicit list (even empty)
+    # is treated literally — `[]` means include nothing from this setting.
+    include: list[str] | None = None
     # ['characters', 'items', 'locations', 'lore', 'factions', 'greetings']
     bound_at_version: int = 0
     track_latest: bool = False

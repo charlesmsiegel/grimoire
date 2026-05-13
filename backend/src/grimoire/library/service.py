@@ -61,10 +61,13 @@ def _normalize_kind(kind: EntityKind | str) -> str:
 def _include_to_kinds(include: list[str] | None) -> set[str] | None:
     """Translate a ``SettingRef.include`` list (directory names) into kinds.
 
-    Returns ``None`` when the include list is empty / missing, meaning
-    "include every kind" per spec 18.
+    Returns ``None`` when the include is missing (``None``), meaning "include
+    every kind" per spec 18. An empty list ``[]`` is preserved as an empty
+    set, meaning "include nothing" — distinct from "all kinds", so a wizard
+    that uncheck-all-kinds excludes the setting rather than (silently)
+    including everything.
     """
-    if not include:
+    if include is None:
         return None
     out: set[str] = set()
     for entry in include:

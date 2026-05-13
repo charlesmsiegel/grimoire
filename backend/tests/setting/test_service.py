@@ -126,11 +126,13 @@ async def _bind_campaign(
 ) -> None:
     await store.upsert_campaign(campaign_id=campaign_id, name=campaign_id)
     for i, (sid, include) in enumerate(refs, start=1):
+        # Tests use [] to mean "all kinds" historically; preserve that intent
+        # by translating empty to None at the boundary.
         await store.upsert_setting_ref(
             campaign_id=campaign_id,
             setting_id=sid,
             priority=i,
-            include=include,
+            include=include if include else None,
             track_latest=True,
         )
 

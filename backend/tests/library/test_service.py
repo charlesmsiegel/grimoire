@@ -320,7 +320,7 @@ async def test_set_composition_preserves_campaign_config(
 
     await library.set_composition(
         "camp-1",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=[])]),
+        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
     )
 
     row = await store.db.fetchone("SELECT config FROM campaigns WHERE id = ?", ("camp-1",))
@@ -344,15 +344,15 @@ async def test_set_composition_drops_removed_refs(
         "camp-1",
         Composition(
             settings=[
-                SettingRef(setting_id="wod-london", priority=1, include=[]),
-                SettingRef(setting_id="wod-nyc", priority=2, include=[]),
+                SettingRef(setting_id="wod-london", priority=1, include=None),
+                SettingRef(setting_id="wod-nyc", priority=2, include=None),
             ]
         ),
     )
 
     await library.set_composition(
         "camp-1",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=[])]),
+        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
     )
     final = await library.get_composition("camp-1")
     assert [r.setting_id for r in final.settings] == ["wod-london"]
@@ -367,7 +367,7 @@ async def test_set_composition_pins_snapshot_when_not_tracking_latest(
 
     await library.set_composition(
         "camp-1",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=[])]),
+        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
     )
 
     # Library mutates after pinning.
@@ -389,7 +389,7 @@ async def test_upgrade_setting_ref_refreshes_snapshots(
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
     await library.set_composition(
         "camp-1",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=[])]),
+        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
     )
     # Library mutates after pinning.
     await _seed_character(store, "wod-london", "alistair", name="v2")
@@ -423,7 +423,7 @@ async def test_resolve_library_live(library: LibraryService, store: StateStore) 
                 SettingRef(
                     setting_id="wod-london",
                     priority=1,
-                    include=[],
+                    include=None,
                     track_latest=True,
                 )
             ]
@@ -448,7 +448,7 @@ async def test_resolve_picks_up_override(library: LibraryService, store: StateSt
                 SettingRef(
                     setting_id="wod-london",
                     priority=1,
-                    include=[],
+                    include=None,
                     track_latest=True,
                 )
             ]
@@ -481,7 +481,7 @@ async def test_resolve_prefers_campaign_emergent(
                 SettingRef(
                     setting_id="wod-london",
                     priority=1,
-                    include=[],
+                    include=None,
                     track_latest=True,
                 )
             ]
@@ -532,7 +532,7 @@ async def test_resolve_pinned_snapshot_doesnt_see_library_updates(
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
     await library.set_composition(
         "camp-1",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=[])]),
+        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
     )
     await _seed_character(store, "wod-london", "alistair", name="v2")
 
@@ -591,11 +591,11 @@ async def test_dependents_lists_referencing_campaigns(
     await store.upsert_campaign(campaign_id="camp-C", name="Charlie")
     await library.set_composition(
         "camp-A",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=[])]),
+        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
     )
     await library.set_composition(
         "camp-B",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=[])]),
+        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
     )
 
     deps = await library.dependents("wod-london", "character", "alistair")

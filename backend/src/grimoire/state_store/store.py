@@ -714,7 +714,7 @@ class StateStore:
         campaign_id: str,
         setting_id: str,
         priority: int,
-        include: list[str],
+        include: list[str] | None,
         track_latest: bool,
         bound_at_version: int | None = None,
     ) -> None:
@@ -744,7 +744,7 @@ class StateStore:
                     campaign_id,
                     setting_id,
                     priority,
-                    json.dumps(list(include), sort_keys=True),
+                    json.dumps(list(include), sort_keys=True) if include is not None else None,
                     bound_at_version,
                     1 if track_latest else 0,
                     _now_iso(),
@@ -853,7 +853,9 @@ class StateStore:
                 "campaign_id": row["campaign_id"],
                 "setting_id": row["setting_id"],
                 "priority": int(row["priority"]),
-                "include": _json_loads(row["include"]) or [],
+                # Preserve None ("missing => include all kinds") vs [] ("include
+                # nothing"). The library service distinguishes these now.
+                "include": _json_loads(row["include"]) if row["include"] is not None else None,
                 "bound_at_version": int(row["bound_at_version"]),
                 "track_latest": bool(int(row["track_latest"])),
                 "bound_at": row["bound_at"],
