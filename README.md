@@ -15,7 +15,27 @@ Runtime user content (library, campaigns, mechanics, plugins) lives outside the 
 ## Prerequisites
 
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
-- Node 20+ and [pnpm](https://pnpm.io/)
+- Node 20+ and [pnpm](https://pnpm.io/) (or just `corepack`, which ships with Node)
+- Bash — Linux/macOS have it natively; on Windows use Git Bash (bundled with [Git for Windows](https://git-scm.com/)) or WSL
+
+## Quick start
+
+```sh
+scripts/install.sh     # installs backend + frontend deps in parallel
+scripts/run.sh         # starts both servers and opens the browser
+scripts/shutdown.sh    # stops both and frees the ports
+```
+
+`scripts/run.sh` accepts flags so you can pick any free ports:
+
+```sh
+scripts/run.sh --backend-port 9000 --frontend-port 5180
+scripts/run.sh --no-browser              # don't auto-open the browser
+scripts/run.sh --reload                  # backend autoreload (uvicorn --reload)
+scripts/run.sh -h                        # full flag list
+```
+
+Ports also accept `GRIMOIRE_BACKEND_PORT` / `GRIMOIRE_FRONTEND_PORT` env vars. `scripts/shutdown.sh` picks the same ports up from the state file `run.sh` writes (`.grimoire-run.env`), so it works from any terminal.
 
 ## Backend
 
@@ -35,7 +55,7 @@ pnpm install
 pnpm dev
 ```
 
-Visits `http://127.0.0.1:5173`. The dev server proxies `/api/*` and `/ws/*` to the backend.
+Visits `http://127.0.0.1:5173`. The dev server proxies `/api/*` and `/ws/*` to the backend (configurable via `GRIMOIRE_BACKEND_HOST` / `GRIMOIRE_BACKEND_PORT`).
 
 ## Tests and lint
 
