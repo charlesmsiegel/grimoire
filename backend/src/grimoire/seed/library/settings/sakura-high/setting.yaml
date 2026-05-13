@@ -1,0 +1,106 @@
+id: sakura-high
+name: "Sakura High"
+description: >-
+  A contemporary Japanese public high school in a quiet commuter town outside
+  Tokyo. A small cast of classmates, a sleepy shopping street, and a famous
+  cherry tree on the school grounds where, supposedly, no confession ever fails.
+  Comfort food for a romcom — clubs, festivals, exam season, the long walk
+  home after the last train.
+tags: [school, japan, romance, slice-of-life, contemporary]
+genre: "high-school romantic comedy"
+
+calendar:
+  epoch: "2025-04-08"
+  months:
+    - { name: January,   days: 31 }
+    - { name: February,  days: 28 }
+    - { name: March,     days: 31 }
+    - { name: April,     days: 30 }
+    - { name: May,       days: 31 }
+    - { name: June,      days: 30 }
+    - { name: July,      days: 31 }
+    - { name: August,    days: 31 }
+    - { name: September, days: 30 }
+    - { name: October,   days: 31 }
+    - { name: November,  days: 30 }
+    - { name: December,  days: 31 }
+  days_per_week: 7
+  week_day_names: [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+  seasons:
+    - name: spring
+      start_month: 3
+      start_day: 20
+      palette: "pale pink, soft green, white"
+      weather_bias: { mild: 0.6, rain: 0.2, clear: 0.2 }
+    - name: summer
+      start_month: 6
+      start_day: 21
+      palette: "cicada-bright greens, blue sky, white shirts"
+      weather_bias: { hot: 0.5, rain: 0.3, clear: 0.2 }
+    - name: autumn
+      start_month: 9
+      start_day: 22
+      palette: "amber, rust, deep blue evenings"
+      weather_bias: { cool: 0.5, clear: 0.3, rain: 0.2 }
+    - name: winter
+      start_month: 12
+      start_day: 21
+      palette: "grey skies, navy coats, condensation on glass"
+      weather_bias: { cold: 0.6, clear: 0.3, snow: 0.1 }
+  holidays:
+    - name: "Entrance Ceremony"
+      month: 4
+      day: 8
+      description: "First day of the school year; cherry blossoms in full bloom."
+      tags: [school, ceremonial]
+    - name: "Golden Week"
+      month: 5
+      day: 3
+      description: "Stretch of national holidays; everyone travels or sleeps in."
+      tags: [holiday, break]
+    - name: "Tanabata"
+      month: 7
+      day: 7
+      description: "Star festival. Students hang wishes on bamboo branches."
+      tags: [festival, romance]
+    - name: "Summer Festival"
+      month: 8
+      day: 15
+      description: "Yukatas, fireworks, candy apples, and the bridge crowded with classmates."
+      tags: [festival, romance]
+    - name: "Cultural Festival"
+      month: 10
+      day: 25
+      description: "Bunkasai. Class cafes, haunted houses, the band on the courtyard stage."
+      tags: [festival, school, romance]
+    - name: "Christmas Eve"
+      month: 12
+      day: 24
+      description: "In Japan a date night more than a family holiday; the brave ask someone out."
+      tags: [romance]
+    - name: "Valentine's Day"
+      month: 2
+      day: 14
+      description: "Girls give chocolate — honmei to a sweetheart, giri to friends."
+      tags: [romance, custom]
+    - name: "White Day"
+      month: 3
+      day: 14
+      description: "Boys return Valentine's gifts, ideally threefold."
+      tags: [romance, custom]
+    - name: "Graduation"
+      month: 3
+      day: 1
+      description: "Third-years leave. Second buttons of uniforms are requested and given."
+      tags: [school, ceremonial, romance]
+
+atmosphere:
+  default_register: "warm, hesitant, full of small specific detail; teenage stakes treated with weight"
+  default_palette: "cherry pink, school blue, late-afternoon gold; chalk dust and cicadas"
+
+defaults:
+  starting_location: classroom-2-b
+  default_style_guide_id: shoujo-romance
+  default_image_preset_id: anime
+
+version: 1
