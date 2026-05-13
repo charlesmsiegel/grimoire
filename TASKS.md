@@ -148,7 +148,7 @@ Spec 14 §Backend contract. FastAPI endpoints surfacing every module: `/library/
 **Blocked by:** 29, 31
 Spec 14. Settings list and detail (with tabs for each entity kind + Meta + Dependent campaigns). Per-kind editors (frontmatter form + markdown body; characters get voice editor, image prompt template, capabilities tab). Edit-with-dependents warning. Cross-setting variants tab. Style guides + image presets editors (with sample preview). Installed mechanics view (per-module manifest summary, sheet schemas, `theme.css` preview, load errors). Installed plugins view per kind (LLM / embedding / ImageGen / export) with config forms (rendered from each plugin's `config_schema`).
 
-### 33. [ ] Build frontend Campaign Play view
+### 33. [x] Build frontend Campaign Play view
 **Blocked by:** 29, 30, 31
 Spec 14. Top bar with active PC switcher. Scene header (location, in-game time, present cast, source badges). Scene pane: posts in order with author labels, inline generated images, mechanical event chips, source badges on entity references, drift warning banners. Side panel: present cast, active threads, capabilities (active PCs), mechanics rolls/slots, quick actions (regen, undo, end scene, skip time, manual fact). Input area with PC selector + Submit + Advance button (only when scene has 2+ PCs and there's something to advance). Real-time updates via WS (token streaming, `advance_disabled`/`enabled`, `drift_detected`, contradictions, `image_ready`).
 

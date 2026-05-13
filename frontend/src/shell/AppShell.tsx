@@ -3,7 +3,8 @@ import { Outlet, useMatch, useNavigate } from "react-router-dom";
 
 import { SkipLink } from "../components/a11y";
 import { useKeyboardShortcuts, type ShortcutBinding } from "../hooks/useKeyboardShortcuts";
-import { useCampaignStream } from "../state/campaignStream";
+import { CampaignStreamProvider } from "../state/campaignStream";
+import { useCampaignStreamStatus } from "../state/useCampaignEvent";
 import { useStore } from "../state/useStore";
 import { useTheme } from "../state/useTheme";
 import { NavSidebar } from "./NavSidebar";
@@ -24,8 +25,6 @@ export function AppShell() {
       dispatch({ type: "set-active-campaign", id: campaignId });
     }
   }, [campaignId, state.activeCampaignId, dispatch]);
-
-  const wsStatus = useCampaignStream(campaignId);
 
   const shortcuts = useMemo<ShortcutBinding[]>(
     () => [
@@ -63,13 +62,20 @@ export function AppShell() {
   useKeyboardShortcuts(shortcuts);
 
   return (
-    <div className="app-shell">
-      <SkipLink targetId={MAIN_ID} />
-      <NavSidebar />
-      <main id={MAIN_ID} className="app-main" tabIndex={-1}>
-        <Outlet />
-      </main>
-      <StatusBar wsStatus={wsStatus} />
-    </div>
+    <CampaignStreamProvider campaignId={campaignId}>
+      <div className="app-shell">
+        <SkipLink targetId={MAIN_ID} />
+        <NavSidebar />
+        <main id={MAIN_ID} className="app-main" tabIndex={-1}>
+          <Outlet />
+        </main>
+        <StatusBarBridge />
+      </div>
+    </CampaignStreamProvider>
   );
+}
+
+function StatusBarBridge() {
+  const status = useCampaignStreamStatus();
+  return <StatusBar wsStatus={status} />;
 }
