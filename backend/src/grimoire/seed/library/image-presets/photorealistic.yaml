@@ -1,0 +1,17 @@
+name: Photorealistic
+description: Photo-real rendering — sharp detail, natural lighting, plausible materials.
+tags: [photorealistic, realistic, photography]
+style_preamble: >-
+  photorealistic, ultra-detailed, natural lighting, sharp focus, accurate
+  materials, plausible anatomy, professional photography, full-frame DSLR,
+  85mm lens, balanced color
+negative_prompt: >-
+  cartoon, anime, illustration, painting, cgi, plastic skin, deformed,
+  extra limbs, watermark, text, signature, oversharpened, jpeg artifacts,
+  low resolution
+default_params:
+  width: 1024
+  height: 1024
+  steps: 32
+  cfg_scale: 5.5
+  sampler: dpmpp_2m_karras

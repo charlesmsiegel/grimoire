@@ -1,0 +1,16 @@
+name: Cinematic
+description: Film-still aesthetic — anamorphic lens, dramatic lighting, shallow depth of field.
+tags: [cinematic, film, dramatic]
+style_preamble: >-
+  cinematic film still, anamorphic 2.39:1, shallow depth of field, dramatic
+  rim lighting, volumetric haze, rich shadows, color-graded teal and amber,
+  35mm film grain, professional cinematography
+negative_prompt: >-
+  cartoon, anime, illustration, low quality, blurry, overexposed, flat lighting,
+  cgi, plastic, oversaturated, watermark, text, signature
+default_params:
+  width: 1344
+  height: 768
+  steps: 30
+  cfg_scale: 6.0
+  sampler: dpmpp_2m_karras

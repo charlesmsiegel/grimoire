@@ -1,0 +1,15 @@
+name: Anime
+description: Anime / manga illustration — clean line art, cel shading, expressive eyes.
+tags: [anime, illustration, cel-shaded]
+style_preamble: >-
+  anime illustration, clean line art, cel shading, expressive eyes, vibrant
+  colors, studio-quality composition, detailed background, soft gradient skies
+negative_prompt: >-
+  photorealistic, 3d render, blurry, low quality, deformed anatomy, extra
+  fingers, watermark, text, signature, oversaturated, jpeg artifacts
+default_params:
+  width: 832
+  height: 1216
+  steps: 28
+  cfg_scale: 7.0
+  sampler: euler_a

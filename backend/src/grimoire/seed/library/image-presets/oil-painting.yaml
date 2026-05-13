@@ -1,0 +1,16 @@
+name: Oil Painting
+description: Classical oil painting — visible brushwork, warm palette, chiaroscuro.
+tags: [painting, oil, classical]
+style_preamble: >-
+  oil painting on canvas, visible brushwork, chiaroscuro lighting, warm
+  palette, glazing technique, painterly composition, museum-quality, soft
+  edges, romantic atmosphere
+negative_prompt: >-
+  photograph, photorealistic, digital art, 3d render, anime, cartoon, low
+  quality, watermark, text, signature, modern, neon, lens flare
+default_params:
+  width: 1024
+  height: 1024
+  steps: 32
+  cfg_scale: 6.5
+  sampler: dpmpp_2m_karras
