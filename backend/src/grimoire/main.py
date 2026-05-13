@@ -2,7 +2,7 @@ import logging
 import os
 import shutil
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -68,10 +68,8 @@ def _seed_defaults(data_root: Path) -> None:
             os.replace(tmp, dst)
         finally:
             if tmp.exists():
-                try:
+                with suppress(OSError):
                     tmp.unlink()
-                except OSError:
-                    pass
         log.info("seeded default %s", rel)
 
 
