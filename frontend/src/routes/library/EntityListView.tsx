@@ -1,0 +1,135 @@
+import { useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+
+import {
+  ApiError,
+  ENTITY_KIND_PLURAL,
+  ENTITY_KIND_SINGULAR,
+  type Greeting,
+  type LibraryEntity,
+  libraryApi,
+} from "../../api/library";
+import { useResource } from "../../api/useResource";
+import { AsyncBoundary } from "./AsyncBoundary";
+
+interface Props {
+  /** Plural kind from URL: characters, items, locations, lore, factions, greetings. */
+  kindOverride?: string;
+}
+
+function isGreeting(v: LibraryEntity | Greeting): v is Greeting {
+  return "starting_location" in v && !("frontmatter" in v);
+}
+
+export function EntityListView({ kindOverride }: Props) {
+  const params = useParams();
+  const settingId = params.settingId ?? "";
+  const kindPlural = kindOverride ?? params.kind ?? "characters";
+  const singular = ENTITY_KIND_SINGULAR[kindPlural] ?? "character";
+
+  const navigate = useNavigate();
+  const { data, loading, error, reload } = useResource(
+    () => libraryApi.listEntities(settingId, kindPlural),
+    [settingId, kindPlural],
+  );
+
+  const [creating, setCreating] = useState(false);
+  const [newId, setNewId] = useState("");
+  const [newName, setNewName] = useState("");
+  const [submitErr, setSubmitErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitErr(null);
+    setBusy(true);
+    try {
+      const created = await libraryApi.createEntity(settingId, kindPlural, {
+        id: newId.trim(),
+        frontmatter: { name: newName.trim(), id: newId.trim() },
+        body: "",
+      });
+      setCreating(false);
+      setNewId("");
+      setNewName("");
+      navigate(
+        `/library/settings/${encodeURIComponent(settingId)}/${kindPlural}/${encodeURIComponent(
+          created.asset_id,
+        )}`,
+      );
+    } catch (err) {
+      setSubmitErr(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="library-section entity-list">
+      <header className="library-section-header">
+        <h4>{kindPlural}</h4>
+        <button onClick={() => setCreating((c) => !c)} aria-expanded={creating}>
+          {creating ? "Cancel" : `+ New ${singular}`}
+        </button>
+      </header>
+
+      {creating && (
+        <form onSubmit={submit} className="library-form" aria-label={`Create ${singular}`}>
+          <label>
+            <span>ID</span>
+            <input
+              required
+              value={newId}
+              pattern="[a-z0-9][a-z0-9-]*"
+              title="lowercase letters, digits, and hyphens"
+              onChange={(e) => setNewId(e.target.value)}
+            />
+          </label>
+          <label>
+            <span>Name</span>
+            <input required value={newName} onChange={(e) => setNewName(e.target.value)} />
+          </label>
+          <button type="submit" disabled={busy}>
+            {busy ? "Creating…" : "Create"}
+          </button>
+          {submitErr && (
+            <p className="library-error" role="alert">
+              {submitErr}
+            </p>
+          )}
+        </form>
+      )}
+
+      <AsyncBoundary
+        loading={loading}
+        error={error}
+        empty={!data || data.length === 0}
+        emptyMessage={`No ${kindPlural} yet.`}
+        onRetry={reload}
+      >
+        <ul className="library-card-grid">
+          {(data ?? []).map((e) => {
+            const id = "asset_id" in e ? e.asset_id : e.id;
+            const name = e.name || id;
+            const tags = isGreeting(e) ? e.tags : (e as LibraryEntity).tags;
+            return (
+              <li key={id} className="library-card">
+                <Link
+                  to={`/library/settings/${encodeURIComponent(settingId)}/${kindPlural}/${encodeURIComponent(id)}`}
+                >
+                  <h4>{name}</h4>
+                  <small>{id}</small>
+                  {tags && tags.length > 0 && (
+                    <p className="library-card-meta">{tags.join(" · ")}</p>
+                  )}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </AsyncBoundary>
+    </div>
+  );
+}
+
+export const ENTITY_KIND_LABELS = ENTITY_KIND_PLURAL;

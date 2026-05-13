@@ -144,7 +144,7 @@ Spec 14 §Backend contract. FastAPI endpoints surfacing every module: `/library/
 
 ## Wave 7 — Frontend assembly
 
-### 32. [ ] Build frontend Library views
+### 32. [x] Build frontend Library views
 **Blocked by:** 29, 31
 Spec 14. Settings list and detail (with tabs for each entity kind + Meta + Dependent campaigns). Per-kind editors (frontmatter form + markdown body; characters get voice editor, image prompt template, capabilities tab). Edit-with-dependents warning. Cross-setting variants tab. Style guides + image presets editors (with sample preview). Installed mechanics view (per-module manifest summary, sheet schemas, `theme.css` preview, load errors). Installed plugins view per kind (LLM / embedding / ImageGen / export) with config forms (rendered from each plugin's `config_schema`).
 
