@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import type { WizardDraft } from "./types";
 import { slugify } from "./types";
 
@@ -9,6 +11,10 @@ interface Props {
 }
 
 export function StepIdentity({ draft, update, idEdited, setIdEdited }: Props) {
+  // Raw input string owned locally so commas and trailing spaces survive each
+  // keystroke. Deriving the displayed value from draft.tags.join(", ") would
+  // snap the cursor back the moment the user types ",".
+  const [tagsInput, setTagsInput] = useState(() => draft.tags.join(", "));
   return (
     <div className="wizard-step">
       <h3>Step 1 — Identity</h3>
@@ -59,15 +65,17 @@ export function StepIdentity({ draft, update, idEdited, setIdEdited }: Props) {
         <span>Tags</span>
         <input
           type="text"
-          value={draft.tags.join(", ")}
-          onChange={(e) =>
+          value={tagsInput}
+          onChange={(e) => {
+            const next = e.target.value;
+            setTagsInput(next);
             update({
-              tags: e.target.value
+              tags: next
                 .split(",")
                 .map((t) => t.trim())
                 .filter(Boolean),
-            })
-          }
+            });
+          }}
           placeholder="vampire, gothic, london"
         />
         <small>Comma-separated.</small>
