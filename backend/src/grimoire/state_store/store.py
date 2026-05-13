@@ -8,6 +8,7 @@ two halves stay coherent.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from collections.abc import AsyncIterator, Iterable
@@ -1401,5 +1402,12 @@ def _content_kind_from_id(composite_id: str) -> str:
 
 
 def _seed_for(label: str) -> int:
-    # Stable deterministic seed from the label; sqlite stores INTEGER.
-    return abs(hash(label)) & 0x7FFFFFFF
+    """Stable deterministic seed from a label; sqlite stores INTEGER.
+
+    Python's builtin ``hash()`` is salted per process (PYTHONHASHSEED), so the
+    same label produces a different value on each restart — breaking the
+    "deterministic replay across restarts" guarantee for branch RNG seeding.
+    Use a fixed-output hash (SHA-256, truncated to 31 bits) instead.
+    """
+    digest = hashlib.sha256(label.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
