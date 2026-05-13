@@ -56,6 +56,18 @@ async function request<T>(
     throw new ApiError(res.status, detail);
   }
   if (res.status === 204) return undefined as T;
+  // Reject HTML bodies loudly. When a path is missing the /api prefix in dev,
+  // Vite's SPA fallback returns index.html with HTTP 200; without this guard
+  // callers downstream blow up with confusing type errors (e.g. ".find is not
+  // a function" on a string).
+  const ct = res.headers.get("content-type") ?? "";
+  if (!ct.includes("application/json")) {
+    throw new ApiError(
+      res.status,
+      null,
+      `expected JSON response from ${path} but got ${ct || "unknown content-type"}`,
+    );
+  }
   return (await parseBody(res)) as T;
 }
 
