@@ -54,7 +54,7 @@ async def test_push_to_unknown_campaign_is_noop() -> None:
 
 def test_ws_health_endpoint(client, container: ServiceContainer) -> None:
     container.stream = StreamManager(event_bus=container.event_bus)
-    response = client.get("/api/ws/health")
+    response = client.get("/ws/health")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
@@ -65,7 +65,7 @@ def test_ws_health_unavailable_without_container_stream(
     client, container: ServiceContainer
 ) -> None:
     container.stream = None
-    response = client.get("/api/ws/health")
+    response = client.get("/ws/health")
     # Lifespan re-creates a StreamManager if one isn't set, so it should be ok.
     assert response.status_code == 200
 
@@ -77,7 +77,7 @@ def test_websocket_receives_event_bus_messages(client, container: ServiceContain
     stream = container.stream
     assert bus is not None and stream is not None
 
-    with client.websocket_connect("/api/campaigns/c1/stream") as ws:
+    with client.websocket_connect("/ws/campaigns/c1/stream") as ws:
         # Run the emit on the server loop via the TestClient's portal so the
         # subscription handler executes synchronously with respect to the WS.
         client.portal.call(

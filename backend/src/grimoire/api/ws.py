@@ -38,7 +38,7 @@ async def campaign_stream(websocket: WebSocket, campaign_id: str) -> None:
         await stream.disconnect(campaign_id, websocket)
 
 
-@router.get("/ws/health")
+@router.get("/health")
 def ws_health(request: Request) -> dict[str, object]:
     container = getattr(request.app.state, "container", None)
     stream = getattr(container, "stream", None) if container is not None else None
