@@ -150,7 +150,10 @@ def test_facts_and_commitments(client, container) -> None:
     assert response.json() == []
 
 
-def test_orchestrator_503_when_missing(client) -> None:
+def test_orchestrator_503_when_missing(client, container) -> None:
+    # Lifespan auto-wires an OrchestratorService; clear it so we can verify
+    # the 503 branch in api/deps.py:_require for any service that goes missing.
+    container.orchestrator = None
     response = client.post("/api/campaigns/c1/turns", json={"pc_ref": "p", "text": "x"})
     assert response.status_code == 503
 
