@@ -500,6 +500,9 @@ class CharactersService:
         refs = {p["character_ref"] for p in pcs}
         if character_ref not in refs:
             raise CharactersError(f"{character_ref!r} is not a PC in campaign {campaign_id!r}")
+        # Persist to DB so the choice survives restart. The in-memory cache
+        # stays as a fast-path for list_pcs/active_pc within the same process.
+        await self.store.set_active_pc(campaign_id=campaign_id, character_ref=character_ref)
         self._active_pc[campaign_id] = character_ref
 
     async def active_pc(self, campaign_id: CampaignId) -> CharacterRef | None:

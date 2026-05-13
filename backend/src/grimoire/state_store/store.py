@@ -821,18 +821,25 @@ class StateStore:
         display_name: str,
         owner: str = "local",
     ) -> None:
+        # First PC in the campaign becomes active; subsequent PCs are added
+        # inactive so at most one row per campaign has active=1. set_active_pc
+        # is the only place that flips the bit afterwards.
+        row = await self.db.fetchone(
+            "SELECT 1 FROM campaign_pcs WHERE campaign_id = ? LIMIT 1",
+            (campaign_id,),
+        )
+        active_default = 0 if row else 1
         await self.db.execute(
             """
             INSERT INTO campaign_pcs (
               campaign_id, character_ref, display_name, owner, active, added_at
             )
-            VALUES (?, ?, ?, ?, 1, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(campaign_id, character_ref) DO UPDATE SET
               display_name = excluded.display_name,
-              owner = excluded.owner,
-              active = 1
+              owner = excluded.owner
             """,
-            (campaign_id, character_ref, display_name, owner, _now_iso()),
+            (campaign_id, character_ref, display_name, owner, active_default, _now_iso()),
         )
 
     async def remove_pc(self, *, campaign_id: str, character_ref: str) -> None:
@@ -840,6 +847,19 @@ class StateStore:
             "DELETE FROM campaign_pcs WHERE campaign_id = ? AND character_ref = ?",
             (campaign_id, character_ref),
         )
+
+    async def set_active_pc(self, *, campaign_id: str, character_ref: str) -> None:
+        """Atomically mark exactly one PC in the campaign as active."""
+        async with self._txn() as conn:
+            await conn.execute(
+                "UPDATE campaign_pcs SET active = 0 WHERE campaign_id = ?",
+                (campaign_id,),
+            )
+            await conn.execute(
+                "UPDATE campaign_pcs SET active = 1 "
+                "WHERE campaign_id = ? AND character_ref = ?",
+                (campaign_id, character_ref),
+            )
 
     async def list_pcs(self, campaign_id: str) -> list[dict]:
         rows = await self.db.fetchall(
