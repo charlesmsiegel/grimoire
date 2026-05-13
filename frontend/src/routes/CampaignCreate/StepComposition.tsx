@@ -29,7 +29,12 @@ export function StepComposition({ draft, update, settings, loading, error }: Pro
   const addRef = (settingId: string) => {
     const next: DraftSettingRef[] = [
       ...refs,
-      { setting_id: settingId, priority: refs.length + 1, include: [], track_latest: false },
+      {
+        setting_id: settingId,
+        priority: refs.length + 1,
+        include: [...ENTITY_KINDS],
+        track_latest: false,
+      },
     ];
     update({ settingRefs: next });
   };
@@ -58,7 +63,7 @@ export function StepComposition({ draft, update, settings, loading, error }: Pro
       <h3>Step 2 — Composition</h3>
       <p className="wizard-step-help">
         Pick one or more library settings. Higher priority refs override lower ones during
-        resolution. Leave the include filter empty to include every entity kind.
+        resolution. Uncheck a kind to exclude it from this setting.
       </p>
 
       {loading && <p className="wizard-meta">Loading settings…</p>}
@@ -104,7 +109,7 @@ export function StepComposition({ draft, update, settings, loading, error }: Pro
                 <span>Track latest library version (auto-upgrade)</span>
               </label>
               <fieldset className="wizard-ref-include">
-                <legend>Include (leave all unchecked for "all")</legend>
+                <legend>Include</legend>
                 {ENTITY_KINDS.map((kind) => (
                   <label key={kind} className="wizard-include-option">
                     <input
