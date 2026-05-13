@@ -81,7 +81,13 @@ function reducer(state: PlayState, action: Action): PlayState {
   switch (action.type) {
     case "loading":
       return { ...state, loading: true, error: null };
-    case "loaded":
+    case "loaded": {
+      // Preserve the server-pushed advance_disabled reason if one is set:
+      // every refresh() would otherwise recompute `advanceEnabled` from
+      // present_pc_refs and reset `advanceReason` to "", losing context the
+      // server gave us about *why* the button is disabled.
+      const presentCount = action.scene?.present_pc_refs.length ?? 0;
+      const stickyDisabled = state.advanceReason !== "" && !state.advanceEnabled;
       return {
         ...state,
         loading: false,
@@ -90,9 +96,10 @@ function reducer(state: PlayState, action: Action): PlayState {
         activePcRef: action.activePcRef,
         scene: action.scene,
         posts: action.posts,
-        advanceEnabled: (action.scene?.present_pc_refs.length ?? 0) >= 2,
-        advanceReason: "",
+        advanceEnabled: stickyDisabled ? false : presentCount >= 2,
+        advanceReason: stickyDisabled ? state.advanceReason : "",
       };
+    }
     case "error":
       return { ...state, loading: false, error: action.message };
     case "set-active-pc":
