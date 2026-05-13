@@ -144,5 +144,9 @@ if [ "$OPEN_BROWSER" = "1" ]; then
     wait_then_open "$FRONTEND_URL" &
 fi
 
-# Exit as soon as either process exits.
-wait -n "$backend_pid" "$frontend_pid"
+# Exit as soon as either process exits. `wait -n` would be cleaner but it's
+# a bash 4.3+ feature, and macOS still ships bash 3.2 by default — poll
+# instead so the script works without Homebrew bash.
+while kill -0 "$backend_pid" 2>/dev/null && kill -0 "$frontend_pid" 2>/dev/null; do
+    sleep 1
+done
