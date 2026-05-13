@@ -1,4 +1,5 @@
 import logging
+import os
 import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -36,9 +37,12 @@ _SEED_ROOT = Path(__file__).resolve().parent / "seed" / "library"
 def _seed_defaults(data_root: Path) -> None:
     """Copy bundled default library assets into the user's data root.
 
-    Only fills in files the user doesn't already have — existing files are
-    never overwritten, so user edits and additions are preserved. Called once
-    per startup before the initial library scan.
+    Skips files the user already has (size > 0) so edits and additions are
+    preserved. A zero-byte file at the destination is treated as a leftover
+    from a previous crashed copy and overwritten. The copy itself writes to
+    a sibling temp file and ``os.replace``s it into place so a crash mid-
+    write cannot leave a partial seed file behind. Called once per startup
+    before the initial library scan.
     """
     if not _SEED_ROOT.is_dir():
         return
@@ -48,10 +52,19 @@ def _seed_defaults(data_root: Path) -> None:
             continue
         rel = src.relative_to(_SEED_ROOT)
         dst = library_root / rel
-        if dst.exists():
+        if dst.exists() and dst.stat().st_size > 0:
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        tmp = dst.with_name(f".{dst.name}.tmp")
+        try:
+            shutil.copy2(src, tmp)
+            os.replace(tmp, dst)
+        finally:
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
         log.info("seeded default %s", rel)
 
 
