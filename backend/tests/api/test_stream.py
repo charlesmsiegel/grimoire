@@ -1,0 +1,92 @@
+"""WebSocket + event bus bridge tests for :mod:`grimoire.api.stream`."""
+
+from __future__ import annotations
+
+import pytest
+
+from grimoire.api.container import ServiceContainer
+from grimoire.api.stream import StreamManager
+from grimoire.event_bus import Event, EventBus
+
+
+@pytest.mark.asyncio
+async def test_event_bus_forwards_campaign_events() -> None:
+    bus = EventBus()
+    stream = StreamManager(event_bus=bus)
+    received: list[dict] = []
+
+    async def fake_send(message: dict) -> None:
+        received.append(message)
+
+    class _FakeWS:
+        async def accept(self) -> None: ...
+        async def send_json(self, message: dict) -> None:
+            await fake_send(message)
+
+        async def close(self) -> None: ...
+
+    ws = _FakeWS()
+    await stream.connect("c1", ws)  # type: ignore[arg-type]
+
+    await bus.emit(
+        Event(
+            type="drift_detected",
+            payload={"campaign_id": "c1", "character_ref": "alistair", "score": 0.6},
+        )
+    )
+
+    assert received == [
+        {
+            "type": "drift_detected",
+            "campaign_id": "c1",
+            "character_ref": "alistair",
+            "score": 0.6,
+        }
+    ]
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_push_to_unknown_campaign_is_noop() -> None:
+    stream = StreamManager(event_bus=None)
+    await stream.push("nope", {"type": "x"})  # must not raise
+
+
+def test_ws_health_endpoint(client, container: ServiceContainer) -> None:
+    container.stream = StreamManager(event_bus=container.event_bus)
+    response = client.get("/api/ws/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["campaigns"] == []
+
+
+def test_ws_health_unavailable_without_container_stream(
+    client, container: ServiceContainer
+) -> None:
+    container.stream = None
+    response = client.get("/api/ws/health")
+    # Lifespan re-creates a StreamManager if one isn't set, so it should be ok.
+    assert response.status_code == 200
+
+
+def test_websocket_receives_event_bus_messages(client, container: ServiceContainer) -> None:
+    """End-to-end: connect a real WS client, emit on the event bus the stream
+    is subscribed to, and verify the message is forwarded."""
+    bus = container.event_bus
+    stream = container.stream
+    assert bus is not None and stream is not None
+
+    with client.websocket_connect("/api/campaigns/c1/stream") as ws:
+        # Run the emit on the server loop via the TestClient's portal so the
+        # subscription handler executes synchronously with respect to the WS.
+        client.portal.call(
+            bus.emit,
+            Event(
+                type="drift_detected",
+                payload={"campaign_id": "c1", "character_ref": "alistair", "score": 0.7},
+            ),
+        )
+        msg = ws.receive_json()
+        assert msg["type"] == "drift_detected"
+        assert msg["character_ref"] == "alistair"
