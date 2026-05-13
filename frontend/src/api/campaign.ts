@@ -91,39 +91,39 @@ export interface OpenCommitment {
 const enc = encodeURIComponent;
 
 export const campaignApi = {
-  list: () => api.get<CampaignSummary[]>("/campaigns"),
+  list: () => api.get<CampaignSummary[]>("/api/campaigns"),
 
-  get: (id: string) => api.get<CampaignSummary>(`/campaigns/${enc(id)}`),
+  get: (id: string) => api.get<CampaignSummary>(`/api/campaigns/${enc(id)}`),
 
-  listPCs: (id: string) => api.get<PCEntry[]>(`/campaigns/${enc(id)}/pcs`),
+  listPCs: (id: string) => api.get<PCEntry[]>(`/api/campaigns/${enc(id)}/pcs`),
 
   setActivePC: (id: string, characterRef: string) =>
-    api.post<{ ok: boolean }>(`/campaigns/${enc(id)}/pcs/${characterRef}/set-active`),
+    api.post<{ ok: boolean }>(`/api/campaigns/${enc(id)}/pcs/${characterRef}/set-active`),
 
-  listScenes: (id: string) => api.get<ApiScene[]>(`/campaigns/${enc(id)}/scenes`),
+  listScenes: (id: string) => api.get<ApiScene[]>(`/api/campaigns/${enc(id)}/scenes`),
 
   getScene: (id: string, sceneId: string) =>
-    api.get<SceneDetail>(`/campaigns/${enc(id)}/scenes/${enc(sceneId)}`),
+    api.get<SceneDetail>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}`),
 
   endScene: (id: string, sceneId: string) =>
-    api.post<ApiScene>(`/campaigns/${enc(id)}/scenes/${enc(sceneId)}/end`),
+    api.post<ApiScene>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}/end`),
 
   submitTurn: (id: string, pcRef: string, text: string) =>
-    api.post<SubmitTurnResult>(`/campaigns/${enc(id)}/turns`, { pc_ref: pcRef, text }),
+    api.post<SubmitTurnResult>(`/api/campaigns/${enc(id)}/turns`, { pc_ref: pcRef, text }),
 
   advance: (id: string, sceneId: string) =>
-    api.post<AdvanceTurnResult>(`/campaigns/${enc(id)}/turns/advance`, { scene_id: sceneId }),
+    api.post<AdvanceTurnResult>(`/api/campaigns/${enc(id)}/turns/advance`, { scene_id: sceneId }),
 
-  regenerate: (id: string) => api.post<unknown>(`/campaigns/${enc(id)}/turns/regenerate`),
+  regenerate: (id: string) => api.post<unknown>(`/api/campaigns/${enc(id)}/turns/regenerate`),
 
   undo: (id: string, count = 1) =>
-    api.post<{ turns_undone: string[] }>(`/campaigns/${enc(id)}/turns/undo`, { count }),
+    api.post<{ turns_undone: string[] }>(`/api/campaigns/${enc(id)}/turns/undo`, { count }),
 
   timeAdvance: (
     id: string,
     payload: { duration?: Record<string, number>; target?: string; reason?: string },
   ) =>
-    api.post<unknown>(`/campaigns/${enc(id)}/time/advance`, {
+    api.post<unknown>(`/api/campaigns/${enc(id)}/time/advance`, {
       reason: payload.reason ?? "narrative",
       duration: payload.duration,
       target: payload.target,
@@ -132,13 +132,13 @@ export const campaignApi = {
   createFact: (
     id: string,
     fact: { subject_ref?: string; predicate: string; object_ref?: string; statement: string },
-  ) => api.post<{ fact_id: string }>(`/campaigns/${enc(id)}/facts`, { fact, source: "user" }),
+  ) => api.post<{ fact_id: string }>(`/api/campaigns/${enc(id)}/facts`, { fact, source: "user" }),
 
-  listCommitments: (id: string) => api.get<OpenCommitment[]>(`/campaigns/${enc(id)}/commitments`),
+  listCommitments: (id: string) => api.get<OpenCommitment[]>(`/api/campaigns/${enc(id)}/commitments`),
 
   listImages: (id: string, sceneId?: string) =>
     api.get<{ id: string; thumb_path?: string; image_path?: string; post_id?: string }[]>(
-      `/campaigns/${enc(id)}/images`,
+      `/api/campaigns/${enc(id)}/images`,
       { query: { scene_id: sceneId } },
     ),
 };
