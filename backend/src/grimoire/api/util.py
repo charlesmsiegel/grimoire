@@ -34,7 +34,14 @@ def to_payload(obj: Any) -> Any:
 
 
 def map_lookup_errors(exc: Exception) -> HTTPException:
-    """Translate well-known service-layer exceptions to HTTP errors."""
+    """Translate well-known service-layer exceptions to HTTP errors.
+
+    HTTPException is passed through unchanged so service-layer code that
+    explicitly raises e.g. ``HTTPException(403)`` keeps its status — without
+    this branch the generic Exception path would reclassify it as 500.
+    """
+    if isinstance(exc, HTTPException):
+        return exc
     name = type(exc).__name__.lower()
     detail = str(exc) or name
     if isinstance(exc, KeyError) or "notfound" in name or "unknown" in name:
