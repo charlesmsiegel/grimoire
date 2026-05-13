@@ -704,10 +704,16 @@ async def list_facts(
     continuity: ContinuityDep,
     limit: int = 50,
 ) -> Any:
+    # ContinuityService is a single shared instance with no campaign scope of
+    # its own, so the route applies the filter to keep campaigns isolated.
+    # Fetch with a generous internal limit so the caller's `limit` still works
+    # after we discard rows that belong to other campaigns.
     try:
-        return to_payload(await continuity.facts_about(limit=limit))
+        all_facts = await continuity.facts_about(limit=max(limit * 8, 200))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+    scoped = [f for f in all_facts if getattr(f, "campaign_id", None) == campaign_id]
+    return to_payload(scoped[:limit])
 
 
 @router.post("/{campaign_id}/facts", status_code=201)
@@ -719,7 +725,10 @@ async def create_fact(
     from grimoire.types.continuity import Fact
 
     try:
-        fact = Fact.model_validate(payload.fact)
+        # Stamp campaign_id from the path so a forged payload can't write into
+        # a different campaign's continuity.
+        fact_data = {**payload.fact, "campaign_id": campaign_id}
+        fact = Fact.model_validate(fact_data)
         fact_id = await continuity.add_fact(fact, source=payload.source)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
@@ -733,9 +742,11 @@ async def list_commitments(
     limit: int = 50,
 ) -> Any:
     try:
-        return to_payload(await continuity.open_commitments(limit=limit))
+        all_commitments = await continuity.open_commitments(limit=max(limit * 8, 200))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+    scoped = [c for c in all_commitments if getattr(c, "campaign_id", None) == campaign_id]
+    return to_payload(scoped[:limit])
 
 
 # --------------------------------------------------------------------------- #
