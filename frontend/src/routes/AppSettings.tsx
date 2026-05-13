@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
 import {
@@ -139,8 +140,10 @@ function ProvidersTab() {
               <ul className="provider-list">
                 {list.map((p) => (
                   <li key={p.id} className={p.load_error ? "has-error" : undefined}>
-                    <strong>{p.name ?? p.id}</strong>
-                    {p.version && <small> v{p.version}</small>}
+                    <Link to={`/library/plugins/${encodeURIComponent(p.id)}`}>
+                      <strong>{p.name ?? p.id}</strong>
+                      {p.version && <small> v{p.version}</small>}
+                    </Link>
                     {p.load_error && <p className="wizard-error">Load error: {p.load_error}</p>}
                   </li>
                 ))}
@@ -150,8 +153,9 @@ function ProvidersTab() {
         );
       })}
       <p className="wizard-meta">
-        Per-provider credential / model configuration uses the plugin's <code>config_schema</code>;
-        the rendered forms land in the Library&apos;s Installed Plugins view (task 32).
+        Click a provider to enter its API key, default model, and other settings. The form is
+        rendered from the plugin's <code>config_schema</code> and saved to the OS keyring where
+        possible.
       </p>
     </div>
   );
@@ -183,7 +187,7 @@ function MechanicsInventoryTab() {
   const rescan = async () => {
     setRescanning(true);
     try {
-      await api.post("/mechanics/rescan");
+      await api.post("/api/mechanics/rescan");
       await load();
     } catch (err) {
       setError(errorMessage(err));
@@ -243,7 +247,7 @@ function PluginsInventoryTab() {
   const rescan = async () => {
     setRescanning(true);
     try {
-      await api.post("/plugins/rescan");
+      await api.post("/api/plugins/rescan");
       await load();
     } catch (err) {
       setError(errorMessage(err));
@@ -254,7 +258,10 @@ function PluginsInventoryTab() {
 
   return (
     <div className="settings-form">
-      <p className="wizard-step-help">All plugin kinds. Drop into data/plugins, then rescan.</p>
+      <p className="wizard-step-help">
+        All plugin kinds. Drop new plugins into <code>~/.grimoire/plugins</code> and rescan. Click a
+        plugin to open its configuration form.
+      </p>
       <button type="button" disabled={rescanning} onClick={() => void rescan()}>
         {rescanning ? "Rescanning…" : "Rescan"}
       </button>
@@ -264,9 +271,11 @@ function PluginsInventoryTab() {
       <ul className="provider-list">
         {plugins.map((p) => (
           <li key={`${p.kind}:${p.id}`} className={p.load_error ? "has-error" : undefined}>
-            <strong>{p.name ?? p.id}</strong>
-            <small> · {p.kind}</small>
-            {p.version && <small> v{p.version}</small>}
+            <Link to={`/library/plugins/${encodeURIComponent(p.id)}`}>
+              <strong>{p.name ?? p.id}</strong>
+              <small> · {p.kind}</small>
+              {p.version && <small> v{p.version}</small>}
+            </Link>
             {p.load_error && <p className="wizard-error">Load error: {p.load_error}</p>}
           </li>
         ))}
