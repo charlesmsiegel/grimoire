@@ -156,7 +156,7 @@ Spec 14. Top bar with active PC switcher. Scene header (location, in-game time, 
 **Blocked by:** 29, 30, 31
 Spec 14. Cast view: resolved characters by tier or source, filters, character detail (resolved card, source chain, voice anchor with samples, mechanical sheet rendered via widget library, capabilities, relationships, recent scenes, edit override / library / promote actions). World view: items / locations / lore / factions / greetings tabs. Timeline view: scenes as cards along in-game timeline with threads as lines. Mechanics view: active module info, sheet list, missing-sheets panel, roll log, combat tracker hook, content browser. Composition view: editable refs with priority/include/`track_latest` + upgrade-available banner with diff preview. Images view: gallery + queue + per-character prompt templates.
 
-### 35. [ ] Build frontend campaign creation flow + settings
+### 35. [x] Build frontend campaign creation flow + settings
 **Blocked by:** 29, 31
 Spec 14. Six-step creation wizard: identity → composition (multi-setting picker with priority + include filters) → mechanics (installed module or `mechanics: null`, with bulk-create-sheets offer) → PCs (pick or create) → style & content (style guide ref or inline, image preset, content boundaries) → starting scene (greeting picker, confirm location/time/cast). Per-campaign settings tabs: General, Model routing (LLM + embedding per task), ImageGen (backend + preset + sampler), Mechanics (active module + module-specific options), Storage (backup), Advanced (per-task prompts + debug log). App-level settings: library path, provider configs, mechanics/plugin scan paths, backup policy, appearance.
 
