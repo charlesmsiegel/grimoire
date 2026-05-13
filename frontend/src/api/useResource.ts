@@ -1,9 +1,9 @@
 /**
- * Tiny async-resource hook: load once on mount (or when `key` changes),
- * exposes `{ data, error, loading, reload }`.
+ * Tiny async-resource hook: load once on mount (or when `deps` / reload tick
+ * change), exposes `{ data, error, loading, reload }`.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export interface Resource<T> {
   data: T | null;
@@ -17,29 +17,25 @@ export function useResource<T>(loader: () => Promise<T>, deps: unknown[]): Resou
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
-  const cancelled = useRef(false);
 
   const reload = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
-    cancelled.current = false;
+    let cancelled = false;
     setLoading(true);
     setError(null);
     loader()
       .then((value) => {
-        if (cancelled.current) return;
-        setData(value);
+        if (!cancelled) setData(value);
       })
       .catch((err: unknown) => {
-        if (cancelled.current) return;
-        setError(err instanceof Error ? err : new Error(String(err)));
+        if (!cancelled) setError(err instanceof Error ? err : new Error(String(err)));
       })
       .finally(() => {
-        if (cancelled.current) return;
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       });
     return () => {
-      cancelled.current = true;
+      cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, tick]);
