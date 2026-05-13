@@ -1,0 +1,71 @@
+/**
+ * Minimal typed HTTP client for the FastAPI backend.
+ *
+ * Errors are normalized to {@link ApiError} so callers can branch on status
+ * without parsing the response twice.
+ */
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: unknown;
+
+  constructor(status: number, detail: unknown, message?: string) {
+    super(message ?? `HTTP ${status}`);
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+interface RequestOptions {
+  signal?: AbortSignal;
+  query?: Record<string, string | number | boolean | undefined | null>;
+}
+
+function buildUrl(path: string, query?: RequestOptions["query"]): string {
+  const url = new URL(path, window.location.origin);
+  if (query) {
+    for (const [k, v] of Object.entries(query)) {
+      if (v === undefined || v === null) continue;
+      url.searchParams.set(k, String(v));
+    }
+  }
+  return url.pathname + url.search;
+}
+
+async function parseBody(res: Response): Promise<unknown> {
+  const ct = res.headers.get("content-type") ?? "";
+  if (ct.includes("application/json")) return res.json();
+  const text = await res.text();
+  return text ? text : null;
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  opts: RequestOptions = {},
+): Promise<T> {
+  const init: RequestInit = { method, signal: opts.signal };
+  if (body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(buildUrl(path, opts.query), init);
+  if (!res.ok) {
+    const detail = await parseBody(res).catch(() => null);
+    throw new ApiError(res.status, detail);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await parseBody(res)) as T;
+}
+
+export const api = {
+  get: <T>(path: string, opts?: RequestOptions) => request<T>("GET", path, undefined, opts),
+  post: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
+    request<T>("POST", path, body, opts),
+  put: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
+    request<T>("PUT", path, body, opts),
+  patch: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
+    request<T>("PATCH", path, body, opts),
+  delete: <T>(path: string, opts?: RequestOptions) => request<T>("DELETE", path, undefined, opts),
+};

@@ -1,67 +1,54 @@
 /**
- * Subscribes the active-campaign WebSocket and routes events into the store.
+ * Active-campaign WebSocket provider.
+ *
+ * One {@link CampaignSocket} per mounted campaign. The provider routes a small
+ * subset of events into the global store (drift, review-queue) so the status
+ * bar updates without view code subscribing. Components that need richer event
+ * access import {@link useCampaignEvent} from `./useCampaignEvent`.
+ *
+ * Hooks live in `./useCampaignEvent` to keep this file component-only so
+ * react-refresh stays happy.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { CampaignSocket, campaignStreamUrl, type WSMessage, type WSStatus } from "../ws/client";
+import { CampaignSocket, campaignStreamUrl } from "../ws/client";
+import type { WSStatus } from "../ws/client";
+import { CampaignStreamContext } from "./campaignStreamContext";
+import { routeToStore } from "./useCampaignEvent";
 import { useStore } from "./useStore";
 
-export function useCampaignStream(campaignId: string | null): WSStatus {
+export function CampaignStreamProvider({
+  campaignId,
+  children,
+}: {
+  campaignId: string | null;
+  children: ReactNode;
+}) {
   const { dispatch } = useStore();
-  const socketRef = useRef<CampaignSocket | null>(null);
   const [status, setStatus] = useState<WSStatus>("idle");
+  const [socket, setSocket] = useState<CampaignSocket | null>(null);
 
   useEffect(() => {
     if (!campaignId) {
       setStatus("idle");
+      setSocket(null);
       return;
     }
-    const socket = new CampaignSocket({ url: campaignStreamUrl(campaignId) });
-    socketRef.current = socket;
-    const offStatus = socket.onStatus(setStatus);
-    const offMessage = socket.onMessage((message) => handleMessage(message, dispatch));
-    socket.connect();
+    const s = new CampaignSocket({ url: campaignStreamUrl(campaignId) });
+    setSocket(s);
+    const offStatus = s.onStatus(setStatus);
+    const offMessage = s.onMessage((m) => routeToStore(m, dispatch));
+    s.connect();
     return () => {
       offStatus();
       offMessage();
-      socket.close();
-      socketRef.current = null;
+      s.close();
+      setSocket(null);
     };
   }, [campaignId, dispatch]);
 
-  return status;
-}
+  const value = useMemo(() => ({ socket, status, campaignId }), [socket, status, campaignId]);
 
-function handleMessage(
-  message: WSMessage,
-  dispatch: ReturnType<typeof useStore>["dispatch"],
-): void {
-  switch (message.type) {
-    case "drift_detected": {
-      const ref = typeof message.character_ref === "string" ? message.character_ref : null;
-      const score = typeof message.score === "number" ? message.score : null;
-      if (ref && score !== null) {
-        dispatch({ type: "drift-alert", alert: { character_ref: ref, score } });
-      }
-      break;
-    }
-    case "review_item_added": {
-      const item = message.item;
-      if (item && typeof item === "object") {
-        const obj = item as Record<string, unknown>;
-        if (typeof obj.id === "string" && typeof obj.summary === "string") {
-          dispatch({ type: "push-review", item: { id: obj.id, summary: obj.summary } });
-        }
-      }
-      break;
-    }
-    case "turn_complete": {
-      // Future: extract budget/cost into status. For now we just clear the queue depth bump.
-      break;
-    }
-    default:
-      // Ignored events propagate via direct subscriptions in view components.
-      break;
-  }
+  return <CampaignStreamContext.Provider value={value}>{children}</CampaignStreamContext.Provider>;
 }
