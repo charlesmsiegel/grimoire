@@ -1,5 +1,8 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 
+import { AppSettings } from "./routes/AppSettings";
+import { CampaignCreate } from "./routes/CampaignCreate";
+import { CampaignSettings } from "./routes/CampaignSettings";
 import { CampaignPlayRoute, CampaignView } from "./routes/CampaignView";
 import { CampaignsView } from "./routes/CampaignsView";
 import { HomeRedirect } from "./routes/HomeRedirect";
@@ -25,6 +28,8 @@ export function App() {
               <Route index element={<HomeRedirect />} />
               <Route path="library/*" element={<LibraryRoutes />} />
               <Route path="campaigns" element={<CampaignsView />} />
+              <Route path="campaigns/new" element={<CampaignCreate />} />
+              <Route path="campaigns/:campaignId/settings" element={<CampaignSettings />} />
               <Route path="campaigns/:campaignId" element={<CampaignView />}>
                 <Route index element={<CampaignPlayRoute />} />
                 <Route path="cast" element={<CastView />} />
@@ -34,6 +39,7 @@ export function App() {
                 <Route path="composition" element={<CompositionView />} />
                 <Route path="images" element={<ImagesView />} />
               </Route>
+              <Route path="settings" element={<AppSettings />} />
               <Route path="*" element={<NotFound />} />
             </Route>
           </Routes>

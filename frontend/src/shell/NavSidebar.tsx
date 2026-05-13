@@ -5,6 +5,7 @@ import { useAppState } from "../state/useStore";
 const navSections: { label: string; to: string; description: string }[] = [
   { label: "Library", to: "/library", description: "Settings, style guides, plugins" },
   { label: "Campaigns", to: "/campaigns", description: "Active plays and creation" },
+  { label: "Settings", to: "/settings", description: "App-level configuration" },
 ];
 
 export function NavSidebar() {
