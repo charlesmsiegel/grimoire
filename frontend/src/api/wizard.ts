@@ -102,6 +102,7 @@ export interface CampaignCreateInput {
   description?: string | null;
   composition?: CompositionInput;
   greeting_id?: string | null;
+  tags?: string[] | null;
 }
 
 function stringOrNull(v: unknown): string | null {

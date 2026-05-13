@@ -64,6 +64,7 @@ class CampaignCreatePayload(BaseModel):
     description: str | None = None
     composition: CompositionPayload | None = None
     greeting_id: str | None = None
+    tags: list[str] | None = None
 
 
 class CampaignUpdatePayload(BaseModel):
@@ -174,6 +175,7 @@ async def create_campaign(
             inline_style_guide=comp.inline_style_guide,
             content_boundaries=comp.content_boundaries,
             greeting_id=payload.greeting_id,
+            tags=payload.tags,
         )
         for ref in comp.settings:
             await state_store.upsert_setting_ref(
