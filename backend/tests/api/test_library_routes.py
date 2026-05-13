@@ -142,7 +142,10 @@ def test_plugins_rescan(client, container) -> None:
     assert response.status_code == 200
 
 
-def test_library_503_when_unset(client) -> None:
+def test_library_503_when_unset(client, container) -> None:
+    # Lifespan auto-wires a LibraryService; clear it so we can verify the
+    # 503 branch in api/deps.py:_require for any service that goes missing.
+    container.library = None
     response = client.get("/api/library/settings")
     assert response.status_code == 503
     assert "library" in response.json()["detail"]
