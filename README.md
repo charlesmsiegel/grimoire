@@ -25,7 +25,7 @@ uv sync
 uv run uvicorn grimoire.main:app --reload
 ```
 
-Visits `http://127.0.0.1:8000/health` to verify.
+Visit `http://127.0.0.1:8000/api/health` to verify.
 
 ## Frontend
 
