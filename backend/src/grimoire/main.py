@@ -17,16 +17,23 @@ from grimoire.api.stream import StreamManager
 from grimoire.api.ws import router as ws_router
 from grimoire.characters import CharactersService
 from grimoire.config import settings
+from grimoire.context.builder import ContextBuilderService
 from grimoire.continuity import ContinuityService
 from grimoire.event_bus import EventBus
+from grimoire.export.service import ExportService
+from grimoire.export.sources import DataSources
+from grimoire.extractor.service import ExtractorService
 from grimoire.imagegen import BackendRegistry, ImageGenService
 from grimoire.library import LibraryService
+from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.mechanics import MechanicsConfig, MechanicsService
+from grimoire.orchestrator.service import OrchestratorService
 from grimoire.plugins import PluginsConfig, PluginsService
 from grimoire.scenes import SceneManager
 from grimoire.setting import SettingService
 from grimoire.state_store import StateStore
 from grimoire.storage import Database, apply_migrations
+from grimoire.time_engine.service import TimeEngineService
 from grimoire.watcher.watcher import FileWatcher
 
 log = logging.getLogger(__name__)
@@ -138,6 +145,78 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 registry=BackendRegistry(),
                 default_backend_id=None,
                 event_bus=container.event_bus,
+            )
+
+        # LLM-adjacent services: gateway + extractor + context builder are
+        # the substrate the orchestrator drives. They're wired even when no
+        # LLM provider plugin is installed — calls that route through the
+        # gateway will raise a clear "no provider" error rather than blowing
+        # up at construction time, so the rest of the routes (library,
+        # images, settings, etc.) keep working.
+        if container.extras.get("llm_gateway") is None:
+            container.extras["llm_gateway"] = LLMGatewayService(
+                plugins=container.plugins,
+                db=db,
+            )
+        llm_gateway = container.extras["llm_gateway"]
+        if container.extras.get("extractor") is None:
+            container.extras["extractor"] = ExtractorService(gateway=llm_gateway)
+        extractor = container.extras["extractor"]
+        if container.extras.get("context_builder") is None:
+            container.extras["context_builder"] = ContextBuilderService(
+                library=container.library,
+                characters=container.characters,
+                setting=container.setting,
+                scenes=container.scenes,
+                continuity=container.continuity,
+                mechanics=container.mechanics,
+                gateway=llm_gateway,
+                state_store=container.state_store,
+            )
+        context_builder = container.extras["context_builder"]
+
+        # Time engine: every dep is already constructed above.
+        if container.time_engine is None:
+            container.time_engine = TimeEngineService(
+                store=container.state_store,
+                setting=container.setting,
+                characters=container.characters,
+                mechanics=container.mechanics,
+                continuity=container.continuity,
+                event_bus=container.event_bus,
+            )
+
+        # Export: scenes is the only required source; others use the bundled
+        # services as duck-typed sources. Adapters come from the plugin
+        # registry, so installing an export plugin makes it available to
+        # /export without further wiring.
+        if container.export is None:
+            sources = DataSources(
+                scenes=container.scenes,
+                characters=container.characters,
+                setting=container.setting,
+                continuity=container.continuity,
+                images=container.imagegen,
+                data_root=data_root,
+            )
+            container.export = ExportService(
+                sources=sources,
+                adapters=container.plugins.export_adapters(),
+            )
+
+        # Orchestrator ties the play loop together. ws_push forwards
+        # streaming tokens and lifecycle events to subscribed WebSocket
+        # clients via StreamManager.
+        if container.orchestrator is None:
+            container.orchestrator = OrchestratorService(
+                event_bus=container.event_bus,
+                scene_manager=container.scenes,
+                llm_gateway=llm_gateway,
+                context_builder=context_builder,
+                extractor=extractor,
+                state_store=container.state_store,
+                mechanics=container.mechanics,
+                ws_push=container.stream.push,
             )
 
         # Seed default library assets (style guides, etc.) and run one scan
