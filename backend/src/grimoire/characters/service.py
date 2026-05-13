@@ -24,10 +24,14 @@ from grimoire.types.characters import (
     Character,
     CharacterData,
     CharacterFilter,
+    CharacterImage,
+    CharacterImageKind,
     CharacterRole,
     DriftReport,
     ImagePromptTemplate,
     ImportResult,
+    IngestedCharacterCard,
+    IngestOptions,
     PCEntry,
     RelationshipState,
     ResolvedCharacter,
@@ -52,7 +56,8 @@ from .errors import (
     CharactersError,
     PromotionError,
 )
-from .imports import parse_charx, parse_plaintext, parse_sillytavern
+from .imports import parse_plaintext
+from .ingest import LLMEnrichCallable, enrich_with_llm, ingest_character_card_v2
 from .views import (
     render_capsule,
     render_compressed,
@@ -99,6 +104,7 @@ class CharactersService:
         post_fetcher: PostFetcher | None = None,
         drift_checker: DriftChecker | None = None,
         drift_threshold: float = 0.4,
+        ingest_llm: LLMEnrichCallable | None = None,
     ) -> None:
         self.library = library
         self.mechanics = mechanics
@@ -108,6 +114,7 @@ class CharactersService:
             drift_threshold=drift_threshold
         )
         self._drift_threshold = drift_threshold
+        self._ingest_llm = ingest_llm
         # Per-PC current scene cache; mirrors SceneManager._pc_current_scene
         # but keyed by ``(campaign_id, character_ref)``. The authoritative
         # source is the active-scene id stored on character_state.
@@ -728,25 +735,146 @@ class CharactersService:
     # Imports
     # ------------------------------------------------------------------ #
 
-    async def import_sillytavern(self, card: bytes, target_setting_id: str) -> ImportResult:
-        data, warnings = parse_sillytavern(card)
-        return await self._finalize_import(target_setting_id, data, warnings)
+    async def import_sillytavern(
+        self,
+        card: bytes,
+        target_setting_id: str,
+        *,
+        options: IngestOptions | None = None,
+    ) -> ImportResult:
+        """Ingest a Character Card V2/V3 payload into ``target_setting_id``.
 
-    async def import_charx(self, charx_bytes: bytes, target_setting_id: str) -> ImportResult:
-        data, warnings = parse_charx(charx_bytes)
-        return await self._finalize_import(target_setting_id, data, warnings)
+        Accepts JSON bytes (the canonical envelope or just the data
+        object) as well as PNG bytes with an embedded ``chara``/``ccv3``
+        tEXt chunk and ``.charx`` zip bundles. When ``options.enrich_with_llm``
+        is true and a ``ingest_llm`` callable was supplied at construction,
+        the parse is enriched before the character is written.
+        """
+        ingested = await self._ingest(card, options=options)
+        return await self._finalize_import(target_setting_id, ingested)
+
+    async def import_charx(
+        self,
+        charx_bytes: bytes,
+        target_setting_id: str,
+        *,
+        options: IngestOptions | None = None,
+    ) -> ImportResult:
+        ingested = await self._ingest(charx_bytes, options=options)
+        return await self._finalize_import(target_setting_id, ingested)
 
     async def import_plaintext(self, text: str, target_setting_id: str) -> ImportResult:
         data, warnings = parse_plaintext(text)
-        return await self._finalize_import(target_setting_id, data, warnings)
+        return await self._finalize_import(
+            target_setting_id,
+            IngestedCharacterCard(data=data, warnings=warnings),
+        )
+
+    async def import_character_card(
+        self,
+        payload: bytes,
+        target_setting_id: str,
+        *,
+        options: IngestOptions | None = None,
+    ) -> tuple[ImportResult, IngestedCharacterCard]:
+        """Like :meth:`import_sillytavern` but also returns the full ingest.
+
+        Useful for UI flows that want to surface the creator notes, the
+        alternate greetings, or the embedded character book before
+        committing the character to disk.
+        """
+        ingested = await self._ingest(payload, options=options)
+        result = await self._finalize_import(target_setting_id, ingested)
+        return result, ingested
+
+    async def _ingest(
+        self,
+        payload: bytes,
+        *,
+        options: IngestOptions | None,
+    ) -> IngestedCharacterCard:
+        opts = options or IngestOptions()
+        ingested = ingest_character_card_v2(payload, options=opts)
+        if opts.enrich_with_llm and self._ingest_llm is not None:
+            ingested = await enrich_with_llm(ingested, self._ingest_llm, options=opts)
+        return ingested
+
+    async def add_character_image(
+        self,
+        setting_id: str,
+        character_id: str,
+        image: CharacterImage,
+        *,
+        image_bytes: bytes | None = None,
+        source: str = "characters:add-image",
+    ) -> Character:
+        """Append ``image`` to ``character_id``'s gallery.
+
+        When ``image_bytes`` is supplied, the bytes are written to disk
+        next to the character markdown (the path is normalized to
+        ``library/settings/<setting>/characters/<id>/<filename>``).
+        Callers can pass any
+        :class:`grimoire.types.characters.CharacterImage` — generated
+        images from ImageGen, manually uploaded references, expression
+        sheets, etc.
+        """
+        ent = await self.library.get_entity(setting_id, "character", character_id)
+        existing = list(_character_from_entity(ent).images)
+        stored = image
+        if image_bytes is not None:
+            stored = await self._write_image_bytes(
+                setting_id=setting_id,
+                character_id=character_id,
+                image=image,
+                payload=image_bytes,
+            )
+        existing.append(stored)
+        fm = dict(ent.frontmatter or {})
+        fm["images"] = [_image_to_dict(img) for img in existing]
+        updated = await self.library.update_entity(
+            setting_id,
+            "character",
+            character_id,
+            frontmatter_patch=fm,
+            body=None,
+            source=source,
+        )
+        return _character_from_entity(updated)
+
+    async def _write_image_bytes(
+        self,
+        *,
+        setting_id: str,
+        character_id: str,
+        image: CharacterImage,
+        payload: bytes,
+    ) -> CharacterImage:
+        from grimoire.state_store.paths import library_root, relative_to_root
+
+        # Default file name uses the image kind to keep multi-image
+        # galleries scannable on disk.
+        filename = image.path or f"{image.kind.value}.png"
+        if "/" in filename:
+            filename = filename.rsplit("/", 1)[-1]
+        target_dir = (
+            library_root(self.store.data_root)
+            / "settings"
+            / setting_id
+            / "characters"
+            / character_id
+        )
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / filename
+        target.write_bytes(payload)
+        return image.model_copy(update={"path": relative_to_root(self.store.data_root, target)})
 
     async def _finalize_import(
         self,
         target_setting_id: str,
-        data: CharacterData,
-        warnings: list[str],
+        ingested: IngestedCharacterCard,
     ) -> ImportResult:
-        result = ImportResult(warnings=warnings)
+        data = ingested.data
+        result = ImportResult(warnings=list(ingested.warnings))
         try:
             existing = await self.library.get_entity(target_setting_id, "character", data.id)
         except Exception:
@@ -757,6 +885,27 @@ class CharactersService:
                 f"character {data.id!r} already exists in {target_setting_id!r}; not overwriting"
             )
             return result
+
+        # Persist the embedded avatar (if any) before writing the markdown,
+        # so the CharacterImage path on the card already points at a real
+        # file rather than the placeholder we filled in during parsing.
+        if ingested.avatar_bytes and data.images:
+            avatar_index = next(
+                (i for i, img in enumerate(data.images) if img.source == "embedded_avatar"),
+                None,
+            )
+            if avatar_index is not None:
+                placeholder = data.images[avatar_index]
+                stored = await self._write_image_bytes(
+                    setting_id=target_setting_id,
+                    character_id=data.id,
+                    image=placeholder,
+                    payload=ingested.avatar_bytes,
+                )
+                images = list(data.images)
+                images[avatar_index] = stored
+                data = data.model_copy(update={"images": images})
+
         try:
             await self.create(target_setting_id, data)
             result.created.append(data.id)
@@ -973,6 +1122,7 @@ def _character_from_frontmatter(
         if isinstance(image_data, dict)
         else None
     )
+    images = [_image_from_dict(img) for img in (fm.get("images") or []) if isinstance(img, dict)]
     structural = [
         StructuralRelationship(
             to_ref=str(r.get("to_ref") or ""),
@@ -992,6 +1142,7 @@ def _character_from_frontmatter(
         tags=[str(t) for t in (fm.get("tags") or [])],
         voice=voice,
         image=image,
+        images=images,
         structural_relationships=structural,
         description=str(fm.get("description") or ""),
         body=body or "",
@@ -1021,7 +1172,60 @@ def _frontmatter_from_payload(payload: CharacterData) -> dict:
             "canonical_seed": img.canonical_seed,
             **(img.extra or {}),
         }
+    if payload.images:
+        fm["images"] = [_image_to_dict(img) for img in payload.images]
+    if payload.structural_relationships:
+        fm["structural_relationships"] = [
+            {"to_ref": r.to_ref, "kind": r.kind, "note": r.note}
+            for r in payload.structural_relationships
+        ]
     return fm
+
+
+def _image_to_dict(image: CharacterImage) -> dict:
+    out: dict[str, Any] = {
+        "path": image.path,
+        "kind": image.kind.value,
+        "description": image.description,
+        "tags": list(image.tags),
+        "source": image.source,
+    }
+    if image.seed is not None:
+        out["seed"] = image.seed
+    if image.prompt_used:
+        out["prompt_used"] = image.prompt_used
+    if image.created_at is not None:
+        out["created_at"] = image.created_at.isoformat()
+    if image.extra:
+        out["extra"] = dict(image.extra)
+    return out
+
+
+def _image_from_dict(raw: dict) -> CharacterImage:
+    try:
+        kind = CharacterImageKind(str(raw.get("kind") or "portrait"))
+    except ValueError:
+        kind = CharacterImageKind.PORTRAIT
+    created_at_raw = raw.get("created_at")
+    created_at: datetime | None = None
+    if isinstance(created_at_raw, str) and created_at_raw:
+        try:
+            created_at = datetime.fromisoformat(created_at_raw)
+        except ValueError:
+            created_at = None
+    elif isinstance(created_at_raw, datetime):
+        created_at = created_at_raw
+    return CharacterImage(
+        path=str(raw.get("path") or ""),
+        description=str(raw.get("description") or ""),
+        kind=kind,
+        tags=[str(t) for t in (raw.get("tags") or []) if t],
+        seed=raw.get("seed"),
+        prompt_used=str(raw.get("prompt_used") or ""),
+        source=str(raw.get("source") or ""),
+        created_at=created_at,
+        extra=dict(raw.get("extra") or {}),
+    )
 
 
 def _entity_from_row_dict(row: Any) -> LibraryEntity:
