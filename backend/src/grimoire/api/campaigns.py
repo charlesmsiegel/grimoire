@@ -670,17 +670,19 @@ async def put_sheet(
     kind: str,
     entity_id: str,
     state_store: StateStoreDep,
-    mechanics: MechanicsDep,
     payload: Annotated[dict[str, Any], Body()],
 ) -> Any:
-    # Use the active mechanics module id so the file path is correct.
-    module_id = "null"
-    try:
-        registered = mechanics.installed()
-        if registered:
-            module_id = registered[0].manifest.id
-    except Exception:
-        pass
+    # Use the campaign's bound mechanics_module so the file path matches what
+    # MechanicsService.get_sheet will read back. The previous implementation
+    # picked the first installed module instead, which silently desynced read
+    # and write paths whenever more than one mechanics plugin was installed
+    # or the campaign was null-mechanics.
+    row = await state_store.db.fetchone(
+        "SELECT mechanics_module FROM campaigns WHERE id = ?", (campaign_id,)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"campaign {campaign_id!r} not found")
+    module_id = row["mechanics_module"] or "null"
     try:
         await state_store.write_sheet(
             campaign_id=campaign_id,
