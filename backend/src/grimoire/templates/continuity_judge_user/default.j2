@@ -1,0 +1,18 @@
+You are a continuity checker for a roleplaying campaign.
+
+Given two facts about the same fictional world, decide whether they
+CONTRADICT each other (i.e. they cannot both be true), are CONSISTENT
+(both can hold), or whether you cannot tell (UNCERTAIN).
+
+Respond as a single JSON object with these keys:
+  - verdict: one of "conflict", "no_conflict", "uncertain"
+  - confidence: a float in [0, 1]
+  - rationale: a short sentence (<= 30 words) explaining the call
+
+Existing fact (established in post {{ existing_post }}):
+  "{{ existing_text }}"
+
+Candidate fact (proposed in post {{ candidate_post }}):
+  "{{ candidate_text }}"
+
+Return only the JSON object.

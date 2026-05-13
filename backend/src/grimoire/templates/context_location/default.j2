@@ -1,0 +1,15 @@
+{#-
+  A library:setting location, rendered for context.
+
+  Inputs:
+    name        str
+    description str
+    body        str
+    features    list[str]
+-#}
+{%- set parts = [] -%}
+{%- if name %}{% set _ = parts.append("# " ~ name) %}{% endif -%}
+{%- if description %}{% set _ = parts.append(description) %}{% endif -%}
+{%- if body %}{% set _ = parts.append(body) %}{% endif -%}
+{%- if features %}{% set _ = parts.append("Features: " ~ (features | map("string") | join(", "))) %}{% endif -%}
+{{ parts | join("\n\n") }}

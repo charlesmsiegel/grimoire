@@ -1,0 +1,18 @@
+{#-
+  Positive image prompt. Spec 12 §Prompt composition ordering:
+  preset preamble, location, characters, scene elements, mood.
+
+  Inputs:
+    preset_preamble     str
+    location_description str
+    character_prompts   list[str]
+    scene_elements      list[str]
+    mood                str
+-#}
+{%- set parts = [] -%}
+{%- if preset_preamble and preset_preamble.strip() %}{% set _ = parts.append(preset_preamble.strip()) %}{% endif -%}
+{%- if location_description and location_description.strip() %}{% set _ = parts.append(location_description.strip()) %}{% endif -%}
+{%- for prompt in character_prompts or [] %}{% if prompt and prompt.strip() %}{% set _ = parts.append(prompt.strip()) %}{% endif %}{% endfor -%}
+{%- for element in scene_elements or [] %}{% if element and element.strip() %}{% set _ = parts.append(element.strip()) %}{% endif %}{% endfor -%}
+{%- if mood and mood.strip() %}{% set _ = parts.append(mood.strip()) %}{% endif -%}
+{{ parts | join(", ") }}

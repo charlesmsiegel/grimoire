@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from grimoire.extractor.config import ExtractorConfig
 from grimoire.extractor.schema import empty_payload, output_schema
+from grimoire.templates import render as render_template
 from grimoire.types.common import CampaignId, Duration, Scope
 from grimoire.types.extraction import EntityCandidate, ExtractionFlag, FlagLevel
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
@@ -87,19 +88,8 @@ def _extract_json_payload(text: str) -> dict | None:
 
 
 def _make_system_prompt() -> str:
-    schema = output_schema()
-    schema_json = json.dumps(schema, separators=(",", ":"))
-    return (
-        "You are the state-extraction stage of a tabletop RPG companion. "
-        "Read the assistant's most recent narration and return a single JSON "
-        "object that describes the state changes it implies. "
-        "Only include items the prose actually supports — when in doubt, "
-        "lower the confidence rather than dropping the item. "
-        "Confidences are numbers in [0, 1]. "
-        "All new entities are campaign-local; never modify library entries. "
-        "Output JSON only — no commentary, no markdown fences. "
-        "Schema:\n" + schema_json
-    )
+    schema_json = json.dumps(output_schema(), separators=(",", ":"))
+    return render_template("extractor_system", schema_json=schema_json)
 
 
 def _compact_snapshot(snapshot: StateSnapshot | None, scene: Scene | None) -> str:
@@ -141,19 +131,14 @@ def _build_request(
     config: ExtractorConfig,
 ) -> CompletionRequest:
     system = _make_system_prompt()
-    user_lines = [
-        "Recent prose to analyze:",
-        "----",
-        response_text.strip(),
-        "----",
-    ]
-    context = _compact_snapshot(snapshot, scene)
-    if context:
-        user_lines.extend(["", "Prior state (compact):", context])
-    user_lines.extend(["", "Return JSON conforming to the schema above."])
+    user = render_template(
+        "extractor_user",
+        response_text=response_text.strip(),
+        context=_compact_snapshot(snapshot, scene),
+    )
     return CompletionRequest(
         model="",  # the gateway fills in the route's model
-        messages=[Message(role=MessageRole.USER, content="\n".join(user_lines))],
+        messages=[Message(role=MessageRole.USER, content=user)],
         system=system,
         max_tokens=config.llm_max_output_tokens,
         temperature=config.llm_temperature,

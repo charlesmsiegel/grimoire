@@ -1,0 +1,13 @@
+{#-
+  Top-of-prompt system block. Inputs:
+    style_text          str
+    content_boundaries  str
+    system_meta         str  (rendered as-is, no header)
+    voice_corrective    str
+-#}
+{%- set blocks = [] -%}
+{%- if style_text %}{% set _ = blocks.append("# Style\n" ~ style_text) %}{% endif -%}
+{%- if content_boundaries %}{% set _ = blocks.append("# Content boundaries\n" ~ content_boundaries) %}{% endif -%}
+{%- if system_meta %}{% set _ = blocks.append(system_meta) %}{% endif -%}
+{%- if voice_corrective %}{% set _ = blocks.append("# Voice corrective\n" ~ voice_corrective) %}{% endif -%}
+{{ blocks | join("\n\n") }}

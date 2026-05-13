@@ -1,0 +1,19 @@
+{#-
+  Lock-in block: scene header, active PC card, commitments, mechanics,
+  and the most recent posts rendered verbatim. Never compressed or
+  dropped (spec).
+
+  Inputs:
+    scene_header        str
+    active_pc_card      str
+    commitments_block   str  (rendered as-is — already has its own header)
+    mechanics_block     str  (rendered as-is)
+    verbatim_posts      str  (already joined; empty = omit)
+-#}
+{%- set chunks = [] -%}
+{%- if scene_header %}{% set _ = chunks.append("# Scene\n" ~ scene_header) %}{% endif -%}
+{%- if active_pc_card %}{% set _ = chunks.append("# Active PC\n" ~ active_pc_card) %}{% endif -%}
+{%- if commitments_block %}{% set _ = chunks.append(commitments_block) %}{% endif -%}
+{%- if mechanics_block %}{% set _ = chunks.append(mechanics_block) %}{% endif -%}
+{%- if verbatim_posts %}{% set _ = chunks.append("# Recent posts (verbatim)\n" ~ verbatim_posts) %}{% endif -%}
+{{ chunks | join("\n\n") }}
