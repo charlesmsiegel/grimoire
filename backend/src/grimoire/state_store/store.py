@@ -856,8 +856,7 @@ class StateStore:
                 (campaign_id,),
             )
             await conn.execute(
-                "UPDATE campaign_pcs SET active = 1 "
-                "WHERE campaign_id = ? AND character_ref = ?",
+                "UPDATE campaign_pcs SET active = 1 WHERE campaign_id = ? AND character_ref = ?",
                 (campaign_id, character_ref),
             )
 
