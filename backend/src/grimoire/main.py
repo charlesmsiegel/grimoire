@@ -158,7 +158,10 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="/api")
     app.include_router(library_router, prefix="/api")
     app.include_router(campaigns_router, prefix="/api")
-    app.include_router(ws_router, prefix="/api")
+    # WebSocket routes mount under /ws so the Vite dev server's `ws: true`
+    # proxy block forwards upgrade requests correctly. The HTTP health probe
+    # in the same router lands at /ws/health.
+    app.include_router(ws_router, prefix="/ws")
     return app
 
 
