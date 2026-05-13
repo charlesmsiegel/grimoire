@@ -3,18 +3,20 @@
 Each helper returns a ``CharacterData`` (the lightweight create payload) and a
 list of warnings. Callers (typically :class:`CharactersService`) decide
 whether to write the resulting character to disk.
+
+The SillyTavern v2/v3 (Character Card V2) and charx parsers are thin
+wrappers around :mod:`grimoire.characters.ingest`; this module remains for
+backwards compatibility with the existing public surface.
 """
 
 from __future__ import annotations
 
-import json
 import re
-import zipfile
-from io import BytesIO
 
-from grimoire.types.characters import CharacterData, CharacterRole, VoiceAnchor
+from grimoire.types.characters import CharacterData, CharacterRole, IngestOptions, VoiceAnchor
 
 from .errors import ImportError_
+from .ingest import ingest_character_card_v2
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -24,102 +26,26 @@ def _slugify(value: str) -> str:
     return slug or "character"
 
 
-def parse_sillytavern(card: bytes) -> tuple[CharacterData, list[str]]:
-    """Parse a SillyTavern v2/v3 character card (JSON-shaped bytes).
+def parse_sillytavern(
+    card: bytes, *, options: IngestOptions | None = None
+) -> tuple[CharacterData, list[str]]:
+    """Parse a SillyTavern v2/v3 character card.
 
-    Accepts both the v2 ``{spec: 'chara_card_v2', data: {...}}`` shape and the
-    v3 layout that adds optional ``creator_notes`` / ``alternate_greetings``.
-    Returns the projected ``CharacterData`` plus any warnings.
+    Accepts the canonical JSON envelope as well as a PNG with an embedded
+    ``chara``/``ccv3`` tEXt chunk. Returns the projected ``CharacterData``
+    plus any warnings. Delegates to
+    :func:`grimoire.characters.ingest.ingest_character_card_v2`.
     """
-    try:
-        payload = json.loads(card.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ImportError_(f"sillytavern card is not valid UTF-8 JSON: {exc}") from exc
-    warnings: list[str] = []
-
-    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
-        spec = str(payload.get("spec") or "")
-        data = payload["data"]
-    else:
-        spec = ""
-        data = payload if isinstance(payload, dict) else {}
-
-    if not isinstance(data, dict) or not data.get("name"):
-        raise ImportError_("sillytavern card missing 'name'")
-
-    name = str(data.get("name") or "").strip() or "Unnamed"
-    asset_id = _slugify(str(data.get("character_book_id") or data.get("char_id") or name))
-    description = str(data.get("description") or "").strip()
-    personality = str(data.get("personality") or "").strip()
-    scenario = str(data.get("scenario") or "").strip()
-    first_mes = str(data.get("first_mes") or "").strip()
-    mes_examples = str(data.get("mes_example") or "").strip()
-    system_prompt = str(data.get("system_prompt") or "").strip()
-
-    samples = _extract_dialogue_samples(mes_examples, first_mes)
-    tags_raw = data.get("tags") or []
-    tags = [str(t) for t in tags_raw if isinstance(t, (str, int))]
-
-    voice = VoiceAnchor(
-        summary=personality or description.split(".", 1)[0].strip(),
-        samples=samples,
-    )
-
-    body_parts: list[str] = []
-    if description:
-        body_parts.append("## Description\n\n" + description)
-    if personality:
-        body_parts.append("## Personality\n\n" + personality)
-    if scenario:
-        body_parts.append("## Scenario\n\n" + scenario)
-    if system_prompt:
-        body_parts.append("## System prompt\n\n" + system_prompt)
-    body = "\n\n".join(body_parts).strip()
-
-    if spec and spec not in {"chara_card_v2", "chara_card_v3"}:
-        warnings.append(f"unknown sillytavern spec {spec!r}; treating as v2-compatible")
-    if not samples:
-        warnings.append("no dialogue samples could be extracted from mes_example/first_mes")
-
-    return (
-        CharacterData(
-            id=asset_id,
-            name=name,
-            role=CharacterRole.MAJOR_NPC,
-            aliases=[],
-            tags=tags,
-            voice=voice,
-            description=description.split("\n", 1)[0].strip(),
-            body=body,
-        ),
-        warnings,
-    )
+    ingested = ingest_character_card_v2(card, options=options)
+    return ingested.data, list(ingested.warnings)
 
 
-def parse_charx(charx_bytes: bytes) -> tuple[CharacterData, list[str]]:
-    """Parse a CharacterX (zip) bundle.
-
-    A ``.charx`` archive contains a ``card.json`` at the root (with v2/v3
-    SillyTavern-style data) and optionally an avatar PNG. We extract the JSON
-    and reuse the SillyTavern parser.
-    """
-    try:
-        zf = zipfile.ZipFile(BytesIO(charx_bytes))
-    except zipfile.BadZipFile as exc:
-        raise ImportError_(f"charx is not a valid zip: {exc}") from exc
-    names = set(zf.namelist())
-    candidate: str | None = None
-    for name in ("card.json", "character.json", "data.json"):
-        if name in names:
-            candidate = name
-            break
-    if candidate is None:
-        raise ImportError_("charx bundle missing card.json/character.json/data.json")
-    with zf.open(candidate) as fh:
-        raw = fh.read()
-    data, warnings = parse_sillytavern(raw)
-    warnings.append(f"charx: extracted from {candidate}")
-    return data, warnings
+def parse_charx(
+    charx_bytes: bytes, *, options: IngestOptions | None = None
+) -> tuple[CharacterData, list[str]]:
+    """Parse a CharacterX (zip) bundle. See :func:`parse_sillytavern`."""
+    ingested = ingest_character_card_v2(charx_bytes, options=options)
+    return ingested.data, list(ingested.warnings)
 
 
 def parse_plaintext(text: str) -> tuple[CharacterData, list[str]]:
@@ -163,36 +89,6 @@ def parse_plaintext(text: str) -> tuple[CharacterData, list[str]]:
         ),
         warnings,
     )
-
-
-def _extract_dialogue_samples(mes_examples: str, first_mes: str) -> list[str]:
-    """Pull canonical sample lines from a SillyTavern card.
-
-    The ``mes_example`` field is conventionally a chunk of dialogue separated
-    by ``<START>`` markers; we keep lines starting with ``{{char}}:`` or
-    ``"`` and strip the speaker label.
-    """
-    samples: list[str] = []
-    raw_chunks = re.split(r"<START>", mes_examples or "", flags=re.IGNORECASE)
-    for chunk in raw_chunks:
-        for ln in chunk.splitlines():
-            ln = ln.strip()
-            if not ln:
-                continue
-            if ln.lower().startswith("{{char}}:"):
-                samples.append(ln.split(":", 1)[1].strip())
-            elif ln.startswith('"') and ln.endswith('"') and len(ln) > 4:
-                samples.append(ln.strip('"'))
-            if len(samples) >= 5:
-                break
-        if len(samples) >= 5:
-            break
-    if not samples and first_mes:
-        for match in re.finditer(r'"([^"\n]{3,})"', first_mes):
-            samples.append(match.group(1))
-            if len(samples) >= 5:
-                break
-    return samples
 
 
 def _looks_like_sample(line: str) -> bool:

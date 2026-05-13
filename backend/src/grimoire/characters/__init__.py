@@ -22,6 +22,13 @@ from grimoire.characters.imports import (
     parse_plaintext,
     parse_sillytavern,
 )
+from grimoire.characters.ingest import (
+    LLMEnrichCallable,
+    LLMEnrichment,
+    enrich_with_llm,
+    extract_relationships_deterministic,
+    ingest_character_card_v2,
+)
 from grimoire.characters.service import CharactersService, PostFetcher
 from grimoire.characters.views import (
     render_capsule,
@@ -40,8 +47,13 @@ __all__ = [
     "DriftInput",
     "HeuristicDriftChecker",
     "ImportError_",
+    "LLMEnrichCallable",
+    "LLMEnrichment",
     "PostFetcher",
     "PromotionError",
+    "enrich_with_llm",
+    "extract_relationships_deterministic",
+    "ingest_character_card_v2",
     "parse_charx",
     "parse_plaintext",
     "parse_sillytavern",
