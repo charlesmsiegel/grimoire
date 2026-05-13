@@ -380,7 +380,10 @@ class OrchestratorService:
         state.queued += 1
         try:
             await state.lock.acquire()
-        except Exception:
+        except BaseException:
+            # BaseException so asyncio.CancelledError also decrements the
+            # counter; with `except Exception` a cancelled acquire() would
+            # leave `state.queued` permanently inflated.
             state.queued -= 1
             raise
         state.queued = max(0, state.queued - 1)
