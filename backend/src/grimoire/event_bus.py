@@ -68,8 +68,12 @@ class EventBus:
     """
 
     def __init__(self) -> None:
+        # subscribe / _remove / emit run without awaiting between their
+        # internal reads and writes, so concurrent coroutines on a single
+        # event loop see a coherent view of `_subs`. Multi-thread callers
+        # must serialize externally — there's no asyncio.Lock here because
+        # one would mean nothing in sync methods.
         self._subs: dict[str, list[Subscription]] = {}
-        self._lock = asyncio.Lock()
 
     def subscribe(self, event_type: str, handler: Handler) -> Subscription:
         if not event_type:
