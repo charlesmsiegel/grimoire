@@ -80,6 +80,21 @@ def llamacpp_module() -> object:
 
 
 @pytest.fixture
+def openrouter_module() -> object:
+    return _import_plugin("llm-openrouter")
+
+
+@pytest.fixture
+def zhipu_glm_module() -> object:
+    return _import_plugin("llm-zhipu-glm")
+
+
+@pytest.fixture
+def openai_compat_module() -> object:
+    return _import_plugin("llm-openai-compatible")
+
+
+@pytest.fixture
 def export_markdown_module() -> object:
     return _import_plugin("export-markdown")
 

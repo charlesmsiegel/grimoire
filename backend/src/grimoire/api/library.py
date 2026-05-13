@@ -298,6 +298,42 @@ async def rescan_plugins(plugins: PluginsDep) -> Any:
         raise map_lookup_errors(exc) from exc
 
 
+@router.get("/plugins/{plugin_id}/config")
+async def get_plugin_config(plugin_id: str, plugins: PluginsDep) -> Any:
+    """Return the saved config for a plugin, with secret fields redacted.
+
+    The frontend uses this when opening a provider's settings panel so the
+    user can see which LLMs are configured. We never echo back stored
+    secrets — only a presence flag — so the response is safe to display.
+    """
+    manifest = await plugins.get_manifest(plugin_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"plugin {plugin_id!r} not loaded")
+    try:
+        config = await plugins.get_config(plugin_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    schema = manifest.config_schema or {}
+    secret_names = _secret_property_names(schema)
+    values: dict[str, Any] = {}
+    secrets_set: dict[str, bool] = {}
+    for name, value in config.items():
+        if name in secret_names:
+            secrets_set[name] = bool(value)
+        else:
+            values[name] = value
+    # Surface secret keys the schema declares but the user has not filled in
+    # yet, so the UI can render an empty input with a "(not set)" hint.
+    for name in secret_names:
+        secrets_set.setdefault(name, False)
+    return {
+        "plugin_id": plugin_id,
+        "values": values,
+        "secrets_set": secrets_set,
+        "configured": _is_configured(schema, config, secret_names),
+    }
+
+
 @router.post("/plugins/{plugin_id}/config")
 async def configure_plugin(
     plugin_id: str,
@@ -317,6 +353,33 @@ async def plugin_health(plugin_id: str, plugins: PluginsDep) -> Any:
         return to_payload(await plugins.health_check(plugin_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+
+
+def _secret_property_names(schema: dict[str, Any]) -> set[str]:
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict):
+        return set()
+    return {
+        name
+        for name, prop in props.items()
+        if isinstance(prop, dict) and prop.get("secret")
+    }
+
+
+def _is_configured(
+    schema: dict[str, Any], config: dict[str, Any], secret_names: set[str]
+) -> bool:
+    required = schema.get("required") if isinstance(schema, dict) else None
+    if not isinstance(required, list):
+        return bool(config)
+    for name in required:
+        value = config.get(name)
+        if name in secret_names:
+            if not value:
+                return False
+        elif value in (None, ""):
+            return False
+    return True
 
 
 # --------------------------------------------------------------------------- #

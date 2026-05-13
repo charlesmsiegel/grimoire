@@ -1,0 +1,141 @@
+id: llm-openai-compatible
+name: "OpenAI-compatible LLM Provider"
+version: "1.0.0"
+api_version: "1"
+author: "Grimoire core"
+homepage: "https://platform.openai.com/docs/api-reference/chat"
+description: |
+  Generic provider for any server that speaks the OpenAI chat-completions
+  wire format. Use it to plug Grimoire into local runtimes (Ollama, LM
+  Studio, vLLM, llama.cpp server, llamafile, KoboldCpp, LocalAI,
+  text-generation-webui) or hosted services that ship an OpenAI-shaped API
+  (Together, Groq, Fireworks, DeepInfra, Mistral, xAI, Perplexity, ...).
+
+  Preset endpoints fill in the right host and auth conventions for the
+  popular options; use `preset: custom` to point at anything else.
+
+implements:
+  - llm_provider
+
+classes:
+  llm_provider: OpenAICompatibleLLMProvider
+
+config_schema:
+  type: object
+  properties:
+    preset:
+      type: string
+      title: Preset
+      description: |
+        Endpoint convention. Most local servers accept any string as the
+        bearer token (or none at all) — `api_key` is still required by the
+        schema so the field is rendered, but you can use a placeholder.
+      enum:
+        - "custom"
+        - "ollama"
+        - "lmstudio"
+        - "vllm"
+        - "llamacpp-server"
+        - "llamafile"
+        - "koboldcpp"
+        - "text-generation-webui"
+        - "localai"
+        - "openai"
+        - "groq"
+        - "together"
+        - "fireworks"
+        - "deepinfra"
+        - "mistral"
+        - "xai"
+        - "perplexity"
+      default: "ollama"
+    base_url:
+      type: string
+      title: Base URL
+      description: |
+        Full base URL up to (but not including) `/chat/completions`.
+        Required when `preset: custom`; otherwise overrides the preset.
+        Examples:
+          Ollama:           http://localhost:11434/v1
+          LM Studio:        http://localhost:1234/v1
+          vLLM:             http://localhost:8000/v1
+          llama.cpp server: http://localhost:8080/v1
+          llamafile:        http://localhost:8080/v1
+          KoboldCpp:        http://localhost:5001/v1
+          text-gen-webui:   http://localhost:5000/v1
+    api_key:
+      type: string
+      title: API key
+      description: |
+        Bearer token. Required for hosted services; for local servers any
+        non-empty string works (most ignore the value). Stored in the OS
+        keyring when available.
+      secret: true
+    default_model:
+      type: string
+      title: Default model
+      description: |
+        Model id used when a request does not specify one. Run
+        `list_models` (or click "Refresh" in the UI) after configuring to
+        discover what the server has loaded.
+    provider_id:
+      type: string
+      title: Provider id
+      description: |
+        Identifier reported back through the LLMProvider protocol. Set
+        this when you run two copies of this plugin (e.g. one for Ollama,
+        one for LM Studio) so routes can target each independently.
+    display_name:
+      type: string
+      title: Display name
+      description: Friendly label shown in the UI.
+    auth_scheme:
+      type: string
+      title: Auth scheme
+      description: |
+        How to send `api_key`. "bearer" sends `Authorization: Bearer ...`,
+        "header" sends a custom header (set `api_key_header`), and "none"
+        omits auth entirely (useful for fully local servers).
+      enum: ["bearer", "header", "none"]
+      default: "bearer"
+    api_key_header:
+      type: string
+      title: API key header name
+      description: "Header name when `auth_scheme: header` (e.g. `x-api-key`)."
+      default: "x-api-key"
+    context_window:
+      type: integer
+      title: Context window (tokens)
+      description: |
+        Reported via `capabilities.max_context` and `list_models()`.
+        Defaults to 0 (let the upstream decide) so the gateway's budget
+        planner doesn't truncate prompts spuriously.
+      minimum: 0
+      default: 0
+    supports_streaming:
+      type: boolean
+      title: Supports streaming
+      default: true
+    timeout_seconds:
+      type: number
+      title: Request timeout (seconds)
+      default: 300
+    extra_headers:
+      type: object
+      title: Extra headers
+      description: Arbitrary headers attached to every request (advanced).
+      additionalProperties:
+        type: string
+  required: [preset]
+  additionalProperties: false
+
+requirements:
+  - "httpx>=0.27.0"
+
+notes: |
+  The plugin auto-fills `base_url` from `preset` when one is not provided.
+  Set `preset: custom` and supply `base_url` to point at any other
+  OpenAI-shaped endpoint. Local servers usually ignore the bearer token —
+  pass any non-empty value (e.g. "local") to satisfy the schema. Set
+  `auth_scheme: none` to suppress the Authorization header for servers
+  that reject unexpected auth.
