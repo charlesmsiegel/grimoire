@@ -52,10 +52,12 @@ class FakeCharacters:
     def __init__(self) -> None:
         self.pcs: dict[str, list[dict]] = {}
 
-    def list_pcs(self, campaign_id: str) -> list[dict]:
+    async def list_pcs(self, campaign_id: str) -> list[dict]:
         return self.pcs.get(campaign_id, [])
 
-    def add_pc(self, campaign_id: str, character_ref: str, name: str, owner: str) -> dict:
+    async def add_pc(
+        self, campaign_id: str, character_ref: str, name: str, owner: str
+    ) -> dict:
         entry = {
             "character_ref": character_ref,
             "name": name,
@@ -65,12 +67,12 @@ class FakeCharacters:
         self.pcs.setdefault(campaign_id, []).append(entry)
         return entry
 
-    def remove_pc(self, campaign_id: str, character_ref: str) -> None:
+    async def remove_pc(self, campaign_id: str, character_ref: str) -> None:
         self.pcs[campaign_id] = [
             p for p in self.pcs.get(campaign_id, []) if p["character_ref"] != character_ref
         ]
 
-    def set_active_pc(self, campaign_id: str, character_ref: str) -> None:
+    async def set_active_pc(self, campaign_id: str, character_ref: str) -> None:
         for p in self.pcs.get(campaign_id, []):
             p["active"] = p["character_ref"] == character_ref
 
@@ -153,3 +155,64 @@ def test_facts_and_commitments(client, container) -> None:
 def test_orchestrator_503_when_missing(client) -> None:
     response = client.post("/api/campaigns/c1/turns", json={"pc_ref": "p", "text": "x"})
     assert response.status_code == 503
+
+
+class _FakeRow(dict):
+    """sqlite-row-like dict that supports both indexing and attribute access."""
+
+
+class FakeStateStoreForReviews:
+    """Just enough surface for review-queue ownership checks."""
+
+    def __init__(self, items: dict[str, str]) -> None:
+        # review_id -> campaign_id
+        self.items = items
+        self.approved: list[str] = []
+        self.rejected: list[tuple[str, str]] = []
+        self.notes: list[tuple[str, str, str]] = []
+        self.db = self  # the route calls state_store.db.fetchone/execute
+
+    async def fetchone(self, sql: str, params: tuple) -> dict | None:
+        if "FROM review_queue" in sql and "id = ?" in sql:
+            review_id = params[0]
+            if review_id not in self.items:
+                return None
+            return _FakeRow(campaign_id=self.items[review_id])
+        return None
+
+    async def execute(self, sql: str, params: tuple) -> None:
+        if "UPDATE review_queue" in sql:
+            notes, review_id, campaign_id = params
+            self.notes.append((review_id, campaign_id, notes))
+
+    async def approve_review_item(self, review_id: str) -> str:
+        self.approved.append(review_id)
+        return f"delta_{review_id}"
+
+    async def reject_review_item(self, review_id: str, *, notes: str = "") -> None:
+        self.rejected.append((review_id, notes))
+
+
+def test_review_approve_rejects_wrong_campaign(client, container) -> None:
+    store = FakeStateStoreForReviews({"r1": "c-real"})
+    container.state_store = store
+    # The review item exists but belongs to c-real, not c-other.
+    response = client.post("/api/campaigns/c-other/reviews/r1/approve")
+    assert response.status_code == 404
+    assert store.approved == []  # store method must not run
+
+
+def test_review_approve_succeeds_for_owning_campaign(client, container) -> None:
+    store = FakeStateStoreForReviews({"r1": "c-real"})
+    container.state_store = store
+    response = client.post("/api/campaigns/c-real/reviews/r1/approve")
+    assert response.status_code == 200
+    assert response.json() == {"delta_id": "delta_r1"}
+    assert store.approved == ["r1"]
+
+
+def test_review_unknown_returns_404(client, container) -> None:
+    store = FakeStateStoreForReviews({})
+    container.state_store = store
+    response = client.post("/api/campaigns/c1/reviews/missing/reject")
+    assert response.status_code == 404

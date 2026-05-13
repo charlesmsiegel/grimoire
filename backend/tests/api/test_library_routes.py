@@ -2,6 +2,8 @@
 
 Each test injects a fake service into the app's :class:`ServiceContainer` and
 verifies the router dispatches correctly and shapes the response as expected.
+The fakes use ``async def`` to mirror the real service signatures so tests
+fail if a handler forgets to ``await``.
 """
 
 from __future__ import annotations
@@ -15,15 +17,15 @@ class FakeLibrary:
     def __init__(self) -> None:
         self.created: list[tuple[str, str]] = []
 
-    def list_settings(self) -> list[SettingMeta]:
+    async def list_settings(self) -> list[SettingMeta]:
         return [SettingMeta(id="wod-london", name="WoD London", version=1)]
 
-    def get_setting(self, setting_id: str) -> SettingMeta:
+    async def get_setting(self, setting_id: str) -> SettingMeta:
         if setting_id != "wod-london":
             raise KeyError(setting_id)
         return SettingMeta(id="wod-london", name="WoD London", version=1)
 
-    def list_in_setting(self, setting_id: str, kind: str) -> list[LibraryEntity]:
+    async def list_in_setting(self, setting_id: str, kind: str) -> list[LibraryEntity]:
         return [
             LibraryEntity(
                 id="settings/wod-london/characters/alistair",
@@ -37,22 +39,22 @@ class FakeLibrary:
             )
         ]
 
-    def list_style_guides(self) -> list[Any]:
+    async def list_style_guides(self) -> list[Any]:
         return []
 
-    def list_image_presets(self) -> list[Any]:
+    async def list_image_presets(self) -> list[Any]:
         return []
 
-    def list_greetings(self, setting_id: str) -> list[Any]:
+    async def list_greetings(self, setting_id: str) -> list[Any]:
         return []
 
-    def variants_of(self, asset_id: str, kind: str) -> list[Any]:
+    async def variants_of(self, asset_id: str, kind: str) -> list[Any]:
         return []
 
-    def dependents(self, setting_id: str, kind: str, entity_id: str) -> list[Any]:
+    async def dependents(self, setting_id: str, kind: str, entity_id: str) -> list[Any]:
         return []
 
-    def create_entity(self, *args: Any, **kwargs: Any) -> Any:
+    async def create_entity(self, *args: Any, **kwargs: Any) -> Any:
         self.created.append((args[1], args[2]))
         return LibraryEntity(
             id=f"settings/{args[0]}/{args[1]}s/{args[2]}",
@@ -67,18 +69,18 @@ class FakeLibrary:
 
 
 class FakeMechanics:
-    def modules(self) -> list[Any]:
+    def installed(self) -> list[Any]:
         return []
 
-    def rescan(self) -> dict[str, Any]:
+    async def rescan(self) -> dict[str, Any]:
         return {"added": [], "removed": [], "errors": []}
 
 
 class FakePlugins:
-    def list_plugins(self, kind: str | None = None, installed_only: bool = False) -> list[Any]:
+    async def list_installed(self) -> list[Any]:
         return []
 
-    def rescan(self) -> dict[str, Any]:
+    async def rescan(self) -> dict[str, Any]:
         return {"added": [], "removed": [], "errors": []}
 
 
