@@ -29,9 +29,13 @@ export function StepStartingScene({
   const selectedGreeting = greetings.find((g) => g.id === draft.greetingId) ?? null;
 
   const candidates = useMemo<CastCandidate[]>(() => {
-    const byId = new Map<string, CastCandidate>();
+    // Refs are settingId-qualified so a character "protagonist" can coexist
+    // across multiple settings without collapsing. PCs already store their
+    // full character_ref (e.g. "wod-london/alex") so they don't need
+    // re-qualification.
+    const byRef = new Map<string, CastCandidate>();
     for (const pc of draft.pcs) {
-      byId.set(pc.character_ref, {
+      byRef.set(pc.character_ref, {
         id: pc.character_ref,
         name: pc.name || pc.character_ref,
         source: "PC",
@@ -39,11 +43,12 @@ export function StepStartingScene({
     }
     for (const [settingId, chars] of castBySetting) {
       for (const c of chars) {
-        if (byId.has(c.id)) continue;
-        byId.set(c.id, { id: c.id, name: c.name ?? c.id, source: settingId });
+        const ref = `${settingId}/${c.id}`;
+        if (byRef.has(ref)) continue;
+        byRef.set(ref, { id: ref, name: c.name ?? c.id, source: settingId });
       }
     }
-    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+    return [...byRef.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [draft.pcs, castBySetting]);
 
   const setCast = (next: string[]) => update({ startingCast: next });
@@ -176,12 +181,10 @@ function CastInput({ value, onChange, candidates }: CastInputProps) {
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      if (matches[0]) {
-        add(matches[0].id);
-      } else if (query.trim()) {
-        // Allow typing a free-form ref the user knows isn't in the list.
-        add(query.trim());
-      }
+      // Only add when there's a matching candidate. Free-form refs (no
+      // setting prefix) would 400 at the backend, so we'd rather wait for
+      // the user to pick or refine than commit something that won't work.
+      if (matches[0]) add(matches[0].id);
     } else if (e.key === "Backspace" && query === "" && value.length > 0) {
       remove(value[value.length - 1]!);
     } else if (e.key === "Escape") {
