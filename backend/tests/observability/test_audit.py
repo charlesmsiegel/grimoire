@@ -5,12 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from grimoire.observability.audit import AuditStore
+from grimoire.types.common import Scope
 from grimoire.types.observability import (
     CompositionSnapshot,
     ContextSummary,
     TurnAudit,
 )
-from grimoire.types.state import ContextTier
+from grimoire.types.state import AppliedDelta, ContextTier, DeltaKind, StateDelta
 
 
 async def test_record_and_get_turn_audit(db) -> None:
@@ -74,6 +75,35 @@ async def test_record_is_upsert(db) -> None:
 async def test_get_missing_returns_none(db) -> None:
     store = AuditStore(db)
     assert await store.get("does-not-exist") is None
+
+
+async def test_record_serializes_applied_deltas(db) -> None:
+    store = AuditStore(db)
+    applied = AppliedDelta(
+        id="ad_1",
+        delta=StateDelta(
+            kind=DeltaKind.FACT_ADD,
+            target_scope=Scope.CAMPAIGN_SQLITE,
+            target_id="f_1",
+            source="extractor",
+        ),
+        campaign_id="c",
+        branch_id="b",
+        turn_id="t_applied",
+        applied_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+    audit = TurnAudit(
+        turn_id="t_applied",
+        campaign_id="c",
+        branch_id="b",
+        started_at=datetime(2024, 1, 1, tzinfo=UTC),
+        applied_deltas=[applied],
+    )
+    # Regression: previously raised AttributeError because the writer
+    # dereferenced d.delta.id (no such attribute) instead of d.id.
+    await store.record(audit)
+    fetched = await store.get("t_applied")
+    assert fetched is not None
 
 
 async def test_list_orders_by_recency_and_filters_by_campaign(db) -> None:

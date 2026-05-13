@@ -113,7 +113,7 @@ class AuditStore:
                 "flags": [f.model_dump(mode="json") for f in audit.extraction_flags],
             }
         )
-        applied_ids = _dump([d.delta.id for d in audit.applied_deltas])
+        applied_ids = _dump([d.id for d in audit.applied_deltas])
         review_ids = _dump([r.id for r in audit.queued_for_review])
         side_effects = _dump(
             {
