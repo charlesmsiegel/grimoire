@@ -137,8 +137,11 @@ def test_imagegen_positive_joins_and_strips() -> None:
 
 def test_imagegen_negative_skips_empty() -> None:
     registry = TemplateRegistry()
-    assert registry.render(
-        "imagegen_negative",
-        preset_negative="lowres",
-        character_negatives=["", "blurry", "  "],
-    ) == "lowres, blurry"
+    assert (
+        registry.render(
+            "imagegen_negative",
+            preset_negative="lowres",
+            character_negatives=["", "blurry", "  "],
+        )
+        == "lowres, blurry"
+    )

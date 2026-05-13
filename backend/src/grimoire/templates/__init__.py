@@ -150,9 +150,7 @@ class TemplateRegistry:
             template = env.get_template(relative)
         except TemplateNotFound:
             if chosen != DEFAULT_VARIANT:
-                template = env.get_template(
-                    f"{template_name}/{DEFAULT_VARIANT}{TEMPLATE_SUFFIX}"
-                )
+                template = env.get_template(f"{template_name}/{DEFAULT_VARIANT}{TEMPLATE_SUFFIX}")
             else:
                 raise
         return template.render(**context)
