@@ -63,58 +63,58 @@ class UpdateEntityPayload(BaseModel):
 
 
 @router.get("/library/settings")
-def list_settings(library: LibraryDep) -> Any:
-    return to_payload(library.list_settings())
+async def list_settings(library: LibraryDep) -> Any:
+    return to_payload(await library.list_settings())
 
 
 @router.post("/library/settings", status_code=201)
-def create_setting(
+async def create_setting(
     payload: CreateSettingPayload,
     setting: SettingDep,
 ) -> Any:
     try:
-        result = setting.create_setting(payload.id, payload.meta or None)
+        result = await setting.create_setting(payload.id, payload.meta or None)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return to_payload(result)
 
 
 @router.get("/library/settings/{setting_id}")
-def get_setting_route(setting_id: str, library: LibraryDep) -> Any:
+async def get_setting_route(setting_id: str, library: LibraryDep) -> Any:
     try:
-        return to_payload(library.get_setting(setting_id))
+        return to_payload(await library.get_setting(setting_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.patch("/library/settings/{setting_id}")
-def update_setting(
+async def update_setting(
     setting_id: str,
     payload: UpdateSettingPayload,
     setting: SettingDep,
 ) -> Any:
     try:
-        return to_payload(setting.update_setting_meta(setting_id, payload.patch))
+        return to_payload(await setting.update_setting_meta(setting_id, payload.patch))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.delete("/library/settings/{setting_id}", status_code=204)
-def delete_setting(setting_id: str, setting: SettingDep) -> None:
+async def delete_setting(setting_id: str, setting: SettingDep) -> None:
     try:
-        setting.delete_setting(setting_id)
+        await setting.delete_setting(setting_id)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.post("/library/settings/{setting_id}/fork", status_code=201)
-def fork_setting(
+async def fork_setting(
     setting_id: str,
     payload: ForkSettingPayload,
     setting: SettingDep,
 ) -> Any:
     try:
-        return to_payload(setting.fork_setting(setting_id, payload.target_id))
+        return to_payload(await setting.fork_setting(setting_id, payload.target_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
@@ -125,31 +125,28 @@ def fork_setting(
 
 
 @router.get("/library/settings/{setting_id}/{kind}")
-def list_setting_entities(
+async def list_setting_entities(
     setting_id: str,
     kind: str,
     library: LibraryDep,
 ) -> Any:
-    if kind == "greetings":
-        try:
-            return to_payload(library.list_greetings(setting_id))
-        except Exception as exc:
-            raise map_lookup_errors(exc) from exc
     try:
-        return to_payload(library.list_in_setting(setting_id, kind))
+        if kind == "greetings":
+            return to_payload(await library.list_greetings(setting_id))
+        return to_payload(await library.list_in_setting(setting_id, kind))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.post("/library/settings/{setting_id}/{kind}", status_code=201)
-def create_setting_entity(
+async def create_setting_entity(
     setting_id: str,
     kind: str,
     payload: CreateEntityPayload,
     library: LibraryDep,
 ) -> Any:
     try:
-        result = library.create_entity(
+        result = await library.create_entity(
             setting_id,
             kind,
             payload.id,
@@ -163,7 +160,7 @@ def create_setting_entity(
 
 
 @router.get("/library/settings/{setting_id}/{kind}/{entity_id}")
-def get_setting_entity(
+async def get_setting_entity(
     setting_id: str,
     kind: str,
     entity_id: str,
@@ -171,14 +168,14 @@ def get_setting_entity(
 ) -> Any:
     try:
         if kind == "greetings":
-            return to_payload(library.get_greeting(setting_id, entity_id))
-        return to_payload(library.get_entity(setting_id, kind, entity_id))
+            return to_payload(await library.get_greeting(setting_id, entity_id))
+        return to_payload(await library.get_entity(setting_id, kind, entity_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.patch("/library/settings/{setting_id}/{kind}/{entity_id}")
-def update_setting_entity(
+async def update_setting_entity(
     setting_id: str,
     kind: str,
     entity_id: str,
@@ -187,7 +184,7 @@ def update_setting_entity(
 ) -> Any:
     try:
         return to_payload(
-            library.update_entity(
+            await library.update_entity(
                 setting_id,
                 kind,
                 entity_id,
@@ -201,7 +198,7 @@ def update_setting_entity(
 
 
 @router.delete("/library/settings/{setting_id}/{kind}/{entity_id}", status_code=204)
-def delete_setting_entity(
+async def delete_setting_entity(
     setting_id: str,
     kind: str,
     entity_id: str,
@@ -209,28 +206,28 @@ def delete_setting_entity(
     source: str = "user",
 ) -> None:
     try:
-        library.delete_entity(setting_id, kind, entity_id, source=source)
+        await library.delete_entity(setting_id, kind, entity_id, source=source)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.get("/library/settings/{setting_id}/{kind}/{entity_id}/dependents")
-def entity_dependents(
+async def entity_dependents(
     setting_id: str,
     kind: str,
     entity_id: str,
     library: LibraryDep,
 ) -> Any:
     try:
-        return to_payload(library.dependents(setting_id, kind, entity_id))
+        return to_payload(await library.dependents(setting_id, kind, entity_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.get("/library/variants/{kind}/{asset_id}")
-def variants(kind: str, asset_id: str, library: LibraryDep) -> Any:
+async def variants(kind: str, asset_id: str, library: LibraryDep) -> Any:
     try:
-        return to_payload(library.variants_of(asset_id, kind))
+        return to_payload(await library.variants_of(asset_id, kind))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
@@ -241,27 +238,27 @@ def variants(kind: str, asset_id: str, library: LibraryDep) -> Any:
 
 
 @router.get("/library/style-guides")
-def list_style_guides(library: LibraryDep) -> Any:
-    return to_payload(library.list_style_guides())
+async def list_style_guides(library: LibraryDep) -> Any:
+    return to_payload(await library.list_style_guides())
 
 
 @router.get("/library/style-guides/{guide_id}")
-def get_style_guide(guide_id: str, library: LibraryDep) -> Any:
+async def get_style_guide(guide_id: str, library: LibraryDep) -> Any:
     try:
-        return to_payload(library.get_style_guide(guide_id))
+        return to_payload(await library.get_style_guide(guide_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.get("/library/image-presets")
-def list_image_presets(library: LibraryDep) -> Any:
-    return to_payload(library.list_image_presets())
+async def list_image_presets(library: LibraryDep) -> Any:
+    return to_payload(await library.list_image_presets())
 
 
 @router.get("/library/image-presets/{preset_id}")
-def get_image_preset(preset_id: str, library: LibraryDep) -> Any:
+async def get_image_preset(preset_id: str, library: LibraryDep) -> Any:
     try:
-        return to_payload(library.get_image_preset(preset_id))
+        return to_payload(await library.get_image_preset(preset_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
@@ -273,53 +270,51 @@ def get_image_preset(preset_id: str, library: LibraryDep) -> Any:
 
 @router.get("/mechanics/installed")
 def installed_mechanics(mechanics: MechanicsDep) -> Any:
-    return to_payload(mechanics.modules())
+    # ``installed()`` is the sync accessor; returns RegisteredModule list.
+    return to_payload(mechanics.installed())
 
 
 @router.post("/mechanics/rescan")
-def rescan_mechanics(mechanics: MechanicsDep) -> Any:
+async def rescan_mechanics(mechanics: MechanicsDep) -> Any:
     try:
-        return to_payload(mechanics.rescan())
+        return to_payload(await mechanics.rescan())
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.get("/plugins/installed")
-def installed_plugins(
-    plugins: PluginsDep,
-    kind: str | None = None,
-    installed_only: bool = False,
-) -> Any:
+async def installed_plugins(plugins: PluginsDep) -> Any:
     try:
-        return to_payload(plugins.list_plugins(kind=kind, installed_only=installed_only))
+        return to_payload(await plugins.list_installed())
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.post("/plugins/rescan")
-def rescan_plugins(plugins: PluginsDep) -> Any:
+async def rescan_plugins(plugins: PluginsDep) -> Any:
     try:
-        return to_payload(plugins.rescan())
+        return to_payload(await plugins.rescan())
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.post("/plugins/{plugin_id}/config")
-def configure_plugin(
+async def configure_plugin(
     plugin_id: str,
     plugins: PluginsDep,
     config: Annotated[dict[str, Any], Body()],
 ) -> Any:
     try:
-        return to_payload(plugins.configure_plugin(plugin_id, config))
+        await plugins.set_config(plugin_id, config)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+    return {"ok": True}
 
 
 @router.get("/plugins/{plugin_id}/health")
-def plugin_health(plugin_id: str, plugins: PluginsDep) -> Any:
+async def plugin_health(plugin_id: str, plugins: PluginsDep) -> Any:
     try:
-        return to_payload(plugins.health_check(plugin_id))
+        return to_payload(await plugins.health_check(plugin_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
@@ -330,10 +325,9 @@ def plugin_health(plugin_id: str, plugins: PluginsDep) -> Any:
 
 
 @router.get("/library/health")
-def library_health(library: LibraryDep) -> dict[str, Any]:
-    # Cheap smoke check: count of settings.
+async def library_health(library: LibraryDep) -> dict[str, Any]:
     try:
-        count = len(library.list_settings())
+        count = len(await library.list_settings())
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"status": "ok", "settings": count}

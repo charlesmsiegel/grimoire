@@ -257,15 +257,15 @@ async def delete_campaign(campaign_id: str, state_store: StateStoreDep) -> None:
 
 
 @router.get("/{campaign_id}/composition")
-def get_composition(campaign_id: str, library: LibraryDep) -> Any:
+async def get_composition(campaign_id: str, library: LibraryDep) -> Any:
     try:
-        return to_payload(library.get_composition(campaign_id))
+        return to_payload(await library.get_composition(campaign_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.put("/{campaign_id}/composition")
-def set_composition(
+async def set_composition(
     campaign_id: str,
     payload: CompositionPayload,
     library: LibraryDep,
@@ -281,8 +281,8 @@ def set_composition(
             inline_style_guide=payload.inline_style_guide,
             content_boundaries=payload.content_boundaries,
         )
-        library.set_composition(campaign_id, comp)
-        return to_payload(library.get_composition(campaign_id))
+        await library.set_composition(campaign_id, comp)
+        return to_payload(await library.get_composition(campaign_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
@@ -320,13 +320,13 @@ async def remove_setting_ref(
 
 
 @router.post("/{campaign_id}/composition/refs/{setting_id}/upgrade")
-def upgrade_setting_ref(
+async def upgrade_setting_ref(
     campaign_id: str,
     setting_id: str,
     library: LibraryDep,
 ) -> Any:
     try:
-        return to_payload(library.upgrade_setting_ref(campaign_id, setting_id))
+        return to_payload(await library.upgrade_setting_ref(campaign_id, setting_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
@@ -337,61 +337,63 @@ def upgrade_setting_ref(
 
 
 @router.get("/{campaign_id}/pcs")
-def list_pcs(campaign_id: str, characters: CharactersDep) -> Any:
+async def list_pcs(campaign_id: str, characters: CharactersDep) -> Any:
     try:
-        return to_payload(characters.list_pcs(campaign_id))
+        return to_payload(await characters.list_pcs(campaign_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.post("/{campaign_id}/pcs", status_code=201)
-def add_pc(
+async def add_pc(
     campaign_id: str,
     payload: AddPCPayload,
     characters: CharactersDep,
 ) -> Any:
     try:
         return to_payload(
-            characters.add_pc(campaign_id, payload.character_ref, payload.name, payload.owner)
+            await characters.add_pc(
+                campaign_id, payload.character_ref, payload.name, payload.owner
+            )
         )
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.delete("/{campaign_id}/pcs/{character_ref:path}", status_code=204)
-def remove_pc(
+async def remove_pc(
     campaign_id: str,
     character_ref: str,
     characters: CharactersDep,
 ) -> None:
     try:
-        characters.remove_pc(campaign_id, character_ref)
+        await characters.remove_pc(campaign_id, character_ref)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.post("/{campaign_id}/pcs/{character_ref:path}/set-active")
-def set_active_pc(
+async def set_active_pc(
     campaign_id: str,
     character_ref: str,
     characters: CharactersDep,
 ) -> Any:
     try:
-        characters.set_active_pc(campaign_id, character_ref)
+        await characters.set_active_pc(campaign_id, character_ref)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return {"ok": True}
 
 
 @router.post("/{campaign_id}/pcs/{character_ref:path}/set-current-scene")
-def set_current_scene_for_pc(
+async def set_current_scene_for_pc(
     campaign_id: str,
     character_ref: str,
     characters: CharactersDep,
     scene_id: Annotated[str, Body(embed=True)],
 ) -> Any:
     try:
-        characters.set_current_scene_for_pc(campaign_id, character_ref, scene_id)
+        await characters.set_current_scene_for_pc(campaign_id, character_ref, scene_id)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return {"ok": True}
@@ -533,51 +535,51 @@ async def end_scene(
 
 
 @router.get("/{campaign_id}/characters")
-def list_characters(campaign_id: str, characters: CharactersDep) -> Any:
+async def list_characters(campaign_id: str, characters: CharactersDep) -> Any:
     try:
-        return to_payload(characters.list_for_campaign(campaign_id))
+        return to_payload(await characters.list_for_campaign(campaign_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
-def _list_kind(campaign_id: str, kind: str, setting: Any) -> Any:
-    return to_payload(setting.list_for_campaign(campaign_id, kind))
+async def _list_kind(campaign_id: str, kind: str, setting: Any) -> Any:
+    return to_payload(await setting.list_for_campaign(campaign_id, kind))
 
 
 @router.get("/{campaign_id}/items")
-def list_items(campaign_id: str, setting: SettingDep) -> Any:
+async def list_items(campaign_id: str, setting: SettingDep) -> Any:
     try:
-        return _list_kind(campaign_id, "item", setting)
+        return await _list_kind(campaign_id, "item", setting)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.get("/{campaign_id}/locations")
-def list_locations(campaign_id: str, setting: SettingDep) -> Any:
+async def list_locations(campaign_id: str, setting: SettingDep) -> Any:
     try:
-        return _list_kind(campaign_id, "location", setting)
+        return await _list_kind(campaign_id, "location", setting)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.get("/{campaign_id}/lore")
-def list_lore(campaign_id: str, setting: SettingDep) -> Any:
+async def list_lore(campaign_id: str, setting: SettingDep) -> Any:
     try:
-        return _list_kind(campaign_id, "lore", setting)
+        return await _list_kind(campaign_id, "lore", setting)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.get("/{campaign_id}/factions")
-def list_factions(campaign_id: str, setting: SettingDep) -> Any:
+async def list_factions(campaign_id: str, setting: SettingDep) -> Any:
     try:
-        return _list_kind(campaign_id, "faction", setting)
+        return await _list_kind(campaign_id, "faction", setting)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.post("/{campaign_id}/characters/{entity_id}/promote-to-library")
-def promote_character(
+async def promote_character(
     campaign_id: str,
     entity_id: str,
     payload: PromotePayload,
@@ -585,7 +587,7 @@ def promote_character(
 ) -> Any:
     try:
         return to_payload(
-            characters.promote_to_library(
+            await characters.promote_to_library(
                 campaign_id,
                 entity_id,
                 payload.target_setting_id,
@@ -597,7 +599,7 @@ def promote_character(
 
 
 @router.post("/{campaign_id}/{kind}/{entity_id}/promote-to-library")
-def promote_entity(
+async def promote_entity(
     campaign_id: str,
     kind: str,
     entity_id: str,
@@ -608,7 +610,7 @@ def promote_entity(
         raise HTTPException(status_code=404, detail="use /characters/{id}/promote-to-library")
     try:
         return to_payload(
-            setting.promote_to_library(
+            await setting.promote_to_library(
                 campaign_id,
                 kind.rstrip("s"),
                 entity_id,
@@ -626,14 +628,14 @@ def promote_entity(
 
 
 @router.get("/{campaign_id}/sheets/{kind}/{entity_id}")
-def get_sheet(
+async def get_sheet(
     campaign_id: str,
     kind: str,
     entity_id: str,
     mechanics: MechanicsDep,
 ) -> Any:
     try:
-        sheet = mechanics.resolve_sheet(campaign_id, entity_id, kind=kind)
+        sheet = await mechanics.get_sheet(campaign_id, entity_id, entity_kind=kind)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     if sheet is None:
@@ -651,10 +653,13 @@ async def put_sheet(
     payload: Annotated[dict[str, Any], Body()],
 ) -> Any:
     # Use the active mechanics module id so the file path is correct.
+    module_id = "null"
     try:
-        module_id = mechanics.modules()[0].manifest.id if mechanics.modules() else "null"
+        registered = mechanics.installed()
+        if registered:
+            module_id = registered[0].manifest.id
     except Exception:
-        module_id = "null"
+        pass
     try:
         await state_store.write_sheet(
             campaign_id=campaign_id,
@@ -731,7 +736,7 @@ async def time_advance(
     try:
         reason = TimeAdvanceReason(payload.reason)
         if payload.target is not None:
-            target = InGameTime(at=datetime.fromisoformat(payload.target))
+            target = InGameTime(moment=datetime.fromisoformat(payload.target))
             result = await time_engine.skip_to(
                 campaign_id,
                 target,
@@ -826,12 +831,35 @@ async def export_campaign(
 # --------------------------------------------------------------------------- #
 
 
+async def _require_review_owned(
+    state_store: Any, campaign_id: str, review_id: str
+) -> None:
+    """Reject the request if ``review_id`` is not scoped to ``campaign_id``.
+
+    The store's approve/reject methods key only on review id, so the routes
+    enforce ownership here to prevent IDOR — a caller cannot affect another
+    campaign's review item by guessing its id.
+    """
+    row = await state_store.db.fetchone(
+        "SELECT campaign_id FROM review_queue WHERE id = ?",
+        (review_id,),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"review item {review_id!r} not found")
+    if row["campaign_id"] != campaign_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"review item {review_id!r} not found in campaign {campaign_id!r}",
+        )
+
+
 @router.post("/{campaign_id}/reviews/{review_id}/approve")
 async def approve_review(
     campaign_id: str,
     review_id: str,
     state_store: StateStoreDep,
 ) -> Any:
+    await _require_review_owned(state_store, campaign_id, review_id)
     try:
         delta_id = await state_store.approve_review_item(review_id)
     except Exception as exc:
@@ -846,6 +874,7 @@ async def reject_review(
     state_store: StateStoreDep,
     payload: ReviewUpdatePayload | None = None,
 ) -> Any:
+    await _require_review_owned(state_store, campaign_id, review_id)
     try:
         await state_store.reject_review_item(review_id, notes=payload.notes if payload else "")
     except Exception as exc:
@@ -860,10 +889,11 @@ async def update_review(
     payload: ReviewUpdatePayload,
     state_store: StateStoreDep,
 ) -> Any:
+    await _require_review_owned(state_store, campaign_id, review_id)
     try:
         await state_store.db.execute(
-            "UPDATE review_queue SET reviewer_notes = ? WHERE id = ?",
-            (payload.notes, review_id),
+            "UPDATE review_queue SET reviewer_notes = ? WHERE id = ? AND campaign_id = ?",
+            (payload.notes, review_id, campaign_id),
         )
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
