@@ -1,0 +1,130 @@
+/**
+ * Lists campaigns whose composition references this setting. The backend
+ * publishes per-entity dependents directly; for setting-wide queries we
+ * fan out through `/api/campaigns/<id>/composition`. The list is small in
+ * practice (campaigns count, not entity count) so this stays fast.
+ */
+
+import { useEffect, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+
+import { ApiError } from "../../api/library";
+
+interface CampaignSummary {
+  id: string;
+  name?: string;
+}
+
+interface SettingRef {
+  setting_id: string;
+  priority: number;
+  bound_at_version: number;
+  track_latest: boolean;
+  include?: string[];
+}
+
+interface CompositionPayload {
+  settings?: SettingRef[];
+}
+
+interface DependentRow {
+  campaign: CampaignSummary;
+  ref: SettingRef;
+}
+
+export function SettingDependentsView() {
+  const { settingId = "" } = useParams();
+  const [rows, setRows] = useState<DependentRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const campaigns = await fetchJson<CampaignSummary[]>(`/api/campaigns`);
+        const compositions = await Promise.all(
+          campaigns.map(async (c) => {
+            try {
+              const comp = await fetchJson<CompositionPayload>(
+                `/api/campaigns/${encodeURIComponent(c.id)}/composition`,
+              );
+              return { campaign: c, comp };
+            } catch {
+              return { campaign: c, comp: null };
+            }
+          }),
+        );
+        const matched: DependentRow[] = [];
+        for (const { campaign, comp } of compositions) {
+          const ref = comp?.settings?.find((r) => r.setting_id === settingId);
+          if (ref) matched.push({ campaign, ref });
+        }
+        if (!cancelled) setRows(matched);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof ApiError ? err : (err as Error));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [settingId]);
+
+  if (loading) return <p className="library-status">Loading dependent campaigns…</p>;
+  if (error) {
+    return (
+      <p className="library-error" role="alert">
+        Failed to load: {error.message}
+      </p>
+    );
+  }
+  if (rows.length === 0) {
+    return <p className="library-status">No campaigns currently reference this setting.</p>;
+  }
+
+  return (
+    <section className="setting-dependents">
+      <p>
+        Editing entities in this setting affects pinned campaigns only after they upgrade their ref;{" "}
+        <code>track_latest</code> campaigns see changes immediately.
+      </p>
+      <table className="library-table">
+        <thead>
+          <tr>
+            <th>Campaign</th>
+            <th>Priority</th>
+            <th>Bound version</th>
+            <th>Tracking</th>
+            <th>Include filter</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ campaign, ref }) => (
+            <tr key={campaign.id}>
+              <td>
+                <Link to={`/campaigns/${encodeURIComponent(campaign.id)}`}>
+                  {campaign.name || campaign.id}
+                </Link>
+              </td>
+              <td>{ref.priority}</td>
+              <td>{ref.bound_at_version}</td>
+              <td>{ref.track_latest ? "track latest" : "pinned"}</td>
+              <td>{(ref.include ?? []).join(", ") || "all"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+async function fetchJson<T>(path: string): Promise<T> {
+  const res = await fetch(path);
+  if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => ""));
+  return (await res.json()) as T;
+}

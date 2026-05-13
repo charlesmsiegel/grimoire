@@ -3,7 +3,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { CampaignView } from "./routes/CampaignView";
 import { CampaignsView } from "./routes/CampaignsView";
 import { HomeRedirect } from "./routes/HomeRedirect";
-import { LibraryView } from "./routes/LibraryView";
+import { LibraryRoutes } from "./routes/library";
 import { NotFound } from "./routes/NotFound";
 import { AppShell } from "./shell/AppShell";
 import { StoreProvider } from "./state/store";
@@ -17,7 +17,7 @@ export function App() {
           <Routes>
             <Route element={<AppShell />}>
               <Route index element={<HomeRedirect />} />
-              <Route path="library/*" element={<LibraryView />} />
+              <Route path="library/*" element={<LibraryRoutes />} />
               <Route path="campaigns" element={<CampaignsView />} />
               <Route path="campaigns/:campaignId/*" element={<CampaignView />} />
               <Route path="*" element={<NotFound />} />
