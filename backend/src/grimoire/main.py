@@ -116,13 +116,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             container.continuity = ContinuityService()
         if container.imagegen is None:
             # No image-generation backends registered. /images endpoints (read)
-            # work against the SQLite index; generation requests will fail
-            # until a backend plugin is installed and registered with the
-            # registry.
+            # work against the SQLite index; queue_generation / active_backend
+            # will raise NoBackendAvailableError until a backend plugin is
+            # installed and registered with the registry. Routes that need a
+            # backend should catch that and 503 with a clear message.
             container.imagegen = ImageGenService(
                 store=container.state_store,
                 registry=BackendRegistry(),
-                default_backend_id="none",
+                default_backend_id=None,
                 event_bus=container.event_bus,
             )
 

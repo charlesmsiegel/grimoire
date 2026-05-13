@@ -114,6 +114,15 @@ def should_illustrate(
     return False
 
 
+class NoBackendAvailableError(RuntimeError):
+    """Raised when an operation requires a backend but none is registered.
+
+    Distinguishes the "no plugin installed yet" steady state from genuine
+    bugs, so callers (and the API layer) can translate it to a clean 503
+    instead of a 500.
+    """
+
+
 # --------------------------------------------------------------------------- #
 # Backend registry
 # --------------------------------------------------------------------------- #
@@ -224,7 +233,7 @@ class ImageGenService:
         *,
         store: StateStore,
         registry: BackendRegistry,
-        default_backend_id: str,
+        default_backend_id: str | None = None,
         event_bus: EventBus | None = None,
         composer: PromptComposer | None = None,
         plugin_backend_ids: Iterable[str] | None = None,
@@ -299,12 +308,15 @@ class ImageGenService:
 
     async def active_backend(self, campaign_id: str) -> BackendInfo:
         backend_id = self._campaign_backend.get(campaign_id) or self.default_backend_id
-        backend = self.registry.get(backend_id)
-        if backend is None:
+        backend = self.registry.get(backend_id) if backend_id else None
+        if backend is None and self.default_backend_id:
             # The configured backend was removed — fall back to default.
             backend = self.registry.get(self.default_backend_id)
-            if backend is None:
-                raise RuntimeError("no image-gen backends registered")
+        if backend is None:
+            raise NoBackendAvailableError(
+                "no image-gen backends registered; install an imagegen plugin "
+                "and configure it under Library → Plugins"
+            )
         return _backend_info(
             backend,
             is_integrated=backend.id not in self._plugin_ids,
