@@ -116,9 +116,7 @@ async def test_complete_posts_chat_completions(openrouter_module) -> None:
 @pytest.mark.asyncio
 async def test_complete_raises_on_http_error(openrouter_module) -> None:
     provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
-    _install_mock_transport(
-        provider, lambda r: httpx.Response(401, text='{"error":"bad key"}')
-    )
+    _install_mock_transport(provider, lambda r: httpx.Response(401, text='{"error":"bad key"}'))
     with pytest.raises(RuntimeError, match="401"):
         await provider.complete(
             CompletionRequest(
@@ -147,17 +145,13 @@ async def test_stream_parses_sse_chunks(openrouter_module) -> None:
     )
 
     def _handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200, content=body, headers={"content-type": "text/event-stream"}
-        )
+        return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
 
     _install_mock_transport(provider, _handler)
     chunks = [
         c
         async for c in provider.stream(
-            CompletionRequest(
-                model="x", messages=[Message(role=MessageRole.USER, content="hi")]
-            )
+            CompletionRequest(model="x", messages=[Message(role=MessageRole.USER, content="hi")])
         )
     ]
     deltas = [c.delta for c in chunks if not c.is_final]

@@ -65,9 +65,7 @@ class OpenAICompatibleLLMProvider:
         cfg = dict(config or {})
         self.config = cfg
         self._preset: str = str(cfg.get("preset") or "custom")
-        default_base, default_auth, allow_empty = PRESETS.get(
-            self._preset, PRESETS["custom"]
-        )
+        default_base, default_auth, allow_empty = PRESETS.get(self._preset, PRESETS["custom"])
         self._allow_empty_key: bool = allow_empty
         self._base_url: str = str(cfg.get("base_url") or default_base).rstrip("/")
         self._api_key: str | None = cfg.get("api_key") or None
@@ -122,9 +120,7 @@ class OpenAICompatibleLLMProvider:
         text = str(message.get("content") or "")
         finish = str(choice.get("finish_reason") or "stop")
         usage = _usage(data.get("usage"))
-        model_id = str(
-            data.get("model") or request.model or self._default_model or "unknown"
-        )
+        model_id = str(data.get("model") or request.model or self._default_model or "unknown")
         return CompletionResponse(
             text=text,
             model=model_id,
@@ -145,9 +141,7 @@ class OpenAICompatibleLLMProvider:
         async with client.stream("POST", "/chat/completions", json=payload) as response:
             if response.status_code >= 400:
                 body = (await response.aread()).decode("utf-8", errors="replace")
-                raise RuntimeError(
-                    f"{self.id}: stream failed ({response.status_code}): {body}"
-                )
+                raise RuntimeError(f"{self.id}: stream failed ({response.status_code}): {body}")
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
@@ -274,12 +268,7 @@ class OpenAICompatibleLLMProvider:
 
     def _is_local(self) -> bool:
         host = self._base_url.lower()
-        return (
-            "localhost" in host
-            or "127.0.0.1" in host
-            or "0.0.0.0" in host
-            or "://[::1]" in host
-        )
+        return "localhost" in host or "127.0.0.1" in host or "0.0.0.0" in host or "://[::1]" in host
 
     async def _ensure_client(self) -> Any:
         if self._client is not None:

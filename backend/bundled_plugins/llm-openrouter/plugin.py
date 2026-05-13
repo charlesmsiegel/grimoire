@@ -107,9 +107,7 @@ class OpenRouterLLMProvider:
         async with client.stream("POST", "/chat/completions", json=payload) as response:
             if response.status_code >= 400:
                 body = (await response.aread()).decode("utf-8", errors="replace")
-                raise RuntimeError(
-                    f"openrouter: stream failed ({response.status_code}): {body}"
-                )
+                raise RuntimeError(f"openrouter: stream failed ({response.status_code}): {body}")
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
@@ -271,10 +269,9 @@ class OpenRouterLLMProvider:
                 continue
             if m.input_cost_per_1k is None or m.output_cost_per_1k is None:
                 return None
-            return (
-                (usage.input_tokens / 1000.0) * m.input_cost_per_1k
-                + (usage.output_tokens / 1000.0) * m.output_cost_per_1k
-            )
+            return (usage.input_tokens / 1000.0) * m.input_cost_per_1k + (
+                usage.output_tokens / 1000.0
+            ) * m.output_cost_per_1k
         return None
 
 
