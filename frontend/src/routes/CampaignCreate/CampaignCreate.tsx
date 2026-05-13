@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError } from "../../api/client";
@@ -89,6 +89,10 @@ export function CampaignCreate() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // Each lazy fetch fires at most once per wizard session. An empty array or
+  // a persistent error must not trigger an infinite refetch loop.
+  const styleAssetsAttempted = useRef(false);
+
   // Initial fetches — settings and mechanics are needed across multiple steps.
   useEffect(() => {
     let cancelled = false;
@@ -116,7 +120,8 @@ export function CampaignCreate() {
   // Style guides and image presets — lazy-load when arriving at step 5.
   useEffect(() => {
     if (step !== 4) return;
-    if (styleGuides.data.length > 0 || styleGuides.loading) return;
+    if (styleAssetsAttempted.current) return;
+    styleAssetsAttempted.current = true;
     setStyleGuides({ data: [], loading: true, error: null });
     setImagePresets({ data: [], loading: true, error: null });
     void (async () => {
@@ -130,7 +135,7 @@ export function CampaignCreate() {
         setImagePresets((s) => ({ ...s, loading: false, error: msg }));
       }
     })();
-  }, [step, styleGuides.data.length, styleGuides.loading]);
+  }, [step]);
 
   // Cast — refetch whenever the composition changes and step is on PCs.
   useEffect(() => {
