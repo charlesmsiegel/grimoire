@@ -77,11 +77,28 @@ class FakeMechanics:
 
 
 class FakePlugins:
+    def __init__(self) -> None:
+        self.manifests: dict[str, Any] = {}
+        self.configs: dict[str, dict[str, Any]] = {}
+        self.saved: list[tuple[str, dict[str, Any]]] = []
+
     async def list_installed(self) -> list[Any]:
         return []
 
     async def rescan(self) -> dict[str, Any]:
         return {"added": [], "removed": [], "errors": []}
+
+    async def get_manifest(self, plugin_id: str) -> Any:
+        return self.manifests.get(plugin_id)
+
+    async def get_config(self, plugin_id: str) -> dict[str, Any]:
+        return dict(self.configs.get(plugin_id, {}))
+
+    async def set_config(self, plugin_id: str, config: dict[str, Any]) -> None:
+        if plugin_id not in self.manifests:
+            raise KeyError(plugin_id)
+        self.configs[plugin_id] = dict(config)
+        self.saved.append((plugin_id, dict(config)))
 
 
 def test_list_settings(client, container) -> None:
@@ -140,6 +157,76 @@ def test_plugins_rescan(client, container) -> None:
     container.plugins = FakePlugins()
     response = client.post("/api/plugins/rescan")
     assert response.status_code == 200
+
+
+def _fake_manifest(plugin_id: str, schema: dict[str, Any]) -> Any:
+    class _Manifest:
+        id = plugin_id
+        config_schema = schema
+
+    return _Manifest()
+
+
+def test_get_plugin_config_redacts_secrets(client, container) -> None:
+    plugins = FakePlugins()
+    schema = {
+        "type": "object",
+        "properties": {
+            "api_key": {"type": "string", "secret": True},
+            "default_model": {"type": "string"},
+        },
+        "required": ["api_key"],
+    }
+    plugins.manifests["llm-x"] = _fake_manifest("llm-x", schema)
+    plugins.configs["llm-x"] = {"api_key": "sk-secret", "default_model": "claude-opus-4-7"}
+    container.plugins = plugins
+
+    response = client.get("/api/plugins/llm-x/config")
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "plugin_id": "llm-x",
+        "values": {"default_model": "claude-opus-4-7"},
+        "secrets_set": {"api_key": True},
+        "configured": True,
+    }
+
+
+def test_get_plugin_config_reports_missing_secret(client, container) -> None:
+    plugins = FakePlugins()
+    schema = {
+        "type": "object",
+        "properties": {"api_key": {"type": "string", "secret": True}},
+        "required": ["api_key"],
+    }
+    plugins.manifests["llm-x"] = _fake_manifest("llm-x", schema)
+    plugins.configs["llm-x"] = {}
+    container.plugins = plugins
+
+    response = client.get("/api/plugins/llm-x/config")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["secrets_set"] == {"api_key": False}
+    assert body["configured"] is False
+
+
+def test_get_plugin_config_404_for_unknown(client, container) -> None:
+    container.plugins = FakePlugins()
+    response = client.get("/api/plugins/does-not-exist/config")
+    assert response.status_code == 404
+
+
+def test_configure_plugin_persists_via_service(client, container) -> None:
+    plugins = FakePlugins()
+    plugins.manifests["llm-x"] = _fake_manifest("llm-x", {"type": "object"})
+    container.plugins = plugins
+    response = client.post(
+        "/api/plugins/llm-x/config",
+        json={"api_key": "sk-1", "default_model": "m"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert plugins.saved == [("llm-x", {"api_key": "sk-1", "default_model": "m"})]
 
 
 def test_library_503_when_unset(client, container) -> None:
