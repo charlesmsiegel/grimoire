@@ -249,6 +249,7 @@ export function CampaignCreate() {
         description: draft.description.trim() || null,
         composition,
         greeting_id: draft.greetingId,
+        tags: draft.tags.length > 0 ? draft.tags : null,
       };
       await createCampaign(input);
       for (const pc of draft.pcs) {

@@ -663,16 +663,18 @@ class StateStore:
         inline_style_guide: str | None = None,
         content_boundaries: str | None = None,
         greeting_id: str | None = None,
+        tags: list[str] | None = None,
         config: dict | None = None,
     ) -> None:
+        tags_json = _json_dumps(list(tags)) if tags is not None else None
         await self.db.execute(
             """
             INSERT INTO campaigns (
               id, name, description, mechanics_module, style_guide_id, image_preset_id,
-              inline_style_guide, content_boundaries, greeting_id, created_at,
+              inline_style_guide, content_boundaries, greeting_id, tags, created_at,
               last_played_at, config
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
             ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               description = excluded.description,
@@ -682,6 +684,7 @@ class StateStore:
               inline_style_guide = excluded.inline_style_guide,
               content_boundaries = excluded.content_boundaries,
               greeting_id = excluded.greeting_id,
+              tags = excluded.tags,
               config = excluded.config
             """,
             (
@@ -694,6 +697,7 @@ class StateStore:
                 inline_style_guide,
                 content_boundaries,
                 greeting_id,
+                tags_json,
                 _now_iso(),
                 _json_dumps(config) if config is not None else None,
             ),
