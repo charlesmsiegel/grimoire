@@ -63,85 +63,114 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         enable_wal=settings.enable_wal,
     )
     await db.connect()
-    await apply_migrations(db)
-    app.state.db = db
-
-    container = getattr(app.state, "container", None)
-    if container is None:
-        container = ServiceContainer(db=db)
-    container.db = db
-    if container.event_bus is None:
-        container.event_bus = EventBus()
-    if container.stream is None:
-        container.stream = StreamManager(event_bus=container.event_bus)
-
-    data_root = settings.data_root
-    for sub in ("library", "mechanics", "plugins", "config/plugins"):
-        (data_root / sub).mkdir(parents=True, exist_ok=True)
-
-    if container.state_store is None:
-        container.state_store = StateStore(db=db, data_root=data_root)
-    if container.library is None:
-        container.library = LibraryService(container.state_store)
-    if container.setting is None:
-        container.setting = SettingService(container.library)
-    if container.mechanics is None:
-        container.mechanics = MechanicsService(
-            MechanicsConfig.for_data_root(data_root),
-            state_store=container.state_store,
-        )
-        try:
-            await container.mechanics.rescan()
-        except Exception:
-            log.exception("mechanics rescan failed at startup")
-    if container.plugins is None:
-        container.plugins = PluginsService(PluginsConfig.for_data_root(data_root))
-        try:
-            await container.plugins.rescan()
-        except Exception:
-            log.exception("plugins rescan failed at startup")
-    if container.characters is None:
-        container.characters = CharactersService(container.library, container.mechanics)
-    if container.scenes is None:
-        container.scenes = SceneManager(data_root, event_bus=container.event_bus)
-    if container.continuity is None:
-        # In-memory store by default — facts/commitments don't persist across
-        # restart. Swap in SqliteContinuityStore when persistence matters.
-        container.continuity = ContinuityService()
-    if container.imagegen is None:
-        # No image-generation backends registered. /images endpoints (read) work
-        # against the SQLite index; generation requests will fail until a
-        # backend plugin is installed and registered with the registry.
-        container.imagegen = ImageGenService(
-            store=container.state_store,
-            registry=BackendRegistry(),
-            default_backend_id="none",
-            event_bus=container.event_bus,
-        )
-
-    # Seed default library assets (style guides, etc.) and run one scan so
-    # the library_index is populated. We don't start the live watchdog
-    # observer here — file changes during runtime won't auto-index, but
-    # in-app writes go through StateStore which updates the index directly.
-    _seed_defaults(data_root)
-    file_watcher = FileWatcher(
-        data_root=data_root, store=container.state_store, bus=container.event_bus
-    )
+    container: ServiceContainer | None = None
     try:
-        await file_watcher.scan_now()
-    except Exception:
-        log.exception("initial library scan failed at startup")
+        # Wrap every step of startup so a failure anywhere (migration error,
+        # malformed seed file, service init bug) still closes the connection
+        # pool and aclose()'s any services we managed to construct.
+        await apply_migrations(db)
+        app.state.db = db
 
-    app.state.container = container
+        container = getattr(app.state, "container", None)
+        if container is None:
+            container = ServiceContainer(db=db)
+        container.db = db
+        if container.event_bus is None:
+            container.event_bus = EventBus()
+        if container.stream is None:
+            container.stream = StreamManager(event_bus=container.event_bus)
+
+        data_root = settings.data_root
+        for sub in ("library", "mechanics", "plugins", "config/plugins"):
+            (data_root / sub).mkdir(parents=True, exist_ok=True)
+
+        if container.state_store is None:
+            container.state_store = StateStore(db=db, data_root=data_root)
+        if container.library is None:
+            container.library = LibraryService(container.state_store)
+        if container.setting is None:
+            container.setting = SettingService(container.library)
+        if container.mechanics is None:
+            container.mechanics = MechanicsService(
+                MechanicsConfig.for_data_root(data_root),
+                state_store=container.state_store,
+            )
+            try:
+                await container.mechanics.rescan()
+            except Exception:
+                log.exception("mechanics rescan failed at startup")
+        if container.plugins is None:
+            container.plugins = PluginsService(PluginsConfig.for_data_root(data_root))
+            try:
+                await container.plugins.rescan()
+            except Exception:
+                log.exception("plugins rescan failed at startup")
+        if container.characters is None:
+            container.characters = CharactersService(container.library, container.mechanics)
+        if container.scenes is None:
+            container.scenes = SceneManager(data_root, event_bus=container.event_bus)
+        if container.continuity is None:
+            # In-memory store by default — facts/commitments don't persist
+            # across restart. Swap in SqliteContinuityStore when persistence
+            # matters.
+            container.continuity = ContinuityService()
+        if container.imagegen is None:
+            # No image-generation backends registered. /images endpoints (read)
+            # work against the SQLite index; generation requests will fail
+            # until a backend plugin is installed and registered with the
+            # registry.
+            container.imagegen = ImageGenService(
+                store=container.state_store,
+                registry=BackendRegistry(),
+                default_backend_id="none",
+                event_bus=container.event_bus,
+            )
+
+        # Seed default library assets (style guides, etc.) and run one scan
+        # so the library_index is populated. We don't start the live
+        # watchdog observer here — file changes during runtime won't
+        # auto-index, but in-app writes go through StateStore which updates
+        # the index directly.
+        _seed_defaults(data_root)
+        file_watcher = FileWatcher(
+            data_root=data_root, store=container.state_store, bus=container.event_bus
+        )
+        try:
+            await file_watcher.scan_now()
+        except Exception:
+            log.exception("initial library scan failed at startup")
+
+        app.state.container = container
+    except Exception:
+        # Tear down anything we managed to construct before re-raising,
+        # otherwise the connection pool stays open and any partially-built
+        # service that holds resources (imagegen workers, stream subscribers)
+        # leaks for the life of the process.
+        await _shutdown(container, db)
+        raise
 
     try:
         yield
     finally:
+        await _shutdown(container, db)
+
+
+async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
+    if container is not None:
         if container.imagegen is not None:
-            await container.imagegen.aclose()
+            try:
+                await container.imagegen.aclose()
+            except Exception:
+                log.exception("imagegen aclose failed during shutdown")
         if container.stream is not None:
-            await container.stream.aclose()
+            try:
+                await container.stream.aclose()
+            except Exception:
+                log.exception("stream aclose failed during shutdown")
+    try:
         await db.close()
+    except Exception:
+        log.exception("db close failed during shutdown")
 
 
 def create_app() -> FastAPI:
