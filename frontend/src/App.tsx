@@ -5,7 +5,7 @@ import { CampaignCreate } from "./routes/CampaignCreate";
 import { CampaignSettings } from "./routes/CampaignSettings";
 import { CampaignPlayRoute, CampaignView } from "./routes/CampaignView";
 import { CampaignsView } from "./routes/CampaignsView";
-import { HomeRedirect } from "./routes/HomeRedirect";
+import { Home } from "./routes/Home";
 import { LibraryRoutes } from "./routes/library";
 import { NotFound } from "./routes/NotFound";
 import { CastView } from "./routes/campaign/CastView";
@@ -25,7 +25,7 @@ export function App() {
         <BrowserRouter>
           <Routes>
             <Route element={<AppShell />}>
-              <Route index element={<HomeRedirect />} />
+              <Route index element={<Home />} />
               <Route path="library/*" element={<LibraryRoutes />} />
               <Route path="campaigns" element={<CampaignsView />} />
               <Route path="campaigns/new" element={<CampaignCreate />} />
