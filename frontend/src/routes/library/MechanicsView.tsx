@@ -44,6 +44,7 @@ function MechanicsList() {
         Mechanics modules ship as Python packages dropped into <code>data/mechanics/</code>. Install
         or remove a module on disk and rescan.
       </p>
+      <MechanicsRequirements />
       {rescanErr && (
         <p className="library-error" role="alert">
           {rescanErr}
@@ -183,6 +184,105 @@ function ModuleDetailCard({ module: m }: { module: RegisteredModule }) {
         </p>
       </Section>
     </div>
+  );
+}
+
+function MechanicsRequirements() {
+  return (
+    <details className="mechanics-requirements">
+      <summary>What a mechanics module requires</summary>
+      <div className="mechanics-requirements-body">
+        <p>
+          A module lives in <code>data/mechanics/&lt;id&gt;/</code>. The directory name must match
+          the manifest <code>id</code>. The loader rejects modules whose manifest fails schema
+          validation or whose entry class does not satisfy the <code>MechanicsModule</code>{" "}
+          protocol.
+        </p>
+
+        <h5>Directory layout</h5>
+        <pre className="preset-text">{`data/mechanics/<id>/
+  manifest.yaml      # required — module metadata
+  mechanics.py       # required — defines Mechanics / MECHANICS / MechanicsModule
+  sheets/            # JSON Schema files per declared sheet kind
+    <kind>.json`}</pre>
+
+        <h5>
+          Required <code>manifest.yaml</code> fields
+        </h5>
+        <ul className="mechanics-requirements-list">
+          <li>
+            <code>id</code> — lowercase slug matching <code>^[a-z0-9][a-z0-9_-]*$</code>; must
+            equal the directory name.
+          </li>
+          <li>
+            <code>name</code> — non-empty display name.
+          </li>
+          <li>
+            <code>version</code> — semver, e.g. <code>1.0.0</code>.
+          </li>
+          <li>
+            <code>api_version</code> — currently only <code>"1"</code> is supported.
+          </li>
+        </ul>
+
+        <h5>Optional manifest fields</h5>
+        <ul className="mechanics-requirements-list">
+          <li>
+            <code>author</code>, <code>homepage</code>, <code>description</code> — surfaced in the
+            module detail view.
+          </li>
+          <li>
+            <code>sheet_kinds</code> — entity kinds the module supplies a sheet schema for (e.g.{" "}
+            <code>character</code>, <code>item</code>).
+          </li>
+          <li>
+            <code>content_kinds</code> — content types the module owns (e.g. <code>spells</code>,{" "}
+            <code>disciplines</code>).
+          </li>
+          <li>
+            <code>capabilities</code> — declared system capabilities (e.g. <code>dice</code>,{" "}
+            <code>combat</code>, <code>character_creation</code>).
+          </li>
+          <li>
+            <code>ui.theme_css</code> — path to a CSS file scoped under{" "}
+            <code>.mechanics-&lt;id&gt;</code> at render time.
+          </li>
+          <li>
+            <code>entry_class</code> — overrides the default class lookup in{" "}
+            <code>mechanics.py</code>.
+          </li>
+        </ul>
+
+        <h5>
+          Required <code>mechanics.py</code> entry
+        </h5>
+        <p>
+          Define one of <code>MECHANICS</code> (instance), <code>Mechanics</code> (class), or{" "}
+          <code>MechanicsModule</code> (class), or set <code>entry_class</code> in the manifest. The
+          resulting instance must expose:
+        </p>
+        <ul className="mechanics-requirements-list">
+          <li>
+            String attributes: <code>id</code>, <code>name</code>, <code>version</code>,{" "}
+            <code>api_version</code> — and <code>instance.id</code> must match{" "}
+            <code>manifest.id</code>.
+          </li>
+          <li>
+            Methods: <code>sheet_schema</code>, <code>validate_sheet</code>,{" "}
+            <code>initialize_sheet</code>, <code>list_content_kinds</code>,{" "}
+            <code>content_schema</code>, <code>capabilities_of</code>,{" "}
+            <code>power_definitions</code>, <code>power_definition</code>,{" "}
+            <code>evaluate_pre_roll</code>, <code>resolve_roll</code>,{" "}
+            <code>validate_narrated_event</code>, <code>character_creation_steps</code>,{" "}
+            <code>time_tick</code>, <code>system_summary</code>.
+          </li>
+        </ul>
+
+        <p className="library-status">
+          See <code>specs/06-mechanics.md</code> for the full protocol reference.
+        </p>
+      </div>
+    </details>
   );
 }
 
