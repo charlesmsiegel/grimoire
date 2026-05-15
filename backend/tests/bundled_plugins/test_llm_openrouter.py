@@ -49,7 +49,7 @@ def test_manifest_loads_and_protocol_satisfied() -> None:
 def test_defaults_picked_up_from_manifest(openrouter_module) -> None:
     provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
     assert provider._base_url == "https://openrouter.ai/api/v1"
-    assert provider._default_model == "anthropic/claude-sonnet-4-6"
+    assert provider._active_model == "anthropic/claude-sonnet-4-6"
 
 
 def test_extra_headers_and_referer_applied(openrouter_module) -> None:
@@ -69,7 +69,7 @@ def test_extra_headers_and_referer_applied(openrouter_module) -> None:
 @pytest.mark.asyncio
 async def test_complete_posts_chat_completions(openrouter_module) -> None:
     provider = openrouter_module.OpenRouterLLMProvider(
-        config={"api_key": "sk-or-x", "default_model": "openai/gpt-4o"}
+        config={"api_key": "sk-or-x", "active_model": "openai/gpt-4o"}
     )
 
     def _handler(request: httpx.Request) -> httpx.Response:

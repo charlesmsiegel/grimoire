@@ -3,6 +3,7 @@ import { Link, Route, Routes, useParams } from "react-router-dom";
 
 import { ApiError, type PluginKind, type PluginManifest, pluginsApi } from "../../api/library";
 import { useResource } from "../../api/useResource";
+import { PluginModelPicker } from "../../components/PluginModelPicker";
 import { AsyncBoundary } from "./AsyncBoundary";
 
 const KINDS: { kind: PluginKind | "all"; label: string }[] = [
@@ -234,6 +235,7 @@ function PluginConfigForm({ plugin }: { plugin: PluginManifest }) {
         {propertyKeys.map((key) => (
           <SchemaField
             key={key}
+            pluginId={plugin.id}
             name={key}
             schema={properties[key] ?? {}}
             required={required.has(key)}
@@ -278,12 +280,14 @@ function initialDraft(properties: Record<string, JsonSchema>): Record<string, un
 }
 
 function SchemaField({
+  pluginId,
   name,
   schema,
   required,
   value,
   onChange,
 }: {
+  pluginId: string;
   name: string;
   schema: JsonSchema;
   required: boolean;
@@ -294,6 +298,19 @@ function SchemaField({
   const label = schema.title ?? name;
   const placeholder = schema.description ?? "";
   const isSecret = schema.format === "password" || /secret|token|key/i.test(name);
+
+  if (schema["x-source"] === "models") {
+    return (
+      <PluginModelPicker
+        pluginId={pluginId}
+        label={label}
+        description={schema.description}
+        required={required}
+        value={typeof value === "string" ? value : ""}
+        onChange={onChange}
+      />
+    );
+  }
 
   if (Array.isArray(schema.enum) && schema.enum.length > 0) {
     return (
@@ -387,3 +404,4 @@ function SchemaField({
     </label>
   );
 }
+

@@ -347,12 +347,67 @@ async def configure_plugin(
     return {"ok": True}
 
 
+@router.patch("/plugins/{plugin_id}/config")
+async def patch_plugin_config(
+    plugin_id: str,
+    plugins: PluginsDep,
+    patch: Annotated[dict[str, Any], Body()],
+) -> Any:
+    """Merge ``patch`` into the saved plugin config and save the result.
+
+    Used by inline editors (e.g. the Providers tab's model picker) that
+    want to change one field without re-supplying secrets the UI never
+    received in the first place.
+    """
+    manifest = await plugins.get_manifest(plugin_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"plugin {plugin_id!r} not loaded")
+    try:
+        current = await plugins.get_config(plugin_id)
+        merged = {**current, **patch}
+        # Drop keys the manifest no longer declares. This makes field
+        # renames (e.g. default_model -> active_model) graceful: the
+        # stale on-disk key is filtered out instead of tripping the
+        # ``additionalProperties: false`` validator.
+        schema = manifest.config_schema or {}
+        properties = schema.get("properties") if isinstance(schema, dict) else None
+        if isinstance(properties, dict) and schema.get("additionalProperties") is False:
+            merged = {k: v for k, v in merged.items() if k in properties}
+        await plugins.set_config(plugin_id, merged)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {"ok": True}
+
+
 @router.get("/plugins/{plugin_id}/health")
 async def plugin_health(plugin_id: str, plugins: PluginsDep) -> Any:
     try:
         return to_payload(await plugins.health_check(plugin_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+
+
+@router.get("/plugins/{plugin_id}/models")
+async def plugin_models(plugin_id: str, plugins: PluginsDep) -> Any:
+    """List models advertised by an LLM-provider plugin.
+
+    Used by the frontend plugin-config form to populate a searchable model
+    picker for fields annotated with ``x-source: models``. Returns 404 if
+    the plugin is not loaded or does not implement ``llm_provider``; a
+    plugin whose provider raises (e.g. missing API key) is surfaced as a
+    409 so the UI can show "configure the plugin first".
+    """
+    provider = plugins.get_llm_provider(plugin_id)
+    if provider is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"plugin {plugin_id!r} is not a loaded LLM provider",
+        )
+    try:
+        models = await provider.list_models()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return to_payload(models)
 
 
 def _secret_property_names(schema: dict[str, Any]) -> set[str]:
