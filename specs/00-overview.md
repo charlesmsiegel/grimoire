@@ -350,6 +350,7 @@ Supporting modules (cross-cut concerns): **Plugins** (manages plugin lifecycle),
 | 16 | Observability | Audit, replay, metrics |
 | 17 | Testing | Test strategy |
 | 18 | Library | File layout, watcher, index |
+| 19 | External Influences | Adopted patterns, rejected anti-patterns, boundary tests |
 
 ### Communication
 
@@ -531,5 +532,6 @@ Numerical order is historical; conceptual order:
 17. **15-plugins.md** — plugin lifecycle (adapter-shaped only)
 18. **16-observability.md** — audit, replay, metrics
 19. **17-testing.md** — test strategy
+20. **19-external-influences.md** — what Grimoire takes from neighbor projects (SillyTavern, Marinara) and what it explicitly rejects
 
 When other specs disagree with this overview, this overview wins until they're updated.
