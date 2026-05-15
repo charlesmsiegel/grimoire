@@ -10,7 +10,7 @@ interface NavSection {
 }
 
 const navSections: NavSection[] = [
-  { label: "Library", to: "/library", description: "Settings, style guides, plugins", icon: "L" },
+  { label: "Library", to: "/library", description: "Worlds, style guides, plugins", icon: "L" },
   { label: "Campaigns", to: "/campaigns", description: "Active plays and creation", icon: "C" },
   { label: "Settings", to: "/settings", description: "App-level configuration", icon: "S" },
 ];

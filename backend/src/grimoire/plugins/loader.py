@@ -223,7 +223,7 @@ def _instantiate(cls: type, config: dict[str, Any]) -> Any:
     if first.kind in (
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
         inspect.Parameter.KEYWORD_ONLY,
-    ) and first.name in {"config", "settings", "options"}:
+    ) and first.name in {"config", "worlds", "options"}:
         return cls(**{first.name: config})
     if (
         first.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD

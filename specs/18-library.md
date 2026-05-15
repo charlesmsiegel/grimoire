@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The Library holds the content campaigns play with: settings (each containing characters, items, locations, lore, factions, greetings) and top-level style guides and image presets. Library content lives as markdown + YAML files on disk; the State Store indexes them into SQLite for queries, but the files are the authoritative source.
+The Library holds the content campaigns play with: worlds (each containing characters, items, locations, lore, factions, greetings) and top-level style guides and image presets. Library content lives as markdown + YAML files on disk; the State Store indexes them into SQLite for queries, but the files are the authoritative source.
 
 The Library is one of three scopes in Grimoire's architecture:
 - **Library** (this spec): user-authored content, files on disk
@@ -15,9 +15,9 @@ This spec is foundational. Specs 00, 03, 08, 09, and 14 are written assuming the
 
 ```
 data/library/
-├── settings/
+├── worlds/
 │   ├── wod-london/
-│   │   ├── setting.yaml              # metadata, calendar, atmosphere
+│   │   ├── world.yaml              # metadata, calendar, atmosphere
 │   │   ├── characters/
 │   │   │   ├── alistair-hyde-smythe.md
 │   │   │   ├── prince-of-london.md
@@ -48,11 +48,11 @@ data/library/
     └── modern-cinematic.yaml
 ```
 
-A setting is one directory with a standard internal layout. Style guides and image presets are top-level because they may be useful across settings.
+A world is one directory with a standard internal layout. Style guides and image presets are top-level because they may be useful across worlds.
 
 ## Entity kinds
 
-Each setting can hold any subset of these entity kinds; absent subdirectories are simply empty:
+Each world can hold any subset of these entity kinds; absent subdirectories are simply empty:
 
 | Kind | What it holds | Mechanics may extend? |
 |---|---|---|
@@ -67,7 +67,7 @@ Items as a first-class entity kind is new in this architecture. Named items (a f
 
 ## File formats
 
-### `setting.yaml`
+### `world.yaml`
 
 ```yaml
 id: wod-london
@@ -95,10 +95,10 @@ defaults:
   default_style_guide_id: gothic-horror
   default_image_preset_id: oil-painting
 
-version: 3                              # increments when any file in this setting changes
+version: 3                              # increments when any file in this world changes
 ```
 
-### Character cards (`<setting>/characters/<id>.md`)
+### Character cards (`<world>/characters/<id>.md`)
 
 YAML frontmatter for structured fields; markdown body for prose.
 
@@ -145,7 +145,7 @@ image:
 
 Mechanical sheets for this character don't live in the library file — they live as separate YAML files under a campaign's `sheets/characters/` directory, keyed by the active mechanics module. The character file is the narrative card; the sheet is the system-specific overlay.
 
-### Location cards (`<setting>/locations/<id>.md`)
+### Location cards (`<world>/locations/<id>.md`)
 
 ```markdown
 ---
@@ -177,7 +177,7 @@ The market thrums after dark — a hundred tongues, the canal's slow water, the 
 ...
 ```
 
-### Item cards (`<setting>/items/<id>.md`)
+### Item cards (`<world>/items/<id>.md`)
 
 ```markdown
 ---
@@ -196,7 +196,7 @@ A single-edged knife in a fishskin sheath, the steel cold even in summer...
 
 Like characters and locations, items get optional mechanical sheets attached per campaign via the mechanics module — a WoD campaign might attach a weapon sheet (damage, range, conceal); an Ars Magica campaign might attach an Enchanted Item sheet (effects, level, opening enchantments). The library card describes what the item *is*; the sheet describes what it *does* under a system.
 
-### Lore (`<setting>/lore/<id>.md`)
+### Lore (`<world>/lore/<id>.md`)
 
 ```markdown
 ---
@@ -215,9 +215,9 @@ The first law of the Camarilla: do not reveal the existence of vampires to morta
 ...
 ```
 
-Lore entries have `keywords` that trigger archive-tier inclusion when they appear in recent posts. SillyTavern lorebook pattern, scoped to settings.
+Lore entries have `keywords` that trigger archive-tier inclusion when they appear in recent posts. SillyTavern lorebook pattern, scoped to worlds.
 
-### Factions (`<setting>/factions/<id>.md`)
+### Factions (`<world>/factions/<id>.md`)
 
 ```markdown
 ---
@@ -237,7 +237,7 @@ tags: [vampire, traditionalist, hierarchical]
 
 Faction identity is library; faction *state* (current goals, focus, resources, public perception) is per-campaign and lives in SQLite.
 
-### Greetings (`<setting>/greetings/<id>.md`)
+### Greetings (`<world>/greetings/<id>.md`)
 
 ```markdown
 ---
@@ -279,7 +279,7 @@ light quality, sound at the edge of hearing. Dialogue tags minimal.
 - Violence is felt, not catalogued. Damage is described in terms of what it costs,
   not in mechanical detail.
 - Mortal characters are clearly mortal — no instinctive supernatural knowledge.
-- Period and place: contemporary; British vocabulary where setting is London.
+- Period and place: contemporary; British vocabulary where world is London.
 ```
 
 ### Image presets (`library/image-presets/<id>.yaml`)
@@ -308,11 +308,11 @@ At startup the app scans `data/library/` and parses every file. Each entity is i
 
 ```sql
 CREATE TABLE library_index (
-  id TEXT PRIMARY KEY,                  -- composite path, e.g. "settings/wod-london/characters/alistair-hyde-smythe"
-  setting_id TEXT,                      -- "wod-london"; null for top-level (style-guides, image-presets)
+  id TEXT PRIMARY KEY,                  -- composite path, e.g. "worlds/wod-london/characters/alistair-hyde-smythe"
+  world_id TEXT,                      -- "wod-london"; null for top-level (style-guides, image-presets)
   kind TEXT NOT NULL,                   -- 'character', 'item', 'location', 'lore', 'faction', 'greeting',
-                                        --   'setting', 'style_guide', 'image_preset'
-  asset_id TEXT NOT NULL,               -- "alistair-hyde-smythe"; used for cross-setting variant lookup
+                                        --   'world', 'style_guide', 'image_preset'
+  asset_id TEXT NOT NULL,               -- "alistair-hyde-smythe"; used for cross-world variant lookup
   name TEXT,
   path TEXT NOT NULL,                   -- absolute file path
   frontmatter JSON NOT NULL,
@@ -326,9 +326,9 @@ CREATE TABLE library_index (
   version INTEGER NOT NULL
 );
 
-CREATE INDEX idx_libidx_setting ON library_index(setting_id);
+CREATE INDEX idx_libidx_world ON library_index(world_id);
 CREATE INDEX idx_libidx_kind ON library_index(kind);
-CREATE INDEX idx_libidx_asset ON library_index(asset_id);    -- for cross-setting variant lookup
+CREATE INDEX idx_libidx_asset ON library_index(asset_id);    -- for cross-world variant lookup
 
 CREATE VIRTUAL TABLE library_index_fts USING fts5(
   name, body, tags, keywords,
@@ -349,29 +349,29 @@ A file watcher (Python `watchdog`) monitors `data/library/`. On change:
 
 `library_file_changed` events flow to the Frontend (library views update in real time) and to campaigns (pinned ones surface upgrade prompts).
 
-## Character variants across settings — by shared id, not a family field
+## Character variants across worlds — by shared id, not a family field
 
-There is **no `family_id` field**. Variants of the same character across settings are recognized by sharing the same asset id. If both `settings/faerun/characters/drizzt.md` and `settings/mythic-europe/characters/drizzt.md` exist with id `drizzt`, the app queries `library_index WHERE kind = 'character' AND asset_id = 'drizzt'` and surfaces them as variants.
+There is **no `family_id` field**. Variants of the same character across worlds are recognized by sharing the same asset id. If both `worlds/faerun/characters/drizzt.md` and `worlds/mythic-europe/characters/drizzt.md` exist with id `drizzt`, the app queries `library_index WHERE kind = 'character' AND asset_id = 'drizzt'` and surfaces them as variants.
 
-UI shows "Drizzt (faerun) — also exists in: mythic-europe." Each variant is fully independent. Editing one has no effect on others. If you rename a character in one setting, the link breaks (cost of renaming). If you want variants kept in voice-sync, that's manual.
+UI shows "Drizzt (faerun) — also exists in: mythic-europe." Each variant is fully independent. Editing one has no effect on others. If you rename a character in one world, the link breaks (cost of renaming). If you want variants kept in voice-sync, that's manual.
 
 Same id-matching applies to items, locations, lore, factions. The id is the link. Nothing else.
 
 ## Composition (campaign references library)
 
-A campaign references one or more library settings, plus optional style guide and image preset, plus exactly one mechanics choice (a module id, or `null`):
+A campaign references one or more library worlds, plus optional style guide and image preset, plus exactly one mechanics choice (a module id, or `null`):
 
 ```python
 @dataclass
 class Composition:
-    settings: list[SettingRef]
+    worlds: list[WorldRef]
     mechanics: Optional[str]               # mechanics module id, or None
     style_guide_id: Optional[str]
     image_preset_id: Optional[str]
 
 @dataclass
-class SettingRef:
-    setting_id: str
+class WorldRef:
+    world_id: str
     priority: int                          # 1 = highest
     include: list[str]                     # ['characters', 'items', 'locations', 'lore', 'factions', 'greetings']
                                            # default: all
@@ -379,14 +379,14 @@ class SettingRef:
     track_latest: bool                     # if true, always read latest from library_index
 ```
 
-Most campaigns have one `SettingRef` with everything included. Crossovers compose multiple refs, often with `include` filters to pull different kinds from different settings.
+Most campaigns have one `WorldRef` with everything included. Crossovers compose multiple refs, often with `include` filters to pull different kinds from different worlds.
 
 ### Read cascade
 
 ```
 1. Look in SQLite for a campaign-local emergent entity matching the ID.
-2. If not found, walk the campaign's setting refs in priority order:
-   For each ref, query library_index filtered by setting_id and kind (respecting include).
+2. If not found, walk the campaign's world refs in priority order:
+   For each ref, query library_index filtered by world_id and kind (respecting include).
 3. Return the first match.
 4. Apply any campaign-local override (in campaigns/<id>/overrides/) on top.
 5. If nothing matches anywhere, the entity is missing.
@@ -394,15 +394,15 @@ Most campaigns have one `SettingRef` with everything included. Crossovers compos
 
 ### Overrides
 
-A campaign edit to a library entity creates a campaign-local override file at `data/campaigns/<id>/overrides/settings/<setting>/<kind>/<entity>.yaml`. The library file is untouched. The override is a YAML patch with only the changed fields.
+A campaign edit to a library entity creates a campaign-local override file at `data/campaigns/<id>/overrides/worlds/<world>/<kind>/<entity>.yaml`. The library file is untouched. The override is a YAML patch with only the changed fields.
 
-Setting / Characters modules apply the patch when returning the entity to callers.
+World / Characters modules apply the patch when returning the entity to callers.
 
 A "Save back to library" action propagates an override into the underlying library file (writes the file, increments version, clears the override).
 
 ### Version pinning
 
-Each setting ref records `bound_at_version`. When the underlying setting changes:
+Each world ref records `bound_at_version`. When the underlying world changes:
 
 - `track_latest: true` → reads current files immediately
 - `track_latest: false` (default) → continues reading at `bound_at_version` until explicit upgrade
@@ -435,18 +435,18 @@ async def promote_to_library(
     campaign_id: str,
     entity_kind: str,                  # 'character', 'item', 'location', 'lore', 'faction'
     campaign_entity_id: str,
-    target_setting_id: str,
+    target_world_id: str,
 ) -> str:                              # returns library path
     # 1. Read the entity from campaign-local SQLite/files
     # 2. Render to markdown + YAML frontmatter
-    # 3. Write to data/library/settings/<target>/<kind>/<id>.md
+    # 3. Write to data/library/worlds/<target>/<kind>/<id>.md
     # 4. Watcher picks it up; library_index gains a row
     # 5. Replace campaign-local record with a reference to the library row
     #    (or convert to an override if the campaign has continued mutations)
     # 6. Migrate embeddings; relink
 ```
 
-UI: in the campaign's Cast / World view, an emergent entity has a "Promote to library..." action. Selecting a target setting shows the diff and confirms.
+UI: in the campaign's Cast / World view, an emergent entity has a "Promote to library..." action. Selecting a target world shows the diff and confirms.
 
 Demote (reverse promotion) is supported: remove from library (delete file). Campaigns that referenced it get a dangling-ref warning and an option to copy down to campaign-local.
 
@@ -455,14 +455,14 @@ Demote (reverse promotion) is supported: remove from library (delete file). Camp
 ```python
 class Library(Protocol):
     # Discovery / listing
-    async def list_settings(self) -> list[SettingMeta]: ...
-    async def get_setting(self, setting_id: str) -> SettingMeta: ...
-    async def list_in_setting(
+    async def list_worlds(self) -> list[WorldMeta]: ...
+    async def get_world(self, world_id: str) -> WorldMeta: ...
+    async def list_in_world(
         self,
-        setting_id: str,
+        world_id: str,
         kind: str,                        # 'character', 'item', 'location', 'lore', 'faction', 'greeting'
     ) -> list[LibraryEntity]: ...
-    async def get_entity(self, setting_id: str, kind: str, entity_id: str) -> LibraryEntity: ...
+    async def get_entity(self, world_id: str, kind: str, entity_id: str) -> LibraryEntity: ...
 
     # Top-level assets
     async def list_style_guides(self) -> list[LibraryEntity]: ...
@@ -470,18 +470,18 @@ class Library(Protocol):
     async def get_style_guide(self, id: str) -> LibraryEntity: ...
     async def get_image_preset(self, id: str) -> LibraryEntity: ...
 
-    # Greetings (setting-level)
-    async def list_greetings(self, setting_id: str) -> list[Greeting]: ...
-    async def get_greeting(self, setting_id: str, id: str) -> Greeting: ...
+    # Greetings (world-level)
+    async def list_greetings(self, world_id: str) -> list[Greeting]: ...
+    async def get_greeting(self, world_id: str, id: str) -> Greeting: ...
 
-    # Cross-setting variant lookup (id-based)
+    # Cross-world variant lookup (id-based)
     async def variants_of(self, asset_id: str, kind: str) -> list[LibraryEntity]: ...
 
     # Writes (mediated; writes the file, updates the index)
-    async def create_setting(self, id: str, meta: dict) -> SettingMeta: ...
+    async def create_world(self, id: str, meta: dict) -> WorldMeta: ...
     async def create_entity(
         self,
-        setting_id: str,
+        world_id: str,
         kind: str,
         entity_id: str,
         frontmatter: dict,
@@ -489,13 +489,13 @@ class Library(Protocol):
     ) -> LibraryEntity: ...
     async def update_entity(
         self,
-        setting_id: str,
+        world_id: str,
         kind: str,
         entity_id: str,
         frontmatter_patch: Optional[dict] = None,
         body: Optional[str] = None,
     ) -> LibraryEntity: ...
-    async def delete_entity(self, setting_id: str, kind: str, entity_id: str) -> None: ...
+    async def delete_entity(self, world_id: str, kind: str, entity_id: str) -> None: ...
 
     # Promotion
     async def promote_to_library(
@@ -503,19 +503,19 @@ class Library(Protocol):
         campaign_id: str,
         entity_kind: str,
         campaign_entity_id: str,
-        target_setting_id: str,
+        target_world_id: str,
     ) -> str: ...
 
     # Composition (per-campaign)
     async def get_composition(self, campaign_id: str) -> Composition: ...
     async def set_composition(self, campaign_id: str, composition: Composition) -> None: ...
-    async def upgrade_setting_ref(
+    async def upgrade_world_ref(
         self,
         campaign_id: str,
-        setting_id: str,
+        world_id: str,
     ) -> UpgradeReport: ...
 
-    # Resolution (used by Setting, Characters, Context Builder)
+    # Resolution (used by World, Characters, Context Builder)
     async def resolve(
         self,
         entity_id: str,
@@ -523,7 +523,7 @@ class Library(Protocol):
     ) -> ResolvedEntity: ...
 
     # Dependents (who's using this library entity)
-    async def dependents(self, setting_id: str, kind: str, entity_id: str) -> list[CampaignRef]: ...
+    async def dependents(self, world_id: str, kind: str, entity_id: str) -> list[CampaignRef]: ...
 ```
 
 ## Configuration
@@ -556,9 +556,9 @@ library:
 ## Open questions (deferred)
 
 - **Multi-library setups.** v1 has one library root. Multi-library (e.g., per-project libraries) is a future option; schema supports it via a `library_root` qualifier.
-- **Library sharing.** Zip a setting folder, share it, unzip into another user's library. Supported by structure; no other tooling for v1.
-- **Renaming and variant links.** If a user renames `drizzt` → `drizzt-do-urden` in one setting, the id-based variant link breaks. A `rename` operation that updates references is a v2 idea.
-- **Setting forks.** Easy via directory copy + id rewrite. The app offers a "fork setting" action.
-- **Cross-variant location families.** If the pattern "the same place exists across setting variants with different mechanical layers" proves common, a v2 sync feature might help. For now: independent files with shared ids.
+- **Library sharing.** Zip a world folder, share it, unzip into another user's library. Supported by structure; no other tooling for v1.
+- **Renaming and variant links.** If a user renames `drizzt` → `drizzt-do-urden` in one world, the id-based variant link breaks. A `rename` operation that updates references is a v2 idea.
+- **World forks.** Easy via directory copy + id rewrite. The app offers a "fork world" action.
+- **Cross-variant location families.** If the pattern "the same place exists across world variants with different mechanical layers" proves common, a v2 sync feature might help. For now: independent files with shared ids.
 - **Parameterized greetings.** Runtime parameters ("a greeting templated with the PC's name and chosen patron"). v2.
 - **Snapshot deduplication.** Pinned snapshots can duplicate a lot. Content-addressed snapshot store keyed by hash is a clear v2 optimization.

@@ -2,13 +2,13 @@
 
 Library content layout (singular ``kind`` → plural directory)::
 
-    data/library/settings/<setting>/characters/<id>.md
-    data/library/settings/<setting>/items/<id>.md
-    data/library/settings/<setting>/locations/<id>.md
-    data/library/settings/<setting>/lore/<id>.md
-    data/library/settings/<setting>/factions/<id>.md
-    data/library/settings/<setting>/greetings/<id>.md
-    data/library/settings/<setting>/setting.yaml
+    data/library/worlds/<world>/characters/<id>.md
+    data/library/worlds/<world>/items/<id>.md
+    data/library/worlds/<world>/locations/<id>.md
+    data/library/worlds/<world>/lore/<id>.md
+    data/library/worlds/<world>/factions/<id>.md
+    data/library/worlds/<world>/greetings/<id>.md
+    data/library/worlds/<world>/world.yaml
     data/library/style-guides/<id>.md
     data/library/image-presets/<id>.yaml
 
@@ -16,13 +16,13 @@ Campaign content layout::
 
     data/campaigns/<id>/campaign.yaml
     data/campaigns/<id>/scenes/NNNN-<slug>.{md,yaml}
-    data/campaigns/<id>/overrides/settings/<setting>/<kind>/<id>.yaml
+    data/campaigns/<id>/overrides/worlds/<world>/<kind>/<id>.yaml
     data/campaigns/<id>/emergent/<kind>/<id>.md
     data/campaigns/<id>/sheets/<kind>/<id>.<mechanics-id>.yaml
     data/campaigns/<id>/images/<id>.{png,yaml}
 
 The composite ``library_id`` keys used in ``library_index.id`` look like
-``settings/<setting>/<kind>/<id>``, ``style-guides/<id>``, or
+``worlds/<world>/<kind>/<id>``, ``style-guides/<id>``, or
 ``image-presets/<id>``.
 """
 
@@ -47,7 +47,7 @@ KIND_TO_DIR: dict[str, str] = {
 DIR_TO_KIND: dict[str, str] = {v: k for k, v in KIND_TO_DIR.items()}
 
 # Allowlist of safe characters for any id that becomes a filesystem path
-# component (campaign_id, setting_id, asset_id, kind, mechanics_id, image_id).
+# component (campaign_id, world_id, asset_id, kind, mechanics_id, image_id).
 # Must start with an alphanumeric so a leading "." can't produce a dotfile,
 # and must not contain "/", "\", or null bytes — which together with the
 # leading-alnum rule also rules out "..".
@@ -71,14 +71,14 @@ class LibraryRef:
     """Parsed view of a ``library_index.id``."""
 
     library_id: str
-    setting_id: str | None  # ``None`` for top-level style-guides / image-presets
+    world_id: str | None  # ``None`` for top-level style-guides / image-presets
     kind: str  # singular: 'character', 'style_guide', 'image_preset', ...
     asset_id: str
     path_segments: tuple[str, ...]  # original path parts as they appear in the id
 
     @property
-    def is_setting_level(self) -> bool:
-        return self.setting_id is not None
+    def is_world_level(self) -> bool:
+        return self.world_id is not None
 
 
 def _normalize_kind_segment(segment: str) -> str:
@@ -95,26 +95,26 @@ def _normalize_kind_segment(segment: str) -> str:
 def parse_library_id(library_id: str) -> LibraryRef:
     """Parse a composite library id into its components.
 
-    Accepts paths of the form ``settings/<setting>/<kind>/<id>``,
+    Accepts paths of the form ``worlds/<world>/<kind>/<id>``,
     ``style-guides/<id>``, ``image-presets/<id>``, or
-    ``settings/<setting>/setting`` (for the setting card itself).
+    ``worlds/<world>/world`` (for the world card itself).
     """
     if not library_id:
         raise InvalidRefError("empty library_id")
     parts = library_id.strip("/").split("/")
     segments = tuple(parts)
 
-    if parts[0] == "settings":
+    if parts[0] == "worlds":
         if len(parts) < 2:
             raise InvalidRefError(f"malformed library_id: {library_id!r}")
-        setting_id = _validate_path_component(parts[1], name="setting_id")
-        if len(parts) == 2 or (len(parts) == 3 and parts[2] == "setting"):
-            # `settings/<setting>` or `settings/<setting>/setting`
+        world_id = _validate_path_component(parts[1], name="world_id")
+        if len(parts) == 2 or (len(parts) == 3 and parts[2] == "world"):
+            # `worlds/<world>` or `worlds/<world>/world`
             return LibraryRef(
                 library_id=library_id,
-                setting_id=setting_id,
-                kind="setting",
-                asset_id=setting_id,
+                world_id=world_id,
+                kind="world",
+                asset_id=world_id,
                 path_segments=segments,
             )
         if len(parts) < 4:
@@ -123,7 +123,7 @@ def parse_library_id(library_id: str) -> LibraryRef:
         asset_id = _validate_path_component(parts[3], name="asset_id")
         return LibraryRef(
             library_id=library_id,
-            setting_id=setting_id,
+            world_id=world_id,
             kind=kind,
             asset_id=asset_id,
             path_segments=segments,
@@ -134,7 +134,7 @@ def parse_library_id(library_id: str) -> LibraryRef:
             raise InvalidRefError(f"malformed library_id: {library_id!r}")
         return LibraryRef(
             library_id=library_id,
-            setting_id=None,
+            world_id=None,
             kind=_normalize_kind_segment(parts[0]),
             asset_id=_validate_path_component(parts[1], name="asset_id"),
             path_segments=segments,
@@ -155,34 +155,34 @@ def library_path(data_root: Path, library_id: str) -> Path:
     """Return the on-disk path for a library entity.
 
     Characters/items/locations/lore/factions/greetings live as ``.md`` files.
-    Style-guides live as ``.md`` files. Image-presets and the setting card
+    Style-guides live as ``.md`` files. Image-presets and the world card
     itself live as ``.yaml`` files.
     """
     ref = parse_library_id(library_id)
     root = library_root(data_root)
-    if ref.kind == "setting":
-        return root / "settings" / ref.setting_id / "setting.yaml"
+    if ref.kind == "world":
+        return root / "worlds" / ref.world_id / "world.yaml"
     if ref.kind == "image_preset":
         return root / "image-presets" / f"{ref.asset_id}.yaml"
     if ref.kind == "style_guide":
         return root / "style-guides" / f"{ref.asset_id}.md"
-    if ref.setting_id is None:
-        raise InvalidRefError(f"library kind {ref.kind!r} requires a setting")
+    if ref.world_id is None:
+        raise InvalidRefError(f"library kind {ref.kind!r} requires a world")
     dir_name = KIND_TO_DIR.get(ref.kind)
     if dir_name is None:
         raise InvalidRefError(f"unknown library kind {ref.kind!r}")
-    return root / "settings" / ref.setting_id / dir_name / f"{ref.asset_id}.md"
+    return root / "worlds" / ref.world_id / dir_name / f"{ref.asset_id}.md"
 
 
 def override_path(
     data_root: Path,
     campaign_id: str,
-    setting_id: str,
+    world_id: str,
     kind: str,
     asset_id: str,
 ) -> Path:
     _validate_path_component(campaign_id, name="campaign_id")
-    _validate_path_component(setting_id, name="setting_id")
+    _validate_path_component(world_id, name="world_id")
     _validate_path_component(asset_id, name="asset_id")
     dir_name = KIND_TO_DIR.get(kind, kind)
     _validate_path_component(dir_name, name="kind")
@@ -190,8 +190,8 @@ def override_path(
         campaigns_root(data_root)
         / campaign_id
         / "overrides"
-        / "settings"
-        / setting_id
+        / "worlds"
+        / world_id
         / dir_name
         / f"{asset_id}.yaml"
     )

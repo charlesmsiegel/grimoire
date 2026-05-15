@@ -1,16 +1,16 @@
-import type { SettingSummary } from "../../api/wizard";
-import type { DraftSettingRef, EntityKind, WizardDraft } from "./types";
+import type { WorldSummary } from "../../api/wizard";
+import type { DraftWorldRef, EntityKind, WizardDraft } from "./types";
 import { ENTITY_KINDS } from "./types";
 
 interface Props {
   draft: WizardDraft;
   update: (patch: Partial<WizardDraft>) => void;
-  settings: SettingSummary[];
+  worlds: WorldSummary[];
   loading: boolean;
   error: string | null;
 }
 
-function moveRef(refs: DraftSettingRef[], index: number, delta: number): DraftSettingRef[] {
+function moveRef(refs: DraftWorldRef[], index: number, delta: number): DraftWorldRef[] {
   const target = index + delta;
   if (target < 0 || target >= refs.length) return refs;
   const a = refs[index];
@@ -22,31 +22,31 @@ function moveRef(refs: DraftSettingRef[], index: number, delta: number): DraftSe
   return next.map((r, i) => ({ ...r, priority: i + 1 }));
 }
 
-export function StepComposition({ draft, update, settings, loading, error }: Props) {
-  const refs = draft.settingRefs;
-  const remaining = settings.filter((s) => !refs.find((r) => r.setting_id === s.id));
+export function StepComposition({ draft, update, worlds, loading, error }: Props) {
+  const refs = draft.worldRefs;
+  const remaining = worlds.filter((s) => !refs.find((r) => r.world_id === s.id));
 
-  const addRef = (settingId: string) => {
-    const next: DraftSettingRef[] = [
+  const addRef = (worldId: string) => {
+    const next: DraftWorldRef[] = [
       ...refs,
       {
-        setting_id: settingId,
+        world_id: worldId,
         priority: refs.length + 1,
         include: [...ENTITY_KINDS],
         track_latest: false,
       },
     ];
-    update({ settingRefs: next });
+    update({ worldRefs: next });
   };
 
   const removeRef = (index: number) => {
     const next = refs.filter((_, i) => i !== index).map((r, i) => ({ ...r, priority: i + 1 }));
-    update({ settingRefs: next });
+    update({ worldRefs: next });
   };
 
-  const patchRef = (index: number, patch: Partial<DraftSettingRef>) => {
+  const patchRef = (index: number, patch: Partial<DraftWorldRef>) => {
     const next = refs.map((r, i) => (i === index ? { ...r, ...patch } : r));
-    update({ settingRefs: next });
+    update({ worldRefs: next });
   };
 
   const toggleInclude = (index: number, kind: EntityKind) => {
@@ -62,28 +62,28 @@ export function StepComposition({ draft, update, settings, loading, error }: Pro
     <div className="wizard-step">
       <h3>Step 2 — Composition</h3>
       <p className="wizard-step-help">
-        Pick one or more library settings. Higher priority refs override lower ones during
-        resolution. Uncheck a kind to exclude it from this setting.
+        Pick one or more library worlds. Higher priority refs override lower ones during
+        resolution. Uncheck a kind to exclude it from this world.
       </p>
 
-      {loading && <p className="wizard-meta">Loading settings…</p>}
+      {loading && <p className="wizard-meta">Loading worlds…</p>}
       {error && <p className="wizard-error">{error}</p>}
 
       {refs.length === 0 ? (
-        <p className="wizard-empty">No settings yet — pick one below.</p>
+        <p className="wizard-empty">No worlds yet — pick one below.</p>
       ) : (
-        <ol className="wizard-ref-list" aria-label="Selected settings">
+        <ol className="wizard-ref-list" aria-label="Selected worlds">
           {refs.map((ref, i) => (
-            <li key={ref.setting_id} className="wizard-ref">
+            <li key={ref.world_id} className="wizard-ref">
               <div className="wizard-ref-head">
                 <span className="wizard-ref-priority">{i + 1}.</span>
-                <strong>{ref.setting_id}</strong>
+                <strong>{ref.world_id}</strong>
                 <div className="wizard-ref-actions">
                   <button
                     type="button"
                     aria-label="Move up"
                     disabled={i === 0}
-                    onClick={() => update({ settingRefs: moveRef(refs, i, -1) })}
+                    onClick={() => update({ worldRefs: moveRef(refs, i, -1) })}
                   >
                     ▲
                   </button>
@@ -91,7 +91,7 @@ export function StepComposition({ draft, update, settings, loading, error }: Pro
                     type="button"
                     aria-label="Move down"
                     disabled={i === refs.length - 1}
-                    onClick={() => update({ settingRefs: moveRef(refs, i, 1) })}
+                    onClick={() => update({ worldRefs: moveRef(refs, i, 1) })}
                   >
                     ▼
                   </button>
@@ -128,9 +128,9 @@ export function StepComposition({ draft, update, settings, loading, error }: Pro
 
       {remaining.length > 0 && (
         <div className="wizard-add-ref">
-          <label htmlFor="wizard-add-setting">Add setting</label>
+          <label htmlFor="wizard-add-world">Add world</label>
           <select
-            id="wizard-add-setting"
+            id="wizard-add-world"
             value=""
             onChange={(e) => {
               if (e.target.value) addRef(e.target.value);

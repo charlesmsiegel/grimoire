@@ -65,7 +65,7 @@ export const ENTITY_KIND_SINGULAR: Record<string, EntityKind> = {
   greetings: "greeting",
 };
 
-export interface SettingMeta {
+export interface WorldMeta {
   id: string;
   name: string;
   description: string;
@@ -79,7 +79,7 @@ export interface SettingMeta {
 
 export interface LibraryEntity {
   id: string;
-  setting_id: string | null;
+  world_id: string | null;
   kind: EntityKind | string;
   asset_id: string;
   name: string;
@@ -97,7 +97,7 @@ export interface LibraryEntity {
 
 export interface Greeting {
   id: string;
-  setting_id: string;
+  world_id: string;
   name: string;
   starting_location: string | null;
   starting_time: string | null;
@@ -164,66 +164,66 @@ export interface RescanReport {
 }
 
 // --------------------------------------------------------------------------
-// Library: settings & entities
+// Library: worlds & entities
 // --------------------------------------------------------------------------
 
 export const libraryApi = {
-  listSettings: () => request<SettingMeta[]>("GET", `/library/settings`),
-  getSetting: (settingId: string) =>
-    request<SettingMeta>("GET", `/library/settings/${encodeURIComponent(settingId)}`),
-  createSetting: (id: string, meta: Record<string, unknown>) =>
-    request<SettingMeta>("POST", `/library/settings`, { id, meta }),
-  updateSetting: (settingId: string, patch: Record<string, unknown>) =>
-    request<SettingMeta>("PATCH", `/library/settings/${encodeURIComponent(settingId)}`, {
+  listWorlds: () => request<WorldMeta[]>("GET", `/library/worlds`),
+  getWorld: (worldId: string) =>
+    request<WorldMeta>("GET", `/library/worlds/${encodeURIComponent(worldId)}`),
+  createWorld: (id: string, meta: Record<string, unknown>) =>
+    request<WorldMeta>("POST", `/library/worlds`, { id, meta }),
+  updateWorld: (worldId: string, patch: Record<string, unknown>) =>
+    request<WorldMeta>("PATCH", `/library/worlds/${encodeURIComponent(worldId)}`, {
       patch,
     }),
-  deleteSetting: (settingId: string) =>
-    request<void>("DELETE", `/library/settings/${encodeURIComponent(settingId)}`),
-  forkSetting: (settingId: string, targetId: string) =>
-    request<SettingMeta>("POST", `/library/settings/${encodeURIComponent(settingId)}/fork`, {
+  deleteWorld: (worldId: string) =>
+    request<void>("DELETE", `/library/worlds/${encodeURIComponent(worldId)}`),
+  forkWorld: (worldId: string, targetId: string) =>
+    request<WorldMeta>("POST", `/library/worlds/${encodeURIComponent(worldId)}/fork`, {
       target_id: targetId,
     }),
 
-  listEntities: (settingId: string, kindPlural: string) =>
+  listEntities: (worldId: string, kindPlural: string) =>
     request<LibraryEntity[] | Greeting[]>(
       "GET",
-      `/library/settings/${encodeURIComponent(settingId)}/${kindPlural}`,
+      `/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}`,
     ),
-  getEntity: (settingId: string, kindPlural: string, entityId: string) =>
+  getEntity: (worldId: string, kindPlural: string, entityId: string) =>
     request<LibraryEntity | Greeting>(
       "GET",
-      `/library/settings/${encodeURIComponent(settingId)}/${kindPlural}/${encodeURIComponent(entityId)}`,
+      `/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(entityId)}`,
     ),
   createEntity: (
-    settingId: string,
+    worldId: string,
     kindPlural: string,
     body: { id: string; frontmatter?: Record<string, unknown>; body?: string },
   ) =>
     request<LibraryEntity>(
       "POST",
-      `/library/settings/${encodeURIComponent(settingId)}/${kindPlural}`,
+      `/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}`,
       body,
     ),
   updateEntity: (
-    settingId: string,
+    worldId: string,
     kindPlural: string,
     entityId: string,
     body: { frontmatter_patch?: Record<string, unknown>; body?: string },
   ) =>
     request<LibraryEntity>(
       "PATCH",
-      `/library/settings/${encodeURIComponent(settingId)}/${kindPlural}/${encodeURIComponent(entityId)}`,
+      `/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(entityId)}`,
       body,
     ),
-  deleteEntity: (settingId: string, kindPlural: string, entityId: string) =>
+  deleteEntity: (worldId: string, kindPlural: string, entityId: string) =>
     request<void>(
       "DELETE",
-      `/library/settings/${encodeURIComponent(settingId)}/${kindPlural}/${encodeURIComponent(entityId)}`,
+      `/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(entityId)}`,
     ),
-  dependents: (settingId: string, kindPlural: string, entityId: string) =>
+  dependents: (worldId: string, kindPlural: string, entityId: string) =>
     request<CampaignRef[]>(
       "GET",
-      `/library/settings/${encodeURIComponent(settingId)}/${kindPlural}/${encodeURIComponent(entityId)}/dependents`,
+      `/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(entityId)}/dependents`,
     ),
 
   variants: (kindPlural: string, assetId: string) =>

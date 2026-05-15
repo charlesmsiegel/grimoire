@@ -1,7 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 
 const tabs = [
-  { to: "/library/settings", label: "Settings" },
+  { to: "/library/worlds", label: "Worlds" },
   { to: "/library/style-guides", label: "Style Guides" },
   { to: "/library/image-presets", label: "Image Presets" },
   { to: "/library/mechanics", label: "Installed Mechanics" },

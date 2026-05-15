@@ -21,12 +21,12 @@ This spec describes the *contract* between Frontend and backend modules: what da
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  LIBRARY                                                    │
-│  ├─ Settings                                                │
+│  ├─ Worlds                                                │
 │  │   ├─ wod-london                                          │
 │  │   ├─ wod-nyc                                             │
 │  │   ├─ mythic-europe                                       │
 │  │   ├─ faerun                                              │
-│  │   └─ [+ New setting]                                     │
+│  │   └─ [+ New world]                                     │
 │  ├─ Style Guides                                            │
 │  ├─ Image Presets                                           │
 │  ├─ Installed Mechanics                                     │
@@ -51,10 +51,10 @@ Switching campaigns is fast (loads the campaign's composition; scopes all reads)
 
 ## Library views
 
-### Settings
+### Worlds
 
-- List of settings (grid or list with quick stats — character count, item count, etc.)
-- Click → setting detail with tabs:
+- List of worlds (grid or list with quick stats — character count, item count, etc.)
+- Click → world detail with tabs:
   - Characters
   - Items
   - Locations
@@ -66,7 +66,7 @@ Switching campaigns is fast (loads the campaign's composition; scopes all reads)
 
 ### Per-entity-kind views
 
-Within a setting:
+Within a world:
 - Grid or list of cards
 - Click → editor with frontmatter form + markdown body
 - For characters: voice editor, image prompt template, capabilities tab (lists capabilities under each installed mechanics module that this character has a sheet for)
@@ -74,9 +74,9 @@ Within a setting:
 
 Editing a library entity that has dependent campaigns surfaces a confirmation: "edits will be visible to campaigns when they upgrade their ref; pinned campaigns continue seeing the previous version."
 
-### Cross-setting variant view
+### Cross-world variant view
 
-For characters, items, locations, etc. with shared asset id across settings, a "Variants" tab lists them with diff preview. Same id = same entity across settings; the UI is purely informational.
+For characters, items, locations, etc. with shared asset id across worlds, a "Variants" tab lists them with diff preview. Same id = same entity across worlds; the UI is purely informational.
 
 ### Style guides, image presets
 
@@ -226,10 +226,10 @@ For `mechanics: null` campaigns: a placeholder explaining "no mechanics selected
 The campaign's composition, editable:
 
 ```
-Settings (priority order):
+Worlds (priority order):
   1. wod-london          v7 [pinned] [include: all]            [▲][▼][⨯]
   2. wod-nyc             v3 [pinned] [include: locations,lore] [▲][▼][⨯]
-  [+ Add setting ref]
+  [+ Add world ref]
 
 Mechanics: wod-mechanics       [change ▼]
 Style Guide: gothic-horror     [change ▼]
@@ -294,21 +294,21 @@ REST + WebSocket. Illustrative endpoints (full API defined separately):
 ### Library
 
 ```
-GET    /library/settings
-POST   /library/settings
-GET    /library/settings/{id}
-PATCH  /library/settings/{id}
-DELETE /library/settings/{id}
-POST   /library/settings/{id}/fork
+GET    /library/worlds
+POST   /library/worlds
+GET    /library/worlds/{id}
+PATCH  /library/worlds/{id}
+DELETE /library/worlds/{id}
+POST   /library/worlds/{id}/fork
 
-GET    /library/settings/{id}/{kind}                   # kind: characters, items, locations, lore, factions, greetings
-POST   /library/settings/{id}/{kind}
-GET    /library/settings/{id}/{kind}/{entity-id}
-PATCH  /library/settings/{id}/{kind}/{entity-id}
-DELETE /library/settings/{id}/{kind}/{entity-id}
-GET    /library/settings/{id}/{kind}/{entity-id}/dependents
+GET    /library/worlds/{id}/{kind}                   # kind: characters, items, locations, lore, factions, greetings
+POST   /library/worlds/{id}/{kind}
+GET    /library/worlds/{id}/{kind}/{entity-id}
+PATCH  /library/worlds/{id}/{kind}/{entity-id}
+DELETE /library/worlds/{id}/{kind}/{entity-id}
+GET    /library/worlds/{id}/{kind}/{entity-id}/dependents
 
-GET    /library/variants/{kind}/{asset-id}             # cross-setting lookup
+GET    /library/variants/{kind}/{asset-id}             # cross-world lookup
 
 GET    /library/style-guides
 GET    /library/image-presets
@@ -331,8 +331,8 @@ DELETE /campaigns/{id}
 GET    /campaigns/{id}/composition
 PUT    /campaigns/{id}/composition
 POST   /campaigns/{id}/composition/refs
-DELETE /campaigns/{id}/composition/refs/{setting-id}
-POST   /campaigns/{id}/composition/refs/{setting-id}/upgrade
+DELETE /campaigns/{id}/composition/refs/{world-id}
+POST   /campaigns/{id}/composition/refs/{world-id}/upgrade
 
 GET    /campaigns/{id}/pcs
 POST   /campaigns/{id}/pcs
@@ -393,7 +393,7 @@ WS     /campaigns/{id}/stream                          # push events
 { "type": "scene_started", "scene_id": "...", "scene": {...} }
 { "type": "scene_ended", "scene_id": "...", "summary": "..." }
 { "type": "library_file_changed", "library_id": "...", "kind": "modified" }
-{ "type": "library_ref_upgraded", "campaign_id": "...", "setting_id": "...", "from": 3, "to": 4 }
+{ "type": "library_ref_upgraded", "campaign_id": "...", "world_id": "...", "from": 3, "to": 4 }
 { "type": "pc_post_appended", "scene_id": "...", "pc_ref": "...", "post_id": "..." }
 { "type": "advance_requested", "scene_id": "...", "turn_id": "..." }
 { "type": "advance_disabled", "scene_id": "...", "reason": "..." }
@@ -406,9 +406,9 @@ Step 1: Identity
   Name, description, tags
 
 Step 2: Composition
-  Pick settings (multi-select with priority and include filters)
-  Default flow: pick one setting → include all entity kinds
-  Advanced: multi-setting crossover with per-ref include filters
+  Pick worlds (multi-select with priority and include filters)
+  Default flow: pick one world → include all entity kinds
+  Advanced: multi-world crossover with per-ref include filters
 
 Step 3: Mechanics
   Pick one installed mechanics module, or "No mechanics (narrative only)"
@@ -499,7 +499,7 @@ A client-side store mirrors active campaign + library state:
 
 - **Single-page app vs. multi-page.** SPA fits the model; locked.
 - **Offline support.** Desktop app should work offline (local models + library files). Cloud-model dependencies surface offline mode.
-- **Library sharing.** Export/import of setting bundles between users (zip a directory). File-based; UI helpers in v2.
+- **Library sharing.** Export/import of world bundles between users (zip a directory). File-based; UI helpers in v2.
 - **Plugin UI extensions.** Mechanics-provided React components for sheets — v2; the architecture supports it.
 - **Multi-campaign quick switcher.** Cmd-K palette for jumping. Nice-to-have.
 - **Library activity feed.** Recent edits across library, affected campaigns. Useful for active multi-campaign users.

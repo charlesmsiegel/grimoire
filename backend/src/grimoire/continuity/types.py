@@ -29,7 +29,7 @@ class InGameTime:
     """Canonical in-game timestamp.
 
     `day_count` is the only field used for comparison so the Continuity
-    module never has to know about per-setting calendars. Setting-specific
+    module never has to know about per-world calendars. World-specific
     calendars convert their representation to a day count when they hand
     timestamps to Continuity.
     """

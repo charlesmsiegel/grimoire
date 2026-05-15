@@ -39,8 +39,8 @@ def get_library(request: Request) -> Any:
     return _require(get_container(request), "library")
 
 
-def get_setting(request: Request) -> Any:
-    return _require(get_container(request), "setting")
+def get_world(request: Request) -> Any:
+    return _require(get_container(request), "world")
 
 
 def get_characters(request: Request) -> Any:
@@ -89,7 +89,7 @@ def get_stream(request: Request) -> Any:
 
 ContainerDep = Annotated[ServiceContainer, Depends(get_container)]
 LibraryDep = Annotated[Any, Depends(get_library)]
-SettingDep = Annotated[Any, Depends(get_setting)]
+WorldDep = Annotated[Any, Depends(get_world)]
 CharactersDep = Annotated[Any, Depends(get_characters)]
 ScenesDep = Annotated[Any, Depends(get_scenes)]
 ContinuityDep = Annotated[Any, Depends(get_continuity)]
@@ -114,10 +114,10 @@ __all__ = [
     "OrchestratorDep",
     "PluginsDep",
     "ScenesDep",
-    "SettingDep",
     "StateStoreDep",
     "StreamDep",
     "TimeEngineDep",
+    "WorldDep",
     "get_characters",
     "get_container",
     "get_continuity",
@@ -128,8 +128,8 @@ __all__ = [
     "get_orchestrator",
     "get_plugins",
     "get_scenes",
-    "get_setting",
     "get_state_store",
     "get_stream",
     "get_time_engine",
+    "get_world",
 ]

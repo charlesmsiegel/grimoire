@@ -42,7 +42,7 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  font-feature-settings: "kern", "liga", "calt";
+  font-feature-worlds: "kern", "liga", "calt";
 }
 
 /* ----- Light (parchment) ----- */
@@ -1806,7 +1806,7 @@ pre {
 }
 
 .library-tabs,
-.setting-tabs,
+.world-tabs,
 .entity-subtabs,
 .library-subnav {
   display: flex;
@@ -1817,7 +1817,7 @@ pre {
 }
 
 .library-tab,
-.setting-tab,
+.world-tab,
 .entity-subtab,
 .library-subnav-item {
   padding: 0.35rem 0.85rem;
@@ -1837,7 +1837,7 @@ pre {
 }
 
 .library-tab:hover,
-.setting-tab:hover,
+.world-tab:hover,
 .entity-subtab:hover,
 .library-subnav-item:hover {
   background: var(--bg-sunken);
@@ -1846,7 +1846,7 @@ pre {
 }
 
 .library-tab.active,
-.setting-tab.active,
+.world-tab.active,
 .entity-subtab.active,
 .library-subnav-item.active {
   background: var(--accent-soft);
@@ -2039,22 +2039,22 @@ pre {
   color: var(--fg-muted);
 }
 
-/* ----- Setting detail ----- */
+/* ----- World detail ----- */
 
-.setting-detail-header {
+.world-detail-header {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
 }
 
-.setting-description {
+.world-description {
   margin: 0;
   color: var(--fg);
   line-height: 1.65;
   font-size: 1rem;
 }
 
-.setting-meta-line {
+.world-meta-line {
   margin: 0;
   font-size: 0.85rem;
   color: var(--fg-muted);
@@ -3110,7 +3110,7 @@ button.primary:disabled {
   margin-left: var(--space-2);
 }
 
-.setting-refs {
+.world-refs {
   list-style: none;
   padding: 0;
   margin: 0;
@@ -3119,7 +3119,7 @@ button.primary:disabled {
   gap: var(--space-2);
 }
 
-.setting-ref {
+.world-ref {
   background: var(--bg-elev);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
@@ -3127,14 +3127,14 @@ button.primary:disabled {
   box-shadow: var(--shadow-xs);
 }
 
-.setting-ref-head {
+.world-ref-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
 }
 
-.setting-ref-head .priority {
+.world-ref-head .priority {
   font-variant-numeric: tabular-nums;
   color: var(--fg-muted);
   font-family: var(--font-mono);
@@ -3739,7 +3739,7 @@ button.primary:disabled {
   gap: var(--space-3);
 }
 
-.wizard-pc-setting {
+.wizard-pc-world {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   margin: 0;
@@ -3747,12 +3747,12 @@ button.primary:disabled {
   background: var(--bg-sunken);
 }
 
-.wizard-pc-setting legend {
+.wizard-pc-world legend {
   font-weight: 600;
   padding: 0 var(--space-1);
 }
 
-.wizard-pc-setting ul {
+.wizard-pc-world ul {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -3761,7 +3761,7 @@ button.primary:disabled {
   gap: var(--space-1);
 }
 
-.wizard-pc-setting li {
+.wizard-pc-world li {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -3827,7 +3827,7 @@ button.primary:disabled {
 }
 
 /* =============================================================
-   Settings tabs
+   Worlds tabs
    ============================================================= */
 
 .tab-bar {

@@ -3,8 +3,8 @@
  * step transforms it into a `CampaignCreateInput` for the backend.
  */
 
-export interface DraftSettingRef {
-  setting_id: string;
+export interface DraftWorldRef {
+  world_id: string;
   priority: number;
   include: string[]; // empty = all kinds
   track_latest: boolean;
@@ -27,7 +27,7 @@ export interface WizardDraft {
   tags: string[];
 
   // Step 2 — composition
-  settingRefs: DraftSettingRef[];
+  worldRefs: DraftWorldRef[];
 
   // Step 3 — mechanics
   mechanicsId: string | null; // null = "No mechanics"
@@ -67,7 +67,7 @@ export function emptyDraft(): WizardDraft {
     name: "",
     description: "",
     tags: [],
-    settingRefs: [],
+    worldRefs: [],
     mechanicsId: null,
     bulkCreateSheets: true,
     pcs: [],

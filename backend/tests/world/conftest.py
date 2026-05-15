@@ -1,4 +1,4 @@
-"""Fixtures for Setting service tests."""
+"""Fixtures for World service tests."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from grimoire.library import LibraryService
-from grimoire.setting import SettingService
 from grimoire.state_store import StateStore
 from grimoire.storage import Database, apply_migrations
+from grimoire.world import WorldService
 
 
 @pytest.fixture
@@ -32,5 +32,5 @@ async def library(store: StateStore) -> LibraryService:
 
 
 @pytest.fixture
-async def setting(library: LibraryService) -> SettingService:
-    return SettingService(library)
+async def world(library: LibraryService) -> WorldService:
+    return WorldService(library)

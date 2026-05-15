@@ -23,14 +23,14 @@ function isGreeting(v: LibraryEntity | Greeting): v is Greeting {
 
 export function EntityListView({ kindOverride }: Props) {
   const params = useParams();
-  const settingId = params.settingId ?? "";
+  const worldId = params.worldId ?? "";
   const kindPlural = kindOverride ?? params.kind ?? "characters";
   const singular = ENTITY_KIND_SINGULAR[kindPlural] ?? "character";
 
   const navigate = useNavigate();
   const { data, loading, error, reload } = useResource(
-    () => libraryApi.listEntities(settingId, kindPlural),
-    [settingId, kindPlural],
+    () => libraryApi.listEntities(worldId, kindPlural),
+    [worldId, kindPlural],
   );
 
   const [creating, setCreating] = useState(false);
@@ -44,7 +44,7 @@ export function EntityListView({ kindOverride }: Props) {
     setSubmitErr(null);
     setBusy(true);
     try {
-      const created = await libraryApi.createEntity(settingId, kindPlural, {
+      const created = await libraryApi.createEntity(worldId, kindPlural, {
         id: newId.trim(),
         frontmatter: { name: newName.trim(), id: newId.trim() },
         body: "",
@@ -53,7 +53,7 @@ export function EntityListView({ kindOverride }: Props) {
       setNewId("");
       setNewName("");
       navigate(
-        `/library/settings/${encodeURIComponent(settingId)}/${kindPlural}/${encodeURIComponent(
+        `/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(
           created.asset_id,
         )}`,
       );
@@ -115,7 +115,7 @@ export function EntityListView({ kindOverride }: Props) {
             return (
               <li key={id} className="library-card">
                 <Link
-                  to={`/library/settings/${encodeURIComponent(settingId)}/${kindPlural}/${encodeURIComponent(id)}`}
+                  to={`/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(id)}`}
                 >
                   <h4>{name}</h4>
                   <small>{id}</small>

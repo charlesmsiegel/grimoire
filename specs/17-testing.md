@@ -49,8 +49,8 @@ Every module's interface is the unit boundary. Tests live alongside the module a
 | LLM Gateway | Provider adapter contract, retry policy, tokenizer cache, streaming normalization, cost computation |
 | Mechanics | (Per module) pre-roll evaluation, roll resolution determinism with fixed seed, character creation step validation, time tick effects, **sheet lookup across (character, mechanics, scope) keys** |
 | Time Engine | Significance filter, NPC tick coherence, faction tick, scheduled event triggering, commitment aging |
-| Characters | Tier recommendation, drift detection logic, voice anchor versioning, cross-setting variant resolution by shared id, import parsing, **scope-aware CRUD**, **library/campaign override semantics**, **promote-to-library**, **multi-PC coordination** |
-| Setting | Spatial queries, lore keyword matching, weather determinism (same seed = same output), calendar arithmetic, **scope filters in composition** |
+| Characters | Tier recommendation, drift detection logic, voice anchor versioning, cross-world variant resolution by shared id, import parsing, **scope-aware CRUD**, **library/campaign override semantics**, **promote-to-library**, **multi-PC coordination** |
+| World | Spatial queries, lore keyword matching, weather determinism (same seed = same output), calendar arithmetic, **scope filters in composition** |
 | Scene Manager | Boundary detection signals, summary generation triggering, scene-seed construction |
 | Continuity | Fact retirement, commitment lifecycle transitions, knowledge state filtering, contradiction reports |
 | ImageGen | Prompt composition, queue scheduling, seed reproducibility, **preset resolution from library** |
@@ -193,16 +193,16 @@ async def test_resolve_character_uses_library_with_campaign_override():
     assert resolved_a.appearance == resolved_b.appearance          # library card unchanged
 ```
 
-### Crossover composition: characters from setting A, locations from setting B
+### Crossover composition: characters from world A, locations from world B
 
 ```python
 async def test_crossover_campaign_resolves_from_multiple_assets():
     app = TestApp.with_fixtures("crossover_setup")
-    # campaign-crossover: settings=[wod-london], settings=[wod-london]
+    # campaign-crossover: worlds=[wod-london], worlds=[wod-london]
     cast = await app.characters.list_for_campaign("campaign-crossover")
-    world = await app.setting.list_locations_for_campaign("campaign-crossover")
+    world = await app.world.list_locations_for_campaign("campaign-crossover")
     assert any(c.name == "Alistair" for c in cast)                # from wod-london characters
-    assert any(l.name == "Camden Market" for l in world)           # from wod setting
+    assert any(l.name == "Camden Market" for l in world)           # from wod world
     assert not any(l.name == "Brixton" for l in world)             # wod-nyc not referenced
 ```
 
@@ -214,13 +214,13 @@ async def test_promote_campaign_local_character_to_library():
     # The Bartender was spawned mid-play in campaign-a; she is campaign-local
     new_id = await app.characters.promote_to_library(
         character_id="bartender-campaign-local",
-        target_setting_id="wod-london",
+        target_world_id="wod-london",
     )
     # In campaign-a she should now resolve to the library version
     resolved = await app.characters.resolve(new_id, campaign_id="campaign-a")
     assert resolved.scope_chain[0].scope == "library"
     # A new campaign created with wod-london should also see her
-    app.create_campaign("new-campaign", settings=["wod-london"])
+    app.create_campaign("new-campaign", worlds=["wod-london"])
     cast = await app.characters.list_for_campaign("new-campaign")
     assert any(c.id == new_id for c in cast)
 ```
@@ -247,7 +247,7 @@ async def test_pinned_campaign_sees_old_version_after_library_edit():
 ### Mechanics swap: same characters, different system
 
 ```python
-async def test_same_setting_two_campaigns_different_mechanics():
+async def test_same_world_two_campaigns_different_mechanics():
     app = TestApp.with_fixtures("wod_with_two_mechanics")
     # Both campaigns use wod-london; one uses wod, one uses another-campaign
     wod_sheet = await app.mechanics.get_sheet("alistair-hyde-smythe", campaign_id="campaign-wod")
@@ -269,7 +269,7 @@ A new fixture type combines library state with one or more campaign states:
 ```python
 @dataclass
 class LibraryCampaignFixture:
-    library_assets: list[LibraryAsset]              # settings, presets
+    library_assets: list[LibraryAsset]              # worlds, presets
     library_entities: dict[str, list]               # characters, locations, lore per asset
     character_families: list[CharacterFamily]
     campaigns: list[CampaignFixture]                # each with composition + state
@@ -392,7 +392,7 @@ To make tests reproducible:
 | LLM Gateway | Non-deterministic in real mode; deterministic in replay mode |
 | ImageGen | Backend-dependent; record/replay where needed |
 | Time Engine | Deterministic except for LLM-driven NPC ticks |
-| Setting weather | Deterministic given seed + location + time |
+| World weather | Deterministic given seed + location + time |
 
 Tests requiring non-deterministic components mock them.
 

@@ -71,7 +71,7 @@ function EntityTab({
       {(rows) => (
         <ul className="entity-grid">
           {rows.map((row) => (
-            <EntityCard key={`${row.setting_id ?? "campaign"}:${row.asset_id}`} row={row}>
+            <EntityCard key={`${row.world_id ?? "campaign"}:${row.asset_id}`} row={row}>
               {kind === "items" && row.extras && extractHolder(row.extras) && (
                 <p className="muted">Holder: {extractHolder(row.extras)}</p>
               )}
@@ -97,7 +97,7 @@ function LocationsTab({ campaignId }: { campaignId: string }) {
             </aside>
             <ul className="entity-grid">
               {rows.map((row) => (
-                <EntityCard key={`${row.setting_id ?? "campaign"}:${row.asset_id}`} row={row}>
+                <EntityCard key={`${row.world_id ?? "campaign"}:${row.asset_id}`} row={row}>
                   {extractParent(row.frontmatter) && (
                     <p className="muted">Parent: {extractParent(row.frontmatter)}</p>
                   )}
@@ -124,7 +124,7 @@ function LoreTab({ campaignId }: { campaignId: string }) {
                 <h3>{kw}</h3>
                 <ul className="entity-grid">
                   {entries.map((row) => (
-                    <EntityCard key={`${row.setting_id ?? "campaign"}:${row.asset_id}`} row={row} />
+                    <EntityCard key={`${row.world_id ?? "campaign"}:${row.asset_id}`} row={row} />
                   ))}
                 </ul>
               </section>
@@ -146,30 +146,30 @@ function GreetingsTab({ campaignId }: { campaignId: string }) {
   }
 
   return (
-    <GreetingsAcrossSettings settingIds={composition.data.settings.map((s) => s.setting_id)} />
+    <GreetingsAcrossWorlds worldIds={composition.data.worlds.map((s) => s.world_id)} />
   );
 }
 
-function GreetingsAcrossSettings({ settingIds }: { settingIds: string[] }) {
+function GreetingsAcrossWorlds({ worldIds }: { worldIds: string[] }) {
   const state = useApi<Greeting[]>(
     () =>
       Promise.all(
-        settingIds.map((id) => viewsApi.listGreetingsForSetting(id).catch(() => [])),
+        worldIds.map((id) => viewsApi.listGreetingsForWorld(id).catch(() => [])),
       ).then((lists) => lists.flat()),
-    [settingIds.join("|")],
+    [worldIds.join("|")],
   );
-  if (settingIds.length === 0) {
-    return <p className="muted">No setting refs in the composition.</p>;
+  if (worldIds.length === 0) {
+    return <p className="muted">No world refs in the composition.</p>;
   }
   return (
-    <Loading state={state} emptyMessage="No greetings declared in the composed settings.">
+    <Loading state={state} emptyMessage="No greetings declared in the composed worlds.">
       {(rows) => (
         <ul className="entity-grid">
           {rows.map((g) => (
-            <li key={`${g.setting_id}:${g.id}`} className="entity-card-static">
+            <li key={`${g.world_id}:${g.id}`} className="entity-card-static">
               <header>
                 <h4>{g.name}</h4>
-                <span className="muted">{g.setting_id}</span>
+                <span className="muted">{g.world_id}</span>
               </header>
               {g.starting_location && <p className="muted">Location: {g.starting_location}</p>}
               {g.starting_time && <p className="muted">Time: {g.starting_time}</p>}
@@ -195,7 +195,7 @@ function EntityCard({ row, children }: { row: ResolvedEntity; children?: React.R
         <h4>{row.name || row.asset_id}</h4>
         <ChainBadge chain={row.source_chain} overrides={row.overrides_applied} />
       </header>
-      {row.setting_id && <p className="muted">setting: {row.setting_id}</p>}
+      {row.world_id && <p className="muted">world: {row.world_id}</p>}
       {children}
       {row.body && (
         <details>

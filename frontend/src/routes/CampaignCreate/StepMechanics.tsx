@@ -65,7 +65,7 @@ export function StepMechanics({ draft, update, modules, loading, error }: Props)
             checked={draft.bulkCreateSheets}
             onChange={(e) => update({ bulkCreateSheets: e.target.checked })}
           />
-          <span>Bulk-create starter sheets for cast in the composed settings</span>
+          <span>Bulk-create starter sheets for cast in the composed worlds</span>
         </label>
       )}
     </div>

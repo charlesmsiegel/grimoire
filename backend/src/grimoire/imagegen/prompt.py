@@ -6,7 +6,7 @@ template), scene-specific visual elements (typically pulled from the most
 recent post), and mood/atmosphere.
 
 The composer is dependency-injection friendly so tests can drop in fakes:
-every collaborator (scene manager, library, characters, setting) is just
+every collaborator (scene manager, library, characters, world) is just
 called through ``Protocol`` shapes.
 """
 
@@ -35,7 +35,7 @@ class _LibraryProvider(Protocol):
     async def get_image_preset(self, id: str) -> Any: ...
 
 
-class _SettingProvider(Protocol):
+class _WorldProvider(Protocol):
     async def resolve(self, entity_ref: str, campaign_id: str) -> Any: ...
 
 
@@ -173,12 +173,12 @@ class PromptComposer:
         *,
         scene_manager: _SceneProvider | None = None,
         library: _LibraryProvider | None = None,
-        setting: _SettingProvider | None = None,
+        world: _WorldProvider | None = None,
         characters: _CharactersProvider | None = None,
     ) -> None:
         self.scene_manager = scene_manager
         self.library = library
-        self.setting = setting
+        self.world = world
         self.characters = characters
 
     async def compose(
@@ -208,9 +208,9 @@ class PromptComposer:
             scene_present_refs = list(getattr(scene, "present_character_refs", []) or [])
             scene_mood = str(getattr(scene, "mood", "") or "")
             location_ref = getattr(scene, "location_ref", None)
-            if location_ref and self.setting is not None:
+            if location_ref and self.world is not None:
                 try:
-                    resolved = await self.setting.resolve(location_ref, campaign_id)
+                    resolved = await self.world.resolve(location_ref, campaign_id)
                 except Exception:
                     resolved = None
                 if resolved is not None:

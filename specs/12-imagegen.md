@@ -153,7 +153,7 @@ Per-campaign, per-illustration, ImageGen builds a prompt:
 [location features]
 [present cast, with their per-character image template]
 [scene-specific elements from the LLM response]
-[mood / atmosphere from setting + scene]
+[mood / atmosphere from world + scene]
 [negative prompt from image preset and per-character templates]
 ```
 
@@ -163,7 +163,7 @@ Image presets and per-character image templates are library content. Per-scene c
 async def compose_prompt(self, scene_id: str, post_id: Optional[str] = None) -> ComposedPrompt:
     scene = await self.scene_manager.get_scene(scene_id)
     preset = await self.library.get_image_preset(scene.image_preset_id or campaign_default)
-    location = await self.setting.resolve(scene.location_ref, scene.campaign_id)
+    location = await self.world.resolve(scene.location_ref, scene.campaign_id)
     present = [await self.characters.resolve(ref, scene.campaign_id) for ref in scene.present_character_refs]
 
     prompt_parts = [preset.style_preamble]
@@ -370,4 +370,4 @@ imagegen:
 - **Animation / video.** Out of scope.
 - **NSFW handling.** Some backends gate-keep; user-configurable safety with appropriate defaults. v2.
 - **Bulk regeneration.** "Regenerate all images in this scene with the new preset." Useful, low priority.
-- **Pre-warming the integrated backend.** Loading SDXL takes time; do it on app start or lazily?  Lazily by default; user can pre-warm in settings.
+- **Pre-warming the integrated backend.** Loading SDXL takes time; do it on app start or lazily?  Lazily by default; user can pre-warm in worlds.

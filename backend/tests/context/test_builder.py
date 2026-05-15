@@ -1,6 +1,6 @@
 """Tests for ContextBuilderService.
 
-The Context Builder consumes a fan of domain modules — Characters, Setting,
+The Context Builder consumes a fan of domain modules — Characters, World,
 Scene Manager, Continuity, Library, LLM Gateway, State Store. Wiring all of
 them up for every test would be expensive; instead we hand the builder
 small stubs whose surface matches what production passes. This lets us
@@ -22,7 +22,7 @@ from grimoire.context import (
     LockInOverflowError,
     TierBudget,
 )
-from grimoire.types.composition import Composition, SettingRef
+from grimoire.types.composition import Composition, WorldRef
 from grimoire.types.mechanics import MechanicsResult, Roll, RollResult
 from grimoire.types.state import ContextTier
 
@@ -37,7 +37,7 @@ class _StyleGuide:
 
 
 @dataclass
-class _SettingMeta:
+class _WorldMeta:
     id: str
     name: str = ""
 
@@ -47,19 +47,19 @@ class StubLibrary:
         self,
         composition: Composition | None = None,
         style_guide_body: str | None = None,
-        settings: dict[str, _SettingMeta] | None = None,
+        worlds: dict[str, _WorldMeta] | None = None,
     ) -> None:
         self._composition = composition or Composition()
         self._style_guide_body = style_guide_body
-        self._settings = settings or {}
+        self._worlds = worlds or {}
 
     async def get_composition(self, campaign_id: str) -> Composition:
         return self._composition
 
-    async def get_setting(self, setting_id: str) -> _SettingMeta:
-        if setting_id not in self._settings:
-            raise KeyError(setting_id)
-        return self._settings[setting_id]
+    async def get_world(self, world_id: str) -> _WorldMeta:
+        if world_id not in self._worlds:
+            raise KeyError(world_id)
+        return self._worlds[world_id]
 
     async def get_style_guide(self, style_id: str) -> _StyleGuide:
         if self._style_guide_body is None:
@@ -98,7 +98,7 @@ class StubCharacters:
 
 @dataclass
 class _Location:
-    setting_id: str
+    world_id: str
     id: str
     name: str
     description: str = ""
@@ -112,7 +112,7 @@ class _Weather:
     kind: str = "clear"
 
 
-class StubSetting:
+class StubWorld:
     def __init__(
         self,
         locations: dict[tuple[str, str], _Location] | None = None,
@@ -125,12 +125,12 @@ class StubSetting:
         self._adjacent = adjacent or []
         self._lore = lore or []
 
-    async def get_location(self, setting_id: str, location_id: str) -> _Location:
-        return self._locations[(setting_id, location_id)]
+    async def get_location(self, world_id: str, location_id: str) -> _Location:
+        return self._locations[(world_id, location_id)]
 
     async def weather_for(
         self,
-        setting_id: str,
+        world_id: str,
         location_id: str,
         when: Any,
         campaign_id: str,
@@ -140,7 +140,7 @@ class StubSetting:
         return self._weather
 
     async def adjacent_locations(
-        self, setting_id: str, location_id: str, campaign_id: str
+        self, world_id: str, location_id: str, campaign_id: str
     ) -> list[_Location]:
         return self._adjacent
 
@@ -220,7 +220,7 @@ def _builder(**overrides: Any) -> ContextBuilderService:
     defaults: dict[str, Any] = {
         "library": StubLibrary(),
         "characters": StubCharacters(),
-        "setting": StubSetting(),
+        "world": StubWorld(),
         "scenes": StubScenes(),
         "continuity": StubContinuity(),
         "state_store": None,
@@ -248,11 +248,11 @@ async def test_system_block_includes_style_and_boundaries() -> None:
     composition = Composition(
         inline_style_guide="Present-tense prose.",
         content_boundaries="No minors in sexual contexts.",
-        settings=[SettingRef(setting_id="wod-london", priority=1)],
+        worlds=[WorldRef(world_id="wod-london", priority=1)],
     )
     library = StubLibrary(
         composition=composition,
-        settings={"wod-london": _SettingMeta(id="wod-london", name="WoD London")},
+        worlds={"wod-london": _WorldMeta(id="wod-london", name="WoD London")},
     )
     builder = _builder(library=library)
     prompt = await builder.build("scene begins", "camp")
@@ -265,9 +265,9 @@ async def test_system_block_includes_style_and_boundaries() -> None:
 async def test_active_pc_card_in_lock_in() -> None:
     chars = StubCharacters(
         cards={
-            "library:settings/wod/characters/alistair": _Card(full="# Alistair\nElder Tremere.")
+            "library:worlds/wod/characters/alistair": _Card(full="# Alistair\nElder Tremere.")
         },
-        active="library:settings/wod/characters/alistair",
+        active="library:worlds/wod/characters/alistair",
     )
     builder = _builder(characters=chars)
     prompt = await builder.build("scene begins", "camp")
@@ -280,15 +280,15 @@ async def test_active_pc_card_in_lock_in() -> None:
 async def test_present_characters_in_spotlight_only() -> None:
     chars = StubCharacters(
         cards={
-            "library:settings/wod/characters/alistair": _Card(full="# Alistair\nFull card"),
-            "library:settings/wod/characters/winifred": _Card(full="# winifred\nFull card"),
+            "library:worlds/wod/characters/alistair": _Card(full="# Alistair\nFull card"),
+            "library:worlds/wod/characters/winifred": _Card(full="# winifred\nFull card"),
         },
-        active="library:settings/wod/characters/alistair",
+        active="library:worlds/wod/characters/alistair",
     )
     scene = _Scene(
         present_character_refs=[
-            "library:settings/wod/characters/alistair",
-            "library:settings/wod/characters/winifred",
+            "library:worlds/wod/characters/alistair",
+            "library:worlds/wod/characters/winifred",
         ]
     )
     scenes = StubScenes(scene=scene)
@@ -326,8 +326,8 @@ async def test_lock_in_overflow_raises() -> None:
     config = ContextBuilderConfig()
     config.tiers[ContextTier.LOCK_IN] = TierBudget(max_tokens=2, priority="required")
     chars = StubCharacters(
-        cards={"library:settings/wod/characters/alistair": _Card(full="x" * 4000)},
-        active="library:settings/wod/characters/alistair",
+        cards={"library:worlds/wod/characters/alistair": _Card(full="x" * 4000)},
+        active="library:worlds/wod/characters/alistair",
     )
     builder = _builder(characters=chars, config=config)
     with pytest.raises(LockInOverflowError):
@@ -395,15 +395,15 @@ async def test_archive_retrieval_uses_gateway_and_store() -> None:
 async def test_scene_header_present_when_scene_set() -> None:
     scene = _Scene(
         title="Elysium",
-        location_ref="library:settings/wod-london/locations/tower",
+        location_ref="library:worlds/wod-london/locations/tower",
         mood="tense",
-        present_character_refs=["library:settings/wod-london/characters/winifred"],
+        present_character_refs=["library:worlds/wod-london/characters/winifred"],
     )
     builder = _builder(scenes=StubScenes(scene=scene))
     prompt = await builder.build("scene begins", "camp")
     body = "\n".join(m.content for m in prompt.messages)
     assert "Elysium" in body
-    assert "library:settings/wod-london/locations/tower" in body
+    assert "library:worlds/wod-london/locations/tower" in body
     assert "tense" in body
 
 
@@ -429,18 +429,18 @@ async def test_commitments_appear_when_open() -> None:
 
 async def test_location_resolution_with_weather() -> None:
     location = _Location(
-        setting_id="wod",
+        world_id="wod",
         id="tower",
         name="Tower of the Tremere",
         description="A candle-lit keep.",
         permanent_features=["stained glass"],
     )
-    setting = StubSetting(
+    world = StubWorld(
         locations={("wod", "tower"): location},
         weather=_Weather(summary="thin drizzle", kind="rain"),
     )
-    scene = _Scene(location_ref="library:settings/wod/locations/tower")
-    builder = _builder(setting=setting, scenes=StubScenes(scene=scene))
+    scene = _Scene(location_ref="library:worlds/wod/locations/tower")
+    builder = _builder(world=world, scenes=StubScenes(scene=scene))
     prompt = await builder.build("scene", "camp")
     spotlight = next((m for m in prompt.messages if m.content.startswith("# Spotlight")), None)
     assert spotlight is not None
@@ -450,8 +450,8 @@ async def test_location_resolution_with_weather() -> None:
 
 async def test_source_attribution_includes_scope() -> None:
     chars = StubCharacters(
-        cards={"library:settings/wod/characters/alistair": _Card(full="x")},
-        active="library:settings/wod/characters/alistair",
+        cards={"library:worlds/wod/characters/alistair": _Card(full="x")},
+        active="library:worlds/wod/characters/alistair",
     )
     builder = _builder(characters=chars)
     prompt = await builder.build("hi", "camp")
@@ -463,8 +463,8 @@ async def test_source_attribution_includes_scope() -> None:
 
 async def test_estimate_returns_per_tier_breakdown() -> None:
     chars = StubCharacters(
-        cards={"library:settings/wod/characters/alistair": _Card(full="# Alistair")},
-        active="library:settings/wod/characters/alistair",
+        cards={"library:worlds/wod/characters/alistair": _Card(full="# Alistair")},
+        active="library:worlds/wod/characters/alistair",
     )
     builder = _builder(characters=chars)
     est = await builder.estimate("hello", "camp")
@@ -484,11 +484,11 @@ async def test_assembled_prompt_carries_messages_hash() -> None:
 async def test_drift_corrective_injected_into_system_block() -> None:
     chars = StubCharacters(
         cards={
-            "library:settings/wod/characters/alistair": _Card(
+            "library:worlds/wod/characters/alistair": _Card(
                 full="# Alistair", corrective="Speak more formally."
             )
         },
-        active="library:settings/wod/characters/alistair",
+        active="library:worlds/wod/characters/alistair",
     )
     builder = _builder(characters=chars)
     prompt = await builder.build("hi", "camp")
@@ -500,20 +500,20 @@ async def test_lore_triggers_surface_in_archive() -> None:
     @dataclass
     class _Lore:
         id: str
-        setting_id: str
+        world_id: str
         title: str
         body: str
         keywords: list[str]
 
     lore = _Lore(
         id="ancient-pact",
-        setting_id="wod",
+        world_id="wod",
         title="The Ancient Pact",
         body="Sealed in blood at the founding.",
         keywords=["pact", "ancient"],
     )
-    setting = StubSetting(lore=[lore])
-    builder = _builder(setting=setting)
+    world = StubWorld(lore=[lore])
+    builder = _builder(world=world)
     prompt = await builder.build("Tell me of the ancient pact", "camp")
     body = "\n".join(m.content for m in prompt.messages)
     assert "Ancient Pact" in body
@@ -522,27 +522,27 @@ async def test_lore_triggers_surface_in_archive() -> None:
 
 async def test_composition_snapshot_preserved() -> None:
     composition = Composition(
-        settings=[SettingRef(setting_id="wod", priority=1)],
+        worlds=[WorldRef(world_id="wod", priority=1)],
         mechanics="wod-mechanics",
     )
     builder = _builder(library=StubLibrary(composition=composition))
     prompt = await builder.build("scene", "camp")
     snap = prompt.composition_snapshot
     assert snap["mechanics"] == "wod-mechanics"
-    assert snap["settings"][0]["setting_id"] == "wod"
+    assert snap["worlds"][0]["world_id"] == "wod"
 
 
 async def test_background_chars_compressed_only() -> None:
     chars = StubCharacters(
         cards={
-            "library:settings/wod/characters/winifred": _Card(
+            "library:worlds/wod/characters/winifred": _Card(
                 full="full-card-winifred",
                 compressed="compressed-winifred",
             )
         }
     )
     scene = _Scene()
-    posts = [_Post(body="library:settings/wod/characters/winifred steps in")]
+    posts = [_Post(body="library:worlds/wod/characters/winifred steps in")]
     builder = _builder(
         characters=chars,
         scenes=StubScenes(scene=scene, posts=posts),

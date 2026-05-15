@@ -38,14 +38,14 @@ async def test_library_entity_queues_embedding_job(
     watcher: FileWatcher,
     store: StateStore,
 ) -> None:
-    target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "f.md"
+    target = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "f.md"
     _write_markdown(target, "name: winifred\ntags: [vampire]", "winifred prose body.")
     await watcher.process_path(target)
 
     jobs = watcher.embedding_queue.drain()
     assert len(jobs) == 1
     job = jobs[0]
-    assert job.ref == "settings/wod-london/characters/f"
+    assert job.ref == "worlds/wod-london/characters/f"
     assert job.scope == "library"
     assert job.source_kind == "character"
     assert "winifred" in job.text and "prose body" in job.text
@@ -55,7 +55,7 @@ async def test_embedding_queue_skips_unchanged_content(
     watcher: FileWatcher,
     store: StateStore,
 ) -> None:
-    target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "f.md"
+    target = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "f.md"
     _write_markdown(target, "name: winifred", "v1")
     await watcher.process_path(target)
     watcher.embedding_queue.drain()
@@ -118,12 +118,12 @@ async def test_scan_now_emits_library_indexed_with_counts(
 ) -> None:
     collector = EventCollector(bus, "library_indexed")
     _write_markdown(
-        store.data_root / "library" / "settings" / "wod-london" / "characters" / "a.md",
+        store.data_root / "library" / "worlds" / "wod-london" / "characters" / "a.md",
         "name: A",
         "alpha",
     )
     _write_markdown(
-        store.data_root / "library" / "settings" / "wod-london" / "lore" / "h.md",
+        store.data_root / "library" / "worlds" / "wod-london" / "lore" / "h.md",
         "name: H",
         "history",
     )
@@ -171,7 +171,7 @@ async def test_expected_write_matches_no_conflict(
     """When the app pre-registers its write, the watcher's reindex of that
     same content should not surface as a conflict."""
     collector = EventCollector(bus, "library_file_changed")
-    target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "f.md"
+    target = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "f.md"
     frontmatter = {"name": "winifred"}
     body = "App-written body."
     expected = _index_hash(frontmatter, body)
@@ -193,7 +193,7 @@ async def test_expected_write_mismatched_flags_conflict(
     """If the file on disk doesn't match what the app expected to land, an
     external editor raced with it and the conflict warning fires."""
     collector = EventCollector(bus, "library_file_changed")
-    target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "f.md"
+    target = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "f.md"
     intended_frontmatter = {"name": "winifred"}
     intended_body = "What the app meant to write."
     intended_hash = _index_hash(intended_frontmatter, intended_body)
@@ -247,7 +247,7 @@ async def test_expectation_consumed_even_on_spurious_event(
     """A registered write must also be consumed when the resulting event is
     deduped as spurious (content unchanged)."""
     collector = EventCollector(bus, "library_file_changed")
-    target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "f.md"
+    target = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "f.md"
     _write_markdown(target, "name: winifred", "v1")
     await watcher.process_path(target)
     # Now register a write and re-process with the same content — spurious.
@@ -267,7 +267,7 @@ async def test_clear_expected_write_drops_pending_expectation(
     bus: EventBus,
 ) -> None:
     collector = EventCollector(bus, "library_file_changed")
-    target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "f.md"
+    target = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "f.md"
     watcher.register_expected_write(target, "bogus-hash")
     watcher.clear_expected_write(target)
 

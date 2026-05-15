@@ -18,24 +18,24 @@ export function VariantsPanel({ kindPlural, assetId }: Props) {
   return (
     <section className="variants-panel">
       <p className="variants-intro">
-        Entities across settings sharing the asset id <code>{assetId}</code>. Each variant is fully
+        Entities across worlds sharing the asset id <code>{assetId}</code>. Each variant is fully
         independent — editing one has no effect on others.
       </p>
       <AsyncBoundary
         loading={loading}
         error={error}
         empty={!data || data.length === 0}
-        emptyMessage="No other settings declare an asset with this id."
+        emptyMessage="No other worlds declare an asset with this id."
         onRetry={reload}
       >
         <ul className="variants-list">
           {data?.map((entity) => (
             <li key={entity.id}>
               <Link
-                to={`/library/settings/${encodeURIComponent(entity.setting_id ?? "")}/${kindPlural}/${encodeURIComponent(entity.asset_id)}`}
+                to={`/library/worlds/${encodeURIComponent(entity.world_id ?? "")}/${kindPlural}/${encodeURIComponent(entity.asset_id)}`}
               >
                 <strong>{entity.name || entity.asset_id}</strong>
-                <span className="variant-source"> — {entity.setting_id}</span>
+                <span className="variant-source"> — {entity.world_id}</span>
               </Link>
               {entity.body && <p className="variant-snippet">{entity.body.slice(0, 180)}…</p>}
             </li>

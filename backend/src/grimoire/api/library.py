@@ -1,7 +1,7 @@
-"""Library + setting + plugin/mechanics rescan REST routes.
+"""Library + world + plugin/mechanics rescan REST routes.
 
 These wrap :class:`grimoire.library.service.LibraryService`,
-:class:`grimoire.setting.service.SettingService`, the mechanics registry, and
+:class:`grimoire.world.service.WorldService`, the mechanics registry, and
 the plugins registry. All endpoints stick to the surface defined in spec 14
 §Backend contract.
 """
@@ -17,7 +17,7 @@ from grimoire.api.deps import (
     LibraryDep,
     MechanicsDep,
     PluginsDep,
-    SettingDep,
+    WorldDep,
 )
 from grimoire.api.util import map_lookup_errors, to_payload
 
@@ -29,18 +29,18 @@ router = APIRouter()
 # --------------------------------------------------------------------------- #
 
 
-class CreateSettingPayload(BaseModel):
+class CreateWorldPayload(BaseModel):
     id: str
     meta: dict[str, Any] = Field(default_factory=dict)
     source: str = "user"
 
 
-class UpdateSettingPayload(BaseModel):
+class UpdateWorldPayload(BaseModel):
     patch: dict[str, Any]
     source: str = "user"
 
 
-class ForkSettingPayload(BaseModel):
+class ForkWorldPayload(BaseModel):
     target_id: str
 
 
@@ -58,96 +58,96 @@ class UpdateEntityPayload(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Settings
+# Worlds
 # --------------------------------------------------------------------------- #
 
 
-@router.get("/library/settings")
-async def list_settings(library: LibraryDep) -> Any:
-    return to_payload(await library.list_settings())
+@router.get("/library/worlds")
+async def list_worlds(library: LibraryDep) -> Any:
+    return to_payload(await library.list_worlds())
 
 
-@router.post("/library/settings", status_code=201)
-async def create_setting(
-    payload: CreateSettingPayload,
-    setting: SettingDep,
+@router.post("/library/worlds", status_code=201)
+async def create_world(
+    payload: CreateWorldPayload,
+    world: WorldDep,
 ) -> Any:
     try:
-        result = await setting.create_setting(payload.id, payload.meta or None)
+        result = await world.create_world(payload.id, payload.meta or None)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return to_payload(result)
 
 
-@router.get("/library/settings/{setting_id}")
-async def get_setting_route(setting_id: str, library: LibraryDep) -> Any:
+@router.get("/library/worlds/{world_id}")
+async def get_world_route(world_id: str, library: LibraryDep) -> Any:
     try:
-        return to_payload(await library.get_setting(setting_id))
+        return to_payload(await library.get_world(world_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
-@router.patch("/library/settings/{setting_id}")
-async def update_setting(
-    setting_id: str,
-    payload: UpdateSettingPayload,
-    setting: SettingDep,
+@router.patch("/library/worlds/{world_id}")
+async def update_world(
+    world_id: str,
+    payload: UpdateWorldPayload,
+    world: WorldDep,
 ) -> Any:
     try:
-        return to_payload(await setting.update_setting_meta(setting_id, payload.patch))
+        return to_payload(await world.update_world_meta(world_id, payload.patch))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
-@router.delete("/library/settings/{setting_id}", status_code=204)
-async def delete_setting(setting_id: str, setting: SettingDep) -> None:
+@router.delete("/library/worlds/{world_id}", status_code=204)
+async def delete_world(world_id: str, world: WorldDep) -> None:
     try:
-        await setting.delete_setting(setting_id)
+        await world.delete_world(world_id)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
-@router.post("/library/settings/{setting_id}/fork", status_code=201)
-async def fork_setting(
-    setting_id: str,
-    payload: ForkSettingPayload,
-    setting: SettingDep,
+@router.post("/library/worlds/{world_id}/fork", status_code=201)
+async def fork_world(
+    world_id: str,
+    payload: ForkWorldPayload,
+    world: WorldDep,
 ) -> Any:
     try:
-        return to_payload(await setting.fork_setting(setting_id, payload.target_id))
+        return to_payload(await world.fork_world(world_id, payload.target_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 # --------------------------------------------------------------------------- #
-# Setting entities (characters / items / locations / lore / factions / greetings)
+# World entities (characters / items / locations / lore / factions / greetings)
 # --------------------------------------------------------------------------- #
 
 
-@router.get("/library/settings/{setting_id}/{kind}")
-async def list_setting_entities(
-    setting_id: str,
+@router.get("/library/worlds/{world_id}/{kind}")
+async def list_world_entities(
+    world_id: str,
     kind: str,
     library: LibraryDep,
 ) -> Any:
     try:
         if kind == "greetings":
-            return to_payload(await library.list_greetings(setting_id))
-        return to_payload(await library.list_in_setting(setting_id, kind))
+            return to_payload(await library.list_greetings(world_id))
+        return to_payload(await library.list_in_world(world_id, kind))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
-@router.post("/library/settings/{setting_id}/{kind}", status_code=201)
-async def create_setting_entity(
-    setting_id: str,
+@router.post("/library/worlds/{world_id}/{kind}", status_code=201)
+async def create_world_entity(
+    world_id: str,
     kind: str,
     payload: CreateEntityPayload,
     library: LibraryDep,
 ) -> Any:
     try:
         result = await library.create_entity(
-            setting_id,
+            world_id,
             kind,
             payload.id,
             payload.frontmatter,
@@ -159,24 +159,24 @@ async def create_setting_entity(
     return to_payload(result)
 
 
-@router.get("/library/settings/{setting_id}/{kind}/{entity_id}")
-async def get_setting_entity(
-    setting_id: str,
+@router.get("/library/worlds/{world_id}/{kind}/{entity_id}")
+async def get_world_entity(
+    world_id: str,
     kind: str,
     entity_id: str,
     library: LibraryDep,
 ) -> Any:
     try:
         if kind == "greetings":
-            return to_payload(await library.get_greeting(setting_id, entity_id))
-        return to_payload(await library.get_entity(setting_id, kind, entity_id))
+            return to_payload(await library.get_greeting(world_id, entity_id))
+        return to_payload(await library.get_entity(world_id, kind, entity_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
-@router.patch("/library/settings/{setting_id}/{kind}/{entity_id}")
-async def update_setting_entity(
-    setting_id: str,
+@router.patch("/library/worlds/{world_id}/{kind}/{entity_id}")
+async def update_world_entity(
+    world_id: str,
     kind: str,
     entity_id: str,
     payload: UpdateEntityPayload,
@@ -185,7 +185,7 @@ async def update_setting_entity(
     try:
         return to_payload(
             await library.update_entity(
-                setting_id,
+                world_id,
                 kind,
                 entity_id,
                 payload.frontmatter_patch,
@@ -197,29 +197,29 @@ async def update_setting_entity(
         raise map_lookup_errors(exc) from exc
 
 
-@router.delete("/library/settings/{setting_id}/{kind}/{entity_id}", status_code=204)
-async def delete_setting_entity(
-    setting_id: str,
+@router.delete("/library/worlds/{world_id}/{kind}/{entity_id}", status_code=204)
+async def delete_world_entity(
+    world_id: str,
     kind: str,
     entity_id: str,
     library: LibraryDep,
     source: str = "user",
 ) -> None:
     try:
-        await library.delete_entity(setting_id, kind, entity_id, source=source)
+        await library.delete_entity(world_id, kind, entity_id, source=source)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
-@router.get("/library/settings/{setting_id}/{kind}/{entity_id}/dependents")
+@router.get("/library/worlds/{world_id}/{kind}/{entity_id}/dependents")
 async def entity_dependents(
-    setting_id: str,
+    world_id: str,
     kind: str,
     entity_id: str,
     library: LibraryDep,
 ) -> Any:
     try:
-        return to_payload(await library.dependents(setting_id, kind, entity_id))
+        return to_payload(await library.dependents(world_id, kind, entity_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
@@ -302,7 +302,7 @@ async def rescan_plugins(plugins: PluginsDep) -> Any:
 async def get_plugin_config(plugin_id: str, plugins: PluginsDep) -> Any:
     """Return the saved config for a plugin, with secret fields redacted.
 
-    The frontend uses this when opening a provider's settings panel so the
+    The frontend uses this when opening a provider's worlds panel so the
     user can see which LLMs are configured. We never echo back stored
     secrets — only a presence flag — so the response is safe to display.
     """
@@ -439,10 +439,10 @@ def _is_configured(schema: dict[str, Any], config: dict[str, Any], secret_names:
 @router.get("/library/health")
 async def library_health(library: LibraryDep) -> dict[str, Any]:
     try:
-        count = len(await library.list_settings())
+        count = len(await library.list_worlds())
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return {"status": "ok", "settings": count}
+    return {"status": "ok", "worlds": count}
 
 
 __all__ = ["router"]

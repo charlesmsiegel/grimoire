@@ -72,7 +72,7 @@ async def test_prompt_composer_uses_all_providers() -> None:
             assert scene_id == "scene-1"
             return FakeScene()
 
-    class FakeSetting:
+    class FakeWorld:
         async def resolve(self, ref: str, campaign_id: str):
             return SimpleNamespace(frontmatter={"visual_description": "a Soho alley"})
 
@@ -87,7 +87,7 @@ async def test_prompt_composer_uses_all_providers() -> None:
     composer = PromptComposer(
         scene_manager=FakeSceneManager(),
         library=FakeLibrary(),
-        setting=FakeSetting(),
+        world=FakeWorld(),
         characters=FakeCharacters(),
     )
     out = await composer.compose(

@@ -10,10 +10,10 @@ from grimoire.characters import CharactersService
 from grimoire.continuity import ContinuityService
 from grimoire.library import LibraryService
 from grimoire.mechanics import MechanicsConfig, MechanicsService
-from grimoire.setting import SettingService
 from grimoire.state_store import StateStore
 from grimoire.storage import Database, apply_migrations
 from grimoire.time_engine import TimeEngineService
+from grimoire.world import WorldService
 
 
 @pytest.fixture
@@ -36,8 +36,8 @@ async def library(store: StateStore) -> LibraryService:
 
 
 @pytest.fixture
-async def setting(library: LibraryService) -> SettingService:
-    return SettingService(library)
+async def world(library: LibraryService) -> WorldService:
+    return WorldService(library)
 
 
 @pytest.fixture
@@ -61,14 +61,14 @@ def continuity() -> ContinuityService:
 @pytest.fixture
 async def time_engine(
     store: StateStore,
-    setting: SettingService,
+    world: WorldService,
     characters: CharactersService,
     mechanics: MechanicsService,
     continuity: ContinuityService,
 ) -> TimeEngineService:
     return TimeEngineService(
         store=store,
-        setting=setting,
+        world=world,
         characters=characters,
         mechanics=mechanics,
         continuity=continuity,

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from grimoire.setting.calendar import holiday_at, parse_calendar, season_for
 from grimoire.types.common import InGameTime
+from grimoire.world.calendar import holiday_at, parse_calendar, season_for
 
 
 def _when(year: int, month: int, day: int) -> InGameTime:
@@ -27,7 +27,7 @@ def test_parse_calendar_normalizes_shapes() -> None:
             "holidays": [{"name": "NYE", "month": 12, "day": 31}],
         },
     )
-    assert cal.setting_id == "x"
+    assert cal.world_id == "x"
     assert cal.epoch == datetime(2024, 1, 1)
     assert [m.name for m in cal.months] == ["Jan", "Feb"]
     assert {s.name for s in cal.seasons} == {"spring", "autumn"}

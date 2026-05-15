@@ -191,16 +191,16 @@ async def keyword_search_library(
     conn: aiosqlite.Connection,
     *,
     query: str,
-    setting_id: str | None = None,
+    world_id: str | None = None,
     kinds: list[str] | None = None,
     top_k: int = 5,
 ) -> list[SearchHit]:
     """FTS5 search across ``library_index``."""
     where: list[str] = ["library_index_fts MATCH ?"]
     params: list[object] = [query]
-    if setting_id is not None:
-        where.append("library_index.setting_id = ?")
-        params.append(setting_id)
+    if world_id is not None:
+        where.append("library_index.world_id = ?")
+        params.append(world_id)
     if kinds:
         placeholders = ",".join("?" * len(kinds))
         where.append(f"library_index.kind IN ({placeholders})")

@@ -8,7 +8,7 @@ import {
   type GreetingSummary,
   type ImagePresetSummary,
   type MechanicsModuleSummary,
-  type SettingSummary,
+  type WorldSummary,
   type StyleGuideSummary,
   addCampaignPC,
   createCampaign,
@@ -16,8 +16,8 @@ import {
   fetchGreetings,
   fetchImagePresets,
   fetchInstalledMechanics,
-  fetchSettingCharacters,
-  fetchSettings,
+  fetchWorldCharacters,
+  fetchWorlds,
   fetchStyleGuides,
 } from "../../api/wizard";
 import { useStore } from "../../state/useStore";
@@ -58,7 +58,7 @@ export function CampaignCreate() {
   const [idEdited, setIdEdited] = useState(false);
   const [step, setStep] = useState(0);
 
-  const [settings, setSettings] = useState<LoadState<SettingSummary[]>>({
+  const [worlds, setWorlds] = useState<LoadState<WorldSummary[]>>({
     data: [],
     loading: true,
     error: null,
@@ -78,7 +78,7 @@ export function CampaignCreate() {
     loading: false,
     error: null,
   });
-  const [castBySetting, setCastBySetting] = useState<Map<string, CharacterSummary[]>>(new Map());
+  const [castByWorld, setCastByWorld] = useState<Map<string, CharacterSummary[]>>(new Map());
   const [castLoading, setCastLoading] = useState(false);
   const [castError, setCastError] = useState<string | null>(null);
   const [greetings, setGreetings] = useState<LoadState<GreetingSummary[]>>({
@@ -94,15 +94,15 @@ export function CampaignCreate() {
   // a persistent error must not trigger an infinite refetch loop.
   const styleAssetsAttempted = useRef(false);
 
-  // Initial fetches — settings and mechanics are needed across multiple steps.
+  // Initial fetches — worlds and mechanics are needed across multiple steps.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const data = await fetchSettings();
-        if (!cancelled) setSettings({ data, loading: false, error: null });
+        const data = await fetchWorlds();
+        if (!cancelled) setWorlds({ data, loading: false, error: null });
       } catch (err) {
-        if (!cancelled) setSettings({ data: [], loading: false, error: errorMessage(err) });
+        if (!cancelled) setWorlds({ data: [], loading: false, error: errorMessage(err) });
       }
     })();
     void (async () => {
@@ -143,9 +143,9 @@ export function CampaignCreate() {
   // is active. Once loaded for a given composition it persists across steps.
   useEffect(() => {
     if (step !== 3 && step !== 5) return;
-    const settingIds = draft.settingRefs.map((r) => r.setting_id);
-    if (settingIds.length === 0) {
-      setCastBySetting(new Map());
+    const worldIds = draft.worldRefs.map((r) => r.world_id);
+    if (worldIds.length === 0) {
+      setCastByWorld(new Map());
       return;
     }
     let cancelled = false;
@@ -154,10 +154,10 @@ export function CampaignCreate() {
     void (async () => {
       try {
         const entries = await Promise.all(
-          settingIds.map(async (id) => [id, await fetchSettingCharacters(id)] as const),
+          worldIds.map(async (id) => [id, await fetchWorldCharacters(id)] as const),
         );
         if (!cancelled) {
-          setCastBySetting(new Map(entries));
+          setCastByWorld(new Map(entries));
           setCastLoading(false);
         }
       } catch (err) {
@@ -170,13 +170,13 @@ export function CampaignCreate() {
     return () => {
       cancelled = true;
     };
-  }, [step, draft.settingRefs]);
+  }, [step, draft.worldRefs]);
 
   // Greetings — lazy-load when arriving at step 6.
   useEffect(() => {
     if (step !== 5) return;
-    const settingIds = draft.settingRefs.map((r) => r.setting_id);
-    if (settingIds.length === 0) {
+    const worldIds = draft.worldRefs.map((r) => r.world_id);
+    if (worldIds.length === 0) {
       setGreetings({ data: [], loading: false, error: null });
       return;
     }
@@ -184,7 +184,7 @@ export function CampaignCreate() {
     setGreetings({ data: [], loading: true, error: null });
     void (async () => {
       try {
-        const lists = await Promise.all(settingIds.map((id) => fetchGreetings(id)));
+        const lists = await Promise.all(worldIds.map((id) => fetchGreetings(id)));
         if (!cancelled) {
           setGreetings({ data: lists.flat(), loading: false, error: null });
         }
@@ -197,7 +197,7 @@ export function CampaignCreate() {
     return () => {
       cancelled = true;
     };
-  }, [step, draft.settingRefs]);
+  }, [step, draft.worldRefs]);
 
   const update = useCallback((patch: Partial<WizardDraft>) => {
     setDraft((d) => ({ ...d, ...patch }));
@@ -208,7 +208,7 @@ export function CampaignCreate() {
       case 0:
         return draft.id.length > 0 && draft.name.trim().length > 0;
       case 1:
-        return draft.settingRefs.length > 0;
+        return draft.worldRefs.length > 0;
       case 2:
         return true;
       case 3:
@@ -228,8 +228,8 @@ export function CampaignCreate() {
     setSubmitError(null);
     try {
       const composition = {
-        settings: draft.settingRefs.map((r) => ({
-          setting_id: r.setting_id,
+        worlds: draft.worldRefs.map((r) => ({
+          world_id: r.world_id,
           priority: r.priority,
           include: r.include,
           track_latest: r.track_latest,
@@ -318,9 +318,9 @@ export function CampaignCreate() {
         <StepComposition
           draft={draft}
           update={update}
-          settings={settings.data}
-          loading={settings.loading}
-          error={settings.error}
+          worlds={worlds.data}
+          loading={worlds.loading}
+          error={worlds.error}
         />
       )}
       {step === 2 && (
@@ -336,7 +336,7 @@ export function CampaignCreate() {
         <StepPCs
           draft={draft}
           update={update}
-          candidates={castBySetting}
+          candidates={castByWorld}
           loading={castLoading}
           error={castError}
         />
@@ -358,7 +358,7 @@ export function CampaignCreate() {
           greetings={greetings.data}
           loading={greetings.loading}
           error={greetings.error}
-          castBySetting={castBySetting}
+          castByWorld={castByWorld}
         />
       )}
 

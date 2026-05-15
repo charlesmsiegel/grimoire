@@ -13,11 +13,11 @@ import hashlib
 import random
 
 from grimoire.types.common import InGameTime
-from grimoire.types.setting import (
+from grimoire.types.world import (
     Season,
-    SettingCalendar,
     Weather,
     WeatherKind,
+    WorldCalendar,
 )
 
 from .calendar import season_for
@@ -66,7 +66,7 @@ def generate_weather(
     campaign_id: str,
     location_ref: str,
     when: InGameTime,
-    calendar: SettingCalendar | None,
+    calendar: WorldCalendar | None,
     climate_zone: str | None,
     indoor: bool = False,
 ) -> Weather:

@@ -1,7 +1,7 @@
-"""Calendar utilities for the Setting module.
+"""Calendar utilities for the World module.
 
-A setting's calendar lives in ``setting.yaml`` under the ``calendar`` key.
-Helpers here translate the loose YAML form into typed ``SettingCalendar``
+A world's calendar lives in ``world.yaml`` under the ``calendar`` key.
+Helpers here translate the loose YAML form into typed ``WorldCalendar``
 values and answer the cross-cutting "what season / holiday is this?"
 questions Time Engine and Context Builder need.
 """
@@ -12,16 +12,16 @@ from datetime import datetime
 from typing import Any
 
 from grimoire.types.common import InGameTime
-from grimoire.types.setting import (
+from grimoire.types.world import (
     Holiday,
     Month,
     Season,
-    SettingCalendar,
+    WorldCalendar,
 )
 
 
-def parse_calendar(setting_id: str, raw: dict[str, Any] | None) -> SettingCalendar:
-    """Build a typed calendar from a free-form ``setting.yaml`` calendar block."""
+def parse_calendar(world_id: str, raw: dict[str, Any] | None) -> WorldCalendar:
+    """Build a typed calendar from a free-form ``world.yaml`` calendar block."""
     raw = raw or {}
     months = [
         Month(name=str(m.get("name") or f"M{i + 1}"), days=int(m.get("days") or 30))
@@ -47,8 +47,8 @@ def parse_calendar(setting_id: str, raw: dict[str, Any] | None) -> SettingCalend
         )
         for h in raw.get("holidays") or []
     ]
-    return SettingCalendar(
-        setting_id=setting_id,
+    return WorldCalendar(
+        world_id=world_id,
         epoch=_parse_dt(raw.get("epoch")),
         months=months,
         days_per_week=int(raw.get("days_per_week") or 7),
@@ -58,7 +58,7 @@ def parse_calendar(setting_id: str, raw: dict[str, Any] | None) -> SettingCalend
     )
 
 
-def season_for(calendar: SettingCalendar, when: InGameTime) -> Season | None:
+def season_for(calendar: WorldCalendar, when: InGameTime) -> Season | None:
     """Return the season ``when`` falls into.
 
     Seasons are interpreted as starts only: each season runs from its
@@ -82,7 +82,7 @@ def season_for(calendar: SettingCalendar, when: InGameTime) -> Season | None:
     return selected
 
 
-def holiday_at(calendar: SettingCalendar, when: InGameTime) -> Holiday | None:
+def holiday_at(calendar: WorldCalendar, when: InGameTime) -> Holiday | None:
     moment = when.moment
     for h in calendar.holidays:
         if h.month == moment.month and h.day == moment.day:
@@ -102,7 +102,7 @@ def _parse_dt(value: Any) -> datetime | None:
 
 
 def _hemisphere_default(when: InGameTime) -> Season:
-    """Fallback Gregorian-ish seasons for settings without their own."""
+    """Fallback Gregorian-ish seasons for worlds without their own."""
     m = when.moment.month
     if m in (12, 1, 2):
         return Season(name="winter", start_month=12, start_day=1)

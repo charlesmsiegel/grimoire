@@ -4,14 +4,14 @@
 
 The Context Builder is the single component responsible for assembling the prompt sent to the LLM each turn. It is the primary fix for context drift, missed characters, and inconsistent voice — by replacing "Claude hopes to load the right files" with a deterministic, budget-aware, layered assembly pipeline.
 
-The Context Builder is **scope-aware**: every entity it loads is resolved through the campaign's composition (campaign-local → library refs → fail) so a campaign that composes `faerun` characters + `wod-nyc` locations gets the right cards from the right sources, transparently. Domain modules (Characters, Setting) handle the resolution; the Context Builder consumes resolved entities.
+The Context Builder is **scope-aware**: every entity it loads is resolved through the campaign's composition (campaign-local → library refs → fail) so a campaign that composes `faerun` characters + `wod-nyc` locations gets the right cards from the right sources, transparently. Domain modules (Characters, World) handle the resolution; the Context Builder consumes resolved entities.
 
 This module is heavily inspired by SillyTavern's prompt manager and world info system, with structural improvements around budget management, tier promotion, and cross-scope composition.
 
 ## Responsibilities
 
 - Receive turn inputs (player message, mechanics results, scene state, active campaign id)
-- Query other modules for resolved entities (Characters, Setting, Scene Manager, Continuity) — entities are returned with library + campaign-local layers already merged
+- Query other modules for resolved entities (Characters, World, Scene Manager, Continuity) — entities are returned with library + campaign-local layers already merged
 - Allocate a token budget across content tiers
 - Promote/demote characters and content between tiers based on screen time and relevance
 - Run retrieval (vector + keyword) scoped to the campaign's effective context (campaign-local + referenced library assets)
@@ -24,7 +24,7 @@ This module is heavily inspired by SillyTavern's prompt manager and world info s
 - Does not call the LLM (Gateway does)
 - Does not decide if a roll is needed (Mechanics does, and returns a result that Context Builder embeds)
 - Does not own character data, scene data, or facts (their owning modules do)
-- Does not perform scope resolution itself (Characters, Setting do; Context Builder consumes resolved entities)
+- Does not perform scope resolution itself (Characters, World do; Context Builder consumes resolved entities)
 - Does not parse responses (Extractor does)
 
 ## Interface
@@ -119,7 +119,7 @@ User can pin a character to a tier (e.g., "always keep Alistair at spotlight") t
 ```
 build(player_input, campaign_id, mechanics_results, extra):
   0. resolve composition
-     ├─ load campaign's asset refs (settings, style guide, image preset)
+     ├─ load campaign's asset refs (worlds, style guide, image preset)
      ├─ load campaign's mechanics module id
      └─ resolve style guide (library asset or inline)
 
@@ -135,10 +135,10 @@ build(player_input, campaign_id, mechanics_results, extra):
      └─ for each tier, fetch resolved cards via Characters
          (Characters applies cascade: campaign-local → library refs)
 
-  3. resolve setting
-     ├─ current location resolved via Setting (cascade)
+  3. resolve world
+     ├─ current location resolved via World (cascade)
      ├─ adjacent locations if relevant
-     ├─ weather, time, atmosphere from Setting (uses campaign seed)
+     ├─ weather, time, atmosphere from World (uses campaign seed)
      └─ faction state if politically active (cascade)
 
   4. resolve continuity
@@ -250,7 +250,7 @@ These are user-supplied. A campaign can either reference a library style guide (
 Retrieval is **campaign-scoped**, but the corpus for retrieval includes both campaign-local content and content from referenced library assets:
 
 - **Campaign-local sources**: past scenes, posts, facts, commitments, campaign-local character cards, location overrides
-- **Library sources** (filtered by composition): character cards from referenced settings, location descriptions from referenced settings, lore entries triggered by keywords
+- **Library sources** (filtered by composition): character cards from referenced worlds, location descriptions from referenced worlds, lore entries triggered by keywords
 
 Vector and keyword search filter by `(scope='campaign-local' AND owner_id=campaign_id) OR (scope='library' AND owner_id IN campaign's referenced asset ids)`. This prevents leak from unrelated campaigns and from unreferenced library assets.
 
@@ -303,5 +303,5 @@ The Characters module computes drift scores periodically (see `08-characters.md`
 - **Multi-shot examples?** For very voice-sensitive characters, would few-shot dialogue examples help? Experimentally, yes. Should be a per-character toggle.
 - **Cost-aware tiering.** When using expensive models, automatically reduce spotlight depth. When using cheap models, expand it. Configurable but should be transparent.
 - **Mining SillyTavern.** Specifically: lorebook entry triggers, world info recursive scanning, character V2/V3 card structure, prompt manager presets. These map cleanly to our tier system.
-- **Cross-asset deduplication.** If two referenced settings both contain a character named "Margaret," both surface in resolved cast. Should the Context Builder dedupe by name (risking incorrect merges) or always show both with source labels (better, default)?
-- **Library asset weighting.** Campaigns may want to emphasize one referenced asset over another in retrieval (this campaign primarily uses setting A; setting B is supplementary). Reflect priority order in retrieval weights? Probably yes; trivial to implement once priority is known.
+- **Cross-asset deduplication.** If two referenced worlds both contain a character named "Margaret," both surface in resolved cast. Should the Context Builder dedupe by name (risking incorrect merges) or always show both with source labels (better, default)?
+- **Library asset weighting.** Campaigns may want to emphasize one referenced asset over another in retrieval (this campaign primarily uses world A; world B is supplementary). Reflect priority order in retrieval weights? Probably yes; trivial to implement once priority is known.

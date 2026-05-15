@@ -192,19 +192,19 @@ class MarkdownBundleAdapter:
             if "cast" in appendices or not appendices:
                 for card in snapshot.characters:
                     zf.writestr(f"characters/{card.asset_id}.md", _render_card(card))
-            if "setting" in appendices or not appendices:
+            if "world" in appendices or not appendices:
                 loc_doc = _flatten_cards("Locations", snapshot.locations, "locations")
                 if loc_doc:
-                    zf.writestr("setting/locations.md", loc_doc)
+                    zf.writestr("world/locations.md", loc_doc)
                 lore_doc = _flatten_cards("Lore", snapshot.lore, "lore")
                 if lore_doc:
-                    zf.writestr("setting/lore.md", lore_doc)
+                    zf.writestr("world/lore.md", lore_doc)
                 fac_doc = _flatten_cards("Factions", snapshot.factions, "factions")
                 if fac_doc:
-                    zf.writestr("setting/factions.md", fac_doc)
+                    zf.writestr("world/factions.md", fac_doc)
                 items_doc = _flatten_cards("Items", snapshot.items, "items")
                 if items_doc:
-                    zf.writestr("setting/items.md", items_doc)
+                    zf.writestr("world/items.md", items_doc)
 
             include_image_binaries = bool(
                 (options.extra or {}).get("include_image_binaries", self._include_images_default)

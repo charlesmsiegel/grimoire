@@ -62,9 +62,9 @@ from .composition import (
     ResolutionSource,
     ResolvedEntity,
     ResolvedLocation,
-    SettingMeta,
-    SettingRef,
     UpgradeReport,
+    WorldMeta,
+    WorldRef,
 )
 from .context import AssembledPrompt, BudgetEstimate, ContextSource
 from .continuity import (
@@ -226,9 +226,6 @@ from .protocols import (
     SceneManager as SceneManagerProtocol,
 )
 from .protocols import (
-    Setting as SettingProtocol,
-)
-from .protocols import (
     StateStore as StateStoreProtocol,
 )
 from .protocols import (
@@ -236,6 +233,9 @@ from .protocols import (
 )
 from .protocols import (
     TurnReplayer as TurnReplayerProtocol,
+)
+from .protocols import (
+    World as WorldProtocol,
 )
 from .scene import (
     AdvanceDecision,
@@ -250,25 +250,6 @@ from .scene import (
     SceneInit,
     SceneThreads,
     Thread,
-)
-from .setting import (
-    Coords,
-    Faction,
-    FactionGoal,
-    FactionStateData,
-    Holiday,
-    Item,
-    Location,
-    LocationConnection,
-    LocationKind,
-    LocationStateData,
-    LoreEntry,
-    Month,
-    Season,
-    SecrecyLevel,
-    SettingCalendar,
-    Weather,
-    WeatherKind,
 )
 from .state import (
     AppliedDelta,
@@ -290,6 +271,25 @@ from .time import (
     TimeAdvanceReason,
     TimeAdvanceResult,
     WeatherChange,
+)
+from .world import (
+    Coords,
+    Faction,
+    FactionGoal,
+    FactionStateData,
+    Holiday,
+    Item,
+    Location,
+    LocationConnection,
+    LocationKind,
+    LocationStateData,
+    LoreEntry,
+    Month,
+    Season,
+    SecrecyLevel,
+    Weather,
+    WeatherKind,
+    WorldCalendar,
 )
 
 __all__ = [  # noqa: RUF022 — grouped by topic for readability
@@ -337,10 +337,10 @@ __all__ = [  # noqa: RUF022 — grouped by topic for readability
     "ResolutionSource",
     "ResolvedEntity",
     "ResolvedLocation",
-    "SettingMeta",
-    "SettingRef",
+    "WorldMeta",
+    "WorldRef",
     "UpgradeReport",
-    # setting
+    # world
     "Coords",
     "Faction",
     "FactionGoal",
@@ -355,7 +355,7 @@ __all__ = [  # noqa: RUF022 — grouped by topic for readability
     "Month",
     "SecrecyLevel",
     "Season",
-    "SettingCalendar",
+    "WorldCalendar",
     "Weather",
     "WeatherKind",
     # scene
@@ -521,7 +521,7 @@ __all__ = [  # noqa: RUF022 — grouped by topic for readability
     "OrchestratorProtocol",
     "PluginsProtocol",
     "SceneManagerProtocol",
-    "SettingProtocol",
+    "WorldProtocol",
     "StateStoreProtocol",
     "TimeEngineProtocol",
     "TurnReplayerProtocol",

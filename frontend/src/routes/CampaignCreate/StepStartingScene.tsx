@@ -9,7 +9,7 @@ interface Props {
   greetings: GreetingSummary[];
   loading: boolean;
   error: string | null;
-  castBySetting: Map<string, CharacterSummary[]>;
+  castByWorld: Map<string, CharacterSummary[]>;
 }
 
 interface CastCandidate {
@@ -24,13 +24,13 @@ export function StepStartingScene({
   greetings,
   loading,
   error,
-  castBySetting,
+  castByWorld,
 }: Props) {
   const selectedGreeting = greetings.find((g) => g.id === draft.greetingId) ?? null;
 
   const candidates = useMemo<CastCandidate[]>(() => {
-    // Refs are settingId-qualified so a character "protagonist" can coexist
-    // across multiple settings without collapsing. PCs already store their
+    // Refs are worldId-qualified so a character "protagonist" can coexist
+    // across multiple worlds without collapsing. PCs already store their
     // full character_ref (e.g. "wod-london/alex") so they don't need
     // re-qualification.
     const byRef = new Map<string, CastCandidate>();
@@ -41,15 +41,15 @@ export function StepStartingScene({
         source: "PC",
       });
     }
-    for (const [settingId, chars] of castBySetting) {
+    for (const [worldId, chars] of castByWorld) {
       for (const c of chars) {
-        const ref = `${settingId}/${c.id}`;
+        const ref = `${worldId}/${c.id}`;
         if (byRef.has(ref)) continue;
-        byRef.set(ref, { id: ref, name: c.name ?? c.id, source: settingId });
+        byRef.set(ref, { id: ref, name: c.name ?? c.id, source: worldId });
       }
     }
     return [...byRef.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [draft.pcs, castBySetting]);
+  }, [draft.pcs, castByWorld]);
 
   const setCast = (next: string[]) => update({ startingCast: next });
 
@@ -57,7 +57,7 @@ export function StepStartingScene({
     <div className="wizard-step">
       <h3>Step 6 — Starting scene</h3>
       <p className="wizard-step-help">
-        Pick a greeting from the composed settings or skip to start with a blank scene. Confirm the
+        Pick a greeting from the composed worlds or skip to start with a blank scene. Confirm the
         opening location, time, and cast.
       </p>
 
@@ -118,12 +118,12 @@ export function StepStartingScene({
         <dd>{draft.id || <em>missing</em>}</dd>
         <dt>Name</dt>
         <dd>{draft.name || <em>missing</em>}</dd>
-        <dt>Settings</dt>
+        <dt>Worlds</dt>
         <dd>
-          {draft.settingRefs.length === 0 ? (
+          {draft.worldRefs.length === 0 ? (
             <em>none — pick at least one</em>
           ) : (
-            draft.settingRefs.map((r) => r.setting_id).join(", ")
+            draft.worldRefs.map((r) => r.world_id).join(", ")
           )}
         </dd>
         <dt>Mechanics</dt>
@@ -182,7 +182,7 @@ function CastInput({ value, onChange, candidates }: CastInputProps) {
     if (e.key === "Enter") {
       e.preventDefault();
       // Only add when there's a matching candidate. Free-form refs (no
-      // setting prefix) would 400 at the backend, so we'd rather wait for
+      // world prefix) would 400 at the backend, so we'd rather wait for
       // the user to pick or refine than commit something that won't work.
       if (matches[0]) add(matches[0].id);
     } else if (e.key === "Backspace" && query === "" && value.length > 0) {

@@ -31,11 +31,11 @@ from grimoire.mechanics import MechanicsConfig, MechanicsService
 from grimoire.orchestrator.service import OrchestratorService
 from grimoire.plugins import PluginsConfig, PluginsService
 from grimoire.scenes import SceneManager
-from grimoire.setting import SettingService
 from grimoire.state_store import StateStore
 from grimoire.storage import Database, apply_migrations
 from grimoire.time_engine.service import TimeEngineService
 from grimoire.watcher.watcher import FileWatcher
+from grimoire.world import WorldService
 
 log = logging.getLogger(__name__)
 
@@ -114,8 +114,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             container.state_store = StateStore(db=db, data_root=data_root)
         if container.library is None:
             container.library = LibraryService(container.state_store)
-        if container.setting is None:
-            container.setting = SettingService(container.library)
+        if container.world is None:
+            container.world = WorldService(container.library)
         if container.mechanics is None:
             container.mechanics = MechanicsService(
                 MechanicsConfig.for_data_root(data_root),
@@ -158,7 +158,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # LLM provider plugin is installed — calls that route through the
         # gateway will raise a clear "no provider" error rather than blowing
         # up at construction time, so the rest of the routes (library,
-        # images, settings, etc.) keep working.
+        # images, worlds, etc.) keep working.
         if container.extras.get("llm_gateway") is None:
             container.extras["llm_gateway"] = LLMGatewayService(
                 plugins=container.plugins,
@@ -172,7 +172,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             container.extras["context_builder"] = ContextBuilderService(
                 library=container.library,
                 characters=container.characters,
-                setting=container.setting,
+                world=container.world,
                 scenes=container.scenes,
                 continuity=container.continuity,
                 mechanics=container.mechanics,
@@ -185,7 +185,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if container.time_engine is None:
             container.time_engine = TimeEngineService(
                 store=container.state_store,
-                setting=container.setting,
+                world=container.world,
                 characters=container.characters,
                 mechanics=container.mechanics,
                 continuity=container.continuity,
@@ -200,7 +200,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             sources = DataSources(
                 scenes=container.scenes,
                 characters=container.characters,
-                setting=container.setting,
+                world=container.world,
                 continuity=container.continuity,
                 images=container.imagegen,
                 data_root=data_root,

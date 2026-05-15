@@ -25,7 +25,7 @@ export interface CharacterCard {
   id: string;
   name: string;
   role: string;
-  setting_id: string | null;
+  world_id: string | null;
   aliases: string[];
   age: string | null;
   tags: string[];
@@ -41,7 +41,7 @@ export interface ResolutionSource {
   layer: "emergent" | "override" | "library_snapshot" | "library_live";
   scope: string;
   library_id: string | null;
-  setting_id: string | null;
+  world_id: string | null;
   version: number | null;
   override_applied: boolean;
 }
@@ -57,7 +57,7 @@ export interface ResolvedCharacter {
 export interface ResolvedEntity {
   kind: string;
   asset_id: string;
-  setting_id: string | null;
+  world_id: string | null;
   name: string;
   frontmatter: Record<string, unknown>;
   body: string;
@@ -66,8 +66,8 @@ export interface ResolvedEntity {
   extras: Record<string, unknown>;
 }
 
-export interface SettingRef {
-  setting_id: string;
+export interface WorldRef {
+  world_id: string;
   priority: number;
   include: string[];
   bound_at_version: number;
@@ -75,7 +75,7 @@ export interface SettingRef {
 }
 
 export interface Composition {
-  settings: SettingRef[];
+  worlds: WorldRef[];
   mechanics: string | null;
   style_guide_id: string | null;
   image_preset_id: string | null;
@@ -85,7 +85,7 @@ export interface Composition {
 
 export interface Greeting {
   id: string;
-  setting_id: string;
+  world_id: string;
   name: string;
   starting_location: string | null;
   starting_time: string | null;
@@ -162,7 +162,7 @@ export interface RegisteredMechanicsModule {
 
 export interface UpgradeReport {
   campaign_id: string;
-  setting_id: string;
+  world_id: string;
   from_version: number;
   to_version: number;
   changed_entities: string[];
@@ -170,7 +170,7 @@ export interface UpgradeReport {
   removed_entities: string[];
 }
 
-export interface SettingMeta {
+export interface WorldMeta {
   id: string;
   name: string;
   description: string;

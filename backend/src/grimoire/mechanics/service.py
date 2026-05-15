@@ -425,7 +425,7 @@ def _parse_entity_ref(
 
     * ``"<kind>:<entity_id>"`` — e.g. ``"character:hyde-smythe"``
     * ``"<kind>/<entity_id>"`` — e.g. ``"character/hyde-smythe"``
-    * ``"library:settings/<setting>/<plural-kind>/<asset>"`` —
+    * ``"library:worlds/<world>/<plural-kind>/<asset>"`` —
       handled via :class:`EntityRef.parse`.
     * Plain id with ``fallback_kind`` supplied.
     """

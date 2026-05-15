@@ -45,7 +45,7 @@ from grimoire.types.imagegen import ImageMetadata
 
 MIME_TYPE = "application/epub+zip"
 OEBPS = "OEBPS"
-DEFAULT_APPENDICES = ("cast", "setting", "calendar", "gallery")
+DEFAULT_APPENDICES = ("cast", "world", "calendar", "gallery")
 
 _NOVEL_CSS = """\
 @charset "utf-8";
@@ -140,7 +140,7 @@ def _option_schema() -> JsonSchema:
                             "type": "string",
                             "enum": [
                                 "cast",
-                                "setting",
+                                "world",
                                 "locations",
                                 "lore",
                                 "factions",
@@ -594,10 +594,10 @@ def _render_appendices(
 
     if "cast" in appendices and snapshot.characters:
         items.append(_appendix_item("cast", "Cast", _render_cast(snapshot.characters)))
-    if any(name in appendices for name in ("setting", "locations", "lore", "factions", "items")):
-        body = _render_setting_appendix(snapshot, appendices)
+    if any(name in appendices for name in ("world", "locations", "lore", "factions", "items")):
+        body = _render_world_appendix(snapshot, appendices)
         if body:
-            items.append(_appendix_item("setting", "Setting", body))
+            items.append(_appendix_item("world", "World", body))
     if "continuity" in appendices and (snapshot.facts or snapshot.commitments):
         items.append(
             _appendix_item(
@@ -653,11 +653,11 @@ def _render_cast(characters: Iterable[Character]) -> str:
     return "\n".join(rows)
 
 
-def _render_setting_appendix(snapshot: CampaignSnapshot, appendices: set[str]) -> str:
+def _render_world_appendix(snapshot: CampaignSnapshot, appendices: set[str]) -> str:
     parts: list[str] = []
-    if snapshot.settings:
-        parts.append("<h2>Settings</h2><ul>")
-        for st in snapshot.settings:
+    if snapshot.worlds:
+        parts.append("<h2>Worlds</h2><ul>")
+        for st in snapshot.worlds:
             parts.append(
                 f"<li><strong>{html.escape(st.name)}</strong> — "
                 f"{html.escape(st.description or st.genre or '')}</li>"
@@ -669,7 +669,7 @@ def _render_setting_appendix(snapshot: CampaignSnapshot, appendices: set[str]) -
         ("lore", "Lore", snapshot.lore),
         ("items", "Items", snapshot.items),
     ):
-        if (kind in appendices or "setting" in appendices) and items:
+        if (kind in appendices or "world" in appendices) and items:
             parts.append(f"<h2>{label}</h2>")
             parts.append(_render_library_dl(items))
     return "\n".join(parts)

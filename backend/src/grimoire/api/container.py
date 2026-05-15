@@ -30,7 +30,7 @@ class ServiceContainer:
     stream: StreamManager | None = None
 
     library: Any = None
-    setting: Any = None
+    world: Any = None
     characters: Any = None
     scenes: Any = None
     continuity: Any = None

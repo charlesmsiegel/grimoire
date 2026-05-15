@@ -1,6 +1,6 @@
 """Data-source protocols the Export module reads from.
 
-Concrete services (Scene Manager, Characters, Setting, Continuity, ImageGen)
+Concrete services (Scene Manager, Characters, World, Continuity, ImageGen)
 implement supersets of these; tests can also supply lightweight in-memory
 stubs without pulling in the full SQLite stack. Keeping this surface
 narrow means an adapter never reaches into the State Store directly.
@@ -22,7 +22,7 @@ from grimoire.types.common import (
 from grimoire.types.composition import (
     Greeting,
     LibraryEntity,
-    SettingMeta,
+    WorldMeta,
 )
 from grimoire.types.continuity import Commitment, Fact
 from grimoire.types.imagegen import ImageMetadata
@@ -43,12 +43,12 @@ class CharacterSource(Protocol):
 
 
 @runtime_checkable
-class SettingSource(Protocol):
-    async def get_composition_settings(self, campaign_id: CampaignId) -> list[SettingMeta]: ...
+class WorldSource(Protocol):
+    async def get_composition_worlds(self, campaign_id: CampaignId) -> list[WorldMeta]: ...
 
-    async def list_in_setting(self, setting_id: str, kind: str) -> list[LibraryEntity]: ...
+    async def list_in_world(self, world_id: str, kind: str) -> list[LibraryEntity]: ...
 
-    async def list_greetings(self, setting_id: str) -> list[Greeting]: ...
+    async def list_greetings(self, world_id: str) -> list[Greeting]: ...
 
     async def get_location(
         self,
@@ -88,14 +88,14 @@ class _NullCharacterSource:
         return []
 
 
-class _NullSettingSource:
-    async def get_composition_settings(self, campaign_id: CampaignId) -> list[SettingMeta]:
+class _NullWorldSource:
+    async def get_composition_worlds(self, campaign_id: CampaignId) -> list[WorldMeta]:
         return []
 
-    async def list_in_setting(self, setting_id: str, kind: str) -> list[LibraryEntity]:
+    async def list_in_world(self, world_id: str, kind: str) -> list[LibraryEntity]:
         return []
 
-    async def list_greetings(self, setting_id: str) -> list[Greeting]:
+    async def list_greetings(self, world_id: str) -> list[Greeting]:
         return []
 
     async def get_location(
@@ -137,7 +137,7 @@ class DataSources:
         scenes: SceneSource,
         *,
         characters: CharacterSource | None = None,
-        setting: SettingSource | None = None,
+        world: WorldSource | None = None,
         continuity: ContinuitySource | None = None,
         images: ImageSource | None = None,
         pcs: PCSource | None = None,
@@ -145,7 +145,7 @@ class DataSources:
     ) -> None:
         self.scenes = scenes
         self.characters = characters or _NullCharacterSource()
-        self.setting = setting or _NullSettingSource()
+        self.world = world or _NullWorldSource()
         self.continuity = continuity or _NullContinuitySource()
         self.images = images or _NullImageSource()
         self.pcs = pcs or _NullPCSource()
@@ -159,5 +159,5 @@ __all__ = [
     "ImageSource",
     "PCSource",
     "SceneSource",
-    "SettingSource",
+    "WorldSource",
 ]

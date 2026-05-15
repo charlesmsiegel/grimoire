@@ -1,7 +1,7 @@
-"""Setting module types: locations, items, factions, lore, weather, calendar.
+"""World module types: locations, items, factions, lore, weather, calendar.
 
-Spec 09. Wraps the typed view of the entity kinds that live inside a setting
-directory plus the procedural fixtures the Setting module computes on top of
+Spec 09. Wraps the typed view of the entity kinds that live inside a world
+directory plus the procedural fixtures the World module computes on top of
 them (weather, season, holiday). Character behaviors live in
 ``types/characters.py``; sheets live behind the mechanics module API.
 """
@@ -41,14 +41,14 @@ class Coords(BaseModel):
 
 
 class LocationConnection(BaseModel):
-    to: str  # asset_id of the connected location (same setting)
+    to: str  # asset_id of the connected location (same world)
     via: str = ""  # 'street', 'door', 'path', 'gate', ...
     duration_min: int = 0
     notes: str = ""
 
 
 class Location(BaseModel):
-    setting_id: str
+    world_id: str
     id: str
     name: str
     parent_id: str | None = None
@@ -66,7 +66,7 @@ class Location(BaseModel):
 
 
 class Item(BaseModel):
-    setting_id: str
+    world_id: str
     id: str
     name: str
     aliases: list[str] = Field(default_factory=list)
@@ -78,7 +78,7 @@ class Item(BaseModel):
 
 
 class Faction(BaseModel):
-    setting_id: str
+    world_id: str
     id: str
     name: str
     kind: str = ""
@@ -101,7 +101,7 @@ class SecrecyLevel(StrEnum):
 
 
 class LoreEntry(BaseModel):
-    setting_id: str
+    world_id: str
     id: str
     title: str
     body: str = ""
@@ -177,8 +177,8 @@ class Holiday(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-class SettingCalendar(BaseModel):
-    setting_id: str
+class WorldCalendar(BaseModel):
+    world_id: str
     epoch: datetime | None = None
     months: list[Month] = Field(default_factory=list)
     days_per_week: int = 7
@@ -202,5 +202,5 @@ class LocationStateData(BaseModel):
 
 
 def in_game_time(value: datetime) -> InGameTime:
-    """Convenience wrapper used by Setting helpers."""
+    """Convenience wrapper used by World helpers."""
     return InGameTime(moment=value)

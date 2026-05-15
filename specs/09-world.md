@@ -1,64 +1,64 @@
-# 09 — Setting
+# 09 — World
 
 ## Purpose
 
-The Setting module is the container for everything in a world. It owns:
+The World module is the container for everything in a world. It owns:
 
-- The setting directory (`data/library/settings/<id>/`) and its `setting.yaml` metadata
-- File IO and CRUD for every entity kind within a setting: characters, items, locations, lore, factions, greetings
-- Composition resolution: when a campaign references multiple settings with `include` filters, Setting walks the refs and returns the right entities
-- The setting calendar (months, seasons, holidays)
+- The world directory (`data/library/worlds/<id>/`) and its `world.yaml` metadata
+- File IO and CRUD for every entity kind within a world: characters, items, locations, lore, factions, greetings
+- Composition resolution: when a campaign references multiple worlds with `include` filters, World walks the refs and returns the right entities
+- The world calendar (months, seasons, holidays)
 - Procedural weather (per location, per campaign seed)
 - Spatial queries (location adjacency, hierarchy)
 - Lore keyword indexing for archive-tier triggers
 - Faction state (campaign-scoped; library defines faction identity, campaign tracks current state)
-- Setting versioning and version pinning
+- World versioning and version pinning
 
-This is the module that handles the *world* in a campaign. Characters live in settings but have specific behaviors (voice, drift, tier, PC role) handled by `08-characters.md` — that's a behavior layer on top of Setting's storage.
+This is the module that handles the *world* in a campaign. Characters live in worlds but have specific behaviors (voice, drift, tier, PC role) handled by `08-characters.md` — that's a behavior layer on top of World's storage.
 
 For the on-disk file format details, see `18-library.md`. For sheet schemas attached by mechanics modules, see `06-mechanics.md`.
 
 ## Responsibilities
 
-- Manage settings as library directories (create, list, get, delete, version)
-- Read/write `setting.yaml` for setting metadata
-- Manage all entity kinds within a setting (CRUD; file IO; index updates)
+- Manage worlds as library directories (create, list, get, delete, version)
+- Read/write `world.yaml` for world metadata
+- Manage all entity kinds within a world (CRUD; file IO; index updates)
 - Resolve entity reads through the read cascade (campaign-local → library refs with `include` filters → fail)
 - Apply campaign-local overrides on top of library entities
 - Generate weather and atmosphere procedurally
-- Maintain the setting calendar
+- Maintain the world calendar
 - Maintain location hierarchy and adjacency queries
 - Manage faction state (campaign-scoped)
 - Maintain lore keyword index for archive-tier triggers
-- Promote campaign-local entities (any kind) into a setting on user action
-- Surface cross-setting links by shared id ("orchard exists in mythic-europe and faerun")
+- Promote campaign-local entities (any kind) into a world on user action
+- Surface cross-world links by shared id ("orchard exists in mythic-europe and faerun")
 
 ## Non-responsibilities
 
-- Does not own character-specific behaviors (voice anchors, drift detection, tier management, PC tracking) — those live in `08-characters.md` and layer over Setting's storage
+- Does not own character-specific behaviors (voice anchors, drift detection, tier management, PC tracking) — those live in `08-characters.md` and layer over World's storage
 - Does not own mechanical sheets — those are owned by mechanics modules (`06-mechanics.md`) and stored separately in campaign directories
-- Does not own scenes (Scene Manager does; scenes reference Setting entities by ref)
-- Does not advance time (Time Engine does; Setting provides weather, season, holiday)
-- Is not a plugin (Setting is core architecture)
+- Does not own scenes (Scene Manager does; scenes reference World entities by ref)
+- Does not advance time (Time Engine does; World provides weather, season, holiday)
+- Is not a plugin (World is core architecture)
 
-## What Setting actually stores
+## What World actually stores
 
-Setting is the storage layer for setting-internal content. For each entity kind, Setting handles:
+World is the storage layer for world-internal content. For each entity kind, World handles:
 
 | Kind | Library file path | Per-campaign override path | Per-campaign emergent path |
 |---|---|---|---|
-| characters | `<setting>/characters/<id>.md` | `campaigns/<c>/overrides/settings/<setting>/characters/<id>.yaml` | `campaigns/<c>/emergent/characters/<id>.md` |
-| items | `<setting>/items/<id>.md` | `campaigns/<c>/overrides/settings/<setting>/items/<id>.yaml` | `campaigns/<c>/emergent/items/<id>.md` |
-| locations | `<setting>/locations/<id>.md` | `campaigns/<c>/overrides/settings/<setting>/locations/<id>.yaml` | `campaigns/<c>/emergent/locations/<id>.md` |
-| lore | `<setting>/lore/<id>.md` | `campaigns/<c>/overrides/settings/<setting>/lore/<id>.yaml` | `campaigns/<c>/emergent/lore/<id>.md` |
-| factions | `<setting>/factions/<id>.md` | `campaigns/<c>/overrides/settings/<setting>/factions/<id>.yaml` | `campaigns/<c>/emergent/factions/<id>.md` |
-| greetings | `<setting>/greetings/<id>.md` | — (greetings aren't overridden) | — (greetings aren't emergent) |
+| characters | `<world>/characters/<id>.md` | `campaigns/<c>/overrides/worlds/<world>/characters/<id>.yaml` | `campaigns/<c>/emergent/characters/<id>.md` |
+| items | `<world>/items/<id>.md` | `campaigns/<c>/overrides/worlds/<world>/items/<id>.yaml` | `campaigns/<c>/emergent/items/<id>.md` |
+| locations | `<world>/locations/<id>.md` | `campaigns/<c>/overrides/worlds/<world>/locations/<id>.yaml` | `campaigns/<c>/emergent/locations/<id>.md` |
+| lore | `<world>/lore/<id>.md` | `campaigns/<c>/overrides/worlds/<world>/lore/<id>.yaml` | `campaigns/<c>/emergent/lore/<id>.md` |
+| factions | `<world>/factions/<id>.md` | `campaigns/<c>/overrides/worlds/<world>/factions/<id>.yaml` | `campaigns/<c>/emergent/factions/<id>.md` |
+| greetings | `<world>/greetings/<id>.md` | — (greetings aren't overridden) | — (greetings aren't emergent) |
 
-Characters get all the special character-behavior treatment from `08-characters.md`. Other kinds are handled by Setting directly with kind-specific helpers below.
+Characters get all the special character-behavior treatment from `08-characters.md`. Other kinds are handled by World directly with kind-specific helpers below.
 
-## Setting metadata
+## World metadata
 
-`<setting>/setting.yaml`:
+`<world>/world.yaml`:
 
 ```yaml
 id: wod-london
@@ -118,7 +118,7 @@ typical_occupants: []
 ```python
 @dataclass
 class Location:
-    setting_id: str
+    world_id: str
     id: str
     name: str
     parent_id: Optional[str]
@@ -147,7 +147,7 @@ class LocationState:                    # campaign-scoped, SQLite
     updated_at_turn: Optional[str]
 ```
 
-Hierarchy is within a setting; cross-setting `parent_id` is not supported (would require cross-library refs). The Context Builder uses hierarchy to find adjacent context — when in Camden Market, Setting provides parent "Camden" compressed plus connected locations.
+Hierarchy is within a world; cross-world `parent_id` is not supported (would require cross-library refs). The Context Builder uses hierarchy to find adjacent context — when in Camden Market, World provides parent "Camden" compressed plus connected locations.
 
 If a location carries a mechanical layer (a WoD Node, an Ars Magica Covenant), that's a separate sheet file owned by the active mechanics module — see `06-mechanics.md`. The library card describes the narrative; the sheet describes the mechanics.
 
@@ -173,7 +173,7 @@ A single-edged knife in a fishskin sheath...
 ```python
 @dataclass
 class Item:
-    setting_id: str
+    world_id: str
     id: str
     name: str
     aliases: list[str]
@@ -184,7 +184,7 @@ class Item:
     body: str
 ```
 
-Mechanical layer (weapon stats, fetish properties, enchantment effects) is owned by the active mechanics module via item sheets. Setting stores the narrative card; sheets live separately.
+Mechanical layer (weapon stats, fetish properties, enchantment effects) is owned by the active mechanics module via item sheets. World stores the narrative card; sheets live separately.
 
 ## Faction schema and behaviors
 
@@ -204,7 +204,7 @@ tags: [vampire, traditionalist, hierarchical]
 ```python
 @dataclass
 class Faction:
-    setting_id: str
+    world_id: str
     id: str
     name: str
     kind: str
@@ -229,7 +229,7 @@ class FactionState:                      # campaign-scoped, SQLite
     secrets: list[str]
 ```
 
-Faction state changes during time ticks; the Time Engine consults mechanics if any. Setting tracks faction identity (library) and state (campaign-scoped).
+Faction state changes during time ticks; the Time Engine consults mechanics if any. World tracks faction identity (library) and state (campaign-scoped).
 
 ## Lore schema and keyword triggers
 
@@ -248,7 +248,7 @@ secrecy: common-knowledge-among-kindred
 ```python
 @dataclass
 class LoreEntry:
-    setting_id: str
+    world_id: str
     id: str
     title: str
     body: str
@@ -260,7 +260,7 @@ class LoreEntry:
     secrecy: SecrecyLevel                # public | common-knowledge | restricted | secret
 ```
 
-Lore `keywords` trigger archive-tier inclusion when they appear in recent posts. The Context Builder calls `Setting.lore_by_keyword(...)` to find triggered entries. The `secrecy` field controls visibility — secret lore is available to the model but hidden from player-facing views by default.
+Lore `keywords` trigger archive-tier inclusion when they appear in recent posts. The Context Builder calls `World.lore_by_keyword(...)` to find triggered entries. The `secrecy` field controls visibility — secret lore is available to the model but hidden from player-facing views by default.
 
 ## Greetings
 
@@ -284,7 +284,7 @@ season_constraint: autumn               # optional
 ```python
 @dataclass
 class Greeting:
-    setting_id: str
+    world_id: str
     id: str
     name: str
     tags: list[str]
@@ -297,7 +297,7 @@ class Greeting:
     body: str                           # opening narration
 ```
 
-When a campaign is created with a greeting selected, Setting hands the greeting to the Orchestrator, which seeds scene 1: time set, location set, present cast in place, opening narration appended as the first post.
+When a campaign is created with a greeting selected, World hands the greeting to the Orchestrator, which seeds scene 1: time set, location set, present cast in place, opening narration appended as the first post.
 
 Greetings aren't overridden or emergent — they're library-only opening scenarios.
 
@@ -308,7 +308,7 @@ Other modules don't read raw scoped rows; they call resolution APIs:
 ```python
 @dataclass
 class ResolvedEntity:
-    setting_id: Optional[str]            # None if campaign-local emergent
+    world_id: Optional[str]            # None if campaign-local emergent
     kind: str
     id: str
     # ... entity-kind-specific fields ...
@@ -317,18 +317,18 @@ class ResolvedEntity:
     overrides_applied: list[str]
 ```
 
-The State Store implements the cascade; the Setting module wraps it for convenience.
+The State Store implements the cascade; the World module wraps it for convenience.
 
-## Cross-setting variant lookup
+## Cross-world variant lookup
 
-Same asset id across settings = variants (see `18-library.md`). Setting exposes:
+Same asset id across worlds = variants (see `18-library.md`). World exposes:
 
 ```python
-async def cross_setting_lookup(
+async def cross_world_lookup(
     self,
     asset_id: str,
     kind: str,                          # 'location', 'item', 'lore', 'faction'
-    exclude_setting: Optional[str] = None,
+    exclude_world: Optional[str] = None,
 ) -> list[LibraryEntity]:
     # SELECT * FROM library_index WHERE kind = ? AND asset_id = ?
 ```
@@ -346,7 +346,7 @@ async def weather_for(
     in_game_time: InGameTime,
     campaign_id: str,
 ) -> Weather:
-    """Uses location.climate_zone, setting calendar season, per-campaign RNG seed.
+    """Uses location.climate_zone, world calendar season, per-campaign RNG seed.
     Same inputs = same weather. Forks preserve."""
 ```
 
@@ -354,21 +354,21 @@ Player can override (the Extractor catches "and it began to rain" and writes a c
 
 ## Calendar
 
-Loaded from `setting.yaml`. The Time Engine uses it for advancement. If a campaign references multiple settings (crossover) with conflicting calendars, the user picks at composition time.
+Loaded from `world.yaml`. The Time Engine uses it for advancement. If a campaign references multiple worlds (crossover) with conflicting calendars, the user picks at composition time.
 
 ```python
-def calendar_for(self, campaign_id: str) -> SettingCalendar: ...
+def calendar_for(self, campaign_id: str) -> WorldCalendar: ...
 def season_for(self, when: InGameTime, campaign_id: str) -> Season: ...
 def holiday_at(self, when: InGameTime, campaign_id: str) -> Optional[Holiday]: ...
 ```
 
 ## Composition: `include` filters
 
-A campaign can include only some entity kinds from a referenced setting. The composition declares:
+A campaign can include only some entity kinds from a referenced world. The composition declares:
 
 ```yaml
 composition:
-  settings:
+  worlds:
     - id: faerun
       priority: 1
       include: [characters]              # only the cast
@@ -378,7 +378,7 @@ composition:
   mechanics: wod-mechanics
 ```
 
-When `list_locations_for_campaign(campaign_id)` is called, Setting consults `campaign_setting_refs`, walks each ref in priority order, applies the `include` filter, and returns the merged list. Same for items, lore, factions, greetings. (Characters are listed via the Characters module, which delegates to Setting for storage and adds character-specific resolution.)
+When `list_locations_for_campaign(campaign_id)` is called, World consults `campaign_world_refs`, walks each ref in priority order, applies the `include` filter, and returns the merged list. Same for items, lore, factions, greetings. (Characters are listed via the Characters module, which delegates to World for storage and adds character-specific resolution.)
 
 ## Promotion: campaign-local → library
 
@@ -388,11 +388,11 @@ async def promote_to_library(
     campaign_id: str,
     kind: str,                          # 'item', 'location', 'lore', 'faction'
     campaign_entity_id: str,
-    target_setting_id: str,
+    target_world_id: str,
 ) -> str:                                # returns library path
     # 1. Read the emergent entity from campaign-local
     # 2. Render to markdown + YAML frontmatter
-    # 3. Write to <library>/settings/<target>/<kind>/<id>.md
+    # 3. Write to <library>/worlds/<target>/<kind>/<id>.md
     # 4. Watcher picks it up; library_index gains a row
     # 5. Replace emergent record with reference; campaign keeps using it
 ```
@@ -402,21 +402,21 @@ Character promotion is the same operation but routed through the Characters modu
 ## Interface
 
 ```python
-class Setting(Protocol):
-    # Setting management
-    async def list_settings(self) -> list[SettingMeta]: ...
-    async def get_setting(self, setting_id: str) -> SettingMeta: ...
-    async def create_setting(self, id: str, meta: SettingMeta) -> SettingMeta: ...
-    async def update_setting_meta(self, setting_id: str, patch: dict) -> SettingMeta: ...
-    async def delete_setting(self, setting_id: str) -> None: ...
-    async def fork_setting(self, source_id: str, new_id: str) -> SettingMeta: ...
+class World(Protocol):
+    # World management
+    async def list_worlds(self) -> list[WorldMeta]: ...
+    async def get_world(self, world_id: str) -> WorldMeta: ...
+    async def create_world(self, id: str, meta: WorldMeta) -> WorldMeta: ...
+    async def update_world_meta(self, world_id: str, patch: dict) -> WorldMeta: ...
+    async def delete_world(self, world_id: str) -> None: ...
+    async def fork_world(self, source_id: str, new_id: str) -> WorldMeta: ...
 
     # Generic per-kind CRUD (characters delegated to 08-characters; everything else here)
-    async def list_in_setting(self, setting_id: str, kind: str) -> list[LibraryEntity]: ...
-    async def get(self, setting_id: str, kind: str, id: str) -> LibraryEntity: ...
-    async def create(self, setting_id: str, kind: str, entity: dict) -> LibraryEntity: ...
-    async def update(self, setting_id: str, kind: str, id: str, patch: dict) -> LibraryEntity: ...
-    async def delete(self, setting_id: str, kind: str, id: str) -> None: ...
+    async def list_in_world(self, world_id: str, kind: str) -> list[LibraryEntity]: ...
+    async def get(self, world_id: str, kind: str, id: str) -> LibraryEntity: ...
+    async def create(self, world_id: str, kind: str, entity: dict) -> LibraryEntity: ...
+    async def update(self, world_id: str, kind: str, id: str, patch: dict) -> LibraryEntity: ...
+    async def delete(self, world_id: str, kind: str, id: str) -> None: ...
 
     # Per-campaign resolution
     async def resolve(self, entity_ref: str, campaign_id: str) -> ResolvedEntity: ...
@@ -432,12 +432,12 @@ class Setting(Protocol):
     async def path_between(self, a: str, b: str, campaign_id: str) -> list[LocationConnection]: ...
     async def locations_within(self, parent_ref: str, campaign_id: str, depth: int = 1) -> list[ResolvedEntity]: ...
 
-    # Cross-setting variant lookup
-    async def cross_setting_lookup(
+    # Cross-world variant lookup
+    async def cross_world_lookup(
         self,
         asset_id: str,
         kind: str,
-        exclude_setting: Optional[str] = None,
+        exclude_world: Optional[str] = None,
     ) -> list[LibraryEntity]: ...
 
     # Lore
@@ -455,8 +455,8 @@ class Setting(Protocol):
     ) -> None: ...
 
     # Greetings
-    async def list_greetings(self, setting_id: str) -> list[Greeting]: ...
-    async def get_greeting(self, setting_id: str, id: str) -> Greeting: ...
+    async def list_greetings(self, world_id: str) -> list[Greeting]: ...
+    async def get_greeting(self, world_id: str, id: str) -> Greeting: ...
 
     # Weather
     async def weather_for(
@@ -475,16 +475,16 @@ class Setting(Protocol):
     ) -> None: ...
 
     # Calendar
-    def calendar_for(self, campaign_id: str) -> SettingCalendar: ...
+    def calendar_for(self, campaign_id: str) -> WorldCalendar: ...
     def season_for(self, when: InGameTime, campaign_id: str) -> Season: ...
     def holiday_at(self, when: InGameTime, campaign_id: str) -> Optional[Holiday]: ...
 
     # Composition (delegated to State Store; surfaced here for convenience)
     async def get_composition(self, campaign_id: str) -> Composition: ...
-    async def upgrade_setting_ref(
+    async def upgrade_world_ref(
         self,
         campaign_id: str,
-        setting_id: str,
+        world_id: str,
     ) -> UpgradeReport: ...
 
     # Promotion (non-character kinds; characters go through Characters module)
@@ -493,14 +493,14 @@ class Setting(Protocol):
         campaign_id: str,
         kind: str,
         campaign_entity_id: str,
-        target_setting_id: str,
+        target_world_id: str,
     ) -> str: ...
 ```
 
 ## Configuration
 
 ```yaml
-setting:
+world:
   weather:
     enabled: true
     seed_per_campaign: true
@@ -517,9 +517,9 @@ setting:
 ## Open questions (deferred)
 
 - **Map UI.** Worth having? v2 candidate; schema supports coordinates and connections.
-- **Travel mechanics.** Setting handles description; mechanics handles mechanical effects.
+- **Travel mechanics.** World handles description; mechanics handles mechanical effects.
 - **Procedural location generation.** "I enter a tavern" — auto-generate one? Yes via LLM, campaign-local emergent, user review.
-- **Cross-setting lore sharing.** Some lore appears across variants (a religion in two settings). v1: duplicate; v2: lore families if patterns emerge.
+- **Cross-world lore sharing.** Some lore appears across variants (a religion in two worlds). v1: duplicate; v2: lore families if patterns emerge.
 - **Player vs. model lore.** `secrecy_level` handles this; Frontend hides player-secret lore.
-- **Crossover calendars.** User picks at composition time when multiple settings disagree.
-- **Setting forks via directory copy.** Easy and supported; UI provides a fork action.
+- **Crossover calendars.** User picks at composition time when multiple worlds disagree.
+- **World forks via directory copy.** Easy and supported; UI provides a fork action.

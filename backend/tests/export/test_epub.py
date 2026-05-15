@@ -7,7 +7,7 @@ import pytest
 
 from grimoire.export import EmptyExportError, EpubAdapter
 from grimoire.scenes.types import AuthorKind
-from grimoire.types.composition import SettingMeta
+from grimoire.types.composition import WorldMeta
 from grimoire.types.export import ExportOptions, ExportSelection
 
 from .conftest import (
@@ -117,12 +117,12 @@ async def test_epub_raises_on_empty_selection(tmp_path: Path) -> None:
 
 async def test_epub_includes_appendices(tmp_path: Path) -> None:
     scene = make_scene(post_count=1)
-    setting = SettingMeta(id="wod-london", name="WoD London", description="Foggy.")
+    world = WorldMeta(id="wod-london", name="WoD London", description="Foggy.")
     sources = make_sources(
         scenes=[scene],
         posts={scene.id: [make_post(scene.id, 1, "Opening line.")]},
         characters=[make_character(name="Alistair", description="Edwardian gent.")],
-        setting=setting,
+        world=world,
         locations=[make_library_location("Elysium")],
         facts=[make_fact("The cup is poisoned.")],
         commitments=[make_commitment("Speak with Edwin by dawn.")],
@@ -131,14 +131,14 @@ async def test_epub_includes_appendices(tmp_path: Path) -> None:
     out = tmp_path / "b.epub"
     result = await adapter.export(
         "campaign-a",
-        _selection(include_appendices=["cast", "setting", "continuity", "calendar"]),
+        _selection(include_appendices=["cast", "world", "continuity", "calendar"]),
         _options(),
         out,
     )
     assert result.scene_count == 1
     with zipfile.ZipFile(out) as zf:
         names = zf.namelist()
-        for slug in ("cast", "setting", "continuity", "calendar"):
+        for slug in ("cast", "world", "continuity", "calendar"):
             assert f"OEBPS/appendices/{slug}.xhtml" in names, slug
         cast = zf.read("OEBPS/appendices/cast.xhtml").decode("utf-8")
         assert "Alistair" in cast

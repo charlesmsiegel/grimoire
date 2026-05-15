@@ -33,14 +33,14 @@ async def test_emergent_entity_round_trip(store: StateStore) -> None:
 async def test_override_falls_back_to_library_via_resolve(store: StateStore) -> None:
     await _seed_campaign(store)
     await store.write_library_file(
-        library_id="settings/wod-london/characters/winifred",
+        library_id="worlds/wod-london/characters/winifred",
         frontmatter={"name": "winifred", "voice": "patient"},
         body="Library copy.",
         source="user",
     )
-    await store.upsert_setting_ref(
+    await store.upsert_world_ref(
         campaign_id="c1",
-        setting_id="wod-london",
+        world_id="wod-london",
         priority=1,
         include=["character"],
         track_latest=True,
@@ -52,7 +52,7 @@ async def test_override_falls_back_to_library_via_resolve(store: StateStore) -> 
         branch_id="c1:main",
         kind="character",
         asset_id="winifred",
-        setting_id="wod-london",
+        world_id="wod-london",
     )
     assert resolved["source"] == "library-live"
     assert resolved["frontmatter"]["voice"] == "patient"
@@ -60,7 +60,7 @@ async def test_override_falls_back_to_library_via_resolve(store: StateStore) -> 
     # Write an override; resolve merges frontmatter on top of the library row.
     await store.write_override(
         campaign_id="c1",
-        library_id="settings/wod-london/characters/winifred",
+        library_id="worlds/wod-london/characters/winifred",
         patch={"voice": "wary", "mood": "grim"},
         source="user",
     )
@@ -69,7 +69,7 @@ async def test_override_falls_back_to_library_via_resolve(store: StateStore) -> 
         branch_id="c1:main",
         kind="character",
         asset_id="winifred",
-        setting_id="wod-london",
+        world_id="wod-london",
     )
     assert resolved["source"] == "campaign-override"
     assert resolved["frontmatter"]["voice"] == "wary"
@@ -77,7 +77,7 @@ async def test_override_falls_back_to_library_via_resolve(store: StateStore) -> 
     assert resolved["frontmatter"]["name"] == "winifred"  # library still wins for unchanged keys
 
 
-async def test_resolve_finds_emergent_when_setting_omitted(store: StateStore) -> None:
+async def test_resolve_finds_emergent_when_world_omitted(store: StateStore) -> None:
     await _seed_campaign(store)
     await store.write_emergent(
         campaign_id="c1",

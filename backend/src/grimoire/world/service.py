@@ -1,6 +1,6 @@
-"""Concrete Setting service (spec 09).
+"""Concrete World service (spec 09).
 
-The Setting module is a behavior + storage layer for everything *inside* a
+The World module is a behavior + storage layer for everything *inside* a
 world: items, locations, lore, factions, greetings. CRUD lives in
 ``LibraryService`` (file-mediated writes through ``StateStore``); this
 service adds the per-campaign behaviors the Library on its own doesn't
@@ -8,12 +8,12 @@ provide:
 
 * Composition-aware listing with ``include`` filters
 * Spatial queries (adjacency, ``path_between``, ``locations_within``)
-* Cross-setting variant lookup
+* Cross-world variant lookup
 * Lore keyword triggers for archive-tier injection
 * Procedural weather + override
 * Calendar / season / holiday queries
 * Faction state CRUD (campaign-scoped, SQLite-backed)
-* Setting fork (directory copy)
+* World fork (directory copy)
 * Promotion of campaign-local entities into the library
 
 Character behaviors live in ``08-characters.md`` and layer on top.
@@ -35,10 +35,10 @@ from grimoire.types.composition import (
     Greeting,
     LibraryEntity,
     ResolvedEntity,
-    SettingMeta,
     UpgradeReport,
+    WorldMeta,
 )
-from grimoire.types.setting import (
+from grimoire.types.world import (
     Faction,
     FactionGoal,
     FactionStateData,
@@ -49,15 +49,15 @@ from grimoire.types.setting import (
     LocationKind,
     LoreEntry,
     Season,
-    SettingCalendar,
     Weather,
+    WorldCalendar,
 )
 
 from .calendar import holiday_at, parse_calendar, season_for
-from .errors import CompositionError, SettingError, SettingNotFoundError
+from .errors import CompositionError, WorldError, WorldNotFoundError
 from .weather import generate_weather
 
-# Setting-internal entity kinds Setting owns CRUD for.
+# World-internal entity kinds World owns CRUD for.
 _OWNED_KINDS: frozenset[str] = frozenset({"item", "location", "lore", "faction", "greeting"})
 
 
@@ -77,7 +77,7 @@ def _normalize_kind(kind: EntityKind | str) -> str:
     return kind
 
 
-class SettingService:
+class WorldService:
     """Spec 09 implementation.
 
     Construct with an initialized :class:`LibraryService` (which already
@@ -90,86 +90,86 @@ class SettingService:
         self.store: StateStore = library.store
 
     # ------------------------------------------------------------------ #
-    # Setting management
+    # World management
     # ------------------------------------------------------------------ #
 
-    async def list_settings(self) -> list[SettingMeta]:
-        return await self.library.list_settings()
+    async def list_worlds(self) -> list[WorldMeta]:
+        return await self.library.list_worlds()
 
-    async def get_setting(self, setting_id: str) -> SettingMeta:
-        return await self.library.get_setting(setting_id)
+    async def get_world(self, world_id: str) -> WorldMeta:
+        return await self.library.get_world(world_id)
 
-    async def create_setting(self, setting_id: str, meta: dict | None = None) -> SettingMeta:
-        return await self.library.create_setting(setting_id, meta or {})
+    async def create_world(self, world_id: str, meta: dict | None = None) -> WorldMeta:
+        return await self.library.create_world(world_id, meta or {})
 
-    async def update_setting_meta(self, setting_id: str, patch: dict) -> SettingMeta:
-        existing = await self.library.get_setting(setting_id)
+    async def update_world_meta(self, world_id: str, patch: dict) -> WorldMeta:
+        existing = await self.library.get_world(world_id)
         merged = existing.model_dump()
         merged.update(patch or {})
-        merged["id"] = setting_id
-        # ``update_entity`` would expect a setting entity-kind file; we round-trip
-        # through ``create_setting`` because the underlying file is YAML-only and
+        merged["id"] = world_id
+        # ``update_entity`` would expect a world entity-kind file; we round-trip
+        # through ``create_world`` because the underlying file is YAML-only and
         # writes are upserts.
-        return await self.library.create_setting(setting_id, merged)
+        return await self.library.create_world(world_id, merged)
 
-    async def delete_setting(self, setting_id: str) -> None:
-        # Delete every entity row under the setting, then the setting file itself.
+    async def delete_world(self, world_id: str) -> None:
+        # Delete every entity row under the world, then the world file itself.
         rows = await self.store.db.fetchall(
-            "SELECT id FROM library_index WHERE setting_id = ?", (setting_id,)
+            "SELECT id FROM library_index WHERE world_id = ?", (world_id,)
         )
         for row in rows:
-            await self.store.delete_library_file(library_id=row["id"], source="setting:delete")
-        # ``library_path`` for the setting card.
+            await self.store.delete_library_file(library_id=row["id"], source="world:delete")
+        # ``library_path`` for the world card.
         import contextlib
 
         from grimoire.state_store.indexers import make_library_id
 
         with contextlib.suppress(Exception):
             await self.store.delete_library_file(
-                library_id=make_library_id(setting_id, "setting", setting_id),
-                source="setting:delete",
+                library_id=make_library_id(world_id, "world", world_id),
+                source="world:delete",
             )
         # Best-effort directory cleanup.
-        root = library_root(self.store.data_root) / "settings" / setting_id
+        root = library_root(self.store.data_root) / "worlds" / world_id
         if root.exists():
             shutil.rmtree(root, ignore_errors=True)
 
-    async def fork_setting(self, src_setting_id: str, dst_setting_id: str) -> SettingMeta:
-        """Copy a setting directory under a new id and reindex.
+    async def fork_world(self, src_world_id: str, dst_world_id: str) -> WorldMeta:
+        """Copy a world directory under a new id and reindex.
 
         The user-visible operation is a deep directory copy; the index is
         rebuilt by walking the copied files through ``write_library_file``
         so every row carries a delta record and proper version numbers.
         """
-        src_root = library_root(self.store.data_root) / "settings" / src_setting_id
+        src_root = library_root(self.store.data_root) / "worlds" / src_world_id
         if not src_root.exists():
-            raise SettingNotFoundError(f"source setting {src_setting_id!r} does not exist")
-        dst_root = library_root(self.store.data_root) / "settings" / dst_setting_id
+            raise WorldNotFoundError(f"source world {src_world_id!r} does not exist")
+        dst_root = library_root(self.store.data_root) / "worlds" / dst_world_id
         if dst_root.exists():
-            raise SettingError(
-                f"destination setting {dst_setting_id!r} already exists at {dst_root}"
+            raise WorldError(
+                f"destination world {dst_world_id!r} already exists at {dst_root}"
             )
 
         shutil.copytree(src_root, dst_root)
 
         # Reindex by walking files and using the typed write API.
-        await self._reindex_setting_dir(dst_setting_id)
-        return await self.library.get_setting(dst_setting_id)
+        await self._reindex_world_dir(dst_world_id)
+        return await self.library.get_world(dst_world_id)
 
-    async def _reindex_setting_dir(self, setting_id: str) -> None:
+    async def _reindex_world_dir(self, world_id: str) -> None:
         from grimoire.files import load_yaml, read_markdown
         from grimoire.state_store.indexers import make_library_id
 
-        root = library_root(self.store.data_root) / "settings" / setting_id
-        setting_yaml = root / "setting.yaml"
-        if setting_yaml.exists():
-            data = dict(load_yaml(setting_yaml) or {})
-            data["id"] = setting_id
+        root = library_root(self.store.data_root) / "worlds" / world_id
+        world_yaml = root / "world.yaml"
+        if world_yaml.exists():
+            data = dict(load_yaml(world_yaml) or {})
+            data["id"] = world_id
             await self.store.write_library_file(
-                library_id=make_library_id(setting_id, "setting", setting_id),
+                library_id=make_library_id(world_id, "world", world_id),
                 frontmatter=data,
                 body="",
-                source="setting:fork",
+                source="world:fork",
             )
         for kind, dir_name in KIND_TO_DIR.items():
             sub = root / dir_name
@@ -181,27 +181,27 @@ class SettingService:
                 fm = dict(doc.frontmatter)
                 fm.setdefault("id", asset_id)
                 await self.store.write_library_file(
-                    library_id=make_library_id(setting_id, kind, asset_id),
+                    library_id=make_library_id(world_id, kind, asset_id),
                     frontmatter=fm,
                     body=doc.body,
-                    source="setting:fork",
+                    source="world:fork",
                 )
 
     # ------------------------------------------------------------------ #
     # Per-kind CRUD (delegates to LibraryService)
     # ------------------------------------------------------------------ #
 
-    async def list_in_setting(self, setting_id: str, kind: EntityKind | str) -> list[LibraryEntity]:
-        return await self.library.list_in_setting(setting_id, kind)
+    async def list_in_world(self, world_id: str, kind: EntityKind | str) -> list[LibraryEntity]:
+        return await self.library.list_in_world(world_id, kind)
 
     async def get_entity(
-        self, setting_id: str, kind: EntityKind | str, entity_id: str
+        self, world_id: str, kind: EntityKind | str, entity_id: str
     ) -> LibraryEntity:
-        return await self.library.get_entity(setting_id, kind, entity_id)
+        return await self.library.get_entity(world_id, kind, entity_id)
 
     async def create_entity(
         self,
-        setting_id: str,
+        world_id: str,
         kind: EntityKind | str,
         entity_id: str,
         frontmatter: dict,
@@ -211,16 +211,16 @@ class SettingService:
     ) -> LibraryEntity:
         normalized = _normalize_kind(kind)
         if normalized == "character":
-            raise SettingError("characters are owned by the Characters module")
+            raise WorldError("characters are owned by the Characters module")
         if normalized not in _OWNED_KINDS:
-            raise SettingError(f"unsupported kind {normalized!r}")
+            raise WorldError(f"unsupported kind {normalized!r}")
         return await self.library.create_entity(
-            setting_id, normalized, entity_id, frontmatter, body, source=source
+            world_id, normalized, entity_id, frontmatter, body, source=source
         )
 
     async def update_entity(
         self,
-        setting_id: str,
+        world_id: str,
         kind: EntityKind | str,
         entity_id: str,
         frontmatter_patch: dict | None = None,
@@ -229,41 +229,41 @@ class SettingService:
         source: str = "user",
     ) -> LibraryEntity:
         return await self.library.update_entity(
-            setting_id, kind, entity_id, frontmatter_patch, body, source=source
+            world_id, kind, entity_id, frontmatter_patch, body, source=source
         )
 
     async def delete_entity(
         self,
-        setting_id: str,
+        world_id: str,
         kind: EntityKind | str,
         entity_id: str,
         *,
         source: str = "user",
     ) -> None:
-        await self.library.delete_entity(setting_id, kind, entity_id, source=source)
+        await self.library.delete_entity(world_id, kind, entity_id, source=source)
 
     # ------------------------------------------------------------------ #
     # Typed projections (light wrappers over LibraryEntity)
     # ------------------------------------------------------------------ #
 
-    async def list_locations(self, setting_id: str) -> list[Location]:
-        rows = await self.library.list_in_setting(setting_id, EntityKind.LOCATION)
+    async def list_locations(self, world_id: str) -> list[Location]:
+        rows = await self.library.list_in_world(world_id, EntityKind.LOCATION)
         return [_location_from_entity(r) for r in rows]
 
-    async def get_location(self, setting_id: str, entity_id: str) -> Location:
-        ent = await self.library.get_entity(setting_id, "location", entity_id)
+    async def get_location(self, world_id: str, entity_id: str) -> Location:
+        ent = await self.library.get_entity(world_id, "location", entity_id)
         return _location_from_entity(ent)
 
-    async def list_items(self, setting_id: str) -> list[Item]:
-        rows = await self.library.list_in_setting(setting_id, EntityKind.ITEM)
+    async def list_items(self, world_id: str) -> list[Item]:
+        rows = await self.library.list_in_world(world_id, EntityKind.ITEM)
         return [_item_from_entity(r) for r in rows]
 
-    async def list_lore(self, setting_id: str) -> list[LoreEntry]:
-        rows = await self.library.list_in_setting(setting_id, EntityKind.LORE)
+    async def list_lore(self, world_id: str) -> list[LoreEntry]:
+        rows = await self.library.list_in_world(world_id, EntityKind.LORE)
         return [_lore_from_entity(r) for r in rows]
 
-    async def list_factions(self, setting_id: str) -> list[Faction]:
-        rows = await self.library.list_in_setting(setting_id, EntityKind.FACTION)
+    async def list_factions(self, world_id: str) -> list[Faction]:
+        rows = await self.library.list_in_world(world_id, EntityKind.FACTION)
         return [_faction_from_entity(r) for r in rows]
 
     # ------------------------------------------------------------------ #
@@ -278,7 +278,7 @@ class SettingService:
         campaign_id: CampaignId,
         kind: EntityKind | str,
     ) -> list[LibraryEntity]:
-        """Composition-aware listing of one kind. Walks setting refs by priority
+        """Composition-aware listing of one kind. Walks world refs by priority
         and applies each ref's ``include`` filter.
         """
         return await self.library.list_for_composition(campaign_id, kind)
@@ -288,42 +288,42 @@ class SettingService:
     # ------------------------------------------------------------------ #
 
     async def adjacent_locations(
-        self, setting_id: str, location_id: str, campaign_id: CampaignId | None = None
+        self, world_id: str, location_id: str, campaign_id: CampaignId | None = None
     ) -> list[Location]:
-        """Locations connected to ``location_id`` within the same setting.
+        """Locations connected to ``location_id`` within the same world.
 
-        Returns parent + connection targets that exist in the setting's
+        Returns parent + connection targets that exist in the world's
         index. Locations not found are silently skipped.
         """
-        center = await self.get_location(setting_id, location_id)
+        center = await self.get_location(world_id, location_id)
         out: list[Location] = []
         seen: set[str] = set()
         if center.parent_id and center.parent_id not in seen:
             try:
-                parent = await self.get_location(setting_id, center.parent_id)
+                parent = await self.get_location(world_id, center.parent_id)
                 out.append(parent)
                 seen.add(parent.id)
-            except SettingNotFoundError:
+            except WorldNotFoundError:
                 pass
         for conn in center.connections:
             if conn.to in seen:
                 continue
             try:
-                neighbor = await self.get_location(setting_id, conn.to)
+                neighbor = await self.get_location(world_id, conn.to)
                 out.append(neighbor)
                 seen.add(neighbor.id)
-            except SettingNotFoundError:
+            except WorldNotFoundError:
                 pass
         return out
 
     async def path_between(
-        self, setting_id: str, src_id: str, dst_id: str
+        self, world_id: str, src_id: str, dst_id: str
     ) -> list[LocationConnection]:
         """BFS over ``connections`` to find a route. Empty list = no route."""
         if src_id == dst_id:
             return []
         locations: dict[str, Location] = {
-            loc.id: loc for loc in await self.list_locations(setting_id)
+            loc.id: loc for loc in await self.list_locations(world_id)
         }
         if src_id not in locations or dst_id not in locations:
             return []
@@ -357,10 +357,10 @@ class SettingService:
         return path
 
     async def locations_within(
-        self, setting_id: str, parent_id: str, depth: int = 1
+        self, world_id: str, parent_id: str, depth: int = 1
     ) -> list[Location]:
         """Descendants of ``parent_id`` up to ``depth`` levels (parent-id chain)."""
-        all_locs = await self.list_locations(setting_id)
+        all_locs = await self.list_locations(world_id)
         by_parent: dict[str | None, list[Location]] = {}
         for loc in all_locs:
             by_parent.setdefault(loc.parent_id, []).append(loc)
@@ -376,18 +376,18 @@ class SettingService:
         return out
 
     # ------------------------------------------------------------------ #
-    # Cross-setting variants
+    # Cross-world variants
     # ------------------------------------------------------------------ #
 
-    async def cross_setting_lookup(
+    async def cross_world_lookup(
         self,
         asset_id: str,
         kind: EntityKind | str,
-        exclude_setting: str | None = None,
+        exclude_world: str | None = None,
     ) -> list[LibraryEntity]:
         rows = await self.library.variants_of(asset_id, kind)
-        if exclude_setting:
-            rows = [r for r in rows if r.setting_id != exclude_setting]
+        if exclude_world:
+            rows = [r for r in rows if r.world_id != exclude_world]
         return rows
 
     # ------------------------------------------------------------------ #
@@ -402,7 +402,7 @@ class SettingService:
         FTS-backed search lives on ``StateStore.keyword_search``; this method
         is a campaign-aware convenience that walks the composition first so
         results respect the ``include`` filter without leaking content from
-        excluded settings.
+        excluded worlds.
         """
         q = (query or "").strip().lower()
         if not q:
@@ -456,32 +456,32 @@ class SettingService:
     # Greetings
     # ------------------------------------------------------------------ #
 
-    async def list_greetings(self, setting_id: str) -> list[Greeting]:
-        return await self.library.list_greetings(setting_id)
+    async def list_greetings(self, world_id: str) -> list[Greeting]:
+        return await self.library.list_greetings(world_id)
 
-    async def get_greeting(self, setting_id: str, greeting_id: str) -> Greeting:
-        return await self.library.get_greeting(setting_id, greeting_id)
+    async def get_greeting(self, world_id: str, greeting_id: str) -> Greeting:
+        return await self.library.get_greeting(world_id, greeting_id)
 
     # ------------------------------------------------------------------ #
     # Calendar
     # ------------------------------------------------------------------ #
 
-    async def calendar_for(self, setting_id: str) -> SettingCalendar:
-        meta = await self.library.get_setting(setting_id)
-        return parse_calendar(setting_id, meta.calendar)
+    async def calendar_for(self, world_id: str) -> WorldCalendar:
+        meta = await self.library.get_world(world_id)
+        return parse_calendar(world_id, meta.calendar)
 
-    async def calendar_for_campaign(self, campaign_id: CampaignId) -> SettingCalendar:
-        """The calendar of the highest-priority setting in the composition.
+    async def calendar_for_campaign(self, campaign_id: CampaignId) -> WorldCalendar:
+        """The calendar of the highest-priority world in the composition.
 
-        Multi-setting campaigns with conflicting calendars are resolved at
+        Multi-world campaigns with conflicting calendars are resolved at
         composition time per spec §Configuration (``multiple_calendars_policy``
         is ``pick`` by default).
         """
         comp = await self.library.get_composition(campaign_id)
-        refs = sorted(comp.settings, key=lambda r: r.priority)
+        refs = sorted(comp.worlds, key=lambda r: r.priority)
         if not refs:
-            raise CompositionError(f"campaign {campaign_id!r} has no setting refs")
-        return await self.calendar_for(refs[0].setting_id)
+            raise CompositionError(f"campaign {campaign_id!r} has no world refs")
+        return await self.calendar_for(refs[0].world_id)
 
     async def season_for(self, when: InGameTime, campaign_id: CampaignId) -> Season | None:
         cal = await self.calendar_for_campaign(campaign_id)
@@ -497,7 +497,7 @@ class SettingService:
 
     async def weather_for(
         self,
-        setting_id: str,
+        world_id: str,
         location_id: str,
         when: InGameTime,
         campaign_id: CampaignId,
@@ -514,22 +514,22 @@ class SettingService:
         override = await self._get_weather_override(
             campaign_id=campaign_id,
             branch_id=branch,
-            location_ref=_location_ref(setting_id, location_id),
+            location_ref=_location_ref(world_id, location_id),
         )
         if override is not None:
             return override
 
         try:
-            loc = await self.get_location(setting_id, location_id)
+            loc = await self.get_location(world_id, location_id)
             climate = loc.climate_zone
             indoor = loc.indoor
-        except SettingNotFoundError:
+        except WorldNotFoundError:
             climate = None
             indoor = False
-        cal = await self.calendar_for(setting_id)
+        cal = await self.calendar_for(world_id)
         return generate_weather(
             campaign_id=campaign_id,
-            location_ref=_location_ref(setting_id, location_id),
+            location_ref=_location_ref(world_id, location_id),
             when=when,
             calendar=cal,
             climate_zone=climate,
@@ -538,7 +538,7 @@ class SettingService:
 
     async def override_weather(
         self,
-        setting_id: str,
+        world_id: str,
         location_id: str,
         weather: Weather,
         campaign_id: CampaignId,
@@ -561,7 +561,7 @@ class SettingService:
               weather = excluded.weather
             """,
             (
-                _location_ref(setting_id, location_id),
+                _location_ref(world_id, location_id),
                 campaign_id,
                 branch,
                 payload,
@@ -679,8 +679,8 @@ class SettingService:
     async def get_composition(self, campaign_id: CampaignId):
         return await self.library.get_composition(campaign_id)
 
-    async def upgrade_setting_ref(self, campaign_id: CampaignId, setting_id: str) -> UpgradeReport:
-        return await self.library.upgrade_setting_ref(campaign_id, setting_id)
+    async def upgrade_world_ref(self, campaign_id: CampaignId, world_id: str) -> UpgradeReport:
+        return await self.library.upgrade_world_ref(campaign_id, world_id)
 
     # ------------------------------------------------------------------ #
     # Promotion (non-character kinds)
@@ -691,15 +691,15 @@ class SettingService:
         campaign_id: CampaignId,
         kind: EntityKind | str,
         campaign_entity_id: str,
-        target_setting_id: str,
+        target_world_id: str,
         *,
         source: str = "user",
     ) -> str:
         normalized = _normalize_kind(kind)
         if normalized == "character":
-            raise SettingError("character promotion goes through the Characters module (task #12)")
+            raise WorldError("character promotion goes through the Characters module (task #12)")
         return await self.library.promote_to_library(
-            campaign_id, normalized, campaign_entity_id, target_setting_id, source=source
+            campaign_id, normalized, campaign_entity_id, target_world_id, source=source
         )
 
 
@@ -708,8 +708,8 @@ class SettingService:
 # ---------------------------------------------------------------------------
 
 
-def _location_ref(setting_id: str, asset_id: str) -> str:
-    return f"library:settings/{setting_id}/locations/{asset_id}"
+def _location_ref(world_id: str, asset_id: str) -> str:
+    return f"library:worlds/{world_id}/locations/{asset_id}"
 
 
 def _location_from_entity(ent: LibraryEntity) -> Location:
@@ -727,7 +727,7 @@ def _location_from_entity(ent: LibraryEntity) -> Location:
     coords = None
     raw_coords = fm.get("coordinates")
     if isinstance(raw_coords, dict) and "x" in raw_coords and "y" in raw_coords:
-        from grimoire.types.setting import Coords
+        from grimoire.types.world import Coords
 
         coords = Coords(x=float(raw_coords["x"]), y=float(raw_coords["y"]))
     try:
@@ -735,7 +735,7 @@ def _location_from_entity(ent: LibraryEntity) -> Location:
     except ValueError:
         kind = LocationKind.OTHER
     return Location(
-        setting_id=ent.setting_id or "",
+        world_id=ent.world_id or "",
         id=ent.asset_id,
         name=ent.name,
         parent_id=fm.get("parent_id"),
@@ -756,7 +756,7 @@ def _location_from_entity(ent: LibraryEntity) -> Location:
 def _item_from_entity(ent: LibraryEntity) -> Item:
     fm = ent.frontmatter or {}
     return Item(
-        setting_id=ent.setting_id or "",
+        world_id=ent.world_id or "",
         id=ent.asset_id,
         name=ent.name,
         aliases=list(fm.get("aliases") or []),
@@ -771,7 +771,7 @@ def _item_from_entity(ent: LibraryEntity) -> Item:
 def _faction_from_entity(ent: LibraryEntity) -> Faction:
     fm = ent.frontmatter or {}
     return Faction(
-        setting_id=ent.setting_id or "",
+        world_id=ent.world_id or "",
         id=ent.asset_id,
         name=ent.name,
         kind=str(fm.get("kind") or ""),
@@ -789,7 +789,7 @@ def _faction_from_entity(ent: LibraryEntity) -> Faction:
 def _lore_from_entity(ent: LibraryEntity) -> LoreEntry:
     fm = ent.frontmatter or {}
     return LoreEntry(
-        setting_id=ent.setting_id or "",
+        world_id=ent.world_id or "",
         id=ent.asset_id,
         title=ent.name,
         body=ent.body,

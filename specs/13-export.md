@@ -13,9 +13,9 @@ Export reads everything through the campaign's composition: character cards in a
 - Provide selection UI hooks (export range, scenes included, content filters)
 - Handle assets (images, fonts, stylesheets) per format
 - Support full-campaign exports and per-scene / per-arc exports
-- Coordinate with State Store, Characters, Setting, Continuity for content (cascading through composition)
-- Track export history (what was exported, when, with what settings, against what library versions)
-- Allow user to choose: include library content (full character cards, full setting lore), or limit to campaign-local content
+- Coordinate with State Store, Characters, World, Continuity for content (cascading through composition)
+- Track export history (what was exported, when, with what worlds, against what library versions)
+- Allow user to choose: include library content (full character cards, full world lore), or limit to campaign-local content
 
 ## Non-responsibilities
 
@@ -88,7 +88,7 @@ Pipeline:
    - Emit chapter as XHTML
 4. Generate appendices:
    - Cast: character list with capsules
-   - Setting: locations and lore
+   - World: locations and lore
    - Continuity: facts ledger (optional; often spoils plot)
    - Calendar: timeline of major events
    - Image gallery (optional)
@@ -113,7 +113,7 @@ campaign-name/
   characters/
     julian.md
     winifred.md
-  setting/
+  world/
     locations.md
     factions.md
     lore.md
@@ -207,7 +207,7 @@ export:
       default_style: novel
       include_appendices_by_default:
         - cast
-        - setting
+        - world
         - calendar
       validate_with_epubcheck: true
       default_cover_generated: true

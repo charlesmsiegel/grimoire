@@ -8,7 +8,7 @@ The State Store is the authoritative persistence layer. It implements Grimoire's
 - **Campaign narrative output** (scenes, posts, overrides, emergent content, mechanical sheets, image metadata) lives as markdown + YAML files under `data/campaigns/<id>/`. Files are SSOT.
 - **Campaign structured state** (facts, commitments, embeddings, audit log, transient state, library indexes and snapshots) lives in SQLite at `data/campaigns.sqlite`.
 
-Domain modules (Library, Setting, Characters, Scene Manager, Continuity) own the semantics of their slice but route all writes through the State Store, which enforces transactionality across the two backends, maintains the library index, and supports undo, fork, and retcon.
+Domain modules (Library, World, Characters, Scene Manager, Continuity) own the semantics of their slice but route all writes through the State Store, which enforces transactionality across the two backends, maintains the library index, and supports undo, fork, and retcon.
 
 ## Storage rule
 
@@ -43,8 +43,8 @@ Domain modules (Library, Setting, Characters, Scene Manager, Continuity) own the
 ```
 data/
 ├── library/                              # SSOT for content (files)
-│   ├── settings/<id>/
-│   │   ├── setting.yaml
+│   ├── worlds/<id>/
+│   │   ├── world.yaml
 │   │   ├── characters/*.md
 │   │   ├── items/*.md
 │   │   ├── locations/*.md
@@ -61,7 +61,7 @@ data/
 │       │   ├── 0001-elysium-opening.md
 │       │   └── 0001-elysium-opening.yaml
 │       ├── overrides/
-│       │   └── settings/<setting>/<kind>/<id>.yaml
+│       │   └── worlds/<world>/<kind>/<id>.yaml
 │       ├── emergent/
 │       │   ├── characters/*.md
 │       │   ├── items/*.md
@@ -101,11 +101,11 @@ All tables live in `campaigns.sqlite`. Library data is not duplicated except as 
 
 ```sql
 CREATE TABLE library_index (
-  id TEXT PRIMARY KEY,                  -- composite path: "settings/wod-london/characters/alistair-hyde-smythe"
-  setting_id TEXT,                      -- "wod-london" (null for top-level style-guides / image-presets)
+  id TEXT PRIMARY KEY,                  -- composite path: "worlds/wod-london/characters/alistair-hyde-smythe"
+  world_id TEXT,                      -- "wod-london" (null for top-level style-guides / image-presets)
   kind TEXT NOT NULL,                   -- 'character', 'item', 'location', 'lore', 'faction', 'greeting',
-                                        --   'setting', 'style_guide', 'image_preset'
-  asset_id TEXT NOT NULL,               -- "alistair-hyde-smythe"; basis for cross-setting variant lookup
+                                        --   'world', 'style_guide', 'image_preset'
+  asset_id TEXT NOT NULL,               -- "alistair-hyde-smythe"; basis for cross-world variant lookup
   name TEXT,
   path TEXT NOT NULL,                   -- absolute file path
   frontmatter JSON NOT NULL,
@@ -119,9 +119,9 @@ CREATE TABLE library_index (
   version INTEGER NOT NULL              -- per-entity version, increments on content_hash change
 );
 
-CREATE INDEX idx_libidx_setting ON library_index(setting_id);
+CREATE INDEX idx_libidx_world ON library_index(world_id);
 CREATE INDEX idx_libidx_kind ON library_index(kind);
-CREATE INDEX idx_libidx_asset_id ON library_index(asset_id);   -- for cross-setting variant lookup
+CREATE INDEX idx_libidx_asset_id ON library_index(asset_id);   -- for cross-world variant lookup
 
 CREATE VIRTUAL TABLE library_index_fts USING fts5(
   name, body, tags, keywords,
@@ -169,7 +169,7 @@ CREATE TABLE library_snapshots (
 );
 ```
 
-Snapshots are written when a campaign binds to a setting at a version. Pinned reads consult snapshots first; `track_latest` campaigns consult the live index.
+Snapshots are written when a campaign binds to a world at a version. Pinned reads consult snapshots first; `track_latest` campaigns consult the live index.
 
 ### Campaign
 
@@ -189,15 +189,15 @@ CREATE TABLE campaigns (
   config JSON
 );
 
-CREATE TABLE campaign_setting_refs (
+CREATE TABLE campaign_world_refs (
   campaign_id TEXT REFERENCES campaigns(id) ON DELETE CASCADE,
-  setting_id TEXT NOT NULL,
+  world_id TEXT NOT NULL,
   priority INTEGER NOT NULL,            -- 1 = highest
   include JSON NOT NULL,                -- ['characters', 'items', 'locations', 'lore', 'factions', 'greetings']
   bound_at_version INTEGER NOT NULL,
   track_latest BOOLEAN DEFAULT FALSE,
   bound_at TIMESTAMP NOT NULL,
-  PRIMARY KEY (campaign_id, setting_id)
+  PRIMARY KEY (campaign_id, world_id)
 );
 
 CREATE TABLE campaign_pcs (
@@ -227,7 +227,7 @@ Per-character, per-location, per-faction runtime state. Too high-write to be fil
 
 ```sql
 CREATE TABLE character_state (
-  character_ref TEXT NOT NULL,          -- 'library:settings/<setting>/characters/<id>' or 'campaign:emergent/<id>'
+  character_ref TEXT NOT NULL,          -- 'library:worlds/<world>/characters/<id>' or 'campaign:emergent/<id>'
   campaign_id TEXT NOT NULL,
   branch_id TEXT NOT NULL,
   location_ref TEXT,
@@ -466,7 +466,7 @@ Vector search filters by scope: queries within a campaign return campaign-scoped
 class StateStore(Protocol):
     # Library
     async def get_library_entity(self, library_id: str) -> Optional[LibraryEntity]: ...
-    async def list_library_in_setting(self, setting_id: str, kind: str) -> list[LibraryEntity]: ...
+    async def list_library_in_world(self, world_id: str, kind: str) -> list[LibraryEntity]: ...
     async def query_library(self, predicate: dict) -> list[LibraryEntity]: ...
     async def variants_of(self, asset_id: str, kind: str) -> list[LibraryEntity]: ...
 
@@ -589,7 +589,7 @@ class StateStore(Protocol):
         campaign_id: str,
         kind: str,
         campaign_entity_id: str,
-        target_setting_id: str,
+        target_world_id: str,
         source: str,
     ) -> str: ...
 
@@ -606,18 +606,18 @@ class StateStore(Protocol):
     async def advance_time(self, to: datetime, branch_id: str, source: str) -> None: ...
 
     # Composition
-    async def upsert_setting_ref(
+    async def upsert_world_ref(
         self,
         campaign_id: str,
-        setting_id: str,
+        world_id: str,
         priority: int,
         include: list[str],
         track_latest: bool,
     ) -> None: ...
-    async def upgrade_setting_ref(
+    async def upgrade_world_ref(
         self,
         campaign_id: str,
-        setting_id: str,
+        world_id: str,
     ) -> UpgradeReport: ...
 
     # PCs
@@ -665,16 +665,16 @@ Initial scan is fast; embedding can take time and runs in the background with pr
 
 ## Library versioning
 
-Each `library_index.version` increments when `content_hash` changes. A setting's version is `max(version)` across all its entities.
+Each `library_index.version` increments when `content_hash` changes. A world's version is `max(version)` across all its entities.
 
-Each `campaign_setting_refs.bound_at_version` records the setting version at bind time. `track_latest` campaigns ignore this and read live; pinned campaigns consult `library_snapshots`.
+Each `campaign_world_refs.bound_at_version` records the world version at bind time. `track_latest` campaigns ignore this and read live; pinned campaigns consult `library_snapshots`.
 
 ## Snapshots for pinned campaigns
 
-When a campaign binds a setting with `track_latest = false`:
+When a campaign binds a world with `track_latest = false`:
 
 ```
-For each entity in the setting (subject to the ref's include filter):
+For each entity in the world (subject to the ref's include filter):
   Copy frontmatter + body from library_index into library_snapshots,
   keyed by (campaign_id, branch_id, library_id).
 ```

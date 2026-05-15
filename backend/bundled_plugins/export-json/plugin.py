@@ -178,7 +178,7 @@ class JsonExportAdapter:
         }
         if include_all or "cast" in appendices:
             payload["characters"] = [_card_to_dict(c) for c in snapshot.characters]
-        if include_all or "setting" in appendices:
+        if include_all or "world" in appendices:
             payload["locations"] = [_card_to_dict(c) for c in snapshot.locations]
             payload["lore"] = [_card_to_dict(c) for c in snapshot.lore]
             payload["factions"] = [_card_to_dict(c) for c in snapshot.factions]

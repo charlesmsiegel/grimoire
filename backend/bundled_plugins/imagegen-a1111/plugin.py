@@ -254,8 +254,8 @@ class A1111ImageGenBackend:
             "n_iter": 1,
         }
         if request.model:
-            payload["override_settings"] = {"sd_model_checkpoint": request.model}
-            payload["override_settings_restore_afterwards"] = True
+            payload["override_worlds"] = {"sd_model_checkpoint": request.model}
+            payload["override_worlds_restore_afterwards"] = True
         if request.init_image:
             payload["init_images"] = [base64.b64encode(request.init_image).decode("ascii")]
             if request.init_image_strength is not None:

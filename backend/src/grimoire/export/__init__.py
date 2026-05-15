@@ -9,7 +9,7 @@ Public surface:
   non-EPUB adapters (spec 13 markdown/json/transcript/html)
 
 The Orchestrator wires together a service with the live ``SceneManager`` /
-``Characters`` / ``Setting`` / ``Continuity`` / ``ImageGen`` instances; tests
+``Characters`` / ``World`` / ``Continuity`` / ``ImageGen`` instances; tests
 typically wire in narrow stubs from :mod:`grimoire.export.sources`. The
 bundled plugin adapters (export-markdown, export-json, etc.) read directly
 from disk via :func:`load_fs_snapshot` because they're loaded standalone
@@ -51,7 +51,7 @@ from grimoire.export.sources import (
     ImageSource,
     PCSource,
     SceneSource,
-    SettingSource,
+    WorldSource,
 )
 
 __all__ = [
@@ -76,9 +76,9 @@ __all__ = [
     "ScenePart",
     "SceneRecord",
     "SceneSource",
-    "SettingSource",
     "UnknownAdapterError",
     "ValidationFailed",
+    "WorldSource",
     "anonymize_label",
     "apply_filters",
     "build_snapshot",

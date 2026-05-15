@@ -15,36 +15,36 @@ const ENTITY_TABS = [
   { to: "dependents", label: "Dependent campaigns" },
 ];
 
-export function SettingDetailView() {
-  const { settingId = "" } = useParams();
+export function WorldDetailView() {
+  const { worldId = "" } = useParams();
   const { data, loading, error, reload } = useResource(
-    () => libraryApi.getSetting(settingId),
-    [settingId],
+    () => libraryApi.getWorld(worldId),
+    [worldId],
   );
 
   return (
-    <div className="library-section setting-detail">
-      <header className="setting-detail-header">
+    <div className="library-section world-detail">
+      <header className="world-detail-header">
         <p className="library-breadcrumb">
-          <NavLink to="/library/settings">Settings</NavLink>
+          <NavLink to="/library/worlds">Worlds</NavLink>
           {" / "}
-          {data?.name || settingId}
+          {data?.name || worldId}
         </p>
         <AsyncBoundary loading={loading} error={error} onRetry={reload}>
-          <h3>{data?.name || settingId}</h3>
-          {data?.description && <p className="setting-description">{data.description}</p>}
-          <p className="setting-meta-line">
+          <h3>{data?.name || worldId}</h3>
+          {data?.description && <p className="world-description">{data.description}</p>}
+          <p className="world-meta-line">
             id: <code>{data?.id}</code> · version {data?.version}
             {data?.genre ? ` · ${data.genre}` : ""}
           </p>
         </AsyncBoundary>
 
-        <nav className="setting-tabs" aria-label="Setting sections">
+        <nav className="world-tabs" aria-label="World sections">
           {ENTITY_TABS.map((tab) => (
             <NavLink
               key={tab.to}
               to={tab.to}
-              className={({ isActive }) => (isActive ? "setting-tab active" : "setting-tab")}
+              className={({ isActive }) => (isActive ? "world-tab active" : "world-tab")}
             >
               {tab.label}
             </NavLink>
