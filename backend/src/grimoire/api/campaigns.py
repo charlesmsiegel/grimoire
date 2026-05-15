@@ -552,6 +552,86 @@ async def end_scene(
         raise map_lookup_errors(exc) from exc
 
 
+@router.post("/{campaign_id}/scenes/seed", status_code=201)
+async def seed_first_scene(
+    campaign_id: str,
+    state_store: StateStoreDep,
+    library: LibraryDep,
+    scenes: ScenesDep,
+) -> Any:
+    """Materialize the opening scene from the campaign's greeting.
+
+    The campaign-create flow stores ``greeting_id`` but does not yet
+    instantiate a scene; without one ``submit_post`` has nowhere to
+    append. This endpoint is idempotent — if any scene already exists
+    it returns the earliest one instead of creating a duplicate. The
+    frontend wizard calls it as the final step of campaign creation,
+    after PCs have been added.
+    """
+    from grimoire.types.scene import SceneInit
+
+    row = await state_store.db.fetchone("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"campaign {campaign_id!r} not found")
+    camp = dict(row)
+
+    existing = await scenes.list_scenes(campaign_id)
+    if existing:
+        return {"scene": to_payload(existing[0]), "created": False}
+
+    greeting_id = camp.get("greeting_id")
+    if not greeting_id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"campaign {campaign_id!r} has no greeting_id; cannot seed an opening scene",
+        )
+
+    composition = await library.get_composition(campaign_id)
+    setting_refs = getattr(composition, "settings", []) or []
+
+    greeting = None
+    for ref in setting_refs:
+        setting_id = getattr(ref, "setting_id", None) or ref.get("setting_id")  # type: ignore[union-attr]
+        if not setting_id:
+            continue
+        try:
+            greeting = await library.get_greeting(setting_id, greeting_id)
+            break
+        except Exception:
+            continue
+    if greeting is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"greeting {greeting_id!r} not found in any setting on campaign {campaign_id!r}",
+        )
+
+    pc_rows = await state_store.list_pcs(campaign_id)
+    pc_refs = [r["character_ref"] for r in pc_rows if r.get("character_ref")]
+
+    # greeting.starting_time is an ISO string in the setting's calendar;
+    # SceneInit.in_game_start wants InGameTime (a wrapped datetime). The
+    # mapping isn't always 1:1 (setting calendars can be non-Gregorian),
+    # so leave it None for the seed and let the orchestrator's time
+    # engine attach a moment when the first turn runs.
+    init = SceneInit(
+        campaign_id=campaign_id,
+        branch_id="main",
+        title=greeting.name or "Opening",
+        location_ref=greeting.starting_location,
+        present_character_refs=list(greeting.present_characters or []),
+        present_pc_refs=pc_refs,
+        pov_character_ref=greeting.pov_character,
+        greeting_id=greeting.id,
+        mood=greeting.mood,
+        tags=list(greeting.tags or []),
+    )
+    try:
+        scene = await scenes.start_scene(init)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {"scene": to_payload(scene), "created": True}
+
+
 # --------------------------------------------------------------------------- #
 # Resolved per-campaign entity views
 # --------------------------------------------------------------------------- #

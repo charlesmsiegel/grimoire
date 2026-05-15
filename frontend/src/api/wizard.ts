@@ -220,6 +220,11 @@ export async function addCampaignPC(
   return api.post<unknown>(`/api/campaigns/${encodeURIComponent(campaignId)}/pcs`, pc);
 }
 
+/** Materialize the opening scene from the campaign's greeting. Idempotent. */
+export async function seedFirstScene(campaignId: string): Promise<unknown> {
+  return api.post<unknown>(`/api/campaigns/${encodeURIComponent(campaignId)}/scenes/seed`);
+}
+
 export async function patchCampaign(
   campaignId: string,
   patch: Partial<{
