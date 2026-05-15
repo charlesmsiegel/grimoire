@@ -763,12 +763,8 @@ class TimeEngineService:
             if not world_id or not asset_id:
                 continue
             try:
-                w_before = await self._world.weather_for(
-                    world_id, asset_id, from_time, campaign_id
-                )
-                w_after = await self._world.weather_for(
-                    world_id, asset_id, to_time, campaign_id
-                )
+                w_before = await self._world.weather_for(world_id, asset_id, from_time, campaign_id)
+                w_after = await self._world.weather_for(world_id, asset_id, to_time, campaign_id)
             except Exception:  # pragma: no cover - defensive
                 logger.exception("weather lookup failed for %s", ref)
                 continue

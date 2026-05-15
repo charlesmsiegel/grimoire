@@ -36,8 +36,7 @@ async def write_snapshots_for_world(
     if include is None:
         rows = await (
             await conn.execute(
-                "SELECT id, kind, frontmatter, body, version FROM library_index "
-                "WHERE world_id = ?",
+                "SELECT id, kind, frontmatter, body, version FROM library_index WHERE world_id = ?",
                 (world_id,),
             )
         ).fetchall()

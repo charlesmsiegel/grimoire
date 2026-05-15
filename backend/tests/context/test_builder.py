@@ -264,9 +264,7 @@ async def test_system_block_includes_style_and_boundaries() -> None:
 
 async def test_active_pc_card_in_lock_in() -> None:
     chars = StubCharacters(
-        cards={
-            "library:worlds/wod/characters/alistair": _Card(full="# Alistair\nElder Tremere.")
-        },
+        cards={"library:worlds/wod/characters/alistair": _Card(full="# Alistair\nElder Tremere.")},
         active="library:worlds/wod/characters/alistair",
     )
     builder = _builder(characters=chars)

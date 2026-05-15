@@ -183,9 +183,7 @@ class LibraryService:
         library_id = make_library_id(world_id, normalized, entity_id)
         row = await self.store.get_library_entity(library_id)
         if row is None:
-            raise LibraryNotFoundError(
-                f"entity {kind}/{entity_id} not found in world {world_id!r}"
-            )
+            raise LibraryNotFoundError(f"entity {kind}/{entity_id} not found in world {world_id!r}")
         return _entity_from_row(row)
 
     # ------------------------------------------------------------------ #
@@ -465,14 +463,10 @@ class LibraryService:
             (campaign_id, world_id),
         )
         if before_max is None:
-            raise LibraryNotFoundError(
-                f"campaign {campaign_id!r} does not bind world {world_id!r}"
-            )
+            raise LibraryNotFoundError(f"campaign {campaign_id!r} does not bind world {world_id!r}")
         from_version = int(before_max["bound_at_version"] or 0)
 
-        report = await self.store.upgrade_world_ref(
-            campaign_id=campaign_id, world_id=world_id
-        )
+        report = await self.store.upgrade_world_ref(campaign_id=campaign_id, world_id=world_id)
         max_row = await self.store.db.fetchone(
             "SELECT MAX(version) AS v FROM library_index WHERE world_id = ?",
             (world_id,),

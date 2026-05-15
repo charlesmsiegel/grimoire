@@ -146,9 +146,7 @@ class WorldService:
             raise WorldNotFoundError(f"source world {src_world_id!r} does not exist")
         dst_root = library_root(self.store.data_root) / "worlds" / dst_world_id
         if dst_root.exists():
-            raise WorldError(
-                f"destination world {dst_world_id!r} already exists at {dst_root}"
-            )
+            raise WorldError(f"destination world {dst_world_id!r} already exists at {dst_root}")
 
         shutil.copytree(src_root, dst_root)
 
