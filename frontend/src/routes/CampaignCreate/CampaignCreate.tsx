@@ -12,6 +12,7 @@ import {
   type StyleGuideSummary,
   addCampaignPC,
   createCampaign,
+  seedFirstScene,
   fetchGreetings,
   fetchImagePresets,
   fetchInstalledMechanics,
@@ -263,6 +264,15 @@ export function CampaignCreate() {
           // Surface PC add errors but don't unwind the campaign — the user can
           // fix in the per-campaign view.
           console.warn(`Failed to add PC ${pc.character_ref}: ${errorMessage(err)}`);
+        }
+      }
+      if (draft.greetingId) {
+        try {
+          await seedFirstScene(draft.id);
+        } catch (err) {
+          // Same posture as PC add: don't block navigation. The campaign view
+          // can re-seed if the first scene is still missing.
+          console.warn(`Failed to seed opening scene: ${errorMessage(err)}`);
         }
       }
       // Append to the in-memory campaigns list rather than clearing it; the
