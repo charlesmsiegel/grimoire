@@ -239,6 +239,23 @@ function ProvidersTab() {
 
   return (
     <div className="settings-form providers-form">
+      <div className="providers-wizard-launch">
+        <div>
+          <strong>Setup wizard</strong>
+          <p className="provider-card-sub">
+            Re-run the first-run wizard to walk through language model, embeddings, image
+            generation, and a starter campaign.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => window.dispatchEvent(new Event("grimoire:open-startup-wizard"))}
+        >
+          Run setup wizard
+        </button>
+      </div>
+
       {loading && <p className="wizard-meta">Loading providers…</p>}
       {error && <p className="wizard-error">{error}</p>}
 
