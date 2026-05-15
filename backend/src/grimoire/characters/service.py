@@ -857,11 +857,7 @@ class CharactersService:
         if "/" in filename:
             filename = filename.rsplit("/", 1)[-1]
         target_dir = (
-            library_root(self.store.data_root)
-            / "worlds"
-            / world_id
-            / "characters"
-            / character_id
+            library_root(self.store.data_root) / "worlds" / world_id / "characters" / character_id
         )
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / filename
@@ -1089,9 +1085,7 @@ def _character_from_entity(ent: LibraryEntity) -> Character:
     return _character_from_frontmatter(ent.frontmatter, ent.body, world_id=ent.world_id)
 
 
-def _character_from_frontmatter(
-    frontmatter: dict, body: str, *, world_id: str | None
-) -> Character:
+def _character_from_frontmatter(frontmatter: dict, body: str, *, world_id: str | None) -> Character:
     fm: dict[str, Any] = dict(frontmatter or {})
     try:
         role = CharacterRole(fm.get("role") or "major_npc")

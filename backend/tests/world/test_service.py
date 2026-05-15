@@ -244,9 +244,7 @@ async def test_list_for_campaign_applies_include_filter(
     await _seed_world(world, "faerun")
     await _seed_location(world, "wod-london", "elysium")
     await _seed_location(world, "faerun", "waterdeep")
-    await _seed_lore(
-        world, "wod-london", "masquerade", title="Masquerade", keywords=["masquerade"]
-    )
+    await _seed_lore(world, "wod-london", "masquerade", title="Masquerade", keywords=["masquerade"])
     await _seed_lore(world, "faerun", "weave", title="The Weave", keywords=["weave"])
 
     await _bind_campaign(
