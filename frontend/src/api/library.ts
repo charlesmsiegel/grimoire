@@ -253,6 +253,14 @@ export interface PluginConfig {
   configured: boolean;
 }
 
+export interface PluginModelInfo {
+  id: string;
+  name: string;
+  context_window: number;
+  input_cost_per_1k: number | null;
+  output_cost_per_1k: number | null;
+}
+
 export const pluginsApi = {
   listInstalled: () => request<PluginManifest[]>("GET", `/plugins/installed`),
   rescan: () => request<RescanReport>("POST", `/plugins/rescan`),
@@ -260,7 +268,11 @@ export const pluginsApi = {
     request<PluginConfig>("GET", `/plugins/${encodeURIComponent(id)}/config`),
   configure: (id: string, config: Record<string, unknown>) =>
     request<{ ok: boolean }>("POST", `/plugins/${encodeURIComponent(id)}/config`, config),
+  patchConfig: (id: string, patch: Record<string, unknown>) =>
+    request<{ ok: boolean }>("PATCH", `/plugins/${encodeURIComponent(id)}/config`, patch),
   health: (id: string) => request<unknown>("GET", `/plugins/${encodeURIComponent(id)}/health`),
+  listModels: (id: string) =>
+    request<PluginModelInfo[]>("GET", `/plugins/${encodeURIComponent(id)}/models`),
 };
 
 export interface TemplateSummary {

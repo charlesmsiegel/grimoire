@@ -16,13 +16,20 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
-import { type PluginConfig, type TemplateSummary, pluginsApi, templatesApi } from "../api/library";
+import {
+  type PluginConfig,
+  type PluginManifest,
+  type TemplateSummary,
+  pluginsApi,
+  templatesApi,
+} from "../api/library";
 import {
   type MechanicsModuleSummary,
   type PluginSummary,
   fetchInstalledMechanics,
   fetchInstalledPlugins,
 } from "../api/wizard";
+import { PluginModelPicker } from "../components/PluginModelPicker";
 import { useTheme } from "../state/useTheme";
 
 type Tab =
@@ -48,6 +55,26 @@ function errorMessage(err: unknown): string {
   if (err instanceof ApiError) return `${err.status}: ${err.message}`;
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+interface FieldSchema {
+  title?: string;
+  description?: string;
+  default?: unknown;
+  [key: string]: unknown;
+}
+
+/** Find the schema property annotated with ``x-source: "models"``, if any. */
+function findModelField(
+  manifest: PluginManifest | undefined,
+): { name: string; schema: FieldSchema } | null {
+  const props = (manifest?.config_schema as { properties?: Record<string, FieldSchema> } | undefined)
+    ?.properties;
+  if (!props) return null;
+  for (const [name, schema] of Object.entries(props)) {
+    if (schema && schema["x-source"] === "models") return { name, schema };
+  }
+  return null;
 }
 
 export function AppSettings() {
@@ -115,19 +142,24 @@ function readDefaultLlm(): string {
 
 function ProvidersTab() {
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
+  const [manifests, setManifests] = useState<PluginManifest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedLlm, setSelectedLlm] = useState<string>(readDefaultLlm);
   const [activeConfig, setActiveConfig] = useState<PluginConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
+  const [modelSaving, setModelSaving] = useState(false);
+  const [modelStatus, setModelStatus] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
         const data = await fetchInstalledPlugins();
+        const full = await pluginsApi.listInstalled();
         if (!cancelled) {
           setPlugins(data);
+          setManifests(full);
           setLoading(false);
         }
       } catch (err) {
@@ -182,6 +214,28 @@ function ProvidersTab() {
   };
 
   const activeLlm = llmPlugins.find((p) => p.id === selectedLlm);
+  const activeManifest = manifests.find((m) => m.id === selectedLlm);
+  const modelField = findModelField(activeManifest);
+  const currentModel =
+    typeof activeConfig?.values[modelField?.name ?? ""] === "string"
+      ? (activeConfig.values[modelField!.name] as string)
+      : (modelField?.schema.default as string | undefined) ?? "";
+
+  async function saveModel(next: string) {
+    if (!selectedLlm || !modelField) return;
+    setModelSaving(true);
+    setModelStatus(null);
+    try {
+      await pluginsApi.patchConfig(selectedLlm, { [modelField.name]: next });
+      const cfg = await pluginsApi.getConfig(selectedLlm);
+      setActiveConfig(cfg);
+      setModelStatus("Saved.");
+    } catch (err) {
+      setModelStatus(`Error: ${errorMessage(err)}`);
+    } finally {
+      setModelSaving(false);
+    }
+  }
 
   return (
     <div className="settings-form providers-form">
@@ -237,6 +291,34 @@ function ProvidersTab() {
 
         {activeLlm && activeConfig && (
           <ProviderConfigSummary config={activeConfig} loading={configLoading} />
+        )}
+
+        {activeLlm && modelField && activeConfig && !activeConfig.configured && (
+          <p className="wizard-meta">
+            Configure your API key first to pick a model.{" "}
+            <Link to={`/library/plugins/${encodeURIComponent(activeLlm.id)}`}>Open settings</Link>
+          </p>
+        )}
+
+        {activeLlm && modelField && activeConfig?.configured && (
+          <section className="provider-model-picker" aria-label="Active model">
+            <PluginModelPicker
+              pluginId={activeLlm.id}
+              label={modelField.schema.title ?? "Active model"}
+              description={modelField.schema.description}
+              value={currentModel}
+              onChange={(next) => void saveModel(next)}
+            />
+            {modelSaving && <small className="wizard-meta">Saving…</small>}
+            {modelStatus && (
+              <small
+                className={modelStatus.startsWith("Error") ? "wizard-error" : "library-ok"}
+                role="status"
+              >
+                {modelStatus}
+              </small>
+            )}
+          </section>
         )}
 
         <div className="provider-card-actions">

@@ -81,6 +81,7 @@ class FakePlugins:
         self.manifests: dict[str, Any] = {}
         self.configs: dict[str, dict[str, Any]] = {}
         self.saved: list[tuple[str, dict[str, Any]]] = []
+        self.llm_providers: dict[str, Any] = {}
 
     async def list_installed(self) -> list[Any]:
         return []
@@ -99,6 +100,9 @@ class FakePlugins:
             raise KeyError(plugin_id)
         self.configs[plugin_id] = dict(config)
         self.saved.append((plugin_id, dict(config)))
+
+    def get_llm_provider(self, plugin_id: str) -> Any:
+        return self.llm_providers.get(plugin_id)
 
 
 def test_list_settings(client, container) -> None:
@@ -214,6 +218,48 @@ def test_get_plugin_config_404_for_unknown(client, container) -> None:
     container.plugins = FakePlugins()
     response = client.get("/api/plugins/does-not-exist/config")
     assert response.status_code == 404
+
+
+class _FakeProvider:
+    def __init__(self, models: list[Any] | Exception) -> None:
+        self._models = models
+
+    async def list_models(self) -> list[Any]:
+        if isinstance(self._models, Exception):
+            raise self._models
+        return list(self._models)
+
+
+def test_plugin_models_returns_list(client, container) -> None:
+    from grimoire.types.llm import ModelInfo
+
+    plugins = FakePlugins()
+    plugins.llm_providers["llm-x"] = _FakeProvider(
+        [
+            ModelInfo(id="anthropic/claude-opus-4-7", name="Claude Opus 4.7", context_window=200000),
+            ModelInfo(id="openai/gpt-4o", name="GPT-4o", context_window=128000),
+        ]
+    )
+    container.plugins = plugins
+    response = client.get("/api/plugins/llm-x/models")
+    assert response.status_code == 200
+    body = response.json()
+    assert [m["id"] for m in body] == ["anthropic/claude-opus-4-7", "openai/gpt-4o"]
+
+
+def test_plugin_models_404_when_not_llm_provider(client, container) -> None:
+    container.plugins = FakePlugins()
+    response = client.get("/api/plugins/llm-x/models")
+    assert response.status_code == 404
+
+
+def test_plugin_models_409_when_provider_unconfigured(client, container) -> None:
+    plugins = FakePlugins()
+    plugins.llm_providers["llm-x"] = _FakeProvider(RuntimeError("api_key is not configured"))
+    container.plugins = plugins
+    response = client.get("/api/plugins/llm-x/models")
+    assert response.status_code == 409
+    assert "api_key" in response.json()["detail"]
 
 
 def test_configure_plugin_persists_via_service(client, container) -> None:

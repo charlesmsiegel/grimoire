@@ -34,6 +34,20 @@ DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 
 
+def _verify() -> Any:
+    """Return an explicit CA bundle path so a broken ``SSL_CERT_FILE`` env
+    var doesn't blow up the TLS handshake (httpx prefers the env var over
+    its bundled certifi data, and a stale anaconda path is a common cause
+    of opaque "file not found" failures inside ``list_models``).
+    """
+    try:
+        import certifi
+
+        return certifi.where()
+    except ModuleNotFoundError:  # pragma: no cover - certifi ships with httpx
+        return True
+
+
 def _role(role: Any) -> str:
     return role.value if hasattr(role, "value") else str(role)
 
@@ -54,7 +68,7 @@ class OpenRouterLLMProvider:
         self.config = cfg
         self._api_key: str | None = cfg.get("api_key") or None
         self._base_url: str = str(cfg.get("base_url") or DEFAULT_BASE_URL).rstrip("/")
-        self._default_model: str = str(cfg.get("default_model") or DEFAULT_MODEL)
+        self._active_model: str = str(cfg.get("active_model") or DEFAULT_MODEL)
         self._http_referer: str | None = cfg.get("http_referer") or None
         self._app_title: str = str(cfg.get("app_title") or "Grimoire")
         self._timeout: float = float(cfg.get("timeout_seconds") or 120)
@@ -86,7 +100,7 @@ class OpenRouterLLMProvider:
         text = str(message.get("content") or "")
         finish = str(choice.get("finish_reason") or "stop")
         usage = _usage(data.get("usage"))
-        model_id = str(data.get("model") or request.model or self._default_model)
+        model_id = str(data.get("model") or request.model or self._active_model)
         return CompletionResponse(
             text=text,
             model=model_id,
@@ -132,9 +146,23 @@ class OpenRouterLLMProvider:
     async def list_models(self) -> list[ModelInfo]:
         if self._models_cache is not None:
             return list(self._models_cache)
+        # OpenRouter's /models endpoint is public, so we can list the
+        # catalog before the user has saved an API key. Reuse the
+        # authenticated client when we have one (pricing is identical on
+        # both paths, but the auth call is logged on their dashboard).
         try:
-            client = await self._ensure_client()
-            response = await client.get("/models")
+            if self._api_key:
+                client = await self._ensure_client()
+                response = await client.get("/models")
+            else:
+                import httpx
+
+                async with httpx.AsyncClient(
+                    base_url=self._base_url,
+                    timeout=self._timeout,
+                    verify=_verify(),
+                ) as anon:
+                    response = await anon.get("/models")
             if response.status_code >= 400:
                 return [self._fallback_model_info()]
             data = response.json()
@@ -201,7 +229,7 @@ class OpenRouterLLMProvider:
         return HealthStatus(
             level=HealthLevel.HEALTHY,
             target_id=self.id,
-            message=f"default model {self._default_model!r}",
+            message=f"default model {self._active_model!r}",
         )
 
     async def aclose(self) -> None:
@@ -235,6 +263,7 @@ class OpenRouterLLMProvider:
                 base_url=self._base_url,
                 headers=headers,
                 timeout=self._timeout,
+                verify=_verify(),
             )
             return self._client
 
@@ -245,7 +274,7 @@ class OpenRouterLLMProvider:
         for m in request.messages:
             messages.append({"role": _role(m.role), "content": m.content})
         payload: dict[str, Any] = {
-            "model": request.model or self._default_model,
+            "model": request.model or self._active_model,
             "messages": messages,
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
@@ -256,7 +285,7 @@ class OpenRouterLLMProvider:
         return payload
 
     def _fallback_model_info(self) -> ModelInfo:
-        return ModelInfo(id=self._default_model, name=self._default_model, context_window=0)
+        return ModelInfo(id=self._active_model, name=self._active_model, context_window=0)
 
     async def _estimate_cost(self, usage: TokenUsage, model_id: str) -> float | None:
         # Only consult the cached catalog so a `complete()` call never fires

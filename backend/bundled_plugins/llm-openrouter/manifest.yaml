@@ -30,13 +30,14 @@ config_schema:
       title: Base URL
       description: Override the API base URL (useful for proxies or self-hosted gateways).
       default: "https://openrouter.ai/api/v1"
-    default_model:
+    active_model:
       type: string
-      title: Default model
+      title: Active model
       description: |
-        OpenRouter model slug used when a request does not specify a model.
-        Browse the full catalog at https://openrouter.ai/models.
+        OpenRouter model slug Grimoire will route completions to. Picked
+        from the live catalog at https://openrouter.ai/models.
       default: "anthropic/claude-sonnet-4-6"
+      x-source: models
     http_referer:
       type: string
       title: HTTP-Referer header
