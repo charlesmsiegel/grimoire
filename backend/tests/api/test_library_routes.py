@@ -236,7 +236,11 @@ def test_plugin_models_returns_list(client, container) -> None:
     plugins = FakePlugins()
     plugins.llm_providers["llm-x"] = _FakeProvider(
         [
-            ModelInfo(id="anthropic/claude-opus-4-7", name="Claude Opus 4.7", context_window=200000),
+            ModelInfo(
+                id="anthropic/claude-opus-4-7",
+                name="Claude Opus 4.7",
+                context_window=200000,
+            ),
             ModelInfo(id="openai/gpt-4o", name="GPT-4o", context_window=128000),
         ]
     )
