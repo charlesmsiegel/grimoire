@@ -1,9 +1,11 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Outlet, useMatch, useNavigate } from "react-router-dom";
 
 import { SkipLink } from "../components/a11y";
 import { useKeyboardShortcuts, type ShortcutBinding } from "../hooks/useKeyboardShortcuts";
 import { useNavCollapsed } from "../hooks/useNavCollapsed";
+import { useSetupStatus } from "../hooks/useSetupStatus";
+import { StartupWizard } from "../routes/StartupWizard";
 import { CampaignStreamProvider } from "../state/campaignStream";
 import { useCampaignStreamStatus } from "../state/useCampaignEvent";
 import { useStore } from "../state/useStore";
@@ -18,6 +20,34 @@ export function AppShell() {
   const { cycle } = useTheme();
   const { state, dispatch } = useStore();
   const { collapsed, toggle } = useNavCollapsed();
+  const setup = useSetupStatus();
+  // Once dismissed, don't re-open just because the underlying status hasn't
+  // refetched yet — the user can re-launch from Settings.
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
+
+  // Auto-open when the backend reports the sentinel is missing.
+  useEffect(() => {
+    if (setup.loading) return;
+    if (setup.status && !setup.status.completed) setWizardOpen(true);
+  }, [setup.loading, setup.status]);
+
+  // Surface a global handler so AppSettings (mounted as a child route) can
+  // re-trigger the wizard without prop drilling through the router.
+  useEffect(() => {
+    const handler = () => {
+      setManualOpen(true);
+      setWizardOpen(true);
+    };
+    window.addEventListener("grimoire:open-startup-wizard", handler);
+    return () => window.removeEventListener("grimoire:open-startup-wizard", handler);
+  }, []);
+
+  const closeWizard = useCallback(() => {
+    setWizardOpen(false);
+    setManualOpen(false);
+    setup.reload();
+  }, [setup]);
 
   const campaignMatch = useMatch("/campaigns/:campaignId/*");
   const campaignId = campaignMatch?.params.campaignId ?? null;
@@ -81,6 +111,12 @@ export function AppShell() {
           <Outlet />
         </main>
         <StatusBarBridge />
+        {wizardOpen && (
+          <StartupWizard
+            onClose={closeWizard}
+            title={manualOpen ? "Setup wizard" : "Welcome to Grimoire"}
+          />
+        )}
       </div>
     </CampaignStreamProvider>
   );

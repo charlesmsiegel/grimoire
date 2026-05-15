@@ -13,6 +13,7 @@ from grimoire.api.campaigns import router as campaigns_router
 from grimoire.api.container import ServiceContainer
 from grimoire.api.health import router as health_router
 from grimoire.api.library import router as library_router
+from grimoire.api.setup import router as setup_router
 from grimoire.api.stream import StreamManager
 from grimoire.api.templates import router as templates_router
 from grimoire.api.ws import router as ws_router
@@ -284,6 +285,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health_router, prefix="/api")
+    app.include_router(setup_router, prefix="/api")
     app.include_router(library_router, prefix="/api")
     app.include_router(templates_router, prefix="/api")
     app.include_router(campaigns_router, prefix="/api")

@@ -3,7 +3,8 @@ import { Link, Route, Routes, useParams } from "react-router-dom";
 
 import { ApiError, type PluginKind, type PluginManifest, pluginsApi } from "../../api/library";
 import { useResource } from "../../api/useResource";
-import { PluginModelPicker } from "../../components/PluginModelPicker";
+import { SchemaField } from "../../components/SchemaField";
+import { type JsonSchema, initialDraftFromSchema } from "../../components/schemaForm";
 import { AsyncBoundary } from "./AsyncBoundary";
 
 const KINDS: { kind: PluginKind | "all"; label: string }[] = [
@@ -196,12 +197,14 @@ function PluginConfigForm({ plugin }: { plugin: PluginManifest }) {
     return new Set((schema?.required ?? []) as string[]);
   }, [plugin]);
   const propertyKeys = useMemo(() => Object.keys(properties), [properties]);
-  const [draft, setDraft] = useState<Record<string, unknown>>(() => initialDraft(properties));
+  const [draft, setDraft] = useState<Record<string, unknown>>(() =>
+    initialDraftFromSchema(properties),
+  );
   const [savingState, setSavingState] = useState<"idle" | "saving" | "ok" | "error">("idle");
   const [saveErr, setSaveErr] = useState<string | null>(null);
 
   useEffect(() => {
-    setDraft(initialDraft(properties));
+    setDraft(initialDraftFromSchema(properties));
     setSavingState("idle");
     setSaveErr(null);
   }, [properties]);
@@ -254,154 +257,6 @@ function PluginConfigForm({ plugin }: { plugin: PluginManifest }) {
         )}
       </form>
     </section>
-  );
-}
-
-interface JsonSchema {
-  type?: string | string[];
-  title?: string;
-  description?: string;
-  enum?: unknown[];
-  default?: unknown;
-  format?: string;
-  properties?: Record<string, JsonSchema>;
-  required?: string[];
-  items?: JsonSchema;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any;
-}
-
-function initialDraft(properties: Record<string, JsonSchema>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, schema] of Object.entries(properties)) {
-    if (schema?.default !== undefined) out[key] = schema.default;
-  }
-  return out;
-}
-
-function SchemaField({
-  pluginId,
-  name,
-  schema,
-  required,
-  value,
-  onChange,
-}: {
-  pluginId: string;
-  name: string;
-  schema: JsonSchema;
-  required: boolean;
-  value: unknown;
-  onChange: (v: unknown) => void;
-}) {
-  const type = Array.isArray(schema.type) ? schema.type[0] : (schema.type ?? "string");
-  const label = schema.title ?? name;
-  const placeholder = schema.description ?? "";
-  const isSecret = schema.format === "password" || /secret|token|key/i.test(name);
-
-  if (schema["x-source"] === "models") {
-    return (
-      <PluginModelPicker
-        pluginId={pluginId}
-        label={label}
-        description={schema.description}
-        required={required}
-        value={typeof value === "string" ? value : ""}
-        onChange={onChange}
-      />
-    );
-  }
-
-  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
-    return (
-      <label>
-        <span>
-          {label} {required && <em>*</em>}
-        </span>
-        <select
-          value={typeof value === "string" || typeof value === "number" ? String(value) : ""}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">(unset)</option>
-          {schema.enum.map((opt) => (
-            <option key={String(opt)} value={String(opt)}>
-              {String(opt)}
-            </option>
-          ))}
-        </select>
-        {schema.description && <small>{schema.description}</small>}
-      </label>
-    );
-  }
-
-  if (type === "boolean") {
-    return (
-      <label className="checkbox-label">
-        <input
-          type="checkbox"
-          checked={Boolean(value)}
-          onChange={(e) => onChange(e.target.checked)}
-        />
-        <span>
-          {label} {required && <em>*</em>}
-        </span>
-        {schema.description && <small>{schema.description}</small>}
-      </label>
-    );
-  }
-
-  if (type === "integer" || type === "number") {
-    return (
-      <label>
-        <span>
-          {label} {required && <em>*</em>}
-        </span>
-        <input
-          type="number"
-          value={typeof value === "number" ? value : ""}
-          step={type === "integer" ? 1 : "any"}
-          onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
-        />
-        {schema.description && <small>{schema.description}</small>}
-      </label>
-    );
-  }
-
-  if (type === "object" || type === "array") {
-    return (
-      <label>
-        <span>
-          {label} {required && <em>*</em>}
-        </span>
-        <textarea
-          rows={4}
-          value={JSON.stringify(value ?? (type === "array" ? [] : {}), null, 2)}
-          onChange={(e) => {
-            try {
-              onChange(JSON.parse(e.target.value));
-            } catch {
-              /* keep last good value */
-            }
-          }}
-        />
-        {schema.description && <small>{schema.description}</small>}
-      </label>
-    );
-  }
-
-  return (
-    <label>
-      <span>
-        {label} {required && <em>*</em>}
-      </span>
-      <input
-        type={isSecret ? "password" : "text"}
-        value={typeof value === "string" ? value : ""}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-      />
-      {schema.description && <small>{schema.description}</small>}
-    </label>
   );
 }
 
