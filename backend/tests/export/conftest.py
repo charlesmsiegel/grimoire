@@ -15,7 +15,7 @@ from grimoire.export import DataSources
 from grimoire.scenes.types import AuthorKind, Post, Scene
 from grimoire.types.characters import Character, CharacterRole, VoiceAnchor
 from grimoire.types.common import EntityKind
-from grimoire.types.composition import LibraryEntity, SettingMeta
+from grimoire.types.composition import LibraryEntity, WorldMeta
 from grimoire.types.continuity import (
     Commitment,
     CommitmentKind,
@@ -48,19 +48,19 @@ class StubCharacters:
 
 
 @dataclass
-class StubSetting:
-    settings: list[SettingMeta] = field(default_factory=list)
+class StubWorld:
+    worlds: list[WorldMeta] = field(default_factory=list)
     entities: dict[tuple[str, str], list[LibraryEntity]] = field(default_factory=dict)
     greetings: dict[str, list] = field(default_factory=dict)
 
-    async def get_composition_settings(self, campaign_id):
-        return list(self.settings)
+    async def get_composition_worlds(self, campaign_id):
+        return list(self.worlds)
 
-    async def list_in_setting(self, setting_id, kind):
-        return list(self.entities.get((setting_id, kind), []))
+    async def list_in_world(self, world_id, kind):
+        return list(self.entities.get((world_id, kind), []))
 
-    async def list_greetings(self, setting_id):
-        return list(self.greetings.get(setting_id, []))
+    async def list_greetings(self, world_id):
+        return list(self.greetings.get(world_id, []))
 
     async def get_location(self, location_ref, campaign_id):
         return None
@@ -170,12 +170,12 @@ def make_character(
 
 def make_library_location(name: str = "Elysium", body: str = "A candlelit tower.") -> LibraryEntity:
     return LibraryEntity(
-        id=f"settings/wod-london/locations/{name.lower()}",
-        setting_id="wod-london",
+        id=f"worlds/wod-london/locations/{name.lower()}",
+        world_id="wod-london",
         kind=EntityKind.LOCATION,
         asset_id=name.lower(),
         name=name,
-        path=f"settings/wod-london/locations/{name.lower()}.md",
+        path=f"worlds/wod-london/locations/{name.lower()}.md",
         frontmatter={},
         body=body,
     )
@@ -231,7 +231,7 @@ def make_sources(
     scenes: list[Scene] | None = None,
     posts: dict[str, list[Post]] | None = None,
     characters: list[Character] | None = None,
-    setting: SettingMeta | None = None,
+    world: WorldMeta | None = None,
     locations: list[LibraryEntity] | None = None,
     lore: list[LibraryEntity] | None = None,
     facts: list[Fact] | None = None,
@@ -242,8 +242,8 @@ def make_sources(
 ) -> DataSources:
     scenes_src = StubScenes(scenes=list(scenes or []), posts=posts or {})
     chars_src = StubCharacters(characters=characters or [])
-    setting_src = StubSetting(
-        settings=[setting] if setting else [],
+    world_src = StubWorld(
+        worlds=[world] if world else [],
         entities={
             ("wod-london", "location"): list(locations or []),
             ("wod-london", "lore"): list(lore or []),
@@ -258,7 +258,7 @@ def make_sources(
     return DataSources(
         scenes=scenes_src,
         characters=chars_src,
-        setting=setting_src,
+        world=world_src,
         continuity=continuity_src,
         images=image_src,
         pcs=pc_src,

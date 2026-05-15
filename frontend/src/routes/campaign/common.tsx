@@ -47,15 +47,15 @@ export function ChainBadge({ chain, overrides }: ChainBadgeProps) {
   }
   const hasOverride = (overrides && overrides.length > 0) || top.override_applied;
   if (hasOverride) {
-    return <SourceBadge source="override" detail={top.setting_id ?? undefined} />;
+    return <SourceBadge source="override" detail={top.world_id ?? undefined} />;
   }
   if (top.layer === "emergent") {
     return <SourceBadge source="emergent" />;
   }
   const detail =
     top.layer === "library_snapshot" && top.version != null
-      ? `${top.setting_id ?? ""} v${top.version}`.trim()
-      : (top.setting_id ?? undefined);
+      ? `${top.world_id ?? ""} v${top.version}`.trim()
+      : (top.world_id ?? undefined);
   return <SourceBadge source="library" detail={detail} />;
 }
 

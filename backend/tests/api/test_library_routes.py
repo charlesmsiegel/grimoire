@@ -10,30 +10,30 @@ from __future__ import annotations
 
 from typing import Any
 
-from grimoire.types.composition import LibraryEntity, SettingMeta
+from grimoire.types.composition import LibraryEntity, WorldMeta
 
 
 class FakeLibrary:
     def __init__(self) -> None:
         self.created: list[tuple[str, str]] = []
 
-    async def list_settings(self) -> list[SettingMeta]:
-        return [SettingMeta(id="wod-london", name="WoD London", version=1)]
+    async def list_worlds(self) -> list[WorldMeta]:
+        return [WorldMeta(id="wod-london", name="WoD London", version=1)]
 
-    async def get_setting(self, setting_id: str) -> SettingMeta:
-        if setting_id != "wod-london":
-            raise KeyError(setting_id)
-        return SettingMeta(id="wod-london", name="WoD London", version=1)
+    async def get_world(self, world_id: str) -> WorldMeta:
+        if world_id != "wod-london":
+            raise KeyError(world_id)
+        return WorldMeta(id="wod-london", name="WoD London", version=1)
 
-    async def list_in_setting(self, setting_id: str, kind: str) -> list[LibraryEntity]:
+    async def list_in_world(self, world_id: str, kind: str) -> list[LibraryEntity]:
         return [
             LibraryEntity(
-                id="settings/wod-london/characters/alistair",
-                setting_id=setting_id,
+                id="worlds/wod-london/characters/alistair",
+                world_id=world_id,
                 kind="character",
                 asset_id="alistair",
                 name="Alistair",
-                path="settings/wod-london/characters/alistair.md",
+                path="worlds/wod-london/characters/alistair.md",
                 frontmatter={"name": "Alistair"},
                 body="",
             )
@@ -45,20 +45,20 @@ class FakeLibrary:
     async def list_image_presets(self) -> list[Any]:
         return []
 
-    async def list_greetings(self, setting_id: str) -> list[Any]:
+    async def list_greetings(self, world_id: str) -> list[Any]:
         return []
 
     async def variants_of(self, asset_id: str, kind: str) -> list[Any]:
         return []
 
-    async def dependents(self, setting_id: str, kind: str, entity_id: str) -> list[Any]:
+    async def dependents(self, world_id: str, kind: str, entity_id: str) -> list[Any]:
         return []
 
     async def create_entity(self, *args: Any, **kwargs: Any) -> Any:
         self.created.append((args[1], args[2]))
         return LibraryEntity(
-            id=f"settings/{args[0]}/{args[1]}s/{args[2]}",
-            setting_id=args[0],
+            id=f"worlds/{args[0]}/{args[1]}s/{args[2]}",
+            world_id=args[0],
             kind=args[1],
             asset_id=args[2],
             name=args[2],
@@ -105,9 +105,9 @@ class FakePlugins:
         return self.llm_providers.get(plugin_id)
 
 
-def test_list_settings(client, container) -> None:
+def test_list_worlds(client, container) -> None:
     container.library = FakeLibrary()
-    response = client.get("/api/library/settings")
+    response = client.get("/api/library/worlds")
     assert response.status_code == 200
     body = response.json()
     assert body == [
@@ -125,25 +125,25 @@ def test_list_settings(client, container) -> None:
     ]
 
 
-def test_get_setting_404_when_unknown(client, container) -> None:
+def test_get_world_404_when_unknown(client, container) -> None:
     container.library = FakeLibrary()
-    response = client.get("/api/library/settings/missing")
+    response = client.get("/api/library/worlds/missing")
     assert response.status_code == 404
 
 
-def test_list_setting_entities(client, container) -> None:
+def test_list_world_entities(client, container) -> None:
     container.library = FakeLibrary()
-    response = client.get("/api/library/settings/wod-london/character")
+    response = client.get("/api/library/worlds/wod-london/character")
     assert response.status_code == 200
     body = response.json()
     assert body[0]["asset_id"] == "alistair"
 
 
-def test_create_setting_entity(client, container) -> None:
+def test_create_world_entity(client, container) -> None:
     fake = FakeLibrary()
     container.library = fake
     response = client.post(
-        "/api/library/settings/wod-london/character",
+        "/api/library/worlds/wod-london/character",
         json={"id": "new-pc", "frontmatter": {"name": "New PC"}, "body": "body"},
     )
     assert response.status_code == 201
@@ -283,6 +283,6 @@ def test_library_503_when_unset(client, container) -> None:
     # Lifespan auto-wires a LibraryService; clear it so we can verify the
     # 503 branch in api/deps.py:_require for any service that goes missing.
     container.library = None
-    response = client.get("/api/library/settings")
+    response = client.get("/api/library/worlds")
     assert response.status_code == 503
     assert "library" in response.json()["detail"]

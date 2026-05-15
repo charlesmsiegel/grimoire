@@ -10,7 +10,7 @@ secrecy: public
 
 # Honorifics and Address
 
-How a character addresses another character carries an enormous amount of information in this setting. The basic system, kept simple:
+How a character addresses another character carries an enormous amount of information in this world. The basic system, kept simple:
 
 - **-san** — neutral, polite. Default for someone you don't know well, an adult, or a peer you respect. Always safe.
 - **-kun** — friendly, slightly familiar. Used boy-to-boy or girl-to-boy among peers; also from teachers and older students addressing younger boys.

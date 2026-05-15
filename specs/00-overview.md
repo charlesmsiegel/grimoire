@@ -8,7 +8,7 @@ A local-first companion app for running long-form RPG campaigns with an LLM. Gri
 
 The fix is to put a thin Orchestrator between the user and the model. The Orchestrator deterministically assembles context, calls the LLM, parses output into structured state, and updates a typed data model. The model becomes a service, not the driver. Mechanics, LLM providers, embedding providers, image backends, and export formats are swappable through stable APIs.
 
-The name comes from the magical-book tradition: a single bound volume containing the spells, lore, beings, and rules of a world. Grimoire holds your library of settings, the characters who inhabit them, the rules they play under, and the chronicles of what they've done.
+The name comes from the magical-book tradition: a single bound volume containing the spells, lore, beings, and rules of a world. Grimoire holds your library of worlds, the characters who inhabit them, the rules they play under, and the chronicles of what they've done.
 
 ## Tech stack
 
@@ -27,7 +27,7 @@ Every piece of data in the system lives in exactly one scope. This is the founda
 
 | Scope | What it holds | Where it lives | Mutability |
 |---|---|---|---|
-| **Library** | Settings (with their characters/items/locations/lore/factions/greetings); style guides; image presets | Markdown + YAML files under `data/library/` | Edited by the user (in the app or in a text editor) |
+| **Library** | Worlds (with their characters/items/locations/lore/factions/greetings); style guides; image presets | Markdown + YAML files under `data/library/` | Edited by the user (in the app or in a text editor) |
 | **Campaign-local** | Play history (scenes, posts), structured play state (facts, commitments, sheets, embeddings, deltas, overrides) | Markdown + YAML files under `data/campaigns/<id>/` for narrative; SQLite at `data/campaigns.sqlite` for structured | Free-write during play |
 | **Code (external)** | Mechanics modules (first-class API) and plugins (LLM providers, embedding providers, ImageGen backends, export adapters) | Python packages on disk under `data/mechanics/` and `data/plugins/` | Read-only at runtime; installed and updated separately from the app |
 
@@ -50,9 +50,9 @@ Everything Grimoire stores on disk:
 ```
 data/
 ├── library/                              # SSOT for content
-│   ├── settings/
+│   ├── worlds/
 │   │   ├── wod-london/
-│   │   │   ├── setting.yaml              # metadata, calendar, atmosphere
+│   │   │   ├── world.yaml              # metadata, calendar, atmosphere
 │   │   │   ├── characters/
 │   │   │   │   ├── alistair-hyde-smythe.md
 │   │   │   │   └── ...
@@ -81,13 +81,13 @@ data/
 │
 ├── campaigns/                            # SSOT for narrative output
 │   └── <campaign-id>/
-│       ├── campaign.yaml                 # composition refs, PCs, settings
+│       ├── campaign.yaml                 # composition refs, PCs, worlds
 │       ├── scenes/
 │       │   ├── 0001-elysium-opening.md          # prose
 │       │   ├── 0001-elysium-opening.yaml        # metadata sidecar
 │       │   └── ...
 │       ├── overrides/                    # campaign edits to library entities
-│       │   └── settings/wod-london/characters/alistair-hyde-smythe.yaml
+│       │   └── worlds/wod-london/characters/alistair-hyde-smythe.yaml
 │       ├── emergent/                     # campaign-spawned content
 │       │   ├── characters/the-bartender.md
 │       │   ├── items/anitas-locket.md
@@ -147,9 +147,9 @@ Backup is "zip `data/`." Search the entire narrative archive with `rg "Alistair"
 
 A file watcher monitors `data/library/` and `data/campaigns/`; changes update the SQLite index incrementally. If `campaigns.sqlite` is deleted, the app rebuilds it from files on startup.
 
-## Library content within a setting
+## Library content within a world
 
-Each setting directory contains structured subdirectories for the kinds of entity that make up a world:
+Each world directory contains structured subdirectories for the kinds of entity that make up a world:
 
 - **characters** — the cast (each with a `role` field: `pc`, `major_npc`, `minor_npc`, `ensemble`, `named_flavor`)
 - **items** — named items with narrative weight (the Sword of Drachenheim, the Whispering Locket). Generic items don't need cards; named ones do.
@@ -158,15 +158,15 @@ Each setting directory contains structured subdirectories for the kinds of entit
 - **factions** — organizations, houses, orders
 - **greetings** — opening scenarios for new campaigns
 
-Each `.md` file has YAML frontmatter for structured fields plus a markdown body for prose. `setting.yaml` per setting carries metadata (calendar, atmosphere style, defaults).
+Each `.md` file has YAML frontmatter for structured fields plus a markdown body for prose. `world.yaml` per world carries metadata (calendar, atmosphere style, defaults).
 
-**Greetings** are setting-level scenario starters: a starting location, in-game time, present cast, opening narration, tags. Picking a greeting at campaign creation populates scene 1. SillyTavern's "alternate greetings," scoped to settings.
+**Greetings** are world-level scenario starters: a starting location, in-game time, present cast, opening narration, tags. Picking a greeting at campaign creation populates scene 1. SillyTavern's "alternate greetings," scoped to worlds.
 
-Style guides and image presets are top-level (outside any setting) because they may apply across settings.
+Style guides and image presets are top-level (outside any world) because they may apply across worlds.
 
 ## Campaign composition
 
-A campaign references library content. Compositions support both the common single-setting case and crossovers.
+A campaign references library content. Compositions support both the common single-world case and crossovers.
 
 ```yaml
 # data/campaigns/<id>/campaign.yaml
@@ -174,7 +174,7 @@ id: by-night-london
 name: "London by Night"
 
 composition:
-  settings:
+  worlds:
     - id: wod-london
       priority: 1
       include: [characters, items, locations, lore, factions, greetings]  # default: all
@@ -185,7 +185,7 @@ composition:
   image_preset_id: oil-painting
 
 pcs:
-  - character_ref: settings/wod-london/characters/alistair-hyde-smythe
+  - character_ref: worlds/wod-london/characters/alistair-hyde-smythe
     name: "Alistair Hyde-Smythe"
     owner: local
     active: true
@@ -194,13 +194,13 @@ greeting_id: elysium-opening
 content_boundaries: ...
 ```
 
-Default flow: pick one setting → get everything in it (cast, items, world, lore, factions, greetings).
+Default flow: pick one world → get everything in it (cast, items, world, lore, factions, greetings).
 
 Crossover:
 
 ```yaml
 composition:
-  settings:
+  worlds:
     - id: faerun
       priority: 1
       include: [characters]              # the cast
@@ -218,7 +218,7 @@ When any module reads an entity in a campaign context:
 
 ```
 1. Check campaign-local emergent content (files in campaigns/<id>/emergent/) and SQLite.
-2. If not found, walk the campaign's setting refs in priority order:
+2. If not found, walk the campaign's world refs in priority order:
    For each ref, check library_index (which mirrors data/library/).
 3. Return the first match.
 4. Apply any campaign-local override (files in campaigns/<id>/overrides/) on top.
@@ -231,9 +231,9 @@ Edits in a library view write the file (and update the index). Edits in a campai
 
 Campaigns version-pin library refs by default. Library edits don't silently mutate active campaigns: pinned campaigns continue reading their bound version (via SQLite snapshots) until the user explicitly upgrades the ref, with a diff. The opposite mode is `track_latest: true`, which always reads current files.
 
-### Character variants across settings
+### Character variants across worlds
 
-No `family_id` field. Variants are recognized by shared asset id. If `settings/faerun/characters/drizzt.md` and `settings/mythic-europe/characters/drizzt.md` both exist, the app surfaces "Drizzt (faerun) — also exists in: mythic-europe" via a single query. Variants are independent — editing one has no effect on others. Renaming in one setting breaks the link.
+No `family_id` field. Variants are recognized by shared asset id. If `worlds/faerun/characters/drizzt.md` and `worlds/mythic-europe/characters/drizzt.md` both exist, the app surfaces "Drizzt (faerun) — also exists in: mythic-europe" via a single query. Variants are independent — editing one has no effect on others. Renaming in one world breaks the link.
 
 The id is the link. Nothing else. Same id-matching applies to items, locations, lore, factions.
 
@@ -243,11 +243,11 @@ A campaign has a list of PCs (one or more). Each PC is a character with `role: p
 
 ```yaml
 pcs:
-  - character_ref: settings/wod-london/characters/aleksandr
+  - character_ref: worlds/wod-london/characters/aleksandr
     name: "Aleksandr"
     owner: local
     active: true
-  - character_ref: settings/wod-london/characters/beatrice
+  - character_ref: worlds/wod-london/characters/beatrice
     name: "Beatrice"
     owner: local
     active: true
@@ -290,7 +290,7 @@ For sheets the widget library can't express (complex combat trackers, custom tal
 
 ### `mechanics: null`
 
-Campaigns can run with `mechanics: null` — no mechanics module selected, pure narrative play. This is a fully supported mode and is the default first-run experience. The sample setting that ships with Grimoire plays in this mode without any mechanics installed.
+Campaigns can run with `mechanics: null` — no mechanics module selected, pure narrative play. This is a fully supported mode and is the default first-run experience. The sample world that ships with Grimoire plays in this mode without any mechanics installed.
 
 ## Architecture
 
@@ -322,7 +322,7 @@ Campaigns can run with `mechanics: null` — no mechanics module selected, pure 
                             │
          ┌────────┬─────────┼─────────┬────────┐
          │        │         │         │        │
-      Characters Setting Continuity   Time   Extractor
+      Characters World Continuity   Time   Extractor
                                     Engine
 ```
 
@@ -339,8 +339,8 @@ Supporting modules (cross-cut concerns): **Plugins** (manages plugin lifecycle),
 | 05 | LLM Gateway | LLM and embedding provider abstraction |
 | 06 | Mechanics | Defines the Mechanics API; modules are external |
 | 07 | Time Engine | In-game time per campaign |
-| 08 | Characters | Character-specific behaviors layered on Setting (voice, drift, tier, PCs, variants) |
-| 09 | Setting | Setting container + all entity-kind storage and CRUD |
+| 08 | Characters | Character-specific behaviors layered on World (voice, drift, tier, PCs, variants) |
+| 09 | World | World container + all entity-kind storage and CRUD |
 | 10 | Scene Manager | Scenes, posts, multi-PC advance trigger |
 | 11 | Continuity | Facts, commitments, contradictions |
 | 12 | ImageGen | Integrated diffusers backend; alternative backends via plugins |
@@ -373,7 +373,7 @@ Core events: `turn_started`, `context_built`, `model_response_received`, `deltas
 5. (When triggered) Orchestrator → Scene Manager: is_scene_break(player_input)?
 6. Orchestrator → Context Builder: build(campaign_id, scene)
    ├─ Resolves entities via cascade (campaign-local → library refs)
-   ├─ Queries Characters, Setting, Scene Manager, Continuity
+   ├─ Queries Characters, World, Scene Manager, Continuity
    └─ Asks Mechanics: should_roll(player_input)?
 7. Orchestrator → LLM Gateway: complete(prompt) (streams to Frontend)
 8. Orchestrator → Extractor: extract(response)
@@ -390,9 +390,9 @@ Core events: `turn_started`, `context_built`, `model_response_received`, `deltas
 
 ## Concrete workflows
 
-### Starting a new campaign in an existing setting
+### Starting a new campaign in an existing world
 
-1. New campaign → pick setting `wod-london`
+1. New campaign → pick world `wod-london`
 2. Pick mechanics: `wod-mechanics` (must be installed) or `mechanics: null` for narrative
 3. Pick or create a PC: select a character with `role: pc`, or create one
 4. Pick a greeting (or skip)
@@ -400,20 +400,20 @@ Core events: `turn_started`, `context_built`, `model_response_received`, `deltas
 
 ### Same world, different mechanics
 
-1. New campaign → setting `mythic-europe`
+1. New campaign → world `mythic-europe`
 2. Mechanics: `another-campaign-mechanics`
 3. App: "Active cast has no Ars Magica sheets. Create empty sheets?"
-4. Try the same setting again with `mechanics: null` for narrative-only play
+4. Try the same world again with `mechanics: null` for narrative-only play
 
 ### Crossover composition
 
-1. New campaign → settings: `faerun` (characters only) + `wod-nyc` (locations + lore only)
+1. New campaign → worlds: `faerun` (characters only) + `wod-nyc` (locations + lore only)
 2. Mechanics: `wod-mechanics`
 3. Done — Faerûn cast operating in WoD New York under WoD rules
 
 ### Two PCs in one campaign (vampire + mage)
 
-1. New campaign → setting `wod-london`, mechanics `wod-mechanics`
+1. New campaign → world `wod-london`, mechanics `wod-mechanics`
 2. Add PC 1: vampire "Aleksandr"
 3. Add PC 2: mage "Beatrice"
 4. Each gets their own starting scene; the LLM auto-responds in each
@@ -425,19 +425,19 @@ Core events: `turn_started`, `context_built`, `model_response_received`, `deltas
 1. The bartender at the Camden club is introduced by the model in scene 47 of `by-night-london`
 2. Stored as `data/campaigns/by-night-london/emergent/characters/the-bartender.md`
 3. Player wants him in future WoD London campaigns → "Promote to library, target: wod-london"
-4. File written to `data/library/settings/wod-london/characters/the-bartender.md`
+4. File written to `data/library/worlds/wod-london/characters/the-bartender.md`
 5. Watcher picks it up; next WoD London campaign sees him by default
 
 ### Library edit with version pinning
 
-1. Edit `data/library/settings/wod-london/characters/alistair-hyde-smythe.md`
+1. Edit `data/library/worlds/wod-london/characters/alistair-hyde-smythe.md`
 2. Watcher catches the change; library_index.version increments
 3. Pinned dependent campaigns show "Alistair updated; upgrade available"; `track_latest` campaigns read the new version immediately
 4. User upgrades campaign A (sees a diff first), leaves B and C pinned
 
 ### Mechanics extending a location (Node)
 
-1. `wod-london` has location `data/library/settings/wod-london/locations/the-rookery.md` (narrative description)
+1. `wod-london` has location `data/library/worlds/wod-london/locations/the-rookery.md` (narrative description)
 2. With `wod-mechanics` active, the user creates `data/campaigns/by-night-london/sheets/locations/the-rookery.wod-mechanics.yaml`
 3. The sheet uses the WoD `location.json` schema, declaring the Rookery as a Node with rating 4, certain Tass, ward status
 4. The Context Builder surfaces "this is a Node (Quintessence 4/day)" alongside the narrative description
@@ -460,9 +460,9 @@ Core events: `turn_started`, `context_built`, `model_response_received`, `deltas
 
 **Bundled mechanics modules**: none. Grimoire ships with no mechanics. Users install what they want from external sources — official mechanics repos, community packages, or their own implementations. The Mechanics API is the contract; modules implement it independently.
 
-**Bundled library content**: one small sample setting (`hello-world`) with two characters, one item, one location, one greeting — for first-run demo. Playable in narrative mode without any mechanics installed. Empty otherwise.
+**Bundled library content**: one small sample world (`hello-world`) with two characters, one item, one location, one greeting — for first-run demo. Playable in narrative mode without any mechanics installed. Empty otherwise.
 
-**Out of the box**: open Grimoire, pick the sample setting, pick a greeting, start playing in narrative mode. To play with rules, install a mechanics module (e.g., `wod-mechanics`, `another-campaign-mechanics`, `dnd5e-mechanics`). To play with your own content, drop a setting directory under `data/library/settings/` or use the import tool.
+**Out of the box**: open Grimoire, pick the sample world, pick a greeting, start playing in narrative mode. To play with rules, install a mechanics module (e.g., `wod-mechanics`, `another-campaign-mechanics`, `dnd5e-mechanics`). To play with your own content, drop a world directory under `data/library/worlds/` or use the import tool.
 
 ## What Grimoire is not
 
@@ -476,7 +476,7 @@ Core events: `turn_started`, `context_built`, `model_response_received`, `deltas
 
 1. **Three scopes.** Library (content), campaign-local (play state and output), code (mechanics modules and plugins).
 2. **Files for everything readable; SQLite for everything queryable.** SSOT is files; SQLite is a cache and query engine.
-3. **Settings own their content.** A setting is a world; its cast, items, places, lore, factions, and greetings live inside it.
+3. **Worlds own their content.** A world is a world; its cast, items, places, lore, factions, and greetings live inside it.
 4. **Mechanics is first-class with an external implementation.** Grimoire defines the API; mechanics modules are installed separately. Writing a module reads the API docs, not Grimoire's source.
 5. **No mechanics is a valid mode.** Campaigns can run with `mechanics: null`.
 6. **Conductor, not companion.** A thin Orchestrator drives the turn; the model is called when needed.
@@ -515,8 +515,8 @@ Numerical order is historical; conceptual order:
 1. **00-overview.md** (this file) — the authoritative architecture
 2. **18-library.md** — file layout, indexing, composition
 3. **03-state-store.md** — hybrid storage architecture
-4. **09-setting.md** — setting as container
-5. **08-characters.md** — character-specific behaviors layered on Setting; PCs and multi-PC
+4. **09-world.md** — world as container
+5. **08-characters.md** — character-specific behaviors layered on World; PCs and multi-PC
 6. **01-orchestrator.md** — turn loop, advance trigger
 7. **02-context-builder.md** — prompt assembly across scopes
 8. **05-llm-gateway.md** — LLM and embedding providers

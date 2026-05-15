@@ -4,7 +4,7 @@
 
 The Time Engine handles in-game time advancement. When the PC experiences elapsed time — a night's sleep, a week of travel, a month of training — the world also experiences it. NPCs do things, factions move, the weather changes, scheduled events happen.
 
-The Time Engine operates **per-campaign**. Each campaign has its own clock and its own time-advancement history. Library characters that appear in multiple campaigns experience different timelines in each; a library character aging by a year in Campaign A does not affect Campaign B. NPC ticks resolve through the campaign's composition: the NPCs that exist for this campaign are the union of referenced library settings + campaign-local NPCs.
+The Time Engine operates **per-campaign**. Each campaign has its own clock and its own time-advancement history. Library characters that appear in multiple campaigns experience different timelines in each; a library character aging by a year in Campaign A does not affect Campaign B. NPC ticks resolve through the campaign's composition: the NPCs that exist for this campaign are the union of referenced library worlds + campaign-local NPCs.
 
 This is explicitly **not** a real-time background simulation. The Time Engine does nothing when the app is closed. It runs only when:
 
@@ -36,7 +36,7 @@ This is explicitly **not** a real-time background simulation. The Time Engine do
 ```python
 class TimeEngine(Protocol):
     def current(self) -> InGameTime: ...
-    def calendar(self) -> SettingCalendar: ...
+    def calendar(self) -> WorldCalendar: ...
 
     async def advance(
         self,
@@ -130,7 +130,7 @@ Inputs:
   - NPC's current state (location, mood, ongoing concerns)
   - NPC's relationships and obligations
   - Calendar events during the period
-  - Setting-level context (weather, faction state, current events)
+  - World-level context (weather, faction state, current events)
   - Other NPCs' tick results (if already computed, for consistency)
 
 Schema:
@@ -168,22 +168,22 @@ Faction ticks run at month-level granularity even for week-scale skips, because 
 
 ## Weather and atmosphere
 
-The Setting module owns weather data. The Time Engine consults it during advancement:
+The World module owns weather data. The Time Engine consults it during advancement:
 
 ```python
-weather_at_end = await self.setting.weather_for(
+weather_at_end = await self.world.weather_for(
     location=current_location,
     in_game_time=to_time,
 )
 ```
 
-Weather is largely deterministic from the setting's climate model + a seeded RNG, so it's cheap and reproducible.
+Weather is largely deterministic from the world's climate model + a seeded RNG, so it's cheap and reproducible.
 
 ## Scheduled events
 
 Events that should happen at specific in-game times:
 
-- Holidays (Christmas, Passover, festivals defined by the setting)
+- Holidays (Christmas, Passover, festivals defined by the world)
 - Recurring schedules ("the mail comes every Tuesday")
 - One-off events ("winifred's birthday on day 312")
 - Plot beats ("the king dies in three months")

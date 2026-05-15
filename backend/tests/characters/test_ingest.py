@@ -40,10 +40,10 @@ from grimoire.types.characters import (
 # --------------------------------------------------------------------------- #
 
 
-async def _seed_setting(store: StateStore, setting_id: str) -> None:
+async def _seed_world(store: StateStore, world_id: str) -> None:
     await store.write_library_file(
-        library_id=f"settings/{setting_id}/setting/{setting_id}",
-        frontmatter={"id": setting_id, "name": setting_id, "version": 1},
+        library_id=f"worlds/{world_id}/world/{world_id}",
+        frontmatter={"id": world_id, "name": world_id, "version": 1},
         body="",
         source="test:seed",
     )
@@ -344,7 +344,7 @@ async def test_enrich_with_llm_skips_empty_patch() -> None:
 async def test_service_import_sillytavern_persists_relationships_and_avatar(
     characters: CharactersService, store: StateStore, tmp_path: Path
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     png = _png_with_card(_v2_card_json())
     result = await characters.import_sillytavern(png, "wod-london")
     assert "vivienne" in result.created
@@ -367,7 +367,7 @@ async def test_service_import_sillytavern_persists_relationships_and_avatar(
 async def test_service_import_character_card_returns_full_ingest(
     characters: CharactersService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     raw = json.dumps(_v2_card_json()).encode("utf-8")
     result, ingested = await characters.import_character_card(raw, "wod-london")
     assert result.created == ["vivienne"]
@@ -379,7 +379,7 @@ async def test_service_import_character_card_returns_full_ingest(
 async def test_service_add_character_image_appends_to_gallery(
     characters: CharactersService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     raw = json.dumps(_v2_card_json()).encode("utf-8")
     await characters.import_sillytavern(raw, "wod-london")
 
@@ -409,7 +409,7 @@ async def test_service_add_character_image_appends_to_gallery(
 async def test_service_ingest_options_pass_through(
     characters: CharactersService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     raw = json.dumps(_v2_card_json()).encode("utf-8")
     await characters.import_sillytavern(
         raw,
@@ -427,7 +427,7 @@ async def test_service_ingest_options_pass_through(
 
 
 async def test_service_ingest_with_llm_enrichment(library, mechanics, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
 
     async def fake_llm(_: IngestedCharacterCard) -> dict:
         return {"tags": ["enriched"], "voice_register": "archaic"}

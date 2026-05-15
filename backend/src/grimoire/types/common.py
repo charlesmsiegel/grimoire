@@ -32,7 +32,7 @@ class EntityKind(StrEnum):
     LORE = "lore"
     FACTION = "faction"
     GREETING = "greeting"
-    SETTING = "setting"
+    World = "world"
     STYLE_GUIDE = "style_guide"
     IMAGE_PRESET = "image_preset"
 
@@ -41,7 +41,7 @@ class EntityRef(BaseModel):
     """Reference to an entity that may be resolved through the campaign cascade.
 
     Examples:
-        library:settings/wod-london/characters/alistair-hyde-smythe
+        library:worlds/wod-london/characters/alistair-hyde-smythe
         campaign:emergent/characters/the-bartender
     """
 
@@ -49,7 +49,7 @@ class EntityRef(BaseModel):
 
     scope: Scope
     kind: EntityKind
-    setting_id: str | None
+    world_id: str | None
     asset_id: str
     raw: str
 
@@ -59,17 +59,17 @@ class EntityRef(BaseModel):
         scope_part, _, path = raw.partition(":")
         scope = Scope(scope_part) if scope_part in Scope._value2member_map_ else Scope.LIBRARY
         parts = path.split("/") if path else []
-        setting_id: str | None = None
+        world_id: str | None = None
         kind = EntityKind.CHARACTER
         asset_id = parts[-1] if parts else raw
-        if len(parts) >= 4 and parts[0] == "settings":
-            setting_id = parts[1]
+        if len(parts) >= 4 and parts[0] == "worlds":
+            world_id = parts[1]
             try:
                 kind_part = parts[2].rstrip("s") if parts[2].endswith("s") else parts[2]
                 kind = EntityKind(kind_part)
             except ValueError:
                 kind = EntityKind.CHARACTER
-        return cls(scope=scope, kind=kind, setting_id=setting_id, asset_id=asset_id, raw=raw)
+        return cls(scope=scope, kind=kind, world_id=world_id, asset_id=asset_id, raw=raw)
 
 
 CharacterRef = str
@@ -122,14 +122,14 @@ class ValidationResult(BaseModel):
 class InGameTime(BaseModel):
     """A point in a campaign's in-game calendar.
 
-    Wraps a `datetime`. Calendars may be Earth-Gregorian or setting-defined;
-    setting-specific calendar metadata lives on the `SettingMeta`.
+    Wraps a `datetime`. Calendars may be Earth-Gregorian or world-defined;
+    world-specific calendar metadata lives on the `WorldMeta`.
     """
 
     model_config = ConfigDict(frozen=True)
 
     moment: datetime
-    calendar_id: str | None = None  # setting calendar id; None = Gregorian
+    calendar_id: str | None = None  # world calendar id; None = Gregorian
 
 
 class Duration(BaseModel):

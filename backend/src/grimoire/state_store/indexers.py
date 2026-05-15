@@ -91,12 +91,12 @@ async def upsert_library_index(
     await conn.execute(
         """
         INSERT INTO library_index (
-          id, setting_id, kind, asset_id, name, path, frontmatter, body,
+          id, world_id, kind, asset_id, name, path, frontmatter, body,
           body_compressed, tags, keywords, file_mtime, content_hash, indexed_at, version
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-          setting_id = excluded.setting_id,
+          world_id = excluded.world_id,
           kind = excluded.kind,
           asset_id = excluded.asset_id,
           name = excluded.name,
@@ -112,7 +112,7 @@ async def upsert_library_index(
         """,
         (
             library_id,
-            ref.setting_id,
+            ref.world_id,
             ref.kind,
             ref.asset_id,
             name,
@@ -192,18 +192,18 @@ async def delete_campaign_content_row(conn: aiosqlite.Connection, composite_id: 
     await conn.execute("DELETE FROM campaign_content_index WHERE id = ?", (composite_id,))
 
 
-def make_library_id(setting_id: str | None, kind: str, asset_id: str) -> str:
+def make_library_id(world_id: str | None, kind: str, asset_id: str) -> str:
     """Inverse of :func:`parse_library_id`."""
-    if kind == "setting":
-        return f"settings/{asset_id}"
+    if kind == "world":
+        return f"worlds/{asset_id}"
     if kind == "style_guide":
         return f"style-guides/{asset_id}"
     if kind == "image_preset":
         return f"image-presets/{asset_id}"
-    if setting_id is None:
-        raise ValueError(f"kind {kind!r} requires a setting_id")
+    if world_id is None:
+        raise ValueError(f"kind {kind!r} requires a world_id")
     dir_name = KIND_TO_DIR.get(kind, kind)
-    return f"settings/{setting_id}/{dir_name}/{asset_id}"
+    return f"worlds/{world_id}/{dir_name}/{asset_id}"
 
 
 __all__ = [

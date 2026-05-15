@@ -36,12 +36,12 @@ async def test_library_create_indexes_and_emits(
     bus: EventBus,
 ) -> None:
     collector = EventCollector(bus, "library_file_changed")
-    target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "f.md"
+    target = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "f.md"
     _write_markdown(target, "name: winifred\ntags: [vampire]", "winifred prose.")
 
     await watcher.process_path(target)
 
-    row = await store.get_library_entity("settings/wod-london/characters/f")
+    row = await store.get_library_entity("worlds/wod-london/characters/f")
     assert row is not None
     assert row["name"] == "winifred"
     assert row["body"].strip() == "winifred prose."
@@ -50,7 +50,7 @@ async def test_library_create_indexes_and_emits(
     assert len(events) == 1
     payload = events[0].payload
     assert payload["change_type"] == "created"
-    assert payload["library_id"] == "settings/wod-london/characters/f"
+    assert payload["library_id"] == "worlds/wod-london/characters/f"
     assert payload["conflict"] is False
 
 
@@ -60,7 +60,7 @@ async def test_library_modify_bumps_version_and_emits_modified(
     bus: EventBus,
 ) -> None:
     collector = EventCollector(bus, "library_file_changed")
-    target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "f.md"
+    target = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "f.md"
     _write_markdown(target, "name: winifred", "v1")
     await watcher.process_path(target)
 
@@ -76,7 +76,7 @@ async def test_library_modify_bumps_version_and_emits_modified(
     assert len(events) == 2
     assert events[-1].payload["change_type"] == "modified"
 
-    row = await store.get_library_entity("settings/wod-london/characters/f")
+    row = await store.get_library_entity("worlds/wod-london/characters/f")
     assert row["body"] == "v2"
     assert row["version"] == 2
 
@@ -87,14 +87,14 @@ async def test_library_delete_removes_row_and_emits(
     bus: EventBus,
 ) -> None:
     collector = EventCollector(bus, "library_file_changed")
-    target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "f.md"
+    target = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "f.md"
     _write_markdown(target, "name: winifred", "prose")
     await watcher.process_path(target)
 
     target.unlink()
     await watcher.process_path(target)
 
-    assert await store.get_library_entity("settings/wod-london/characters/f") is None
+    assert await store.get_library_entity("worlds/wod-london/characters/f") is None
     events = collector.of_type("library_file_changed")
     assert events[-1].payload["change_type"] == "deleted"
     assert events[-1].payload["content_hash"] is None
@@ -128,7 +128,7 @@ async def test_override_indexes_into_campaign_content_index(
         / "campaigns"
         / "c1"
         / "overrides"
-        / "settings"
+        / "worlds"
         / "wod-london"
         / "characters"
         / "winifred.yaml"
@@ -145,7 +145,7 @@ async def test_override_indexes_into_campaign_content_index(
     assert {r["kind"] for r in rows} == {"override"}
 
     events = collector.of_type("campaign_file_changed")
-    assert events[-1].payload["library_id"] == "settings/wod-london/characters/winifred"
+    assert events[-1].payload["library_id"] == "worlds/wod-london/characters/winifred"
 
 
 async def test_emergent_md_indexes_and_emits(
@@ -237,14 +237,14 @@ async def test_external_overwrite_is_last_write_wins(
     """If the user externally rewrites a library file, the watcher reindexes it
     rather than crashing or rejecting the change."""
     collector = EventCollector(bus, "library_file_changed")
-    target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "f.md"
+    target = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "f.md"
     _write_markdown(target, "name: winifred", "first")
     await watcher.process_path(target)
     # Simulate external edit changing the content.
     _write_markdown(target, "name: winifred", "external rewrite")
     await watcher.process_path(target)
 
-    row = await store.get_library_entity("settings/wod-london/characters/f")
+    row = await store.get_library_entity("worlds/wod-london/characters/f")
     assert row["body"] == "external rewrite"
     payload = collector.of_type("library_file_changed")[-1].payload
     assert payload["change_type"] == "modified"
@@ -260,7 +260,7 @@ async def test_deleting_override_does_not_wipe_library_embeddings(
     """Regression: a campaign override file and its underlying library entity
     share the same ``library_id`` in the classifier. Deleting the override
     must not delete embeddings keyed on the library ref."""
-    library_id = "settings/wod-london/characters/winifred"
+    library_id = "worlds/wod-london/characters/winifred"
     await store.add_embedding(
         ref=library_id,
         scope="library",
@@ -275,7 +275,7 @@ async def test_deleting_override_does_not_wipe_library_embeddings(
         / "campaigns"
         / "c1"
         / "overrides"
-        / "settings"
+        / "worlds"
         / "wod-london"
         / "characters"
         / "winifred.yaml"
@@ -314,8 +314,8 @@ async def test_scan_now_picks_up_preexisting_files(
     bus: EventBus,
 ) -> None:
     # Files exist before the watcher starts.
-    a = store.data_root / "library" / "settings" / "wod-london" / "characters" / "a.md"
-    b = store.data_root / "library" / "settings" / "wod-london" / "lore" / "history.md"
+    a = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "a.md"
+    b = store.data_root / "library" / "worlds" / "wod-london" / "lore" / "history.md"
     _write_markdown(a, "name: Alice", "Alice prose.")
     _write_markdown(b, "name: History", "Ancient times.")
 
@@ -325,8 +325,8 @@ async def test_scan_now_picks_up_preexisting_files(
     # Initial scan does not emit events (those are reserved for live edits).
     assert collector.events == []
 
-    row_a = await store.get_library_entity("settings/wod-london/characters/a")
-    row_b = await store.get_library_entity("settings/wod-london/lore/history")
+    row_a = await store.get_library_entity("worlds/wod-london/characters/a")
+    row_b = await store.get_library_entity("worlds/wod-london/lore/history")
     assert row_a is not None and row_a["name"] == "Alice"
     assert row_b is not None and row_b["name"] == "History"
 
@@ -335,14 +335,14 @@ async def test_scan_now_drops_orphan_library_rows(
     watcher: FileWatcher,
     store: StateStore,
 ) -> None:
-    target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "x.md"
+    target = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "x.md"
     _write_markdown(target, "name: X", "")
     await watcher.scan_now()
-    assert await store.get_library_entity("settings/wod-london/characters/x") is not None
+    assert await store.get_library_entity("worlds/wod-london/characters/x") is not None
 
     target.unlink()
     await watcher.scan_now()
-    assert await store.get_library_entity("settings/wod-london/characters/x") is None
+    assert await store.get_library_entity("worlds/wod-london/characters/x") is None
 
 
 # --------------------------------------------------------------------------- #
@@ -358,13 +358,13 @@ async def test_live_observer_picks_up_filesystem_events(
     collector = EventCollector(bus, "library_file_changed")
     await watcher.start(initial_scan=True)
     try:
-        target = store.data_root / "library" / "settings" / "wod-london" / "characters" / "live.md"
+        target = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "live.md"
         _write_markdown(target, "name: Live", "First version.")
 
         # Wait until the row appears or the timeout elapses.
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
-            row = await store.get_library_entity("settings/wod-london/characters/live")
+            row = await store.get_library_entity("worlds/wod-london/characters/live")
             if row is not None:
                 break
             await asyncio.sleep(0.1)
@@ -373,7 +373,7 @@ async def test_live_observer_picks_up_filesystem_events(
 
         assert row["name"] == "Live"
         assert any(
-            e.payload.get("library_id") == "settings/wod-london/characters/live"
+            e.payload.get("library_id") == "worlds/wod-london/characters/live"
             for e in collector.of_type("library_file_changed")
         )
     finally:

@@ -5,7 +5,7 @@ The builder orchestrates the seven-step pipeline:
     0. resolve composition
     1. resolve scene state
     2. resolve cast (with tier promotion)
-    3. resolve setting (location, adjacent, weather, factions, lore)
+    3. resolve world (location, adjacent, weather, factions, lore)
     4. resolve continuity (commitments, recent facts)
     5. archive retrieval (vector + keyword)
     6. budget allocation
@@ -14,7 +14,7 @@ The builder orchestrates the seven-step pipeline:
 The module dependencies are duck-typed at construction so unit tests can
 substitute lightweight stubs for any subset of services. Production wiring
 passes the concrete services from :mod:`grimoire.library`,
-:mod:`grimoire.characters`, :mod:`grimoire.setting`,
+:mod:`grimoire.characters`, :mod:`grimoire.world`,
 :mod:`grimoire.scenes`, :mod:`grimoire.continuity`, and
 :mod:`grimoire.llm_gateway`.
 """
@@ -95,7 +95,7 @@ class ContextBuilderService:
         *,
         library: Any,
         characters: Any,
-        setting: Any,
+        world: Any,
         scenes: Any,
         continuity: Any,
         mechanics: Any | None = None,
@@ -105,7 +105,7 @@ class ContextBuilderService:
     ) -> None:
         self._library = library
         self._characters = characters
-        self._setting = setting
+        self._world = world
         self._scenes = scenes
         self._continuity = continuity
         self._mechanics = mechanics
@@ -203,12 +203,12 @@ class ContextBuilderService:
             recent_posts=recent_posts,
         )
 
-        # Step 3 — setting
-        setting_spotlight, setting_background = await self._resolve_setting(
+        # Step 3 — world
+        world_spotlight, world_background = await self._resolve_world(
             scene=scene, campaign_id=campaign_id, branch_id=branch_id
         )
-        spotlight_items.extend(setting_spotlight)
-        background_items.extend(setting_background)
+        spotlight_items.extend(world_spotlight)
+        background_items.extend(world_background)
 
         # Step 4 — continuity
         commitments_block, commitments_source = await self._render_commitments(
@@ -277,18 +277,18 @@ class ContextBuilderService:
         return ""
 
     async def _render_system_meta(self, composition: Composition | None) -> str:
-        if composition is None or not composition.settings:
+        if composition is None or not composition.worlds:
             return ""
         names: list[str] = []
-        for ref in sorted(composition.settings, key=lambda r: r.priority):
+        for ref in sorted(composition.worlds, key=lambda r: r.priority):
             try:
-                meta = await self._library.get_setting(ref.setting_id)
+                meta = await self._library.get_world(ref.world_id)
             except Exception:
                 continue
-            names.append(f"{meta.name} ({ref.setting_id})")
+            names.append(f"{meta.name} ({ref.world_id})")
         if not names:
             return ""
-        return "Settings in play: " + "; ".join(names)
+        return "Worlds in play: " + "; ".join(names)
 
     # -- scene / cast --------------------------------------------------- #
 
@@ -426,9 +426,9 @@ class ContextBuilderService:
             summary=ref,
         )
 
-    # -- setting -------------------------------------------------------- #
+    # -- world -------------------------------------------------------- #
 
-    async def _resolve_setting(
+    async def _resolve_world(
         self,
         *,
         scene: Any,
@@ -442,13 +442,13 @@ class ContextBuilderService:
 
         location_ref = getattr(scene, "location_ref", None)
         if location_ref:
-            setting_id, location_id = _parse_location_ref(location_ref)
+            world_id, location_id = _parse_location_ref(location_ref)
         else:
-            setting_id, location_id = None, None
+            world_id, location_id = None, None
 
-        if setting_id and location_id and self._setting is not None:
+        if world_id and location_id and self._world is not None:
             try:
-                location = await self._setting.get_location(setting_id, location_id)
+                location = await self._world.get_location(world_id, location_id)
             except Exception:
                 location = None
             if location is not None:
@@ -462,7 +462,7 @@ class ContextBuilderService:
                         source=ContextSource(
                             kind="location",
                             scope="library",
-                            owner_id=f"library:settings/{setting_id}/locations/{location_id}",
+                            owner_id=f"library:worlds/{world_id}/locations/{location_id}",
                             tier=ContextTier.SPOTLIGHT,
                             summary=location.name,
                         ),
@@ -471,8 +471,8 @@ class ContextBuilderService:
 
                 # Weather (spotlight context block)
                 try:
-                    weather = await self._setting.weather_for(
-                        setting_id,
+                    weather = await self._world.weather_for(
+                        world_id,
                         location_id,
                         getattr(scene, "in_game_start", None),
                         campaign_id,
@@ -499,8 +499,8 @@ class ContextBuilderService:
 
                 # Adjacent locations into background
                 try:
-                    adjacent = await self._setting.adjacent_locations(
-                        setting_id, location_id, campaign_id
+                    adjacent = await self._world.adjacent_locations(
+                        world_id, location_id, campaign_id
                     )
                 except Exception:
                     adjacent = []
@@ -516,7 +516,7 @@ class ContextBuilderService:
                                 source=ContextSource(
                                     kind="location",
                                     scope="library",
-                                    owner_id=f"library:settings/{setting_id}",
+                                    owner_id=f"library:worlds/{world_id}",
                                     tier=ContextTier.BACKGROUND,
                                     summary="adjacency",
                                 ),
@@ -667,10 +667,10 @@ class ContextBuilderService:
         return items
 
     async def _lore_triggers(self, player_input: str, campaign_id: CampaignId) -> list[_TierItem]:
-        if self._setting is None or not player_input:
+        if self._world is None or not player_input:
             return []
         try:
-            triggered = await self._setting.lore_for_post(player_input, campaign_id)
+            triggered = await self._world.lore_for_post(player_input, campaign_id)
         except Exception:
             return []
         items: list[_TierItem] = []
@@ -678,7 +678,7 @@ class ContextBuilderService:
             body = getattr(lore, "body", "") or ""
             title = getattr(lore, "title", "") or ""
             text = f"[lore: {title}] {body[:400]}".strip()
-            setting_id = getattr(lore, "setting_id", "")
+            world_id = getattr(lore, "world_id", "")
             lore_id = getattr(lore, "id", "")
             items.append(
                 _TierItem(
@@ -689,7 +689,7 @@ class ContextBuilderService:
                     source=ContextSource(
                         kind="lore",
                         scope="library",
-                        owner_id=f"library:settings/{setting_id}/lore/{lore_id}",
+                        owner_id=f"library:worlds/{world_id}/lore/{lore_id}",
                         tier=ContextTier.ARCHIVE,
                         summary=title,
                     ),
@@ -997,14 +997,14 @@ class ContextBuilderService:
 
 
 def _parse_location_ref(ref: str | None) -> tuple[str | None, str | None]:
-    """Parse ``library:settings/<s>/locations/<id>``-style refs."""
+    """Parse ``library:worlds/<s>/locations/<id>``-style refs."""
     if not ref:
         return None, None
     raw = ref
     if raw.startswith("library:"):
         raw = raw[len("library:") :]
     parts = raw.strip("/").split("/")
-    if len(parts) >= 4 and parts[0] == "settings" and parts[2] in {"locations", "location"}:
+    if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"locations", "location"}:
         return parts[1], parts[3]
     return None, None
 

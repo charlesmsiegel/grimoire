@@ -2,49 +2,49 @@
 
 ## Purpose
 
-The Characters module is the character-specific behavior layer over Setting's storage. Setting owns the character files (`<setting>/characters/<id>.md`) and handles CRUD; Characters provides the *behaviors* that characters need but other entity kinds don't:
+The Characters module is the character-specific behavior layer over World's storage. World owns the character files (`<world>/characters/<id>.md`) and handles CRUD; Characters provides the *behaviors* that characters need but other entity kinds don't:
 
 - Voice anchors (canonical voice, sample dialogue, address terms, dos and don'ts)
 - Drift detection (voice consistency over time, with corrective context)
 - Context tier management (lock-in, spotlight, background, archive)
 - PC role tracking (which characters are PCs in this campaign, multi-PC coordination)
-- Cross-setting variant queries (Drizzt in faerun and mythic-europe, by shared id)
+- Cross-world variant queries (Drizzt in faerun and mythic-europe, by shared id)
 - Compressed card views (full, compressed, voice-only, capsule)
 - Relationship state (campaign-scoped affection, trust, awareness)
-- Promotion of campaign-local emergent characters into a setting
+- Promotion of campaign-local emergent characters into a world
 
-Characters does not own data. It calls into Setting for reads/writes of the underlying files. It calls into Mechanics for sheet schemas and capability queries when a character has a mechanical sheet. Think of Characters as the "character service" — a behavior facade over multiple storage and rule sources.
+Characters does not own data. It calls into World for reads/writes of the underlying files. It calls into Mechanics for sheet schemas and capability queries when a character has a mechanical sheet. Think of Characters as the "character service" — a behavior facade over multiple storage and rule sources.
 
 ## Responsibilities
 
-- Provide character-aware reads and writes through Setting
+- Provide character-aware reads and writes through World
 - Maintain voice anchors and recommend rotation of dialogue samples
 - Detect voice drift in recent play and surface corrective context
 - Recommend context tiers based on scene presence, recent mentions, commitments, and user pins
 - Track PC roles and active-PC state per campaign
 - Coordinate multi-PC turn flow (advance trigger; see also `10-scene-manager.md`)
-- Provide cross-setting variant lookup for characters
+- Provide cross-world variant lookup for characters
 - Generate compressed views of characters (full / compressed / voice / capsule)
 - Maintain campaign-scoped relationship state
-- Promote campaign-local emergent characters into a setting on user action
+- Promote campaign-local emergent characters into a world on user action
 - Import characters from external formats (SillyTavern V2/V3 cards, JSON, plain text)
 
 ## Non-responsibilities
 
-- Does not own character files (Setting does; Characters reads/writes through Setting's API)
+- Does not own character files (World does; Characters reads/writes through World's API)
 - Does not own mechanical sheets (Mechanics does; sheets live as separate files per `06-mechanics.md`)
 - Does not assemble prompts (Context Builder does; uses Characters as a data source)
 - Does not own scenes (Scene Manager does; scenes reference characters by ref)
-- Does not own non-character entities (Setting handles items, locations, lore, factions, greetings directly)
+- Does not own non-character entities (World handles items, locations, lore, factions, greetings directly)
 
 ## Character schema
 
-The library file format is owned by Setting (see `18-library.md` and `09-setting.md`). The schema as seen by Characters:
+The library file format is owned by World (see `18-library.md` and `09-world.md`). The schema as seen by Characters:
 
 ```python
 @dataclass
 class Character:
-    setting_id: Optional[str]            # None if campaign-local emergent
+    world_id: Optional[str]            # None if campaign-local emergent
     id: str
     name: str
     role: CharacterRole                  # pc | major_npc | minor_npc | ensemble | named_flavor
@@ -81,7 +81,7 @@ Campaign-scoped, in SQLite (see `03-state-store.md`):
 ```python
 @dataclass
 class CharacterState:
-    character_ref: str                   # "library:settings/wod-london/characters/alistair-hyde-smythe"
+    character_ref: str                   # "library:worlds/wod-london/characters/alistair-hyde-smythe"
                                          #   or "campaign:emergent/the-bartender"
     campaign_id: str
     branch_id: str
@@ -102,7 +102,7 @@ class CharacterState:
 ```python
 @dataclass
 class ResolvedCharacter:
-    setting_id: Optional[str]
+    world_id: Optional[str]
     id: str
     # ... all card fields, with override patch applied ...
     current_state: CharacterState        # campaign-scoped state
@@ -205,15 +205,15 @@ Recommendation rules:
 
 Tier pins are campaign-local.
 
-## Cross-setting variant lookup
+## Cross-world variant lookup
 
-Variants of the same character across settings are recognized by shared asset id (no `family_id` field). If `wod-london/characters/alistair-hyde-smythe.md` and `wod-nyc/characters/alistair-hyde-smythe.md` both exist, they're variants.
+Variants of the same character across worlds are recognized by shared asset id (no `family_id` field). If `wod-london/characters/alistair-hyde-smythe.md` and `wod-nyc/characters/alistair-hyde-smythe.md` both exist, they're variants.
 
 ```python
-async def cross_setting_lookup(
+async def cross_world_lookup(
     self,
     character_id: str,
-    exclude_setting: Optional[str] = None,
+    exclude_world: Optional[str] = None,
 ) -> list[Character]: ...
 ```
 
@@ -279,9 +279,9 @@ async def promote_to_library(
     self,
     campaign_id: str,
     character_id: str,                  # the campaign-local id
-    target_setting_id: str,
+    target_world_id: str,
 ) -> str:                                # returns the new library path
-    # Delegates to Setting.promote_to_library with kind='character'.
+    # Delegates to World.promote_to_library with kind='character'.
     # Characters wraps it to handle character-specific concerns:
     # - Render voice anchor properly
     # - Preserve drift_score / tier_pin if explicitly carried
@@ -296,24 +296,24 @@ The user has many SillyTavern character cards (the `wod-london-roster`, `opt-ros
 async def import_sillytavern(
     self,
     card: bytes,
-    target_setting_id: str,
+    target_world_id: str,
 ) -> ImportResult: ...
-async def import_charx(self, charx: bytes, target_setting_id: str) -> ImportResult: ...
-async def import_plaintext(self, text: str, target_setting_id: str) -> ImportResult: ...
+async def import_charx(self, charx: bytes, target_world_id: str) -> ImportResult: ...
+async def import_plaintext(self, text: str, target_world_id: str) -> ImportResult: ...
 ```
 
-Imports propose mappings (frontmatter fields, voice anchor extraction) and on confirmation write character files under the target setting.
+Imports propose mappings (frontmatter fields, voice anchor extraction) and on confirmation write character files under the target world.
 
 ## Interface
 
 ```python
 class Characters(Protocol):
-    # Character CRUD (delegated to Setting, but exposed here for convenience)
-    async def list_in_setting(self, setting_id: str) -> list[Character]: ...
-    async def get(self, setting_id: str, id: str) -> Character: ...
-    async def create(self, setting_id: str, character: CharacterData) -> Character: ...
-    async def update(self, setting_id: str, id: str, patch: dict) -> Character: ...
-    async def delete(self, setting_id: str, id: str) -> None: ...
+    # Character CRUD (delegated to World, but exposed here for convenience)
+    async def list_in_world(self, world_id: str) -> list[Character]: ...
+    async def get(self, world_id: str, id: str) -> Character: ...
+    async def create(self, world_id: str, character: CharacterData) -> Character: ...
+    async def update(self, world_id: str, id: str, patch: dict) -> Character: ...
+    async def delete(self, world_id: str, id: str) -> None: ...
 
     # Emergent (campaign-local) characters
     async def create_emergent(
@@ -342,11 +342,11 @@ class Characters(Protocol):
         filter: CharacterFilter = ...,
     ) -> list[ResolvedCharacter]: ...
 
-    # Cross-setting variants
-    async def cross_setting_lookup(
+    # Cross-world variants
+    async def cross_world_lookup(
         self,
         character_id: str,
-        exclude_setting: Optional[str] = None,
+        exclude_world: Optional[str] = None,
     ) -> list[Character]: ...
 
     # Views
@@ -409,19 +409,19 @@ class Characters(Protocol):
         self,
         campaign_id: str,
         character_id: str,
-        target_setting_id: str,
+        target_world_id: str,
     ) -> str: ...
 
     # Import
-    async def import_sillytavern(self, card: bytes, target_setting_id: str) -> ImportResult: ...
-    async def import_charx(self, charx: bytes, target_setting_id: str) -> ImportResult: ...
-    async def import_plaintext(self, text: str, target_setting_id: str) -> ImportResult: ...
+    async def import_sillytavern(self, card: bytes, target_world_id: str) -> ImportResult: ...
+    async def import_charx(self, charx: bytes, target_world_id: str) -> ImportResult: ...
+    async def import_plaintext(self, text: str, target_world_id: str) -> ImportResult: ...
 
     # Search
     async def search(
         self,
         query: str,
-        setting_id: Optional[str] = None,
+        world_id: Optional[str] = None,
         scope: str = "all",
         campaign_id: Optional[str] = None,
     ) -> list[Character]: ...
@@ -447,7 +447,7 @@ characters:
     plaintext: true
   promotion:
     require_confirmation: true
-  cross_setting_lookup:
+  cross_world_lookup:
     case_sensitive: false
   multi_pc:
     auto_advance_with_single_pc: true
@@ -459,6 +459,6 @@ characters:
 - **Auto-draft voice anchors for emergent characters.** When a new NPC appears, auto-draft an anchor from their first scene? Yes, with user review.
 - **Visualization.** Relationship graph, variant lineage. UI consideration; data model supports it.
 - **Sheet versioning.** When mechanical sheets change (XP spent), are old versions kept? Yes via delta log; snapshot-per-session is nice-to-have.
-- **Cross-setting renaming.** Renaming `alistair-hyde-smythe` to `hyde-smythe` in one setting breaks the variant link. A `rename` operation that updates references is a v2 idea.
+- **Cross-world renaming.** Renaming `alistair-hyde-smythe` to `hyde-smythe` in one world breaks the variant link. A `rename` operation that updates references is a v2 idea.
 - **PC scene placement.** When a PC has no current scene (just joined a campaign or just finished one), what's the default? Probably "show the campaign overview"; UI decision.
 - **Body field structure.** The markdown body is unstructured; canonical headings (Appearance, Personality, Background) are encouraged via templates but not enforced.

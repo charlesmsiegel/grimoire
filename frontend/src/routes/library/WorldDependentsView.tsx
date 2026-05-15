@@ -1,6 +1,6 @@
 /**
- * Lists campaigns whose composition references this setting. The backend
- * publishes per-entity dependents directly; for setting-wide queries we
+ * Lists campaigns whose composition references this world. The backend
+ * publishes per-entity dependents directly; for world-wide queries we
  * fan out through `/api/campaigns/<id>/composition`. The list is small in
  * practice (campaigns count, not entity count) so this stays fast.
  */
@@ -15,8 +15,8 @@ interface CampaignSummary {
   name?: string;
 }
 
-interface SettingRef {
-  setting_id: string;
+interface WorldRef {
+  world_id: string;
   priority: number;
   bound_at_version: number;
   track_latest: boolean;
@@ -24,16 +24,16 @@ interface SettingRef {
 }
 
 interface CompositionPayload {
-  settings?: SettingRef[];
+  worlds?: WorldRef[];
 }
 
 interface DependentRow {
   campaign: CampaignSummary;
-  ref: SettingRef;
+  ref: WorldRef;
 }
 
-export function SettingDependentsView() {
-  const { settingId = "" } = useParams();
+export function WorldDependentsView() {
+  const { worldId = "" } = useParams();
   const [rows, setRows] = useState<DependentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
@@ -59,7 +59,7 @@ export function SettingDependentsView() {
         );
         const matched: DependentRow[] = [];
         for (const { campaign, comp } of compositions) {
-          const ref = comp?.settings?.find((r) => r.setting_id === settingId);
+          const ref = comp?.worlds?.find((r) => r.world_id === worldId);
           if (ref) matched.push({ campaign, ref });
         }
         if (!cancelled) setRows(matched);
@@ -73,7 +73,7 @@ export function SettingDependentsView() {
     return () => {
       cancelled = true;
     };
-  }, [settingId]);
+  }, [worldId]);
 
   if (loading) return <p className="library-status">Loading dependent campaigns…</p>;
   if (error) {
@@ -84,13 +84,13 @@ export function SettingDependentsView() {
     );
   }
   if (rows.length === 0) {
-    return <p className="library-status">No campaigns currently reference this setting.</p>;
+    return <p className="library-status">No campaigns currently reference this world.</p>;
   }
 
   return (
-    <section className="setting-dependents">
+    <section className="world-dependents">
       <p>
-        Editing entities in this setting affects pinned campaigns only after they upgrade their ref;{" "}
+        Editing entities in this world affects pinned campaigns only after they upgrade their ref;{" "}
         <code>track_latest</code> campaigns see changes immediately.
       </p>
       <table className="library-table">

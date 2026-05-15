@@ -157,7 +157,7 @@ class StateSnapshot(BaseModel):
 class SearchResult(BaseModel):
     """A vector or keyword search result."""
 
-    # composite id; e.g. 'campaign:scene:0003' or 'library:settings/.../characters/...'
+    # composite id; e.g. 'campaign:scene:0003' or 'library:worlds/.../characters/...'
     ref: str
     scope: Scope
     source_kind: str  # 'post', 'scene_summary', 'character', 'lore', 'fact'

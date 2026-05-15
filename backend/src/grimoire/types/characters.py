@@ -1,4 +1,4 @@
-"""Character-specific types layered over Setting storage."""
+"""Character-specific types layered over World storage."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ class StructuralRelationship(BaseModel):
     """Library-level relationship recorded on the character card.
 
     ``to_ref`` may be a character reference (the common case) or a
-    faction reference such as ``settings/<s>/factions/<id>`` when the
+    faction reference such as ``worlds/<s>/factions/<id>`` when the
     relationship is membership / leadership / rivalry with a faction. Use
     ``kind`` values like ``faction:member`` / ``faction:leader`` /
     ``faction:rival`` to disambiguate.
@@ -86,7 +86,7 @@ class Character(BaseModel):
     id: str
     name: str
     role: CharacterRole
-    setting_id: str | None = None  # None if campaign-local emergent
+    world_id: str | None = None  # None if campaign-local emergent
     aliases: list[str] = Field(default_factory=list)
     age: str | None = None
     tags: list[str] = Field(default_factory=list)
@@ -138,7 +138,7 @@ class PCEntry(BaseModel):
 class CharacterFilter(BaseModel):
     roles: list[CharacterRole] | None = None
     tags: list[str] | None = None
-    setting_ids: list[str] | None = None
+    world_ids: list[str] | None = None
     name_contains: str | None = None
 
 
@@ -207,10 +207,10 @@ class IngestOptions(BaseModel):
     llm_task: str = "character_ingest"
     """Routing key passed to the LLM gateway when ``enrich_with_llm`` is on."""
 
-    setting_factions: list[str] = Field(default_factory=list)
+    world_factions: list[str] = Field(default_factory=list)
     """Known faction slugs to match against when extracting affiliations."""
 
-    setting_characters: list[str] = Field(default_factory=list)
+    world_characters: list[str] = Field(default_factory=list)
     """Known character slugs for cross-linking structural relationships."""
 
     avatar_dir: str | None = None

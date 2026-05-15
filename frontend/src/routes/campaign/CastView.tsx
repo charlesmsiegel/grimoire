@@ -150,7 +150,7 @@ function CharacterDetail({ character: row }: { character: ResolvedCharacter }) {
       <p className="muted">
         {character.role}
         {character.age && ` · age ${character.age}`}
-        {character.setting_id && ` · ${character.setting_id}`}
+        {character.world_id && ` · ${character.world_id}`}
       </p>
 
       {character.description && <p>{character.description}</p>}
@@ -221,7 +221,7 @@ function CharacterDetail({ character: row }: { character: ResolvedCharacter }) {
           <button type="button" disabled title="Wired in a follow-up task.">
             Edit library
           </button>
-          {!character.setting_id && (
+          {!character.world_id && (
             <button type="button" disabled title="Wired in a follow-up task.">
               Promote to library
             </button>

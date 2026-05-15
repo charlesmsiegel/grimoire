@@ -21,7 +21,7 @@ from grimoire.export.sources import DataSources
 from grimoire.scenes.types import Post, Scene
 from grimoire.types.characters import Character
 from grimoire.types.common import CampaignId, CharacterRef, InGameTime
-from grimoire.types.composition import Greeting, LibraryEntity, SettingMeta
+from grimoire.types.composition import Greeting, LibraryEntity, WorldMeta
 from grimoire.types.continuity import Commitment, Fact
 from grimoire.types.export import ExportOptions, ExportSelection
 from grimoire.types.imagegen import ImageMetadata
@@ -57,7 +57,7 @@ class CampaignSnapshot:
 
     scenes: list[ScenePart] = field(default_factory=list)
     characters: list[Character] = field(default_factory=list)
-    settings: list[SettingMeta] = field(default_factory=list)
+    worlds: list[WorldMeta] = field(default_factory=list)
     locations: list[LibraryEntity] = field(default_factory=list)
     lore: list[LibraryEntity] = field(default_factory=list)
     factions: list[LibraryEntity] = field(default_factory=list)
@@ -203,19 +203,19 @@ async def build_snapshot(
             snapshot.characters = [
                 _anonymize_character(ch, filter_ctx.anonymize) for ch in snapshot.characters
             ]
-    if any(name in appendices for name in ("setting", "locations", "lore", "factions", "items")):
-        snapshot.settings = list(await sources.setting.get_composition_settings(campaign_id))
-        for st in snapshot.settings:
-            if "locations" in appendices or "setting" in appendices:
-                snapshot.locations.extend(await sources.setting.list_in_setting(st.id, "location"))
-            if "lore" in appendices or "setting" in appendices:
-                snapshot.lore.extend(await sources.setting.list_in_setting(st.id, "lore"))
-            if "factions" in appendices or "setting" in appendices:
-                snapshot.factions.extend(await sources.setting.list_in_setting(st.id, "faction"))
-            if "items" in appendices or "setting" in appendices:
-                snapshot.items.extend(await sources.setting.list_in_setting(st.id, "item"))
+    if any(name in appendices for name in ("world", "locations", "lore", "factions", "items")):
+        snapshot.worlds = list(await sources.world.get_composition_worlds(campaign_id))
+        for st in snapshot.worlds:
+            if "locations" in appendices or "world" in appendices:
+                snapshot.locations.extend(await sources.world.list_in_world(st.id, "location"))
+            if "lore" in appendices or "world" in appendices:
+                snapshot.lore.extend(await sources.world.list_in_world(st.id, "lore"))
+            if "factions" in appendices or "world" in appendices:
+                snapshot.factions.extend(await sources.world.list_in_world(st.id, "faction"))
+            if "items" in appendices or "world" in appendices:
+                snapshot.items.extend(await sources.world.list_in_world(st.id, "item"))
             if "greetings" in appendices:
-                snapshot.greetings.extend(await sources.setting.list_greetings(st.id))
+                snapshot.greetings.extend(await sources.world.list_greetings(st.id))
     if "continuity" in appendices:
         snapshot.facts = list(await sources.continuity.list_facts(campaign_id))
         snapshot.commitments = list(await sources.continuity.list_commitments(campaign_id))

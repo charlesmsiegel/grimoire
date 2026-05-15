@@ -5,9 +5,9 @@ import { ApiError, libraryApi } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { AsyncBoundary } from "./AsyncBoundary";
 
-export function SettingsListView() {
+export function WorldsListView() {
   const navigate = useNavigate();
-  const { data, loading, error, reload } = useResource(() => libraryApi.listSettings(), []);
+  const { data, loading, error, reload } = useResource(() => libraryApi.listWorlds(), []);
 
   const [creating, setCreating] = useState(false);
   const [newId, setNewId] = useState("");
@@ -20,11 +20,11 @@ export function SettingsListView() {
     setSubmitErr(null);
     setBusy(true);
     try {
-      const created = await libraryApi.createSetting(newId.trim(), { name: newName.trim() });
+      const created = await libraryApi.createWorld(newId.trim(), { name: newName.trim() });
       setCreating(false);
       setNewId("");
       setNewName("");
-      navigate(`/library/settings/${encodeURIComponent(created.id)}`);
+      navigate(`/library/worlds/${encodeURIComponent(created.id)}`);
     } catch (err) {
       setSubmitErr(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -35,14 +35,14 @@ export function SettingsListView() {
   return (
     <div className="library-section">
       <header className="library-section-header">
-        <h3>Settings</h3>
+        <h3>Worlds</h3>
         <button onClick={() => setCreating((c) => !c)} aria-expanded={creating}>
-          {creating ? "Cancel" : "+ New setting"}
+          {creating ? "Cancel" : "+ New world"}
         </button>
       </header>
 
       {creating && (
-        <form onSubmit={submit} className="library-form" aria-label="Create setting">
+        <form onSubmit={submit} className="library-form" aria-label="Create world">
           <label>
             <span>ID</span>
             <input
@@ -72,13 +72,13 @@ export function SettingsListView() {
         loading={loading}
         error={error}
         empty={!data || data.length === 0}
-        emptyMessage="No settings yet. Create one to get started."
+        emptyMessage="No worlds yet. Create one to get started."
         onRetry={reload}
       >
         <ul className="library-card-grid">
           {data?.map((s) => (
             <li key={s.id} className="library-card">
-              <Link to={`/library/settings/${encodeURIComponent(s.id)}`}>
+              <Link to={`/library/worlds/${encodeURIComponent(s.id)}`}>
                 <h4>{s.name || s.id}</h4>
                 <small>{s.id}</small>
                 {s.genre && <p className="library-card-genre">{s.genre}</p>}

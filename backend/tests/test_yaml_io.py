@@ -21,7 +21,7 @@ def test_parse_yaml_invalid_raises() -> None:
 
 
 def test_load_yaml_reads_utf8(tmp_path: Path) -> None:
-    path = tmp_path / "setting.yaml"
+    path = tmp_path / "world.yaml"
     path.write_text("name: café\nseasons: [été, hiver]\n", encoding="utf-8")
     assert load_yaml(path) == {"name": "café", "seasons": ["été", "hiver"]}
 

@@ -1,25 +1,25 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { ApiError, libraryApi, type SettingMeta } from "../../api/library";
+import { ApiError, libraryApi, type WorldMeta } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { AsyncBoundary } from "./AsyncBoundary";
 
-const FIELDS: { key: keyof SettingMeta; label: string; type: "text" | "textarea" | "tags" }[] = [
+const FIELDS: { key: keyof WorldMeta; label: string; type: "text" | "textarea" | "tags" }[] = [
   { key: "name", label: "Name", type: "text" },
   { key: "genre", label: "Genre", type: "text" },
   { key: "description", label: "Description", type: "textarea" },
   { key: "tags", label: "Tags (comma separated)", type: "tags" },
 ];
 
-export function SettingMetaView() {
-  const { settingId = "" } = useParams();
+export function WorldMetaView() {
+  const { worldId = "" } = useParams();
   const { data, loading, error, reload } = useResource(
-    () => libraryApi.getSetting(settingId),
-    [settingId],
+    () => libraryApi.getWorld(worldId),
+    [worldId],
   );
 
-  const [draft, setDraft] = useState<Partial<SettingMeta>>({});
+  const [draft, setDraft] = useState<Partial<WorldMeta>>({});
   const [calendar, setCalendar] = useState("");
   const [atmosphere, setAtmosphere] = useState("");
   const [defaults, setDefaults] = useState("");
@@ -41,7 +41,7 @@ export function SettingMetaView() {
     setDirty(false);
   }, [data]);
 
-  function patch<K extends keyof SettingMeta>(key: K, value: SettingMeta[K]) {
+  function patch<K extends keyof WorldMeta>(key: K, value: WorldMeta[K]) {
     setDraft((d) => ({ ...d, [key]: value }));
     setDirty(true);
   }
@@ -60,7 +60,7 @@ export function SettingMetaView() {
           `JSON parse error in calendar/atmosphere/defaults: ${(parseErr as Error).message}`,
         );
       }
-      await libraryApi.updateSetting(settingId, body);
+      await libraryApi.updateWorld(worldId, body);
       setDirty(false);
       reload();
     } catch (err) {
@@ -71,9 +71,9 @@ export function SettingMetaView() {
   }
 
   return (
-    <section className="setting-meta">
+    <section className="world-meta">
       <AsyncBoundary loading={loading} error={error} onRetry={reload}>
-        <div className="library-form" aria-label="Setting metadata">
+        <div className="library-form" aria-label="World metadata">
           {FIELDS.map((field) => (
             <label key={field.key}>
               <span>{field.label}</span>

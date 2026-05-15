@@ -20,7 +20,7 @@ class CompositionSnapshot(BaseModel):
     """What library state a turn saw, captured at turn time."""
 
     mechanics_module: str | None
-    setting_refs: list[Json] = Field(default_factory=list)
+    world_refs: list[Json] = Field(default_factory=list)
     style_guide_id: str | None = None
     image_preset_id: str | None = None
 

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from grimoire.setting.weather import generate_weather
 from grimoire.types.common import InGameTime
-from grimoire.types.setting import SettingCalendar
+from grimoire.types.world import WorldCalendar
+from grimoire.world.weather import generate_weather
 
 
 def _when(year: int, month: int, day: int, hour: int = 12) -> InGameTime:
@@ -14,17 +14,17 @@ def _when(year: int, month: int, day: int, hour: int = 12) -> InGameTime:
 
 
 def test_same_inputs_same_output() -> None:
-    cal = SettingCalendar(setting_id="x")
+    cal = WorldCalendar(world_id="x")
     a = generate_weather(
         campaign_id="c1",
-        location_ref="library:settings/x/locations/y",
+        location_ref="library:worlds/x/locations/y",
         when=_when(2024, 11, 1, 18),
         calendar=cal,
         climate_zone="temperate-oceanic",
     )
     b = generate_weather(
         campaign_id="c1",
-        location_ref="library:settings/x/locations/y",
+        location_ref="library:worlds/x/locations/y",
         when=_when(2024, 11, 1, 18),
         calendar=cal,
         climate_zone="temperate-oceanic",
@@ -33,7 +33,7 @@ def test_same_inputs_same_output() -> None:
 
 
 def test_different_hour_changes_outcome() -> None:
-    cal = SettingCalendar(setting_id="x")
+    cal = WorldCalendar(world_id="x")
     samples = {
         generate_weather(
             campaign_id="c1",
@@ -48,7 +48,7 @@ def test_different_hour_changes_outcome() -> None:
 
 
 def test_indoor_is_always_clear() -> None:
-    cal = SettingCalendar(setting_id="x")
+    cal = WorldCalendar(world_id="x")
     w = generate_weather(
         campaign_id="c1",
         location_ref="loc",
@@ -62,7 +62,7 @@ def test_indoor_is_always_clear() -> None:
 
 
 def test_climate_zone_influences_distribution() -> None:
-    cal = SettingCalendar(setting_id="x")
+    cal = WorldCalendar(world_id="x")
     arctic_kinds = [
         generate_weather(
             campaign_id="c1",

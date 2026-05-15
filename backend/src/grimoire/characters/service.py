@@ -1,7 +1,7 @@
 """Concrete Characters service (spec 08).
 
-Behavior facade over Library/Setting storage. The Library owns the on-disk
-``settings/<setting>/characters/<id>.md`` files; this service adds the
+Behavior facade over Library/World storage. The Library owns the on-disk
+``worlds/<world>/characters/<id>.md`` files; this service adds the
 character-specific behaviors: voice anchors and drift detection, context
 tier recommendation, PC roles and multi-PC coordination, compressed card
 views, campaign-scoped relationships, mechanical capability surfacing, and
@@ -124,25 +124,25 @@ class CharactersService:
     # CRUD (delegated to Library)
     # ------------------------------------------------------------------ #
 
-    async def list_in_setting(self, setting_id: str) -> list[Character]:
-        rows = await self.library.list_in_setting(setting_id, "character")
+    async def list_in_world(self, world_id: str) -> list[Character]:
+        rows = await self.library.list_in_world(world_id, "character")
         return [_character_from_entity(r) for r in rows]
 
-    async def get(self, setting_id: str, character_id: str) -> Character:
-        ent = await self.library.get_entity(setting_id, "character", character_id)
+    async def get(self, world_id: str, character_id: str) -> Character:
+        ent = await self.library.get_entity(world_id, "character", character_id)
         return _character_from_entity(ent)
 
-    async def create(self, setting_id: str, payload: CharacterData) -> Character:
+    async def create(self, world_id: str, payload: CharacterData) -> Character:
         fm = _frontmatter_from_payload(payload)
         ent = await self.library.create_entity(
-            setting_id, "character", payload.id, fm, payload.body, source="characters:create"
+            world_id, "character", payload.id, fm, payload.body, source="characters:create"
         )
         return _character_from_entity(ent)
 
-    async def update(self, setting_id: str, character_id: str, patch: dict) -> Character:
+    async def update(self, world_id: str, character_id: str, patch: dict) -> Character:
         body = patch.pop("body", None)
         ent = await self.library.update_entity(
-            setting_id,
+            world_id,
             "character",
             character_id,
             frontmatter_patch=patch or None,
@@ -151,9 +151,9 @@ class CharactersService:
         )
         return _character_from_entity(ent)
 
-    async def delete(self, setting_id: str, character_id: str) -> None:
+    async def delete(self, world_id: str, character_id: str) -> None:
         await self.library.delete_entity(
-            setting_id, "character", character_id, source="characters:delete"
+            world_id, "character", character_id, source="characters:delete"
         )
 
     # ------------------------------------------------------------------ #
@@ -203,7 +203,7 @@ class CharactersService:
             body=body,
             source=source,
         )
-        return _character_from_frontmatter(fm, body, setting_id=None)
+        return _character_from_frontmatter(fm, body, world_id=None)
 
     async def delete_emergent(self, campaign_id: CampaignId, character_id: str) -> None:
         from grimoire.state_store.paths import emergent_path
@@ -225,7 +225,7 @@ class CharactersService:
     ) -> None:
         """Persist a campaign-local override against a library character.
 
-        ``character_ref`` must be a ``library:settings/<s>/characters/<id>``
+        ``character_ref`` must be a ``library:worlds/<s>/characters/<id>``
         reference. The override file lives under the campaign's
         ``overrides/`` tree.
         """
@@ -252,25 +252,25 @@ class CharactersService:
             character = _character_from_frontmatter(
                 row.get("frontmatter") or {},
                 row.get("body") or "",
-                setting_id=None,
+                world_id=None,
             )
             chain = [
                 ResolutionSource(
                     layer=ResolutionLayer.EMERGENT,
                     scope="campaign-local",
                     library_id=None,
-                    setting_id=None,
+                    world_id=None,
                     override_applied=False,
                 )
             ]
             overrides_applied: list[str] = []
         else:
             entity = await self.library.resolve(
-                f"settings/{ref_entity.setting_id}/characters/{ref_entity.asset_id}",
+                f"worlds/{ref_entity.world_id}/characters/{ref_entity.asset_id}",
                 campaign_id,
             )
             character = _character_from_frontmatter(
-                entity.frontmatter, entity.body, setting_id=entity.setting_id
+                entity.frontmatter, entity.body, world_id=entity.world_id
             )
             chain = list(entity.source_chain)
             overrides_applied = list(entity.overrides_applied)
@@ -297,7 +297,7 @@ class CharactersService:
         for ent in composed:
             if not _passes_filter(ent, filter):
                 continue
-            ref = f"library:settings/{ent.setting_id}/characters/{ent.asset_id}"
+            ref = f"library:worlds/{ent.world_id}/characters/{ent.asset_id}"
             try:
                 out.append(await self.resolve(ref, campaign_id))
             except CharacterNotFoundError:
@@ -315,15 +315,15 @@ class CharactersService:
         return out
 
     # ------------------------------------------------------------------ #
-    # Cross-setting variants
+    # Cross-world variants
     # ------------------------------------------------------------------ #
 
-    async def cross_setting_lookup(
-        self, character_id: str, exclude_setting: str | None = None
+    async def cross_world_lookup(
+        self, character_id: str, exclude_world: str | None = None
     ) -> list[Character]:
         rows = await self.library.variants_of(character_id, "character")
-        if exclude_setting:
-            rows = [r for r in rows if r.setting_id != exclude_setting]
+        if exclude_world:
+            rows = [r for r in rows if r.world_id != exclude_world]
         return [_character_from_entity(r) for r in rows]
 
     # ------------------------------------------------------------------ #
@@ -697,7 +697,7 @@ class CharactersService:
         self,
         campaign_id: CampaignId,
         character_id: str,
-        target_setting_id: str,
+        target_world_id: str,
         *,
         source: str = "characters:promote",
         delete_emergent: bool = False,
@@ -715,7 +715,7 @@ class CharactersService:
             )
         fm = dict(emergent.get("frontmatter") or {})
         fm.setdefault("id", character_id)
-        library_id = make_library_id(target_setting_id, "character", character_id)
+        library_id = make_library_id(target_world_id, "character", character_id)
         result = await self.store.write_library_file(
             library_id=library_id,
             frontmatter=fm,
@@ -738,11 +738,11 @@ class CharactersService:
     async def import_sillytavern(
         self,
         card: bytes,
-        target_setting_id: str,
+        target_world_id: str,
         *,
         options: IngestOptions | None = None,
     ) -> ImportResult:
-        """Ingest a Character Card V2/V3 payload into ``target_setting_id``.
+        """Ingest a Character Card V2/V3 payload into ``target_world_id``.
 
         Accepts JSON bytes (the canonical envelope or just the data
         object) as well as PNG bytes with an embedded ``chara``/``ccv3``
@@ -751,29 +751,29 @@ class CharactersService:
         the parse is enriched before the character is written.
         """
         ingested = await self._ingest(card, options=options)
-        return await self._finalize_import(target_setting_id, ingested)
+        return await self._finalize_import(target_world_id, ingested)
 
     async def import_charx(
         self,
         charx_bytes: bytes,
-        target_setting_id: str,
+        target_world_id: str,
         *,
         options: IngestOptions | None = None,
     ) -> ImportResult:
         ingested = await self._ingest(charx_bytes, options=options)
-        return await self._finalize_import(target_setting_id, ingested)
+        return await self._finalize_import(target_world_id, ingested)
 
-    async def import_plaintext(self, text: str, target_setting_id: str) -> ImportResult:
+    async def import_plaintext(self, text: str, target_world_id: str) -> ImportResult:
         data, warnings = parse_plaintext(text)
         return await self._finalize_import(
-            target_setting_id,
+            target_world_id,
             IngestedCharacterCard(data=data, warnings=warnings),
         )
 
     async def import_character_card(
         self,
         payload: bytes,
-        target_setting_id: str,
+        target_world_id: str,
         *,
         options: IngestOptions | None = None,
     ) -> tuple[ImportResult, IngestedCharacterCard]:
@@ -784,7 +784,7 @@ class CharactersService:
         committing the character to disk.
         """
         ingested = await self._ingest(payload, options=options)
-        result = await self._finalize_import(target_setting_id, ingested)
+        result = await self._finalize_import(target_world_id, ingested)
         return result, ingested
 
     async def _ingest(
@@ -801,7 +801,7 @@ class CharactersService:
 
     async def add_character_image(
         self,
-        setting_id: str,
+        world_id: str,
         character_id: str,
         image: CharacterImage,
         *,
@@ -812,18 +812,18 @@ class CharactersService:
 
         When ``image_bytes`` is supplied, the bytes are written to disk
         next to the character markdown (the path is normalized to
-        ``library/settings/<setting>/characters/<id>/<filename>``).
+        ``library/worlds/<world>/characters/<id>/<filename>``).
         Callers can pass any
         :class:`grimoire.types.characters.CharacterImage` — generated
         images from ImageGen, manually uploaded references, expression
         sheets, etc.
         """
-        ent = await self.library.get_entity(setting_id, "character", character_id)
+        ent = await self.library.get_entity(world_id, "character", character_id)
         existing = list(_character_from_entity(ent).images)
         stored = image
         if image_bytes is not None:
             stored = await self._write_image_bytes(
-                setting_id=setting_id,
+                world_id=world_id,
                 character_id=character_id,
                 image=image,
                 payload=image_bytes,
@@ -832,7 +832,7 @@ class CharactersService:
         fm = dict(ent.frontmatter or {})
         fm["images"] = [_image_to_dict(img) for img in existing]
         updated = await self.library.update_entity(
-            setting_id,
+            world_id,
             "character",
             character_id,
             frontmatter_patch=fm,
@@ -844,7 +844,7 @@ class CharactersService:
     async def _write_image_bytes(
         self,
         *,
-        setting_id: str,
+        world_id: str,
         character_id: str,
         image: CharacterImage,
         payload: bytes,
@@ -858,8 +858,8 @@ class CharactersService:
             filename = filename.rsplit("/", 1)[-1]
         target_dir = (
             library_root(self.store.data_root)
-            / "settings"
-            / setting_id
+            / "worlds"
+            / world_id
             / "characters"
             / character_id
         )
@@ -870,19 +870,19 @@ class CharactersService:
 
     async def _finalize_import(
         self,
-        target_setting_id: str,
+        target_world_id: str,
         ingested: IngestedCharacterCard,
     ) -> ImportResult:
         data = ingested.data
         result = ImportResult(warnings=list(ingested.warnings))
         try:
-            existing = await self.library.get_entity(target_setting_id, "character", data.id)
+            existing = await self.library.get_entity(target_world_id, "character", data.id)
         except Exception:
             existing = None
         if existing is not None:
             result.skipped.append(data.id)
             result.warnings.append(
-                f"character {data.id!r} already exists in {target_setting_id!r}; not overwriting"
+                f"character {data.id!r} already exists in {target_world_id!r}; not overwriting"
             )
             return result
 
@@ -897,7 +897,7 @@ class CharactersService:
             if avatar_index is not None:
                 placeholder = data.images[avatar_index]
                 stored = await self._write_image_bytes(
-                    setting_id=target_setting_id,
+                    world_id=target_world_id,
                     character_id=data.id,
                     image=placeholder,
                     payload=ingested.avatar_bytes,
@@ -907,7 +907,7 @@ class CharactersService:
                 data = data.model_copy(update={"images": images})
 
         try:
-            await self.create(target_setting_id, data)
+            await self.create(target_world_id, data)
             result.created.append(data.id)
         except Exception as exc:  # pragma: no cover - defensive
             result.errors.append(str(exc))
@@ -920,7 +920,7 @@ class CharactersService:
     async def search(
         self,
         query: str,
-        setting_id: str | None = None,
+        world_id: str | None = None,
         scope: str = "all",
         campaign_id: CampaignId | None = None,
     ) -> list[Character]:
@@ -928,26 +928,26 @@ class CharactersService:
 
         Scope:
         * ``library`` — search across the entire library
-        * ``setting`` — restrict to ``setting_id``
+        * ``world`` — restrict to ``world_id``
         * ``campaign`` — search composition + emergents for ``campaign_id``
-        * ``all`` — library if no ``setting_id``, else setting; falls back to
+        * ``all`` — library if no ``world_id``, else world; falls back to
           composition for ``campaign_id``
         """
         q = (query or "").strip().lower()
         if not q:
             return []
         rows: list[LibraryEntity] = []
-        if scope in {"setting"} and setting_id is not None:
-            rows = await self.library.list_in_setting(setting_id, "character")
-        elif scope == "library" or (scope == "all" and setting_id is None and campaign_id is None):
+        if scope in {"world"} and world_id is not None:
+            rows = await self.library.list_in_world(world_id, "character")
+        elif scope == "library" or (scope == "all" and world_id is None and campaign_id is None):
             rows = await self.store.db.fetchall(
                 "SELECT * FROM library_index WHERE kind = 'character' ORDER BY name"
             )
             rows = [_entity_from_row_dict(r) for r in rows]
         elif scope == "campaign" or campaign_id is not None:
             rows = await self.library.list_for_composition(campaign_id, "character")
-        elif setting_id is not None:
-            rows = await self.library.list_in_setting(setting_id, "character")
+        elif world_id is not None:
+            rows = await self.library.list_in_world(world_id, "character")
 
         results: list[Character] = []
         for r in rows:
@@ -1086,11 +1086,11 @@ class CharactersService:
 
 
 def _character_from_entity(ent: LibraryEntity) -> Character:
-    return _character_from_frontmatter(ent.frontmatter, ent.body, setting_id=ent.setting_id)
+    return _character_from_frontmatter(ent.frontmatter, ent.body, world_id=ent.world_id)
 
 
 def _character_from_frontmatter(
-    frontmatter: dict, body: str, *, setting_id: str | None
+    frontmatter: dict, body: str, *, world_id: str | None
 ) -> Character:
     fm: dict[str, Any] = dict(frontmatter or {})
     try:
@@ -1136,7 +1136,7 @@ def _character_from_frontmatter(
         id=str(fm.get("id") or ""),
         name=str(fm.get("name") or fm.get("id") or ""),
         role=role,
-        setting_id=setting_id,
+        world_id=world_id,
         aliases=[str(a) for a in (fm.get("aliases") or [])],
         age=fm.get("age"),
         tags=[str(t) for t in (fm.get("tags") or [])],
@@ -1241,7 +1241,7 @@ def _entity_from_row_dict(row: Any) -> LibraryEntity:
             fm = {}
     return LibraryEntity(
         id=raw.get("id") or "",
-        setting_id=raw.get("setting_id"),
+        world_id=raw.get("world_id"),
         kind="character",
         asset_id=raw.get("asset_id") or "",
         name=raw.get("name") or raw.get("asset_id") or "",
@@ -1278,7 +1278,7 @@ def _matches_query(character: Character, q: str) -> bool:
 def _passes_filter(entity: LibraryEntity, filter: CharacterFilter | None) -> bool:
     if filter is None:
         return True
-    if filter.setting_ids and entity.setting_id not in filter.setting_ids:
+    if filter.world_ids and entity.world_id not in filter.world_ids:
         return False
     if filter.tags and not (set(entity.tags or []) & set(filter.tags)):
         return False
@@ -1301,7 +1301,7 @@ def _passes_resolved_filter(resolved: ResolvedCharacter, filter: CharacterFilter
         return False
     if filter.tags and not (set(c.tags) & set(filter.tags)):
         return False
-    if filter.setting_ids and c.setting_id not in filter.setting_ids:
+    if filter.world_ids and c.world_id not in filter.world_ids:
         return False
     return not (filter.name_contains and filter.name_contains.lower() not in c.name.lower())
 
@@ -1338,9 +1338,9 @@ def _relationship_row_to_dict(row: Any) -> dict:
 class _CharacterRefView:
     """Lightweight parsed view of a character reference."""
 
-    def __init__(self, is_emergent: bool, setting_id: str | None, asset_id: str) -> None:
+    def __init__(self, is_emergent: bool, world_id: str | None, asset_id: str) -> None:
         self.is_emergent = is_emergent
-        self.setting_id = setting_id
+        self.world_id = world_id
         self.asset_id = asset_id
 
 
@@ -1362,11 +1362,11 @@ def _parse_character_ref(ref: str) -> _CharacterRefView:
     if ref.startswith("library:"):
         _, _, path = ref.partition("library:")
         parts = path.strip("/").split("/")
-        if len(parts) >= 4 and parts[0] == "settings" and parts[2] in {"characters", "character"}:
+        if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"characters", "character"}:
             return _CharacterRefView(False, parts[1], parts[3])
-    # Bare "settings/<s>/characters/<id>"
+    # Bare "worlds/<s>/characters/<id>"
     parts = ref.strip("/").split("/")
-    if len(parts) >= 4 and parts[0] == "settings" and parts[2] in {"characters", "character"}:
+    if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"characters", "character"}:
         return _CharacterRefView(False, parts[1], parts[3])
     raise CharactersError(f"unrecognized character_ref {ref!r}")
 
@@ -1377,6 +1377,6 @@ def _asset_id_for_ref(ref: CharacterRef) -> str:
 
 def _library_id_from_ref(ref: CharacterRef) -> str:
     view = _parse_character_ref(ref)
-    if view.is_emergent or view.setting_id is None:
+    if view.is_emergent or view.world_id is None:
         raise CharactersError(f"cannot derive library_id from emergent ref {ref!r}")
-    return make_library_id(view.setting_id, "character", view.asset_id)
+    return make_library_id(view.world_id, "character", view.asset_id)

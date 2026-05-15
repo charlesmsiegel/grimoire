@@ -16,7 +16,7 @@ import type {
   ResolvedCharacter,
   ResolvedEntity,
   SceneSummary,
-  SettingMeta,
+  WorldMeta,
   UpgradeReport,
 } from "./types";
 
@@ -42,9 +42,9 @@ export const viewsApi = {
     api.get<Composition>(`/api/campaigns/${enc(campaignId)}/composition`),
   setComposition: (campaignId: string, composition: Composition) =>
     api.put<Composition>(`/api/campaigns/${enc(campaignId)}/composition`, composition),
-  upgradeRef: (campaignId: string, settingId: string) =>
+  upgradeRef: (campaignId: string, worldId: string) =>
     api.post<UpgradeReport>(
-      `/api/campaigns/${enc(campaignId)}/composition/refs/${enc(settingId)}/upgrade`,
+      `/api/campaigns/${enc(campaignId)}/composition/refs/${enc(worldId)}/upgrade`,
     ),
 
   listImages: (campaignId: string, opts: { sceneId?: string; starredOnly?: boolean } = {}) =>
@@ -68,9 +68,9 @@ export const viewsApi = {
 
   // ---------- Library / mechanics ----------
 
-  listSettings: () => api.get<SettingMeta[]>(`/api/library/settings`),
-  listGreetingsForSetting: (settingId: string) =>
-    api.get<Greeting[]>(`/api/library/settings/${enc(settingId)}/greetings`),
+  listWorlds: () => api.get<WorldMeta[]>(`/api/library/worlds`),
+  listGreetingsForWorld: (worldId: string) =>
+    api.get<Greeting[]>(`/api/library/worlds/${enc(worldId)}/greetings`),
 
   installedMechanics: () => api.get<RegisteredMechanicsModule[]>(`/api/mechanics/installed`),
 };

@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 # Kinds whose body is prose and should be embedded for retrieval.
-# Structured-only files (settings, image presets, sheets, image metadata,
+# Structured-only files (worlds, image presets, sheets, image metadata,
 # scene sidecars, campaign configs) are skipped — embedding them adds noise
 # without buying recall on the surfaces that query the vector index.
 _EMBEDDABLE_KINDS: frozenset[str] = frozenset(
@@ -405,8 +405,8 @@ class FileWatcher:
             payload["campaign_id"] = watched.campaign_id
         if watched.branch_id is not None:
             payload["branch_id"] = watched.branch_id
-        if watched.setting_id is not None:
-            payload["setting_id"] = watched.setting_id
+        if watched.world_id is not None:
+            payload["world_id"] = watched.world_id
         if watched.entity_kind is not None:
             payload["entity_kind"] = watched.entity_kind
         if watched.asset_id is not None:
@@ -473,7 +473,7 @@ def _parse_file(watched: WatchedFile) -> _Parsed | None:
         doc = read_markdown(path)
         return _Parsed(doc.frontmatter, doc.body)
     if watched.kind in {
-        "library_setting",
+        "library_world",
         "library_image_preset",
         "override",
         "sheet",

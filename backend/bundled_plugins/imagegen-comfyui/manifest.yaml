@@ -69,4 +69,4 @@ requirements:
 notes: |
   Start ComfyUI with `python main.py --listen` to expose the HTTP API.
   Workflow templates use the ComfyUI "API format" JSON (the JSON saved
-  via Settings → Enable Dev Mode → Save (API format)).
+  via Worlds → Enable Dev Mode → Save (API format)).

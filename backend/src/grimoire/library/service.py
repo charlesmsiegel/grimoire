@@ -3,7 +3,7 @@
 Wraps :class:`grimoire.state_store.StateStore` to provide the spec 18 surface.
 The State Store owns SQLite mutations and file mediation; this service
 translates between the file-shaped writes the store understands and the
-typed values (``LibraryEntity``, ``SettingMeta``, ``Greeting``,
+typed values (``LibraryEntity``, ``WorldMeta``, ``Greeting``,
 ``ResolvedEntity``) the rest of the system consumes.
 """
 
@@ -30,13 +30,13 @@ from grimoire.types.composition import (
     ResolutionLayer,
     ResolutionSource,
     ResolvedEntity,
-    SettingMeta,
-    SettingRef,
     UpgradeReport,
+    WorldMeta,
+    WorldRef,
 )
 
-# Entity kinds that live inside a setting directory.
-_SETTING_ENTITY_KINDS: frozenset[str] = frozenset(
+# Entity kinds that live inside a world directory.
+_World_ENTITY_KINDS: frozenset[str] = frozenset(
     {"character", "item", "location", "lore", "faction", "greeting"}
 )
 
@@ -59,12 +59,12 @@ def _normalize_kind(kind: EntityKind | str) -> str:
 
 
 def _include_to_kinds(include: list[str] | None) -> set[str] | None:
-    """Translate a ``SettingRef.include`` list (directory names) into kinds.
+    """Translate a ``WorldRef.include`` list (directory names) into kinds.
 
     Returns ``None`` when the include is missing (``None``), meaning "include
     every kind" per spec 18. An empty list ``[]`` is preserved as an empty
     set, meaning "include nothing" — distinct from "all kinds", so a wizard
-    that uncheck-all-kinds excludes the setting rather than (silently)
+    that uncheck-all-kinds excludes the world rather than (silently)
     including everything.
     """
     if include is None:
@@ -95,7 +95,7 @@ def _entity_from_row(row: dict) -> LibraryEntity:
         raise LibraryError(f"unknown library kind {row['kind']!r}") from exc
     return LibraryEntity(
         id=row["id"],
-        setting_id=row.get("setting_id"),
+        world_id=row.get("world_id"),
         kind=kind,
         asset_id=row["asset_id"],
         name=row.get("name") or row["asset_id"],
@@ -112,9 +112,9 @@ def _entity_from_row(row: dict) -> LibraryEntity:
     )
 
 
-def _setting_meta_from_row(row: dict) -> SettingMeta:
+def _world_meta_from_row(row: dict) -> WorldMeta:
     fm = row.get("frontmatter") or {}
-    return SettingMeta(
+    return WorldMeta(
         id=fm.get("id") or row.get("asset_id") or "",
         name=fm.get("name") or row.get("name") or row.get("asset_id") or "",
         description=fm.get("description") or "",
@@ -131,7 +131,7 @@ def _greeting_from_row(row: dict) -> Greeting:
     fm = row.get("frontmatter") or {}
     return Greeting(
         id=fm.get("id") or row.get("asset_id") or "",
-        setting_id=row.get("setting_id") or "",
+        world_id=row.get("world_id") or "",
         name=fm.get("name") or row.get("name") or row.get("asset_id") or "",
         starting_location=fm.get("starting_location"),
         starting_time=fm.get("starting_time"),
@@ -158,33 +158,33 @@ class LibraryService:
     # Discovery / listing
     # ------------------------------------------------------------------ #
 
-    async def list_settings(self) -> list[SettingMeta]:
+    async def list_worlds(self) -> list[WorldMeta]:
         rows = await self.store.db.fetchall(
-            "SELECT * FROM library_index WHERE kind = 'setting' ORDER BY name"
+            "SELECT * FROM library_index WHERE kind = 'world' ORDER BY name"
         )
-        return [_setting_meta_from_row(_normalize_row(row)) for row in rows]
+        return [_world_meta_from_row(_normalize_row(row)) for row in rows]
 
-    async def get_setting(self, setting_id: str) -> SettingMeta:
-        library_id = make_library_id(setting_id, "setting", setting_id)
+    async def get_world(self, world_id: str) -> WorldMeta:
+        library_id = make_library_id(world_id, "world", world_id)
         row = await self.store.get_library_entity(library_id)
         if row is None:
-            raise LibraryNotFoundError(f"setting {setting_id!r} not found")
-        return _setting_meta_from_row(row)
+            raise LibraryNotFoundError(f"world {world_id!r} not found")
+        return _world_meta_from_row(row)
 
-    async def list_in_setting(self, setting_id: str, kind: EntityKind | str) -> list[LibraryEntity]:
+    async def list_in_world(self, world_id: str, kind: EntityKind | str) -> list[LibraryEntity]:
         normalized = _normalize_kind(kind)
-        rows = await self.store.list_library_in_setting(setting_id, normalized)
+        rows = await self.store.list_library_in_world(world_id, normalized)
         return [_entity_from_row(row) for row in rows]
 
     async def get_entity(
-        self, setting_id: str, kind: EntityKind | str, entity_id: str
+        self, world_id: str, kind: EntityKind | str, entity_id: str
     ) -> LibraryEntity:
         normalized = _normalize_kind(kind)
-        library_id = make_library_id(setting_id, normalized, entity_id)
+        library_id = make_library_id(world_id, normalized, entity_id)
         row = await self.store.get_library_entity(library_id)
         if row is None:
             raise LibraryNotFoundError(
-                f"entity {kind}/{entity_id} not found in setting {setting_id!r}"
+                f"entity {kind}/{entity_id} not found in world {world_id!r}"
             )
         return _entity_from_row(row)
 
@@ -222,19 +222,19 @@ class LibraryService:
     # Greetings
     # ------------------------------------------------------------------ #
 
-    async def list_greetings(self, setting_id: str) -> list[Greeting]:
-        rows = await self.store.list_library_in_setting(setting_id, "greeting")
+    async def list_greetings(self, world_id: str) -> list[Greeting]:
+        rows = await self.store.list_library_in_world(world_id, "greeting")
         return [_greeting_from_row(row) for row in rows]
 
-    async def get_greeting(self, setting_id: str, id: str) -> Greeting:
-        library_id = make_library_id(setting_id, "greeting", id)
+    async def get_greeting(self, world_id: str, id: str) -> Greeting:
+        library_id = make_library_id(world_id, "greeting", id)
         row = await self.store.get_library_entity(library_id)
         if row is None:
-            raise LibraryNotFoundError(f"greeting {id!r} not found in setting {setting_id!r}")
+            raise LibraryNotFoundError(f"greeting {id!r} not found in world {world_id!r}")
         return _greeting_from_row(row)
 
     # ------------------------------------------------------------------ #
-    # Cross-setting variants
+    # Cross-world variants
     # ------------------------------------------------------------------ #
 
     async def variants_of(self, asset_id: str, kind: EntityKind | str) -> list[LibraryEntity]:
@@ -246,23 +246,23 @@ class LibraryService:
     # Writes
     # ------------------------------------------------------------------ #
 
-    async def create_setting(self, id: str, meta: dict, *, source: str = "user") -> SettingMeta:
+    async def create_world(self, id: str, meta: dict, *, source: str = "user") -> WorldMeta:
         frontmatter = dict(meta or {})
         frontmatter.setdefault("id", id)
         frontmatter.setdefault("name", id)
         frontmatter.setdefault("version", int(frontmatter.get("version") or 1))
-        library_id = make_library_id(id, "setting", id)
+        library_id = make_library_id(id, "world", id)
         await self.store.write_library_file(
             library_id=library_id,
             frontmatter=frontmatter,
             body="",
             source=source,
         )
-        return await self.get_setting(id)
+        return await self.get_world(id)
 
     async def create_entity(
         self,
-        setting_id: str,
+        world_id: str,
         kind: EntityKind | str,
         entity_id: str,
         frontmatter: dict,
@@ -271,26 +271,26 @@ class LibraryService:
         source: str = "user",
     ) -> LibraryEntity:
         normalized = _normalize_kind(kind)
-        if normalized not in _SETTING_ENTITY_KINDS:
+        if normalized not in _World_ENTITY_KINDS:
             raise LibraryError(
                 f"create_entity does not handle kind {normalized!r}; "
-                "use create_setting / write top-level assets via store"
+                "use create_world / write top-level assets via store"
             )
         fm = dict(frontmatter or {})
         fm.setdefault("id", entity_id)
         fm.setdefault("name", fm.get("name") or entity_id)
-        library_id = make_library_id(setting_id, normalized, entity_id)
+        library_id = make_library_id(world_id, normalized, entity_id)
         await self.store.write_library_file(
             library_id=library_id,
             frontmatter=fm,
             body=body or "",
             source=source,
         )
-        return await self.get_entity(setting_id, normalized, entity_id)
+        return await self.get_entity(world_id, normalized, entity_id)
 
     async def update_entity(
         self,
-        setting_id: str,
+        world_id: str,
         kind: EntityKind | str,
         entity_id: str,
         frontmatter_patch: dict | None = None,
@@ -299,11 +299,11 @@ class LibraryService:
         source: str = "user",
     ) -> LibraryEntity:
         normalized = _normalize_kind(kind)
-        library_id = make_library_id(setting_id, normalized, entity_id)
+        library_id = make_library_id(world_id, normalized, entity_id)
         row = await self.store.get_library_entity(library_id)
         if row is None:
             raise LibraryNotFoundError(
-                f"cannot update missing entity {kind}/{entity_id} in {setting_id!r}"
+                f"cannot update missing entity {kind}/{entity_id} in {world_id!r}"
             )
         new_frontmatter = dict(row.get("frontmatter") or {})
         if frontmatter_patch:
@@ -315,22 +315,22 @@ class LibraryService:
             body=new_body,
             source=source,
         )
-        return await self.get_entity(setting_id, normalized, entity_id)
+        return await self.get_entity(world_id, normalized, entity_id)
 
     async def delete_entity(
         self,
-        setting_id: str,
+        world_id: str,
         kind: EntityKind | str,
         entity_id: str,
         *,
         source: str = "user",
     ) -> None:
         normalized = _normalize_kind(kind)
-        library_id = make_library_id(setting_id, normalized, entity_id)
+        library_id = make_library_id(world_id, normalized, entity_id)
         row = await self.store.get_library_entity(library_id)
         if row is None:
             raise LibraryNotFoundError(
-                f"cannot delete missing entity {kind}/{entity_id} in {setting_id!r}"
+                f"cannot delete missing entity {kind}/{entity_id} in {world_id!r}"
             )
         await self.store.delete_library_file(library_id=library_id, source=source)
 
@@ -343,21 +343,21 @@ class LibraryService:
         campaign_id: str,
         entity_kind: EntityKind | str,
         campaign_entity_id: str,
-        target_setting_id: str,
+        target_world_id: str,
         *,
         source: str = "user",
     ) -> str:
         """Promote a campaign-local emergent entity into the library.
 
         Reads the emergent file, writes it as a library entity in
-        ``target_setting_id``, and returns the library path. The original
+        ``target_world_id``, and returns the library path. The original
         emergent file is left in place; callers may opt to delete it.
         Characters are not yet supported here — task #12 owns that flow.
         """
         normalized = _normalize_kind(entity_kind)
-        if normalized not in _SETTING_ENTITY_KINDS:
+        if normalized not in _World_ENTITY_KINDS:
             raise PromotionError(
-                f"cannot promote kind {normalized!r}; only setting-scoped kinds supported"
+                f"cannot promote kind {normalized!r}; only world-scoped kinds supported"
             )
         emergent = await self.store.get_emergent(campaign_id, normalized, campaign_entity_id)
         if emergent is None:
@@ -366,7 +366,7 @@ class LibraryService:
             )
         frontmatter = dict(emergent.get("frontmatter") or {})
         frontmatter.setdefault("id", campaign_entity_id)
-        library_id = make_library_id(target_setting_id, normalized, campaign_entity_id)
+        library_id = make_library_id(target_world_id, normalized, campaign_entity_id)
         result = await self.store.write_library_file(
             library_id=library_id,
             frontmatter=frontmatter,
@@ -387,10 +387,10 @@ class LibraryService:
         if camp_row is None:
             raise LibraryNotFoundError(f"campaign {campaign_id!r} not found")
 
-        refs_raw = await self.store.list_setting_refs(campaign_id)
+        refs_raw = await self.store.list_world_refs(campaign_id)
         refs = [
-            SettingRef(
-                setting_id=r["setting_id"],
+            WorldRef(
+                world_id=r["world_id"],
                 priority=int(r["priority"]),
                 include=list(r.get("include") or []),
                 bound_at_version=int(r.get("bound_at_version") or 0),
@@ -399,7 +399,7 @@ class LibraryService:
             for r in refs_raw
         ]
         return Composition(
-            settings=refs,
+            worlds=refs,
             mechanics=camp_row["mechanics_module"],
             style_guide_id=camp_row["style_guide_id"],
             image_preset_id=camp_row["image_preset_id"],
@@ -427,13 +427,13 @@ class LibraryService:
             config=_maybe_json(camp_row["config"]),
         )
 
-        existing = {r["setting_id"] for r in await self.store.list_setting_refs(campaign_id)}
+        existing = {r["world_id"] for r in await self.store.list_world_refs(campaign_id)}
         desired_ids: set[str] = set()
-        for ref in composition.settings:
-            desired_ids.add(ref.setting_id)
-            await self.store.upsert_setting_ref(
+        for ref in composition.worlds:
+            desired_ids.add(ref.world_id)
+            await self.store.upsert_world_ref(
                 campaign_id=campaign_id,
-                setting_id=ref.setting_id,
+                world_id=ref.world_id,
                 priority=ref.priority,
                 include=list(ref.include or []),
                 track_latest=ref.track_latest,
@@ -443,8 +443,8 @@ class LibraryService:
         for old in existing - desired_ids:
             await self.store.db.execute(
                 """
-                DELETE FROM campaign_setting_refs
-                WHERE campaign_id = ? AND setting_id = ?
+                DELETE FROM campaign_world_refs
+                WHERE campaign_id = ? AND world_id = ?
                 """,
                 (campaign_id, old),
             )
@@ -452,35 +452,35 @@ class LibraryService:
                 """
                 DELETE FROM library_snapshots
                 WHERE campaign_id = ? AND library_id IN (
-                  SELECT id FROM library_index WHERE setting_id = ?
+                  SELECT id FROM library_index WHERE world_id = ?
                 )
                 """,
                 (campaign_id, old),
             )
 
-    async def upgrade_setting_ref(self, campaign_id: str, setting_id: str) -> UpgradeReport:
+    async def upgrade_world_ref(self, campaign_id: str, world_id: str) -> UpgradeReport:
         before_max = await self.store.db.fetchone(
-            "SELECT bound_at_version FROM campaign_setting_refs "
-            "WHERE campaign_id = ? AND setting_id = ?",
-            (campaign_id, setting_id),
+            "SELECT bound_at_version FROM campaign_world_refs "
+            "WHERE campaign_id = ? AND world_id = ?",
+            (campaign_id, world_id),
         )
         if before_max is None:
             raise LibraryNotFoundError(
-                f"campaign {campaign_id!r} does not bind setting {setting_id!r}"
+                f"campaign {campaign_id!r} does not bind world {world_id!r}"
             )
         from_version = int(before_max["bound_at_version"] or 0)
 
-        report = await self.store.upgrade_setting_ref(
-            campaign_id=campaign_id, setting_id=setting_id
+        report = await self.store.upgrade_world_ref(
+            campaign_id=campaign_id, world_id=world_id
         )
         max_row = await self.store.db.fetchone(
-            "SELECT MAX(version) AS v FROM library_index WHERE setting_id = ?",
-            (setting_id,),
+            "SELECT MAX(version) AS v FROM library_index WHERE world_id = ?",
+            (world_id,),
         )
         to_version = int((max_row["v"] if max_row else 0) or 0)
         return UpgradeReport(
             campaign_id=campaign_id,
-            setting_id=setting_id,
+            world_id=world_id,
             from_version=from_version,
             to_version=to_version,
             changed_entities=sorted(report.diff.keys()),
@@ -495,11 +495,11 @@ class LibraryService:
         """Resolve an entity through the campaign cascade.
 
         ``entity_id`` is either a composite ``library_id``
-        (``settings/<setting>/<kind>/<id>``) or a campaign-local
+        (``worlds/<world>/<kind>/<id>``) or a campaign-local
         ``emergent/<kind>/<id>`` reference. Walks emergent → override →
         snapshot (pinned) → live index → fail.
         """
-        target_kind, setting_id, asset_id, is_emergent_only = _parse_resolve_ref(entity_id)
+        target_kind, world_id, asset_id, is_emergent_only = _parse_resolve_ref(entity_id)
 
         branch_id = f"{campaign_id}:main"
 
@@ -509,15 +509,15 @@ class LibraryService:
                 branch_id=branch_id,
                 kind=target_kind,
                 asset_id=asset_id,
-                setting_id=None,
+                world_id=None,
             )
             if data is None:
                 raise LibraryNotFoundError(
                     f"emergent {target_kind}/{asset_id} not found in campaign {campaign_id!r}"
                 )
-            return _build_resolved(target_kind, setting_id, asset_id, data)
+            return _build_resolved(target_kind, world_id, asset_id, data)
 
-        # Settings ref path: check emergent first (campaign-shadowed name),
+        # Worlds ref path: check emergent first (campaign-shadowed name),
         # then the store's override/snapshot/live cascade.
         emergent = await self.store.get_emergent(campaign_id, target_kind, asset_id)
         if emergent is not None:
@@ -526,29 +526,29 @@ class LibraryService:
                 "frontmatter": emergent.get("frontmatter") or {},
                 "body": emergent.get("body") or "",
             }
-            return _build_resolved(target_kind, setting_id, asset_id, data)
+            return _build_resolved(target_kind, world_id, asset_id, data)
 
         data = await self.store.resolve_entity(
             campaign_id=campaign_id,
             branch_id=branch_id,
             kind=target_kind,
             asset_id=asset_id,
-            setting_id=setting_id,
+            world_id=world_id,
         )
         if data is None:
             raise LibraryNotFoundError(f"cannot resolve {entity_id!r} for campaign {campaign_id!r}")
-        return _build_resolved(target_kind, setting_id, asset_id, data)
+        return _build_resolved(target_kind, world_id, asset_id, data)
 
     # ------------------------------------------------------------------ #
     # Dependents
     # ------------------------------------------------------------------ #
 
     async def dependents(
-        self, setting_id: str, kind: EntityKind | str, entity_id: str
+        self, world_id: str, kind: EntityKind | str, entity_id: str
     ) -> list[CampaignRef]:
-        """Return campaigns that reference ``setting_id``.
+        """Return campaigns that reference ``world_id``.
 
-        v1: a campaign is a dependent of any entity in a setting it
+        v1: a campaign is a dependent of any entity in a world it
         composes. Fine-grained per-entity dependency tracking (e.g. via
         override files) is a v2 refinement.
         """
@@ -556,16 +556,16 @@ class LibraryService:
             """
             SELECT c.id AS id, c.name AS name
             FROM campaigns c
-            JOIN campaign_setting_refs r ON r.campaign_id = c.id
-            WHERE r.setting_id = ?
+            JOIN campaign_world_refs r ON r.campaign_id = c.id
+            WHERE r.world_id = ?
             ORDER BY c.name
             """,
-            (setting_id,),
+            (world_id,),
         )
         return [CampaignRef(id=row["id"], name=row["name"]) for row in rows]
 
     # ------------------------------------------------------------------ #
-    # Composition-aware listing (used by Setting/Context Builder)
+    # Composition-aware listing (used by World/Context Builder)
     # ------------------------------------------------------------------ #
 
     async def list_for_composition(
@@ -575,12 +575,12 @@ class LibraryService:
     ) -> list[LibraryEntity]:
         """Return entities of ``kind`` reachable through a campaign's composition.
 
-        Walks setting refs in priority order, respecting each ref's
+        Walks world refs in priority order, respecting each ref's
         ``include`` filter. Higher-priority refs win when asset ids
         collide.
         """
         normalized = _normalize_kind(kind)
-        refs = await self.store.list_setting_refs(campaign_id)
+        refs = await self.store.list_world_refs(campaign_id)
         refs.sort(key=lambda r: int(r.get("priority") or 0))
 
         seen: dict[str, LibraryEntity] = {}
@@ -588,7 +588,7 @@ class LibraryService:
             include_kinds = _include_to_kinds(ref.get("include"))
             if include_kinds is not None and normalized not in include_kinds:
                 continue
-            rows = await self.store.list_library_in_setting(ref["setting_id"], normalized)
+            rows = await self.store.list_library_in_world(ref["world_id"], normalized)
             for row in rows:
                 asset = row["asset_id"]
                 if asset in seen:
@@ -630,7 +630,7 @@ def _maybe_json(value: Any) -> Any:
 
 
 def _parse_resolve_ref(entity_id: str) -> tuple[str, str | None, str, bool]:
-    """Return ``(kind, setting_id, asset_id, emergent_only)`` for resolve()."""
+    """Return ``(kind, world_id, asset_id, emergent_only)`` for resolve()."""
     if not entity_id:
         raise LibraryError("empty entity_id")
     parts = entity_id.strip("/").split("/")
@@ -639,17 +639,17 @@ def _parse_resolve_ref(entity_id: str) -> tuple[str, str | None, str, bool]:
         kind = _normalize_kind(parts[1])
         return kind, None, parts[2], True
     ref = parse_library_id(entity_id)
-    if ref.kind in {"setting", "style_guide", "image_preset"}:
+    if ref.kind in {"world", "style_guide", "image_preset"}:
         raise LibraryError(
             f"resolve() does not handle top-level kind {ref.kind!r}; "
-            "use get_setting / get_style_guide / get_image_preset"
+            "use get_world / get_style_guide / get_image_preset"
         )
-    return ref.kind, ref.setting_id, ref.asset_id, False
+    return ref.kind, ref.world_id, ref.asset_id, False
 
 
 def _build_resolved(
     kind: str,
-    setting_id: str | None,
+    world_id: str | None,
     asset_id: str,
     data: dict,
 ) -> ResolvedEntity:
@@ -661,7 +661,7 @@ def _build_resolved(
             layer=layer,
             scope=_SCOPE_BY_SOURCE.get(source, "library"),
             library_id=data.get("library_id"),
-            setting_id=setting_id,
+            world_id=world_id,
             version=data.get("version"),
             override_applied=bool(data.get("override")),
         )
@@ -669,7 +669,7 @@ def _build_resolved(
     return ResolvedEntity(
         kind=EntityKind(kind),
         asset_id=asset_id,
-        setting_id=setting_id,
+        world_id=world_id,
         name=fm.get("name") or fm.get("title") or asset_id,
         frontmatter=fm,
         body=data.get("body") or "",

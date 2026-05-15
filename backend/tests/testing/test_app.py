@@ -24,12 +24,12 @@ async def test_test_app_lifecycle(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_test_app_with_fixtures_copies_files(tmp_path: Path) -> None:
     src = tmp_path / "src"
-    (src / "library" / "settings").mkdir(parents=True)
-    (src / "library" / "settings" / "marker.yaml").write_text("id: marker\n", encoding="utf-8")
+    (src / "library" / "worlds").mkdir(parents=True)
+    (src / "library" / "worlds" / "marker.yaml").write_text("id: marker\n", encoding="utf-8")
 
     fixture = TestAppFixture(name="probe", files_root=src)
     async with TestApp.with_fixtures(fixture, root=tmp_path / "data") as app:
-        marker = app.data_root / "library" / "settings" / "marker.yaml"
+        marker = app.data_root / "library" / "worlds" / "marker.yaml"
         assert marker.is_file()
 
 

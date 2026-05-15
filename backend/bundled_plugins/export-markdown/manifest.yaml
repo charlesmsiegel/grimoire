@@ -33,4 +33,4 @@ requirements: []
 
 notes: |
   The adapter follows the layout in spec 13: ``scenes/``, ``characters/``,
-  ``setting/``, ``continuity/``, ``images/`` plus a ``README.md`` index.
+  ``world/``, ``continuity/``, ``images/`` plus a ``README.md`` index.

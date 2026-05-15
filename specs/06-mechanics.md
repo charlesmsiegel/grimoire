@@ -32,7 +32,7 @@ Campaigns can also run with `mechanics: null` — no mechanics module selected, 
 - Does not narrate outcomes (the LLM does, with mechanics results as input)
 - Does not parse prose into events (the Extractor does, then asks Mechanics to validate)
 - Does not advance time (Time Engine does, though it consults mechanics for activity durations and effects)
-- Does not own character or location data (Setting owns those files; Characters module handles character-specific behaviors)
+- Does not own character or location data (World owns those files; Characters module handles character-specific behaviors)
 - Is not a plugin (the generic plugin protocol is too narrow; see `15-plugins.md` for what plugins are)
 
 ## The mechanics module API
@@ -207,7 +207,7 @@ Nothing. Characters, items, locations, factions are pure narrative. No sheets. N
 - **item**: Magical item (rarity, attunement, properties).
 - **location**: minimal; mostly narrative.
 
-The mechanics module is the authority on what fields a sheet has. The Setting module stores the files; the Mechanics module interprets them.
+The mechanics module is the authority on what fields a sheet has. The World module stores the files; the Mechanics module interprets them.
 
 ## Powers and capabilities
 
@@ -360,7 +360,7 @@ def character_creation_steps(self) -> list[CreationStep]:
 
 Each step is rendered by the Frontend (using the widget library). The final result is a complete sheet conforming to `sheet_schema("character")`, written to `data/campaigns/<id>/sheets/characters/<character-id>.<mechanics-id>.yaml`.
 
-Library characters can also have library-baseline sheets — written by hand or via creation flow before any campaign exists — stored under the character's setting. The campaign's sheet (if any) overrides the library baseline.
+Library characters can also have library-baseline sheets — written by hand or via creation flow before any campaign exists — stored under the character's world. The campaign's sheet (if any) overrides the library baseline.
 
 ## Time ticks
 

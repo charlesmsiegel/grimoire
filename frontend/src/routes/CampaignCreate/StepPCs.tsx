@@ -6,7 +6,7 @@ import type { DraftPC, WizardDraft } from "./types";
 interface Props {
   draft: WizardDraft;
   update: (patch: Partial<WizardDraft>) => void;
-  candidates: Map<string, CharacterSummary[]>; // by setting id
+  candidates: Map<string, CharacterSummary[]>; // by world id
   loading: boolean;
   error: string | null;
 }
@@ -18,8 +18,8 @@ export function StepPCs({ draft, update, candidates, loading, error }: Props) {
     update({ pcs: draft.pcs.filter((p) => p.character_ref !== ref) });
   };
 
-  const addLibraryPC = (settingId: string, character: CharacterSummary) => {
-    const ref = `${settingId}/${character.id}`;
+  const addLibraryPC = (worldId: string, character: CharacterSummary) => {
+    const ref = `${worldId}/${character.id}`;
     if (draft.pcs.find((p) => p.character_ref === ref)) return;
     const pc: DraftPC = {
       character_ref: ref,
@@ -72,15 +72,15 @@ export function StepPCs({ draft, update, candidates, loading, error }: Props) {
       )}
 
       <div className="wizard-pc-pickers">
-        {[...candidates.entries()].map(([settingId, chars]) => {
+        {[...candidates.entries()].map(([worldId, chars]) => {
           const pcs = chars.filter((c) => (c.role ?? "") === "pc");
           if (pcs.length === 0) return null;
           return (
-            <fieldset key={settingId} className="wizard-pc-setting">
-              <legend>{settingId}</legend>
+            <fieldset key={worldId} className="wizard-pc-world">
+              <legend>{worldId}</legend>
               <ul>
                 {pcs.map((c) => {
-                  const ref = `${settingId}/${c.id}`;
+                  const ref = `${worldId}/${c.id}`;
                   const already = Boolean(draft.pcs.find((p) => p.character_ref === ref));
                   return (
                     <li key={c.id}>
@@ -88,7 +88,7 @@ export function StepPCs({ draft, update, candidates, loading, error }: Props) {
                       <button
                         type="button"
                         disabled={already}
-                        onClick={() => addLibraryPC(settingId, c)}
+                        onClick={() => addLibraryPC(worldId, c)}
                       >
                         {already ? "Added" : "Add"}
                       </button>

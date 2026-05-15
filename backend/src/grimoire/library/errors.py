@@ -8,7 +8,7 @@ class LibraryError(Exception):
 
 
 class LibraryNotFoundError(LibraryError):
-    """Raised when a requested setting / entity / style guide / preset is absent."""
+    """Raised when a requested world / entity / style guide / preset is absent."""
 
 
 class PromotionError(LibraryError):

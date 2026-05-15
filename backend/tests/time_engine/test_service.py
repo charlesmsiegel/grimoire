@@ -26,7 +26,6 @@ from grimoire.continuity.types import (
 )
 from grimoire.event_bus import Event, EventBus
 from grimoire.mechanics import MechanicsService
-from grimoire.setting import SettingService
 from grimoire.state_store import StateStore
 from grimoire.time_engine import (
     InvalidSkipError,
@@ -41,9 +40,10 @@ from grimoire.types.time import (
     ScheduledEvent,
     TimeAdvanceReason,
 )
+from grimoire.world import WorldService
 
 CAMPAIGN = "test-campaign"
-SETTING = "test-setting"
+World = "test-world"
 
 
 # ---------------------------------------------------------------------------
@@ -53,8 +53,8 @@ SETTING = "test-setting"
 
 async def _seed_campaign(store: StateStore, *, mechanics: str | None = None) -> None:
     await store.write_library_file(
-        library_id=f"settings/{SETTING}/setting/{SETTING}",
-        frontmatter={"id": SETTING, "name": SETTING, "version": 1},
+        library_id=f"worlds/{World}/world/{World}",
+        frontmatter={"id": World, "name": World, "version": 1},
         body="",
         source="test:seed",
     )
@@ -63,9 +63,9 @@ async def _seed_campaign(store: StateStore, *, mechanics: str | None = None) -> 
         name="Test Campaign",
         mechanics_module=mechanics,
     )
-    await store.upsert_setting_ref(
+    await store.upsert_world_ref(
         campaign_id=CAMPAIGN,
-        setting_id=SETTING,
+        world_id=World,
         priority=1,
         include=None,
         track_latest=True,
@@ -248,7 +248,7 @@ async def test_npcs_tick_via_injected_callable(
     characters: CharactersService,
 ):
     await _seed_campaign(store)
-    await characters.create(SETTING, _character("alistair", CharacterRole.MAJOR_NPC))
+    await characters.create(World, _character("alistair", CharacterRole.MAJOR_NPC))
     await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1))
 
     seen: list[str] = []
@@ -281,8 +281,8 @@ async def test_pcs_are_not_ticked(
     characters: CharactersService,
 ):
     await _seed_campaign(store)
-    await characters.create(SETTING, _character("hyde", CharacterRole.PC))
-    await characters.create(SETTING, _character("alistair", CharacterRole.MAJOR_NPC))
+    await characters.create(World, _character("hyde", CharacterRole.PC))
+    await characters.create(World, _character("alistair", CharacterRole.MAJOR_NPC))
     await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1))
 
     seen: list[str] = []
@@ -305,10 +305,10 @@ async def test_minor_npc_with_open_commitment_ticks(
     continuity: ContinuityService,
 ):
     await _seed_campaign(store)
-    await characters.create(SETTING, _character("vivienne", CharacterRole.MINOR_NPC))
+    await characters.create(World, _character("vivienne", CharacterRole.MINOR_NPC))
     await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1))
 
-    char_ref = f"library:settings/{SETTING}/characters/vivienne"
+    char_ref = f"library:worlds/{World}/characters/vivienne"
     await continuity.add_commitment(
         ContinuityCommitment(
             id="",
@@ -341,7 +341,7 @@ async def test_significance_cap_is_respected(
 ):
     await _seed_campaign(store)
     for i in range(5):
-        await characters.create(SETTING, _character(f"npc-{i}", CharacterRole.MAJOR_NPC))
+        await characters.create(World, _character(f"npc-{i}", CharacterRole.MAJOR_NPC))
     await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1))
 
     time_engine._config = TimeEngineConfig(significance=SignificanceConfig(max_npcs_per_advance=2))
@@ -361,14 +361,14 @@ async def test_significance_cap_is_respected(
 
 async def test_faction_tick_only_at_month_resolution(
     time_engine: TimeEngineService,
-    setting: SettingService,
+    world: WorldService,
     store: StateStore,
 ):
     await _seed_campaign(store)
     await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1))
 
-    await setting.update_faction_state(
-        faction_ref=f"library:settings/{SETTING}/factions/cabal",
+    await world.update_faction_state(
+        faction_ref=f"library:worlds/{World}/factions/cabal",
         campaign_id=CAMPAIGN,
         patch={
             "goals": [
@@ -381,7 +381,7 @@ async def test_faction_tick_only_at_month_resolution(
     assert short.faction_summaries == {}
 
     long = await time_engine.advance(CAMPAIGN, _duration_days(60), TimeAdvanceReason.EXPLICIT_USER)
-    faction_ref = f"library:settings/{SETTING}/factions/cabal"
+    faction_ref = f"library:worlds/{World}/factions/cabal"
     assert faction_ref in long.faction_summaries
     assert long.faction_summaries[faction_ref].goal_progress["control-district"] > 0.10
 
@@ -571,7 +571,7 @@ async def test_mechanics_time_tick_is_called_for_each_present_npc(
     mechanics.register_module(ModuleManifest(id="test-mech", name="Test", version="0.1"), module)
 
     await _seed_campaign(store, mechanics="test-mech")
-    await characters.create(SETTING, _character("alistair", CharacterRole.MAJOR_NPC))
+    await characters.create(World, _character("alistair", CharacterRole.MAJOR_NPC))
     await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1))
 
     async def tick_fn(_payload):
@@ -596,7 +596,7 @@ async def test_emits_time_advance_event(
     time_engine._event_bus = bus  # type: ignore[attr-defined]
 
     await _seed_campaign(store)
-    await characters.create(SETTING, _character("alistair"))
+    await characters.create(World, _character("alistair"))
     await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1))
 
     received: list[Event] = []
@@ -621,7 +621,7 @@ async def test_digest_includes_structured_summary(
     characters: CharactersService,
 ):
     await _seed_campaign(store)
-    await characters.create(SETTING, _character("alistair"))
+    await characters.create(World, _character("alistair"))
     await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1))
 
     async def tick_fn(payload):
@@ -645,7 +645,7 @@ async def test_digest_narrative_can_be_disabled(
 ):
     time_engine._config = dataclasses.replace(time_engine._config, digest_narrative=False)
     await _seed_campaign(store)
-    await characters.create(SETTING, _character("alistair"))
+    await characters.create(World, _character("alistair"))
     await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1))
 
     called = False

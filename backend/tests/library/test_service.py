@@ -7,19 +7,19 @@ import pytest
 from grimoire.library import LibraryNotFoundError, LibraryService, PromotionError
 from grimoire.state_store import StateStore
 from grimoire.types.common import EntityKind
-from grimoire.types.composition import Composition, SettingRef
+from grimoire.types.composition import Composition, WorldRef
 
 
-async def _seed_setting(
+async def _seed_world(
     store: StateStore,
-    setting_id: str,
+    world_id: str,
     *,
     name: str = "London by Night",
 ) -> None:
     await store.write_library_file(
-        library_id=f"settings/{setting_id}",
+        library_id=f"worlds/{world_id}",
         frontmatter={
-            "id": setting_id,
+            "id": world_id,
             "name": name,
             "tags": ["wod", "vampire"],
             "genre": "urban gothic horror",
@@ -34,13 +34,13 @@ async def _seed_setting(
 
 async def _seed_character(
     store: StateStore,
-    setting_id: str,
+    world_id: str,
     asset_id: str,
     *,
     name: str | None = None,
 ) -> None:
     await store.write_library_file(
-        library_id=f"settings/{setting_id}/characters/{asset_id}",
+        library_id=f"worlds/{world_id}/characters/{asset_id}",
         frontmatter={
             "id": asset_id,
             "name": name or asset_id.replace("-", " ").title(),
@@ -56,34 +56,34 @@ async def _seed_character(
 # ---------------------------------------------------------------------------
 
 
-async def test_list_and_get_settings(library: LibraryService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london", name="London by Night")
-    await _seed_setting(store, "wod-nyc", name="NYC by Night")
+async def test_list_and_get_worlds(library: LibraryService, store: StateStore) -> None:
+    await _seed_world(store, "wod-london", name="London by Night")
+    await _seed_world(store, "wod-nyc", name="NYC by Night")
 
-    settings = await library.list_settings()
-    ids = {s.id for s in settings}
+    worlds = await library.list_worlds()
+    ids = {s.id for s in worlds}
     assert ids == {"wod-london", "wod-nyc"}
 
-    london = await library.get_setting("wod-london")
+    london = await library.get_world("wod-london")
     assert london.name == "London by Night"
     assert "wod" in london.tags
     assert london.atmosphere["default_register"] == "low"
 
 
-async def test_get_setting_missing_raises(library: LibraryService) -> None:
+async def test_get_world_missing_raises(library: LibraryService) -> None:
     with pytest.raises(LibraryNotFoundError):
-        await library.get_setting("nope")
+        await library.get_world("nope")
 
 
-async def test_list_in_setting_and_get_entity(library: LibraryService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+async def test_list_in_world_and_get_entity(library: LibraryService, store: StateStore) -> None:
+    await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair", name="Alistair")
     await _seed_character(store, "wod-london", "winifred", name="winifred")
 
-    chars = await library.list_in_setting("wod-london", EntityKind.CHARACTER)
+    chars = await library.list_in_world("wod-london", EntityKind.CHARACTER)
     assert {c.asset_id for c in chars} == {"alistair", "winifred"}
     assert all(c.kind == EntityKind.CHARACTER for c in chars)
-    assert all(c.setting_id == "wod-london" for c in chars)
+    assert all(c.world_id == "wod-london" for c in chars)
 
     alistair = await library.get_entity("wod-london", "character", "alistair")
     assert alistair.name == "Alistair"
@@ -93,14 +93,14 @@ async def test_list_in_setting_and_get_entity(library: LibraryService, store: St
         await library.get_entity("wod-london", "character", "no-such")
 
 
-async def test_list_in_setting_accepts_directory_alias(
+async def test_list_in_world_accepts_directory_alias(
     library: LibraryService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair")
     # Pass "characters" (directory form) and "character" (singular form).
-    plural = await library.list_in_setting("wod-london", "characters")
-    singular = await library.list_in_setting("wod-london", "character")
+    plural = await library.list_in_world("wod-london", "characters")
+    singular = await library.list_in_world("wod-london", "character")
     assert [c.asset_id for c in plural] == [c.asset_id for c in singular]
 
 
@@ -112,9 +112,9 @@ async def test_list_in_setting_accepts_directory_alias(
 async def test_greeting_listing_returns_typed_greeting(
     library: LibraryService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await store.write_library_file(
-        library_id="settings/wod-london/greetings/elysium-opening",
+        library_id="worlds/wod-london/greetings/elysium-opening",
         frontmatter={
             "id": "elysium-opening",
             "name": "Elysium Opening",
@@ -131,7 +131,7 @@ async def test_greeting_listing_returns_typed_greeting(
     assert len(greetings) == 1
     g = greetings[0]
     assert g.id == "elysium-opening"
-    assert g.setting_id == "wod-london"
+    assert g.world_id == "wod-london"
     assert g.mood == "tense civility"
     assert g.body.startswith("The Prince's tower")
 
@@ -180,22 +180,22 @@ async def test_style_guides_and_image_presets(library: LibraryService, store: St
 
 
 # ---------------------------------------------------------------------------
-# Cross-setting variants
+# Cross-world variants
 # ---------------------------------------------------------------------------
 
 
 async def test_variants_of_shared_asset_id(library: LibraryService, store: StateStore) -> None:
-    await _seed_setting(store, "faerun")
-    await _seed_setting(store, "mythic-europe")
+    await _seed_world(store, "faerun")
+    await _seed_world(store, "mythic-europe")
     await _seed_character(store, "faerun", "drizzt", name="Drizzt")
     await _seed_character(store, "mythic-europe", "drizzt", name="Drizzt")
     await _seed_character(store, "faerun", "elminster", name="Elminster")
 
     variants = await library.variants_of("drizzt", EntityKind.CHARACTER)
-    assert {v.setting_id for v in variants} == {"faerun", "mythic-europe"}
+    assert {v.world_id for v in variants} == {"faerun", "mythic-europe"}
 
     solo = await library.variants_of("elminster", EntityKind.CHARACTER)
-    assert [v.setting_id for v in solo] == ["faerun"]
+    assert [v.world_id for v in solo] == ["faerun"]
 
 
 # ---------------------------------------------------------------------------
@@ -203,8 +203,8 @@ async def test_variants_of_shared_asset_id(library: LibraryService, store: State
 # ---------------------------------------------------------------------------
 
 
-async def test_create_setting_and_entity(library: LibraryService) -> None:
-    meta = await library.create_setting("wod-paris", {"name": "Paris by Night"})
+async def test_create_world_and_entity(library: LibraryService) -> None:
+    meta = await library.create_world("wod-paris", {"name": "Paris by Night"})
     assert meta.id == "wod-paris"
     assert meta.name == "Paris by Night"
 
@@ -223,7 +223,7 @@ async def test_create_setting_and_entity(library: LibraryService) -> None:
 async def test_update_entity_preserves_unchanged_fields(
     library: LibraryService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair", name="Alistair")
 
     updated = await library.update_entity(
@@ -249,11 +249,11 @@ async def test_update_entity_preserves_unchanged_fields(
 
 async def test_update_entity_missing_raises(library: LibraryService) -> None:
     with pytest.raises(LibraryNotFoundError):
-        await library.update_entity("ghost-setting", "character", "ghost")
+        await library.update_entity("ghost-world", "character", "ghost")
 
 
 async def test_delete_entity(library: LibraryService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair")
     await library.delete_entity("wod-london", "character", "alistair")
 
@@ -271,20 +271,20 @@ async def test_delete_entity(library: LibraryService, store: StateStore) -> None
 async def test_set_and_get_composition_round_trip(
     library: LibraryService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
-    await _seed_setting(store, "wod-nyc")
+    await _seed_world(store, "wod-london")
+    await _seed_world(store, "wod-nyc")
     await store.upsert_campaign(campaign_id="camp-1", name="My Campaign", mechanics_module="wod")
 
     composition = Composition(
-        settings=[
-            SettingRef(
-                setting_id="wod-london",
+        worlds=[
+            WorldRef(
+                world_id="wod-london",
                 priority=1,
                 include=["characters", "locations"],
                 track_latest=False,
             ),
-            SettingRef(
-                setting_id="wod-nyc",
+            WorldRef(
+                world_id="wod-nyc",
                 priority=2,
                 include=["characters"],
                 track_latest=True,
@@ -300,7 +300,7 @@ async def test_set_and_get_composition_round_trip(
     assert roundtrip.mechanics == "wod"
     assert roundtrip.style_guide_id == "gothic-horror"
     assert roundtrip.image_preset_id == "oil-painting"
-    by_id = {r.setting_id: r for r in roundtrip.settings}
+    by_id = {r.world_id: r for r in roundtrip.worlds}
     assert by_id["wod-london"].priority == 1
     assert by_id["wod-london"].include == ["characters", "locations"]
     assert by_id["wod-london"].track_latest is False
@@ -311,7 +311,7 @@ async def test_set_composition_preserves_campaign_config(
     library: LibraryService, store: StateStore
 ) -> None:
     """Regression: set_composition must not wipe campaigns.config to NULL."""
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await store.upsert_campaign(
         campaign_id="camp-1",
         name="Camp",
@@ -320,7 +320,7 @@ async def test_set_composition_preserves_campaign_config(
 
     await library.set_composition(
         "camp-1",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
+        Composition(worlds=[WorldRef(world_id="wod-london", priority=1, include=None)]),
     )
 
     row = await store.db.fetchone("SELECT config FROM campaigns WHERE id = ?", ("camp-1",))
@@ -336,67 +336,67 @@ async def test_set_composition_preserves_campaign_config(
 async def test_set_composition_drops_removed_refs(
     library: LibraryService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
-    await _seed_setting(store, "wod-nyc")
+    await _seed_world(store, "wod-london")
+    await _seed_world(store, "wod-nyc")
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
 
     await library.set_composition(
         "camp-1",
         Composition(
-            settings=[
-                SettingRef(setting_id="wod-london", priority=1, include=None),
-                SettingRef(setting_id="wod-nyc", priority=2, include=None),
+            worlds=[
+                WorldRef(world_id="wod-london", priority=1, include=None),
+                WorldRef(world_id="wod-nyc", priority=2, include=None),
             ]
         ),
     )
 
     await library.set_composition(
         "camp-1",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
+        Composition(worlds=[WorldRef(world_id="wod-london", priority=1, include=None)]),
     )
     final = await library.get_composition("camp-1")
-    assert [r.setting_id for r in final.settings] == ["wod-london"]
+    assert [r.world_id for r in final.worlds] == ["wod-london"]
 
 
 async def test_set_composition_pins_snapshot_when_not_tracking_latest(
     library: LibraryService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair")
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
 
     await library.set_composition(
         "camp-1",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
+        Composition(worlds=[WorldRef(world_id="wod-london", priority=1, include=None)]),
     )
 
     # Library mutates after pinning.
     await _seed_character(store, "wod-london", "alistair", name="Alistair v2")
     snap = await store.db.fetchone(
         "SELECT * FROM library_snapshots WHERE campaign_id = ? AND library_id = ?",
-        ("camp-1", "settings/wod-london/characters/alistair"),
+        ("camp-1", "worlds/wod-london/characters/alistair"),
     )
     assert snap is not None
     # Snapshot version is the version at bind time (v1, before mutation to v2).
     assert int(snap["version"]) == 1
 
 
-async def test_upgrade_setting_ref_refreshes_snapshots(
+async def test_upgrade_world_ref_refreshes_snapshots(
     library: LibraryService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair")
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
     await library.set_composition(
         "camp-1",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
+        Composition(worlds=[WorldRef(world_id="wod-london", priority=1, include=None)]),
     )
     # Library mutates after pinning.
     await _seed_character(store, "wod-london", "alistair", name="v2")
 
-    report = await library.upgrade_setting_ref("camp-1", "wod-london")
-    assert report.setting_id == "wod-london"
-    assert "settings/wod-london/characters/alistair" in report.changed_entities
+    report = await library.upgrade_world_ref("camp-1", "wod-london")
+    assert report.world_id == "wod-london"
+    assert "worlds/wod-london/characters/alistair" in report.changed_entities
     assert report.to_version >= report.from_version
 
 
@@ -413,15 +413,15 @@ async def test_get_composition_missing_campaign_raises(
 
 
 async def test_resolve_library_live(library: LibraryService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair", name="Alistair")
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
     await library.set_composition(
         "camp-1",
         Composition(
-            settings=[
-                SettingRef(
-                    setting_id="wod-london",
+            worlds=[
+                WorldRef(
+                    world_id="wod-london",
                     priority=1,
                     include=None,
                     track_latest=True,
@@ -430,7 +430,7 @@ async def test_resolve_library_live(library: LibraryService, store: StateStore) 
         ),
     )
 
-    resolved = await library.resolve("settings/wod-london/characters/alistair", "camp-1")
+    resolved = await library.resolve("worlds/wod-london/characters/alistair", "camp-1")
     assert resolved.kind == EntityKind.CHARACTER
     assert resolved.asset_id == "alistair"
     assert resolved.frontmatter["name"] == "Alistair"
@@ -438,15 +438,15 @@ async def test_resolve_library_live(library: LibraryService, store: StateStore) 
 
 
 async def test_resolve_picks_up_override(library: LibraryService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair", name="Alistair")
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
     await library.set_composition(
         "camp-1",
         Composition(
-            settings=[
-                SettingRef(
-                    setting_id="wod-london",
+            worlds=[
+                WorldRef(
+                    world_id="wod-london",
                     priority=1,
                     include=None,
                     track_latest=True,
@@ -456,12 +456,12 @@ async def test_resolve_picks_up_override(library: LibraryService, store: StateSt
     )
     await store.write_override(
         campaign_id="camp-1",
-        library_id="settings/wod-london/characters/alistair",
+        library_id="worlds/wod-london/characters/alistair",
         patch={"age": "ancient"},
         source="user",
     )
 
-    resolved = await library.resolve("settings/wod-london/characters/alistair", "camp-1")
+    resolved = await library.resolve("worlds/wod-london/characters/alistair", "camp-1")
     assert resolved.frontmatter["age"] == "ancient"
     assert resolved.frontmatter["name"] == "Alistair"
     assert resolved.source_chain[0].layer.value == "override"
@@ -471,15 +471,15 @@ async def test_resolve_picks_up_override(library: LibraryService, store: StateSt
 async def test_resolve_prefers_campaign_emergent(
     library: LibraryService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair", name="Library Alistair")
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
     await library.set_composition(
         "camp-1",
         Composition(
-            settings=[
-                SettingRef(
-                    setting_id="wod-london",
+            worlds=[
+                WorldRef(
+                    world_id="wod-london",
                     priority=1,
                     include=None,
                     track_latest=True,
@@ -496,7 +496,7 @@ async def test_resolve_prefers_campaign_emergent(
         source="user",
     )
 
-    resolved = await library.resolve("settings/wod-london/characters/alistair", "camp-1")
+    resolved = await library.resolve("worlds/wod-london/characters/alistair", "camp-1")
     assert resolved.frontmatter["name"] == "Emergent Alistair"
     assert resolved.source_chain[0].layer.value == "emergent"
 
@@ -513,30 +513,30 @@ async def test_resolve_emergent_only_shorthand(library: LibraryService, store: S
     )
     resolved = await library.resolve("emergent/character/the-bartender", "camp-1")
     assert resolved.frontmatter["name"] == "The Bartender"
-    assert resolved.setting_id is None
+    assert resolved.world_id is None
     assert resolved.source_chain[0].layer.value == "emergent"
 
 
 async def test_resolve_missing_raises(library: LibraryService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
     with pytest.raises(LibraryNotFoundError):
-        await library.resolve("settings/wod-london/characters/ghost", "camp-1")
+        await library.resolve("worlds/wod-london/characters/ghost", "camp-1")
 
 
 async def test_resolve_pinned_snapshot_doesnt_see_library_updates(
     library: LibraryService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair", name="v1")
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
     await library.set_composition(
         "camp-1",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
+        Composition(worlds=[WorldRef(world_id="wod-london", priority=1, include=None)]),
     )
     await _seed_character(store, "wod-london", "alistair", name="v2")
 
-    resolved = await library.resolve("settings/wod-london/characters/alistair", "camp-1")
+    resolved = await library.resolve("worlds/wod-london/characters/alistair", "camp-1")
     assert resolved.frontmatter["name"] == "v1"
     assert resolved.source_chain[0].layer.value == "library_snapshot"
 
@@ -547,7 +547,7 @@ async def test_resolve_pinned_snapshot_doesnt_see_library_updates(
 
 
 async def test_promote_emergent_to_library(library: LibraryService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
     await store.write_emergent(
         campaign_id="camp-1",
@@ -585,17 +585,17 @@ async def test_promote_rejects_top_level_kinds(library: LibraryService) -> None:
 async def test_dependents_lists_referencing_campaigns(
     library: LibraryService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await store.upsert_campaign(campaign_id="camp-A", name="Alpha")
     await store.upsert_campaign(campaign_id="camp-B", name="Bravo")
     await store.upsert_campaign(campaign_id="camp-C", name="Charlie")
     await library.set_composition(
         "camp-A",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
+        Composition(worlds=[WorldRef(world_id="wod-london", priority=1, include=None)]),
     )
     await library.set_composition(
         "camp-B",
-        Composition(settings=[SettingRef(setting_id="wod-london", priority=1, include=None)]),
+        Composition(worlds=[WorldRef(world_id="wod-london", priority=1, include=None)]),
     )
 
     deps = await library.dependents("wod-london", "character", "alistair")
@@ -611,8 +611,8 @@ async def test_dependents_lists_referencing_campaigns(
 async def test_list_for_composition_respects_priority_and_include(
     library: LibraryService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "primary")
-    await _seed_setting(store, "secondary")
+    await _seed_world(store, "primary")
+    await _seed_world(store, "secondary")
     await _seed_character(store, "primary", "alistair", name="Primary Alistair")
     await _seed_character(store, "secondary", "alistair", name="Secondary Alistair")
     await _seed_character(store, "secondary", "winifred", name="winifred")
@@ -620,15 +620,15 @@ async def test_list_for_composition_respects_priority_and_include(
     await library.set_composition(
         "camp-1",
         Composition(
-            settings=[
-                SettingRef(
-                    setting_id="primary",
+            worlds=[
+                WorldRef(
+                    world_id="primary",
                     priority=1,
                     include=["characters"],
                     track_latest=True,
                 ),
-                SettingRef(
-                    setting_id="secondary",
+                WorldRef(
+                    world_id="secondary",
                     priority=2,
                     include=["characters"],
                     track_latest=True,
@@ -648,15 +648,15 @@ async def test_list_for_composition_respects_priority_and_include(
 async def test_list_for_composition_skips_excluded_kinds(
     library: LibraryService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair")
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
     await library.set_composition(
         "camp-1",
         Composition(
-            settings=[
-                SettingRef(
-                    setting_id="wod-london",
+            worlds=[
+                WorldRef(
+                    world_id="wod-london",
                     priority=1,
                     include=["locations"],
                     track_latest=True,

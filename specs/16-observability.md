@@ -45,7 +45,7 @@ class TurnAudit:
 
     # Composition snapshot at turn time
     composition_snapshot: CompositionSnapshot   # asset refs + versions + mechanics module
-    # Captures: which rosters and settings were referenced, what versions were bound,
+    # Captures: which rosters and worlds were referenced, what versions were bound,
     # which mechanics module was active. Lets us answer "what library state did this
     # turn see?" even if the library has since changed.
 
@@ -159,7 +159,7 @@ class CostTracker(Protocol):
     async def by_model(self, campaign_id: str) -> dict[str, float]: ...
 ```
 
-The Frontend's status bar surfaces session cost in real time. The Settings panel surfaces 30-day rollups. Budget alerts are configurable per campaign (warn at $X, hard-stop at $Y); the Orchestrator owns enforcement, Observability owns the data.
+The Frontend's status bar surfaces session cost in real time. The Worlds panel surfaces 30-day rollups. Budget alerts are configurable per campaign (warn at $X, hard-stop at $Y); the Orchestrator owns enforcement, Observability owns the data.
 
 ## Performance metrics
 
@@ -176,7 +176,7 @@ Per-module, per-operation:
 | Time Engine | tick duration, NPC ticks per advance | per advance |
 | ImageGen | queue depth, generation duration, success rate | per job |
 
-Metrics are stored in a rolling window (configurable, default 30 days). The Frontend exposes a Performance tab in Settings showing percentile latencies, error counts, and trend lines.
+Metrics are stored in a rolling window (configurable, default 30 days). The Frontend exposes a Performance tab in Worlds showing percentile latencies, error counts, and trend lines.
 
 Metric collection is sample-based for hot paths (every Nth call) and exhaustive for cold paths (every call).
 

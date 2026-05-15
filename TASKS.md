@@ -14,7 +14,7 @@ Python FastAPI backend skeleton, TypeScript React+Vite frontend skeleton, and `d
 
 ### 2. [x] Define shared types and protocol stubs
 **Blocked by:** 1
-Cross-module dataclasses and Protocols referenced throughout the specs: `EntityRef`, `InGameTime`, `Duration`, `Composition` + `SettingRef`, `ResolvedEntity`, `StateDelta` + `AppliedDelta`, `Post`, `Scene`, `Fact`, `Commitment`, `Capability`, etc. Pure types only — no behavior. Lives in a shared package both backend and tests import.
+Cross-module dataclasses and Protocols referenced throughout the specs: `EntityRef`, `InGameTime`, `Duration`, `Composition` + `WorldRef`, `ResolvedEntity`, `StateDelta` + `AppliedDelta`, `Post`, `Scene`, `Fact`, `Commitment`, `Capability`, etc. Pure types only — no behavior. Lives in a shared package both backend and tests import.
 
 ### 3. [x] Implement in-process event bus
 **Blocked by:** 1
@@ -22,7 +22,7 @@ Async pub/sub bus owned by the Orchestrator (spec 01). `subscribe(event_type, ha
 
 ### 4. [x] Build file parsing helpers
 **Blocked by:** 1
-Markdown + YAML frontmatter parser (used by every entity card kind), `content_hash` computation, slug generator for scene filenames (`NNNN-slug.md`), YAML-only loader for `setting.yaml` / `image-preset.yaml` / sheet files / `campaign.yaml`. Encoding fixed to UTF-8.
+Markdown + YAML frontmatter parser (used by every entity card kind), `content_hash` computation, slug generator for scene filenames (`NNNN-slug.md`), YAML-only loader for `world.yaml` / `image-preset.yaml` / sheet files / `campaign.yaml`. Encoding fixed to UTF-8.
 
 ### 5. [x] Set up SQLite migrations + sqlite-vec
 **Blocked by:** 1
@@ -44,7 +44,7 @@ Spec 14. SPA shell with Library / Campaigns top-level nav. Routing. Theme + dark
 
 ### 8. [x] Build State Store schema and write APIs
 **Blocked by:** 2, 5
-Spec 03. Migrations for every table: `library_index` (+ FTS), `campaign_content_index`, `library_snapshots`, `campaigns` + `campaign_setting_refs` + `campaign_pcs`, `branches`, `character/location/faction_state`, `scenes` + `posts`, `facts` + `commitments` + `relationships` + `knowledge_state`, `calendar`, `images`, `deltas` + `review_queue`, `embeddings` (sqlite-vec), `llm_requests`, `embedding_cache`, `turn_audits` + `cost_records` + `metric_samples` + `log_events` + `error_records`. Implement read APIs (resolve cascade, `vector_search`, `keyword_search`, `get_delta_log`) and write APIs (`apply_delta`, `reverse_delta`, `queue_for_review`, file-write mediators that update indexes synchronously). Snapshot writing on bind, undo/retcon/branch fork copy-on-write.
+Spec 03. Migrations for every table: `library_index` (+ FTS), `campaign_content_index`, `library_snapshots`, `campaigns` + `campaign_world_refs` + `campaign_pcs`, `branches`, `character/location/faction_state`, `scenes` + `posts`, `facts` + `commitments` + `relationships` + `knowledge_state`, `calendar`, `images`, `deltas` + `review_queue`, `embeddings` (sqlite-vec), `llm_requests`, `embedding_cache`, `turn_audits` + `cost_records` + `metric_samples` + `log_events` + `error_records`. Implement read APIs (resolve cascade, `vector_search`, `keyword_search`, `get_delta_log`) and write APIs (`apply_delta`, `reverse_delta`, `queue_for_review`, file-write mediators that update indexes synchronously). Snapshot writing on bind, undo/retcon/branch fork copy-on-write.
 
 ### 9. [x] Wire watchdog file watcher
 **Blocked by:** 4, 8
@@ -66,7 +66,7 @@ Spec 14 §Sheet widget library. TypeScript React components: `text`, `textarea`,
 
 ### 10. [x] Implement Library indexer and Library protocol
 **Blocked by:** 4, 8, 9
-Spec 18. `Library` protocol: `list_settings`/`get_setting`/`list_in_setting`/`get_entity`/`list_style_guides`/`list_image_presets`/`list_greetings`/`variants_of`/`create_entity`/`update_entity`/`delete_entity`/`promote_to_library`/`get_composition`/`set_composition`/`upgrade_setting_ref`/`resolve`/`dependents`. Initial scan on startup populates `library_index` from `data/library/`. Snapshot writing for pinned setting refs. Override file write/read at `campaigns/<id>/overrides/settings/<setting>/<kind>/<id>.yaml`. Read cascade: campaign emergent → campaign override → library snapshot (pinned) or library index (`track_latest`) → fail.
+Spec 18. `Library` protocol: `list_worlds`/`get_world`/`list_in_world`/`get_entity`/`list_style_guides`/`list_image_presets`/`list_greetings`/`variants_of`/`create_entity`/`update_entity`/`delete_entity`/`promote_to_library`/`get_composition`/`set_composition`/`upgrade_world_ref`/`resolve`/`dependents`. Initial scan on startup populates `library_index` from `data/library/`. Snapshot writing for pinned world refs. Override file write/read at `campaigns/<id>/overrides/worlds/<world>/<kind>/<id>.yaml`. Read cascade: campaign emergent → campaign override → library snapshot (pinned) or library index (`track_latest`) → fail.
 
 ### 14. [x] Implement bundled LLM provider plugins
 **Blocked by:** 7, 13
@@ -90,13 +90,13 @@ Spec 17. `TestApp` harness with fixture loading. `MockLLMGateway` with per-task 
 
 ## Wave 4 — Content + Integrators
 
-### 11. [x] Build Setting module
+### 11. [x] Build World module
 **Blocked by:** 10
-Spec 09. CRUD for items/locations/lore/factions/greetings within a setting (delegates to Library writes). Per-campaign composition resolution with `include` filters. Location adjacency / `path_between` / `locations_within`. Cross-setting variant lookup by shared `asset_id`. Lore keyword search for archive-tier triggers. Procedural weather (seeded per campaign, deterministic). Calendar / season / holiday queries. Faction state CRUD (campaign-scoped, SQLite). `promote_to_library` for non-character kinds. `setting.yaml` CRUD + `fork_setting` (directory copy).
+Spec 09. CRUD for items/locations/lore/factions/greetings within a world (delegates to Library writes). Per-campaign composition resolution with `include` filters. Location adjacency / `path_between` / `locations_within`. Cross-world variant lookup by shared `asset_id`. Lore keyword search for archive-tier triggers. Procedural weather (seeded per campaign, deterministic). Calendar / season / holiday queries. Faction state CRUD (campaign-scoped, SQLite). `promote_to_library` for non-character kinds. `world.yaml` CRUD + `fork_world` (directory copy).
 
 ### 12. [x] Build Characters module
 **Blocked by:** 11, 16
-Spec 08. Behavior layer over Setting's character storage. Voice anchors + dialogue sample rotation. Drift detection (LLM call against recent dialogue; produces `drift_score` + corrective context). Context tier recommendation (lock-in / spotlight / background / archive) with user pins. PC role tracking + multi-PC coordination (`list_pcs`/`add_pc`/`remove_pc`/`set_active_pc`/`current_scene_for_pc`/`should_auto_respond`/`present_pcs_in_scene`). Cross-setting variant lookup. Compressed card views (full/compressed/voice-only/capsule). Campaign-scoped relationships + relationship state. Capability surfacing via Mechanics. `promote_to_library` wrapper. Imports: SillyTavern v2/v3 cards, charx, plaintext.
+Spec 08. Behavior layer over World's character storage. Voice anchors + dialogue sample rotation. Drift detection (LLM call against recent dialogue; produces `drift_score` + corrective context). Context tier recommendation (lock-in / spotlight / background / archive) with user pins. PC role tracking + multi-PC coordination (`list_pcs`/`add_pc`/`remove_pc`/`set_active_pc`/`current_scene_for_pc`/`should_auto_respond`/`present_pcs_in_scene`). Cross-world variant lookup. Compressed card views (full/compressed/voice-only/capsule). Campaign-scoped relationships + relationship state. Capability surfacing via Mechanics. `promote_to_library` wrapper. Imports: SillyTavern v2/v3 cards, charx, plaintext.
 
 ### 19. [x] Build Extractor
 **Blocked by:** 8, 13, 16, 18
@@ -104,13 +104,13 @@ Spec 04. Parallel strategies: rule-based (regex/patterns for time markers, inven
 
 ### 21. [x] Build Time Engine
 **Blocked by:** 11, 12, 13, 16, 18
-Spec 07. `advance(duration, reason)` and `skip_to(target)`. NPC tick architecture: significance filter (major/spotlight/PC-commitment/household + recent appearances), shared-events pre-pass for inter-NPC coherence, per-NPC structured LLM tick (`npc_tick` task) with knowledge/secrecy split. Faction ticks at month granularity. Weather/atmosphere via Setting. Scheduled events (holidays, recurring schedules, plot beats). Commitment aging via `Continuity.age()`. `Mechanics.time_tick` fan-out per character. Digest generation (structured + optional narrative prose).
+Spec 07. `advance(duration, reason)` and `skip_to(target)`. NPC tick architecture: significance filter (major/spotlight/PC-commitment/household + recent appearances), shared-events pre-pass for inter-NPC coherence, per-NPC structured LLM tick (`npc_tick` task) with knowledge/secrecy split. Faction ticks at month granularity. Weather/atmosphere via World. Scheduled events (holidays, recurring schedules, plot beats). Commitment aging via `Continuity.age()`. `Mechanics.time_tick` fan-out per character. Digest generation (structured + optional narrative prose).
 
 ## Wave 5 — Top-level + Producers
 
 ### 20. [x] Build Context Builder
 **Blocked by:** 11, 12, 13, 16, 17, 18
-Spec 02. `build(player_input, campaign_id, mechanics_results)` returns `AssembledPrompt` with `messages`, `params`, `budget_used`, `sources`, `summary`. Pipeline: resolve composition → scene state → cast (with tier promotion via Characters) → setting (location, adjacent, weather, factions via Setting) → continuity (facts, commitments via Continuity) → archive retrieval (vector + keyword, scoped to campaign-local + referenced library assets) → budget allocation per tier → canonical message ordering. Style guide + content boundaries from composition. Voice anchor injection for spotlighted speakers. Mechanics result injection as authoritative. Source attribution (scope, library asset id, override applied).
+Spec 02. `build(player_input, campaign_id, mechanics_results)` returns `AssembledPrompt` with `messages`, `params`, `budget_used`, `sources`, `summary`. Pipeline: resolve composition → scene state → cast (with tier promotion via Characters) → world (location, adjacent, weather, factions via World) → continuity (facts, commitments via Continuity) → archive retrieval (vector + keyword, scoped to campaign-local + referenced library assets) → budget allocation per tier → canonical message ordering. Style guide + content boundaries from composition. Voice anchor injection for spotlighted speakers. Mechanics result injection as authoritative. Source attribution (scope, library asset id, override applied).
 
 ### 22. [x] Build Orchestrator + turn loop
 **Blocked by:** 3, 13, 16, 17, 19, 20
@@ -122,11 +122,11 @@ Spec 12. `IntegratedDiffusersBackend` (SDXL via HuggingFace `diffusers`, lazy we
 
 ### 25. [x] Implement Export EPUB adapter
 **Blocked by:** 7, 11, 12, 17, 18
-Spec 13. EPUB 3 pipeline: front matter (title, copyright, TOC, dedication), scenes-as-chapters (with inline illustrations + post formatting + mechanics annotations), appendices (cast, setting, continuity ledger, calendar, image gallery — toggleable), bundle into EPUB package with stylesheet. Two style presets (Novel, Manuscript). EPUBCheck validation. Filter pipeline (strip OOC, mechanics, anonymize, content filter, POV consolidation). Per-scene and per-arc selection. Cover image support (user-provided or default).
+Spec 13. EPUB 3 pipeline: front matter (title, copyright, TOC, dedication), scenes-as-chapters (with inline illustrations + post formatting + mechanics annotations), appendices (cast, world, continuity ledger, calendar, image gallery — toggleable), bundle into EPUB package with stylesheet. Two style presets (Novel, Manuscript). EPUBCheck validation. Filter pipeline (strip OOC, mechanics, anonymize, content filter, POV consolidation). Per-scene and per-arc selection. Cover image support (user-provided or default).
 
 ### 26. [x] Implement remaining export adapters
 **Blocked by:** 7, 11, 12, 17, 18
-Spec 13. `markdown` bundle (directory tree with scenes + characters + setting + continuity + images), `single_markdown` concatenated file, `json` structured dump (full state, optional embeddings, pretty-print), `transcript` plain-text prose-only, `html` standalone with relative assets. Each implements `ExportAdapter` protocol with `options_schema`. Shared transformation/filter pass.
+Spec 13. `markdown` bundle (directory tree with scenes + characters + world + continuity + images), `single_markdown` concatenated file, `json` structured dump (full state, optional embeddings, pretty-print), `transcript` plain-text prose-only, `html` standalone with relative assets. Each implements `ExportAdapter` protocol with `options_schema`. Shared transformation/filter pass.
 
 ## Wave 6 — Surface + Observability
 
@@ -140,13 +140,13 @@ Spec 16. `TurnAudit` record assembled by subscribing to Orchestrator events: com
 
 ### 31. [x] Expose backend REST + WebSocket API
 **Blocked by:** 22, 23, 25
-Spec 14 §Backend contract. FastAPI endpoints surfacing every module: `/library/settings/{id}/{kind}`, `/library/variants`, `/library/style-guides`, `/library/image-presets`, `/mechanics/installed` (+ rescan), `/plugins/installed` (+ rescan); `/campaigns` CRUD, `/campaigns/{id}/composition` (+ refs + upgrade), `/campaigns/{id}/pcs`, `/campaigns/{id}/turns` (submit / advance / regenerate / undo / retcon), `/campaigns/{id}/forks`, `/campaigns/{id}/scenes`, `/campaigns/{id}/{characters,items,locations,lore,factions}`, `/campaigns/{id}/sheets/{kind}/{id}`, `/campaigns/{id}/facts`, `/campaigns/{id}/commitments`, `/campaigns/{id}/time/advance`, `/campaigns/{id}/images/generate` (+ list), `/campaigns/{id}/export`, `/campaigns/{id}/reviews/{id}` approve/reject. WS `/campaigns/{id}/stream` emitting `token`/`turn_complete`/`image_ready`/`drift_detected`/`contradiction_detected`/`review_item_added`/`npc_tick_complete`/`scene_started`/`scene_ended`/`library_file_changed`/`library_ref_upgraded`/`pc_post_appended`/`advance_requested`/`advance_disabled`.
+Spec 14 §Backend contract. FastAPI endpoints surfacing every module: `/library/worlds/{id}/{kind}`, `/library/variants`, `/library/style-guides`, `/library/image-presets`, `/mechanics/installed` (+ rescan), `/plugins/installed` (+ rescan); `/campaigns` CRUD, `/campaigns/{id}/composition` (+ refs + upgrade), `/campaigns/{id}/pcs`, `/campaigns/{id}/turns` (submit / advance / regenerate / undo / retcon), `/campaigns/{id}/forks`, `/campaigns/{id}/scenes`, `/campaigns/{id}/{characters,items,locations,lore,factions}`, `/campaigns/{id}/sheets/{kind}/{id}`, `/campaigns/{id}/facts`, `/campaigns/{id}/commitments`, `/campaigns/{id}/time/advance`, `/campaigns/{id}/images/generate` (+ list), `/campaigns/{id}/export`, `/campaigns/{id}/reviews/{id}` approve/reject. WS `/campaigns/{id}/stream` emitting `token`/`turn_complete`/`image_ready`/`drift_detected`/`contradiction_detected`/`review_item_added`/`npc_tick_complete`/`scene_started`/`scene_ended`/`library_file_changed`/`library_ref_upgraded`/`pc_post_appended`/`advance_requested`/`advance_disabled`.
 
 ## Wave 7 — Frontend assembly
 
 ### 32. [x] Build frontend Library views
 **Blocked by:** 29, 31
-Spec 14. Settings list and detail (with tabs for each entity kind + Meta + Dependent campaigns). Per-kind editors (frontmatter form + markdown body; characters get voice editor, image prompt template, capabilities tab). Edit-with-dependents warning. Cross-setting variants tab. Style guides + image presets editors (with sample preview). Installed mechanics view (per-module manifest summary, sheet schemas, `theme.css` preview, load errors). Installed plugins view per kind (LLM / embedding / ImageGen / export) with config forms (rendered from each plugin's `config_schema`).
+Spec 14. Worlds list and detail (with tabs for each entity kind + Meta + Dependent campaigns). Per-kind editors (frontmatter form + markdown body; characters get voice editor, image prompt template, capabilities tab). Edit-with-dependents warning. Cross-world variants tab. Style guides + image presets editors (with sample preview). Installed mechanics view (per-module manifest summary, sheet schemas, `theme.css` preview, load errors). Installed plugins view per kind (LLM / embedding / ImageGen / export) with config forms (rendered from each plugin's `config_schema`).
 
 ### 33. [x] Build frontend Campaign Play view
 **Blocked by:** 29, 30, 31
@@ -156,9 +156,9 @@ Spec 14. Top bar with active PC switcher. Scene header (location, in-game time, 
 **Blocked by:** 29, 30, 31
 Spec 14. Cast view: resolved characters by tier or source, filters, character detail (resolved card, source chain, voice anchor with samples, mechanical sheet rendered via widget library, capabilities, relationships, recent scenes, edit override / library / promote actions). World view: items / locations / lore / factions / greetings tabs. Timeline view: scenes as cards along in-game timeline with threads as lines. Mechanics view: active module info, sheet list, missing-sheets panel, roll log, combat tracker hook, content browser. Composition view: editable refs with priority/include/`track_latest` + upgrade-available banner with diff preview. Images view: gallery + queue + per-character prompt templates.
 
-### 35. [x] Build frontend campaign creation flow + settings
+### 35. [x] Build frontend campaign creation flow + worlds
 **Blocked by:** 29, 31
-Spec 14. Six-step creation wizard: identity → composition (multi-setting picker with priority + include filters) → mechanics (installed module or `mechanics: null`, with bulk-create-sheets offer) → PCs (pick or create) → style & content (style guide ref or inline, image preset, content boundaries) → starting scene (greeting picker, confirm location/time/cast). Per-campaign settings tabs: General, Model routing (LLM + embedding per task), ImageGen (backend + preset + sampler), Mechanics (active module + module-specific options), Storage (backup), Advanced (per-task prompts + debug log). App-level settings: library path, provider configs, mechanics/plugin scan paths, backup policy, appearance.
+Spec 14. Six-step creation wizard: identity → composition (multi-world picker with priority + include filters) → mechanics (installed module or `mechanics: null`, with bulk-create-sheets offer) → PCs (pick or create) → style & content (style guide ref or inline, image preset, content boundaries) → starting scene (greeting picker, confirm location/time/cast). Per-campaign worlds tabs: General, Model routing (LLM + embedding per task), ImageGen (backend + preset + sampler), Mechanics (active module + module-specific options), Storage (backup), Advanced (per-task prompts + debug log). App-level worlds: library path, provider configs, mechanics/plugin scan paths, backup policy, appearance.
 
 ## Dependency graph (compact)
 

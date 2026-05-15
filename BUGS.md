@@ -56,7 +56,7 @@ Format: **Title** — file:line — one-line description.
 - **`parseBody` swallows JSON parse failures on error responses** — `frontend/src/api/client.ts:55` — `.catch(() => null)` on parse — user sees `HTTP 500` with no `detail`. Log the parse failure.
 - **`wait_then_open` background curl loop is orphaned on script exit** — `scripts/run.sh:144` — Cleanup trap doesn't track the waiter PID; on quick failure the script can leave a curl loop running for up to 30s.
 - **`Markdown` component without `rehype-sanitize`** — `frontend/src/components/Markdown.tsx` — Currently safe (no `rehype-raw`), but a future `rehype-raw` addition becomes XSS. Worth a comment.
-- **Wizard `update()` callback recreates `draft` identity every keystroke** — `frontend/src/routes/CampaignCreate/CampaignCreate.tsx:201-203` — Children aren't `React.memo`'d so today this is a non-issue, but `StepStartingScene`'s `useMemo(candidates, [draft.pcs, castBySetting])` re-runs on every keystroke anywhere in the wizard.
+- **Wizard `update()` callback recreates `draft` identity every keystroke** — `frontend/src/routes/CampaignCreate/CampaignCreate.tsx:201-203` — Children aren't `React.memo`'d so today this is a non-issue, but `StepStartingScene`'s `useMemo(candidates, [draft.pcs, castByWorld])` re-runs on every keystroke anywhere in the wizard.
 - **`JsonSchema` interface escape-hatches `[key: string]: any`** — `frontend/src/routes/library/PluginsView.tsx:268-270` — Explicit `any` index signature defeats the discriminator. Intentional but flagged.
 - **`useCampaignEvent` wildcard mode fragile** — `frontend/src/state/useCampaignEvent.ts:36` — `typeKey` from `sort().join("|")`. Passing `["*"]` as an array looks like an explicit-type filter after sort+join. Undocumented edge.
 

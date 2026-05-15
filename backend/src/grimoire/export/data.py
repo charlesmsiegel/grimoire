@@ -176,12 +176,12 @@ def _load_emergent(data_root: Path, campaign_id: str, kind: str) -> list[EntityC
 
 def _load_overrides(data_root: Path, campaign_id: str, kind: str) -> list[EntityCard]:
     dir_name = _ENTITY_DIRS.get(kind, kind)
-    base = data_root / "campaigns" / campaign_id / "overrides" / "settings"
+    base = data_root / "campaigns" / campaign_id / "overrides" / "worlds"
     if not base.is_dir():
         return []
     cards: list[EntityCard] = []
-    for setting_dir in sorted(p for p in base.iterdir() if p.is_dir()):
-        kind_dir = setting_dir / dir_name
+    for world_dir in sorted(p for p in base.iterdir() if p.is_dir()):
+        kind_dir = world_dir / dir_name
         if not kind_dir.is_dir():
             continue
         for path in sorted(kind_dir.glob("*.yaml")):

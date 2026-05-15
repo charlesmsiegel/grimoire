@@ -16,7 +16,7 @@ from grimoire.state_store.paths import DIR_TO_KIND
 # Map a watched-file ``kind`` to the bus event type the watcher emits.
 EVENT_TYPE_BY_KIND: dict[str, str] = {
     "library_entity": "library_file_changed",
-    "library_setting": "library_file_changed",
+    "library_world": "library_file_changed",
     "library_style_guide": "library_file_changed",
     "library_image_preset": "library_file_changed",
     "scene_body": "scene_file_changed",
@@ -40,7 +40,7 @@ class WatchedFile:
     library_id: str | None = None
     campaign_id: str | None = None
     branch_id: str | None = None
-    setting_id: str | None = None
+    world_id: str | None = None
     entity_kind: str | None = None
     asset_id: str | None = None
     mechanics_id: str | None = None
@@ -57,8 +57,8 @@ class WatchedFile:
         if self.kind == "override":
             dir_name = _kind_to_dir(self.entity_kind or "")
             return (
-                f"campaigns/{self.campaign_id}/overrides/settings/"
-                f"{self.setting_id}/{dir_name}/{self.asset_id}"
+                f"campaigns/{self.campaign_id}/overrides/worlds/"
+                f"{self.world_id}/{dir_name}/{self.asset_id}"
             )
         if self.kind == "emergent":
             dir_name = _kind_to_dir(self.entity_kind or "")
@@ -113,20 +113,20 @@ def _classify_library(abs_path: Path, rel: Path) -> WatchedFile | None:
         return None
     head = parts[0]
 
-    if head == "settings":
-        if len(parts) == 3 and parts[2] == "setting.yaml":
-            setting_id = parts[1]
+    if head == "worlds":
+        if len(parts) == 3 and parts[2] == "world.yaml":
+            world_id = parts[1]
             return WatchedFile(
                 scope="library",
-                kind="library_setting",
+                kind="library_world",
                 path=abs_path,
-                setting_id=setting_id,
-                entity_kind="setting",
-                asset_id=setting_id,
-                library_id=f"settings/{setting_id}/setting",
+                world_id=world_id,
+                entity_kind="world",
+                asset_id=world_id,
+                library_id=f"worlds/{world_id}/world",
             )
         if len(parts) == 4:
-            setting_id = parts[1]
+            world_id = parts[1]
             dir_name = parts[2]
             entity_kind = DIR_TO_KIND.get(dir_name)
             if entity_kind is None:
@@ -139,10 +139,10 @@ def _classify_library(abs_path: Path, rel: Path) -> WatchedFile | None:
                 scope="library",
                 kind="library_entity",
                 path=abs_path,
-                setting_id=setting_id,
+                world_id=world_id,
                 entity_kind=entity_kind,
                 asset_id=asset_id,
-                library_id=f"settings/{setting_id}/{dir_name}/{asset_id}",
+                library_id=f"worlds/{world_id}/{dir_name}/{asset_id}",
             )
         return None
 
@@ -198,8 +198,8 @@ def _classify_campaign(abs_path: Path, rel: Path) -> WatchedFile | None:
         branch_id = rest[0]
         return _classify_scene(abs_path, campaign_id, branch_id, rest[2:])
 
-    if sub == "overrides" and len(rest) == 4 and rest[0] == "settings":
-        setting_id = rest[1]
+    if sub == "overrides" and len(rest) == 4 and rest[0] == "worlds":
+        world_id = rest[1]
         dir_name = rest[2]
         filename = rest[3]
         if not filename.endswith(".yaml"):
@@ -211,10 +211,10 @@ def _classify_campaign(abs_path: Path, rel: Path) -> WatchedFile | None:
             kind="override",
             path=abs_path,
             campaign_id=campaign_id,
-            setting_id=setting_id,
+            world_id=world_id,
             entity_kind=entity_kind,
             asset_id=asset_id,
-            library_id=f"settings/{setting_id}/{dir_name}/{asset_id}",
+            library_id=f"worlds/{world_id}/{dir_name}/{asset_id}",
         )
 
     if sub == "emergent" and len(rest) == 2:

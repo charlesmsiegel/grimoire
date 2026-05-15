@@ -23,7 +23,7 @@ All of Continuity's content is **campaign-scoped**. Facts about a character or p
 - Does not store posts or scenes (State Store + Scene Manager do)
 - Does not generate facts from prose (Extractor does, then writes them here)
 - Does not summarize (Scene Manager does)
-- Does not own characters (Setting owns the storage, Characters owns character-specific behaviors; facts reference characters by ref, which resolves through library)
+- Does not own characters (World owns the storage, Characters owns character-specific behaviors; facts reference characters by ref, which resolves through library)
 - Does not surface facts across campaigns — facts are per-timeline by design
 
 ## Fact ledger

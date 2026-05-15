@@ -197,8 +197,8 @@ def ingest_character_card_v2(
     if opts.extract_relationships:
         structural = extract_relationships_deterministic(
             "\n".join(p for p in (description, personality, scenario) if p),
-            known_characters=opts.setting_characters,
-            known_factions=opts.setting_factions,
+            known_characters=opts.world_characters,
+            known_factions=opts.world_factions,
         )
 
     data_payload = CharacterData(

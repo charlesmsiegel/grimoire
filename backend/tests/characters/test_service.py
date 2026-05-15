@@ -24,20 +24,20 @@ from grimoire.types.state import ContextTier
 # ---------------------------------------------------------------------------
 
 
-async def _seed_setting(store: StateStore, setting_id: str) -> None:
+async def _seed_world(store: StateStore, world_id: str) -> None:
     await store.write_library_file(
-        library_id=f"settings/{setting_id}/setting/{setting_id}",
-        frontmatter={"id": setting_id, "name": setting_id, "version": 1},
+        library_id=f"worlds/{world_id}/world/{world_id}",
+        frontmatter={"id": world_id, "name": world_id, "version": 1},
         body="",
         source="test:seed",
     )
 
 
-async def _bind_campaign(store: StateStore, campaign_id: str, setting_id: str) -> None:
+async def _bind_campaign(store: StateStore, campaign_id: str, world_id: str) -> None:
     await store.upsert_campaign(campaign_id=campaign_id, name=campaign_id)
-    await store.upsert_setting_ref(
+    await store.upsert_world_ref(
         campaign_id=campaign_id,
-        setting_id=setting_id,
+        world_id=world_id,
         priority=1,
         include=None,
         track_latest=True,
@@ -81,14 +81,14 @@ def _character_data(
 
 
 async def test_create_and_get_character(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     created = await characters.create("wod-london", _character_data())
 
     assert created.id == "alistair"
     assert created.name == "Alistair"
     assert created.voice.samples
     assert created.voice.voice_register == "formal"
-    assert created.setting_id == "wod-london"
+    assert created.world_id == "wod-london"
 
     fetched = await characters.get("wod-london", "alistair")
     assert fetched.id == "alistair"
@@ -96,29 +96,29 @@ async def test_create_and_get_character(characters: CharactersService, store: St
 
 
 async def test_update_character(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await characters.create("wod-london", _character_data())
 
     updated = await characters.update("wod-london", "alistair", {"age": "452"})
     assert updated.age == "452"
 
 
-async def test_list_in_setting(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+async def test_list_in_world(characters: CharactersService, store: StateStore) -> None:
+    await _seed_world(store, "wod-london")
     await characters.create("wod-london", _character_data("alistair"))
     await characters.create("wod-london", _character_data("vivienne", role=CharacterRole.PC))
 
-    listed = await characters.list_in_setting("wod-london")
+    listed = await characters.list_in_world("wod-london")
     ids = {c.id for c in listed}
     assert ids == {"alistair", "vivienne"}
 
 
 async def test_delete_character(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await characters.create("wod-london", _character_data())
 
     await characters.delete("wod-london", "alistair")
-    listed = await characters.list_in_setting("wod-london")
+    listed = await characters.list_in_world("wod-london")
     assert listed == []
 
 
@@ -128,7 +128,7 @@ async def test_delete_character(characters: CharactersService, store: StateStore
 
 
 async def test_create_emergent(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
 
     ref = await characters.create_emergent(
@@ -138,15 +138,15 @@ async def test_create_emergent(characters: CharactersService, store: StateStore)
     assert ref == "campaign:emergent/character/the-bartender"
     resolved = await characters.resolve(ref, "camp-1")
     assert resolved.character.id == "the-bartender"
-    assert resolved.character.setting_id is None
+    assert resolved.character.world_id is None
 
 
 async def test_upsert_override(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
     await characters.create("wod-london", _character_data())
 
-    ref = "library:settings/wod-london/characters/alistair"
+    ref = "library:worlds/wod-london/characters/alistair"
     await characters.upsert_override(
         "camp-1", ref, {"description": "Newly turned softer in this chronicle."}
     )
@@ -161,12 +161,12 @@ async def test_upsert_override(characters: CharactersService, store: StateStore)
 
 
 async def test_pc_lifecycle(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
     await characters.create("wod-london", _character_data("vivienne", role=CharacterRole.PC))
 
     entry = await characters.add_pc(
-        "camp-1", "library:settings/wod-london/characters/vivienne", "vivienne", owner="local"
+        "camp-1", "library:worlds/wod-london/characters/vivienne", "vivienne", owner="local"
     )
     assert entry.active is True
 
@@ -174,7 +174,7 @@ async def test_pc_lifecycle(characters: CharactersService, store: StateStore) ->
     assert len(listed) == 1
     assert listed[0].name == "vivienne"
 
-    await characters.remove_pc("camp-1", "library:settings/wod-london/characters/vivienne")
+    await characters.remove_pc("camp-1", "library:worlds/wod-london/characters/vivienne")
     assert await characters.list_pcs("camp-1") == []
 
 
@@ -183,7 +183,7 @@ async def test_set_active_pc_rejects_unknown(
 ) -> None:
     await _bind_campaign(store, "camp-1", "wod-london")
     try:
-        await characters.set_active_pc("camp-1", "library:settings/wod/characters/ghost")
+        await characters.set_active_pc("camp-1", "library:worlds/wod/characters/ghost")
     except Exception as exc:
         assert "not a PC" in str(exc)
     else:
@@ -193,10 +193,10 @@ async def test_set_active_pc_rejects_unknown(
 async def test_multi_pc_should_auto_respond(
     characters: CharactersService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
-    pc1 = "library:settings/wod-london/characters/vivienne"
-    pc2 = "library:settings/wod-london/characters/winifred"
+    pc1 = "library:worlds/wod-london/characters/vivienne"
+    pc2 = "library:worlds/wod-london/characters/winifred"
     await characters.add_pc("camp-1", pc1, "vivienne")
     await characters.add_pc("camp-1", pc2, "winifred")
 
@@ -257,7 +257,7 @@ async def test_pending_pc_inputs_since_last_advance(
 
 async def test_current_scene_for_pc(characters: CharactersService, store: StateStore) -> None:
     await _bind_campaign(store, "camp-1", "wod-london")
-    ref = "library:settings/wod-london/characters/vivienne"
+    ref = "library:worlds/wod-london/characters/vivienne"
     assert await characters.current_scene_for_pc("camp-1", ref) is None
     await characters.set_current_scene_for_pc("camp-1", ref, "scene-7")
     assert await characters.current_scene_for_pc("camp-1", ref) == "scene-7"
@@ -277,17 +277,17 @@ async def test_recommend_tiers(characters: CharactersService, store: StateStore)
         ordinal=1,
         slug="s",
         file_path="x.md",
-        present_character_refs=["library:settings/wod-london/characters/alistair"],
+        present_character_refs=["library:worlds/wod-london/characters/alistair"],
     )
     tiers = await characters.recommend_tiers(scene)
-    assert tiers["library:settings/wod-london/characters/alistair"] == ContextTier.SPOTLIGHT
+    assert tiers["library:worlds/wod-london/characters/alistair"] == ContextTier.SPOTLIGHT
 
 
 async def test_pin_tier_overrides_recommendation(
     characters: CharactersService, store: StateStore
 ) -> None:
     await _bind_campaign(store, "camp-1", "wod-london")
-    ref = "library:settings/wod-london/characters/alistair"
+    ref = "library:worlds/wod-london/characters/alistair"
     await characters.pin_tier(ref, "camp-1", ContextTier.LOCK_IN)
     scene = Scene(
         id="scene-1",
@@ -308,10 +308,10 @@ async def test_pin_tier_overrides_recommendation(
 
 
 async def test_drift_with_in_voice_recent(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
     await characters.create("wod-london", _character_data())
-    ref = "library:settings/wod-london/characters/alistair"
+    ref = "library:worlds/wod-london/characters/alistair"
 
     posts = [
         Post(
@@ -336,10 +336,10 @@ async def test_drift_with_in_voice_recent(characters: CharactersService, store: 
 async def test_drift_with_forbidden_phrase(
     characters: CharactersService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
     await characters.create("wod-london", _character_data())
-    ref = "library:settings/wod-london/characters/alistair"
+    ref = "library:worlds/wod-london/characters/alistair"
 
     posts = [
         Post(
@@ -362,10 +362,10 @@ async def test_drift_with_forbidden_phrase(
 async def test_drift_corrective_context_below_threshold(
     characters: CharactersService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
     await characters.create("wod-london", _character_data())
-    ref = "library:settings/wod-london/characters/alistair"
+    ref = "library:worlds/wod-london/characters/alistair"
 
     # No recent posts → drift 0 → empty corrective.
     await characters.check_drift(ref, "camp-1", recent_posts=[])
@@ -378,10 +378,10 @@ async def test_drift_corrective_context_below_threshold(
 
 
 async def test_compressed_views(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
     await characters.create("wod-london", _character_data())
-    ref = "library:settings/wod-london/characters/alistair"
+    ref = "library:worlds/wod-london/characters/alistair"
 
     full = await characters.get_full_card(ref, "camp-1")
     compressed = await characters.get_compressed_card(ref, "camp-1")
@@ -395,18 +395,18 @@ async def test_compressed_views(characters: CharactersService, store: StateStore
 
 
 # ---------------------------------------------------------------------------
-# Cross-setting variants
+# Cross-world variants
 # ---------------------------------------------------------------------------
 
 
-async def test_cross_setting_lookup(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
-    await _seed_setting(store, "wod-nyc")
+async def test_cross_world_lookup(characters: CharactersService, store: StateStore) -> None:
+    await _seed_world(store, "wod-london")
+    await _seed_world(store, "wod-nyc")
     await characters.create("wod-london", _character_data("alistair"))
     await characters.create("wod-nyc", _character_data("alistair"))
 
-    variants = await characters.cross_setting_lookup("alistair", exclude_setting="wod-london")
-    assert [v.setting_id for v in variants] == ["wod-nyc"]
+    variants = await characters.cross_world_lookup("alistair", exclude_world="wod-london")
+    assert [v.world_id for v in variants] == ["wod-nyc"]
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +419,7 @@ async def test_capabilities_empty_when_null_mechanics(
 ) -> None:
     await _bind_campaign(store, "camp-1", "wod-london")
     caps = await characters.capabilities_of(
-        "library:settings/wod-london/characters/alistair", "camp-1"
+        "library:worlds/wod-london/characters/alistair", "camp-1"
     )
     assert caps == []
 
@@ -432,8 +432,8 @@ async def test_capabilities_empty_when_null_mechanics(
 async def test_relationship_increment(characters: CharactersService, store: StateStore) -> None:
     await _bind_campaign(store, "camp-1", "wod-london")
     rel1 = await characters.update_relationship(
-        "library:settings/wod-london/characters/vivienne",
-        "library:settings/wod-london/characters/winifred",
+        "library:worlds/wod-london/characters/vivienne",
+        "library:worlds/wod-london/characters/winifred",
         "camp-1",
         delta={"affection": 3, "trust": 2},
         types=["sibling"],
@@ -442,8 +442,8 @@ async def test_relationship_increment(characters: CharactersService, store: Stat
     assert rel1["types"] == ["sibling"]
 
     rel2 = await characters.update_relationship(
-        "library:settings/wod-london/characters/vivienne",
-        "library:settings/wod-london/characters/winifred",
+        "library:worlds/wod-london/characters/vivienne",
+        "library:worlds/wod-london/characters/winifred",
         "camp-1",
         delta={"affection": -1},
     )
@@ -451,7 +451,7 @@ async def test_relationship_increment(characters: CharactersService, store: Stat
     assert rel2["state"]["trust"] == 2
 
     listed = await characters.get_relationships(
-        "library:settings/wod-london/characters/vivienne", "camp-1"
+        "library:worlds/wod-london/characters/vivienne", "camp-1"
     )
     assert len(listed) == 1
     assert listed[0]["state"]["affection"] == 2
@@ -465,7 +465,7 @@ async def test_relationship_increment(characters: CharactersService, store: Stat
 async def test_promote_emergent_to_library(
     characters: CharactersService, store: StateStore
 ) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
     await characters.create_emergent(
         "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
@@ -487,7 +487,7 @@ async def test_promote_emergent_to_library(
 
 
 async def test_import_sillytavern_v2(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     card = (
         b'{"spec":"chara_card_v2","data":{'
         b'"name":"vivienne","description":"A witty Toreador.",'
@@ -503,7 +503,7 @@ async def test_import_sillytavern_v2(characters: CharactersService, store: State
 
 
 async def test_import_plaintext(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     text = 'winifred\nA Tremere apprentice.\n"One does not simply leave the chantry."'
     result = await characters.import_plaintext(text, "wod-london")
     assert "winifred" in result.created
@@ -512,7 +512,7 @@ async def test_import_plaintext(characters: CharactersService, store: StateStore
 
 
 async def test_import_skip_existing(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await characters.create("wod-london", _character_data("vivienne", role=CharacterRole.PC))
 
     card = (
@@ -530,9 +530,9 @@ async def test_import_skip_existing(characters: CharactersService, store: StateS
 
 
 async def test_search_by_name(characters: CharactersService, store: StateStore) -> None:
-    await _seed_setting(store, "wod-london")
+    await _seed_world(store, "wod-london")
     await characters.create("wod-london", _character_data("alistair"))
     await characters.create("wod-london", _character_data("vivienne", role=CharacterRole.PC))
 
-    hits = await characters.search("char", setting_id="wod-london", scope="setting")
+    hits = await characters.search("char", world_id="wod-london", scope="world")
     assert {c.id for c in hits} == {"vivienne"}

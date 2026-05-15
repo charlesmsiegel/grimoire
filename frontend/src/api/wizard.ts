@@ -18,10 +18,10 @@ import {
   type PluginKind,
   type PluginManifest,
   type RegisteredModule,
-  type SettingMeta,
+  type WorldMeta,
 } from "./library";
 
-export interface SettingSummary {
+export interface WorldSummary {
   id: string;
   name?: string;
   description?: string | null;
@@ -68,7 +68,7 @@ export interface CharacterSummary {
   id: string;
   name?: string;
   role?: string | null;
-  setting_id?: string | null;
+  world_id?: string | null;
 }
 
 export interface CampaignSummaryPayload {
@@ -80,15 +80,15 @@ export interface CampaignSummaryPayload {
   image_preset_id?: string | null;
 }
 
-export interface SettingRefInput {
-  setting_id: string;
+export interface WorldRefInput {
+  world_id: string;
   priority: number;
   include: string[];
   track_latest: boolean;
 }
 
 export interface CompositionInput {
-  settings: SettingRefInput[];
+  worlds: WorldRefInput[];
   mechanics?: string | null;
   style_guide_id?: string | null;
   image_preset_id?: string | null;
@@ -109,7 +109,7 @@ function stringOrNull(v: unknown): string | null {
   return typeof v === "string" ? v : null;
 }
 
-function fromSettingMeta(s: SettingMeta): SettingSummary {
+function fromWorldMeta(s: WorldMeta): WorldSummary {
   return {
     id: s.id,
     name: s.name,
@@ -141,7 +141,7 @@ function fromCharacterEntity(e: LibraryEntity): CharacterSummary {
     id: e.id,
     name: e.name,
     role: stringOrNull(e.frontmatter?.role),
-    setting_id: e.setting_id,
+    world_id: e.world_id,
   };
 }
 
@@ -165,8 +165,8 @@ function fromPluginManifest(m: PluginManifest): PluginSummary[] {
   }));
 }
 
-export async function fetchSettings(): Promise<SettingSummary[]> {
-  return (await libraryApi.listSettings()).map(fromSettingMeta);
+export async function fetchWorlds(): Promise<WorldSummary[]> {
+  return (await libraryApi.listWorlds()).map(fromWorldMeta);
 }
 
 export async function fetchStyleGuides(): Promise<StyleGuideSummary[]> {
@@ -194,13 +194,13 @@ export async function rescanPlugins(): Promise<unknown> {
   return pluginsApi.rescan();
 }
 
-export async function fetchGreetings(settingId: string): Promise<GreetingSummary[]> {
-  const rows = (await libraryApi.listEntities(settingId, "greetings")) as Greeting[];
+export async function fetchGreetings(worldId: string): Promise<GreetingSummary[]> {
+  const rows = (await libraryApi.listEntities(worldId, "greetings")) as Greeting[];
   return rows.map(fromGreeting);
 }
 
-export async function fetchSettingCharacters(settingId: string): Promise<CharacterSummary[]> {
-  const rows = (await libraryApi.listEntities(settingId, "characters")) as LibraryEntity[];
+export async function fetchWorldCharacters(worldId: string): Promise<CharacterSummary[]> {
+  const rows = (await libraryApi.listEntities(worldId, "characters")) as LibraryEntity[];
   return rows.map(fromCharacterEntity);
 }
 

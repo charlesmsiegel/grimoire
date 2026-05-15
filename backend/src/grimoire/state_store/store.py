@@ -67,9 +67,9 @@ from grimoire.state_store.search import (
 )
 from grimoire.state_store.search import vector_search as _vector_search
 from grimoire.state_store.snapshots import (
-    remove_snapshots_for_setting,
+    remove_snapshots_for_world,
     upgrade_snapshots,
-    write_snapshots_for_setting,
+    write_snapshots_for_world,
 )
 from grimoire.storage import Database
 
@@ -100,7 +100,7 @@ def _new_id(prefix: str) -> str:
 
 @dataclass(frozen=True)
 class UpgradeReport:
-    setting_id: str
+    world_id: str
     diff: dict[str, dict]  # library_id -> {before: int, after: int}
 
     @property
@@ -173,7 +173,7 @@ class StateStore:
 
         before_payload: dict | None
         if target.exists():
-            if ref.kind in {"setting", "image_preset"}:
+            if ref.kind in {"world", "image_preset"}:
                 before_data = load_yaml(target) or {}
                 before_payload = {"frontmatter": before_data, "body": ""}
             else:
@@ -183,7 +183,7 @@ class StateStore:
             before_payload = None
 
         # Write the file.
-        if ref.kind in {"setting", "image_preset"}:
+        if ref.kind in {"world", "image_preset"}:
             write_yaml(target, frontmatter)
             body = ""
         else:
@@ -237,7 +237,7 @@ class StateStore:
         if not target.exists():
             raise NotFoundError(f"library file does not exist: {library_id}")
 
-        if ref.kind in {"setting", "image_preset"}:
+        if ref.kind in {"world", "image_preset"}:
             before_data = load_yaml(target) or {}
             before_payload = {"frontmatter": before_data, "body": ""}
         else:
@@ -278,9 +278,9 @@ class StateStore:
         turn_id: str | None = None,
     ) -> Path:
         ref = parse_library_id(library_id)
-        if ref.setting_id is None:
-            raise InvalidRefError("overrides are only valid for setting-scoped library entities")
-        target = override_path(self.data_root, campaign_id, ref.setting_id, ref.kind, ref.asset_id)
+        if ref.world_id is None:
+            raise InvalidRefError("overrides are only valid for world-scoped library entities")
+        target = override_path(self.data_root, campaign_id, ref.world_id, ref.kind, ref.asset_id)
         before_payload: dict | None = None
         if target.exists():
             before_payload = load_yaml(target) or {}
@@ -470,31 +470,31 @@ class StateStore:
             return None
         return _library_row_to_dict(row)
 
-    async def list_library_in_setting(self, setting_id: str, kind: str | None = None) -> list[dict]:
+    async def list_library_in_world(self, world_id: str, kind: str | None = None) -> list[dict]:
         if kind is None:
             rows = await self.db.fetchall(
-                "SELECT * FROM library_index WHERE setting_id = ? ORDER BY name",
-                (setting_id,),
+                "SELECT * FROM library_index WHERE world_id = ? ORDER BY name",
+                (world_id,),
             )
         else:
             rows = await self.db.fetchall(
-                "SELECT * FROM library_index WHERE setting_id = ? AND kind = ? ORDER BY name",
-                (setting_id, kind),
+                "SELECT * FROM library_index WHERE world_id = ? AND kind = ? ORDER BY name",
+                (world_id, kind),
             )
         return [_library_row_to_dict(row) for row in rows]
 
     async def variants_of(self, asset_id: str, kind: str) -> list[dict]:
         rows = await self.db.fetchall(
-            "SELECT * FROM library_index WHERE asset_id = ? AND kind = ? ORDER BY setting_id",
+            "SELECT * FROM library_index WHERE asset_id = ? AND kind = ? ORDER BY world_id",
             (asset_id, kind),
         )
         return [_library_row_to_dict(row) for row in rows]
 
     async def get_override(self, campaign_id: str, library_id: str) -> dict | None:
         ref = parse_library_id(library_id)
-        if ref.setting_id is None:
+        if ref.world_id is None:
             return None
-        target = override_path(self.data_root, campaign_id, ref.setting_id, ref.kind, ref.asset_id)
+        target = override_path(self.data_root, campaign_id, ref.world_id, ref.kind, ref.asset_id)
         if not target.exists():
             return None
         return load_yaml(target) or {}
@@ -560,14 +560,14 @@ class StateStore:
         branch_id: str,
         kind: str,
         asset_id: str,
-        setting_id: str | None = None,
+        world_id: str | None = None,
     ) -> dict | None:
         """Cascade: campaign override → snapshot (pinned) / live index → None.
 
-        ``setting_id=None`` means try campaign emergent first (the entity is
-        campaign-local). Pinned vs live is determined per setting ref.
+        ``world_id=None`` means try campaign emergent first (the entity is
+        campaign-local). Pinned vs live is determined per world ref.
         """
-        if setting_id is None:
+        if world_id is None:
             emergent = await self.get_emergent(campaign_id, kind, asset_id)
             if emergent is not None:
                 return {
@@ -577,14 +577,14 @@ class StateStore:
                 }
             return None
 
-        library_id = make_library_id(setting_id, kind, asset_id)
+        library_id = make_library_id(world_id, kind, asset_id)
 
         override = await self.get_override(campaign_id, library_id)
         if override is not None:
-            base = await self._resolve_setting_base(
+            base = await self._resolve_world_base(
                 campaign_id=campaign_id,
                 branch_id=branch_id,
-                setting_id=setting_id,
+                world_id=world_id,
                 library_id=library_id,
             )
             merged = dict(base or {})
@@ -595,28 +595,28 @@ class StateStore:
             merged["override"] = override
             return merged
 
-        return await self._resolve_setting_base(
+        return await self._resolve_world_base(
             campaign_id=campaign_id,
             branch_id=branch_id,
-            setting_id=setting_id,
+            world_id=world_id,
             library_id=library_id,
         )
 
-    async def _resolve_setting_base(
+    async def _resolve_world_base(
         self,
         *,
         campaign_id: str,
         branch_id: str,
-        setting_id: str,
+        world_id: str,
         library_id: str,
     ) -> dict | None:
         """Find the base data for a library entity, snapshot-first when pinned."""
         ref_row = await self.db.fetchone(
             """
-            SELECT track_latest FROM campaign_setting_refs
-            WHERE campaign_id = ? AND setting_id = ?
+            SELECT track_latest FROM campaign_world_refs
+            WHERE campaign_id = ? AND world_id = ?
             """,
-            (campaign_id, setting_id),
+            (campaign_id, world_id),
         )
         prefer_snapshot = bool(ref_row and not int(ref_row["track_latest"]))
 
@@ -649,7 +649,7 @@ class StateStore:
         }
 
     # ------------------------------------------------------------------
-    # Composition (setting refs + PCs)
+    # Composition (world refs + PCs)
     # ------------------------------------------------------------------
 
     async def upsert_campaign(
@@ -713,11 +713,11 @@ class StateStore:
             (f"{campaign_id}:main", campaign_id, _seed_for("main"), _now_iso()),
         )
 
-    async def upsert_setting_ref(
+    async def upsert_world_ref(
         self,
         *,
         campaign_id: str,
-        setting_id: str,
+        world_id: str,
         priority: int,
         include: list[str] | None,
         track_latest: bool,
@@ -725,20 +725,20 @@ class StateStore:
     ) -> None:
         if bound_at_version is None:
             row = await self.db.fetchone(
-                "SELECT MAX(version) AS v FROM library_index WHERE setting_id = ?",
-                (setting_id,),
+                "SELECT MAX(version) AS v FROM library_index WHERE world_id = ?",
+                (world_id,),
             )
             bound_at_version = int(row["v"] or 0) if row else 0
 
         async with self._txn() as conn:
             await conn.execute(
                 """
-                INSERT INTO campaign_setting_refs (
-                  campaign_id, setting_id, priority, include, bound_at_version,
+                INSERT INTO campaign_world_refs (
+                  campaign_id, world_id, priority, include, bound_at_version,
                   track_latest, bound_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(campaign_id, setting_id) DO UPDATE SET
+                ON CONFLICT(campaign_id, world_id) DO UPDATE SET
                   priority = excluded.priority,
                   include = excluded.include,
                   bound_at_version = excluded.bound_at_version,
@@ -747,7 +747,7 @@ class StateStore:
                 """,
                 (
                     campaign_id,
-                    setting_id,
+                    world_id,
                     priority,
                     json.dumps(list(include), sort_keys=True) if include is not None else None,
                     bound_at_version,
@@ -756,43 +756,43 @@ class StateStore:
                 ),
             )
             if not track_latest:
-                await write_snapshots_for_setting(
+                await write_snapshots_for_world(
                     conn,
                     campaign_id=campaign_id,
                     branch_id=f"{campaign_id}:main",
-                    setting_id=setting_id,
+                    world_id=world_id,
                     include=list(include) if include else None,
                 )
             else:
-                await remove_snapshots_for_setting(
+                await remove_snapshots_for_world(
                     conn,
                     campaign_id=campaign_id,
                     branch_id=f"{campaign_id}:main",
-                    setting_id=setting_id,
+                    world_id=world_id,
                 )
 
-    async def upgrade_setting_ref(
+    async def upgrade_world_ref(
         self,
         *,
         campaign_id: str,
-        setting_id: str,
+        world_id: str,
     ) -> UpgradeReport:
         ref_row = await self.db.fetchone(
             """
-            SELECT include, track_latest FROM campaign_setting_refs
-            WHERE campaign_id = ? AND setting_id = ?
+            SELECT include, track_latest FROM campaign_world_refs
+            WHERE campaign_id = ? AND world_id = ?
             """,
-            (campaign_id, setting_id),
+            (campaign_id, world_id),
         )
         if ref_row is None:
-            raise NotFoundError(f"campaign {campaign_id!r} does not bind setting {setting_id!r}")
+            raise NotFoundError(f"campaign {campaign_id!r} does not bind world {world_id!r}")
         if int(ref_row["track_latest"]):
-            return UpgradeReport(setting_id=setting_id, diff={})
+            return UpgradeReport(world_id=world_id, diff={})
         include = _json_loads(ref_row["include"]) or None
 
         max_row = await self.db.fetchone(
-            "SELECT MAX(version) AS v FROM library_index WHERE setting_id = ?",
-            (setting_id,),
+            "SELECT MAX(version) AS v FROM library_index WHERE world_id = ?",
+            (world_id,),
         )
         new_max = int(max_row["v"] or 0) if max_row else 0
         async with self._txn() as conn:
@@ -800,18 +800,18 @@ class StateStore:
                 conn,
                 campaign_id=campaign_id,
                 branch_id=f"{campaign_id}:main",
-                setting_id=setting_id,
+                world_id=world_id,
                 include=include,
             )
             await conn.execute(
                 """
-                UPDATE campaign_setting_refs
+                UPDATE campaign_world_refs
                 SET bound_at_version = ?, bound_at = ?
-                WHERE campaign_id = ? AND setting_id = ?
+                WHERE campaign_id = ? AND world_id = ?
                 """,
-                (new_max, _now_iso(), campaign_id, setting_id),
+                (new_max, _now_iso(), campaign_id, world_id),
             )
-        return UpgradeReport(setting_id=setting_id, diff=diff)
+        return UpgradeReport(world_id=world_id, diff=diff)
 
     async def add_pc(
         self,
@@ -867,15 +867,15 @@ class StateStore:
         )
         return [dict(row) for row in rows]
 
-    async def list_setting_refs(self, campaign_id: str) -> list[dict]:
+    async def list_world_refs(self, campaign_id: str) -> list[dict]:
         rows = await self.db.fetchall(
-            "SELECT * FROM campaign_setting_refs WHERE campaign_id = ? ORDER BY priority",
+            "SELECT * FROM campaign_world_refs WHERE campaign_id = ? ORDER BY priority",
             (campaign_id,),
         )
         return [
             {
                 "campaign_id": row["campaign_id"],
-                "setting_id": row["setting_id"],
+                "world_id": row["world_id"],
                 "priority": int(row["priority"]),
                 # Preserve None ("missing => include all kinds") vs [] ("include
                 # nothing"). The library service distinguishes these now.
@@ -1302,7 +1302,7 @@ class StateStore:
 def _library_row_to_dict(row: aiosqlite.Row) -> dict:
     return {
         "id": row["id"],
-        "setting_id": row["setting_id"],
+        "world_id": row["world_id"],
         "kind": row["kind"],
         "asset_id": row["asset_id"],
         "name": row["name"],

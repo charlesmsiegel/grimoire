@@ -15,29 +15,29 @@ def _root(tmp_path: Path) -> Path:
 
 def test_library_entity_path(tmp_path: Path) -> None:
     root = _root(tmp_path)
-    target = root / "library" / "settings" / "wod-london" / "characters" / "winifred.md"
+    target = root / "library" / "worlds" / "wod-london" / "characters" / "winifred.md"
     target.parent.mkdir(parents=True)
     target.touch()
     w = classify_path(root, target)
     assert w is not None
     assert w.scope == "library"
     assert w.kind == "library_entity"
-    assert w.library_id == "settings/wod-london/characters/winifred"
+    assert w.library_id == "worlds/wod-london/characters/winifred"
     assert w.entity_kind == "character"
-    assert w.setting_id == "wod-london"
+    assert w.world_id == "wod-london"
     assert w.event_type == "library_file_changed"
 
 
-def test_library_setting_yaml(tmp_path: Path) -> None:
+def test_library_world_yaml(tmp_path: Path) -> None:
     root = _root(tmp_path)
-    target = root / "library" / "settings" / "wod-london" / "setting.yaml"
+    target = root / "library" / "worlds" / "wod-london" / "world.yaml"
     target.parent.mkdir(parents=True)
     target.touch()
     w = classify_path(root, target)
     assert w is not None
-    assert w.kind == "library_setting"
-    assert w.library_id == "settings/wod-london/setting"
-    assert w.setting_id == "wod-london"
+    assert w.kind == "library_world"
+    assert w.library_id == "worlds/wod-london/world"
+    assert w.world_id == "wod-london"
 
 
 def test_style_guide_and_image_preset(tmp_path: Path) -> None:
@@ -98,7 +98,7 @@ def test_override_emergent_sheet_image(tmp_path: Path) -> None:
         / "campaigns"
         / "c1"
         / "overrides"
-        / "settings"
+        / "worlds"
         / "wod-london"
         / "characters"
         / "winifred.yaml"
@@ -119,7 +119,7 @@ def test_override_emergent_sheet_image(tmp_path: Path) -> None:
     assert w is not None and w.kind == "override"
     assert w.event_type == "campaign_file_changed"
     assert w.content_index_id.endswith("winifred")
-    assert w.library_id == "settings/wod-london/characters/winifred"
+    assert w.library_id == "worlds/wod-london/characters/winifred"
 
     w = classify_path(root, emergent)
     assert w is not None and w.kind == "emergent"
@@ -157,7 +157,7 @@ def test_paths_outside_roots_return_none(tmp_path: Path) -> None:
 
 def test_unknown_filename_returns_none(tmp_path: Path) -> None:
     root = _root(tmp_path)
-    odd = root / "library" / "settings" / "wod-london" / "characters" / "notes.txt"
+    odd = root / "library" / "worlds" / "wod-london" / "characters" / "notes.txt"
     odd.parent.mkdir(parents=True)
     odd.touch()
     assert classify_path(root, odd) is None

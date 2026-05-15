@@ -1,7 +1,7 @@
 /**
  * Composition view (spec 14 §Composition view).
  *
- * Editable list of setting refs (priority, include filters, track_latest) +
+ * Editable list of world refs (priority, include filters, track_latest) +
  * the mechanics / style guide / image preset ids. Reorders mutate locally and
  * PUT the new composition to the backend; the upgrade-available banner
  * surfaces refs that drifted from their bound version and offers a one-click
@@ -12,7 +12,7 @@ import { useCallback, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { viewsApi } from "../../api/views";
-import type { Composition, SettingRef, SettingMeta } from "../../api/types";
+import type { Composition, WorldRef, WorldMeta } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { Loading } from "./common";
 
@@ -21,7 +21,7 @@ const KINDS = ["characters", "items", "locations", "lore", "factions", "greeting
 export function CompositionView() {
   const { campaignId = "" } = useParams();
   const composition = useApi(() => viewsApi.getComposition(campaignId), [campaignId]);
-  const settings = useApi(() => viewsApi.listSettings(), []);
+  const worlds = useApi(() => viewsApi.listWorlds(), []);
 
   return (
     <section className="route campaign-composition" aria-labelledby="comp-heading">
@@ -30,9 +30,9 @@ export function CompositionView() {
       </header>
       <Loading state={composition}>
         {(comp) => (
-          <Loading state={settings}>
-            {(settingsList) => (
-              <CompositionEditor campaignId={campaignId} initial={comp} catalog={settingsList} />
+          <Loading state={worlds}>
+            {(worldsList) => (
+              <CompositionEditor campaignId={campaignId} initial={comp} catalog={worldsList} />
             )}
           </Loading>
         )}
@@ -44,7 +44,7 @@ export function CompositionView() {
 interface EditorProps {
   campaignId: string;
   initial: Composition;
-  catalog: SettingMeta[];
+  catalog: WorldMeta[];
 }
 
 function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
@@ -54,14 +54,14 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
   const [error, setError] = useState<string | null>(null);
 
   const catalogById = new Map(catalog.map((s) => [s.id, s]));
-  const upgrades = collectUpgrades(comp.settings, catalogById);
+  const upgrades = collectUpgrades(comp.worlds, catalogById);
 
   const mutate = useCallback((next: Composition) => {
     setComp(next);
     setDirty(true);
   }, []);
 
-  const reorderedRefs = [...comp.settings].sort((a, b) => a.priority - b.priority);
+  const reorderedRefs = [...comp.worlds].sort((a, b) => a.priority - b.priority);
 
   const move = (idx: number, dir: -1 | 1) => {
     const target = idx + dir;
@@ -73,32 +73,32 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
     swap[idx] = b;
     swap[target] = a;
     const renumbered = swap.map((r, i) => ({ ...r, priority: i + 1 }));
-    mutate({ ...comp, settings: renumbered });
+    mutate({ ...comp, worlds: renumbered });
   };
 
-  const remove = (settingId: string) => {
-    const next = comp.settings.filter((r) => r.setting_id !== settingId);
-    mutate({ ...comp, settings: renumber(next) });
+  const remove = (worldId: string) => {
+    const next = comp.worlds.filter((r) => r.world_id !== worldId);
+    mutate({ ...comp, worlds: renumber(next) });
   };
 
-  const update = (settingId: string, patch: Partial<SettingRef>) => {
+  const update = (worldId: string, patch: Partial<WorldRef>) => {
     mutate({
       ...comp,
-      settings: comp.settings.map((r) => (r.setting_id === settingId ? { ...r, ...patch } : r)),
+      worlds: comp.worlds.map((r) => (r.world_id === worldId ? { ...r, ...patch } : r)),
     });
   };
 
-  const addRef = (settingId: string) => {
-    if (comp.settings.some((r) => r.setting_id === settingId)) return;
-    const meta = catalogById.get(settingId);
-    const next: SettingRef = {
-      setting_id: settingId,
-      priority: comp.settings.length + 1,
+  const addRef = (worldId: string) => {
+    if (comp.worlds.some((r) => r.world_id === worldId)) return;
+    const meta = catalogById.get(worldId);
+    const next: WorldRef = {
+      world_id: worldId,
+      priority: comp.worlds.length + 1,
       include: [],
       bound_at_version: meta?.version ?? 0,
       track_latest: false,
     };
-    mutate({ ...comp, settings: [...comp.settings, next] });
+    mutate({ ...comp, worlds: [...comp.worlds, next] });
   };
 
   const save = async () => {
@@ -115,10 +115,10 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
     }
   };
 
-  const upgrade = async (settingId: string) => {
+  const upgrade = async (worldId: string) => {
     setError(null);
     try {
-      await viewsApi.upgradeRef(campaignId, settingId);
+      await viewsApi.upgradeRef(campaignId, worldId);
       const refreshed = await viewsApi.getComposition(campaignId);
       setComp(refreshed);
       setDirty(false);
@@ -127,7 +127,7 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
     }
   };
 
-  const addable = catalog.filter((s) => !comp.settings.some((r) => r.setting_id === s.id));
+  const addable = catalog.filter((s) => !comp.worlds.some((r) => r.world_id === s.id));
 
   return (
     <div className="composition-editor">
@@ -136,12 +136,12 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
           <h3>Upgrade available</h3>
           <ul>
             {upgrades.map((u) => (
-              <li key={u.setting_id}>
-                <strong>{u.setting_id}</strong> has new version {u.latest} (currently v{u.bound}).
+              <li key={u.world_id}>
+                <strong>{u.world_id}</strong> has new version {u.latest} (currently v{u.bound}).
                 <button type="button" disabled title="Diff preview ships in a follow-up task.">
                   Preview diff
                 </button>
-                <button type="button" onClick={() => upgrade(u.setting_id)}>
+                <button type="button" onClick={() => upgrade(u.world_id)}>
                   Upgrade
                 </button>
               </li>
@@ -151,13 +151,13 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
       )}
 
       <section>
-        <h3>Settings (priority order)</h3>
-        <ol className="setting-refs">
+        <h3>Worlds (priority order)</h3>
+        <ol className="world-refs">
           {reorderedRefs.map((ref, idx) => (
-            <li key={ref.setting_id} className="setting-ref">
-              <div className="setting-ref-head">
+            <li key={ref.world_id} className="world-ref">
+              <div className="world-ref-head">
                 <span className="priority">{idx + 1}.</span>
-                <strong>{ref.setting_id}</strong>
+                <strong>{ref.world_id}</strong>
                 <span className="muted">
                   v{ref.bound_at_version}
                   {ref.track_latest ? " · track_latest" : " · pinned"}
@@ -179,18 +179,18 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
                   >
                     ▼
                   </button>
-                  <button type="button" aria-label="Remove" onClick={() => remove(ref.setting_id)}>
+                  <button type="button" aria-label="Remove" onClick={() => remove(ref.world_id)}>
                     ⨯
                   </button>
                 </div>
               </div>
-              <IncludeEditor settingRef={ref} onChange={(patch) => update(ref.setting_id, patch)} />
+              <IncludeEditor worldRef={ref} onChange={(patch) => update(ref.world_id, patch)} />
             </li>
           ))}
         </ol>
         {addable.length > 0 ? (
           <label className="field">
-            <span>Add setting ref</span>
+            <span>Add world ref</span>
             <select
               value=""
               onChange={(e) => {
@@ -206,7 +206,7 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
             </select>
           </label>
         ) : (
-          <p className="muted">All known settings are already in this composition.</p>
+          <p className="muted">All known worlds are already in this composition.</p>
         )}
       </section>
 
@@ -264,21 +264,21 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
 }
 
 function IncludeEditor({
-  settingRef,
+  worldRef,
   onChange,
 }: {
-  settingRef: SettingRef;
-  onChange: (patch: Partial<SettingRef>) => void;
+  worldRef: WorldRef;
+  onChange: (patch: Partial<WorldRef>) => void;
 }) {
-  const all = settingRef.include.length === 0;
+  const all = worldRef.include.length === 0;
   const toggle = (kind: string) => {
     if (all) {
       onChange({ include: KINDS.filter((k) => k !== kind) });
       return;
     }
-    const next = settingRef.include.includes(kind)
-      ? settingRef.include.filter((k) => k !== kind)
-      : [...settingRef.include, kind];
+    const next = worldRef.include.includes(kind)
+      ? worldRef.include.filter((k) => k !== kind)
+      : [...worldRef.include, kind];
     onChange({ include: next });
   };
   return (
@@ -298,7 +298,7 @@ function IncludeEditor({
               <label className="field-inline">
                 <input
                   type="checkbox"
-                  checked={settingRef.include.includes(k)}
+                  checked={worldRef.include.includes(k)}
                   onChange={() => toggle(k)}
                 />
                 {k}
@@ -310,7 +310,7 @@ function IncludeEditor({
       <label className="field-inline">
         <input
           type="checkbox"
-          checked={settingRef.track_latest}
+          checked={worldRef.track_latest}
           onChange={(e) => onChange({ track_latest: e.target.checked })}
         />
         track_latest (auto-pull library updates)
@@ -319,25 +319,25 @@ function IncludeEditor({
   );
 }
 
-function renumber(refs: SettingRef[]): SettingRef[] {
+function renumber(refs: WorldRef[]): WorldRef[] {
   return refs.map((r, i) => ({ ...r, priority: i + 1 }));
 }
 
 interface UpgradeHint {
-  setting_id: string;
+  world_id: string;
   bound: number;
   latest: number;
 }
 
-function collectUpgrades(refs: SettingRef[], catalogById: Map<string, SettingMeta>): UpgradeHint[] {
+function collectUpgrades(refs: WorldRef[], catalogById: Map<string, WorldMeta>): UpgradeHint[] {
   const out: UpgradeHint[] = [];
   for (const ref of refs) {
     if (ref.track_latest) continue;
-    const meta = catalogById.get(ref.setting_id);
+    const meta = catalogById.get(ref.world_id);
     if (!meta) continue;
     if (meta.version > ref.bound_at_version) {
       out.push({
-        setting_id: ref.setting_id,
+        world_id: ref.world_id,
         bound: ref.bound_at_version,
         latest: meta.version,
       });

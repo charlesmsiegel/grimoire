@@ -25,9 +25,9 @@ from grimoire.api.deps import (
     MechanicsDep,
     OrchestratorDep,
     ScenesDep,
-    SettingDep,
     StateStoreDep,
     TimeEngineDep,
+    WorldDep,
 )
 from grimoire.api.util import map_lookup_errors, to_payload
 
@@ -39,18 +39,18 @@ router = APIRouter(prefix="/campaigns")
 # --------------------------------------------------------------------------- #
 
 
-class SettingRefPayload(BaseModel):
-    setting_id: str
+class WorldRefPayload(BaseModel):
+    world_id: str
     priority: int = 1
     # None / missing means "include every kind"; an explicit list (even empty)
-    # is treated literally — `[]` excludes everything from this setting.
+    # is treated literally — `[]` excludes everything from this world.
     include: list[str] | None = None
     track_latest: bool = False
     bound_at_version: int | None = None
 
 
 class CompositionPayload(BaseModel):
-    settings: list[SettingRefPayload] = Field(default_factory=list)
+    worlds: list[WorldRefPayload] = Field(default_factory=list)
     mechanics: str | None = None
     style_guide_id: str | None = None
     image_preset_id: str | None = None
@@ -139,7 +139,7 @@ class ReviewUpdatePayload(BaseModel):
 
 
 class PromotePayload(BaseModel):
-    target_setting_id: str
+    target_world_id: str
     source: str = "user"
 
 
@@ -177,10 +177,10 @@ async def create_campaign(
             greeting_id=payload.greeting_id,
             tags=payload.tags,
         )
-        for ref in comp.settings:
-            await state_store.upsert_setting_ref(
+        for ref in comp.worlds:
+            await state_store.upsert_world_ref(
                 campaign_id=payload.id,
-                setting_id=ref.setting_id,
+                world_id=ref.world_id,
                 priority=ref.priority,
                 include=list(ref.include) if ref.include is not None else None,
                 track_latest=ref.track_latest,
@@ -274,11 +274,11 @@ async def set_composition(
     payload: CompositionPayload,
     library: LibraryDep,
 ) -> Any:
-    from grimoire.types.composition import Composition, SettingRef
+    from grimoire.types.composition import Composition, WorldRef
 
     try:
         comp = Composition(
-            settings=[SettingRef(**ref.model_dump()) for ref in payload.settings],
+            worlds=[WorldRef(**ref.model_dump()) for ref in payload.worlds],
             mechanics=payload.mechanics,
             style_guide_id=payload.style_guide_id,
             image_preset_id=payload.image_preset_id,
@@ -292,15 +292,15 @@ async def set_composition(
 
 
 @router.post("/{campaign_id}/composition/refs", status_code=201)
-async def add_setting_ref(
+async def add_world_ref(
     campaign_id: str,
-    ref: SettingRefPayload,
+    ref: WorldRefPayload,
     state_store: StateStoreDep,
 ) -> Any:
     try:
-        await state_store.upsert_setting_ref(
+        await state_store.upsert_world_ref(
             campaign_id=campaign_id,
-            setting_id=ref.setting_id,
+            world_id=ref.world_id,
             priority=ref.priority,
             include=list(ref.include) if ref.include is not None else None,
             track_latest=ref.track_latest,
@@ -311,26 +311,26 @@ async def add_setting_ref(
     return {"ok": True}
 
 
-@router.delete("/{campaign_id}/composition/refs/{setting_id}", status_code=204)
-async def remove_setting_ref(
+@router.delete("/{campaign_id}/composition/refs/{world_id}", status_code=204)
+async def remove_world_ref(
     campaign_id: str,
-    setting_id: str,
+    world_id: str,
     state_store: StateStoreDep,
 ) -> None:
     await state_store.db.execute(
-        "DELETE FROM campaign_setting_refs WHERE campaign_id = ? AND setting_id = ?",
-        (campaign_id, setting_id),
+        "DELETE FROM campaign_world_refs WHERE campaign_id = ? AND world_id = ?",
+        (campaign_id, world_id),
     )
 
 
-@router.post("/{campaign_id}/composition/refs/{setting_id}/upgrade")
-async def upgrade_setting_ref(
+@router.post("/{campaign_id}/composition/refs/{world_id}/upgrade")
+async def upgrade_world_ref(
     campaign_id: str,
-    setting_id: str,
+    world_id: str,
     library: LibraryDep,
 ) -> Any:
     try:
-        return to_payload(await library.upgrade_setting_ref(campaign_id, setting_id))
+        return to_payload(await library.upgrade_world_ref(campaign_id, world_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
@@ -587,30 +587,30 @@ async def seed_first_scene(
         )
 
     composition = await library.get_composition(campaign_id)
-    setting_refs = getattr(composition, "settings", []) or []
+    world_refs = getattr(composition, "worlds", []) or []
 
     greeting = None
-    for ref in setting_refs:
-        setting_id = getattr(ref, "setting_id", None) or ref.get("setting_id")  # type: ignore[union-attr]
-        if not setting_id:
+    for ref in world_refs:
+        world_id = getattr(ref, "world_id", None) or ref.get("world_id")  # type: ignore[union-attr]
+        if not world_id:
             continue
         try:
-            greeting = await library.get_greeting(setting_id, greeting_id)
+            greeting = await library.get_greeting(world_id, greeting_id)
             break
         except Exception:
             continue
     if greeting is None:
         raise HTTPException(
             status_code=404,
-            detail=f"greeting {greeting_id!r} not found in any setting on campaign {campaign_id!r}",
+            detail=f"greeting {greeting_id!r} not found in any world on campaign {campaign_id!r}",
         )
 
     pc_rows = await state_store.list_pcs(campaign_id)
     pc_refs = [r["character_ref"] for r in pc_rows if r.get("character_ref")]
 
-    # greeting.starting_time is an ISO string in the setting's calendar;
+    # greeting.starting_time is an ISO string in the world's calendar;
     # SceneInit.in_game_start wants InGameTime (a wrapped datetime). The
-    # mapping isn't always 1:1 (setting calendars can be non-Gregorian),
+    # mapping isn't always 1:1 (world calendars can be non-Gregorian),
     # so leave it None for the seed and let the orchestrator's time
     # engine attach a moment when the first turn runs.
     init = SceneInit(
@@ -645,38 +645,38 @@ async def list_characters(campaign_id: str, characters: CharactersDep) -> Any:
         raise map_lookup_errors(exc) from exc
 
 
-async def _list_kind(campaign_id: str, kind: str, setting: Any) -> Any:
-    return to_payload(await setting.list_for_campaign(campaign_id, kind))
+async def _list_kind(campaign_id: str, kind: str, world: Any) -> Any:
+    return to_payload(await world.list_for_campaign(campaign_id, kind))
 
 
 @router.get("/{campaign_id}/items")
-async def list_items(campaign_id: str, setting: SettingDep) -> Any:
+async def list_items(campaign_id: str, world: WorldDep) -> Any:
     try:
-        return await _list_kind(campaign_id, "item", setting)
+        return await _list_kind(campaign_id, "item", world)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.get("/{campaign_id}/locations")
-async def list_locations(campaign_id: str, setting: SettingDep) -> Any:
+async def list_locations(campaign_id: str, world: WorldDep) -> Any:
     try:
-        return await _list_kind(campaign_id, "location", setting)
+        return await _list_kind(campaign_id, "location", world)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.get("/{campaign_id}/lore")
-async def list_lore(campaign_id: str, setting: SettingDep) -> Any:
+async def list_lore(campaign_id: str, world: WorldDep) -> Any:
     try:
-        return await _list_kind(campaign_id, "lore", setting)
+        return await _list_kind(campaign_id, "lore", world)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
 
 @router.get("/{campaign_id}/factions")
-async def list_factions(campaign_id: str, setting: SettingDep) -> Any:
+async def list_factions(campaign_id: str, world: WorldDep) -> Any:
     try:
-        return await _list_kind(campaign_id, "faction", setting)
+        return await _list_kind(campaign_id, "faction", world)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
@@ -693,7 +693,7 @@ async def promote_character(
             await characters.promote_to_library(
                 campaign_id,
                 entity_id,
-                payload.target_setting_id,
+                payload.target_world_id,
                 source=payload.source,
             )
         )
@@ -707,17 +707,17 @@ async def promote_entity(
     kind: str,
     entity_id: str,
     payload: PromotePayload,
-    setting: SettingDep,
+    world: WorldDep,
 ) -> Any:
     if kind == "characters":
         raise HTTPException(status_code=404, detail="use /characters/{id}/promote-to-library")
     try:
         return to_payload(
-            await setting.promote_to_library(
+            await world.promote_to_library(
                 campaign_id,
                 kind.rstrip("s"),
                 entity_id,
-                payload.target_setting_id,
+                payload.target_world_id,
                 source=payload.source,
             )
         )

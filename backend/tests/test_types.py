@@ -23,10 +23,10 @@ def test_package_exports_are_resolvable() -> None:
 
 
 def test_entity_ref_parse_library_character() -> None:
-    ref = gt.EntityRef.parse("library:settings/wod-london/characters/alistair-hyde-smythe")
+    ref = gt.EntityRef.parse("library:worlds/wod-london/characters/alistair-hyde-smythe")
     assert ref.scope is gt.Scope.LIBRARY
     assert ref.kind is gt.EntityKind.CHARACTER
-    assert ref.setting_id == "wod-london"
+    assert ref.world_id == "wod-london"
     assert ref.asset_id == "alistair-hyde-smythe"
 
 
@@ -47,9 +47,9 @@ def test_scope_and_enums_are_str_enums() -> None:
 
 def test_composition_round_trip() -> None:
     comp = gt.Composition(
-        settings=[
-            gt.SettingRef(
-                setting_id="wod-london",
+        worlds=[
+            gt.WorldRef(
+                world_id="wod-london",
                 priority=1,
                 include=["characters", "locations"],
                 bound_at_version=7,
@@ -59,7 +59,7 @@ def test_composition_round_trip() -> None:
         mechanics="wod-mechanics",
         style_guide_id="gothic-horror",
     )
-    assert comp.settings[0].setting_id == "wod-london"
+    assert comp.worlds[0].world_id == "wod-london"
     assert comp.mechanics == "wod-mechanics"
 
 
@@ -191,7 +191,7 @@ def test_protocols_module_exposes_module_protocols() -> None:
         "StateStoreProtocol",
         "ExtractorProtocol",
         "LibraryProtocol",
-        "SettingProtocol",
+        "WorldProtocol",
         "CharactersProtocol",
         "SceneManagerProtocol",
         "ContinuityProtocol",
@@ -263,14 +263,14 @@ def test_resolved_entity_carries_source_chain() -> None:
     src = gt.ResolutionSource(
         layer=gt.ResolutionLayer.LIBRARY_SNAPSHOT,
         scope=gt.Scope.LIBRARY,
-        library_id="settings/wod-london/characters/alistair-hyde-smythe",
-        setting_id="wod-london",
+        library_id="worlds/wod-london/characters/alistair-hyde-smythe",
+        world_id="wod-london",
         version=7,
     )
     resolved = gt.ResolvedEntity(
         kind=gt.EntityKind.CHARACTER,
         asset_id="alistair-hyde-smythe",
-        setting_id="wod-london",
+        world_id="wod-london",
         name="Alistair Hyde-Smythe",
         frontmatter={"role": "pc"},
         body="...",
@@ -349,7 +349,7 @@ def test_turn_audit_nested_round_trip() -> None:
 
 
 def test_entity_ref_is_frozen_and_hashable() -> None:
-    ref = gt.EntityRef.parse("library:settings/wod-london/characters/alistair")
+    ref = gt.EntityRef.parse("library:worlds/wod-london/characters/alistair")
     assert hash(ref) == hash(ref)
     with pytest.raises((ValueError, TypeError)):
         ref.asset_id = "something-else"  # type: ignore[misc]
@@ -360,7 +360,7 @@ def test_composition_validates_field_types() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        gt.SettingRef(setting_id="x", priority="not-an-int", include=[])  # type: ignore[arg-type]
+        gt.WorldRef(world_id="x", priority="not-an-int", include=[])  # type: ignore[arg-type]
 
 
 def test_completion_chunk_round_trip_with_usage() -> None:

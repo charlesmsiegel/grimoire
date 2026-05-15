@@ -1,4 +1,4 @@
-"""YAML-only loading and writing for ``setting.yaml``, ``image-preset.yaml``,
+"""YAML-only loading and writing for ``world.yaml``, ``image-preset.yaml``,
 sheet files, ``campaign.yaml``, and scene sidecars.
 
 UTF-8 is enforced for all file I/O. ``yaml.safe_load`` / ``yaml.safe_dump``

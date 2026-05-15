@@ -34,11 +34,9 @@ from grimoire.continuity.protocols import Continuity
 from grimoire.continuity.types import InGameTime as ContinuityInGameTime
 from grimoire.event_bus import Event, EventBus
 from grimoire.mechanics.service import MechanicsService
-from grimoire.setting import SettingService
 from grimoire.state_store import StateStore
 from grimoire.types.characters import CharacterRole, ResolvedCharacter
 from grimoire.types.common import CampaignId, CharacterRef, Duration, EventId, InGameTime
-from grimoire.types.setting import SettingCalendar
 from grimoire.types.state import StateDelta
 from grimoire.types.time import (
     FactionTickSummary,
@@ -48,6 +46,8 @@ from grimoire.types.time import (
     TimeAdvanceResult,
     WeatherChange,
 )
+from grimoire.types.world import WorldCalendar
+from grimoire.world import WorldService
 
 from .config import TimeEngineConfig
 from .errors import InvalidSkipError, TimeNotSetError
@@ -155,7 +155,7 @@ def _to_continuity_time(when: InGameTime, epoch: datetime | None) -> ContinuityI
     """Convert a datetime-based InGameTime into Continuity's day-count form.
 
     Continuity (task #18) tracks aging in whole days from a campaign epoch;
-    the Time Engine works in datetimes. When a setting declares its own
+    the Time Engine works in datetimes. When a world declares its own
     epoch we anchor to it; otherwise the Unix epoch is fine because only
     deltas matter to Continuity.
     """
@@ -183,7 +183,7 @@ class TimeEngineService:
     """Spec 07 implementation.
 
     Construct with the shared :class:`StateStore`, the per-campaign helpers
-    (Setting, Characters, Mechanics) plus a Continuity instance, optionally
+    (World, Characters, Mechanics) plus a Continuity instance, optionally
     an :class:`EventBus` for ``time_advance``/``npc_tick_complete`` emission,
     and the two injectable callables for LLM-backed tick + digest generation.
     """
@@ -192,7 +192,7 @@ class TimeEngineService:
         self,
         *,
         store: StateStore,
-        setting: SettingService,
+        world: WorldService,
         characters: CharactersService,
         mechanics: MechanicsService,
         continuity: Continuity,
@@ -202,7 +202,7 @@ class TimeEngineService:
         digest_fn: DigestFn | None = None,
     ) -> None:
         self._store = store
-        self._setting = setting
+        self._world = world
         self._characters = characters
         self._mechanics = mechanics
         self._continuity = continuity
@@ -259,9 +259,9 @@ class TimeEngineService:
             (campaign_id, branch, when.moment.isoformat()),
         )
 
-    async def calendar(self, campaign_id: CampaignId) -> SettingCalendar:
-        """The active calendar for the campaign (highest-priority setting)."""
-        return await self._setting.calendar_for_campaign(campaign_id)
+    async def calendar(self, campaign_id: CampaignId) -> WorldCalendar:
+        """The active calendar for the campaign (highest-priority world)."""
+        return await self._world.calendar_for_campaign(campaign_id)
 
     # ------------------------------------------------------------------ #
     # Scheduled events
@@ -759,15 +759,15 @@ class TimeEngineService:
                 location_refs.append(c.location_ref)
         changes: list[WeatherChange] = []
         for ref in location_refs:
-            setting_id, asset_id = _split_location_ref(ref)
-            if not setting_id or not asset_id:
+            world_id, asset_id = _split_location_ref(ref)
+            if not world_id or not asset_id:
                 continue
             try:
-                w_before = await self._setting.weather_for(
-                    setting_id, asset_id, from_time, campaign_id
+                w_before = await self._world.weather_for(
+                    world_id, asset_id, from_time, campaign_id
                 )
-                w_after = await self._setting.weather_for(
-                    setting_id, asset_id, to_time, campaign_id
+                w_after = await self._world.weather_for(
+                    world_id, asset_id, to_time, campaign_id
                 )
             except Exception:  # pragma: no cover - defensive
                 logger.exception("weather lookup failed for %s", ref)
@@ -827,7 +827,7 @@ class TimeEngineService:
 
     async def _epoch_for(self, campaign_id: CampaignId) -> datetime | None:
         try:
-            cal = await self._setting.calendar_for_campaign(campaign_id)
+            cal = await self._world.calendar_for_campaign(campaign_id)
         except Exception:
             return None
         return cal.epoch
@@ -858,8 +858,8 @@ class TimeEngineService:
         return refs
 
     def _ref_from_resolved(self, r: ResolvedCharacter) -> str:
-        if r.character.setting_id:
-            return f"library:settings/{r.character.setting_id}/characters/{r.character.id}"
+        if r.character.world_id:
+            return f"library:worlds/{r.character.world_id}/characters/{r.character.id}"
         return f"campaign:emergent/character/{r.character.id}"
 
     async def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
@@ -922,14 +922,14 @@ def _npc_summary_from_payload(
 
 
 def _split_location_ref(ref: str) -> tuple[str | None, str | None]:
-    """``library:settings/<s>/locations/<id>`` → ``(s, id)``."""
+    """``library:worlds/<s>/locations/<id>`` → ``(s, id)``."""
     if not ref:
         return None, None
     if not ref.startswith("library:"):
         return None, None
     _, _, path = ref.partition("library:")
     parts = path.strip("/").split("/")
-    if len(parts) >= 4 and parts[0] == "settings" and parts[2] in {"locations", "location"}:
+    if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"locations", "location"}:
         return parts[1], parts[3]
     return None, None
 

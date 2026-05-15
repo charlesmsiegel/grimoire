@@ -19,12 +19,12 @@ import { VariantsPanel } from "./VariantsPanel";
 const CHARACTER_HIDDEN_KEYS = ["voice", "image", "name", "id"];
 
 export function EntityEditorView() {
-  const { settingId = "", kind = "characters", entityId = "" } = useParams();
+  const { worldId = "", kind = "characters", entityId = "" } = useParams();
   const singular = ENTITY_KIND_SINGULAR[kind] ?? kind;
 
   const { data, loading, error, reload } = useResource(
-    () => libraryApi.getEntity(settingId, kind, entityId),
-    [settingId, kind, entityId],
+    () => libraryApi.getEntity(worldId, kind, entityId),
+    [worldId, kind, entityId],
   );
 
   const isCharacter = singular === "character";
@@ -32,9 +32,9 @@ export function EntityEditorView() {
   return (
     <div className="library-section entity-editor">
       <p className="library-breadcrumb">
-        <Link to={`/library/settings/${encodeURIComponent(settingId)}`}>{settingId}</Link>
+        <Link to={`/library/worlds/${encodeURIComponent(worldId)}`}>{worldId}</Link>
         {" / "}
-        <Link to={`/library/settings/${encodeURIComponent(settingId)}/${kind}`}>{kind}</Link>
+        <Link to={`/library/worlds/${encodeURIComponent(worldId)}/${kind}`}>{kind}</Link>
         {" / "}
         {entityId}
       </p>
@@ -42,7 +42,7 @@ export function EntityEditorView() {
         {data && "frontmatter" in data && (
           <EntityEditorBody
             entity={data as LibraryEntity}
-            settingId={settingId}
+            worldId={worldId}
             kindPlural={kind}
             entityId={entityId}
             isCharacter={isCharacter}
@@ -59,7 +59,7 @@ export function EntityEditorView() {
 
 interface EditorBodyProps {
   entity: LibraryEntity;
-  settingId: string;
+  worldId: string;
   kindPlural: string;
   entityId: string;
   isCharacter: boolean;
@@ -75,7 +75,7 @@ const SUB_TABS = (isCharacter: boolean) => [
 
 function EntityEditorBody({
   entity,
-  settingId,
+  worldId,
   kindPlural,
   entityId,
   isCharacter,
@@ -98,8 +98,8 @@ function EntityEditorBody({
   }, [entity]);
 
   const dependents = useResource(
-    () => libraryApi.dependents(settingId, kindPlural, entityId),
-    [settingId, kindPlural, entityId],
+    () => libraryApi.dependents(worldId, kindPlural, entityId),
+    [worldId, kindPlural, entityId],
   );
 
   function patchFrontmatter(next: Frontmatter) {
@@ -111,7 +111,7 @@ function EntityEditorBody({
     setSaving(true);
     setSaveErr(null);
     try {
-      await libraryApi.updateEntity(settingId, kindPlural, entityId, {
+      await libraryApi.updateEntity(worldId, kindPlural, entityId, {
         frontmatter_patch: frontmatter,
         body,
       });
