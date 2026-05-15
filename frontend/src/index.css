@@ -4446,3 +4446,137 @@ button.primary:disabled {
   background: var(--danger-soft);
   border-color: var(--danger);
 }
+
+/* =============================================================
+   Home route
+   ============================================================= */
+
+.nav-brand-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  margin: calc(var(--space-1) * -1) calc(var(--space-2) * -1);
+  border-radius: var(--radius-sm);
+  color: inherit;
+  text-decoration: none;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.nav-brand-link:hover {
+  background: var(--bg-elev);
+  color: var(--fg-strong);
+}
+
+.nav-brand-link.active {
+  color: var(--fg-strong);
+}
+
+.nav-brand-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.home {
+  max-width: 72ch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.home-hero h2 {
+  font-family: var(--font-display);
+  font-size: 2.4rem;
+  letter-spacing: 0.02em;
+  margin: 0 0 var(--space-2);
+  color: var(--fg-strong);
+}
+
+.home-tagline {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--fg-muted);
+}
+
+.home-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  line-height: 1.6;
+}
+
+.home-body h3 {
+  margin: var(--space-2) 0 0;
+  font-size: 1.05rem;
+  color: var(--fg-strong);
+  letter-spacing: 0.02em;
+}
+
+.home-scopes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.home-scopes > div {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-elev);
+  padding: var(--space-3) var(--space-4);
+}
+
+.home-scopes dt {
+  font-weight: 600;
+  color: var(--fg-strong);
+  margin-bottom: var(--space-1);
+}
+
+.home-scopes dd {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.home-action {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.55rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition:
+    filter var(--transition-fast),
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.home-action:hover {
+  filter: brightness(1.05);
+}
+
+.home-action.home-action-quiet {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+.home-action.home-action-quiet:hover {
+  background: var(--bg-elev);
+  color: var(--fg-strong);
+}

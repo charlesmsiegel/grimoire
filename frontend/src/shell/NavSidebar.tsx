@@ -27,8 +27,18 @@ export function NavSidebar({ collapsed, onToggle }: Props) {
     <nav className="nav-sidebar" aria-label="Primary" data-collapsed={collapsed || undefined}>
       <div className="nav-header">
         <h1 className="nav-brand">
-          <span className="nav-brand-mark" aria-hidden="true" />
-          <span className="nav-brand-text">Grimoire</span>
+          <NavLink
+            to="/"
+            end
+            className={({ isActive }) =>
+              isActive ? "nav-brand-link active" : "nav-brand-link"
+            }
+            title={collapsed ? "Grimoire — home" : "Home"}
+            aria-label="Grimoire — home"
+          >
+            <span className="nav-brand-mark" aria-hidden="true" />
+            <span className="nav-brand-text">Grimoire</span>
+          </NavLink>
         </h1>
         <button
           type="button"
