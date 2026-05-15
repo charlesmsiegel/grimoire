@@ -1,11 +1,11 @@
 import { NavLink, Outlet } from "react-router-dom";
 
 const tabs = [
-  { to: "settings", label: "Settings" },
-  { to: "style-guides", label: "Style Guides" },
-  { to: "image-presets", label: "Image Presets" },
-  { to: "mechanics", label: "Installed Mechanics" },
-  { to: "plugins", label: "Installed Plugins" },
+  { to: "/library/settings", label: "Settings" },
+  { to: "/library/style-guides", label: "Style Guides" },
+  { to: "/library/image-presets", label: "Image Presets" },
+  { to: "/library/mechanics", label: "Installed Mechanics" },
+  { to: "/library/plugins", label: "Installed Plugins" },
 ];
 
 export function LibraryLayout() {
