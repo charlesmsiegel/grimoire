@@ -164,7 +164,7 @@ The single concession to user tuning is `pin` and `exclude`. Both take an entity
 
 Pins and excludes are recorded as state deltas — `context_pin_added`, `context_pin_cleared`, `context_pin_expired`, `context_exclude_added`, `context_exclude_cleared`, `context_exclude_expired` — in the audit log. They are NOT a way to reorder the prompt or inject text — only inclusion and exclusion of already-known entities. This preserves Test 1 (deterministic assembly): the user can constrain inputs but cannot rewrite the assembly logic.
 
-TTL defaults to 3 turns. A pin set for "this turn only" auto-expires after the next `turn_complete` event. Pins survive scene transitions unless explicitly attached to a scene id.
+TTL defaults to 3 turns. A pin set for "this turn only" auto-expires after the next `turn_complete` event. Pins are measured in turns, not scenes, and survive scene transitions; scene-scoped pins are not in v1.
 
 ### Diff
 
