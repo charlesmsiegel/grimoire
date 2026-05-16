@@ -446,7 +446,7 @@ def _delta_is_about(delta: StateDelta, pc_ref: str) -> bool:
     fields = ("character_id", "actor_ref", "from", "subject")
     for f in fields:
         v = after.get(f)
-        if isinstance(v, str) and (v == pc_ref or v.endswith(pc_ref) or pc_ref.endswith(v)):
+        if isinstance(v, str) and v and (v == pc_ref or v.endswith(pc_ref) or pc_ref.endswith(v)):
             return True
     about = after.get("about")
     if isinstance(about, dict):
