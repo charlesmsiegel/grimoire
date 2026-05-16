@@ -49,6 +49,93 @@ LOCATION_TRANSITION_PATTERNS = [
     re.compile(r"\b(arrived?\s+at)\s+", re.IGNORECASE),
 ]
 
+# Strong tonal keywords grouped by register. A submission that mixes registers,
+# or pivots hard into one of these, is a candidate tonal shift.
+TONAL_KEYWORDS = {
+    "rage": (
+        "scream",
+        "screams",
+        "screaming",
+        "screamed",
+        "rage",
+        "raging",
+        "fury",
+        "furious",
+        "snarl",
+        "snarling",
+        "snarls",
+        "snarled",
+        "roar",
+        "roars",
+        "roared",
+        "hate",
+        "hates",
+        "kill",
+        "kills",
+        "killing",
+        "destroy",
+        "destroys",
+        "slaughter",
+    ),
+    "grief": (
+        "weep",
+        "weeps",
+        "weeping",
+        "wept",
+        "sob",
+        "sobs",
+        "sobbing",
+        "sobbed",
+        "anguish",
+        "despair",
+        "grief",
+        "grieve",
+        "mourn",
+        "mourning",
+        "mourned",
+        "shatter",
+        "shattered",
+        "broken",
+        "tears",
+        "crying",
+    ),
+    "terror": (
+        "terror",
+        "terrified",
+        "horror",
+        "horrified",
+        "panic",
+        "panicked",
+        "dread",
+        "flee",
+        "flees",
+        "fled",
+        "tremble",
+        "trembles",
+        "trembled",
+        "trembling",
+    ),
+    "awe": (
+        "rapture",
+        "ecstasy",
+        "ecstatic",
+        "awe",
+        "awed",
+        "marvel",
+        "marvels",
+        "marveling",
+        "marvelous",
+        "wondrous",
+        "radiant",
+    ),
+}
+
+_TONAL_KEYWORD_TO_REGISTER: dict[str, str] = {
+    word: register for register, words in TONAL_KEYWORDS.items() for word in words
+}
+
+_TONAL_WORD_RE = re.compile(r"[A-Za-z']+")
+
 
 @dataclass
 class BoundaryConfig:
@@ -75,6 +162,51 @@ def _detect_time_jump(text: str) -> bool:
 
 def _detect_location_transition(text: str) -> bool:
     return any(p.search(text) for p in LOCATION_TRANSITION_PATTERNS)
+
+
+def _tonal_signal(text: str) -> tuple[str, float] | None:
+    """Heuristic tonal-shift detector working on a single submission.
+
+    Fires when the prose carries strong tonal markers — multiple exclamations,
+    SHOUTING in caps, or a cluster of register-defining keywords (rage, grief,
+    terror, awe). Confidence is moderate (0.55) per the spec: enough to surface
+    to the user but not to auto-break.
+    """
+    if not text or not text.strip():
+        return None
+
+    score = 0
+    registers: set[str] = set()
+
+    exclamations = text.count("!")
+    if exclamations >= 2:
+        score += 2
+    elif exclamations == 1:
+        score += 1
+
+    keyword_hits = 0
+    caps_words = 0
+    for match in _TONAL_WORD_RE.finditer(text):
+        word = match.group(0)
+        if len(word) >= 3 and word.isupper():
+            caps_words += 1
+        register = _TONAL_KEYWORD_TO_REGISTER.get(word.lower())
+        if register is not None:
+            registers.add(register)
+            keyword_hits += 1
+
+    if caps_words >= 1:
+        score += 2
+    score += keyword_hits
+
+    # A pivot into two distinct emotional registers in a single submission is a
+    # stronger tonal signal than a single keyword in isolation.
+    if len(registers) >= 2:
+        score += 1
+
+    if score < 2:
+        return None
+    return ("tonal_shift", 0.55)
 
 
 def detect_scene_break(
@@ -136,6 +268,10 @@ def detect_scene_break(
             overlap = len(before & after) / len(before)
             if overlap <= (1 - cfg.cast_change_ratio):
                 signals.append(("cast_change", 0.75))
+
+    tonal = _tonal_signal(player_input)
+    if tonal is not None:
+        signals.append(tonal)
 
     if not signals:
         return SceneBreakDecision(is_break=False, confidence=0.0, reason="none")

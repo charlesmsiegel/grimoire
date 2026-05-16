@@ -90,3 +90,49 @@ def test_confidence_threshold_prompt_gates_borderline() -> None:
 def test_no_active_scene_returns_no_break() -> None:
     decision = detect_scene_break(None, "Hours later, dawn breaks.")
     assert decision.is_break is False
+
+
+def test_tonal_shift_caps_and_exclamation() -> None:
+    decision = detect_scene_break(_scene(), "ENOUGH! I will not hear another word!")
+    assert decision.reason == "tonal_shift"
+    assert decision.confidence == 0.55
+    # 0.55 sits above the default prompt threshold (0.5) — surface to user.
+    assert decision.is_break is True
+    assert decision.proposed_new_scene is not None
+    assert decision.proposed_new_scene.campaign_id == "campaign-a"
+
+
+def test_tonal_shift_two_registers() -> None:
+    decision = detect_scene_break(
+        _scene(),
+        "I weep openly, then snarl through the tears.",
+    )
+    assert decision.reason == "tonal_shift"
+    assert decision.confidence == 0.55
+
+
+def test_tonal_shift_yields_to_stronger_signal() -> None:
+    decision = detect_scene_break(
+        _scene(),
+        "Hours later, I scream into the empty street!",
+    )
+    # Time-jump prose (0.85) outranks the tonal_shift signal (0.55).
+    assert decision.reason == "explicit"
+    assert decision.confidence >= 0.8
+
+
+def test_tonal_shift_below_threshold_does_not_break() -> None:
+    cfg = BoundaryConfig(confidence_threshold_prompt=0.6)
+    decision = detect_scene_break(
+        _scene(),
+        "ENOUGH! I will not hear another word!",
+        config=cfg,
+    )
+    assert decision.reason == "tonal_shift"
+    assert decision.is_break is False
+
+
+def test_tonal_shift_quiet_prose_does_not_trigger() -> None:
+    decision = detect_scene_break(_scene(), "I nod and consider his offer.")
+    assert decision.reason == "none"
+    assert decision.is_break is False
