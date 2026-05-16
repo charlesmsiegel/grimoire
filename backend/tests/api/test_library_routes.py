@@ -67,6 +67,49 @@ class FakeLibrary:
             body=args[4],
         )
 
+    async def create_style_guide(self, id: str, **kwargs: Any) -> LibraryEntity:
+        self.created.append(("style_guide", id))
+        body_parts = [f"# {kwargs.get('name') or id}"]
+        for heading_key, heading in (
+            ("pacing", "Pacing"),
+            ("voice", "Voice"),
+            ("themes", "Themes"),
+            ("avoid", "Avoid"),
+        ):
+            items = [b.strip() for b in (kwargs.get(heading_key) or []) if b and b.strip()]
+            if items:
+                bullets = "\n".join(f"- {b}" for b in items)
+                body_parts.append(f"## {heading}\n{bullets}")
+        return LibraryEntity(
+            id=f"style-guides/{id}",
+            world_id=None,
+            kind="style_guide",
+            asset_id=id,
+            name=kwargs.get("name") or id,
+            path=f"style-guides/{id}.md",
+            frontmatter={"id": id, "name": kwargs.get("name") or id},
+            body="\n\n".join(body_parts) + "\n",
+            tags=list(kwargs.get("tags") or []),
+        )
+
+    async def update_style_guide(self, id: str, **kwargs: Any) -> LibraryEntity:
+        self.created.append(("style_guide_update", id))
+        return await self.create_style_guide(id, **kwargs)
+
+    async def parse_style_guide(self, id: str) -> dict[str, Any]:
+        return {
+            "id": id,
+            "name": id.title(),
+            "description": "",
+            "tags": [],
+            "intro": "",
+            "pacing": ["one"],
+            "voice": [],
+            "themes": [],
+            "avoid": [],
+            "extra_sections": [],
+        }
+
 
 class FakeMechanics:
     def installed(self) -> list[Any]:
@@ -152,6 +195,51 @@ def test_create_world_entity(client, container) -> None:
     )
     assert response.status_code == 201
     assert fake.created == [("character", "new-pc")]
+
+
+def test_create_style_guide(client, container) -> None:
+    fake = FakeLibrary()
+    container.library = fake
+    response = client.post(
+        "/api/library/style-guides",
+        json={
+            "id": "cozy-mystery",
+            "name": "Cozy Mystery",
+            "description": "Low stakes.",
+            "tags": ["cozy"],
+            "pacing": ["Unhurried."],
+            "voice": ["Warm."],
+            "themes": ["Community."],
+            "avoid": ["Gore."],
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["asset_id"] == "cozy-mystery"
+    assert "## Pacing\n- Unhurried." in body["body"]
+    assert ("style_guide", "cozy-mystery") in fake.created
+
+
+def test_update_style_guide(client, container) -> None:
+    fake = FakeLibrary()
+    container.library = fake
+    response = client.patch(
+        "/api/library/style-guides/cozy-mystery",
+        json={"voice": ["Brisker."]},
+    )
+    assert response.status_code == 200
+    assert response.json()["asset_id"] == "cozy-mystery"
+    assert ("style_guide_update", "cozy-mystery") in fake.created
+
+
+def test_get_style_guide_edit_returns_parsed_shape(client, container) -> None:
+    container.library = FakeLibrary()
+    response = client.get("/api/library/style-guides/cozy-mystery/edit")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == "cozy-mystery"
+    assert body["pacing"] == ["one"]
+    assert "extra_sections" in body
 
 
 def test_mechanics_installed(client, container) -> None:

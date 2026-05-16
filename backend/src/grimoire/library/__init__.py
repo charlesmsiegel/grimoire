@@ -13,6 +13,7 @@ sync; reads follow the cascade documented in the spec.
 """
 
 from grimoire.library.errors import (
+    LibraryConflictError,
     LibraryError,
     LibraryNotFoundError,
     PromotionError,
@@ -20,6 +21,7 @@ from grimoire.library.errors import (
 from grimoire.library.service import LibraryService
 
 __all__ = [
+    "LibraryConflictError",
     "LibraryError",
     "LibraryNotFoundError",
     "LibraryService",

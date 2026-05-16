@@ -163,6 +163,19 @@ export interface RescanReport {
   removed: string[];
 }
 
+export interface StyleGuideEditPayload {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  intro: string;
+  pacing: string[];
+  voice: string[];
+  themes: string[];
+  avoid: string[];
+  extra_sections: [string, string][];
+}
+
 // --------------------------------------------------------------------------
 // Library: worlds & entities
 // --------------------------------------------------------------------------
@@ -235,6 +248,38 @@ export const libraryApi = {
   listStyleGuides: () => request<LibraryEntity[]>("GET", `/library/style-guides`),
   getStyleGuide: (id: string) =>
     request<LibraryEntity>("GET", `/library/style-guides/${encodeURIComponent(id)}`),
+  getStyleGuideEdit: (id: string) =>
+    request<StyleGuideEditPayload>(
+      "GET",
+      `/library/style-guides/${encodeURIComponent(id)}/edit`,
+    ),
+  createStyleGuide: (payload: {
+    id: string;
+    name: string;
+    description?: string;
+    tags?: string[];
+    pacing?: string[];
+    voice?: string[];
+    themes?: string[];
+    avoid?: string[];
+  }) => request<LibraryEntity>("POST", `/library/style-guides`, payload),
+  updateStyleGuide: (
+    id: string,
+    patch: {
+      name?: string;
+      description?: string;
+      tags?: string[];
+      pacing?: string[];
+      voice?: string[];
+      themes?: string[];
+      avoid?: string[];
+    },
+  ) =>
+    request<LibraryEntity>(
+      "PATCH",
+      `/library/style-guides/${encodeURIComponent(id)}`,
+      patch,
+    ),
 
   listImagePresets: () => request<LibraryEntity[]>("GET", `/library/image-presets`),
   getImagePreset: (id: string) =>
