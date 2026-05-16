@@ -13,6 +13,7 @@ import pytest
 
 from grimoire.library import LibraryService
 from grimoire.state_store import StateStore
+from grimoire.state_store.errors import InvalidRefError
 from grimoire.types.common import EntityKind, InGameTime
 from grimoire.types.world import Weather, WeatherKind
 from grimoire.world import WorldService
@@ -518,6 +519,82 @@ async def test_fork_world_collision(world: WorldService) -> None:
 async def test_fork_world_missing_source(world: WorldService) -> None:
     with pytest.raises(WorldNotFoundError):
         await world.fork_world("nope", "still-nope")
+
+
+# ---------------------------------------------------------------------------
+# Path traversal — delete_world / fork_world reject unsafe world ids before
+# any filesystem operation runs. Regression for issue #30.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "../escape",
+        "../../escape",
+        "..",
+        ".hidden",
+        "a/b",
+        "a\\b",
+        "with space",
+        "",
+    ],
+)
+async def test_delete_world_rejects_unsafe_world_id(
+    world: WorldService, store: StateStore, bad_id: str, tmp_path
+) -> None:
+    # Drop a sentinel directory at a sibling of data/library/worlds/ to prove
+    # the validator stops rmtree before it ever touches the filesystem.
+    sentinel = tmp_path / "sentinel"
+    sentinel.mkdir()
+    (sentinel / "keep.txt").write_text("do not delete")
+
+    with pytest.raises(InvalidRefError):
+        await world.delete_world(bad_id)
+
+    assert sentinel.exists()
+    assert (sentinel / "keep.txt").read_text() == "do not delete"
+
+
+@pytest.mark.parametrize(
+    "src_id,dst_id",
+    [
+        ("../evil", "ok"),
+        ("ok", "../evil"),
+        ("..", "ok"),
+        (".hidden", "ok"),
+        ("a/b", "ok"),
+    ],
+)
+async def test_fork_world_rejects_unsafe_world_id(
+    world: WorldService, src_id: str, dst_id: str, tmp_path
+) -> None:
+    sentinel = tmp_path / "sentinel"
+    sentinel.mkdir()
+    (sentinel / "keep.txt").write_text("do not overwrite")
+
+    with pytest.raises(InvalidRefError):
+        await world.fork_world(src_id, dst_id)
+
+    assert (sentinel / "keep.txt").read_text() == "do not overwrite"
+
+
+async def test_delete_world_traversal_does_not_remove_outside_root(
+    world: WorldService, store: StateStore, tmp_path
+) -> None:
+    """End-to-end check: even with a path that would resolve outside the
+    worlds root, the validator rejects the call before rmtree runs.
+    """
+    outside = store.data_root.parent / "important_dir"
+    outside.mkdir()
+    (outside / "treasure.txt").write_text("keep me")
+
+    # The literal string a caller could send to an HTTP endpoint.
+    with pytest.raises(InvalidRefError):
+        await world.delete_world("../../important_dir")
+
+    assert outside.exists()
+    assert (outside / "treasure.txt").read_text() == "keep me"
 
 
 # ---------------------------------------------------------------------------

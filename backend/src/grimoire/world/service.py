@@ -25,12 +25,14 @@ import json
 import shutil
 from collections import deque
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from grimoire.library import LibraryService
 from grimoire.library.errors import LibraryNotFoundError
 from grimoire.state_store import StateStore
-from grimoire.state_store.paths import KIND_TO_DIR, library_root
+from grimoire.state_store.errors import InvalidRefError
+from grimoire.state_store.paths import KIND_TO_DIR, library_root, validate_path_component
 from grimoire.types.common import CampaignId, EntityKind, InGameTime
 from grimoire.types.composition import (
     Greeting,
@@ -90,6 +92,29 @@ class WorldService:
         self.library = library
         self.store: StateStore = library.store
 
+    def _safe_world_dir(self, world_id: str) -> Path:
+        """Resolve ``data/library/worlds/<world_id>`` after path-safety checks.
+
+        Why: ``delete_world`` and ``fork_world`` hand the result to
+        ``shutil.rmtree`` / ``shutil.copytree``. Without validation, an id
+        like ``"../../something"`` would let the OS normalise the ``..``
+        segments and escape the worlds root, silently deleting or
+        clobbering arbitrary directories.
+
+        The allowlist regex rejects path separators and any leading
+        non-alphanumeric (so ``..`` is impossible); the resolved-subpath
+        assertion is belt-and-braces in case a future code path introduces
+        a new escape vector (symlinks, drive letters, etc.).
+        """
+        validate_path_component(world_id, name="world_id")
+        worlds_root = (library_root(self.store.data_root) / "worlds").resolve()
+        candidate = (worlds_root / world_id).resolve()
+        try:
+            candidate.relative_to(worlds_root)
+        except ValueError as exc:
+            raise InvalidRefError(f"unsafe world_id: {world_id!r}") from exc
+        return candidate
+
     # ------------------------------------------------------------------ #
     # World management
     # ------------------------------------------------------------------ #
@@ -114,6 +139,9 @@ class WorldService:
         return await self.library.create_world(world_id, merged)
 
     async def delete_world(self, world_id: str) -> None:
+        # Validate world_id up-front so the SQL delete below and the rmtree
+        # below operate on the same allowlisted shape.
+        root = self._safe_world_dir(world_id)
         # Delete every entity row under the world, then the world file itself.
         rows = await self.store.db.fetchall(
             "SELECT id FROM library_index WHERE world_id = ?", (world_id,)
@@ -131,7 +159,6 @@ class WorldService:
                 source="world:delete",
             )
         # Best-effort directory cleanup.
-        root = library_root(self.store.data_root) / "worlds" / world_id
         if root.exists():
             shutil.rmtree(root, ignore_errors=True)
 
@@ -142,10 +169,10 @@ class WorldService:
         rebuilt by walking the copied files through ``write_library_file``
         so every row carries a delta record and proper version numbers.
         """
-        src_root = library_root(self.store.data_root) / "worlds" / src_world_id
+        src_root = self._safe_world_dir(src_world_id)
+        dst_root = self._safe_world_dir(dst_world_id)
         if not src_root.exists():
             raise WorldNotFoundError(f"source world {src_world_id!r} does not exist")
-        dst_root = library_root(self.store.data_root) / "worlds" / dst_world_id
         if dst_root.exists():
             raise WorldError(f"destination world {dst_world_id!r} already exists at {dst_root}")
 
