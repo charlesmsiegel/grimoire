@@ -38,6 +38,9 @@ class ExtractorConfig:
     contradiction_confidence_penalty: float = 0.25
     # Penalty applied to facts speaking as a character (testimony) vs. narrator.
     testimony_confidence_penalty: float = 0.1
+    # How many times to retry the structured-LLM call when the first response
+    # is unparseable JSON (spec 04 §Configuration). 0 disables retries.
+    retry_on_parse_failure: int = 1
     # Strategy base confidences.
     rule_based_base_confidence: float = 0.95
     # Tags applied to deltas by source attribution.

@@ -133,7 +133,7 @@ async def test_extract_with_llm_flags_when_payload_unparseable(
         snapshot=snapshot,
         campaign_id="c1",
         gateway=gateway,
-        config=ExtractorConfig(),
+        config=ExtractorConfig(retry_on_parse_failure=0),
         source="extractor",
     )
     assert any(f.code == "llm_json_unparseable" for f in out.flags)
@@ -153,3 +153,97 @@ async def test_extract_with_llm_flags_when_gateway_raises(scene: Scene, snapshot
         source="extractor",
     )
     assert any(f.code == "llm_call_failed" for f in out.flags)
+
+
+@pytest.mark.asyncio
+async def test_extract_with_llm_retries_once_on_parse_failure(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # First response is garbage; second response is valid JSON. With the
+    # default retry budget of 1, the second call should succeed and yield deltas.
+    gateway = FakeGateway(
+        queue=[
+            "totally not json",
+            {"facts": [{"text": "after retry", "confidence": 0.9}]},
+        ]
+    )
+    out = await extract_with_llm(
+        response_text="...",
+        scene=scene,
+        snapshot=snapshot,
+        campaign_id="c1",
+        gateway=gateway,
+        config=ExtractorConfig(),
+        source="extractor",
+    )
+    assert len(gateway.seen) == 2
+    assert out.deltas and out.deltas[0].kind == DeltaKind.FACT_ADD
+    assert not any(f.code == "llm_json_unparseable" for f in out.flags)
+
+
+@pytest.mark.asyncio
+async def test_extract_with_llm_no_retry_when_budget_zero(
+    scene: Scene, snapshot: StateSnapshot
+):
+    gateway = FakeGateway(queue=["totally not json"])
+    out = await extract_with_llm(
+        response_text="...",
+        scene=scene,
+        snapshot=snapshot,
+        campaign_id="c1",
+        gateway=gateway,
+        config=ExtractorConfig(retry_on_parse_failure=0),
+        source="extractor",
+    )
+    assert len(gateway.seen) == 1
+    assert any(f.code == "llm_json_unparseable" for f in out.flags)
+    assert not out.deltas
+
+
+@pytest.mark.asyncio
+async def test_extract_with_llm_gives_up_after_exhausting_retries(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # Both attempts produce garbage; the strategy must surface the
+    # unparseable flag rather than looping forever.
+    gateway = FakeGateway(queue=["garbage one", "garbage two"])
+    out = await extract_with_llm(
+        response_text="...",
+        scene=scene,
+        snapshot=snapshot,
+        campaign_id="c1",
+        gateway=gateway,
+        config=ExtractorConfig(retry_on_parse_failure=1),
+        source="extractor",
+    )
+    assert len(gateway.seen) == 2
+    assert any(f.code == "llm_json_unparseable" for f in out.flags)
+    assert not out.deltas
+
+
+@pytest.mark.asyncio
+async def test_extract_with_llm_retry_appends_repair_message(
+    scene: Scene, snapshot: StateSnapshot
+):
+    gateway = FakeGateway(
+        queue=[
+            "totally not json",
+            {"facts": []},
+        ]
+    )
+    await extract_with_llm(
+        response_text="...",
+        scene=scene,
+        snapshot=snapshot,
+        campaign_id="c1",
+        gateway=gateway,
+        config=ExtractorConfig(),
+        source="extractor",
+    )
+    # The retry request should include an additional user message asking
+    # the model to return valid JSON.
+    retry_request = gateway.seen[1][1]
+    assert len(retry_request.messages) > len(gateway.seen[0][1].messages)
+    assert any(
+        "json" in m.content.lower() for m in retry_request.messages[1:]
+    )

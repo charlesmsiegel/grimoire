@@ -397,6 +397,13 @@ def parse_llm_payload(
     return out
 
 
+_REPAIR_INSTRUCTION = (
+    "Your previous response could not be parsed as JSON. "
+    "Reply again with ONLY a JSON object matching the schema — no prose, "
+    "no markdown fences, no commentary."
+)
+
+
 async def extract_with_llm(
     *,
     response_text: str,
@@ -414,39 +421,58 @@ async def extract_with_llm(
         scene=scene,
         config=config,
     )
-    try:
-        completion = await gateway.complete(config.task_name, request, campaign_id=campaign_id)
-    except Exception as exc:  # flag-and-continue is the contract
-        logger.warning("structured-llm extraction failed: %s", exc)
-        return LLMStrategyOutput(
-            flags=[
-                ExtractionFlag(
-                    level=FlagLevel.WARNING,
-                    code="llm_call_failed",
-                    message=f"structured extraction failed: {type(exc).__name__}",
-                    evidence=str(exc),
-                )
-            ]
-        )
+    attempts_remaining = max(0, config.retry_on_parse_failure) + 1
+    last_text = ""
+    current_request = request
+    while attempts_remaining > 0:
+        attempts_remaining -= 1
+        try:
+            completion = await gateway.complete(
+                config.task_name, current_request, campaign_id=campaign_id
+            )
+        except Exception as exc:  # flag-and-continue is the contract
+            logger.warning("structured-llm extraction failed: %s", exc)
+            return LLMStrategyOutput(
+                flags=[
+                    ExtractionFlag(
+                        level=FlagLevel.WARNING,
+                        code="llm_call_failed",
+                        message=f"structured extraction failed: {type(exc).__name__}",
+                        evidence=str(exc),
+                    )
+                ]
+            )
 
-    payload = _extract_json_payload(completion.text)
-    if payload is None:
-        return LLMStrategyOutput(
-            flags=[
-                ExtractionFlag(
-                    level=FlagLevel.WARNING,
-                    code="llm_json_unparseable",
-                    message="structured extraction returned unparseable JSON",
-                    evidence=completion.text[:500],
-                )
-            ]
-        )
-    return parse_llm_payload(
-        payload,
-        campaign_id=campaign_id,
-        source=source,
-        max_new_entities=config.max_new_entities_per_turn,
+        last_text = completion.text
+        payload = _extract_json_payload(completion.text)
+        if payload is not None:
+            return parse_llm_payload(
+                payload,
+                campaign_id=campaign_id,
+                source=source,
+                max_new_entities=config.max_new_entities_per_turn,
+            )
+        if attempts_remaining > 0:
+            current_request = _build_retry_request(current_request, completion.text)
+
+    return LLMStrategyOutput(
+        flags=[
+            ExtractionFlag(
+                level=FlagLevel.WARNING,
+                code="llm_json_unparseable",
+                message="structured extraction returned unparseable JSON",
+                evidence=last_text[:500],
+            )
+        ]
     )
+
+
+def _build_retry_request(previous: CompletionRequest, previous_text: str) -> CompletionRequest:
+    """Append the prior bad reply + a repair instruction so the model can self-correct."""
+    new_messages = list(previous.messages)
+    new_messages.append(Message(role=MessageRole.ASSISTANT, content=previous_text))
+    new_messages.append(Message(role=MessageRole.USER, content=_REPAIR_INSTRUCTION))
+    return previous.model_copy(update={"messages": new_messages})
 
 
 __all__ = [
