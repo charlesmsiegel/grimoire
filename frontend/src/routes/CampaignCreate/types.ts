@@ -71,7 +71,7 @@ export function emptyDraft(): WizardDraft {
     mechanicsId: null,
     bulkCreateSheets: true,
     pcs: [],
-    styleGuideMode: "none",
+    styleGuideMode: "library",
     styleGuideId: null,
     inlineStyleGuide: "",
     imagePresetId: null,
