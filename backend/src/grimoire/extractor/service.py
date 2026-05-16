@@ -446,7 +446,12 @@ def _delta_is_about(delta: StateDelta, pc_ref: str) -> bool:
     fields = ("character_id", "actor_ref", "from", "subject")
     for f in fields:
         v = after.get(f)
-        if isinstance(v, str) and v and (v == pc_ref or v.endswith(pc_ref) or pc_ref.endswith(v)):
+        if not isinstance(v, str) or not v:
+            continue
+        # Require a namespace separator on partial matches so that
+        # `pc_ref="julian"` doesn't accidentally match `v="crasher"` or
+        # `v="her"` via raw suffix overlap.
+        if v == pc_ref or v.endswith(f":{pc_ref}") or pc_ref.endswith(f":{v}"):
             return True
     about = after.get("about")
     if isinstance(about, dict):
