@@ -23,6 +23,9 @@ package-lock.json
 .vscode/
 .idea/
 
+# Local git worktrees (created via `git worktree add .worktrees/<name>`)
+.worktrees/
+
 # Claude Code: personal permission overrides; project settings + hooks are tracked
 .claude/settings.local.json
 
