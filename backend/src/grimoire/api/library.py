@@ -474,9 +474,7 @@ async def plugin_models(plugin_id: str, plugins: PluginsDep) -> Any:
     plugin whose provider raises (e.g. missing API key) is surfaced as a
     409 so the UI can show "configure the plugin first".
     """
-    provider: Any = plugins.get_llm_provider(plugin_id) or plugins.get_embedding_provider(
-        plugin_id
-    )
+    provider: Any = plugins.get_llm_provider(plugin_id) or plugins.get_embedding_provider(plugin_id)
     if provider is None or not hasattr(provider, "list_models"):
         raise HTTPException(
             status_code=404,

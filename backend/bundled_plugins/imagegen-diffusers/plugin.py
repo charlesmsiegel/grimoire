@@ -51,12 +51,8 @@ class _CuratedModel:
 
 CURATED_MODELS: tuple[_CuratedModel, ...] = (
     # SDXL
-    _CuratedModel(
-        "stabilityai/stable-diffusion-xl-base-1.0", "SDXL", "SDXL base 1.0 (default)"
-    ),
-    _CuratedModel(
-        "stabilityai/stable-diffusion-xl-refiner-1.0", "SDXL", "SDXL refiner 1.0"
-    ),
+    _CuratedModel("stabilityai/stable-diffusion-xl-base-1.0", "SDXL", "SDXL base 1.0 (default)"),
+    _CuratedModel("stabilityai/stable-diffusion-xl-refiner-1.0", "SDXL", "SDXL refiner 1.0"),
     _CuratedModel("stabilityai/sdxl-turbo", "SDXL", "SDXL Turbo (1-4 step)"),
     _CuratedModel("Lykon/dreamshaper-xl-1-0", "SDXL", "Dreamshaper XL 1.0"),
     _CuratedModel(
@@ -66,12 +62,8 @@ CURATED_MODELS: tuple[_CuratedModel, ...] = (
     _CuratedModel(
         "stabilityai/stable-diffusion-3-medium-diffusers", "SD3", "SD 3 medium", gated=True
     ),
-    _CuratedModel(
-        "stabilityai/stable-diffusion-3.5-medium", "SD3", "SD 3.5 medium", gated=True
-    ),
-    _CuratedModel(
-        "stabilityai/stable-diffusion-3.5-large", "SD3", "SD 3.5 large", gated=True
-    ),
+    _CuratedModel("stabilityai/stable-diffusion-3.5-medium", "SD3", "SD 3.5 medium", gated=True),
+    _CuratedModel("stabilityai/stable-diffusion-3.5-large", "SD3", "SD 3.5 large", gated=True),
     # Flux
     _CuratedModel("black-forest-labs/FLUX.1-schnell", "Flux", "Flux.1 Schnell (4-step)"),
     _CuratedModel("black-forest-labs/FLUX.1-dev", "Flux", "Flux.1 dev", gated=True),

@@ -88,9 +88,7 @@ class OpenRouterEmbeddingProvider:
         self._extra_headers: dict[str, str] = (
             {str(k): str(v) for k, v in extra.items()} if isinstance(extra, dict) else {}
         )
-        self.dimensions: int = self._configured_dimensions or KNOWN_DIMENSIONS.get(
-            self.model_id, 0
-        )
+        self.dimensions: int = self._configured_dimensions or KNOWN_DIMENSIONS.get(self.model_id, 0)
         self._client: Any | None = None
         self._client_lock = asyncio.Lock()
         self._models_cache: list[ModelInfo] | None = None

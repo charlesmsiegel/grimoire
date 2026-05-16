@@ -99,8 +99,7 @@ class SentenceTransformersEmbeddingProvider:
 
     async def list_models(self) -> list[ModelInfo]:
         models = [
-            ModelInfo(id=mid, name=label, dimensions=dims)
-            for (mid, dims, label) in CURATED_MODELS
+            ModelInfo(id=mid, name=label, dimensions=dims) for (mid, dims, label) in CURATED_MODELS
         ]
         if self.model_id and not any(m.id == self.model_id for m in models):
             models.append(
