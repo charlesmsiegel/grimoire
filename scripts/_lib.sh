@@ -88,6 +88,38 @@ kill_port() {
     done < <(pids_on_port "$port")
 }
 
+# Print PIDs of running processes whose command line references the given path.
+# Used to detect grimoire dev servers regardless of which port they bound to.
+# One PID per line. Windows-only today; no-op (silent) on other platforms.
+pids_using_path() {
+    local path="$1"
+    [ -z "$path" ] && return 0
+    case "$PLATFORM" in
+        windows)
+            command -v powershell.exe >/dev/null 2>&1 || return 0
+            # Forward slashes are friendlier for PowerShell -match (regex);
+            # the substring match catches both slash styles in CommandLine.
+            # Filter by process name to avoid matching shells/helpers that
+            # happen to have the repo path in their argv (e.g. bash running
+            # the install script itself).
+            local needle
+            needle="$(printf '%s' "$path" | sed 's|\\|/|g')"
+            powershell.exe -NoProfile -Command "
+                \$needle = [regex]::Escape('$needle')
+                Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='uvicorn.exe' OR Name='node.exe'\" |
+                  Where-Object { \$_.CommandLine -and (\$_.CommandLine -replace '\\\\','/') -match \$needle } |
+                  Select-Object -ExpandProperty ProcessId
+            " 2>/dev/null | tr -d '\r' | sed '/^$/d' || true
+            ;;
+        *)
+            # POSIX: ps + grep on full command line.
+            ps -eo pid=,args= 2>/dev/null \
+                | awk -v needle="$path" 'index($0, needle) { print $1 }' \
+                | sed '/^$/d' || true
+            ;;
+    esac
+}
+
 # Kill stray uvicorn workers spawned by --reload that outlive their parent
 # on Windows (WinError 87). No-op on other platforms.
 kill_orphaned_uvicorn_workers() {
