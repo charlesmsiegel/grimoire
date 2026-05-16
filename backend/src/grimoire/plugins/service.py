@@ -17,7 +17,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from grimoire.plugins.config import PluginsConfig
-from grimoire.plugins.config_store import KeyringBackend, PluginConfigStore
+from grimoire.plugins.config_store import (
+    KeyringBackend,
+    PluginConfigStore,
+    secret_property_names,
+)
 from grimoire.plugins.discovery import DiscoveryError, discover
 from grimoire.plugins.loader import LoadResult, load_plugin
 from grimoire.plugins.registry import PluginRegistry
@@ -264,7 +268,12 @@ class PluginsService:
     async def get_config(self, plugin_id: PluginId) -> dict:
         manifest = await self.get_manifest(plugin_id)
         schema = manifest.config_schema if manifest else {}
-        return self._config_store.load(plugin_id, schema)
+        config = self._config_store.load(plugin_id, schema)
+        if manifest is not None:
+            self._inherit_shared_secrets(
+                schema, manifest.shares_secrets_with, config
+            )
+        return config
 
     async def set_config(self, plugin_id: PluginId, config: dict) -> None:
         manifest = await self.get_manifest(plugin_id)
@@ -301,10 +310,62 @@ class PluginsService:
             raw_manifest.get("config_schema") if isinstance(raw_manifest, dict) else None
         ) or {}
         try:
-            return self._config_store.load(plugin_id, schema)
+            config = self._config_store.load(plugin_id, schema)
         except Exception as exc:
             logger.warning("could not load config for plugin %s: %r", plugin_id, exc)
             return {}
+        siblings = [
+            str(x)
+            for x in (
+                raw_manifest.get("shares_secrets_with")
+                if isinstance(raw_manifest, dict)
+                else None
+            )
+            or []
+        ]
+        self._inherit_shared_secrets(schema, siblings, config)
+        return config
+
+    def _inherit_shared_secrets(
+        self,
+        schema: dict[str, Any],
+        siblings: list[str],
+        config: dict[str, Any],
+    ) -> None:
+        """Fill empty secret fields in ``config`` from listed sibling plugins.
+
+        The keyring is keyed by ``(plugin_id, field_name)``, so we don't
+        need the sibling's full schema to fetch its secrets — a synthetic
+        schema covering only the field names we want is enough to make
+        :meth:`PluginConfigStore.load` consult the keyring entries for the
+        sibling. Sibling plugins don't need to be loaded yet.
+        """
+        if not siblings:
+            return
+        own_secrets = secret_property_names(schema or {})
+        missing = [n for n in own_secrets if not config.get(n)]
+        if not missing:
+            return
+        for sibling_id in siblings:
+            fetch_schema = {
+                "properties": {n: {"type": "string", "secret": True} for n in missing},
+            }
+            try:
+                sibling_config = self._config_store.load(sibling_id, fetch_schema)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "could not read sibling config %s for shared secrets: %r",
+                    sibling_id,
+                    exc,
+                )
+                continue
+            for name in list(missing):
+                value = sibling_config.get(name)
+                if value:
+                    config[name] = value
+            missing = [n for n in own_secrets if not config.get(n)]
+            if not missing:
+                return
 
     # ------------------------------------------------------------------ #
     # Health checks

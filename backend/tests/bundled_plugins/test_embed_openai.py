@@ -46,7 +46,7 @@ def test_manifest_discovers_and_loads() -> None:
     instance = result.instances[0].instance
     assert_protocol_attrs(
         instance,
-        ["id", "name", "model_id", "dimensions", "embed", "health_check"],
+        ["id", "name", "model_id", "dimensions", "embed", "list_models", "health_check"],
     )
 
 
@@ -58,9 +58,26 @@ def test_defaults_match_spec(openai_module) -> None:
     assert provider.dimensions == 1536
 
 
+def test_active_model_config_key(openai_module) -> None:
+    provider = openai_module.OpenAIEmbeddingProvider(
+        config={"api_key": "sk", "active_model": "text-embedding-3-large"}
+    )
+    assert provider.model_id == "text-embedding-3-large"
+    assert provider.dimensions == 3072
+
+
+def test_legacy_model_key_still_honored(openai_module) -> None:
+    # Saved configs from before the rename used `model`. Loading them
+    # shouldn't require manual migration.
+    provider = openai_module.OpenAIEmbeddingProvider(
+        config={"api_key": "sk", "model": "text-embedding-3-large"}
+    )
+    assert provider.model_id == "text-embedding-3-large"
+
+
 def test_dimensions_override(openai_module) -> None:
     provider = openai_module.OpenAIEmbeddingProvider(
-        config={"api_key": "sk", "model": "text-embedding-3-large", "dimensions": 256}
+        config={"api_key": "sk", "active_model": "text-embedding-3-large", "dimensions": 256}
     )
     assert provider.dimensions == 256
     assert provider._configured_dimensions == 256
@@ -153,3 +170,72 @@ async def test_health_check_unhealthy_on_failure(openai_module) -> None:
     _install_mock_transport(provider, lambda r: httpx.Response(500, text="boom"))
     status = await provider.health_check()
     assert status.level == HealthLevel.UNHEALTHY
+
+
+@pytest.mark.asyncio
+async def test_list_models_filters_embedding_family(openai_module) -> None:
+    provider = openai_module.OpenAIEmbeddingProvider(config={"api_key": "sk"})
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/models")
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "gpt-4o"},
+                    {"id": "text-embedding-3-small"},
+                    {"id": "text-embedding-3-large"},
+                    {"id": "whisper-1"},
+                ]
+            },
+        )
+
+    _install_mock_transport(provider, _handler)
+    models = await provider.list_models()
+    ids = sorted(m.id for m in models)
+    assert ids == ["text-embedding-3-large", "text-embedding-3-small"]
+    by_id = {m.id: m for m in models}
+    assert by_id["text-embedding-3-small"].dimensions == 1536
+    assert by_id["text-embedding-3-large"].dimensions == 3072
+    # Pricing comes from a hard-coded table since OpenAI's /v1/models
+    # endpoint doesn't return pricing data.
+    assert by_id["text-embedding-3-small"].input_cost_per_1k == pytest.approx(0.00002)
+    assert by_id["text-embedding-3-large"].input_cost_per_1k == pytest.approx(0.00013)
+    # Embeddings have no output token cost.
+    assert by_id["text-embedding-3-small"].output_cost_per_1k is None
+
+
+@pytest.mark.asyncio
+async def test_list_models_includes_active_model_even_when_absent(openai_module) -> None:
+    provider = openai_module.OpenAIEmbeddingProvider(
+        config={"api_key": "sk", "active_model": "text-embedding-preview-2030"}
+    )
+    _install_mock_transport(
+        provider,
+        lambda r: httpx.Response(200, json={"data": [{"id": "text-embedding-3-small"}]}),
+    )
+    models = await provider.list_models()
+    ids = {m.id for m in models}
+    assert "text-embedding-preview-2030" in ids
+
+
+@pytest.mark.asyncio
+async def test_list_models_requires_api_key(openai_module) -> None:
+    provider = openai_module.OpenAIEmbeddingProvider()
+    with pytest.raises(RuntimeError, match="api_key"):
+        await provider.list_models()
+
+
+@pytest.mark.asyncio
+async def test_list_models_cached_after_first_call(openai_module) -> None:
+    provider = openai_module.OpenAIEmbeddingProvider(config={"api_key": "sk"})
+    calls = {"n": 0}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={"data": [{"id": "text-embedding-3-small"}]})
+
+    _install_mock_transport(provider, _handler)
+    await provider.list_models()
+    await provider.list_models()
+    assert calls["n"] == 1

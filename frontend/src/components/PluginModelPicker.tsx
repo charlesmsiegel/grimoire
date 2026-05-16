@@ -97,31 +97,60 @@ export function PluginModelPicker({
           </button>
         </small>
       )}
-      {match && match.context_window > 0 && (
-        <small>
-          {match.name} · context {match.context_window.toLocaleString()}
-          {match.input_cost_per_1k !== null && match.output_cost_per_1k !== null
-            ? ` · $${match.input_cost_per_1k.toFixed(4)}/$${match.output_cost_per_1k.toFixed(4)} per 1K in/out`
-            : ""}
-        </small>
-      )}
+      {match && <ModelDetailLine model={match} />}
     </label>
   );
+}
+
+function ModelDetailLine({ model }: { model: PluginModelInfo }) {
+  const parts: string[] = [];
+  if (model.context_window > 0) {
+    parts.push(`context ${model.context_window.toLocaleString()}`);
+  }
+  if (model.dimensions !== null && model.dimensions > 0) {
+    parts.push(`${model.dimensions.toLocaleString()} dims`);
+  }
+  if (model.input_cost_per_1k !== null && model.output_cost_per_1k !== null) {
+    parts.push(
+      `$${(model.input_cost_per_1k * 1000).toFixed(2)}/$${(model.output_cost_per_1k * 1000).toFixed(2)} per 1M in/out`,
+    );
+  } else if (model.input_cost_per_1k !== null) {
+    parts.push(`$${(model.input_cost_per_1k * 1000).toFixed(2)} per 1M tokens`);
+  }
+  if (parts.length === 0) return null;
+  return <small>{`${model.name} · ${parts.join(" · ")}`}</small>;
 }
 
 function optionLabel(m: PluginModelInfo): string {
   const tail = m.id.includes("/") ? m.id.split("/").slice(1).join("/") : m.id;
   const base = m.name && m.name !== m.id ? `${m.name} (${tail})` : tail;
-  return base + formatPriceTag(m);
+  return base + formatDimsTag(m) + formatPriceTag(m);
 }
 
-/** Compact " · $3.00/$15.00 per 1M" suffix; "" when no pricing, " · free" when zero. */
+/** Compact " · 1536d" suffix for embedding models; "" otherwise. */
+function formatDimsTag(m: PluginModelInfo): string {
+  return m.dimensions && m.dimensions > 0 ? ` · ${m.dimensions}d` : "";
+}
+
+/** Compact pricing suffix.
+ *
+ * - Chat models: " · $3.00/$15.00 per 1M" (input/output).
+ * - Embedding models: " · $0.02 per 1M" (input only — embeddings have no
+ *   output token cost).
+ * - "" when no pricing, " · free" when zero.
+ */
 function formatPriceTag(m: PluginModelInfo): string {
   const inP = m.input_cost_per_1k;
   const outP = m.output_cost_per_1k;
   if (inP == null && outP == null) return "";
   if ((inP ?? 0) === 0 && (outP ?? 0) === 0) return " · free";
-  const fmt = (v: number | null) => (v == null ? "?" : `$${(v * 1000).toFixed(2)}`);
+  const fmt = (v: number) => `$${(v * 1000).toFixed(2)}`;
+  if (outP == null) {
+    return inP != null ? ` · ${fmt(inP)} per 1M` : "";
+  }
+  if (inP == null) {
+    return ` · ${fmt(outP)} per 1M out`;
+  }
   return ` · ${fmt(inP)}/${fmt(outP)} per 1M`;
 }
 

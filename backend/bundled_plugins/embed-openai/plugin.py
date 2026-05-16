@@ -5,10 +5,11 @@ The client is created lazily on first call so importing the plugin
 doesn't open network resources until the gateway actually routes through
 it.
 
-Dimensions come from the configured `dimensions` value (if any) or from
-a small table of known model dimensions. If the configured model isn't
-listed, `dimensions` stays at 0 until the first successful `embed` call
-fills it in from the response payload.
+The active embedding model is configured via ``active_model`` and surfaced
+to the UI by ``list_models()``, which hits OpenAI's ``/v1/models``
+endpoint and keeps the rows whose id starts with one of the embedding
+family prefixes. Dimensions come from the response payload, falling back
+to a table of known counts when the catalog hasn't been fetched yet.
 """
 
 from __future__ import annotations
@@ -18,19 +19,38 @@ import logging
 from typing import Any
 
 from grimoire.types.common import HealthLevel, HealthStatus
+from grimoire.types.llm import ModelInfo
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "text-embedding-3-small"
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
+# Embedding model id prefixes published by OpenAI. Used to filter the
+# `/v1/models` listing (which contains chat, audio, image, and embedding
+# models in one bucket) without hard-coding the actual catalog.
+EMBEDDING_PREFIXES: tuple[str, ...] = (
+    "text-embedding-",
+)
+
 # Known native dimension counts for the OpenAI embedding models. Used so
-# `dimensions` is populated before the first call; not authoritative —
-# the response is trusted over this table.
+# the model picker can show a dimension count before the model has been
+# called, and so `dimensions` is populated before the first call; not
+# authoritative — the response is trusted over this table.
 KNOWN_DIMENSIONS: dict[str, int] = {
     "text-embedding-3-small": 1536,
     "text-embedding-3-large": 3072,
     "text-embedding-ada-002": 1536,
+}
+
+# Published USD price per 1K input tokens for the OpenAI embedding models.
+# OpenAI's `/v1/models` endpoint doesn't return pricing, so this table is
+# the source of truth for what the picker shows. Update when OpenAI revises
+# its embedding price list (https://openai.com/api/pricing/).
+KNOWN_INPUT_COST_PER_1K: dict[str, float] = {
+    "text-embedding-3-small": 0.00002,
+    "text-embedding-3-large": 0.00013,
+    "text-embedding-ada-002": 0.00010,
 }
 
 
@@ -42,7 +62,10 @@ class OpenAIEmbeddingProvider:
         cfg = dict(config or {})
         self._api_key: str | None = cfg.get("api_key") or None
         self._base_url: str = str(cfg.get("base_url") or DEFAULT_BASE_URL).rstrip("/")
-        self.model_id: str = str(cfg.get("model") or DEFAULT_MODEL)
+        # Accept the legacy ``model`` key so saved configs from before the
+        # rename keep working without manual migration.
+        active = cfg.get("active_model") or cfg.get("model") or DEFAULT_MODEL
+        self.model_id: str = str(active)
         self._configured_dimensions: int | None = (
             int(cfg["dimensions"]) if cfg.get("dimensions") is not None else None
         )
@@ -51,6 +74,7 @@ class OpenAIEmbeddingProvider:
         self.dimensions: int = self._configured_dimensions or KNOWN_DIMENSIONS.get(self.model_id, 0)
         self._client: Any | None = None
         self._client_lock = asyncio.Lock()
+        self._models_cache: list[ModelInfo] | None = None
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -74,6 +98,52 @@ class OpenAIEmbeddingProvider:
         if vectors and self.dimensions != len(vectors[0]):
             self.dimensions = len(vectors[0])
         return vectors
+
+    async def list_models(self) -> list[ModelInfo]:
+        if self._models_cache is not None:
+            return list(self._models_cache)
+        if not self._api_key:
+            raise RuntimeError("embed-openai: api_key is not configured")
+        client = await self._ensure_client()
+        try:
+            response = await client.get("/models")
+        except Exception as exc:
+            raise RuntimeError(f"embed-openai: could not list models: {exc!r}") from exc
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"embed-openai: /models returned HTTP {response.status_code}: {response.text}"
+            )
+        data = response.json()
+        rows = data.get("data") or []
+        models: list[ModelInfo] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            mid = str(row.get("id") or "")
+            if not mid or not mid.startswith(EMBEDDING_PREFIXES):
+                continue
+            models.append(
+                ModelInfo(
+                    id=mid,
+                    name=mid,
+                    dimensions=KNOWN_DIMENSIONS.get(mid),
+                    input_cost_per_1k=KNOWN_INPUT_COST_PER_1K.get(mid),
+                )
+            )
+        # Always include the currently selected model so it shows up in
+        # the picker even when /models prunes it (e.g. preview models).
+        if self.model_id and not any(m.id == self.model_id for m in models):
+            models.append(
+                ModelInfo(
+                    id=self.model_id,
+                    name=self.model_id,
+                    dimensions=KNOWN_DIMENSIONS.get(self.model_id),
+                    input_cost_per_1k=KNOWN_INPUT_COST_PER_1K.get(self.model_id),
+                )
+            )
+        models.sort(key=lambda m: m.id)
+        self._models_cache = models
+        return list(models)
 
     async def health_check(self) -> HealthStatus:
         if not self._api_key:

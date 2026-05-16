@@ -47,7 +47,7 @@ def test_manifest_discovers_and_loads() -> None:
     instance = result.instances[0].instance
     assert_protocol_attrs(
         instance,
-        ["id", "name", "model_id", "dimensions", "embed", "health_check"],
+        ["id", "name", "model_id", "dimensions", "embed", "list_models", "health_check"],
     )
 
 
@@ -55,16 +55,36 @@ def test_defaults_match_spec(st_module) -> None:
     provider = st_module.SentenceTransformersEmbeddingProvider()
     assert provider.id == "embed-sentence-transformers"
     assert provider.model_id == "sentence-transformers/all-mpnet-base-v2"
-    assert provider.dimensions == 0  # filled in after model load
+    # Pre-load, dimensions come from the curated catalog for known ids.
+    assert provider.dimensions == 768
 
 
-def test_config_overrides_model(st_module) -> None:
+def test_active_model_config_key(st_module) -> None:
     provider = st_module.SentenceTransformersEmbeddingProvider(
-        config={"model": "BAAI/bge-small-en", "batch_size": 8, "normalize": False}
+        config={"active_model": "BAAI/bge-base-en-v1.5", "batch_size": 8, "normalize": False}
     )
-    assert provider.model_id == "BAAI/bge-small-en"
+    assert provider.model_id == "BAAI/bge-base-en-v1.5"
+    assert provider.dimensions == 768  # from curated catalog
     assert provider._batch_size == 8
     assert provider._normalize is False
+
+
+def test_legacy_model_key_still_honored(st_module) -> None:
+    # Pre-rename configs used `model`; loading must not require manual
+    # migration.
+    provider = st_module.SentenceTransformersEmbeddingProvider(
+        config={"model": "BAAI/bge-small-en-v1.5"}
+    )
+    assert provider.model_id == "BAAI/bge-small-en-v1.5"
+    assert provider.dimensions == 384
+
+
+def test_unknown_model_has_zero_dimensions_until_load(st_module) -> None:
+    provider = st_module.SentenceTransformersEmbeddingProvider(
+        config={"active_model": "some-org/some-experimental-model"}
+    )
+    assert provider.model_id == "some-org/some-experimental-model"
+    assert provider.dimensions == 0
 
 
 @pytest.mark.asyncio
@@ -110,6 +130,31 @@ async def test_health_check_healthy_after_load(monkeypatch, st_module) -> None:
     status = await provider.health_check()
     assert status.level == HealthLevel.HEALTHY
     assert provider.dimensions == 8
+
+
+@pytest.mark.asyncio
+async def test_list_models_returns_curated_catalog(st_module) -> None:
+    provider = st_module.SentenceTransformersEmbeddingProvider()
+    models = await provider.list_models()
+    ids = {m.id for m in models}
+    # A few sentinel members of the curated set.
+    assert "sentence-transformers/all-mpnet-base-v2" in ids
+    assert "BAAI/bge-base-en-v1.5" in ids
+    assert "intfloat/e5-base-v2" in ids
+    # Every curated entry advertises a non-null dimension count.
+    by_id = {m.id: m for m in models}
+    assert by_id["sentence-transformers/all-mpnet-base-v2"].dimensions == 768
+    assert by_id["BAAI/bge-large-en-v1.5"].dimensions == 1024
+
+
+@pytest.mark.asyncio
+async def test_list_models_includes_unknown_active_model(st_module) -> None:
+    provider = st_module.SentenceTransformersEmbeddingProvider(
+        config={"active_model": "some-org/custom-checkpoint"}
+    )
+    models = await provider.list_models()
+    ids = {m.id for m in models}
+    assert "some-org/custom-checkpoint" in ids
 
 
 @pytest.mark.asyncio

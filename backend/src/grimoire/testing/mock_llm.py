@@ -19,6 +19,7 @@ from grimoire.types.llm import (
     CompletionChunk,
     CompletionRequest,
     CompletionResponse,
+    ModelInfo,
     TokenUsage,
 )
 
@@ -300,6 +301,9 @@ class MockEmbeddingProvider:
         return [
             [float(sum(ord(c) for c in t) % 100) + i for i in range(self.dimensions)] for t in texts
         ]
+
+    async def list_models(self) -> list[ModelInfo]:
+        return [ModelInfo(id=self.model_id, name=self.model_id, dimensions=self.dimensions)]
 
     async def health_check(self) -> HealthStatus:
         return HealthStatus(level=HealthLevel.HEALTHY, target_id=self.id)
