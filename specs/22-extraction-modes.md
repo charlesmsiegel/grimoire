@@ -239,7 +239,7 @@ The Extractor picks a mode at the start of each turn based on:
 1. **Per-campaign config** (user-set preference)
 2. **Provider capability** (queried via LLM Gateway)
 3. **Auto-disable state** (mode disabled for this provider due to recent failures)
-4. **Auxiliary task suppression** (`23-impersonation-mode.md`: auxiliary tasks skip extraction entirely)
+4. **Auxiliary task suppression** (`23-auxiliary-tasks.md`: auxiliary tasks skip extraction entirely)
 
 Pseudo:
 
@@ -352,7 +352,7 @@ Together mode adds instructions to the assembled prompt. Tool-use mode attaches 
 
 ## Interaction with other modules
 
-- **`23-impersonation-mode.md`** (Auxiliary tasks): all extraction is suppressed for auxiliary tasks regardless of mode. The Context Builder omits Together's tracker instructions and Tool-use's tool declarations.
+- **`23-auxiliary-tasks.md`** (Auxiliary tasks): all extraction is suppressed for auxiliary tasks regardless of mode. The Context Builder omits Together's tracker instructions and Tool-use's tool declarations.
 - **`05-llm-gateway.md`**: capability detection per provider (supports tool-use? streaming tool-use? max-tool-count? per-tool max-params?). LLM Gateway exposes this; Extractor consumes it.
 - **`19-scene-hud.md`** and **`20-transient-state.md`**: extracted transient updates flow through the same path regardless of mode; the HUD doesn't know which mode produced the data.
 - **`10-scene-manager.md`**: Together mode's tracker text is stripped before the post is appended to the scene file; the scene file never contains tracker JSON.

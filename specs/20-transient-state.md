@@ -359,7 +359,7 @@ A campaign accumulates ~50-200 transient rows per turn (across all entities). At
 - **Extractor proposes a transient update that conflicts with a fact** — flagged, not applied to facts; transient still recorded for traceability
 - **User sets a value the Extractor then keeps overriding** — the user-source write has higher priority; Extractor proposals against a user-written field are routed to review for the next 3 posts (debouncing)
 - **Decay clock goes backward (time retcon)** — vacuum runs on retcon to clear / restore expired rows as appropriate
-- **Mechanics callback writes to a field the user just set** — Mechanics > Extractor but User > Mechanics; if Mechanics is authoritative for that field (e.g., post-wound posture), it wins with a flagged audit entry
+- **Mechanics callback writes to a field the user just set** — per the conflict-resolution rule, the user's write wins; the mechanics proposal is surfaced as a conflict for the user to pick. If the mechanics module truly needs authoritative state (e.g., a wound's posture effect), that state belongs on the mechanics sheet — transient state is narrative and respects user > mechanics unconditionally.
 
 ## Open questions
 
