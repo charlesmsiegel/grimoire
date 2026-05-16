@@ -1,24 +1,23 @@
-id: llm-openrouter
-name: "OpenRouter LLM Provider"
+id: embed-openrouter
+name: "OpenRouter Embeddings"
 version: "1.0.0"
 api_version: "1"
 author: "Grimoire core"
 homepage: "https://openrouter.ai"
 description: |
-  Routes completions through OpenRouter's OpenAI-compatible API so any of
-  the hundreds of models on openrouter.ai can be used as a Grimoire
-  provider with a single API key. Models are addressed by their OpenRouter
-  slug (e.g. `anthropic/claude-opus-4-7`, `openai/gpt-4o`,
-  `meta-llama/llama-3.1-70b-instruct`).
+  Routes embeddings through OpenRouter's OpenAI-compatible `/embeddings`
+  endpoint so any of the embedding models exposed by openrouter.ai can be
+  used with a single API key. Models are addressed by their OpenRouter
+  slug (e.g. `openai/text-embedding-3-small`, `mistralai/mistral-embed`).
 
 implements:
-  - llm_provider
+  - embedding_provider
 
 classes:
-  llm_provider: OpenRouterLLMProvider
+  embedding_provider: OpenRouterEmbeddingProvider
 
 shares_secrets_with:
-  - embed-openrouter
+  - llm-openrouter
 
 config_schema:
   type: object
@@ -37,10 +36,20 @@ config_schema:
       type: string
       title: Active model
       description: |
-        OpenRouter model slug Grimoire will route completions to. Picked
-        from the live catalog at https://openrouter.ai/models.
-      default: "anthropic/claude-sonnet-4-6"
+        OpenRouter model slug Grimoire will embed with. Picked from the live
+        catalog at https://openrouter.ai/models, filtered to embedding
+        models.
+      default: "openai/text-embedding-3-small"
       x-source: models
+    dimensions:
+      type: integer
+      minimum: 1
+      title: Dimensions
+      description: |
+        Truncate the embedding to this length. Only honoured by models
+        that support a `dimensions` request parameter (mostly OpenAI's
+        `text-embedding-3-*` family). Leave unset to use the model's
+        native dimension count.
     http_referer:
       type: string
       title: HTTP-Referer header
@@ -55,7 +64,7 @@ config_schema:
     timeout_seconds:
       type: number
       title: Request timeout (seconds)
-      default: 120
+      default: 60
     extra_headers:
       type: object
       title: Extra headers
@@ -69,7 +78,7 @@ requirements:
   - "httpx>=0.27.0"
 
 notes: |
-  Get an API key at https://openrouter.ai/keys. Per-model pricing is fetched
-  lazily from the OpenRouter `/models` endpoint and reflected in
-  `list_models()`; if the call fails the provider still works but cost
-  estimates are unavailable for unknown models.
+  Get an API key at https://openrouter.ai/keys. The list of embedding
+  models is fetched from OpenRouter's `/models` endpoint and filtered to
+  rows whose architecture reports an `embedding` output modality (with a
+  small fallback list when filtering yields nothing).

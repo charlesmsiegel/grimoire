@@ -126,6 +126,7 @@ def test_load_plugin_supports_multi_kind_plugins(plugins_root: Path) -> None:
                 self.model_id = "test"
                 self.dimensions = 8
             async def embed(self, texts): return [[0.0] * 8 for _ in texts]
+            async def list_models(self): return []
             async def health_check(self):
                 return HealthStatus(level=HealthLevel.HEALTHY, target_id=self.id)
         """

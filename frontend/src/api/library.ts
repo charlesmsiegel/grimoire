@@ -259,6 +259,7 @@ export interface PluginModelInfo {
   context_window: number;
   input_cost_per_1k: number | null;
   output_cost_per_1k: number | null;
+  dimensions: number | null;
 }
 
 export const pluginsApi = {

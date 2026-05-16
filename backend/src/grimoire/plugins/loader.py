@@ -180,6 +180,7 @@ def _build_manifest(raw: dict[str, Any]) -> PluginManifest:
         homepage=raw.get("homepage") or "",
         description=raw.get("description") or "",
         isolated_venv=bool(raw.get("isolated_venv") or False),
+        shares_secrets_with=[str(x) for x in raw.get("shares_secrets_with") or []],
         raw=dict(raw),
     )
 

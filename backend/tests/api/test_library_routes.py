@@ -82,6 +82,7 @@ class FakePlugins:
         self.configs: dict[str, dict[str, Any]] = {}
         self.saved: list[tuple[str, dict[str, Any]]] = []
         self.llm_providers: dict[str, Any] = {}
+        self.embedding_providers: dict[str, Any] = {}
 
     async def list_installed(self) -> list[Any]:
         return []
@@ -103,6 +104,9 @@ class FakePlugins:
 
     def get_llm_provider(self, plugin_id: str) -> Any:
         return self.llm_providers.get(plugin_id)
+
+    def get_embedding_provider(self, plugin_id: str) -> Any:
+        return self.embedding_providers.get(plugin_id)
 
 
 def test_list_worlds(client, container) -> None:
@@ -251,7 +255,7 @@ def test_plugin_models_returns_list(client, container) -> None:
     assert [m["id"] for m in body] == ["anthropic/claude-opus-4-7", "openai/gpt-4o"]
 
 
-def test_plugin_models_404_when_not_llm_provider(client, container) -> None:
+def test_plugin_models_404_when_no_catalog(client, container) -> None:
     container.plugins = FakePlugins()
     response = client.get("/api/plugins/llm-x/models")
     assert response.status_code == 404
@@ -264,6 +268,24 @@ def test_plugin_models_409_when_provider_unconfigured(client, container) -> None
     response = client.get("/api/plugins/llm-x/models")
     assert response.status_code == 409
     assert "api_key" in response.json()["detail"]
+
+
+def test_plugin_models_serves_embedding_provider(client, container) -> None:
+    from grimoire.types.llm import ModelInfo
+
+    plugins = FakePlugins()
+    plugins.embedding_providers["embed-x"] = _FakeProvider(
+        [
+            ModelInfo(id="text-embedding-3-small", name="3-small", dimensions=1536),
+            ModelInfo(id="text-embedding-3-large", name="3-large", dimensions=3072),
+        ]
+    )
+    container.plugins = plugins
+    response = client.get("/api/plugins/embed-x/models")
+    assert response.status_code == 200
+    body = response.json()
+    assert [m["id"] for m in body] == ["text-embedding-3-small", "text-embedding-3-large"]
+    assert body[0]["dimensions"] == 1536
 
 
 def test_configure_plugin_persists_via_service(client, container) -> None:

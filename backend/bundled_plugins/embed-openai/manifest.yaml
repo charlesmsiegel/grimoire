@@ -20,28 +20,37 @@ config_schema:
   properties:
     api_key:
       type: string
+      title: API key
       description: OpenAI API key.
       secret: true
     base_url:
       type: string
+      title: Base URL
       description: Override the API base URL (Azure / proxies).
       default: https://api.openai.com/v1
-    model:
+    active_model:
       type: string
-      description: Embedding model id.
+      title: Active model
+      description: |
+        Embedding model id. Picked from the live OpenAI `/v1/models`
+        catalog, filtered to embedding models.
       default: text-embedding-3-small
+      x-source: models
     dimensions:
       type: integer
       minimum: 1
+      title: Dimensions
       description: >
         Truncate the embedding to this length. Only supported by
         `text-embedding-3-small` and `text-embedding-3-large`. When unset
         the model's native dimension count is used.
     organization:
       type: string
+      title: Organization
       description: Optional OpenAI organization header.
     timeout_seconds:
       type: number
       minimum: 1
+      title: Request timeout (seconds)
       default: 30
   additionalProperties: false

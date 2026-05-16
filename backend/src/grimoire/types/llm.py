@@ -54,6 +54,7 @@ class ModelInfo(BaseModel):
     input_cost_per_1k: float | None = None
     output_cost_per_1k: float | None = None
     capabilities: ProviderCapabilities | None = None
+    dimensions: int | None = None
 
 
 class CompletionRequest(BaseModel):

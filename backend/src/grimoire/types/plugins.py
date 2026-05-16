@@ -39,6 +39,11 @@ class PluginManifest(BaseModel):
     homepage: str = ""
     description: str = ""
     isolated_venv: bool = False
+    # Plugin ids whose secret fields this plugin inherits when its own
+    # are blank. Used to share an OpenRouter / OpenAI API key across
+    # paired LLM and embedding plugins so the user only configures it
+    # in one place.
+    shares_secrets_with: list[PluginId] = Field(default_factory=list)
     raw: Json = Field(default_factory=dict)
 
 

@@ -210,6 +210,107 @@ async def test_validate_config_returns_result(plugins_root: Path, config_root: P
     assert not bad.ok
 
 
+async def test_get_config_inherits_secret_from_sibling(
+    plugins_root: Path, config_root: Path
+) -> None:
+    write_plugin(plugins_root, "alpha", manifest={"shares_secrets_with": ["beta"]})
+    write_plugin(plugins_root, "beta", manifest={"shares_secrets_with": ["alpha"]})
+    svc = _service(plugins_root, config_root)
+    await svc.rescan()
+
+    await svc.set_config("beta", {"api_key": "sk-shared"})
+
+    inherited = await svc.get_config("alpha")
+    assert inherited.get("api_key") == "sk-shared"
+
+
+async def test_get_config_does_not_overwrite_own_secret(
+    plugins_root: Path, config_root: Path
+) -> None:
+    write_plugin(plugins_root, "alpha", manifest={"shares_secrets_with": ["beta"]})
+    write_plugin(plugins_root, "beta", manifest={"shares_secrets_with": ["alpha"]})
+    svc = _service(plugins_root, config_root)
+    await svc.rescan()
+
+    await svc.set_config("alpha", {"api_key": "sk-alpha"})
+    await svc.set_config("beta", {"api_key": "sk-beta"})
+
+    assert (await svc.get_config("alpha"))["api_key"] == "sk-alpha"
+    assert (await svc.get_config("beta"))["api_key"] == "sk-beta"
+
+
+async def test_plugin_instance_constructed_with_inherited_secret(
+    plugins_root: Path, config_root: Path
+) -> None:
+    # Plugin records its `config` dict, so we can inspect what the loader
+    # actually passed it after the inheritance pass.
+    py = textwrap.dedent(
+        """
+        from grimoire.types.common import HealthLevel, HealthStatus
+
+
+        class Provider:
+            def __init__(self, config=None):
+                self.config = config or {}
+                self.id = "rec"
+                self.name = "Rec"
+                self.capabilities = object()
+
+            async def complete(self, request):
+                return None
+
+            def stream(self, request):
+                async def _gen():
+                    if False:
+                        yield None
+                return _gen()
+
+            async def list_models(self):
+                return []
+
+            async def estimate_tokens(self, text):
+                return 0
+
+            async def health_check(self):
+                return HealthStatus(level=HealthLevel.HEALTHY, target_id=self.id)
+        """
+    ).strip()
+    write_plugin(
+        plugins_root,
+        "alpha",
+        manifest={"shares_secrets_with": ["beta"]},
+        plugin_py=py,
+    )
+    write_plugin(
+        plugins_root,
+        "beta",
+        manifest={"shares_secrets_with": ["alpha"]},
+        plugin_py=py,
+    )
+    svc = _service(plugins_root, config_root)
+    # Seed beta's config before any rescan; alpha has no config yet.
+    await svc.rescan()
+    await svc.set_config("beta", {"api_key": "sk-shared"})
+    # Rescan again so alpha's provider is rebuilt with the inherited key.
+    await svc.rescan()
+
+    alpha = svc.get_llm_provider("alpha")
+    assert alpha is not None
+    assert alpha.config.get("api_key") == "sk-shared"
+
+
+async def test_shared_secret_unset_when_neither_side_configured(
+    plugins_root: Path, config_root: Path
+) -> None:
+    write_plugin(plugins_root, "alpha", manifest={"shares_secrets_with": ["beta"]})
+    write_plugin(plugins_root, "beta", manifest={"shares_secrets_with": ["alpha"]})
+    svc = _service(plugins_root, config_root)
+    await svc.rescan()
+
+    cfg = await svc.get_config("alpha")
+    assert "api_key" not in cfg or not cfg["api_key"]
+
+
 async def test_unload_clears_record(plugins_root: Path, config_root: Path) -> None:
     write_plugin(plugins_root, "alpha")
     svc = _service(plugins_root, config_root)

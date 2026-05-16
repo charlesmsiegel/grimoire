@@ -57,6 +57,29 @@ class UpdateEntityPayload(BaseModel):
     source: str = "user"
 
 
+class CreateStyleGuidePayload(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    pacing: list[str] = Field(default_factory=list)
+    voice: list[str] = Field(default_factory=list)
+    themes: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+    source: str = "user"
+
+
+class UpdateStyleGuidePayload(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    pacing: list[str] | None = None
+    voice: list[str] | None = None
+    themes: list[str] | None = None
+    avoid: list[str] | None = None
+    source: str = "user"
+
+
 # --------------------------------------------------------------------------- #
 # Worlds
 # --------------------------------------------------------------------------- #
@@ -242,12 +265,66 @@ async def list_style_guides(library: LibraryDep) -> Any:
     return to_payload(await library.list_style_guides())
 
 
+@router.post("/library/style-guides", status_code=201)
+async def create_style_guide(
+    payload: CreateStyleGuidePayload,
+    library: LibraryDep,
+) -> Any:
+    try:
+        result = await library.create_style_guide(
+            payload.id,
+            name=payload.name,
+            description=payload.description,
+            tags=payload.tags,
+            pacing=payload.pacing,
+            voice=payload.voice,
+            themes=payload.themes,
+            avoid=payload.avoid,
+            source=payload.source,
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return to_payload(result)
+
+
 @router.get("/library/style-guides/{guide_id}")
 async def get_style_guide(guide_id: str, library: LibraryDep) -> Any:
     try:
         return to_payload(await library.get_style_guide(guide_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+
+
+@router.get("/library/style-guides/{guide_id}/edit")
+async def get_style_guide_edit(guide_id: str, library: LibraryDep) -> Any:
+    """Return a style guide parsed into the structured shape the edit form uses."""
+    try:
+        return to_payload(await library.parse_style_guide(guide_id))
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.patch("/library/style-guides/{guide_id}")
+async def update_style_guide(
+    guide_id: str,
+    payload: UpdateStyleGuidePayload,
+    library: LibraryDep,
+) -> Any:
+    try:
+        result = await library.update_style_guide(
+            guide_id,
+            name=payload.name,
+            description=payload.description,
+            tags=payload.tags,
+            pacing=payload.pacing,
+            voice=payload.voice,
+            themes=payload.themes,
+            avoid=payload.avoid,
+            source=payload.source,
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return to_payload(result)
 
 
 @router.get("/library/image-presets")
@@ -389,19 +466,21 @@ async def plugin_health(plugin_id: str, plugins: PluginsDep) -> Any:
 
 @router.get("/plugins/{plugin_id}/models")
 async def plugin_models(plugin_id: str, plugins: PluginsDep) -> Any:
-    """List models advertised by an LLM-provider plugin.
+    """List models advertised by an LLM- or embedding-provider plugin.
 
     Used by the frontend plugin-config form to populate a searchable model
     picker for fields annotated with ``x-source: models``. Returns 404 if
-    the plugin is not loaded or does not implement ``llm_provider``; a
+    the plugin is not loaded or does not advertise a model catalog; a
     plugin whose provider raises (e.g. missing API key) is surfaced as a
     409 so the UI can show "configure the plugin first".
     """
-    provider = plugins.get_llm_provider(plugin_id)
-    if provider is None:
+    provider: Any = plugins.get_llm_provider(plugin_id) or plugins.get_embedding_provider(
+        plugin_id
+    )
+    if provider is None or not hasattr(provider, "list_models"):
         raise HTTPException(
             status_code=404,
-            detail=f"plugin {plugin_id!r} is not a loaded LLM provider",
+            detail=f"plugin {plugin_id!r} does not advertise a model catalog",
         )
     try:
         models = await provider.list_models()

@@ -85,6 +85,11 @@ def openrouter_module() -> object:
 
 
 @pytest.fixture
+def embed_openrouter_module() -> object:
+    return _import_plugin("embed-openrouter")
+
+
+@pytest.fixture
 def zhipu_glm_module() -> object:
     return _import_plugin("llm-zhipu-glm")
 

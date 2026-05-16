@@ -63,6 +63,11 @@ PLUGIN_MANIFEST_SCHEMA: dict = {
             "type": "array",
             "items": {"type": "string"},
         },
+        "shares_secrets_with": {
+            "type": "array",
+            "uniqueItems": True,
+            "items": {"type": "string", "pattern": _ID_PATTERN},
+        },
         "notes": {"type": "string"},
     },
     "additionalProperties": True,
