@@ -6,10 +6,11 @@ import pytest
 
 from grimoire.extractor import ExtractorConfig, ExtractorService
 from grimoire.extractor.routing import route_deltas
-from grimoire.types.common import ValidationResult
+from grimoire.extractor.service import _delta_is_about
+from grimoire.types.common import Scope, ValidationResult
 from grimoire.types.extraction import FlagLevel
 from grimoire.types.scene import Scene
-from grimoire.types.state import CharacterState, DeltaKind, StateSnapshot
+from grimoire.types.state import CharacterState, DeltaKind, StateDelta, StateSnapshot
 
 from .conftest import FakeContradictionChecker, FakeGateway, FakeMechanics
 
@@ -109,6 +110,19 @@ async def test_extract_clamps_player_authority_on_other_subjects(
     # Player's own PC keeps full confidence; the other subject is clamped.
     assert by_subject.get(("julian",)) == 0.95
     assert by_subject.get(("winifred",)) == 0.5
+
+
+@pytest.mark.parametrize("field", ["character_id", "actor_ref", "from", "subject"])
+def test_delta_is_about_rejects_empty_string_subject(field: str):
+    """Regression for #31: empty subject must not match via `pc_ref.endswith("")`."""
+    delta = StateDelta(
+        kind=DeltaKind.FACT_ADD,
+        target_scope=Scope.CAMPAIGN_SQLITE,
+        target_id="fact:x",
+        after={field: "", "about": {"character_ids": ["winifred"]}},
+        confidence=0.95,
+    )
+    assert _delta_is_about(delta, pc_ref="julian") is False
 
 
 @pytest.mark.asyncio
