@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from grimoire.library import LibraryNotFoundError, LibraryService, PromotionError
+from grimoire.library import (
+    LibraryConflictError,
+    LibraryNotFoundError,
+    LibraryService,
+    PromotionError,
+)
 from grimoire.state_store import StateStore
 from grimoire.types.common import EntityKind
 from grimoire.types.composition import Composition, WorldRef
@@ -177,6 +182,82 @@ async def test_style_guides_and_image_presets(library: LibraryService, store: St
         await library.get_style_guide("missing")
     with pytest.raises(LibraryNotFoundError):
         await library.get_image_preset("missing")
+
+
+async def test_create_style_guide_renders_bulleted_sections(library: LibraryService) -> None:
+    created = await library.create_style_guide(
+        "cozy-mystery",
+        name="Cozy Mystery",
+        description="Low stakes, high warmth.",
+        tags=["mystery", "cozy"],
+        pacing=["Unhurried.", "Tea between clues."],
+        voice=["Warm third-limited."],
+        themes=["Community.", "Small redemption."],
+        avoid=["Graphic violence.", "Nihilism."],
+    )
+    assert created.asset_id == "cozy-mystery"
+    assert created.name == "Cozy Mystery"
+    assert created.frontmatter.get("description") == "Low stakes, high warmth."
+    assert created.tags == ["mystery", "cozy"]
+
+    body = created.body
+    assert "# Cozy Mystery" in body
+    assert "## Pacing\n- Unhurried.\n- Tea between clues." in body
+    assert "## Voice\n- Warm third-limited." in body
+    assert "## Themes\n- Community.\n- Small redemption." in body
+    assert "## Avoid\n- Graphic violence.\n- Nihilism." in body
+
+    # Duplicate id -> conflict, not silent overwrite.
+    with pytest.raises(LibraryConflictError):
+        await library.create_style_guide("cozy-mystery", name="dup")
+
+
+async def test_create_style_guide_omits_blank_sections(library: LibraryService) -> None:
+    created = await library.create_style_guide(
+        "voice-only",
+        name="Voice Only",
+        voice=["Terse, declarative."],
+    )
+    body = created.body
+    assert "## Voice" in body
+    assert "## Pacing" not in body
+    assert "## Themes" not in body
+    assert "## Avoid" not in body
+
+
+async def test_update_style_guide_replaces_bullets_and_preserves_intro(
+    library: LibraryService, store: StateStore
+) -> None:
+    await store.write_library_file(
+        library_id="style-guides/gothic-horror",
+        frontmatter={"id": "gothic-horror", "name": "Gothic Horror", "tags": ["horror"]},
+        body=(
+            "# Gothic Horror\n\n"
+            "Atmosphere first, action second.\n\n"
+            "## Pacing\n"
+            "- Original bullet.\n\n"
+            "## Footnote\n"
+            "Hand-authored prose we should keep.\n"
+        ),
+        source="user",
+    )
+
+    parsed = await library.parse_style_guide("gothic-horror")
+    assert parsed["intro"] == "Atmosphere first, action second."
+    assert parsed["pacing"] == ["Original bullet."]
+    assert parsed["extra_sections"] == [("Footnote", "Hand-authored prose we should keep.")]
+
+    updated = await library.update_style_guide(
+        "gothic-horror",
+        pacing=["New bullet A.", "New bullet B."],
+        voice=["Whispered."],
+    )
+    assert "## Pacing\n- New bullet A.\n- New bullet B." in updated.body
+    assert "## Voice\n- Whispered." in updated.body
+    # Intro and extra section round-trip.
+    assert "Atmosphere first, action second." in updated.body
+    assert "## Footnote" in updated.body
+    assert "Hand-authored prose we should keep." in updated.body
 
 
 # ---------------------------------------------------------------------------

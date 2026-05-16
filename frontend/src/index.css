@@ -1959,6 +1959,150 @@ pre {
   font-weight: 400;
 }
 
+.library-form-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.library-card:has(.library-card-actions) {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+  transition: border-color var(--transition-fast);
+}
+
+.library-card:has(.library-card-actions):hover {
+  border-color: var(--accent);
+}
+
+.library-card:has(.library-card-actions) > a {
+  flex: 1 1 auto;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.library-card:has(.library-card-actions) > a:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: transparent;
+}
+
+.library-card-actions {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.library-card-actions a {
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+}
+
+.library-card-actions a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.bullet-editor {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--bg);
+}
+
+.bullet-editor legend {
+  padding: 0 var(--space-1);
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+.bullet-editor-empty {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--fg-subtle);
+  font-style: italic;
+}
+
+.bullet-editor-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.bullet-editor-marker {
+  color: var(--fg-subtle);
+  flex: 0 0 auto;
+  width: 0.75rem;
+  text-align: center;
+}
+
+.bullet-editor-row input {
+  flex: 1 1 auto;
+}
+
+.bullet-editor-remove {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.bullet-editor-remove:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.bullet-editor-add {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--fg-muted);
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.bullet-editor-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.button-link {
+  display: inline-block;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 0.85rem;
+  background: var(--bg);
+}
+
+.button-link:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
 .library-card-grid {
   list-style: none;
   margin: 0;

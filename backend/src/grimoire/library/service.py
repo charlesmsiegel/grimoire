@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from grimoire.library.errors import (
+    LibraryConflictError,
     LibraryError,
     LibraryNotFoundError,
     PromotionError,
@@ -208,6 +209,107 @@ class LibraryService:
         if row is None:
             raise LibraryNotFoundError(f"style guide {id!r} not found")
         return _entity_from_row(row)
+
+    async def create_style_guide(
+        self,
+        id: str,
+        *,
+        name: str,
+        description: str = "",
+        tags: list[str] | None = None,
+        pacing: list[str] | None = None,
+        voice: list[str] | None = None,
+        themes: list[str] | None = None,
+        avoid: list[str] | None = None,
+        source: str = "user",
+    ) -> LibraryEntity:
+        library_id = f"style-guides/{id}"
+        existing = await self.store.get_library_entity(library_id)
+        if existing is not None:
+            raise LibraryConflictError(f"style guide {id!r} already exists")
+        frontmatter: dict[str, Any] = {"id": id, "name": name or id}
+        if description:
+            frontmatter["description"] = description
+        if tags:
+            frontmatter["tags"] = list(tags)
+        body = _render_style_guide_body(
+            name=name or id,
+            pacing=pacing or [],
+            voice=voice or [],
+            themes=themes or [],
+            avoid=avoid or [],
+        )
+        await self.store.write_library_file(
+            library_id=library_id,
+            frontmatter=frontmatter,
+            body=body,
+            source=source,
+        )
+        return await self.get_style_guide(id)
+
+    async def parse_style_guide(self, id: str) -> dict[str, Any]:
+        """Return the editable shape of a style guide for the edit form."""
+        entity = await self.get_style_guide(id)
+        parsed = _parse_style_guide_body(entity.body)
+        fm = entity.frontmatter or {}
+        return {
+            "id": entity.asset_id,
+            "name": entity.name,
+            "description": fm.get("description") or "",
+            "tags": list(entity.tags),
+            "intro": parsed["intro"],
+            "pacing": parsed["pacing"],
+            "voice": parsed["voice"],
+            "themes": parsed["themes"],
+            "avoid": parsed["avoid"],
+            "extra_sections": parsed["extra_sections"],
+        }
+
+    async def update_style_guide(
+        self,
+        id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+        pacing: list[str] | None = None,
+        voice: list[str] | None = None,
+        themes: list[str] | None = None,
+        avoid: list[str] | None = None,
+        source: str = "user",
+    ) -> LibraryEntity:
+        existing = await self.get_style_guide(id)
+        parsed = _parse_style_guide_body(existing.body)
+        fm = dict(existing.frontmatter or {})
+        new_name = name if name is not None else (fm.get("name") or existing.name or id)
+        fm["id"] = id
+        fm["name"] = new_name
+        if description is not None:
+            if description:
+                fm["description"] = description
+            else:
+                fm.pop("description", None)
+        if tags is not None:
+            if tags:
+                fm["tags"] = list(tags)
+            else:
+                fm.pop("tags", None)
+        body = _render_style_guide_body(
+            name=new_name,
+            pacing=pacing if pacing is not None else parsed["pacing"],
+            voice=voice if voice is not None else parsed["voice"],
+            themes=themes if themes is not None else parsed["themes"],
+            avoid=avoid if avoid is not None else parsed["avoid"],
+            intro=parsed["intro"],
+            extra_sections=parsed["extra_sections"],
+        )
+        await self.store.write_library_file(
+            library_id=f"style-guides/{id}",
+            frontmatter=fm,
+            body=body,
+            source=source,
+        )
+        return await self.get_style_guide(id)
 
     async def get_image_preset(self, id: str) -> LibraryEntity:
         library_id = f"image-presets/{id}"
@@ -610,6 +712,97 @@ def _normalize_row(row: Any) -> dict:
     raw["tags"] = _maybe_json(raw.get("tags")) or []
     raw["keywords"] = _maybe_json(raw.get("keywords")) or []
     return raw
+
+
+def _render_style_guide_body(
+    *,
+    name: str,
+    pacing: list[str],
+    voice: list[str],
+    themes: list[str],
+    avoid: list[str],
+    intro: str = "",
+    extra_sections: list[tuple[str, str]] | None = None,
+) -> str:
+    parts: list[str] = [f"# {name}"]
+    intro_text = (intro or "").strip()
+    if intro_text:
+        parts.append(intro_text)
+    for heading, items in (
+        ("Pacing", pacing),
+        ("Voice", voice),
+        ("Themes", themes),
+        ("Avoid", avoid),
+    ):
+        bullets = [item.strip() for item in (items or []) if item and item.strip()]
+        if not bullets:
+            continue
+        section = f"## {heading}\n" + "\n".join(f"- {b}" for b in bullets)
+        parts.append(section)
+    for heading, raw in extra_sections or []:
+        body_text = (raw or "").strip()
+        if not body_text:
+            continue
+        parts.append(f"## {heading}\n{body_text}")
+    return "\n\n".join(parts) + "\n"
+
+
+_KNOWN_SECTIONS: tuple[str, ...] = ("Pacing", "Voice", "Themes", "Avoid")
+
+
+def _parse_style_guide_body(body: str) -> dict[str, Any]:
+    """Split a style-guide markdown body into the structured shape the form edits.
+
+    Returns ``{intro, pacing, voice, themes, avoid, extra_sections}`` where the
+    four named sections are bullet-item lists and ``extra_sections`` preserves
+    any other ``## Heading`` blocks verbatim so a round-trip edit doesn't
+    silently drop hand-authored prose.
+    """
+    lines = (body or "").splitlines()
+    cursor = 0
+    # Skip a leading H1; we re-emit it from the entity name.
+    while cursor < len(lines) and not lines[cursor].strip():
+        cursor += 1
+    if cursor < len(lines) and lines[cursor].lstrip().startswith("# "):
+        cursor += 1
+
+    intro_lines: list[str] = []
+    while cursor < len(lines) and not lines[cursor].lstrip().startswith("## "):
+        intro_lines.append(lines[cursor])
+        cursor += 1
+    intro = "\n".join(intro_lines).strip()
+
+    sections: dict[str, list[str]] = {h: [] for h in _KNOWN_SECTIONS}
+    extras: list[tuple[str, str]] = []
+    while cursor < len(lines):
+        heading_line = lines[cursor].lstrip()
+        if not heading_line.startswith("## "):
+            cursor += 1
+            continue
+        heading = heading_line[3:].strip()
+        cursor += 1
+        block: list[str] = []
+        while cursor < len(lines) and not lines[cursor].lstrip().startswith("## "):
+            block.append(lines[cursor])
+            cursor += 1
+        canonical = next((h for h in _KNOWN_SECTIONS if h.lower() == heading.lower()), None)
+        if canonical is not None:
+            bullets: list[str] = []
+            for raw in block:
+                stripped = raw.lstrip()
+                if stripped.startswith("- ") or stripped.startswith("* "):
+                    bullets.append(stripped[2:].strip())
+            sections[canonical] = bullets
+        else:
+            extras.append((heading, "\n".join(block).strip()))
+    return {
+        "intro": intro,
+        "pacing": sections["Pacing"],
+        "voice": sections["Voice"],
+        "themes": sections["Themes"],
+        "avoid": sections["Avoid"],
+        "extra_sections": extras,
+    }
 
 
 def _maybe_json(value: Any) -> Any:
