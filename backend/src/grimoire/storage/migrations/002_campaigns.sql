@@ -15,15 +15,15 @@ CREATE TABLE campaigns (
   config TEXT
 );
 
-CREATE TABLE campaign_world_refs (
+CREATE TABLE campaign_setting_refs (
   campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
-  world_id TEXT NOT NULL,
+  setting_id TEXT NOT NULL,
   priority INTEGER NOT NULL,
   include TEXT NOT NULL,
   bound_at_version INTEGER NOT NULL,
   track_latest INTEGER NOT NULL DEFAULT 0,
   bound_at TEXT NOT NULL,
-  PRIMARY KEY (campaign_id, world_id)
+  PRIMARY KEY (campaign_id, setting_id)
 );
 
 CREATE TABLE campaign_pcs (

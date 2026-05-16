@@ -2,7 +2,7 @@
 
 CREATE TABLE library_index (
   id TEXT PRIMARY KEY,
-  world_id TEXT,
+  setting_id TEXT,
   kind TEXT NOT NULL,
   asset_id TEXT NOT NULL,
   name TEXT,
@@ -18,7 +18,7 @@ CREATE TABLE library_index (
   version INTEGER NOT NULL
 );
 
-CREATE INDEX idx_libidx_world ON library_index(world_id);
+CREATE INDEX idx_libidx_setting ON library_index(setting_id);
 CREATE INDEX idx_libidx_kind ON library_index(kind);
 CREATE INDEX idx_libidx_asset_id ON library_index(asset_id);
 
