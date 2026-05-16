@@ -202,6 +202,28 @@ async def test_adjacent_locations_skips_missing_neighbors(world: WorldService) -
     assert {loc.id for loc in adj} == {"chalk-farm"}
 
 
+async def test_adjacent_locations_includes_parent_skips_missing_neighbor(
+    world: WorldService,
+) -> None:
+    await _seed_world(world, "wod-london")
+    await _seed_location(world, "wod-london", "camden")
+    await _seed_location(
+        world,
+        "wod-london",
+        "camden-market",
+        parent_id="camden",
+        connections=[
+            {"to": "chalk-farm", "via": "street", "duration_min": 8},
+            {"to": "ghost-station", "via": "tube", "duration_min": 4},
+        ],
+    )
+    await _seed_location(world, "wod-london", "chalk-farm")
+
+    adj = await world.adjacent_locations("wod-london", "camden-market")
+    ids = {loc.id for loc in adj}
+    assert ids == {"camden", "chalk-farm"}
+
+
 async def test_path_between(world: WorldService) -> None:
     await _seed_world(world, "wod-london")
     await _seed_location(

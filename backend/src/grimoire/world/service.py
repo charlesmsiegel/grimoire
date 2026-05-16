@@ -277,7 +277,10 @@ class WorldService:
         return [_location_from_entity(r) for r in rows]
 
     async def get_location(self, world_id: str, entity_id: str) -> Location:
-        ent = await self.library.get_entity(world_id, "location", entity_id)
+        try:
+            ent = await self.library.get_entity(world_id, "location", entity_id)
+        except LibraryNotFoundError as exc:
+            raise WorldNotFoundError(str(exc)) from exc
         return _location_from_entity(ent)
 
     async def list_items(self, world_id: str) -> list[Item]:
@@ -329,7 +332,7 @@ class WorldService:
                 parent = await self.get_location(world_id, center.parent_id)
                 out.append(parent)
                 seen.add(parent.id)
-            except LibraryNotFoundError:
+            except WorldNotFoundError:
                 pass
         for conn in center.connections:
             if conn.to in seen:
@@ -338,7 +341,7 @@ class WorldService:
                 neighbor = await self.get_location(world_id, conn.to)
                 out.append(neighbor)
                 seen.add(neighbor.id)
-            except LibraryNotFoundError:
+            except WorldNotFoundError:
                 pass
         return out
 
@@ -549,7 +552,7 @@ class WorldService:
             loc = await self.get_location(world_id, location_id)
             climate = loc.climate_zone
             indoor = loc.indoor
-        except LibraryNotFoundError:
+        except WorldNotFoundError:
             climate = None
             indoor = False
         cal = await self.calendar_for(world_id)
