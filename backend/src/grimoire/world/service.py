@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from grimoire.library import LibraryService
+from grimoire.library.errors import LibraryNotFoundError
 from grimoire.state_store import StateStore
 from grimoire.state_store.paths import KIND_TO_DIR, library_root
 from grimoire.types.common import CampaignId, EntityKind, InGameTime
@@ -301,7 +302,7 @@ class WorldService:
                 parent = await self.get_location(world_id, center.parent_id)
                 out.append(parent)
                 seen.add(parent.id)
-            except WorldNotFoundError:
+            except LibraryNotFoundError:
                 pass
         for conn in center.connections:
             if conn.to in seen:
@@ -310,7 +311,7 @@ class WorldService:
                 neighbor = await self.get_location(world_id, conn.to)
                 out.append(neighbor)
                 seen.add(neighbor.id)
-            except WorldNotFoundError:
+            except LibraryNotFoundError:
                 pass
         return out
 
@@ -521,7 +522,7 @@ class WorldService:
             loc = await self.get_location(world_id, location_id)
             climate = loc.climate_zone
             indoor = loc.indoor
-        except WorldNotFoundError:
+        except LibraryNotFoundError:
             climate = None
             indoor = False
         cal = await self.calendar_for(world_id)
