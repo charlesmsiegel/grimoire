@@ -126,6 +126,94 @@ def test_delta_is_about_rejects_empty_string_subject(field: str):
 
 
 @pytest.mark.asyncio
+async def test_extract_player_authority_does_not_match_by_suffix(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # Regression for #32: pc_ref="julian" must NOT be classified as "about the
+    # player's PC" when an unrelated subject merely shares a suffix (e.g.
+    # "her", "crasher"). Without the separator guard, both deltas would slip
+    # past the player-authority cap.
+    gateway = FakeGateway(
+        queue=[
+            {
+                "character_updates": [
+                    {
+                        "character_id": "her",
+                        "field": "mood",
+                        "after": "thoughtful",
+                        "confidence": 0.95,
+                        "evidence": "she felt thoughtful",
+                    },
+                    {
+                        "character_id": "crasher",
+                        "field": "mood",
+                        "after": "smug",
+                        "confidence": 0.95,
+                        "evidence": "the crasher looked smug",
+                    },
+                ]
+            }
+        ]
+    )
+    service = ExtractorService(
+        gateway=gateway,
+        config=ExtractorConfig(player_other_subject_confidence_cap=0.5),
+    )
+    result = await service.extract_from_user_text(
+        "I narrate something involving her and a party crasher.",
+        scene,
+        "camp-1",
+        snapshot=snapshot,
+        player_pc_ref="julian",
+    )
+    by_subject = {
+        d.after["character_id"]: d.confidence
+        for d in result.deltas
+        if d.kind == DeltaKind.CHARACTER_STATE_UPDATE
+    }
+    # Both subjects are unrelated to "julian" and should hit the non-PC cap.
+    assert by_subject.get("her") == 0.5
+    assert by_subject.get("crasher") == 0.5
+
+
+@pytest.mark.asyncio
+async def test_extract_player_authority_allows_namespaced_pc_ref(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # A namespaced ref like "character:julian" should still be recognized as
+    # the player's own PC when pc_ref is the bare "julian" form (and vice
+    # versa). The `:` separator distinguishes this from accidental suffixes.
+    gateway = FakeGateway(
+        queue=[
+            {
+                "character_updates": [
+                    {
+                        "character_id": "character:julian",
+                        "field": "mood",
+                        "after": "resolved",
+                        "confidence": 0.95,
+                        "evidence": "he steadied himself",
+                    },
+                ]
+            }
+        ]
+    )
+    service = ExtractorService(
+        gateway=gateway,
+        config=ExtractorConfig(player_other_subject_confidence_cap=0.5),
+    )
+    result = await service.extract_from_user_text(
+        "I steady myself.",
+        scene,
+        "camp-1",
+        snapshot=snapshot,
+        player_pc_ref="julian",
+    )
+    update = next(d for d in result.deltas if d.kind == DeltaKind.CHARACTER_STATE_UPDATE)
+    assert update.confidence == 0.95
+
+
+@pytest.mark.asyncio
 async def test_extract_downgrades_facts_on_contradiction(scene: Scene, snapshot: StateSnapshot):
     gateway = FakeGateway(
         queue=[
