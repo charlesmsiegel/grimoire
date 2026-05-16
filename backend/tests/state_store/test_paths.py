@@ -71,6 +71,7 @@ def test_library_path_round_trip(tmp_path: Path) -> None:
 
 def test_make_library_id_inverse() -> None:
     ids = [
+        "worlds/wod-london/world",
         "worlds/wod-london/characters/winifred",
         "style-guides/gothic",
         "image-presets/oil-painting",

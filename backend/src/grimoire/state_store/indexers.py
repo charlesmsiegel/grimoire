@@ -195,7 +195,11 @@ async def delete_campaign_content_row(conn: aiosqlite.Connection, composite_id: 
 def make_library_id(world_id: str | None, kind: str, asset_id: str) -> str:
     """Inverse of :func:`parse_library_id`."""
     if kind == "world":
-        return f"worlds/{asset_id}"
+        # Match the watcher classifier's canonical form (and the row id it
+        # writes when indexing world.yaml from disk). parse_library_id also
+        # accepts the shorter ``worlds/<id>`` form, but library_index rows
+        # are keyed on the 3-segment form, so direct lookups need it too.
+        return f"worlds/{asset_id}/world"
     if kind == "style_guide":
         return f"style-guides/{asset_id}"
     if kind == "image_preset":
