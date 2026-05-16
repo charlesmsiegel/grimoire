@@ -17,7 +17,7 @@ async def _seed_world(
     name: str = "London by Night",
 ) -> None:
     await store.write_library_file(
-        library_id=f"worlds/{world_id}",
+        library_id=f"worlds/{world_id}/world",
         frontmatter={
             "id": world_id,
             "name": name,
