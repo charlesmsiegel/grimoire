@@ -1965,6 +1965,54 @@ pre {
   align-items: center;
 }
 
+.greeting-character-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  margin: 0;
+}
+
+.greeting-character-picker legend {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--fg-muted);
+  padding: 0 var(--space-2);
+}
+
+.greeting-character-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-1);
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.greeting-character-list li label {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  border-radius: var(--radius-sm);
+}
+
+.greeting-character-list li label:hover {
+  background: var(--bg-elev);
+}
+
+.greeting-character-list li label small {
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+  margin-left: auto;
+}
+
 .library-card:has(.library-card-actions) {
   display: flex;
   flex-direction: column;

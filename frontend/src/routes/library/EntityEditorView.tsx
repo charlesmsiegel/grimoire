@@ -5,6 +5,7 @@ import {
   ApiError,
   ENTITY_KIND_SINGULAR,
   type CampaignRef,
+  type Greeting,
   type LibraryEntity,
   libraryApi,
 } from "../../api/library";
@@ -14,6 +15,8 @@ import { AsyncBoundary } from "./AsyncBoundary";
 import { CharacterExtras } from "./CharacterExtras";
 import { FrontmatterEditor } from "./FrontmatterEditor";
 import { ensureFrontmatter, type Frontmatter } from "./frontmatter";
+import { greetingFormToPayload, type GreetingFormValue } from "./greeting-form";
+import { GreetingFormFields } from "./GreetingFormFields";
 import { VariantsPanel } from "./VariantsPanel";
 
 const CHARACTER_HIDDEN_KEYS = ["voice", "image", "name", "id"];
@@ -50,7 +53,12 @@ export function EntityEditorView() {
           />
         )}
         {data && !("frontmatter" in data) && (
-          <p>Greetings are read-only summaries; the underlying file holds the body.</p>
+          <GreetingEditorBody
+            greeting={data as Greeting}
+            worldId={worldId}
+            entityId={entityId}
+            onReload={reload}
+          />
         )}
       </AsyncBoundary>
     </div>
@@ -328,6 +336,130 @@ function ConfirmEditDialog({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function greetingToForm(g: Greeting): GreetingFormValue {
+  return {
+    name: g.name ?? "",
+    tagsText: (g.tags ?? []).join(", "),
+    body: g.body ?? "",
+    presentCharacters: g.present_characters ?? [],
+    povCharacter: g.pov_character ?? "",
+    startingLocation: g.starting_location ?? "",
+    startingTime: g.starting_time ?? "",
+    mood: g.mood ?? "",
+  };
+}
+
+function GreetingEditorBody({
+  greeting,
+  worldId,
+  entityId,
+  onReload,
+}: {
+  greeting: Greeting;
+  worldId: string;
+  entityId: string;
+  onReload: () => void;
+}) {
+  const [form, setForm] = useState<GreetingFormValue>(() => greetingToForm(greeting));
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [confirmEdit, setConfirmEdit] = useState<null | { dependents: CampaignRef[] }>(null);
+  const [pendingSave, setPendingSave] = useState(false);
+
+  useEffect(() => {
+    setForm(greetingToForm(greeting));
+    setDirty(false);
+  }, [greeting]);
+
+  const dependents = useResource(
+    () => libraryApi.dependents(worldId, "greetings", entityId),
+    [worldId, entityId],
+  );
+
+  function patch(next: GreetingFormValue) {
+    setForm(next);
+    setDirty(true);
+  }
+
+  async function performSave() {
+    setSaving(true);
+    setSaveErr(null);
+    try {
+      const { frontmatter, body } = greetingFormToPayload(form, greeting.id);
+      await libraryApi.updateEntity(worldId, "greetings", entityId, {
+        frontmatter_patch: frontmatter,
+        body,
+      });
+      setDirty(false);
+      onReload();
+      dependents.reload();
+    } catch (err) {
+      setSaveErr(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setSaving(false);
+      setConfirmEdit(null);
+      setPendingSave(false);
+    }
+  }
+
+  function handleSaveClick() {
+    setPendingSave(true);
+    if (dependents.data && dependents.data.length > 0) {
+      setConfirmEdit({ dependents: dependents.data });
+    } else {
+      void performSave();
+    }
+  }
+
+  return (
+    <div className="entity-editor-body">
+      <header className="entity-editor-header">
+        <div>
+          <h3>{form.name || greeting.id}</h3>
+          <small>greeting · {greeting.id}</small>
+        </div>
+        <div className="entity-editor-actions">
+          <button onClick={handleSaveClick} disabled={!dirty || saving}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </header>
+
+      {saveErr && (
+        <p className="library-error" role="alert">
+          {saveErr}
+        </p>
+      )}
+
+      <DependentsBanner dependents={dependents.data ?? []} loading={dependents.loading} />
+
+      <form
+        className="library-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          handleSaveClick();
+        }}
+      >
+        <GreetingFormFields worldId={worldId} value={form} onChange={patch} />
+      </form>
+
+      {confirmEdit && (
+        <ConfirmEditDialog
+          dependents={confirmEdit.dependents}
+          busy={saving}
+          onConfirm={() => void performSave()}
+          onCancel={() => {
+            setConfirmEdit(null);
+            setPendingSave(false);
+          }}
+          pending={pendingSave}
+        />
+      )}
     </div>
   );
 }
