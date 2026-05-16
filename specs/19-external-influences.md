@@ -162,7 +162,7 @@ Reasons compose. A character can be included for `present_in_scene` *and* `commi
 
 The single concession to user tuning is `pin` and `exclude`. Both take an entity ref and a TTL in turns. Pinned entities are guaranteed to appear in context (subject to budget; if pinning blows the budget the inspector raises a warning). Excluded entities are guaranteed to be omitted, regardless of other reasons.
 
-Pins and excludes are recorded as state deltas (`context_pin_added`, `context_exclude_added`, `context_pin_expired`) in the audit log. They are NOT a way to reorder the prompt or inject text — only inclusion and exclusion of already-known entities. This preserves Test 1 (deterministic assembly): the user can constrain inputs but cannot rewrite the assembly logic.
+Pins and excludes are recorded as state deltas — `context_pin_added`, `context_pin_cleared`, `context_pin_expired`, `context_exclude_added`, `context_exclude_cleared`, `context_exclude_expired` — in the audit log. They are NOT a way to reorder the prompt or inject text — only inclusion and exclusion of already-known entities. This preserves Test 1 (deterministic assembly): the user can constrain inputs but cannot rewrite the assembly logic.
 
 TTL defaults to 3 turns. A pin set for "this turn only" auto-expires after the next `turn_complete` event. Pins survive scene transitions unless explicitly attached to a scene id.
 
@@ -172,7 +172,7 @@ TTL defaults to 3 turns. A pin set for "this turn only" auto-expires after the n
 
 ### UI affordances (non-negotiable)
 
-The inspector panel is one of the four debug views named in `16-observability.md` ("What did the model see?") elevated to first-class status during play. The Frontend MUST render at least:
+The inspector panel is the pre-flight, live counterpart to the post-hoc "What did the model see?" debug view defined in `16-observability.md` — same source attribution and token accounting, but shown for the *next* turn during play rather than for a completed turn after the fact. The two views coexist; neither replaces the other. The Frontend MUST render at least:
 
 - Token budget bars per tier, color-coded by utilization
 - Entity list per tier, click-through to inclusion reason
@@ -185,7 +185,7 @@ Out of scope for v1: editing prompt fragments inline, reordering tiers, runtime 
 
 ### Events
 
-The inspector listens to `context_built` (already emitted by the Orchestrator) for completed assemblies, and produces `context_preview_built` for previews. Pin and exclude actions emit `context_pin_added` / `context_pin_cleared` / `context_pin_expired`.
+The inspector listens to `context_built` (already emitted by the Orchestrator) for completed assemblies, and produces `context_preview_built` for previews. Pin and exclude actions emit the lifecycle events listed under "User overrides" above (`context_pin_added`, `context_pin_cleared`, `context_pin_expired`, `context_exclude_added`, `context_exclude_cleared`, `context_exclude_expired`).
 
 ### Storage
 
@@ -526,7 +526,7 @@ The following patterns appear in neighbor projects and would, if adopted, break 
 
 **Why rejected.** Fails Test 1 — the card author is editing the assembled prompt at runtime, in a position-aware way, on every turn the character appears. This is the inverse of "the Context Builder assembles deterministically." Community cards routinely include long depth prompts and complex post-history-instructions that work in SillyTavern's slot-based prompt system and would not even be meaningful in Grimoire's tier-based assembly.
 
-**Grimoire's alternative.** The importer reads these fields and logs them in the import report so the user can see what was discarded. A `system_addendum` field on the campaign (not the character card) lets the user add a stable string to every turn's system tier in a single, visible location. If a behavior really needs character-specific prompt influence, it belongs in the character's authored card prose (which the Context Builder includes via standard inclusion reasons), not in a side channel.
+**Grimoire's alternative.** The importer reads these fields and logs them in the import report: `system_prompt` is mapped to a campaign-scoped `system_addendum` field, while `post_history_instructions` and `depth_prompt` are discarded with a warning. A `system_addendum` field on the campaign (not the character card) lets the user add a stable string to every turn's system tier in a single, visible location. If a behavior really needs character-specific prompt influence, it belongs in the character's authored card prose (which the Context Builder includes via standard inclusion reasons), not in a side channel.
 
 ### Rejected: live bidirectional sync with neighbor frontends
 
@@ -547,7 +547,7 @@ This spec touches several modules. Authoritative details remain in those specs; 
 | `08-characters.md` | Per-paragraph speaker → expression mapping for the sprite display |
 | `13-export.md` | Stretch: SillyTavern-format export as the inverse of the importer |
 | `14-frontend.md` | Context Inspector panel; sprite display rules |
-| `16-observability.md` | Inspector elevates the "What did the model see?" debug view into a live pre-flight tool |
+| `16-observability.md` | Inspector adds a pre-flight live counterpart to the existing post-hoc "What did the model see?" debug view; the post-hoc view is unchanged |
 | `18-library.md` | Directory-form character cards (`characters/<id>/card.md`); sprite directory layout; importer's target structure |
 
 Each of those specs is amended to point back here for the externally-influenced details and to remain authoritative for the module-internal details.
