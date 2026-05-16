@@ -11,6 +11,8 @@ import {
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { AsyncBoundary } from "./AsyncBoundary";
+import { emptyGreetingForm, greetingFormToPayload, type GreetingFormValue } from "./greeting-form";
+import { GreetingFormFields } from "./GreetingFormFields";
 
 interface Props {
   /** Plural kind from URL: characters, items, locations, lore, factions, greetings. */
@@ -36,22 +38,30 @@ export function EntityListView({ kindOverride }: Props) {
   const [creating, setCreating] = useState(false);
   const [newId, setNewId] = useState("");
   const [newName, setNewName] = useState("");
+  const [greetingForm, setGreetingForm] = useState<GreetingFormValue>(emptyGreetingForm);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const isGreetingKind = kindPlural === "greetings";
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitErr(null);
     setBusy(true);
     try {
+      const id = newId.trim();
+      const { frontmatter, body } = isGreetingKind
+        ? greetingFormToPayload({ ...greetingForm, name: newName.trim() }, id)
+        : { frontmatter: { name: newName.trim(), id }, body: "" };
       const created = await libraryApi.createEntity(worldId, kindPlural, {
-        id: newId.trim(),
-        frontmatter: { name: newName.trim(), id: newId.trim() },
-        body: "",
+        id,
+        frontmatter,
+        body,
       });
       setCreating(false);
       setNewId("");
       setNewName("");
+      setGreetingForm(emptyGreetingForm());
       navigate(
         `/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(
           created.asset_id,
@@ -89,6 +99,14 @@ export function EntityListView({ kindOverride }: Props) {
             <span>Name</span>
             <input required value={newName} onChange={(e) => setNewName(e.target.value)} />
           </label>
+          {isGreetingKind && (
+            <GreetingFormFields
+              worldId={worldId}
+              value={greetingForm}
+              onChange={setGreetingForm}
+              hideName
+            />
+          )}
           <button type="submit" disabled={busy}>
             {busy ? "Creating…" : "Create"}
           </button>
