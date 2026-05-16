@@ -359,6 +359,16 @@ function ProviderStep({ kind, manifests, storageKey }: ProviderStepProps) {
     return stored;
   });
 
+  // Clear a stored ID that no longer matches an installed plugin (uninstalled
+  // or renamed since the last run). Without this the <select> sits blank and
+  // the config card never renders.
+  useEffect(() => {
+    if (!manifests) return;
+    if (selectedId && !candidates.some((m) => m.id === selectedId)) {
+      setSelectedId("");
+    }
+  }, [manifests, candidates, selectedId]);
+
   // If nothing is stored and only one candidate exists, preselect it so the
   // user lands on the config form immediately.
   useEffect(() => {

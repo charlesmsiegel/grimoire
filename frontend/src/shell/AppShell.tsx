@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useMatch, useNavigate } from "react-router-dom";
 
 import { SkipLink } from "../components/a11y";
@@ -21,14 +21,16 @@ export function AppShell() {
   const { state, dispatch } = useStore();
   const { collapsed, toggle } = useNavCollapsed();
   const setup = useSetupStatus();
-  // Once dismissed, don't re-open just because the underlying status hasn't
-  // refetched yet — the user can re-launch from Settings.
   const [wizardOpen, setWizardOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
+  // Once the user dismisses, the auto-open effect must not re-fire when a
+  // refetch produces a new (still-incomplete) status object. The manual
+  // re-open path clears this so /settings → Run setup wizard still works.
+  const dismissedRef = useRef(false);
 
-  // Auto-open when the backend reports the sentinel is missing.
   useEffect(() => {
     if (setup.loading) return;
+    if (dismissedRef.current) return;
     if (setup.status && !setup.status.completed) setWizardOpen(true);
   }, [setup.loading, setup.status]);
 
@@ -36,6 +38,7 @@ export function AppShell() {
   // re-trigger the wizard without prop drilling through the router.
   useEffect(() => {
     const handler = () => {
+      dismissedRef.current = false;
       setManualOpen(true);
       setWizardOpen(true);
     };
@@ -44,10 +47,10 @@ export function AppShell() {
   }, []);
 
   const closeWizard = useCallback(() => {
+    dismissedRef.current = true;
     setWizardOpen(false);
     setManualOpen(false);
-    setup.reload();
-  }, [setup]);
+  }, []);
 
   const campaignMatch = useMatch("/campaigns/:campaignId/*");
   const campaignId = campaignMatch?.params.campaignId ?? null;
