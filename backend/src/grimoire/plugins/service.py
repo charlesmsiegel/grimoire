@@ -270,9 +270,7 @@ class PluginsService:
         schema = manifest.config_schema if manifest else {}
         config = self._config_store.load(plugin_id, schema)
         if manifest is not None:
-            self._inherit_shared_secrets(
-                schema, manifest.shares_secrets_with, config
-            )
+            self._inherit_shared_secrets(schema, manifest.shares_secrets_with, config)
         return config
 
     async def set_config(self, plugin_id: PluginId, config: dict) -> None:
@@ -317,9 +315,7 @@ class PluginsService:
         siblings = [
             str(x)
             for x in (
-                raw_manifest.get("shares_secrets_with")
-                if isinstance(raw_manifest, dict)
-                else None
+                raw_manifest.get("shares_secrets_with") if isinstance(raw_manifest, dict) else None
             )
             or []
         ]

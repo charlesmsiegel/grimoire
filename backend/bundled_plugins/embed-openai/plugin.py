@@ -29,9 +29,7 @@ DEFAULT_BASE_URL = "https://api.openai.com/v1"
 # Embedding model id prefixes published by OpenAI. Used to filter the
 # `/v1/models` listing (which contains chat, audio, image, and embedding
 # models in one bucket) without hard-coding the actual catalog.
-EMBEDDING_PREFIXES: tuple[str, ...] = (
-    "text-embedding-",
-)
+EMBEDDING_PREFIXES: tuple[str, ...] = ("text-embedding-",)
 
 # Known native dimension counts for the OpenAI embedding models. Used so
 # the model picker can show a dimension count before the model has been

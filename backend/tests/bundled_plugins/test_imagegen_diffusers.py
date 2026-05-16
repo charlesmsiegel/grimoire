@@ -10,7 +10,6 @@ weights are downloaded.
 
 from __future__ import annotations
 
-import io
 from typing import Any
 
 import pytest
@@ -20,7 +19,6 @@ from grimoire.types.imagegen import GenerationRequest
 from grimoire.types.plugins import PluginKind
 
 from .conftest import assert_protocol_attrs, load_bundled
-
 
 # --------------------------------------------------------------------- #
 # Fake pipeline scaffolding (only built inside tests that have PIL)
@@ -74,7 +72,7 @@ def _make_fake_pipeline_factory():
         def enable_sequential_cpu_offload(self) -> None:
             self.applied_options.append("cpu_offload")
 
-        def to(self, device: str) -> "_FakePipeline":
+        def to(self, device: str) -> _FakePipeline:
             self.applied_options.append(f"to:{device}")
             return self
 
