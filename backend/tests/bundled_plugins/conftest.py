@@ -137,3 +137,8 @@ def comfyui_module() -> object:
 @pytest.fixture
 def dalle_module() -> object:
     return _import_plugin("imagegen-dalle")
+
+
+@pytest.fixture
+def diffusers_module() -> object:
+    return _import_plugin("imagegen-diffusers")
