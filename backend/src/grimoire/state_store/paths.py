@@ -54,7 +54,7 @@ DIR_TO_KIND: dict[str, str] = {v: k for k, v in KIND_TO_DIR.items()}
 _SAFE_COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def _validate_path_component(value: str, *, name: str) -> str:
+def validate_path_component(value: str, *, name: str) -> str:
     """Reject ids that would let untrusted input escape the data root.
 
     Every helper in this module that interpolates an id into a Path runs
@@ -107,7 +107,7 @@ def parse_library_id(library_id: str) -> LibraryRef:
     if parts[0] == "worlds":
         if len(parts) < 2:
             raise InvalidRefError(f"malformed library_id: {library_id!r}")
-        world_id = _validate_path_component(parts[1], name="world_id")
+        world_id = validate_path_component(parts[1], name="world_id")
         if len(parts) == 2 or (len(parts) == 3 and parts[2] == "world"):
             # `worlds/<world>` or `worlds/<world>/world`
             return LibraryRef(
@@ -120,7 +120,7 @@ def parse_library_id(library_id: str) -> LibraryRef:
         if len(parts) < 4:
             raise InvalidRefError(f"malformed library_id: {library_id!r}")
         kind = _normalize_kind_segment(parts[2])
-        asset_id = _validate_path_component(parts[3], name="asset_id")
+        asset_id = validate_path_component(parts[3], name="asset_id")
         return LibraryRef(
             library_id=library_id,
             world_id=world_id,
@@ -136,7 +136,7 @@ def parse_library_id(library_id: str) -> LibraryRef:
             library_id=library_id,
             world_id=None,
             kind=_normalize_kind_segment(parts[0]),
-            asset_id=_validate_path_component(parts[1], name="asset_id"),
+            asset_id=validate_path_component(parts[1], name="asset_id"),
             path_segments=segments,
         )
 
@@ -181,11 +181,11 @@ def override_path(
     kind: str,
     asset_id: str,
 ) -> Path:
-    _validate_path_component(campaign_id, name="campaign_id")
-    _validate_path_component(world_id, name="world_id")
-    _validate_path_component(asset_id, name="asset_id")
+    validate_path_component(campaign_id, name="campaign_id")
+    validate_path_component(world_id, name="world_id")
+    validate_path_component(asset_id, name="asset_id")
     dir_name = KIND_TO_DIR.get(kind, kind)
-    _validate_path_component(dir_name, name="kind")
+    validate_path_component(dir_name, name="kind")
     return (
         campaigns_root(data_root)
         / campaign_id
@@ -203,10 +203,10 @@ def emergent_path(
     kind: str,
     asset_id: str,
 ) -> Path:
-    _validate_path_component(campaign_id, name="campaign_id")
-    _validate_path_component(asset_id, name="asset_id")
+    validate_path_component(campaign_id, name="campaign_id")
+    validate_path_component(asset_id, name="asset_id")
     dir_name = KIND_TO_DIR.get(kind, kind)
-    _validate_path_component(dir_name, name="kind")
+    validate_path_component(dir_name, name="kind")
     return campaigns_root(data_root) / campaign_id / "emergent" / dir_name / f"{asset_id}.md"
 
 
@@ -217,11 +217,11 @@ def sheet_path(
     asset_id: str,
     mechanics_id: str,
 ) -> Path:
-    _validate_path_component(campaign_id, name="campaign_id")
-    _validate_path_component(asset_id, name="asset_id")
-    _validate_path_component(mechanics_id, name="mechanics_id")
+    validate_path_component(campaign_id, name="campaign_id")
+    validate_path_component(asset_id, name="asset_id")
+    validate_path_component(mechanics_id, name="mechanics_id")
     dir_name = KIND_TO_DIR.get(kind, kind)
-    _validate_path_component(dir_name, name="kind")
+    validate_path_component(dir_name, name="kind")
     return (
         campaigns_root(data_root)
         / campaign_id
@@ -232,8 +232,8 @@ def sheet_path(
 
 
 def image_metadata_path(data_root: Path, campaign_id: str, image_id: str) -> Path:
-    _validate_path_component(campaign_id, name="campaign_id")
-    _validate_path_component(image_id, name="image_id")
+    validate_path_component(campaign_id, name="campaign_id")
+    validate_path_component(image_id, name="image_id")
     return campaigns_root(data_root) / campaign_id / "images" / f"{image_id}.yaml"
 
 
