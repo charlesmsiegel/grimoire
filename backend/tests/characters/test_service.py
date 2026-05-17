@@ -756,6 +756,102 @@ async def test_relationship_increment(characters: CharactersService, store: Stat
     assert listed[0]["state"]["affection"] == 2
 
 
+async def test_relationship_history_appends_event_when_summary_supplied(
+    characters: CharactersService, store: StateStore
+) -> None:
+    await _bind_campaign(store, "camp-1", "wod-london")
+    rel = await characters.update_relationship(
+        "library:worlds/wod-london/characters/vivienne",
+        "library:worlds/wod-london/characters/winifred",
+        "camp-1",
+        delta={"affection": 2},
+        in_post="post-001",
+        summary="winifred apologized for the library incident.",
+    )
+    history = rel["history"]
+    assert len(history) == 1
+    assert history[0]["in_post"] == "post-001"
+    assert history[0]["summary"] == "winifred apologized for the library incident."
+    assert history[0]["delta"] == {"affection": 2}
+    assert history[0]["at"]  # ISO timestamp
+
+    # The standalone read path returns the same event.
+    fetched = await characters.get_relationship_history(
+        "library:worlds/wod-london/characters/vivienne",
+        "library:worlds/wod-london/characters/winifred",
+        "camp-1",
+    )
+    assert len(fetched) == 1
+    assert fetched[0]["summary"] == "winifred apologized for the library incident."
+
+
+async def test_relationship_history_omits_event_without_summary(
+    characters: CharactersService, store: StateStore
+) -> None:
+    await _bind_campaign(store, "camp-1", "wod-london")
+    # No summary supplied -> no event appended (avoid spamming empty events).
+    rel = await characters.update_relationship(
+        "library:worlds/wod-london/characters/vivienne",
+        "library:worlds/wod-london/characters/winifred",
+        "camp-1",
+        delta={"affection": 1},
+    )
+    assert rel["history"] == []
+
+    # Empty-string summary also doesn't count.
+    rel2 = await characters.update_relationship(
+        "library:worlds/wod-london/characters/vivienne",
+        "library:worlds/wod-london/characters/winifred",
+        "camp-1",
+        delta={"trust": 1},
+        in_post="post-002",
+        summary="",
+    )
+    assert rel2["history"] == []
+
+
+async def test_relationship_history_preserves_chronological_order(
+    characters: CharactersService, store: StateStore
+) -> None:
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.update_relationship(
+        "library:worlds/wod-london/characters/vivienne",
+        "library:worlds/wod-london/characters/winifred",
+        "camp-1",
+        delta={"affection": 1},
+        in_post="post-001",
+        summary="first event",
+    )
+    await characters.update_relationship(
+        "library:worlds/wod-london/characters/vivienne",
+        "library:worlds/wod-london/characters/winifred",
+        "camp-1",
+        delta={"trust": 1},
+        in_post="post-002",
+        summary="second event",
+    )
+    await characters.update_relationship(
+        "library:worlds/wod-london/characters/vivienne",
+        "library:worlds/wod-london/characters/winifred",
+        "camp-1",
+        delta={"affection": -1},
+        in_post="post-003",
+        summary="third event",
+    )
+
+    history = await characters.get_relationship_history(
+        "library:worlds/wod-london/characters/vivienne",
+        "library:worlds/wod-london/characters/winifred",
+        "camp-1",
+    )
+    assert [e["summary"] for e in history] == [
+        "first event",
+        "second event",
+        "third event",
+    ]
+    assert [e["in_post"] for e in history] == ["post-001", "post-002", "post-003"]
+
+
 # ---------------------------------------------------------------------------
 # Promotion
 # ---------------------------------------------------------------------------
