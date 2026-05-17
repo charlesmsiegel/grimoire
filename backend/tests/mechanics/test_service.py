@@ -247,6 +247,7 @@ async def test_branch_seed_fallback_is_stable_across_processes(
     Python's built-in ``hash()`` is randomised per-process via PYTHONHASHSEED,
     so the fallback must not rely on it.
     """
+    import os
     import subprocess
     import sys
 
@@ -267,9 +268,14 @@ async def test_branch_seed_fallback_is_stable_across_processes(
         "bs = int.from_bytes(digest[:8], 'big') & 0x7FFFFFFFFFFFFFFF;"
         "print(derive_roll_seed(bs, 7, 'r1'))"
     )
+    env: dict[str, str] = {"PYTHONHASHSEED": "12345", "PATH": ""}
+    for k in ("SystemRoot", "SYSTEMDRIVE", "TEMP", "TMP"):
+        v = os.environ.get(k)
+        if v:
+            env[k] = v
     out = subprocess.check_output(
         [sys.executable, "-c", script],
-        env={"PYTHONHASHSEED": "12345", "PATH": ""},
+        env=env,
         text=True,
     )
     expected_seed = int(out.strip())

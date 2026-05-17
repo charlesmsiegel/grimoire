@@ -40,10 +40,33 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _safe_branch_segment(branch_id: str) -> str:
+    """Return a filesystem-safe directory name for *branch_id*.
+
+    Windows forbids ``:`` in path components, but branch IDs use the convention
+    ``<campaign>:<label>``.  We encode ``:`` as ``__`` so the on-disk layout
+    remains portable.  Use :func:`_from_safe_segment` to reverse the mapping
+    when reading directory names back as branch IDs.
+    """
+    return branch_id.replace(":", "__")
+
+
+def _from_safe_segment(dir_name: str) -> str:
+    """Reverse :func:`_safe_branch_segment` — convert a directory name back to a branch ID."""
+    return dir_name.replace("__", ":")
+
+
 def scenes_dir(data_root: Path, campaign_id: str, branch_id: str = "main") -> Path:
     if branch_id == "main":
         return data_root / "campaigns" / campaign_id / "scenes"
-    return data_root / "campaigns" / campaign_id / "branches" / branch_id / "scenes"
+    return (
+        data_root
+        / "campaigns"
+        / campaign_id
+        / "branches"
+        / _safe_branch_segment(branch_id)
+        / "scenes"
+    )
 
 
 def scene_basename(ordinal: int, slug: str) -> str:

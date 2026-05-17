@@ -639,7 +639,7 @@ async def test_promote_to_library_routes_through_library(
     )
 
     path = await world.promote_to_library("camp1", "location", "bone-orchard", "wod-london")
-    assert path.endswith("wod-london/locations/bone-orchard.md")
+    assert path.replace("\\", "/").endswith("wod-london/locations/bone-orchard.md")
 
     # The library now contains the row.
     promoted = await world.get_location("wod-london", "bone-orchard")

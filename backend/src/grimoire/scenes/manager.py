@@ -36,6 +36,7 @@ from grimoire.scenes.events import (
     SceneEvent,
 )
 from grimoire.scenes.storage import (
+    _from_safe_segment,
     append_post_to_body,
     next_ordinal,
     read_posts,
@@ -182,7 +183,9 @@ class SceneManager:
         branches = ["main"]
         branches_dir = campaign_dir / "branches"
         if branches_dir.exists():
-            branches.extend(sorted(p.name for p in branches_dir.iterdir() if p.is_dir()))
+            branches.extend(
+                sorted(_from_safe_segment(p.name) for p in branches_dir.iterdir() if p.is_dir())
+            )
         return branches
 
     async def get_scene_file_path(self, scene_id: str) -> Path:

@@ -18,7 +18,7 @@ import yaml
 
 from grimoire.files.frontmatter import parse_frontmatter
 from grimoire.files.yaml_io import load_yaml
-from grimoire.scenes.storage import read_posts, read_sidecar
+from grimoire.scenes.storage import _safe_branch_segment, read_posts, read_sidecar
 from grimoire.scenes.types import Scene
 
 
@@ -102,7 +102,7 @@ def _scenes_dir(data_root: Path, campaign_id: str, branch_id: str) -> Path:
     base = data_root / "campaigns" / campaign_id
     if branch_id == "main":
         return base / "scenes"
-    return base / "branches" / branch_id / "scenes"
+    return base / "branches" / _safe_branch_segment(branch_id) / "scenes"
 
 
 def _read_campaign_yaml(data_root: Path, campaign_id: str) -> dict[str, Any]:

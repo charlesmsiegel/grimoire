@@ -374,7 +374,8 @@ async def test_fork_creates_branch_and_copies_scenes(
     # The branch was registered in the fake store.
     assert fake_store.forks[-1]["new_id"] == "c1:what-if"
     # The branched scenes directory exists on disk.
-    branched = tmp_path / "campaigns" / "c1" / "branches" / "c1:what-if" / "scenes"
+    # Branch IDs use ":" which is Windows-unsafe, so on-disk it is encoded as "__".
+    branched = tmp_path / "campaigns" / "c1" / "branches" / "c1__what-if" / "scenes"
     assert branched.exists()
 
 
