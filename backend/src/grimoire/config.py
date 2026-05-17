@@ -2,6 +2,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from grimoire.llm_gateway.settings import GatewaySettings
+
 
 def _default_data_root() -> Path:
     # User-scoped, so multiple clones of the repo share one library / campaigns.
@@ -19,6 +21,8 @@ class Settings(BaseSettings):
     database_path: Path | None = None
     db_pool_size: int = 5
     enable_wal: bool = True
+
+    llm_gateway: GatewaySettings = GatewaySettings()
 
     @property
     def resolved_database_path(self) -> Path:

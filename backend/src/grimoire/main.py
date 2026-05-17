@@ -164,6 +164,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             container.extras["llm_gateway"] = LLMGatewayService(
                 plugins=container.plugins,
                 db=db,
+                config=settings.llm_gateway.to_gateway_config(),
+                data_root=settings.data_root,
             )
         llm_gateway = container.extras["llm_gateway"]
         if container.extras.get("extractor") is None:

@@ -10,9 +10,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 
+from grimoire.files.yaml_io import dump_yaml, load_yaml
 from grimoire.llm_gateway.cache import EmbeddingCache
 from grimoire.llm_gateway.config import GatewayConfig
 from grimoire.llm_gateway.errors import (
@@ -42,10 +45,13 @@ class LLMGatewayService:
         plugins: Plugins,
         db: Database,
         config: GatewayConfig | None = None,
+        *,
+        data_root: Path | None = None,
     ) -> None:
         self._plugins = plugins
         self._db = db
         self._config = config or GatewayConfig()
+        self._data_root = data_root
         self._router = RouteResolver(
             self._config.default_routes,
             self._config.fallback_routes,
@@ -59,6 +65,7 @@ class LLMGatewayService:
             log_response_text=self._config.observability.log_response_text,
             response_excerpt_chars=self._config.observability.response_excerpt_chars,
         )
+        self._loaded_campaigns: set[CampaignId] = set()
 
     # ------------------------------------------------------------------ #
     # Introspection
@@ -80,6 +87,8 @@ class LLMGatewayService:
         campaign_id: CampaignId | None = None,
     ) -> None:
         self._router.set_route(task, route, campaign_id)
+        if campaign_id is not None and self._data_root is not None:
+            self._persist_campaign_route(campaign_id, task, route)
 
     # ------------------------------------------------------------------ #
     # Completion
@@ -93,6 +102,8 @@ class LLMGatewayService:
         *,
         turn_id: TurnId | None = None,
     ) -> CompletionResponse:
+        if campaign_id is not None and campaign_id not in self._loaded_campaigns:
+            await self._load_campaign_routing(campaign_id)
         primary = self._router.resolve(task, campaign_id)
         fallback = self._router.fallback(task)
         return await self._complete_one(
@@ -280,6 +291,8 @@ class LLMGatewayService:
         *,
         turn_id: TurnId | None = None,
     ) -> AsyncIterator[CompletionChunk]:
+        if campaign_id is not None and campaign_id not in self._loaded_campaigns:
+            await self._load_campaign_routing(campaign_id)
         route = self._router.resolve(task, campaign_id)
         provider = self._require_llm(route.provider_id)
         scoped = request.model_copy(update={"model": route.model})
@@ -375,6 +388,8 @@ class LLMGatewayService:
     ) -> list[list[float]]:
         if not texts:
             return []
+        if campaign_id is not None and campaign_id not in self._loaded_campaigns:
+            await self._load_campaign_routing(campaign_id)
         route = self._router.resolve(task, campaign_id)
         provider = self._require_embedding(route.provider_id)
         model_id = provider.model_id
@@ -528,6 +543,78 @@ class LLMGatewayService:
         for pid in sorted(ids):
             results[pid] = await self.health_check(pid)
         return results
+
+    # ------------------------------------------------------------------ #
+    # Campaign routing helpers
+    # ------------------------------------------------------------------ #
+
+    def _campaign_yaml_path(self, campaign_id: CampaignId) -> Path | None:
+        """Return the campaign.yaml path for *campaign_id*, or None if no data_root."""
+        if self._data_root is None:
+            return None
+        return self._data_root / "campaigns" / campaign_id / "campaign.yaml"
+
+    async def _load_campaign_routing(self, campaign_id: CampaignId) -> None:
+        """Lazily read ``model_routing`` from campaign.yaml and apply routes.
+
+        Always marks the campaign as loaded — even on failure — so we don't
+        re-attempt on every subsequent call.
+        """
+        self._loaded_campaigns.add(campaign_id)
+        yaml_path = self._campaign_yaml_path(campaign_id)
+        if yaml_path is None or not yaml_path.is_file():
+            return
+        try:
+            raw = load_yaml(yaml_path)
+        except Exception:
+            logger.warning(
+                "llm_gateway: failed to parse %s; campaign routing not loaded",
+                yaml_path,
+            )
+            return
+        if not isinstance(raw, dict):
+            return
+        routing = raw.get("model_routing")
+        if not isinstance(routing, dict):
+            return
+        for task, route in routing.items():
+            try:
+                self._router.set_route(str(task), str(route), campaign_id)
+            except ValueError:
+                logger.warning(
+                    "llm_gateway: skipping bad model_routing entry in %s — "
+                    "task=%r route=%r is not a valid 'provider.model' string",
+                    yaml_path,
+                    task,
+                    route,
+                )
+
+    def _persist_campaign_route(self, campaign_id: CampaignId, task: str, route: str) -> None:
+        """Synchronously write the route change back to campaign.yaml atomically."""
+        yaml_path = self._campaign_yaml_path(campaign_id)
+        if yaml_path is None:
+            return
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        # Read existing data, if any.
+        data: dict = {}
+        if yaml_path.is_file():
+            try:
+                raw = load_yaml(yaml_path)
+                if isinstance(raw, dict):
+                    data = dict(raw)
+            except Exception:
+                logger.warning(
+                    "llm_gateway: could not read %s for route persistence; "
+                    "existing content may be overwritten",
+                    yaml_path,
+                )
+        if "model_routing" not in data or not isinstance(data["model_routing"], dict):
+            data["model_routing"] = {}
+        data["model_routing"][task] = route
+        # Atomic write: write to .tmp then rename.
+        tmp_path = yaml_path.with_suffix(".yaml.tmp")
+        tmp_path.write_text(dump_yaml(data), encoding="utf-8")
+        os.replace(tmp_path, yaml_path)
 
     # ------------------------------------------------------------------ #
     # Internals
