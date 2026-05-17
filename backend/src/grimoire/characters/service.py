@@ -522,15 +522,38 @@ class CharactersService:
     # PCs
     # ------------------------------------------------------------------ #
 
+    def _seed_active_pc_from_rows(
+        self, campaign_id: CampaignId, rows: list[dict]
+    ) -> CharacterRef | None:
+        """Return the cached active PC ref, hydrating from ``rows`` if needed.
+
+        Picks the first row whose ``active`` flag is truthy (rows are returned
+        by the store in ``added_at`` order); falls back to the first row when
+        no row carries an active bit. The choice is cached so subsequent calls
+        within the process are stable, matching ``set_active_pc`` semantics.
+        Returns ``None`` only when ``rows`` is empty.
+        """
+        cached = self._active_pc.get(campaign_id)
+        if cached is not None:
+            return cached
+        if not rows:
+            return None
+        chosen = next(
+            (row["character_ref"] for row in rows if bool(row["active"])),
+            rows[0]["character_ref"],
+        )
+        self._active_pc[campaign_id] = chosen
+        return chosen
+
     async def list_pcs(self, campaign_id: CampaignId) -> list[PCEntry]:
         rows = await self.store.list_pcs(campaign_id)
-        active_ref = self._active_pc.get(campaign_id)
+        active_ref = self._seed_active_pc_from_rows(campaign_id, rows)
         return [
             PCEntry(
                 character_ref=row["character_ref"],
                 name=row["display_name"],
                 owner=row["owner"],
-                active=(active_ref == row["character_ref"] if active_ref else bool(row["active"])),
+                active=active_ref == row["character_ref"],
             )
             for row in rows
         ]
@@ -577,11 +600,7 @@ class CharactersService:
         if campaign_id in self._active_pc:
             return self._active_pc[campaign_id]
         pcs = await self.store.list_pcs(campaign_id)
-        if not pcs:
-            return None
-        ref = pcs[0]["character_ref"]
-        self._active_pc[campaign_id] = ref
-        return ref
+        return self._seed_active_pc_from_rows(campaign_id, pcs)
 
     # ------------------------------------------------------------------ #
     # Per-PC current scene

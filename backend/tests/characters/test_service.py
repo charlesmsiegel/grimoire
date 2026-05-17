@@ -190,6 +190,42 @@ async def test_set_active_pc_rejects_unknown(
         raise AssertionError("expected CharactersError")
 
 
+async def test_list_pcs_single_active_when_cache_cold(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """Regression for spec 2026-05-17 §14.
+
+    When the in-process active-PC cache is empty (fresh worker) and multiple
+    persisted rows have ``active=1`` (legacy data / pre-fix writes),
+    ``list_pcs`` must still return exactly one entry with ``active=True``.
+    """
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    pc1 = "library:worlds/wod-london/characters/vivienne"
+    pc2 = "library:worlds/wod-london/characters/winifred"
+    pc3 = "library:worlds/wod-london/characters/genevieve"
+    await characters.add_pc("camp-1", pc1, "vivienne")
+    await characters.add_pc("camp-1", pc2, "winifred")
+    await characters.add_pc("camp-1", pc3, "Genevieve")
+
+    # Simulate legacy / corrupted DB state where every row has active=1.
+    await store.db.execute(
+        "UPDATE campaign_pcs SET active = 1 WHERE campaign_id = ?",
+        ("camp-1",),
+    )
+
+    # Simulate a fresh worker process: cache is cold.
+    characters._active_pc.pop("camp-1", None)
+
+    listed = await characters.list_pcs("camp-1")
+    assert len(listed) == 3
+    active_entries = [pc for pc in listed if pc.active]
+    assert len(active_entries) == 1, (
+        f"expected exactly one active PC, got {len(active_entries)}: "
+        f"{[pc.character_ref for pc in active_entries]}"
+    )
+
+
 async def test_multi_pc_should_auto_respond(
     characters: CharactersService, store: StateStore
 ) -> None:
