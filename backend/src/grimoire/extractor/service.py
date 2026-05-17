@@ -22,9 +22,13 @@ from grimoire.extractor.llm_strategy import (
     extract_with_llm,
 )
 from grimoire.extractor.merge import merge_candidates, merge_deltas
-from grimoire.extractor.protocols import ContradictionChecker, MechanicsValidator
+from grimoire.extractor.protocols import (
+    ContradictionChecker,
+    EntityResolver,
+    MechanicsValidator,
+)
 from grimoire.extractor.rule_based import extract_rule_based
-from grimoire.types.common import CampaignId, Json
+from grimoire.types.common import CampaignId, EntityKind, Json, Scope
 from grimoire.types.extraction import (
     EntityCandidate,
     ExtractionFlag,
@@ -53,12 +57,14 @@ class ExtractorService:
         gateway: LLMGatewayLike | None = None,
         mechanics: MechanicsValidator | None = None,
         contradictions: ContradictionChecker | None = None,
+        resolver: EntityResolver | None = None,
         config: ExtractorConfig | None = None,
         source: str = "extractor",
     ) -> None:
         self._gateway = gateway
         self._mechanics = mechanics
         self._contradictions = contradictions
+        self._resolver = resolver
         self._config = config or ExtractorConfig()
         self._source = source
 
@@ -216,6 +222,15 @@ class ExtractorService:
                 merged_deltas, campaign_id=campaign_id
             )
             flags.extend(contra_flags)
+
+        # Library-drift detection: deltas mutating a library-scoped entity
+        # are routed to review as proposed campaign-local overrides
+        # (spec extractor-remaining §1).
+        if self._resolver is not None:
+            merged_deltas, drift_flags = await self._detect_library_drift(
+                merged_deltas, campaign_id=campaign_id
+            )
+            flags.extend(drift_flags)
 
         # Apply LLM + heuristic flags.
         flags.extend(llm_out.flags)
@@ -461,6 +476,101 @@ class ExtractorService:
             )
         return out, flags
 
+    async def _detect_library_drift(
+        self,
+        deltas: list[StateDelta],
+        *,
+        campaign_id: CampaignId,
+    ) -> tuple[list[StateDelta], list[ExtractionFlag]]:
+        """Flag deltas that mutate a library-scoped entity as proposed overrides.
+
+        For each CHARACTER_STATE_UPDATE / SCENE_CHANGE that targets an entity
+        resolving through the library, compare the proposed value against the
+        card's current value. On divergence: annotate `extra["override_of_library"]`
+        and clamp confidence into `[review_threshold, auto_apply_threshold)` so
+        the orchestrator routes it to the review queue with the `library_drift`
+        flag set — giving the UI the signal it needs to render the three-option
+        "add as override / edit library card / treat as transient" prompt.
+        """
+        flags: list[ExtractionFlag] = []
+        out: list[StateDelta] = []
+        for delta in deltas:
+            target = _library_drift_target(delta)
+            if target is None:
+                out.append(delta)
+                continue
+            entity_ref, kind, field, proposed_value = target
+            try:
+                resolved = await self._resolver.resolve(campaign_id, entity_ref, kind)
+            except Exception as exc:
+                logger.warning("entity resolver failed: %s", exc)
+                flags.append(
+                    ExtractionFlag(
+                        level=FlagLevel.WARNING,
+                        code="entity_resolver_failed",
+                        message=f"entity resolver raised: {type(exc).__name__}",
+                        evidence=delta.evidence,
+                    )
+                )
+                out.append(delta)
+                continue
+            if resolved is None or resolved.scope is not Scope.LIBRARY:
+                out.append(delta)
+                continue
+            if field is None:
+                # The delta references the library entity but doesn't assert a
+                # value for any card field — nothing to diverge from.
+                out.append(delta)
+                continue
+            current_value = resolved.card.get(field)
+            if current_value == proposed_value:
+                out.append(delta)
+                continue
+            updated_extra = dict(delta.extra)
+            updated_extra["override_of_library"] = True
+            updated_extra["library_card_value"] = current_value
+            out.append(
+                delta.model_copy(
+                    update={
+                        "confidence": self._clamp_into_review_band(delta.confidence),
+                        "extra": updated_extra,
+                    }
+                )
+            )
+            flags.append(
+                ExtractionFlag(
+                    level=FlagLevel.CONTRADICTION,
+                    code="library_drift",
+                    message=(
+                        f"prose modifies library entity {entity_ref!r} "
+                        f"(field {field!r}) — propose as campaign-local override"
+                    ),
+                    evidence=delta.evidence,
+                    related=[entity_ref],
+                    payload={
+                        "entity_ref": entity_ref,
+                        "entity_kind": str(kind),
+                        "field": field,
+                        "library_value": current_value,
+                        "proposed_value": proposed_value,
+                    },
+                )
+            )
+        return out, flags
+
+    def _clamp_into_review_band(self, confidence: float) -> float:
+        """Force `confidence` into `[review_threshold, auto_apply_threshold)`.
+
+        Used by drift detection to guarantee the delta routes to review
+        regardless of where the original confidence landed.
+        """
+        review = self._config.review_threshold
+        auto = self._config.auto_apply_threshold
+        # Subtract a small epsilon so a value exactly at `auto` doesn't
+        # auto-apply; `route_deltas` uses `>=` against `auto_apply_threshold`.
+        upper = max(review, auto - 1e-6)
+        return min(max(confidence, review), upper)
+
     # ------------------------------------------------------------------ #
     # Result unwrapping helpers (gather with return_exceptions=True)
     # ------------------------------------------------------------------ #
@@ -544,6 +654,41 @@ def _delta_is_about(delta: StateDelta, pc_ref: str) -> bool:
         if pc_ref in chars:
             return True
     return False
+
+
+def _library_drift_target(
+    delta: StateDelta,
+) -> tuple[str, EntityKind, str | None, object] | None:
+    """Extract `(entity_ref, kind, field, proposed_value)` if `delta` is eligible.
+
+    Returns `None` for deltas the drift step ignores. The fields returned
+    name the entity to resolve and the card field whose value is being
+    asserted by the delta; `field is None` means "no specific field" (e.g.
+    SCENE_CHANGE merely references the location).
+    """
+    after = delta.after
+    if delta.kind == DeltaKind.CHARACTER_STATE_UPDATE:
+        character_id = after.get("character_id")
+        if not isinstance(character_id, str) or not character_id.strip():
+            return None
+        field = after.get("field")
+        return (
+            character_id,
+            EntityKind.CHARACTER,
+            field if isinstance(field, str) and field else None,
+            after.get("after"),
+        )
+    if delta.kind == DeltaKind.SCENE_CHANGE:
+        to_location = after.get("to_location")
+        if not isinstance(to_location, str) or not to_location.strip():
+            return None
+        # SCENE_CHANGE doesn't assert a value for any specific card field —
+        # surface it for resolution but with no field/proposed-value pair,
+        # so drift only fires when the resolver itself signals an issue
+        # (today that means: never; left in place so future SCENE_CHANGE
+        # payloads carrying location-attribute claims wire up cleanly).
+        return (to_location, EntityKind.LOCATION, None, None)
+    return None
 
 
 def _normalize_about(about: Json) -> dict[str, list[str]]:

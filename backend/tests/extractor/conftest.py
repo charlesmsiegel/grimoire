@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from grimoire.extractor.protocols import ConflictRecord
-from grimoire.types.common import CampaignId, ValidationResult
+from grimoire.extractor.protocols import ConflictRecord, ResolvedEntity
+from grimoire.types.common import CampaignId, EntityKind, Scope, ValidationResult
 from grimoire.types.llm import CompletionRequest, CompletionResponse, TokenUsage
 from grimoire.types.mechanics import NarratedEvent
 from grimoire.types.scene import Scene, SceneContext
@@ -93,6 +93,41 @@ class FakeContradictionChecker:
             self.raise_on_next = None
             raise err
         return list(self.conflicts_for.get(fact_text, []))
+
+
+@dataclass
+class FakeEntityResolver:
+    """An `EntityResolver` that returns canned `(scope, card)` tuples.
+
+    `entries` is keyed by `(entity_ref, EntityKind)`; absent keys resolve
+    to `None` so the drift step degrades the same way it would against a
+    missing library asset.
+    """
+
+    entries: dict[tuple[str, EntityKind], ResolvedEntity] = field(default_factory=dict)
+    seen: list[tuple[CampaignId, str, EntityKind]] = field(default_factory=list)
+    raise_on_next: BaseException | None = None
+
+    async def resolve(
+        self,
+        campaign_id: CampaignId,
+        entity_ref: str,
+        kind: EntityKind,
+    ) -> ResolvedEntity | None:
+        self.seen.append((campaign_id, entity_ref, kind))
+        if self.raise_on_next is not None:
+            err = self.raise_on_next
+            self.raise_on_next = None
+            raise err
+        return self.entries.get((entity_ref, kind))
+
+
+def make_library_entity(card: dict) -> ResolvedEntity:
+    return ResolvedEntity(scope=Scope.LIBRARY, card=dict(card))
+
+
+def make_campaign_entity(card: dict) -> ResolvedEntity:
+    return ResolvedEntity(scope=Scope.CAMPAIGN_LOCAL, card=dict(card))
 
 
 @pytest.fixture
