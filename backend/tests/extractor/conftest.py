@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from grimoire.extractor.protocols import ConflictRecord
 from grimoire.types.common import CampaignId, ValidationResult
 from grimoire.types.llm import CompletionRequest, CompletionResponse, TokenUsage
 from grimoire.types.mechanics import NarratedEvent
@@ -74,9 +75,9 @@ class FakeMechanics:
 
 @dataclass
 class FakeContradictionChecker:
-    """A `ContradictionChecker` that returns canned conflict lists."""
+    """A `ContradictionChecker` that returns canned `ConflictRecord` lists."""
 
-    conflicts_for: dict[str, list[str]] = field(default_factory=dict)
+    conflicts_for: dict[str, list[ConflictRecord]] = field(default_factory=dict)
     seen: list[tuple[CampaignId, str, dict]] = field(default_factory=list)
     raise_on_next: BaseException | None = None
 
@@ -85,7 +86,7 @@ class FakeContradictionChecker:
         campaign_id: CampaignId,
         fact_text: str,
         about: dict[str, list[str]],
-    ) -> list[str]:
+    ) -> list[ConflictRecord]:
         self.seen.append((campaign_id, fact_text, about))
         if self.raise_on_next is not None:
             err = self.raise_on_next
