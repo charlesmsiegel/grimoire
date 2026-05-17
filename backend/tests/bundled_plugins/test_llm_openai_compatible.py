@@ -20,6 +20,13 @@ from grimoire.types.plugins import PluginKind
 from .conftest import load_bundled
 
 
+@pytest.fixture(autouse=True)
+def _clear_ssl_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove host-env SSL overrides that may point at nonexistent cert files."""
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+
+
 def _install_mock_transport(provider, handler) -> list[httpx.Request]:
     requests: list[httpx.Request] = []
 

@@ -90,7 +90,7 @@ async def test_append_post_updates_files_and_counts(tmp_path: Path) -> None:
     assert any(e.type == PC_POST_APPENDED for e in bus.events)
     assert sum(1 for e in bus.events if e.type == POST_APPENDED) == 2
 
-    md = (tmp_path / "campaigns" / "c" / "scenes" / "0001-elysium.md").read_text()
+    md = (tmp_path / "campaigns" / "c" / "scenes" / "0001-elysium.md").read_text(encoding="utf-8")
     assert "## Post 1 — narrator" in md
     assert "## Post 2 — pc:alistair" in md
 

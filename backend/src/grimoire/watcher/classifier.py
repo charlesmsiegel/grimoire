@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from grimoire.scenes.storage import _from_safe_segment
 from grimoire.state_store.paths import DIR_TO_KIND
 
 # Map a watched-file ``kind`` to the bus event type the watcher emits.
@@ -195,7 +196,7 @@ def _classify_campaign(abs_path: Path, rel: Path) -> WatchedFile | None:
         return _classify_scene(abs_path, campaign_id, "main", rest)
 
     if sub == "branches" and len(rest) >= 3 and rest[1] == "scenes":
-        branch_id = rest[0]
+        branch_id = _from_safe_segment(rest[0])
         return _classify_scene(abs_path, campaign_id, branch_id, rest[2:])
 
     if sub == "overrides" and len(rest) == 4 and rest[0] == "worlds":
