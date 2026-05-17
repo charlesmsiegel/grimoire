@@ -1340,3 +1340,109 @@ async def test_draft_voice_anchor_raises_when_not_configured(
         assert "voice_anchor_llm" in str(exc)
     else:
         raise AssertionError("expected CharactersError when no voice_anchor_llm is wired")
+
+
+# ---------------------------------------------------------------------------
+# Delta log integration (spec characters-remaining §8)
+# ---------------------------------------------------------------------------
+
+
+async def _character_state_deltas(store: StateStore, campaign_id: str) -> list:
+    log = await store.get_delta_log(campaign_id=campaign_id)
+    return [d for d in log if d.target_table == "character_state"]
+
+
+async def test_update_state_records_character_state_delta(
+    characters: CharactersService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    state = await characters.get_state(ref, "camp-1")
+    state.emotional_state = "wary"
+    await characters.update_state(ref, "camp-1", state, source="test:update")
+
+    deltas = await _character_state_deltas(store, "camp-1")
+    assert len(deltas) == 1
+    delta = deltas[0]
+    assert delta.kind == "character_state_update"
+    assert delta.target_scope == "campaign-sqlite"
+    assert delta.target_id == ref
+    assert delta.source == "test:update"
+    assert delta.after["character_ref"] == ref
+    assert delta.after["emotional_state"] == "wary"
+    # And the row is actually persisted (apply_delta writes through).
+    reloaded = await characters.get_state(ref, "camp-1")
+    assert reloaded.emotional_state == "wary"
+
+
+async def test_mark_screen_time_records_delta_with_turn_id(
+    characters: CharactersService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    await characters.mark_screen_time(ref, "camp-1", "t_42")
+
+    deltas = await _character_state_deltas(store, "camp-1")
+    assert len(deltas) == 1
+    delta = deltas[0]
+    assert delta.kind == "character_state_update"
+    assert delta.turn_id == "t_42"
+    assert delta.target_id == ref
+    assert delta.after["last_screen_time_turn"] == "t_42"
+
+
+async def test_check_drift_records_delta(
+    characters: CharactersService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    posts = [
+        Post(
+            id="p1",
+            scene_id="s",
+            order_in_scene=1,
+            author_kind=AuthorKind.NPC,
+            author_npc_ref="alistair",
+            body="yo dude lol modern slang totally rad.",
+            is_player=False,
+            created_at=datetime.now(UTC),
+            turn_id="t1",
+        )
+    ]
+    report = await characters.check_drift(ref, "camp-1", recent_posts=posts)
+
+    deltas = await _character_state_deltas(store, "camp-1")
+    assert len(deltas) == 1
+    delta = deltas[0]
+    assert delta.kind == "character_state_update"
+    assert delta.source == "characters:drift-check"
+    assert delta.after["drift_score"] == report.drift_score
+
+
+async def test_pin_tier_does_not_record_delta(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """pin_tier is a UI choice — it should survive an undo_turn replay,
+    so we deliberately skip the delta-log write (record_in_delta_log=False).
+    """
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    await characters.pin_tier(ref, "camp-1", ContextTier.LOCK_IN)
+
+    deltas = await _character_state_deltas(store, "camp-1")
+    assert deltas == []
+    # But the pin still persists.
+    state = await characters.get_state(ref, "camp-1")
+    assert state.tier_pin == ContextTier.LOCK_IN

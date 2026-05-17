@@ -42,11 +42,11 @@ from grimoire.types.characters import (
     StructuralRelationship,
     VoiceAnchor,
 )
-from grimoire.types.common import CampaignId, CharacterRef, PostId
+from grimoire.types.common import CampaignId, CharacterRef, PostId, Scope
 from grimoire.types.composition import LibraryEntity, ResolutionLayer, ResolutionSource
 from grimoire.types.mechanics import Capability
 from grimoire.types.scene import Post, Scene
-from grimoire.types.state import CharacterState, ContextTier
+from grimoire.types.state import CharacterState, ContextTier, DeltaKind, StateDelta
 
 from .drift import (
     CallableDriftChecker,
@@ -492,7 +492,11 @@ class CharactersService:
     async def pin_tier(self, ref: CharacterRef, campaign_id: CampaignId, tier: ContextTier) -> None:
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
         state.tier_pin = tier
-        await self._save_state(ref, campaign_id, state, source="characters:tier-pin")
+        # Tier pins are a UI choice and must survive undo_turn replay, so we
+        # skip the delta log here (spec characters-remaining §8).
+        await self._save_state(
+            ref, campaign_id, state, source="characters:tier-pin", record_in_delta_log=False
+        )
 
     # ------------------------------------------------------------------ #
     # Drift
@@ -1330,16 +1334,21 @@ class CharactersService:
         *,
         source: str,
         turn_id: str | None = None,
+        record_in_delta_log: bool = True,
     ) -> None:
-        """Persist ``state`` directly to the character_state table.
+        """Persist ``state`` to ``character_state``.
 
-        We use a direct upsert (rather than apply_delta) because we don't yet
-        have a turn-level audit pipeline; the change still emits a delta row
-        via the State Store's reusable insertion path so reversal stays
-        possible.
+        Per spec characters-remaining §8, writes route through
+        ``state_store.apply_delta`` so undo_turn can reverse them. The State
+        Store's apply_delta already writes the row via ``upsert_row`` for
+        campaign-sqlite targets, so there's no separate direct-write step.
+
+        Callers that should not be reversible by undo (currently only
+        ``pin_tier`` — UI choices must survive replay) pass
+        ``record_in_delta_log=False`` and we fall back to a direct upsert.
         """
         branch = state.branch_id or _branch_for(campaign_id, None)
-        payload = {
+        after = {
             "character_ref": ref,
             "campaign_id": campaign_id,
             "branch_id": branch,
@@ -1347,15 +1356,36 @@ class CharactersService:
             "emotional_state": state.emotional_state,
             "physical_state": state.physical_state,
             "immediate_intent": state.immediate_intent,
-            "knowledge_state": json.dumps(state.knowledge_state or {}, default=str),
+            "knowledge_state": state.knowledge_state or {},
             "last_action": state.last_action,
             "last_screen_time_turn": state.last_screen_time_turn,
-            "visible_to_pc": 1 if state.visible_to_pc else 0,
+            "visible_to_pc": bool(state.visible_to_pc),
             "drift_score": float(state.drift_score),
             "tier_pin": state.tier_pin.value if state.tier_pin else None,
             "current_scene_id": state.current_scene_id,
             "updated_at_turn": turn_id or state.updated_at_turn or _now_iso(),
         }
+
+        if record_in_delta_log:
+            delta = StateDelta(
+                kind=DeltaKind.CHARACTER_STATE_UPDATE,
+                target_scope=Scope.CAMPAIGN_SQLITE,
+                target_id=ref,
+                target_table="character_state",
+                after=after,
+                confidence=1.0,
+                source=source,
+            )
+            await self.store.apply_delta(
+                delta=delta,
+                source=source,
+                turn_id=turn_id,
+                branch_id=branch,
+                campaign_id=campaign_id,
+            )
+            return
+
+        # record_in_delta_log=False: direct upsert, no delta row (pin_tier).
         await self.store.db.execute(
             """
             INSERT INTO character_state (
@@ -1381,28 +1411,24 @@ class CharactersService:
               current_scene_id = excluded.current_scene_id,
               updated_at_turn = excluded.updated_at_turn
             """,
-            tuple(
-                payload[k]
-                for k in (
-                    "character_ref",
-                    "campaign_id",
-                    "branch_id",
-                    "location_ref",
-                    "emotional_state",
-                    "physical_state",
-                    "immediate_intent",
-                    "knowledge_state",
-                    "last_action",
-                    "last_screen_time_turn",
-                    "visible_to_pc",
-                    "drift_score",
-                    "tier_pin",
-                    "current_scene_id",
-                    "updated_at_turn",
-                )
+            (
+                after["character_ref"],
+                after["campaign_id"],
+                after["branch_id"],
+                after["location_ref"],
+                after["emotional_state"],
+                after["physical_state"],
+                after["immediate_intent"],
+                json.dumps(after["knowledge_state"], default=str),
+                after["last_action"],
+                after["last_screen_time_turn"],
+                1 if after["visible_to_pc"] else 0,
+                after["drift_score"],
+                after["tier_pin"],
+                after["current_scene_id"],
+                after["updated_at_turn"],
             ),
         )
-        _ = source  # reserved for future delta-log integration
 
     async def _get_tier_pin(self, ref: CharacterRef, campaign_id: CampaignId) -> ContextTier | None:
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
