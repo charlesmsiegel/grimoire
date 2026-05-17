@@ -174,6 +174,19 @@ class DriftReport(BaseModel):
     corrective_context: str = ""
 
 
+class CapsuleDraft(BaseModel):
+    """Auto-drafted capsule fields for a sparse emergent character.
+
+    Returned by the ``LLMCapsuleDrafter`` hook wired into
+    :class:`CharactersService` and applied back through
+    ``update_emergent`` so the standard persistence path handles it
+    (spec 2026-05-17 §10).
+    """
+
+    summary_line: str = ""
+    tags: list[str] = Field(default_factory=list)
+
+
 class ImportResult(BaseModel):
     created: list[str] = Field(default_factory=list)
     updated: list[str] = Field(default_factory=list)

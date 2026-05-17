@@ -29,7 +29,12 @@ from grimoire.characters.ingest import (
     extract_relationships_deterministic,
     ingest_character_card_v2,
 )
-from grimoire.characters.service import CharactersService, PostFetcher
+from grimoire.characters.service import (
+    CharactersService,
+    LLMCapsuleDrafter,
+    LLMVoiceAnchorDrafter,
+    PostFetcher,
+)
 from grimoire.characters.views import (
     render_capsule,
     render_compressed,
@@ -47,8 +52,10 @@ __all__ = [
     "DriftInput",
     "HeuristicDriftChecker",
     "ImportError_",
+    "LLMCapsuleDrafter",
     "LLMEnrichCallable",
     "LLMEnrichment",
+    "LLMVoiceAnchorDrafter",
     "PostFetcher",
     "PromotionError",
     "enrich_with_llm",

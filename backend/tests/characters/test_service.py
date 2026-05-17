@@ -10,8 +10,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from grimoire.characters import CharactersService
+from grimoire.characters.errors import CharactersError
+from grimoire.library import LibraryService
+from grimoire.mechanics import MechanicsService
 from grimoire.state_store import StateStore
 from grimoire.types.characters import (
+    CapsuleDraft,
+    Character,
     CharacterData,
     CharacterRole,
     VoiceAnchor,
@@ -931,3 +936,187 @@ async def test_search_by_name(characters: CharactersService, store: StateStore) 
 
     hits = await characters.search("char", world_id="wod-london", scope="world")
     assert {c.id for c in hits} == {"vivienne"}
+
+
+# ---------------------------------------------------------------------------
+# §10 — auto-capsule for sparse emergent NPCs
+# ---------------------------------------------------------------------------
+
+
+class FakeCapsuleDrafter:
+    """Test double for the LLMCapsuleDrafter protocol."""
+
+    def __init__(self, draft: CapsuleDraft) -> None:
+        self.draft = draft
+        self.calls: list[CharacterData] = []
+
+    async def __call__(self, payload: CharacterData) -> CapsuleDraft:
+        self.calls.append(payload)
+        return self.draft
+
+
+def _sparse_character_data(asset_id: str = "the-bartender") -> CharacterData:
+    """Emergent payload with no description and no tags."""
+    return CharacterData(
+        id=asset_id,
+        name=asset_id.replace("-", " ").title(),
+        role=CharacterRole.MINOR_NPC,
+    )
+
+
+async def test_create_emergent_auto_capsule_fills_sparse_payload(
+    library: LibraryService, mechanics: MechanicsService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+
+    drafter = FakeCapsuleDrafter(
+        CapsuleDraft(
+            summary_line="A jaded barkeep who pours bourbon and rumors in equal measure.",
+            tags=["bartender", "rumormonger"],
+        )
+    )
+    svc = CharactersService(library, mechanics, auto_capsule_llm=drafter)
+
+    ref = await svc.create_emergent("camp-1", _sparse_character_data("the-bartender"))
+
+    assert ref == "campaign:emergent/character/the-bartender"
+    assert len(drafter.calls) == 1
+    assert drafter.calls[0].id == "the-bartender"
+
+    resolved = await svc.resolve(ref, "camp-1")
+    assert "jaded barkeep" in resolved.character.description
+    assert set(resolved.character.tags) == {"bartender", "rumormonger"}
+
+
+async def test_create_emergent_auto_capsule_skipped_when_not_sparse(
+    library: LibraryService, mechanics: MechanicsService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+
+    drafter = FakeCapsuleDrafter(CapsuleDraft(summary_line="x"))
+    svc = CharactersService(library, mechanics, auto_capsule_llm=drafter)
+
+    # Has a description → not sparse → drafter must NOT be invoked.
+    await svc.create_emergent(
+        "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
+    )
+
+    assert drafter.calls == []
+
+
+async def test_create_emergent_no_auto_capsule_drafter_works_as_before(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """Backwards compat: with no drafter wired, sparse payloads pass through untouched."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+
+    ref = await characters.create_emergent("camp-1", _sparse_character_data("ghost"))
+    resolved = await characters.resolve(ref, "camp-1")
+    assert resolved.character.description == ""
+    assert resolved.character.tags == []
+
+
+# ---------------------------------------------------------------------------
+# §11 — auto-draft voice anchor for emergent characters
+# ---------------------------------------------------------------------------
+
+
+class FakeVoiceAnchorDrafter:
+    """Test double for the LLMVoiceAnchorDrafter protocol."""
+
+    def __init__(self, anchor: VoiceAnchor) -> None:
+        self.anchor = anchor
+        self.calls: list[tuple[Character, list[Post]]] = []
+
+    async def __call__(self, character: Character, recent_posts: list[Post]) -> VoiceAnchor:
+        self.calls.append((character, list(recent_posts)))
+        return self.anchor
+
+
+def _post(
+    post_id: str,
+    body: str,
+    *,
+    order: int = 1,
+    scene_id: str = "scene-1",
+) -> Post:
+    return Post(
+        id=post_id,
+        scene_id=scene_id,
+        order_in_scene=order,
+        author_kind=AuthorKind.NARRATOR,
+        body=body,
+        is_player=False,
+        created_at=datetime.now(UTC),
+        turn_id=f"t-{post_id}",
+    )
+
+
+async def test_draft_voice_anchor_calls_drafter_with_mentioning_posts(
+    library: LibraryService, mechanics: MechanicsService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+
+    bartender = CharacterData(
+        id="the-bartender",
+        name="The Bartender",
+        role=CharacterRole.MINOR_NPC,
+        aliases=["Barkeep"],
+    )
+
+    fetched_posts = [
+        _post("p1", "The Bartender wipes a glass and grunts.", order=1),
+        _post("p2", "vivienne sips her drink in silence.", order=2),  # no mention
+        _post("p3", "Barkeep, another round?", order=3),
+        _post("p4", '"Coming right up," he says.', order=4),  # no mention
+    ]
+
+    async def fetcher(scene_id: str) -> list[Post]:
+        assert scene_id == "scene-bar"
+        return fetched_posts
+
+    drafted_anchor = VoiceAnchor(
+        summary="Gruff, terse, world-weary.",
+        voice_register="low",
+        samples=["Coming right up."],
+    )
+    drafter = FakeVoiceAnchorDrafter(drafted_anchor)
+    svc = CharactersService(
+        library,
+        mechanics,
+        post_fetcher=fetcher,
+        voice_anchor_llm=drafter,
+    )
+
+    ref = await svc.create_emergent("camp-1", bartender)
+    await svc.set_current_scene_for_pc("camp-1", ref, "scene-bar")
+
+    anchor = await svc.draft_voice_anchor(ref, "camp-1")
+
+    assert anchor == drafted_anchor
+    assert len(drafter.calls) == 1
+    sent_character, sent_posts = drafter.calls[0]
+    assert sent_character.id == "the-bartender"
+    # Only the two posts that mention the character (by name or alias) are passed.
+    sent_ids = [p.id for p in sent_posts]
+    assert sent_ids == ["p1", "p3"]
+
+
+async def test_draft_voice_anchor_raises_when_not_configured(
+    characters: CharactersService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+
+    ref = await characters.create_emergent("camp-1", _sparse_character_data("nobody"))
+
+    try:
+        await characters.draft_voice_anchor(ref, "camp-1")
+    except CharactersError as exc:
+        assert "voice_anchor_llm" in str(exc)
+    else:
+        raise AssertionError("expected CharactersError when no voice_anchor_llm is wired")

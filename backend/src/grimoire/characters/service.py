@@ -21,6 +21,7 @@ from grimoire.mechanics.service import MechanicsService
 from grimoire.state_store import StateStore
 from grimoire.state_store.indexers import make_library_id
 from grimoire.types.characters import (
+    CapsuleDraft,
     Character,
     CharacterData,
     CharacterFilter,
@@ -68,6 +69,23 @@ from .views import (
 
 PostFetcher = Callable[[str], Awaitable[list[Post]]]
 
+LLMCapsuleDrafter = Callable[[CharacterData], Awaitable[CapsuleDraft]]
+"""Async hook used by :meth:`CharactersService.create_emergent`.
+
+When the caller injects a ``LLMCapsuleDrafter`` and the emergent payload
+is "sparse" (empty ``description`` and ``tags``), the service awaits the
+drafter and writes the returned :class:`CapsuleDraft` back via
+``update_emergent`` (spec 2026-05-17 §10).
+"""
+
+LLMVoiceAnchorDrafter = Callable[[Character, list[Post]], Awaitable[VoiceAnchor]]
+"""Async hook used by :meth:`CharactersService.draft_voice_anchor`.
+
+Receives the resolved character and the recent posts that mention them
+(filtered to the configured ``sample_window``) and returns a draft
+:class:`VoiceAnchor` for the caller to review (spec 2026-05-17 §11).
+"""
+
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
@@ -106,6 +124,8 @@ class CharactersService:
         drift_checker: DriftChecker | None = None,
         drift_threshold: float = 0.4,
         ingest_llm: LLMEnrichCallable | None = None,
+        auto_capsule_llm: LLMCapsuleDrafter | None = None,
+        voice_anchor_llm: LLMVoiceAnchorDrafter | None = None,
         tier_demote_to_background_after_turns: int = 3,
         tier_demote_to_archive_after_turns: int = 10,
     ) -> None:
@@ -118,6 +138,8 @@ class CharactersService:
         )
         self._drift_threshold = drift_threshold
         self._ingest_llm = ingest_llm
+        self._auto_capsule_llm = auto_capsule_llm
+        self._voice_anchor_llm = voice_anchor_llm
         self._tier_demote_to_background_after = tier_demote_to_background_after_turns
         self._tier_demote_to_archive_after = tier_demote_to_archive_after_turns
         # Per-PC current scene cache; mirrors SceneManager._pc_current_scene
@@ -181,6 +203,28 @@ class CharactersService:
             body=payload.body,
             source=source,
         )
+        # Spec 2026-05-17 §10: when the payload is sparse (no description
+        # and no tags) and an auto-capsule drafter is wired, ask the LLM to
+        # draft a summary line + tags and write the result back through
+        # ``update_emergent`` so the standard persistence path handles it.
+        # We await synchronously (option (a) in the spec) — the alternative
+        # ``asyncio.create_task`` background path makes error handling and
+        # ordering against subsequent reads harder to reason about; the
+        # awaited form keeps the contract obvious for v1.
+        if self._auto_capsule_llm is not None and _is_sparse_payload(payload):
+            try:
+                draft = await self._auto_capsule_llm(payload)
+            except Exception:  # pragma: no cover - drafter failures shouldn't block create
+                draft = None
+            if draft is not None:
+                patch = _capsule_draft_to_patch(draft)
+                if patch:
+                    await self.update_emergent(
+                        campaign_id,
+                        payload.id,
+                        patch,
+                        source="characters:auto-capsule",
+                    )
         return f"campaign:emergent/character/{payload.id}"
 
     async def update_emergent(
@@ -500,6 +544,44 @@ class CharactersService:
             self._drift_checker = CallableDriftChecker(checker)  # type: ignore[arg-type]
         else:
             self._drift_checker = checker  # type: ignore[assignment]
+
+    # ------------------------------------------------------------------ #
+    # Voice anchor drafting (spec 2026-05-17 §11)
+    # ------------------------------------------------------------------ #
+
+    async def draft_voice_anchor(
+        self,
+        character_ref: CharacterRef,
+        campaign_id: CampaignId,
+        *,
+        sample_window: int = 10,
+    ) -> VoiceAnchor:
+        """Ask the configured LLM to propose a :class:`VoiceAnchor`.
+
+        Pulls the character's recent dialogue from their current scene via
+        the injected ``post_fetcher`` (same pattern as :meth:`check_drift`),
+        filters to posts that mention the character by name or alias, and
+        hands the trimmed window to the drafter. The returned anchor is a
+        *proposal* — the caller routes it through ``update_emergent`` or
+        ``upsert_override`` to accept it (spec 2026-05-17 §11).
+
+        Raises :class:`CharactersError` when no ``voice_anchor_llm`` was
+        wired at construction.
+        """
+        if self._voice_anchor_llm is None:
+            raise CharactersError(
+                "draft_voice_anchor requires a voice_anchor_llm to be configured"
+            )
+        resolved = await self.resolve(character_ref, campaign_id)
+        posts: list[Post] = []
+        if self._post_fetcher is not None:
+            scene_id = resolved.current_state.current_scene_id
+            if scene_id:
+                fetched = await self._post_fetcher(scene_id)
+                posts = list(fetched)
+        matching = [p for p in posts if _mentions_character(p.body, resolved.character)]
+        trimmed = matching[-sample_window:] if sample_window > 0 else matching
+        return await self._voice_anchor_llm(resolved.character, trimmed)
 
     # ------------------------------------------------------------------ #
     # State
@@ -1578,6 +1660,31 @@ def _turns_since(last_seen: str | None, recent_turn_ids: list[str]) -> int | Non
         # last_seen falls outside the window — treat as fully aged-out.
         return len(recent_turn_ids)
     return len(recent_turn_ids) - 1 - idx
+
+
+def _is_sparse_payload(payload: CharacterData) -> bool:
+    """Spec 2026-05-17 §10: "sparse" = no description AND no tags.
+
+    The voice anchor's contents are intentionally ignored — an emergent
+    NPC introduced mid-scene almost always lacks a fleshed-out voice
+    block, so requiring it would never trigger.
+    """
+    return not (payload.description or "").strip() and not payload.tags
+
+
+def _capsule_draft_to_patch(draft: CapsuleDraft) -> dict[str, object]:
+    """Translate a :class:`CapsuleDraft` into an ``update_emergent`` patch.
+
+    Empty fields are skipped so a partial draft (e.g. summary only) does
+    not blow away any defaults the caller provided.
+    """
+    patch: dict[str, object] = {}
+    summary = (draft.summary_line or "").strip()
+    if summary:
+        patch["description"] = summary
+    if draft.tags:
+        patch["tags"] = [t for t in draft.tags if t]
+    return patch
 
 
 def _mentions_character(text: str, character: Character) -> bool:
