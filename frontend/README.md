@@ -9,7 +9,7 @@ pnpm install
 pnpm dev
 ```
 
-Visits `http://127.0.0.1:5173`. Proxies `/api/*` and `/ws/*` to `http://127.0.0.1:8000` (the backend).
+Visits `http://127.0.0.1:5173`. Proxies `/api/*` and `/ws/*` to `http://127.0.0.1:8173` (the backend).
 
 ## Test
 

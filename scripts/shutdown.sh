@@ -18,7 +18,7 @@ Usage: scripts/shutdown.sh [options]
 
 Stops grimoire backend/frontend processes and frees their ports. Resolves
 ports in this order: CLI flag > .grimoire-run.env state file > environment
-variable (GRIMOIRE_*_PORT) > default (8000 backend, 5173 frontend).
+variable (GRIMOIRE_*_PORT) > default (8173 backend, 5173 frontend).
 
 Options:
   --backend-port N    Backend port to free (overrides state file)
@@ -49,7 +49,7 @@ if [ -f "$STATE_FILE" ]; then
 fi
 
 # Precedence: CLI > state file > env > default.
-: "${BACKEND_PORT:=${backend_port:-${GRIMOIRE_BACKEND_PORT:-8000}}}"
+: "${BACKEND_PORT:=${backend_port:-${GRIMOIRE_BACKEND_PORT:-8173}}}"
 : "${FRONTEND_PORT:=${frontend_port:-${GRIMOIRE_FRONTEND_PORT:-5173}}}"
 
 # 1. Kill recorded PIDs first (most precise — won't touch unrelated services).

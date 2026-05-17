@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     data_root: Path = _default_data_root()
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8173
 
     database_path: Path | None = None
     db_pool_size: int = 5
