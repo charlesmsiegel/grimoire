@@ -37,7 +37,8 @@ from grimoire.types.llm import (
     ModelInfo,
     TokenUsage,
 )
-from grimoire.types.protocols import EmbeddingProvider, LLMProvider, Plugins
+from grimoire.types.observability import HealthTarget
+from grimoire.types.protocols import EmbeddingProvider, HealthMonitor, LLMProvider, Plugins
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +52,14 @@ class LLMGatewayService:
         *,
         data_root: Path | None = None,
         event_bus: EventBus | None = None,
+        health_monitor: HealthMonitor | None = None,
     ) -> None:
         self._plugins = plugins
         self._db = db
         self._config = config or GatewayConfig()
         self._data_root = data_root
         self._event_bus = event_bus
+        self._health_monitor = health_monitor
         self._router = RouteResolver(
             self._config.default_routes,
             self._config.fallback_routes,
@@ -73,6 +76,10 @@ class LLMGatewayService:
         self._loaded_campaigns: set[CampaignId] = set()
         # (provider_id, model) → ModelInfo or None (None = "no pricing available")
         self._pricing_cache: dict[tuple[str, str], ModelInfo | None] = {}
+        # provider_id → last observed HealthLevel (populated by register_with_health_monitor)
+        self._provider_health_levels: dict[str, HealthLevel] = {}
+        # subscription handle for the health-monitor subscriber (kept to prevent GC)
+        self._health_sub_id: str | None = None
 
     # ------------------------------------------------------------------ #
     # Event helpers
@@ -791,6 +798,65 @@ class LLMGatewayService:
         for pid in sorted(ids):
             results[pid] = await self.health_check(pid)
         return results
+
+    async def register_with_health_monitor(self) -> None:
+        """Register all providers with the HealthMonitor and subscribe to status changes.
+
+        Emits ``provider_health_changed`` via the event bus whenever a provider's
+        health level transitions.  The first observation for each provider always
+        emits (with ``old_level=None``) so subscribers see the initial state.
+
+        Calling this when ``health_monitor`` is None is a safe no-op.
+
+        NOTE: does NOT auto-switch routes on UNHEALTHY — fallback remains
+        request-driven to avoid flapping.
+        """
+        if self._health_monitor is None:
+            return
+
+        # Collect all (target, kind) pairs.
+        provider_kinds: list[tuple[object, str]] = []
+        for p in self._plugins.llm_providers():
+            provider_kinds.append((p, "llm_provider"))
+        for p in self._plugins.embedding_providers():
+            provider_kinds.append((p, "embedding_provider"))
+
+        # Register each provider with the monitor.
+        # We also build a local id→kind map for use in the subscriber.
+        kind_map: dict[str, str] = {}
+        for provider, kind in provider_kinds:
+            target = HealthTarget(id=provider.id, kind=kind)
+            self._health_monitor.register_probeable(target, provider)
+            kind_map[provider.id] = kind
+
+        # Subscribe a handler that tracks level changes and emits events.
+        async def _on_health(status: HealthStatus) -> None:
+            target_id = status.target_id
+            new_level = status.level
+            old_level = self._provider_health_levels.get(target_id)
+
+            # If the level hasn't changed (and this isn't the first observation),
+            # skip emission.
+            if old_level is not None and old_level == new_level:
+                return
+
+            # Update the tracked level.
+            self._provider_health_levels[target_id] = new_level
+
+            # Emit the event.
+            await self._emit(
+                "provider_health_changed",
+                {
+                    "target_id": target_id,
+                    "kind": kind_map.get(target_id, ""),
+                    "old_level": old_level.value if old_level is not None else None,
+                    "new_level": new_level.value,
+                    "message": status.message,
+                    "checked_at": status.checked_at,
+                },
+            )
+
+        self._health_sub_id = self._health_monitor.subscribe(_on_health)
 
     # ------------------------------------------------------------------ #
     # Campaign routing helpers
