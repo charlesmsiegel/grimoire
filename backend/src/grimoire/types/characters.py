@@ -162,6 +162,8 @@ class RelationshipEvent(BaseModel):
     in_post: str | None
     summary: str
     delta: Json = Field(default_factory=dict)
+    at: str | None = None
+    """ISO-8601 UTC timestamp recorded when the event was appended."""
 
 
 class DriftReport(BaseModel):

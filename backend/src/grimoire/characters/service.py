@@ -33,12 +33,13 @@ from grimoire.types.characters import (
     IngestedCharacterCard,
     IngestOptions,
     PCEntry,
+    RelationshipEvent,
     RelationshipState,
     ResolvedCharacter,
     StructuralRelationship,
     VoiceAnchor,
 )
-from grimoire.types.common import CampaignId, CharacterRef
+from grimoire.types.common import CampaignId, CharacterRef, PostId
 from grimoire.types.composition import LibraryEntity, ResolutionLayer, ResolutionSource
 from grimoire.types.mechanics import Capability
 from grimoire.types.scene import Post, Scene
@@ -704,12 +705,22 @@ class CharactersService:
         branch_id: str | None = None,
         types: list[str] | None = None,
         turn_id: str | None = None,
+        in_post: PostId | None = None,
+        summary: str | None = None,
     ) -> dict:
         """Apply ``delta`` to the relationship between ``from_ref`` and ``to_ref``.
 
         Numeric fields (``affection``, ``trust``, ``dominance``,
         ``intimacy``) are incremented; other fields are set. Creates the row
         if it doesn't exist.
+
+        When the caller supplies a non-empty ``summary``, a
+        :class:`RelationshipEvent` is appended to the relationship's
+        ``history`` log (with optional ``in_post`` and the applied
+        ``delta``) so a "relationship timeline" view can reconstruct what
+        drove each shift. Calls without a summary leave the log alone,
+        avoiding empty/noise entries for background tooling that only
+        nudges the rolling state.
         """
         branch = _branch_for(campaign_id, branch_id)
         existing = await self.store.db.fetchone(
@@ -724,6 +735,7 @@ class CharactersService:
             state = RelationshipState()
             existing_types = types or []
             row_id = _new_id("rel")
+            history = []
         else:
             state = _relationship_state_from_json(existing["state"])
             existing_types = json.loads(existing["types"]) if existing["types"] else []
@@ -732,6 +744,7 @@ class CharactersService:
                 merged = list(dict.fromkeys(existing_types + types))
                 existing_types = merged
             row_id = existing["id"]
+            history = _relationship_history_from_json(existing["history"])
 
         merged_state = state.model_dump()
         for key in ("affection", "trust", "dominance", "intimacy"):
@@ -743,17 +756,27 @@ class CharactersService:
         if "custom" in delta and isinstance(delta["custom"], dict):
             merged_state["custom"] = {**(merged_state.get("custom") or {}), **delta["custom"]}
 
+        if summary:
+            event = RelationshipEvent(
+                in_post=in_post,
+                summary=summary,
+                delta=dict(delta),
+                at=_now_iso(),
+            )
+            history.append(event.model_dump())
+
         await self.store.db.execute(
             """
             INSERT INTO relationships (
               id, campaign_id, branch_id, from_character_ref, to_character_ref,
-              types, state, updated_at_turn
+              types, state, updated_at_turn, history
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               types = excluded.types,
               state = excluded.state,
-              updated_at_turn = excluded.updated_at_turn
+              updated_at_turn = excluded.updated_at_turn,
+              history = excluded.history
             """,
             (
                 row_id,
@@ -764,6 +787,7 @@ class CharactersService:
                 json.dumps(existing_types),
                 json.dumps(merged_state, default=str),
                 turn_id or _now_iso(),
+                json.dumps(history, default=str),
             ),
         )
         return {
@@ -774,7 +798,36 @@ class CharactersService:
             "to_ref": to_ref,
             "types": existing_types,
             "state": merged_state,
+            "history": history,
         }
+
+    async def get_relationship_history(
+        self,
+        from_ref: CharacterRef,
+        to_ref: CharacterRef,
+        campaign_id: CampaignId,
+        *,
+        branch_id: str | None = None,
+    ) -> list[dict]:
+        """Return the chronological :class:`RelationshipEvent` log.
+
+        Empty list if no relationship exists (or it has no recorded
+        events). Events are returned in the order they were appended,
+        which matches the wall-clock order of the originating
+        ``update_relationship`` calls.
+        """
+        branch = _branch_for(campaign_id, branch_id)
+        row = await self.store.db.fetchone(
+            """
+            SELECT history FROM relationships
+            WHERE campaign_id = ? AND branch_id = ?
+              AND from_character_ref = ? AND to_character_ref = ?
+            """,
+            (campaign_id, branch, from_ref, to_ref),
+        )
+        if row is None:
+            return []
+        return _relationship_history_from_json(row["history"])
 
     # ------------------------------------------------------------------ #
     # Promotion
@@ -1397,6 +1450,22 @@ def _relationship_state_from_json(value: Any) -> RelationshipState:
     return RelationshipState.model_validate(data) if isinstance(data, dict) else RelationshipState()
 
 
+def _relationship_history_from_json(value: Any) -> list[dict]:
+    """Decode the ``history`` JSON column into a list of event dicts.
+
+    Returns an empty list on missing / malformed payloads; non-list JSON
+    is also rejected to keep callers from surfacing scalar / object
+    garbage as a "timeline".
+    """
+    if not value:
+        return []
+    try:
+        data = value if isinstance(value, list) else json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+
 def _relationship_row_to_dict(row: Any) -> dict:
     types = row["types"]
     try:
@@ -1404,6 +1473,13 @@ def _relationship_row_to_dict(row: Any) -> dict:
     except (TypeError, json.JSONDecodeError):
         types = []
     state = _relationship_state_from_json(row["state"]).model_dump()
+    # Older rows (pre-migration 015) may not have a ``history`` column at
+    # all if a caller hand-built the row dict; guard the lookup so reads
+    # stay backward-compatible.
+    try:
+        history_raw = row["history"]
+    except (IndexError, KeyError):
+        history_raw = None
     return {
         "id": row["id"],
         "campaign_id": row["campaign_id"],
@@ -1413,6 +1489,7 @@ def _relationship_row_to_dict(row: Any) -> dict:
         "types": types,
         "state": state,
         "updated_at_turn": row["updated_at_turn"],
+        "history": _relationship_history_from_json(history_raw),
     }
 
 
