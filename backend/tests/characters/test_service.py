@@ -12,6 +12,11 @@ from datetime import UTC, datetime
 import pytest
 
 from grimoire.characters import CharactersService
+from grimoire.characters.config import (
+    CacheConfig,
+    CharactersConfig,
+    DriftConfig,
+)
 from grimoire.characters.errors import CharactersError, PromotionError
 from grimoire.library import LibraryService
 from grimoire.mechanics import MechanicsService
@@ -919,7 +924,7 @@ async def test_cache_respects_max_size(
     store: StateStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    chars = CharactersService(library, mechanics, cache_max_size=2)
+    chars = CharactersService(library, mechanics, config=CharactersConfig(cache=CacheConfig(max_size=2)))
     await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
     await characters_create_many(chars)
@@ -963,6 +968,61 @@ async def test_cross_world_lookup(characters: CharactersService, store: StateSto
 
     variants = await characters.cross_world_lookup("alistair", exclude_world="wod-london")
     assert [v.world_id for v in variants] == ["wod-nyc"]
+
+
+def test_characters_config_defaults_match_spec() -> None:
+    """Spec characters-remaining §6: documented defaults from spec 08 §Configuration."""
+    config = CharactersConfig()
+    assert config.drift.threshold == 0.4
+    assert config.drift.check_every_n_appearances == 5
+    assert config.tiers.demote_to_background_after_turns == 3
+    assert config.tiers.demote_to_archive_after_turns == 10
+    assert config.voice_anchor.sample_dialogue_rotation is True
+    assert config.voice_anchor.max_samples == 5
+    assert config.capsules.auto_generate is True
+    assert config.promotion.require_confirmation is True
+    assert config.cross_world_lookup.case_sensitive is False
+    assert config.multi_pc.auto_advance_with_single_pc is True
+    assert config.multi_pc.require_advance_with_multiple_pcs is True
+    assert config.cache.max_size == 256
+
+
+async def test_cross_world_lookup_is_case_insensitive_by_default(
+    library: LibraryService,
+    mechanics: MechanicsService,
+    store: StateStore,
+) -> None:
+    """Spec characters-remaining §7: case_sensitive=False slug-normalizes the id."""
+    chars = CharactersService(library, mechanics)
+    await _seed_world(store, "wod-london")
+    await _seed_world(store, "wod-nyc")
+    await chars.create("wod-london", _character_data("alistair-hyde-smythe"))
+    await chars.create("wod-nyc", _character_data("alistair-hyde-smythe"))
+
+    # Mixed-case query slug-normalizes to "alistair-hyde-smythe".
+    variants = await chars.cross_world_lookup("Alistair Hyde Smythe")
+    assert {v.world_id for v in variants} == {"wod-london", "wod-nyc"}
+
+
+async def test_cross_world_lookup_respects_case_sensitive_flag(
+    library: LibraryService,
+    mechanics: MechanicsService,
+    store: StateStore,
+) -> None:
+    """When case_sensitive=True the raw id is passed through verbatim."""
+    from grimoire.characters.config import CrossWorldLookupConfig
+
+    chars = CharactersService(
+        library,
+        mechanics,
+        config=CharactersConfig(cross_world_lookup=CrossWorldLookupConfig(case_sensitive=True)),
+    )
+    await _seed_world(store, "wod-london")
+    await chars.create("wod-london", _character_data("alistair-hyde-smythe"))
+
+    # Different case → no match (no slugification applied).
+    variants = await chars.cross_world_lookup("Alistair Hyde Smythe")
+    assert variants == []
 
 
 # ---------------------------------------------------------------------------
@@ -1747,7 +1807,10 @@ async def test_maybe_check_drift_below_threshold_returns_none(
 
     checker = _CountingChecker()
     characters = CharactersService(
-        library, mechanics, drift_checker=checker, drift_check_every_n_appearances=5
+        library,
+        mechanics,
+        drift_checker=checker,
+        config=CharactersConfig(drift=DriftConfig(check_every_n_appearances=5)),
     )
     await characters.create("wod-london", _character_data())
     ref = "library:worlds/wod-london/characters/alistair"
@@ -1789,7 +1852,10 @@ async def test_maybe_check_drift_at_threshold_runs_and_resets(
 
     checker = _CountingChecker()
     characters = CharactersService(
-        library, mechanics, drift_checker=checker, drift_check_every_n_appearances=3
+        library,
+        mechanics,
+        drift_checker=checker,
+        config=CharactersConfig(drift=DriftConfig(check_every_n_appearances=3)),
     )
     await characters.create("wod-london", _character_data())
     ref = "library:worlds/wod-london/characters/alistair"
@@ -1830,7 +1896,10 @@ async def test_maybe_check_drift_force_bypasses_threshold(
 
     checker = _CountingChecker()
     characters = CharactersService(
-        library, mechanics, drift_checker=checker, drift_check_every_n_appearances=100
+        library,
+        mechanics,
+        drift_checker=checker,
+        config=CharactersConfig(drift=DriftConfig(check_every_n_appearances=100)),
     )
     await characters.create("wod-london", _character_data())
     ref = "library:worlds/wod-london/characters/alistair"
@@ -1862,7 +1931,10 @@ async def test_check_drift_emits_event_when_threshold_crossed(
         events.append(event)
 
     characters = CharactersService(
-        library, mechanics, drift_event_sink=sink, drift_threshold=0.4
+        library,
+        mechanics,
+        drift_event_sink=sink,
+        config=CharactersConfig(drift=DriftConfig(threshold=0.4)),
     )
     await characters.create("wod-london", _character_data())
     ref = "library:worlds/wod-london/characters/alistair"
@@ -1906,7 +1978,10 @@ async def test_check_drift_does_not_emit_below_threshold(
         events.append(event)
 
     characters = CharactersService(
-        library, mechanics, drift_event_sink=sink, drift_threshold=0.99
+        library,
+        mechanics,
+        drift_event_sink=sink,
+        config=CharactersConfig(drift=DriftConfig(threshold=0.99)),
     )
     await characters.create("wod-london", _character_data())
     ref = "library:worlds/wod-london/characters/alistair"
@@ -1940,7 +2015,10 @@ async def test_check_drift_swallows_sink_exceptions(
         raise RuntimeError("sink exploded")
 
     characters = CharactersService(
-        library, mechanics, drift_event_sink=sink, drift_threshold=0.0
+        library,
+        mechanics,
+        drift_event_sink=sink,
+        config=CharactersConfig(drift=DriftConfig(threshold=0.0)),
     )
     await characters.create("wod-london", _character_data())
     ref = "library:worlds/wod-london/characters/alistair"
