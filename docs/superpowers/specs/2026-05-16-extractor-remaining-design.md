@@ -49,18 +49,9 @@ Spec 04 §Configuration implicitly assumes the orchestrator's `ErrorConfig.retry
 
 The retry should reuse the same `CompletionRequest` with an appended user message instructing the model to return valid JSON only — or alternatively re-render the prompt with an explicit "your last response was unparseable" preamble.
 
-## 6. Streaming-friendly start
+## 6. Streaming-friendly start — RESOLVED (option b)
 
-Spec 04 §Performance: "Extraction runs in parallel with the user's reading of the response (the response streams to the UI; extraction starts immediately). For a typical post, target extraction latency is < 3 seconds using a fast model."
-
-Today `ExtractorService.extract(response_text, ...)` is called **after** the full response has streamed to completion (see Orchestrator `_run_turn` step 8 -> step 9 in `2026-05-12-orchestrator-design.md`). The rule-based and heuristic strategies could in principle run on a partial buffer earlier; the structured-LLM strategy needs the full text.
-
-Two options:
-
-- (a) Add `extract_partial(text_so_far, ...)` returning only rule-based + heuristic results, then `extract_full` for the structured-LLM pass — orchestrator calls (a) every N chunks, (b) once at end
-- (b) Leave the API alone and accept that "extraction starts immediately" actually means "extraction starts as soon as streaming ends" — document the deviation
-
-Pick one; either is defensible. (a) is more useful but requires orchestrator changes and result merging.
+**Resolution:** option (b) — extraction runs once after the full response streams. The deviation is documented in `2026-05-12-extractor-design.md` under "Timing — runs after streaming, not during". Option (a) (`extract_partial` API + per-chunk orchestrator calls) is deferred until profiling shows the structured-LLM strategy is the user-perceived bottleneck; the rule-based and heuristic strategies are fast enough on a complete buffer that the coordination cost of splitting isn't worth it speculatively.
 
 ## 7. Commitment-id resolution for `commitment_resolutions`
 
