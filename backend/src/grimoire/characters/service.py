@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -132,6 +133,7 @@ class CharactersService:
         tier_demote_to_background_after_turns: int = 3,
         tier_demote_to_archive_after_turns: int = 10,
         sheet_migrator: SheetMigrator | None = None,
+        cache_max_size: int = 256,
     ) -> None:
         self.library = library
         self.mechanics = mechanics
@@ -151,6 +153,16 @@ class CharactersService:
         # but keyed by ``(campaign_id, character_ref)``. The authoritative
         # source is the active-scene id stored on character_state.
         self._active_pc: dict[str, CharacterRef] = {}
+        # Compressed-view LRU (spec 2026-05-17 §5). Key is
+        # ``(ref, campaign_id, view, seed)``; value is the rendered string.
+        # We rely solely on the in-process invalidation hooks below — the
+        # Library exposes mtime but consulting it would require a DB
+        # roundtrip per cache check, defeating the cache. All mutation
+        # paths through this service call ``_view_cache_invalidate`` (or
+        # ``clear`` for cross-campaign library writes), so staleness is
+        # impossible as long as Library writes go through ``self.library``.
+        self._view_cache: OrderedDict[tuple[str, str, str, int | None], str] = OrderedDict()
+        self._view_cache_max_size = cache_max_size
 
     # ------------------------------------------------------------------ #
     # CRUD (delegated to Library)
@@ -181,12 +193,19 @@ class CharactersService:
             body=body,
             source="characters:update",
         )
+        # Pragmatic compromise (spec 2026-05-17 §5): a library write affects
+        # every campaign whose composition pulls in this world. We don't keep
+        # a campaign→world index here, so clear the entire cache instead of
+        # walking bindings. Library writes are rare relative to view reads.
+        self._view_cache_invalidate()
         return _character_from_entity(ent)
 
     async def delete(self, world_id: str, character_id: str) -> None:
         await self.library.delete_entity(
             world_id, "character", character_id, source="characters:delete"
         )
+        # Same compromise as ``update`` above — clear the whole cache.
+        self._view_cache_invalidate()
 
     # ------------------------------------------------------------------ #
     # Emergent (campaign-local) + override
@@ -257,6 +276,8 @@ class CharactersService:
             body=body,
             source=source,
         )
+        emergent_ref = f"campaign:emergent/character/{character_id}"
+        self._view_cache_invalidate(ref=emergent_ref, campaign_id=campaign_id)
         return _character_from_frontmatter(fm, body, world_id=None)
 
     async def delete_emergent(self, campaign_id: CampaignId, character_id: str) -> None:
@@ -268,6 +289,8 @@ class CharactersService:
                 f"no emergent character {character_id!r} in campaign {campaign_id!r}"
             )
         target.unlink()
+        emergent_ref = f"campaign:emergent/character/{character_id}"
+        self._view_cache_invalidate(ref=emergent_ref, campaign_id=campaign_id)
 
     async def upsert_override(
         self,
@@ -290,6 +313,7 @@ class CharactersService:
             patch=patch,
             source=source,
         )
+        self._view_cache_invalidate(ref=character_ref, campaign_id=campaign_id)
 
     # ------------------------------------------------------------------ #
     # Resolution
@@ -387,26 +411,101 @@ class CharactersService:
     async def get_full_card(
         self, ref: str, campaign_id: CampaignId, *, seed: int | None = None
     ) -> str:
+        cached = self._view_cache_get(ref, campaign_id, "full", seed)
+        if cached is not None:
+            return cached
         resolved = await self.resolve(ref, campaign_id)
-        return render_full(resolved.character, seed=seed)
+        rendered = render_full(resolved.character, seed=seed)
+        self._view_cache_set(ref, campaign_id, "full", seed, rendered)
+        return rendered
 
     async def get_compressed_card(
         self, ref: str, campaign_id: CampaignId, *, seed: int | None = None
     ) -> str:
+        cached = self._view_cache_get(ref, campaign_id, "compressed", seed)
+        if cached is not None:
+            return cached
         resolved = await self.resolve(ref, campaign_id)
-        return render_compressed(resolved.character, seed=seed)
+        rendered = render_compressed(resolved.character, seed=seed)
+        self._view_cache_set(ref, campaign_id, "compressed", seed, rendered)
+        return rendered
 
     async def get_voice_only(
         self, ref: str, campaign_id: CampaignId, *, seed: int | None = None
     ) -> str:
+        cached = self._view_cache_get(ref, campaign_id, "voice_only", seed)
+        if cached is not None:
+            return cached
         resolved = await self.resolve(ref, campaign_id)
-        return render_voice_only(resolved.character, seed=seed)
+        rendered = render_voice_only(resolved.character, seed=seed)
+        self._view_cache_set(ref, campaign_id, "voice_only", seed, rendered)
+        return rendered
 
     async def get_capsule(
         self, ref: str, campaign_id: CampaignId, *, seed: int | None = None
     ) -> str:
+        cached = self._view_cache_get(ref, campaign_id, "capsule", seed)
+        if cached is not None:
+            return cached
         resolved = await self.resolve(ref, campaign_id)
-        return render_capsule(resolved.character, seed=seed)
+        rendered = render_capsule(resolved.character, seed=seed)
+        self._view_cache_set(ref, campaign_id, "capsule", seed, rendered)
+        return rendered
+
+    # ------------------------------------------------------------------ #
+    # View cache helpers (spec 2026-05-17 §5)
+    # ------------------------------------------------------------------ #
+
+    def _view_cache_get(
+        self,
+        ref: CharacterRef,
+        campaign_id: CampaignId,
+        view: str,
+        seed: int | None,
+    ) -> str | None:
+        key = (ref, campaign_id, view, seed)
+        try:
+            value = self._view_cache[key]
+        except KeyError:
+            return None
+        self._view_cache.move_to_end(key)  # LRU touch
+        return value
+
+    def _view_cache_set(
+        self,
+        ref: CharacterRef,
+        campaign_id: CampaignId,
+        view: str,
+        seed: int | None,
+        value: str,
+    ) -> None:
+        key = (ref, campaign_id, view, seed)
+        self._view_cache[key] = value
+        self._view_cache.move_to_end(key)
+        while len(self._view_cache) > self._view_cache_max_size:
+            self._view_cache.popitem(last=False)
+
+    def _view_cache_invalidate(
+        self,
+        ref: CharacterRef | None = None,
+        campaign_id: CampaignId | None = None,
+    ) -> None:
+        """Drop all cache entries matching ``(ref, campaign_id)``.
+
+        ``view`` and ``seed`` are always cleared together — invalidation is
+        coarse on purpose. ``None`` for either field means "any".
+        """
+        if ref is None and campaign_id is None:
+            self._view_cache.clear()
+            return
+        doomed = [
+            key
+            for key in self._view_cache
+            if (ref is None or key[0] == ref)
+            and (campaign_id is None or key[1] == campaign_id)
+        ]
+        for key in doomed:
+            del self._view_cache[key]
 
     # ------------------------------------------------------------------ #
     # Tier management
@@ -497,6 +596,8 @@ class CharactersService:
         await self._save_state(
             ref, campaign_id, state, source="characters:tier-pin", record_in_delta_log=False
         )
+        # tier_pin is rendered into the full card via current_state — bust.
+        self._view_cache_invalidate(ref=ref, campaign_id=campaign_id)
 
     # ------------------------------------------------------------------ #
     # Drift
@@ -605,6 +706,7 @@ class CharactersService:
         source: str = "characters:state-update",
     ) -> None:
         await self._save_state(ref, campaign_id, state, source=source)
+        self._view_cache_invalidate(ref=ref, campaign_id=campaign_id)
 
     async def mark_screen_time(
         self, ref: CharacterRef, campaign_id: CampaignId, turn_id: str
