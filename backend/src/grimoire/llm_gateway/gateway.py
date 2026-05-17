@@ -604,7 +604,7 @@ class LLMGatewayService:
                         task=task,
                         provider_id=route.provider_id,
                         model=model_id,
-                        retries=0,
+                        retries=total_retries,
                         error=f"{type(exc).__name__}: {exc}",
                         campaign_id=campaign_id,
                         turn_id=turn_id,
@@ -618,18 +618,21 @@ class LLMGatewayService:
                         "campaign_id": campaign_id,
                         "turn_id": turn_id,
                         "error": f"{type(exc).__name__}: {exc}",
-                        "retries": 0,
+                        "retries": total_retries,
                         "fallback_used": False,
                     },
                 )
                 raise
             except RETRIABLE_EXCEPTIONS as exc:
+                # `total_retries` sums batches that succeeded; add the
+                # exhausted-retries count for the batch that finally failed.
+                final_retries = total_retries + self._config.retry.max_retries
                 if self._config.observability.log_all_requests:
                     await self._log.record(
                         task=task,
                         provider_id=route.provider_id,
                         model=model_id,
-                        retries=self._config.retry.max_retries,
+                        retries=final_retries,
                         error=f"{type(exc).__name__}: {exc}",
                         campaign_id=campaign_id,
                         turn_id=turn_id,
@@ -643,7 +646,7 @@ class LLMGatewayService:
                         "campaign_id": campaign_id,
                         "turn_id": turn_id,
                         "error": f"{type(exc).__name__}: {exc}",
-                        "retries": self._config.retry.max_retries,
+                        "retries": final_retries,
                         "fallback_used": False,
                     },
                 )
