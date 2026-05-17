@@ -44,6 +44,7 @@ class LLMGatewayLike:
         task: str,
         request: CompletionRequest,
         campaign_id: CampaignId | None = None,
+        *,
         turn_id: TurnId | None = None,
     ):
         raise NotImplementedError
