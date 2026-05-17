@@ -51,6 +51,10 @@ class ExtractorService:
 
 `route_deltas(deltas, *, config)` lives at `extractor/routing.py` and is what the Orchestrator imports; it returns `Routing(auto_apply, review, dropped)` with `Decision` per delta based on `auto_apply_threshold` / `review_threshold`.
 
+## Timing — runs after streaming, not during
+
+Spec 04 §Performance imagined extraction running in parallel with the response stream ("extraction starts immediately"). The shipped Orchestrator calls `extract(response_text, ...)` once, after the full response has finished streaming (see `_run_turn` in `2026-05-12-orchestrator-design.md`). This is a deliberate deviation: the structured-LLM strategy needs the full text, and the rule-based + heuristic strategies are fast enough on a complete buffer that splitting into `extract_partial` / `extract_full` would add coordination cost without saving user-perceived latency until profiling proves otherwise. Documented in `2026-05-16-extractor-remaining-design.md` §6, resolved as option (b).
+
 ## Extraction flow (`_run`)
 
 1. Start a monotonic clock for the `duration_ms` report
