@@ -10,8 +10,6 @@ from grimoire.llm_gateway.config import (
     EmbeddingCacheConfig,
     GatewayConfig,
     ObservabilityConfig,
-    RetryConfig,
-    TimeoutConfig,
 )
 from grimoire.llm_gateway.errors import (
     AuthenticationError,
@@ -26,6 +24,7 @@ from grimoire.llm_gateway.errors import (
 )
 from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.llm_gateway.routing import Route, RouteResolver
+from grimoire.types.llm import RetryPolicy, TimeoutPolicy
 
 __all__ = [
     "AuthenticationError",
@@ -39,10 +38,10 @@ __all__ = [
     "PermanentError",
     "ProviderNotFoundError",
     "RateLimitError",
-    "RetryConfig",
+    "RetryPolicy",
     "Route",
     "RouteNotFoundError",
     "RouteResolver",
-    "TimeoutConfig",
+    "TimeoutPolicy",
     "TransientError",
 ]

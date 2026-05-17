@@ -12,8 +12,6 @@ from grimoire.llm_gateway.config import (
     EmbeddingCacheConfig,
     GatewayConfig,
     ObservabilityConfig,
-    RetryConfig,
-    TimeoutConfig,
 )
 from grimoire.storage import Database, apply_migrations
 from grimoire.types.llm import (
@@ -21,6 +19,8 @@ from grimoire.types.llm import (
     Message,
     MessageRole,
     ModelInfo,
+    RetryPolicy,
+    TimeoutPolicy,
     TokenUsage,
 )
 from tests.llm_gateway.conftest import FakeLLMProvider, FakePlugins
@@ -42,8 +42,8 @@ def _request(model: str = "ignored") -> CompletionRequest:
 def _config(**overrides) -> GatewayConfig:
     base = dict(
         default_routes={"main": "prov.model-a"},
-        retry=RetryConfig(max_retries=0, initial_delay_ms=0, backoff_factor=1.0),
-        timeout=TimeoutConfig(total_seconds=5.0, first_token_seconds=2.0),
+        retry=RetryPolicy(max_retries=0, initial_delay_ms=0, backoff_factor=1.0),
+        timeout=TimeoutPolicy(total_seconds=5.0, first_token_seconds=2.0),
         embedding_cache=EmbeddingCacheConfig(enabled=True, max_entries=100),
         observability=ObservabilityConfig(log_all_requests=True),
     )

@@ -17,12 +17,10 @@ from grimoire.llm_gateway.config import (
     EmbeddingCacheConfig,
     GatewayConfig,
     ObservabilityConfig,
-    RetryConfig,
-    TimeoutConfig,
 )
 from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.llm_gateway.settings import GatewaySettings
-from grimoire.types.llm import CompletionRequest, Message, MessageRole
+from grimoire.types.llm import CompletionRequest, Message, MessageRole, RetryPolicy, TimeoutPolicy
 from tests.llm_gateway.conftest import FakeLLMProvider
 
 # ---------------------------------------------------------------------------
@@ -42,8 +40,8 @@ def _request() -> CompletionRequest:
 def _minimal_config() -> GatewayConfig:
     return GatewayConfig(
         default_routes={"main": "fake.model"},
-        retry=RetryConfig(max_retries=0, initial_delay_ms=0, backoff_factor=1.0),
-        timeout=TimeoutConfig(total_seconds=5.0, first_token_seconds=2.0),
+        retry=RetryPolicy(max_retries=0, initial_delay_ms=0, backoff_factor=1.0),
+        timeout=TimeoutPolicy(total_seconds=5.0, first_token_seconds=2.0),
         observability=ObservabilityConfig(log_all_requests=False),
     )
 
@@ -121,8 +119,8 @@ class TestGatewaySettings:
         cfg = s.to_gateway_config()
         assert cfg.default_routes == {"main": "p.m", "drift_check": "p.h"}
         assert cfg.fallback_routes == {"main": "p.fallback"}
-        assert cfg.retry == RetryConfig(max_retries=1, initial_delay_ms=100, backoff_factor=1.5)
-        assert cfg.timeout == TimeoutConfig(total_seconds=30.0, first_token_seconds=5.0)
+        assert cfg.retry == RetryPolicy(max_retries=1, initial_delay_ms=100, backoff_factor=1.5)
+        assert cfg.timeout == TimeoutPolicy(total_seconds=30.0, first_token_seconds=5.0)
         assert cfg.embedding_cache == EmbeddingCacheConfig(enabled=True, max_entries=1000)
         assert cfg.observability == ObservabilityConfig(
             log_all_requests=True, log_response_text=False, response_excerpt_chars=50

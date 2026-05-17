@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import dataclasses
 import logging
 import os
 import time
@@ -20,14 +19,14 @@ from pathlib import Path
 from grimoire.event_bus import Event, EventBus
 from grimoire.files.yaml_io import dump_yaml, load_yaml
 from grimoire.llm_gateway.cache import EmbeddingCache
-from grimoire.llm_gateway.config import GatewayConfig, RetryConfig, TimeoutConfig
+from grimoire.llm_gateway.config import GatewayConfig
 from grimoire.llm_gateway.errors import (
     GatewayError,
     PermanentError,
     ProviderNotFoundError,
 )
 from grimoire.llm_gateway.request_log import LLMRequestLog, request_hash
-from grimoire.llm_gateway.retry import RETRIABLE_EXCEPTIONS, run_with_retries
+from grimoire.llm_gateway.retry import resolve_retry_exceptions, run_with_retries
 from grimoire.llm_gateway.routing import Route, RouteResolver
 from grimoire.storage.db import Database
 from grimoire.types.common import CampaignId, HealthLevel, HealthStatus, TurnId
@@ -36,6 +35,8 @@ from grimoire.types.llm import (
     CompletionRequest,
     CompletionResponse,
     ModelInfo,
+    RetryPolicy,
+    TimeoutPolicy,
     TokenUsage,
 )
 from grimoire.types.observability import HealthTarget
@@ -81,6 +82,11 @@ class LLMGatewayService:
         self._provider_health_levels: dict[str, HealthLevel] = {}
         # subscription handle for the health-monitor subscriber (kept to prevent GC)
         self._health_sub_id: str | None = None
+        # Resolved retriable exception tuple from the configured retry policy.
+        # Used in `except` clauses throughout the gateway (outside run_with_retries).
+        self._retriable: tuple[type[BaseException], ...] = resolve_retry_exceptions(
+            self._config.retry.retry_on
+        )
 
     # ------------------------------------------------------------------ #
     # Event helpers
@@ -157,23 +163,40 @@ class LLMGatewayService:
     # Per-call override resolvers
     # ------------------------------------------------------------------ #
 
-    def _resolved_retry(self, override: RetryConfig | None) -> RetryConfig:
+    def _resolved_retry(self, override: RetryPolicy | None) -> RetryPolicy:
         """Return the per-call override if given, else the global config value."""
         return override if override is not None else self._config.retry
 
-    def _resolved_timeout(self, override: TimeoutConfig | None) -> TimeoutConfig:
+    def _resolved_timeout(self, override: TimeoutPolicy | None) -> TimeoutPolicy:
         """Return the per-call override if given, else the global config value."""
         return override if override is not None else self._config.timeout
 
-    @staticmethod
-    def _retry_dict(cfg: RetryConfig | None) -> dict | None:
-        """Serialise a RetryConfig to a plain dict for event payloads (None → None)."""
-        return dataclasses.asdict(cfg) if cfg is not None else None
+    def _retriable_for(self, override: RetryPolicy | None) -> tuple[type[BaseException], ...]:
+        """Return the retriable exception tuple for *override*, or the gateway default."""
+        if override is None:
+            return self._retriable
+        return resolve_retry_exceptions(override.retry_on)
 
     @staticmethod
-    def _timeout_dict(cfg: TimeoutConfig | None) -> dict | None:
-        """Serialise a TimeoutConfig to a plain dict for event payloads (None → None)."""
-        return dataclasses.asdict(cfg) if cfg is not None else None
+    def _retry_dict(cfg: RetryPolicy | None) -> dict | None:
+        """Serialise a RetryPolicy to a plain dict for event payloads (None → None)."""
+        if cfg is None:
+            return None
+        return {
+            "max_retries": cfg.max_retries,
+            "initial_delay_ms": cfg.initial_delay_ms,
+            "backoff_factor": cfg.backoff_factor,
+        }
+
+    @staticmethod
+    def _timeout_dict(cfg: TimeoutPolicy | None) -> dict | None:
+        """Serialise a TimeoutPolicy to a plain dict for event payloads (None → None)."""
+        if cfg is None:
+            return None
+        return {
+            "total_seconds": cfg.total_seconds,
+            "first_token_seconds": cfg.first_token_seconds,
+        }
 
     # ------------------------------------------------------------------ #
     # Completion
@@ -186,8 +209,8 @@ class LLMGatewayService:
         campaign_id: CampaignId | None = None,
         *,
         turn_id: TurnId | None = None,
-        retry: RetryConfig | None = None,
-        timeout: TimeoutConfig | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: TimeoutPolicy | None = None,
     ) -> CompletionResponse:
         if campaign_id is not None and campaign_id not in self._loaded_campaigns:
             await self._load_campaign_routing(campaign_id)
@@ -213,8 +236,8 @@ class LLMGatewayService:
         campaign_id: CampaignId | None,
         turn_id: TurnId | None,
         fallback: Route | None,
-        retry: RetryConfig | None = None,
-        timeout: TimeoutConfig | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: TimeoutPolicy | None = None,
     ) -> CompletionResponse:
         resolved_retry = self._resolved_retry(retry)
         try:
@@ -243,7 +266,10 @@ class LLMGatewayService:
                 timeout=timeout,
             )
             raise
-        except RETRIABLE_EXCEPTIONS as exc:
+        except BaseException as exc:
+            retriable = self._retriable_for(retry)
+            if not retriable or not isinstance(exc, retriable):
+                raise
             await self._record_failure(
                 task=task,
                 route=route,
@@ -290,7 +316,9 @@ class LLMGatewayService:
                     timeout=timeout,
                 )
                 raise
-            except RETRIABLE_EXCEPTIONS as fallback_exc:
+            except BaseException as fallback_exc:
+                if not retriable or not isinstance(fallback_exc, retriable):
+                    raise
                 await self._record_failure(
                     task=task,
                     route=fallback,
@@ -314,8 +342,8 @@ class LLMGatewayService:
         campaign_id: CampaignId | None,
         turn_id: TurnId | None,
         fallback_used: bool,
-        retry: RetryConfig | None = None,
-        timeout: TimeoutConfig | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: TimeoutPolicy | None = None,
     ) -> tuple[CompletionResponse, int]:
         provider = self._require_llm(route.provider_id)
         scoped = request.model_copy(update={"model": route.model})
@@ -416,8 +444,8 @@ class LLMGatewayService:
         error: BaseException,
         retries: int,
         fallback_used: bool,
-        retry: RetryConfig | None = None,
-        timeout: TimeoutConfig | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: TimeoutPolicy | None = None,
     ) -> None:
         await self._emit(
             "llm_request_failed",
@@ -465,8 +493,8 @@ class LLMGatewayService:
         campaign_id: CampaignId | None = None,
         *,
         turn_id: TurnId | None = None,
-        retry: RetryConfig | None = None,
-        timeout: TimeoutConfig | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: TimeoutPolicy | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         """Stream completion chunks, retrying / falling back on zero-chunk failures.
 
@@ -499,6 +527,7 @@ class LLMGatewayService:
 
         first_chunk_delivered = False
         last_exc: BaseException | None = None
+        retriable = self._retriable_for(retry)
 
         # ── Primary route: initial attempt + up to max_retries retries ──────
         retries_used = 0
@@ -546,7 +575,7 @@ class LLMGatewayService:
                     # Mid-stream failure after at least one chunk — propagate
                     # uncaught.  No retry, no fallback (caller sees partial data).
                     raise
-                if not isinstance(exc, RETRIABLE_EXCEPTIONS):
+                if not retriable or not isinstance(exc, retriable):
                     # Non-retriable, non-Permanent exception (e.g. programming
                     # error): record and re-raise immediately.
                     await self._record_failure(
@@ -645,8 +674,8 @@ class LLMGatewayService:
         campaign_id: CampaignId | None,
         turn_id: TurnId | None,
         fallback_used: bool = False,
-        retry: RetryConfig | None = None,
-        timeout: TimeoutConfig | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: TimeoutPolicy | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         """Attempt a single streaming call to `provider` and yield chunks.
 
@@ -756,8 +785,8 @@ class LLMGatewayService:
         campaign_id: CampaignId | None = None,
         *,
         turn_id: TurnId | None = None,
-        retry: RetryConfig | None = None,
-        timeout: TimeoutConfig | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: TimeoutPolicy | None = None,
     ) -> list[list[float]]:
         if not texts:
             return []
@@ -783,6 +812,7 @@ class LLMGatewayService:
         if missing:
             resolved_retry = self._resolved_retry(retry)
             resolved_timeout = self._resolved_timeout(timeout)
+            embed_retriable = self._retriable_for(retry)
 
             await self._emit(
                 "embedding_request_started",
@@ -866,7 +896,9 @@ class LLMGatewayService:
                     },
                 )
                 raise
-            except RETRIABLE_EXCEPTIONS as exc:
+            except BaseException as exc:
+                if not embed_retriable or not isinstance(exc, embed_retriable):
+                    raise
                 # `total_retries` sums batches that succeeded; add the
                 # exhausted-retries count for the batch that finally failed.
                 final_retries = total_retries + resolved_retry.max_retries
