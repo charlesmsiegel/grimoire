@@ -40,7 +40,7 @@ def main() -> None:
     abs_path = os.path.abspath(file_path)
 
     try:
-        repo_root = subprocess.check_output(
+        cwd_repo_root = subprocess.check_output(
             ["git", "rev-parse", "--show-toplevel"],
             stderr=subprocess.DEVNULL,
             text=True,
@@ -48,10 +48,26 @@ def main() -> None:
     except (subprocess.CalledProcessError, FileNotFoundError):
         return
 
-    repo_root = os.path.abspath(repo_root)
+    cwd_repo_root = os.path.abspath(cwd_repo_root)
+
+    # Resolve the worktree that owns `abs_path` (may differ from CWD's
+    # worktree when writing into `.worktrees/<name>/...`). Using the file's
+    # own worktree means check-ignore consults the right .gitignore stack —
+    # `.worktrees/` is ignored from the main worktree's POV but the files
+    # inside each worktree are normally tracked there.
+    target_dir = os.path.dirname(abs_path) or "."
+    try:
+        target_repo_root = subprocess.check_output(
+            ["git", "-C", target_dir, "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        target_repo_root = os.path.abspath(target_repo_root)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        target_repo_root = cwd_repo_root
 
     try:
-        rel = os.path.relpath(abs_path, repo_root)
+        rel = os.path.relpath(abs_path, target_repo_root)
     except ValueError:
         emit_deny(f"Refusing to write outside the repo (different drive): {abs_path}")
         return
@@ -59,12 +75,12 @@ def main() -> None:
     if rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel):
         emit_deny(
             f"Refusing to write outside the repo. Path resolves to {abs_path}, "
-            f"which is outside {repo_root}."
+            f"which is outside {target_repo_root}."
         )
         return
 
     result = subprocess.run(
-        ["git", "-C", repo_root, "check-ignore", "-q", "--", abs_path],
+        ["git", "-C", target_repo_root, "check-ignore", "-q", "--", abs_path],
         stderr=subprocess.DEVNULL,
         check=False,
     )
