@@ -24,10 +24,18 @@ open_url() {
     esac
 }
 
-# Resolve the pnpm command. Echoes a single token: either "pnpm" or "corepack pnpm".
-# Returns non-zero with an error on stderr if neither is available.
+# Resolve the pnpm command. Echoes a single token: "pnpm.cmd", "pnpm", or
+# "corepack pnpm". Returns non-zero with an error on stderr if none available.
 resolve_pnpm() {
-    if command -v pnpm >/dev/null 2>&1; then
+    # On Windows, prefer pnpm.cmd. The npm-installed pnpm ships a POSIX shell
+    # wrapper that runs `cygpath -w "$basedir"` to translate /c/... to C:\...;
+    # if PATH puts a foreign MSYS root (e.g. Anaconda's
+    # Library/usr/bin/cygpath) ahead of Git Bash's, that translation produces
+    # a path like C:\...\anaconda3\Library\c\Users\... and node fails with
+    # MODULE_NOT_FOUND. pnpm.cmd skips cygpath entirely.
+    if command -v pnpm.cmd >/dev/null 2>&1; then
+        printf 'pnpm.cmd'
+    elif command -v pnpm >/dev/null 2>&1; then
         printf 'pnpm'
     elif command -v corepack >/dev/null 2>&1; then
         printf 'corepack pnpm'
