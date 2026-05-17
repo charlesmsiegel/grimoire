@@ -185,6 +185,10 @@ class ExtractorService:
         # Merge deltas (rule + llm). Heuristic strategy emits only flags.
         merged_deltas = merge_deltas(rule_deltas, llm_out.deltas)
 
+        # Speaker authority: testimony from a character is less authoritative
+        # than GM-voice narration (spec 04 §Confidence scoring).
+        merged_deltas = [self._apply_speaker_authority(d) for d in merged_deltas]
+
         # Player text: clamp confidence on non-PC subjects.
         if from_player and player_pc_ref:
             merged_deltas = [
@@ -264,6 +268,25 @@ class ExtractorService:
             config=self._config,
             source=self._source,
         )
+
+    def _apply_speaker_authority(self, delta: StateDelta) -> StateDelta:
+        """Subtract `testimony_confidence_penalty` for character-spoken facts.
+
+        Spec 04 §Confidence scoring: GM-voice narration is more authoritative
+        than a character's in-fiction claim. We treat `speaker_id is None`
+        (or missing) as the GM narrator marker and apply the penalty only
+        to FACT_ADD deltas tagged with a concrete speaker.
+        """
+        if delta.kind != DeltaKind.FACT_ADD:
+            return delta
+        speaker_id = delta.after.get("speaker_id")
+        if not isinstance(speaker_id, str) or not speaker_id.strip():
+            return delta
+        penalty = self._config.testimony_confidence_penalty
+        if penalty <= 0:
+            return delta
+        adjusted = max(0.0, delta.confidence - penalty)
+        return delta.model_copy(update={"confidence": adjusted})
 
     def _clamp_player_authority(self, delta: StateDelta, *, player_pc_ref: str) -> StateDelta:
         """Apply the player-authority heuristic (spec 04 §Handling player text).
