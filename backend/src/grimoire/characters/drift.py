@@ -15,7 +15,35 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from grimoire.types.characters import Character, DriftReport
+from grimoire.types.common import CampaignId, CharacterRef
 from grimoire.types.scene import Post
+
+
+@dataclass(frozen=True)
+class DriftEvent:
+    """Surface-level notification that a character's voice has drifted.
+
+    Emitted by :meth:`CharactersService.check_drift` whenever the computed
+    drift score meets or exceeds the configured threshold (spec
+    characters-remaining §4). Consumers (the event bus, the Frontend badge
+    renderer, the regenerate hook) read ``report.corrective_context`` to
+    render the UI affordance and to prime the Context Builder's next prompt.
+    """
+
+    character_ref: CharacterRef
+    campaign_id: CampaignId
+    drift_score: float
+    threshold: float
+    report: DriftReport
+
+
+DriftEventSink = Callable[[DriftEvent], Awaitable[None]]
+"""Async sink for :class:`DriftEvent` notifications.
+
+Wired into :class:`CharactersService` via the ``drift_event_sink`` kwarg.
+Sink failures are swallowed (logged as a warning) so a flaky bus does not
+block extraction or post-turn drift checks.
+"""
 
 
 @dataclass(frozen=True)

@@ -8,6 +8,8 @@ capability surfacing.
 from grimoire.characters.drift import (
     CallableDriftChecker,
     DriftChecker,
+    DriftEvent,
+    DriftEventSink,
     DriftInput,
     HeuristicDriftChecker,
 )
@@ -50,6 +52,8 @@ __all__ = [
     "CharactersError",
     "CharactersService",
     "DriftChecker",
+    "DriftEvent",
+    "DriftEventSink",
     "DriftInput",
     "HeuristicDriftChecker",
     "ImportError_",

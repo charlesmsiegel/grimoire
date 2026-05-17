@@ -1695,3 +1695,269 @@ async def test_pin_tier_does_not_record_delta(
     # But the pin still persists.
     state = await characters.get_state(ref, "camp-1")
     assert state.tier_pin == ContextTier.LOCK_IN
+
+
+# ---------------------------------------------------------------------------
+# Drift cadence (spec characters-remaining §3)
+# ---------------------------------------------------------------------------
+
+
+async def test_mark_screen_time_bumps_appearance_counter(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """Each screen-time bump increments the drift-cadence counter."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    state = await characters.get_state(ref, "camp-1")
+    assert state.appearances_since_last_drift_check == 0
+
+    await characters.mark_screen_time(ref, "camp-1", "t_1")
+    await characters.mark_screen_time(ref, "camp-1", "t_2")
+    await characters.mark_screen_time(ref, "camp-1", "t_3")
+
+    state = await characters.get_state(ref, "camp-1")
+    assert state.appearances_since_last_drift_check == 3
+
+
+async def test_maybe_check_drift_below_threshold_returns_none(
+    library: LibraryService, mechanics: MechanicsService, store: StateStore
+) -> None:
+    """Counter below threshold → no checker call, no report."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+
+    class _CountingChecker:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def evaluate(self, payload):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            from grimoire.types.characters import DriftReport
+
+            return DriftReport(
+                character_ref=payload.character.id,
+                window=payload.window,
+                drift_score=0.0,
+                evidence=[],
+                corrective_context="",
+            )
+
+    checker = _CountingChecker()
+    characters = CharactersService(
+        library, mechanics, drift_checker=checker, drift_check_every_n_appearances=5
+    )
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    # Two appearances, threshold is 5 → maybe_check_drift should noop.
+    await characters.mark_screen_time(ref, "camp-1", "t_1")
+    await characters.mark_screen_time(ref, "camp-1", "t_2")
+
+    report = await characters.maybe_check_drift(ref, "camp-1", recent_posts=[])
+    assert report is None
+    assert checker.calls == 0
+    # Counter is unchanged when we skip.
+    state = await characters.get_state(ref, "camp-1")
+    assert state.appearances_since_last_drift_check == 2
+
+
+async def test_maybe_check_drift_at_threshold_runs_and_resets(
+    library: LibraryService, mechanics: MechanicsService, store: StateStore
+) -> None:
+    """Counter reaches threshold → checker runs, counter resets."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+
+    class _CountingChecker:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def evaluate(self, payload):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            from grimoire.types.characters import DriftReport
+
+            return DriftReport(
+                character_ref=payload.character.id,
+                window=payload.window,
+                drift_score=0.1,
+                evidence=[],
+                corrective_context="",
+            )
+
+    checker = _CountingChecker()
+    characters = CharactersService(
+        library, mechanics, drift_checker=checker, drift_check_every_n_appearances=3
+    )
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    await characters.mark_screen_time(ref, "camp-1", "t_1")
+    await characters.mark_screen_time(ref, "camp-1", "t_2")
+    await characters.mark_screen_time(ref, "camp-1", "t_3")
+
+    report = await characters.maybe_check_drift(ref, "camp-1", recent_posts=[])
+    assert report is not None
+    assert checker.calls == 1
+    state = await characters.get_state(ref, "camp-1")
+    assert state.appearances_since_last_drift_check == 0
+
+
+async def test_maybe_check_drift_force_bypasses_threshold(
+    library: LibraryService, mechanics: MechanicsService, store: StateStore
+) -> None:
+    """``force=True`` always runs, even with a zero counter."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+
+    class _CountingChecker:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def evaluate(self, payload):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            from grimoire.types.characters import DriftReport
+
+            return DriftReport(
+                character_ref=payload.character.id,
+                window=payload.window,
+                drift_score=0.0,
+                evidence=[],
+                corrective_context="",
+            )
+
+    checker = _CountingChecker()
+    characters = CharactersService(
+        library, mechanics, drift_checker=checker, drift_check_every_n_appearances=100
+    )
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    report = await characters.maybe_check_drift(
+        ref, "camp-1", recent_posts=[], force=True
+    )
+    assert report is not None
+    assert checker.calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Drift UI surfacing (spec characters-remaining §4)
+# ---------------------------------------------------------------------------
+
+
+async def test_check_drift_emits_event_when_threshold_crossed(
+    library: LibraryService, mechanics: MechanicsService, store: StateStore
+) -> None:
+    """When drift_score >= threshold, the sink receives a DriftEvent."""
+    from grimoire.characters.drift import DriftEvent
+
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+
+    events: list[DriftEvent] = []
+
+    async def sink(event: DriftEvent) -> None:
+        events.append(event)
+
+    characters = CharactersService(
+        library, mechanics, drift_event_sink=sink, drift_threshold=0.4
+    )
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    posts = [
+        Post(
+            id="p1",
+            scene_id="s",
+            order_in_scene=1,
+            author_kind=AuthorKind.NPC,
+            author_npc_ref="alistair",
+            body="yo dude lol modern slang totally rad.",
+            is_player=False,
+            created_at=datetime.now(UTC),
+            turn_id="t1",
+        )
+    ]
+    report = await characters.check_drift(ref, "camp-1", recent_posts=posts)
+    assert report.drift_score >= 0.4
+    assert len(events) == 1
+    event = events[0]
+    assert event.character_ref == ref
+    assert event.campaign_id == "camp-1"
+    assert event.drift_score == report.drift_score
+    assert event.threshold == 0.4
+    assert event.report is report
+
+
+async def test_check_drift_does_not_emit_below_threshold(
+    library: LibraryService, mechanics: MechanicsService, store: StateStore
+) -> None:
+    """Score below threshold → no event."""
+    from grimoire.characters.drift import DriftEvent
+
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+
+    events: list[DriftEvent] = []
+
+    async def sink(event: DriftEvent) -> None:
+        events.append(event)
+
+    characters = CharactersService(
+        library, mechanics, drift_event_sink=sink, drift_threshold=0.99
+    )
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    # In-voice line → low drift score.
+    posts = [
+        Post(
+            id="p1",
+            scene_id="s",
+            order_in_scene=1,
+            author_kind=AuthorKind.NPC,
+            author_npc_ref="alistair",
+            body="Indeed, one shall not tolerate such pedestrian threats.",
+            is_player=False,
+            created_at=datetime.now(UTC),
+            turn_id="t1",
+        )
+    ]
+    await characters.check_drift(ref, "camp-1", recent_posts=posts)
+    assert events == []
+
+
+async def test_check_drift_swallows_sink_exceptions(
+    library: LibraryService, mechanics: MechanicsService, store: StateStore
+) -> None:
+    """A failing sink must not block drift detection."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+
+    async def sink(event) -> None:  # type: ignore[no-untyped-def]
+        raise RuntimeError("sink exploded")
+
+    characters = CharactersService(
+        library, mechanics, drift_event_sink=sink, drift_threshold=0.0
+    )
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    posts = [
+        Post(
+            id="p1",
+            scene_id="s",
+            order_in_scene=1,
+            author_kind=AuthorKind.NPC,
+            author_npc_ref="alistair",
+            body="yo dude lol modern slang totally rad.",
+            is_player=False,
+            created_at=datetime.now(UTC),
+            turn_id="t1",
+        )
+    ]
+    # Should NOT raise.
+    report = await characters.check_drift(ref, "camp-1", recent_posts=posts)
+    assert report.drift_score >= 0.0
