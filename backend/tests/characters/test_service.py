@@ -302,6 +302,173 @@ async def test_pin_tier_overrides_recommendation(
     assert tiers[ref] == ContextTier.LOCK_IN
 
 
+async def test_recommend_tiers_promotes_recent_mentions_to_background(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """Spec characters-remaining §1: characters mentioned in recent posts → BACKGROUND."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data("alistair"))
+    alistair_ref = "library:worlds/wod-london/characters/alistair"
+    scene = Scene(
+        id="scene-1",
+        campaign_id="camp-1",
+        branch_id="camp-1:main",
+        ordinal=1,
+        slug="s",
+        file_path="x.md",
+        present_character_refs=[],  # not present
+    )
+    posts = [
+        Post(
+            id="p1",
+            scene_id="s",
+            order_in_scene=1,
+            author_kind=AuthorKind.NARRATOR,
+            body="The Tremere has been watching from the shadows.",  # matches alias
+            is_player=False,
+            created_at=datetime.now(UTC),
+            turn_id="t_p1",
+        )
+    ]
+    tiers = await characters.recommend_tiers(scene, recent_posts=posts)
+    assert tiers.get(alistair_ref) == ContextTier.BACKGROUND
+
+
+async def test_recommend_tiers_promotes_open_commitment_targets_to_background(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """Spec characters-remaining §1: characters with open commitments to PCs → ≥ BACKGROUND."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data("alistair"))
+    alistair_ref = "library:worlds/wod-london/characters/alistair"
+    scene = Scene(
+        id="scene-1",
+        campaign_id="camp-1",
+        branch_id="camp-1:main",
+        ordinal=1,
+        slug="s",
+        file_path="x.md",
+        present_character_refs=[],
+    )
+    tiers = await characters.recommend_tiers(
+        scene, commitments_targeting_pcs={alistair_ref}
+    )
+    assert tiers.get(alistair_ref) == ContextTier.BACKGROUND
+
+
+async def test_recommend_tiers_demotes_inactive_characters(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """Spec characters-remaining §1: inactivity → demotion over time."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data("alistair"))
+    alistair_ref = "library:worlds/wod-london/characters/alistair"
+    # Mark screen time at turn t_old, then advance the post log past the
+    # background/archive thresholds without seeing alistair again.
+    await characters.mark_screen_time(alistair_ref, "camp-1", "t_old")
+    scene = Scene(
+        id="scene-1",
+        campaign_id="camp-1",
+        branch_id="camp-1:main",
+        ordinal=1,
+        slug="s",
+        file_path="x.md",
+        present_character_refs=[],
+    )
+    # Five turns since alistair was on-screen; background threshold defaults
+    # to 3 turns of silence.
+    posts = [
+        Post(
+            id=f"p{i}",
+            scene_id="s",
+            order_in_scene=i,
+            author_kind=AuthorKind.NARRATOR,
+            body="Nothing about that character.",
+            is_player=False,
+            created_at=datetime.now(UTC),
+            turn_id=f"t_{i}",
+        )
+        for i in range(1, 6)
+    ]
+    tiers = await characters.recommend_tiers(scene, recent_posts=posts)
+    assert tiers.get(alistair_ref) == ContextTier.BACKGROUND
+
+
+async def test_recommend_tiers_archives_long_inactive_characters(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """After more turns than the archive threshold, demotion goes all the way."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data("alistair"))
+    alistair_ref = "library:worlds/wod-london/characters/alistair"
+    await characters.mark_screen_time(alistair_ref, "camp-1", "t_old")
+    scene = Scene(
+        id="scene-1",
+        campaign_id="camp-1",
+        branch_id="camp-1:main",
+        ordinal=1,
+        slug="s",
+        file_path="x.md",
+        present_character_refs=[],
+    )
+    # Twelve turns since alistair was on-screen; archive threshold defaults
+    # to 10 turns of silence.
+    posts = [
+        Post(
+            id=f"p{i}",
+            scene_id="s",
+            order_in_scene=i,
+            author_kind=AuthorKind.NARRATOR,
+            body="Nothing relevant.",
+            is_player=False,
+            created_at=datetime.now(UTC),
+            turn_id=f"t_{i}",
+        )
+        for i in range(1, 13)
+    ]
+    tiers = await characters.recommend_tiers(scene, recent_posts=posts)
+    assert tiers.get(alistair_ref) == ContextTier.ARCHIVE
+
+
+async def test_recommend_tiers_presence_beats_inactivity_demotion(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """Being present in the scene wins over any inactivity demotion."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data("alistair"))
+    alistair_ref = "library:worlds/wod-london/characters/alistair"
+    await characters.mark_screen_time(alistair_ref, "camp-1", "t_old")
+    scene = Scene(
+        id="scene-1",
+        campaign_id="camp-1",
+        branch_id="camp-1:main",
+        ordinal=1,
+        slug="s",
+        file_path="x.md",
+        present_character_refs=[alistair_ref],
+    )
+    posts = [
+        Post(
+            id=f"p{i}",
+            scene_id="s",
+            order_in_scene=i,
+            author_kind=AuthorKind.NARRATOR,
+            body="Nothing relevant.",
+            is_player=False,
+            created_at=datetime.now(UTC),
+            turn_id=f"t_{i}",
+        )
+        for i in range(1, 13)
+    ]
+    tiers = await characters.recommend_tiers(scene, recent_posts=posts)
+    assert tiers[alistair_ref] == ContextTier.SPOTLIGHT
+
+
 # ---------------------------------------------------------------------------
 # Drift
 # ---------------------------------------------------------------------------

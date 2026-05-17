@@ -105,6 +105,8 @@ class CharactersService:
         drift_checker: DriftChecker | None = None,
         drift_threshold: float = 0.4,
         ingest_llm: LLMEnrichCallable | None = None,
+        tier_demote_to_background_after_turns: int = 3,
+        tier_demote_to_archive_after_turns: int = 10,
     ) -> None:
         self.library = library
         self.mechanics = mechanics
@@ -115,6 +117,8 @@ class CharactersService:
         )
         self._drift_threshold = drift_threshold
         self._ingest_llm = ingest_llm
+        self._tier_demote_to_background_after = tier_demote_to_background_after_turns
+        self._tier_demote_to_archive_after = tier_demote_to_archive_after_turns
         # Per-PC current scene cache; mirrors SceneManager._pc_current_scene
         # but keyed by ``(campaign_id, character_ref)``. The authoritative
         # source is the active-scene id stored on character_state.
@@ -351,19 +355,75 @@ class CharactersService:
     # ------------------------------------------------------------------ #
 
     async def recommend_tiers(
-        self, scene: Scene, campaign_id: CampaignId | None = None
+        self,
+        scene: Scene,
+        campaign_id: CampaignId | None = None,
+        *,
+        recent_posts: list[Post] | None = None,
+        commitments_targeting_pcs: set[CharacterRef] | None = None,
     ) -> dict[CharacterRef, ContextTier]:
         """Per-character tier recommendation for a scene.
 
-        Rules (spec 08 §Tier management):
-        * Present in the scene → spotlight
-        * Mentioned in recent posts → background
-        * User tier pin → forced tier
+        Spec 08 §Tier management lists four rules. They compose, with the
+        later rules in this list overriding earlier ones:
+
+        * Inactivity → demote (BACKGROUND after `tier_demote_to_background_after_turns`
+          turns of silence; ARCHIVE after `tier_demote_to_archive_after_turns`).
+        * Mentioned in recent posts (by name or alias) → at least BACKGROUND.
+        * Open commitments to a PC (caller-provided) → at least BACKGROUND.
+        * Present in the scene → SPOTLIGHT.
+        * User `tier_pin` → forced tier (wins over all the above).
         """
         target_campaign = campaign_id or scene.campaign_id
         out: dict[CharacterRef, ContextTier] = {}
+
+        present = set(scene.present_character_refs)
+
+        # Inactivity demotion needs the full set of campaign characters so we
+        # can find ones with stale `last_screen_time_turn`. Skip the lookup if
+        # there are no posts to measure recency against.
+        if recent_posts:
+            recent_turn_ids = [p.turn_id for p in recent_posts]
+            for resolved in await self.list_for_campaign(target_campaign):
+                ref = _ref_from_resolved(resolved)
+                if ref in present:
+                    continue
+                last_seen = resolved.current_state.last_screen_time_turn
+                turns_off_screen = _turns_since(last_seen, recent_turn_ids)
+                if turns_off_screen is None:
+                    continue
+                if turns_off_screen >= self._tier_demote_to_archive_after:
+                    out[ref] = ContextTier.ARCHIVE
+                elif turns_off_screen >= self._tier_demote_to_background_after:
+                    out[ref] = ContextTier.BACKGROUND
+
+        # Mentioned in recent posts → at least BACKGROUND. We match against
+        # the resolved character's name + aliases. Already-demoted-to-archive
+        # entries are upgraded back to BACKGROUND because being talked about
+        # is a stronger signal than time-since-screen.
+        if recent_posts:
+            joined_body = "\n".join(p.body for p in recent_posts)
+            for resolved in await self.list_for_campaign(target_campaign):
+                ref = _ref_from_resolved(resolved)
+                if ref in present:
+                    continue
+                if _mentions_character(joined_body, resolved.character):
+                    if _tier_rank(out.get(ref)) < _tier_rank(ContextTier.BACKGROUND):
+                        out[ref] = ContextTier.BACKGROUND
+
+        # Open commitments to a PC → at least BACKGROUND. Caller passes the
+        # set; we don't reach into Continuity here.
+        if commitments_targeting_pcs:
+            for ref in commitments_targeting_pcs:
+                if ref in present:
+                    continue
+                if _tier_rank(out.get(ref)) < _tier_rank(ContextTier.BACKGROUND):
+                    out[ref] = ContextTier.BACKGROUND
+
+        # Presence overrides any demotion.
         for ref in scene.present_character_refs:
             out[ref] = ContextTier.SPOTLIGHT
+
         # User pins win over heuristics.
         for ref in list(out.keys()):
             pin = await self._get_tier_pin(ref, target_campaign)
@@ -1374,3 +1434,71 @@ def _library_id_from_ref(ref: CharacterRef) -> str:
     if view.is_emergent or view.world_id is None:
         raise CharactersError(f"cannot derive library_id from emergent ref {ref!r}")
     return make_library_id(view.world_id, "character", view.asset_id)
+
+
+def _ref_from_resolved(resolved: ResolvedCharacter) -> CharacterRef:
+    char = resolved.character
+    if char.world_id:
+        return f"library:worlds/{char.world_id}/characters/{char.id}"
+    return f"campaign:emergent/character/{char.id}"
+
+
+_TIER_RANK: dict[ContextTier | None, int] = {
+    None: -1,
+    ContextTier.ARCHIVE: 0,
+    ContextTier.BACKGROUND: 1,
+    ContextTier.SPOTLIGHT: 2,
+    ContextTier.LOCK_IN: 3,
+}
+
+
+def _tier_rank(tier: ContextTier | None) -> int:
+    return _TIER_RANK.get(tier, -1)
+
+
+def _turns_since(last_seen: str | None, recent_turn_ids: list[str]) -> int | None:
+    """How many recent turns post-date `last_seen`.
+
+    Returns `None` when we cannot answer (no last_seen recorded, or the
+    recent-turn window is empty). When `last_seen` is older than every id
+    in the window we return `len(recent_turn_ids)` — i.e. "at least the
+    whole window."
+    """
+    if not recent_turn_ids:
+        return None
+    if last_seen is None:
+        return len(recent_turn_ids)
+    try:
+        idx = recent_turn_ids.index(last_seen)
+    except ValueError:
+        # last_seen falls outside the window — treat as fully aged-out.
+        return len(recent_turn_ids)
+    return len(recent_turn_ids) - 1 - idx
+
+
+def _mentions_character(text: str, character: Character) -> bool:
+    """Whole-word match against the character's name or any alias.
+
+    Matching is case-insensitive (spec characters-remaining §1 doesn't pin
+    case-sensitivity here; the related cross-world lookup flag in §7 is what
+    governs id matching, not mention scanning).
+    """
+    needles = [character.name, *character.aliases]
+    haystack = text.lower()
+    for needle in needles:
+        n = needle.strip().lower()
+        if not n:
+            continue
+        # Word-boundary check — substring would let "Tom" match "Tomato".
+        i = 0
+        while True:
+            i = haystack.find(n, i)
+            if i < 0:
+                break
+            before_ok = i == 0 or not haystack[i - 1].isalnum()
+            end = i + len(n)
+            after_ok = end == len(haystack) or not haystack[end].isalnum()
+            if before_ok and after_ok:
+                return True
+            i = end
+    return False
