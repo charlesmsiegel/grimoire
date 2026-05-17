@@ -105,15 +105,9 @@ Spec 08 §PC role and multi-PC defines `owner: str` ("local in v1; account id in
 
 `list_pcs` (`service.py:465`) computes `active = (active_ref == row["character_ref"] if active_ref else bool(row["active"]))`. When there's no in-process active PC cached (e.g. right after restart in a fresh worker that hasn't called `active_pc` yet for this campaign), it falls back to `row["active"]` per row — but every persisted row has `active=1` from earlier writes, so multiple PCs can show as active. The `active_pc(...)` method hydrates the cache; ensure all `list_pcs` callers go through `active_pc` first or refactor `list_pcs` to always seed from DB before deciding.
 
-## 15. Search ranking + advanced filters
+## 15. Search ranking + advanced filters — RESOLVED (YAGNI)
 
-Spec 08 §Interface — the `search(...)` method is shipped as a substring match (`name + aliases + tags`). Spec text doesn't elaborate, but obvious gaps for a real UI:
-
-- No ranking — results come back in `library_index` order.
-- No filter on role / world / tags via search (`CharacterFilter` is only used by `list_for_campaign`).
-- No fuzzy match for typos.
-
-YAGNI today; defer until a UI consumer asks. Recorded so it doesn't surface as a "bug".
+**Resolution:** Confirmed YAGNI. The shipped substring-match `search(...)` is sufficient for the API contract today; ranking, role/world/tag filters, and fuzzy-match all add real complexity (BM25 or trigram-style indexing, query DSL, typo budget) but no consumer currently asks for any of them. Revisit when a frontend search affordance explicitly needs one of these — at that point the relevant requirement will pin down which gap to close and how.
 
 ## 16. Cross-world rename (v2; deferred)
 
