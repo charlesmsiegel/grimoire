@@ -151,6 +151,10 @@ def find_proper_noun_candidates(
     Each unique phrase appears once. Sentence-initial single capitals are
     filtered to avoid surfacing every "He" / "The" / "Then".
     """
+    # Per spec extractor-remaining §8: the heuristic stays character-only.
+    # Classifying a name into location / faction / item / lore from prose
+    # alone is brittle; that decision is left to the LLM strategy, which
+    # has the full schema's new_locations / new_factions / new_items arrays.
     found: dict[str, str] = {}
     known_lower = {n.lower() for n in known_names}
     for match in _PROPER_NOUN.finditer(text):
