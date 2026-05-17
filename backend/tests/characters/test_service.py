@@ -702,6 +702,255 @@ async def test_get_compressed_and_voice_only_honor_seed(
 
 
 # ---------------------------------------------------------------------------
+# Compressed-view caching (spec 2026-05-17 §5)
+# ---------------------------------------------------------------------------
+
+
+def _patch_render_counters(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Wrap the four view renderers and return a counter dict.
+
+    Service-side calls are intercepted by patching the names imported into
+    ``grimoire.characters.service``; cache hits skip the renderer entirely
+    so counts only bump on a miss.
+    """
+    from grimoire.characters import service as svc
+
+    counts = {"full": 0, "compressed": 0, "voice_only": 0, "capsule": 0}
+    real_full = svc.render_full
+    real_compressed = svc.render_compressed
+    real_voice = svc.render_voice_only
+    real_capsule = svc.render_capsule
+
+    def _full(*args, **kwargs):
+        counts["full"] += 1
+        return real_full(*args, **kwargs)
+
+    def _compressed(*args, **kwargs):
+        counts["compressed"] += 1
+        return real_compressed(*args, **kwargs)
+
+    def _voice(*args, **kwargs):
+        counts["voice_only"] += 1
+        return real_voice(*args, **kwargs)
+
+    def _capsule(*args, **kwargs):
+        counts["capsule"] += 1
+        return real_capsule(*args, **kwargs)
+
+    monkeypatch.setattr(svc, "render_full", _full)
+    monkeypatch.setattr(svc, "render_compressed", _compressed)
+    monkeypatch.setattr(svc, "render_voice_only", _voice)
+    monkeypatch.setattr(svc, "render_capsule", _capsule)
+    return counts
+
+
+async def test_get_full_card_is_cached(
+    characters: CharactersService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    counts = _patch_render_counters(monkeypatch)
+    first = await characters.get_full_card(ref, "camp-1")
+    second = await characters.get_full_card(ref, "camp-1")
+
+    assert first == second
+    assert counts["full"] == 1  # second call served from cache
+
+
+async def test_cache_distinguishes_views_and_seeds(
+    characters: CharactersService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data_many_samples())
+    ref = "library:worlds/wod-london/characters/verbose"
+
+    counts = _patch_render_counters(monkeypatch)
+
+    # Different seeds → distinct cache slots → distinct renders.
+    await characters.get_full_card(ref, "camp-1", seed=0)
+    await characters.get_full_card(ref, "camp-1", seed=1)
+    await characters.get_full_card(ref, "camp-1", seed=0)
+    assert counts["full"] == 2
+
+    # Different views key independently.
+    await characters.get_compressed_card(ref, "camp-1", seed=0)
+    await characters.get_compressed_card(ref, "camp-1", seed=0)
+    assert counts["compressed"] == 1
+
+    await characters.get_voice_only(ref, "camp-1", seed=0)
+    await characters.get_capsule(ref, "camp-1", seed=0)
+    assert counts["voice_only"] == 1
+    assert counts["capsule"] == 1
+
+
+async def test_update_state_invalidates_cache(
+    characters: CharactersService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    counts = _patch_render_counters(monkeypatch)
+    await characters.get_full_card(ref, "camp-1")
+    state = await characters.get_state(ref, "camp-1")
+    state.emotional_state = "wary"
+    await characters.update_state(ref, "camp-1", state)
+
+    await characters.get_full_card(ref, "camp-1")
+    assert counts["full"] == 2  # invalidated → re-rendered
+
+
+async def test_upsert_override_invalidates_cache(
+    characters: CharactersService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    counts = _patch_render_counters(monkeypatch)
+    first = await characters.get_full_card(ref, "camp-1")
+    await characters.upsert_override(
+        "camp-1", ref, {"description": "A softer Tremere in this chronicle."}
+    )
+    second = await characters.get_full_card(ref, "camp-1")
+
+    assert counts["full"] == 2
+    assert "softer" in second
+    assert first != second
+
+
+async def test_pin_tier_invalidates_cache(
+    characters: CharactersService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    counts = _patch_render_counters(monkeypatch)
+    await characters.get_full_card(ref, "camp-1")
+    await characters.pin_tier(ref, "camp-1", ContextTier.LOCK_IN)
+    await characters.get_full_card(ref, "camp-1")
+
+    assert counts["full"] == 2
+
+
+async def test_update_emergent_invalidates_cache(
+    characters: CharactersService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    emergent_ref = await characters.create_emergent(
+        "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
+    )
+
+    counts = _patch_render_counters(monkeypatch)
+    await characters.get_full_card(emergent_ref, "camp-1")
+    await characters.update_emergent("camp-1", "the-bartender", {"description": "Now scarred."})
+    await characters.get_full_card(emergent_ref, "camp-1")
+
+    assert counts["full"] == 2
+
+
+async def test_delete_emergent_invalidates_cache(
+    characters: CharactersService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    emergent_ref = await characters.create_emergent(
+        "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
+    )
+    counts = _patch_render_counters(monkeypatch)
+    await characters.get_full_card(emergent_ref, "camp-1")
+    assert counts["full"] == 1
+
+    await characters.delete_emergent("camp-1", "the-bartender")
+    # The cached entry should be gone; we can't re-render (resolve will fail)
+    # but the invalidation hook itself must have cleared the slot. Recreate
+    # and confirm the new render is fresh.
+    await characters.create_emergent(
+        "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
+    )
+    await characters.get_full_card(emergent_ref, "camp-1")
+    assert counts["full"] == 2
+
+
+async def test_update_library_character_invalidates_cache(
+    characters: CharactersService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    counts = _patch_render_counters(monkeypatch)
+    await characters.get_full_card(ref, "camp-1")
+    await characters.update("wod-london", "alistair", {"description": "Now older."})
+    await characters.get_full_card(ref, "camp-1")
+
+    assert counts["full"] == 2
+
+
+async def test_cache_respects_max_size(
+    library: LibraryService,
+    mechanics: MechanicsService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chars = CharactersService(library, mechanics, cache_max_size=2)
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters_create_many(chars)
+    ref_a = "library:worlds/wod-london/characters/cache-a"
+    ref_b = "library:worlds/wod-london/characters/cache-b"
+    ref_c = "library:worlds/wod-london/characters/cache-c"
+
+    counts = _patch_render_counters(monkeypatch)
+    await chars.get_full_card(ref_a, "camp-1")  # cache: [a]
+    await chars.get_full_card(ref_b, "camp-1")  # cache: [a, b]
+    await chars.get_full_card(ref_c, "camp-1")  # cache: [b, c] (a evicted)
+    assert counts["full"] == 3
+
+    # Touching b should hit cache (still resident).
+    await chars.get_full_card(ref_b, "camp-1")
+    assert counts["full"] == 3
+
+    # Re-rendering a forces a fresh render (was evicted) and pushes b out.
+    await chars.get_full_card(ref_a, "camp-1")
+    assert counts["full"] == 4
+
+
+async def characters_create_many(chars: CharactersService) -> None:
+    for suffix in ("a", "b", "c"):
+        await chars.create(
+            "wod-london",
+            _character_data(asset_id=f"cache-{suffix}", role=CharacterRole.MINOR_NPC),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Cross-world variants
 # ---------------------------------------------------------------------------
 
