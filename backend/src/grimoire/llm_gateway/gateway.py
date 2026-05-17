@@ -239,6 +239,8 @@ class LLMGatewayService:
                 error=exc,
                 retries=0,
                 fallback_used=False,
+                retry=retry,
+                timeout=timeout,
             )
             raise
         except RETRIABLE_EXCEPTIONS as exc:
@@ -251,6 +253,8 @@ class LLMGatewayService:
                 error=exc,
                 retries=resolved_retry.max_retries,
                 fallback_used=False,
+                retry=retry,
+                timeout=timeout,
             )
             if fallback is None or fallback.raw == route.raw:
                 raise
@@ -282,6 +286,8 @@ class LLMGatewayService:
                     error=fallback_exc,
                     retries=0,
                     fallback_used=True,
+                    retry=retry,
+                    timeout=timeout,
                 )
                 raise
             except RETRIABLE_EXCEPTIONS as fallback_exc:
@@ -294,6 +300,8 @@ class LLMGatewayService:
                     error=fallback_exc,
                     retries=resolved_retry.max_retries,
                     fallback_used=True,
+                    retry=retry,
+                    timeout=timeout,
                 )
                 raise
 
@@ -371,6 +379,8 @@ class LLMGatewayService:
                 response_text=response.text,
                 campaign_id=campaign_id,
                 turn_id=turn_id,
+                retry_override=self._retry_dict(retry),
+                timeout_override=self._timeout_dict(timeout),
             )
         await self._emit(
             "llm_response_received",
@@ -406,6 +416,8 @@ class LLMGatewayService:
         error: BaseException,
         retries: int,
         fallback_used: bool,
+        retry: RetryConfig | None = None,
+        timeout: TimeoutConfig | None = None,
     ) -> None:
         await self._emit(
             "llm_request_failed",
@@ -418,6 +430,8 @@ class LLMGatewayService:
                 "error": f"{type(error).__name__}: {error}",
                 "retries": retries,
                 "fallback_used": fallback_used,
+                "retry_override": self._retry_dict(retry),
+                "timeout_override": self._timeout_dict(timeout),
             },
         )
         if not self._config.observability.log_all_requests:
@@ -434,6 +448,8 @@ class LLMGatewayService:
                 error=f"{type(error).__name__}: {error}",
                 campaign_id=campaign_id,
                 turn_id=turn_id,
+                retry_override=self._retry_dict(retry),
+                timeout_override=self._timeout_dict(timeout),
             )
         except Exception:
             logger.exception("failed to record llm_requests row for failed call")
@@ -520,6 +536,8 @@ class LLMGatewayService:
                     error=exc,
                     retries=0,
                     fallback_used=False,
+                    retry=retry,
+                    timeout=timeout,
                 )
                 last_exc = exc
                 break  # No retries for PermanentError; go straight to fallback.
@@ -540,6 +558,8 @@ class LLMGatewayService:
                         error=exc,
                         retries=retries_used,
                         fallback_used=False,
+                        retry=retry,
+                        timeout=timeout,
                     )
                     raise
                 # Zero-chunk retriable error.
@@ -552,6 +572,8 @@ class LLMGatewayService:
                     error=exc,
                     retries=retries_used,
                     fallback_used=False,
+                    retry=retry,
+                    timeout=timeout,
                 )
                 last_exc = exc
                 if retries_used == max_retries:
@@ -604,6 +626,8 @@ class LLMGatewayService:
                     error=exc,
                     retries=0,
                     fallback_used=True,
+                    retry=retry,
+                    timeout=timeout,
                 )
                 last_exc = exc
 
@@ -696,6 +720,8 @@ class LLMGatewayService:
                 response_text="".join(text_parts),
                 campaign_id=campaign_id,
                 turn_id=turn_id,
+                retry_override=self._retry_dict(retry),
+                timeout_override=self._timeout_dict(timeout),
             )
         await self._emit(
             "llm_response_received",
@@ -821,6 +847,8 @@ class LLMGatewayService:
                         error=f"{type(exc).__name__}: {exc}",
                         campaign_id=campaign_id,
                         turn_id=turn_id,
+                        retry_override=self._retry_dict(retry),
+                        timeout_override=self._timeout_dict(timeout),
                     )
                 await self._emit(
                     "llm_request_failed",
@@ -851,6 +879,8 @@ class LLMGatewayService:
                         error=f"{type(exc).__name__}: {exc}",
                         campaign_id=campaign_id,
                         turn_id=turn_id,
+                        retry_override=self._retry_dict(retry),
+                        timeout_override=self._timeout_dict(timeout),
                     )
                 await self._emit(
                     "llm_request_failed",
@@ -893,6 +923,8 @@ class LLMGatewayService:
                     retries=retries,
                     campaign_id=campaign_id,
                     turn_id=turn_id,
+                    retry_override=self._retry_dict(retry),
+                    timeout_override=self._timeout_dict(timeout),
                 )
             await self._emit(
                 "embedding_response_received",
