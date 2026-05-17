@@ -310,6 +310,7 @@ class OrchestratorService:
                 scene_file.campaign_id,
                 snapshot=snapshot,
                 player_pc_ref=post.author_pc_ref,
+                turn_id=post.turn_id,
             )
             routing = route_deltas(list(result.deltas), config=self._extractor_config)
             for delta in routing.auto_apply:
@@ -419,6 +420,7 @@ class OrchestratorService:
                 campaign_id,
                 mechanics_results=mechanics_results,
                 pc_ref=triggering_pc,
+                turn_id=turn_id,
             )
             await self._emit_turn_event(
                 "context_built",
@@ -589,6 +591,7 @@ class OrchestratorService:
             self._config.main_llm_task,
             request,
             campaign_id=campaign_id,
+            turn_id=turn_id,
         )
         async for chunk in stream:
             if chunk.delta:
@@ -625,6 +628,7 @@ class OrchestratorService:
                 pyd_scene,
                 campaign_id,
                 snapshot,
+                turn_id=turn_id,
             )
         except Exception as exc:
             logger.warning("extractor failed for turn %s: %s", turn_id, exc)

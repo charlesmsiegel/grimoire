@@ -42,6 +42,7 @@ from grimoire.continuity.types import (
     KnowledgeEntry,
     RetirementReason,
 )
+from grimoire.types.common import TurnId
 
 
 class FactNotFoundError(KeyError):
@@ -217,7 +218,12 @@ class ContinuityService(Continuity):
     # Contradictions
     # ------------------------------------------------------------------
 
-    async def check_contradictions(self, candidate: Fact) -> ContradictionReport:
+    async def check_contradictions(
+        self,
+        candidate: Fact,
+        *,
+        turn_id: TurnId | None = None,
+    ) -> ContradictionReport:
         cfg = self._config.contradiction_check
         conflicts: list[ContradictionCandidate] = []
         if cfg.enabled:
@@ -225,7 +231,7 @@ class ContinuityService(Continuity):
             for existing, similarity in similar:
                 if existing.id and existing.id == candidate.id:
                     continue
-                verdict = await self._judge.judge(candidate, existing)
+                verdict = await self._judge.judge(candidate, existing, turn_id=turn_id)
                 # Use the search-index similarity if the judge didn't supply one.
                 if verdict.similarity == 0.0 and similarity > 0.0:
                     verdict = dataclasses.replace(verdict, similarity=similarity)

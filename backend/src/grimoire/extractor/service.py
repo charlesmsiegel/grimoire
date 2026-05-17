@@ -28,7 +28,7 @@ from grimoire.extractor.protocols import (
     MechanicsValidator,
 )
 from grimoire.extractor.rule_based import extract_rule_based
-from grimoire.types.common import CampaignId, EntityKind, Json, Scope
+from grimoire.types.common import CampaignId, EntityKind, Json, Scope, TurnId
 from grimoire.types.extraction import (
     EntityCandidate,
     ExtractionFlag,
@@ -80,6 +80,7 @@ class ExtractorService:
         prior_state_snapshot: StateSnapshot,
         *,
         pre_roll_resolved: bool = False,
+        turn_id: TurnId | None = None,
     ) -> ExtractionResult:
         """Extract state changes from a model-authored response."""
         return await self._run(
@@ -90,6 +91,7 @@ class ExtractorService:
             from_player=False,
             player_pc_ref=None,
             pre_roll_resolved=pre_roll_resolved,
+            turn_id=turn_id,
         )
 
     async def extract_from_user_text(
@@ -100,6 +102,7 @@ class ExtractorService:
         *,
         snapshot: StateSnapshot | None = None,
         player_pc_ref: str | None = None,
+        turn_id: TurnId | None = None,
     ) -> ExtractionResult:
         """Extract state changes from a player-authored post."""
         return await self._run(
@@ -110,6 +113,7 @@ class ExtractorService:
             from_player=True,
             player_pc_ref=player_pc_ref or _author_pc(scene),
             pre_roll_resolved=False,
+            turn_id=turn_id,
         )
 
     # ------------------------------------------------------------------ #
@@ -126,6 +130,7 @@ class ExtractorService:
         from_player: bool,
         player_pc_ref: str | None,
         pre_roll_resolved: bool,
+        turn_id: TurnId | None = None,
     ) -> ExtractionResult:
         started = time.monotonic()
         strategies_to_run = set(self._config.parallel_strategies)
@@ -140,7 +145,7 @@ class ExtractorService:
 
         if "structured_llm" in strategies_to_run:
             ran.append("structured_llm")
-            coros.append(self._run_llm(text, scene, snapshot, campaign_id))
+            coros.append(self._run_llm(text, scene, snapshot, campaign_id, turn_id))
         else:
             coros.append(_noop_llm())
 
@@ -219,7 +224,7 @@ class ExtractorService:
         # Contradiction detection.
         if self._contradictions is not None:
             merged_deltas, contra_flags = await self._check_contradictions(
-                merged_deltas, campaign_id=campaign_id
+                merged_deltas, campaign_id=campaign_id, turn_id=turn_id
             )
             flags.extend(contra_flags)
 
@@ -271,6 +276,7 @@ class ExtractorService:
         scene: Scene | None,
         snapshot: StateSnapshot | None,
         campaign_id: CampaignId,
+        turn_id: TurnId | None = None,
     ) -> LLMStrategyOutput:
         if self._gateway is None:
             return LLMStrategyOutput(
@@ -290,6 +296,7 @@ class ExtractorService:
             gateway=self._gateway,
             config=self._config,
             source=self._source,
+            turn_id=turn_id,
         )
 
     def _apply_speaker_authority(self, delta: StateDelta) -> StateDelta:
@@ -345,9 +352,7 @@ class ExtractorService:
                 ExtractionFlag(
                     level=FlagLevel.CONTRADICTION,
                     code="unresolved_commitment_reference",
-                    message=(
-                        f"commitment_id {commitment_id!r} does not match any open commitment"
-                    ),
+                    message=(f"commitment_id {commitment_id!r} does not match any open commitment"),
                     evidence=delta.evidence,
                     payload={
                         "commitment_id": commitment_id,
@@ -433,6 +438,7 @@ class ExtractorService:
         deltas: list[StateDelta],
         *,
         campaign_id: CampaignId,
+        turn_id: TurnId | None = None,
     ) -> tuple[list[StateDelta], list[ExtractionFlag]]:
         flags: list[ExtractionFlag] = []
         out: list[StateDelta] = []
@@ -444,7 +450,9 @@ class ExtractorService:
             about_raw = delta.after.get("about") or {}
             about = _normalize_about(about_raw)
             try:
-                conflicts = await self._contradictions.check(campaign_id, fact_text, about)
+                conflicts = await self._contradictions.check(
+                    campaign_id, fact_text, about, turn_id=turn_id
+                )
             except Exception as exc:
                 logger.warning("contradiction check failed: %s", exc)
                 out.append(delta)

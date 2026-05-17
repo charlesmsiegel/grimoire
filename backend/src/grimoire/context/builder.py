@@ -32,7 +32,7 @@ from grimoire.context.config import ContextBuilderConfig
 from grimoire.context.errors import LockInOverflowError
 from grimoire.context.tokens import TokenEstimator, cheap_estimator, estimate_tokens
 from grimoire.templates import render as render_template
-from grimoire.types.common import CampaignId
+from grimoire.types.common import CampaignId, TurnId
 from grimoire.types.composition import Composition
 from grimoire.types.context import AssembledPrompt, BudgetEstimate, ContextSource
 from grimoire.types.llm import Message, MessageRole, ModelParams
@@ -127,6 +127,7 @@ class ContextBuilderService:
         *,
         branch_id: str | None = None,
         pc_ref: str | None = None,
+        turn_id: TurnId | None = None,
     ) -> AssembledPrompt:
         ctx = await self._build_context(
             player_input=player_input,
@@ -135,6 +136,7 @@ class ContextBuilderService:
             extra=extra,
             branch_id=branch_id,
             pc_ref=pc_ref,
+            turn_id=turn_id,
         )
         return await self._assemble(ctx, player_input)
 
@@ -145,6 +147,7 @@ class ContextBuilderService:
         *,
         branch_id: str | None = None,
         pc_ref: str | None = None,
+        turn_id: TurnId | None = None,
     ) -> BudgetEstimate:
         """Dry-run the pipeline and report what each tier would consume."""
         ctx = await self._build_context(
@@ -154,6 +157,7 @@ class ContextBuilderService:
             extra=None,
             branch_id=branch_id,
             pc_ref=pc_ref,
+            turn_id=turn_id,
         )
         assembled = await self._assemble(ctx, player_input)
         return BudgetEstimate(
@@ -176,6 +180,7 @@ class ContextBuilderService:
         extra: str | None,
         branch_id: str | None,
         pc_ref: str | None,
+        turn_id: TurnId | None = None,
     ) -> _BuiltContext:
         # Step 0 — composition
         composition = await self._safe_call(self._library.get_composition, campaign_id)
@@ -222,6 +227,7 @@ class ContextBuilderService:
             campaign_id=campaign_id,
             scene=scene,
             recent_posts=recent_posts,
+            turn_id=turn_id,
         )
 
         # Step 5a — lore keyword triggers (campaign-scoped) — archive tier
@@ -611,6 +617,7 @@ class ContextBuilderService:
         campaign_id: CampaignId,
         scene: Any,
         recent_posts: list[Any],
+        turn_id: TurnId | None = None,
     ) -> list[_TierItem]:
         items: list[_TierItem] = []
         query = self._build_retrieval_query(player_input, scene, recent_posts)
@@ -618,7 +625,7 @@ class ContextBuilderService:
             return items
 
         # Vector
-        vector_hits = await self._vector_search(query, campaign_id)
+        vector_hits = await self._vector_search(query, campaign_id, turn_id)
         for hit in vector_hits:
             text = getattr(hit, "text", "") or ""
             if not text:
@@ -697,12 +704,20 @@ class ContextBuilderService:
             )
         return items
 
-    async def _vector_search(self, query: str, campaign_id: CampaignId) -> list[Any]:
+    async def _vector_search(
+        self,
+        query: str,
+        campaign_id: CampaignId,
+        turn_id: TurnId | None = None,
+    ) -> list[Any]:
         if self._gateway is None or self._store is None:
             return []
         try:
             vectors = await self._gateway.embed(
-                self._config.retrieval.embedding_task, [query], campaign_id=campaign_id
+                self._config.retrieval.embedding_task,
+                [query],
+                campaign_id=campaign_id,
+                turn_id=turn_id,
             )
         except Exception:
             return []

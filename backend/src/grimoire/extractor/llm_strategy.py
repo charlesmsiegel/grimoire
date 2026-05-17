@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from grimoire.extractor.config import ExtractorConfig
 from grimoire.extractor.schema import empty_payload, output_schema
 from grimoire.templates import render as render_template
-from grimoire.types.common import CampaignId, Duration, EntityKind, Scope
+from grimoire.types.common import CampaignId, Duration, EntityKind, Scope, TurnId
 from grimoire.types.extraction import EntityCandidate, ExtractionFlag, FlagLevel
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
 from grimoire.types.scene import Scene
@@ -44,6 +44,7 @@ class LLMGatewayLike:
         task: str,
         request: CompletionRequest,
         campaign_id: CampaignId | None = None,
+        turn_id: TurnId | None = None,
     ):
         raise NotImplementedError
 
@@ -429,6 +430,7 @@ async def extract_with_llm(
     gateway: LLMGatewayLike,
     config: ExtractorConfig,
     source: str,
+    turn_id: TurnId | None = None,
 ) -> LLMStrategyOutput:
     """Run the structured-LLM strategy against the gateway."""
     request = _build_request(
@@ -444,7 +446,7 @@ async def extract_with_llm(
         attempts_remaining -= 1
         try:
             completion = await gateway.complete(
-                config.task_name, current_request, campaign_id=campaign_id
+                config.task_name, current_request, campaign_id=campaign_id, turn_id=turn_id
             )
         except Exception as exc:  # flag-and-continue is the contract
             logger.warning("structured-llm extraction failed: %s", exc)

@@ -29,6 +29,7 @@ from grimoire.continuity.types import (
     FactId,
     KnowledgeEntry,
 )
+from grimoire.types.common import TurnId
 
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
@@ -142,7 +143,13 @@ class StubContradictionJudge(ContradictionJudge):
     interesting deterministic judge.
     """
 
-    async def judge(self, candidate: Fact, existing: Fact) -> ContradictionCandidate:
+    async def judge(
+        self,
+        candidate: Fact,
+        existing: Fact,
+        *,
+        turn_id: TurnId | None = None,
+    ) -> ContradictionCandidate:
         return ContradictionCandidate(
             existing_fact=existing,
             similarity=0.0,

@@ -171,6 +171,7 @@ class FakeContextBuilder:
         pc_ref: str | None = None,
         extra: str | None = None,
         branch_id: str | None = None,
+        turn_id: str | None = None,
     ) -> AssembledPrompt:
         self.calls.append(
             {
@@ -208,6 +209,8 @@ class FakeGateway:
         task: str,
         request: CompletionRequest,
         campaign_id: str | None = None,
+        *,
+        turn_id: str | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         self.seen_tasks.append(task)
         self.seen_requests.append(request)
@@ -230,6 +233,7 @@ class FakeExtractor:
         snapshot: Any,
         *,
         pre_roll_resolved: bool = False,
+        turn_id: str | None = None,
     ) -> ExtractionResult:
         self.seen.append(
             {
@@ -250,6 +254,7 @@ class FakeExtractor:
         *,
         snapshot: Any | None = None,
         player_pc_ref: str | None = None,
+        turn_id: str | None = None,
     ) -> ExtractionResult:
         return ExtractionResult(deltas=list(self.deltas))
 

@@ -22,6 +22,7 @@ from grimoire.continuity.types import (
     FactSource,
 )
 from grimoire.templates import render as render_template
+from grimoire.types.common import TurnId
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ class JudgeLLM(Protocol):
     module independent of the gateway's pydantic types.
     """
 
-    async def complete(self, task: str, request) -> object: ...
+    async def complete(self, task: str, request, *, turn_id: TurnId | None = None) -> object: ...
 
 
 class LLMContradictionJudge(ContradictionJudge):
@@ -66,7 +67,13 @@ class LLMContradictionJudge(ContradictionJudge):
         self._make_request = request_factory
         self._task = task
 
-    async def judge(self, candidate: Fact, existing: Fact) -> ContradictionCandidate:
+    async def judge(
+        self,
+        candidate: Fact,
+        existing: Fact,
+        *,
+        turn_id: TurnId | None = None,
+    ) -> ContradictionCandidate:
         # Two facts established by the same character speaking in-fiction
         # aren't comparable on the same "is it true" axis — testimony is
         # subjective. Don't flag them.
@@ -93,7 +100,7 @@ class LLMContradictionJudge(ContradictionJudge):
         system_prompt = render_template("continuity_judge_system")
         request = self._make_request(system_prompt, user_prompt)
         try:
-            response = await self._gateway.complete(self._task, request)
+            response = await self._gateway.complete(self._task, request, turn_id=turn_id)
         except Exception as exc:
             logger.warning("contradiction judge LLM call failed: %s", exc)
             return ContradictionCandidate(

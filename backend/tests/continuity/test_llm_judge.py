@@ -27,7 +27,7 @@ class _FakeGateway:
         self.replies = list(replies)
         self.calls: list[tuple[str, object]] = []
 
-    async def complete(self, task: str, request) -> _Response:
+    async def complete(self, task: str, request, *, turn_id=None) -> _Response:
         self.calls.append((task, request))
         if not self.replies:
             raise AssertionError("FakeGateway exhausted scripted replies")
@@ -75,7 +75,7 @@ async def test_judge_unparseable_response_falls_back_to_uncertain() -> None:
 
 async def test_judge_gateway_exception_returns_uncertain() -> None:
     class _Boom:
-        async def complete(self, task, request):
+        async def complete(self, task, request, *, turn_id=None):
             raise RuntimeError("provider down")
 
     judge = LLMContradictionJudge(_Boom(), _make_request)
