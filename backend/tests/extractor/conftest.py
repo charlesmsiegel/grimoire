@@ -34,6 +34,7 @@ class FakeGateway:
         task: str,
         request: CompletionRequest,
         campaign_id: CampaignId | None = None,
+        *,
         turn_id: str | None = None,
     ) -> CompletionResponse:
         self.seen.append((task, request, campaign_id))
