@@ -408,20 +408,159 @@ class LLMGatewayService:
         *,
         turn_id: TurnId | None = None,
     ) -> AsyncIterator[CompletionChunk]:
+        """Stream completion chunks, retrying / falling back on zero-chunk failures.
+
+        §6 — Streaming retry / fallback policy:
+
+        * Retry and fallback fire ONLY when zero chunks have been delivered to
+          the caller.  Once any chunk has been yielded, the call is "committed"
+          and subsequent failures propagate uncaught (mid-stream crash).
+        * Zero-chunk retriable errors (``TransientError``, ``RateLimitError``,
+          ``TimeoutError``) are retried up to ``config.retry.max_retries`` times
+          against the same route before the fallback is consulted.
+        * Zero-chunk ``PermanentError`` skips retries and goes straight to the
+          fallback (if one is configured and is a different route).
+        * If all attempts (primary + retries + fallback) fail, the last
+          exception is re-raised.
+        """
         if campaign_id is not None and campaign_id not in self._loaded_campaigns:
             await self._load_campaign_routing(campaign_id)
-        route = self._router.resolve(task, campaign_id)
-        provider = self._require_llm(route.provider_id)
-        scoped = request.model_copy(update={"model": route.model})
-        async for chunk in self._stream_one(
-            task=task,
-            route=route,
-            provider=provider,
-            request=scoped,
-            campaign_id=campaign_id,
-            turn_id=turn_id,
+        primary_route = self._router.resolve(task, campaign_id)
+        fallback_route = self._router.fallback(task)
+
+        # Build the ordered attempt list: primary (possibly repeated for retries)
+        # followed by fallback (a single attempt with its own internal retry).
+        # We drive the retry loop explicitly here because async generators don't
+        # compose cleanly with run_with_retries.
+        max_retries = self._config.retry.max_retries
+        delay_s = max(0, self._config.retry.initial_delay_ms) / 1000.0
+        backoff = max(1.0, self._config.retry.backoff_factor)
+
+        first_chunk_delivered = False
+        last_exc: BaseException | None = None
+
+        # ── Primary route: initial attempt + up to max_retries retries ──────
+        retries_used = 0
+        while retries_used <= max_retries:
+            primary_provider = self._require_llm(primary_route.provider_id)
+            primary_scoped = request.model_copy(update={"model": primary_route.model})
+            try:
+                async for chunk in self._stream_one(
+                    task=task,
+                    route=primary_route,
+                    provider=primary_provider,
+                    request=primary_scoped,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    fallback_used=False,
+                ):
+                    first_chunk_delivered = True
+                    yield chunk
+                # Stream completed successfully on the primary route.
+                return
+            except PermanentError as exc:
+                if first_chunk_delivered:
+                    # Mid-stream permanent error — propagate uncaught.
+                    raise
+                # Zero-chunk permanent error: record failure, skip retries,
+                # fall through to the fallback below.
+                await self._record_failure(
+                    task=task,
+                    route=primary_route,
+                    request=primary_scoped,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    error=exc,
+                    retries=0,
+                    fallback_used=False,
+                )
+                last_exc = exc
+                break  # No retries for PermanentError; go straight to fallback.
+            except BaseException as exc:
+                if first_chunk_delivered:
+                    # Mid-stream failure after at least one chunk — propagate
+                    # uncaught.  No retry, no fallback (caller sees partial data).
+                    raise
+                if not isinstance(exc, RETRIABLE_EXCEPTIONS):
+                    # Non-retriable, non-Permanent exception (e.g. programming
+                    # error): record and re-raise immediately.
+                    await self._record_failure(
+                        task=task,
+                        route=primary_route,
+                        request=primary_scoped,
+                        campaign_id=campaign_id,
+                        turn_id=turn_id,
+                        error=exc,
+                        retries=retries_used,
+                        fallback_used=False,
+                    )
+                    raise
+                # Zero-chunk retriable error.
+                await self._record_failure(
+                    task=task,
+                    route=primary_route,
+                    request=primary_scoped,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    error=exc,
+                    retries=retries_used,
+                    fallback_used=False,
+                )
+                last_exc = exc
+                if retries_used == max_retries:
+                    break  # Retries exhausted; fall through to fallback.
+                # Back off before the next retry.
+                if delay_s > 0:
+                    await asyncio.sleep(delay_s)
+                delay_s *= backoff
+                retries_used += 1
+                continue
+
+        # ── Fallback route (single attempt with its own retry policy) ────────
+        if (
+            fallback_route is not None
+            and fallback_route.raw != primary_route.raw
+            and not first_chunk_delivered
         ):
-            yield chunk
+            logger.warning(
+                "stream primary route %s failed for task %s; trying fallback %s",
+                primary_route.raw,
+                task,
+                fallback_route.raw,
+            )
+            fallback_provider = self._require_llm(fallback_route.provider_id)
+            fallback_scoped = request.model_copy(update={"model": fallback_route.model})
+            try:
+                async for chunk in self._stream_one(
+                    task=task,
+                    route=fallback_route,
+                    provider=fallback_provider,
+                    request=fallback_scoped,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    fallback_used=True,
+                ):
+                    first_chunk_delivered = True
+                    yield chunk
+                return
+            except BaseException as exc:
+                if first_chunk_delivered:
+                    raise
+                await self._record_failure(
+                    task=task,
+                    route=fallback_route,
+                    request=fallback_scoped,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    error=exc,
+                    retries=0,
+                    fallback_used=True,
+                )
+                last_exc = exc
+
+        # All attempts failed with zero chunks delivered.
+        assert last_exc is not None
+        raise last_exc
 
     async def _stream_one(
         self,
@@ -432,7 +571,20 @@ class LLMGatewayService:
         request: CompletionRequest,
         campaign_id: CampaignId | None,
         turn_id: TurnId | None,
+        fallback_used: bool = False,
     ) -> AsyncIterator[CompletionChunk]:
+        """Attempt a single streaming call to `provider` and yield chunks.
+
+        §6 — Streaming retry / fallback policy:
+
+        * ``_stream_one`` raises on any error (before or during the stream).
+        * The caller (``stream``) is responsible for deciding whether to retry
+          or fall back.  It tracks whether any chunk has been yielded and only
+          retries / falls back when zero chunks were delivered.
+        * Once any chunk has been yielded, subsequent failures propagate
+          uncaught — mid-stream crashes are not retried.
+        * ``fallback_used`` is forwarded into emitted event payloads.
+        """
         first_token_timeout = self._config.timeout.first_token_seconds
         total_timeout = self._config.timeout.total_seconds
         started = time.monotonic()
@@ -445,7 +597,7 @@ class LLMGatewayService:
                 "model": route.model,
                 "campaign_id": campaign_id,
                 "turn_id": turn_id,
-                "fallback_used": False,
+                "fallback_used": fallback_used,
             },
         )
 
@@ -471,18 +623,6 @@ class LLMGatewayService:
                 yield chunk
                 if chunk.is_final:
                     break
-        except (PermanentError, *RETRIABLE_EXCEPTIONS) as exc:
-            await self._record_failure(
-                task=task,
-                route=route,
-                request=request,
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                error=exc,
-                retries=0,
-                fallback_used=False,
-            )
-            raise
         finally:
             close = getattr(stream, "aclose", None)
             if close is not None:
@@ -497,7 +637,7 @@ class LLMGatewayService:
                 usage=usage,
                 latency_ms=latency_ms,
                 retries=0,
-                fallback_used=False,
+                fallback_used=fallback_used,
                 request_hash=request_hash(request),
                 response_text="".join(text_parts),
                 campaign_id=campaign_id,
@@ -513,7 +653,7 @@ class LLMGatewayService:
                 "turn_id": turn_id,
                 "latency_ms": latency_ms,
                 "retries": 0,
-                "fallback_used": False,
+                "fallback_used": fallback_used,
                 "usage": {
                     "input_tokens": usage.input_tokens if usage else 0,
                     "output_tokens": usage.output_tokens if usage else 0,
