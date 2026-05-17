@@ -196,11 +196,10 @@ class EmbeddingProvider(Protocol):
     name: str
     model_id: str
     dimensions: int
-    # Optional attribute — concrete providers MAY declare `max_batch_size: int`
-    # to tell the gateway how many texts to send per call.  Access it via
-    # `getattr(provider, "max_batch_size", None)`; do not add it here as a
-    # required Protocol member because that would break existing providers that
-    # do not yet declare it.
+    # Optional cap on inputs per `embed` call. None / unset means "send all in
+    # one shot" (today's behavior). The gateway reads via getattr at call time,
+    # so providers that don't declare it still satisfy the protocol.
+    max_batch_size: int | None = None
 
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
