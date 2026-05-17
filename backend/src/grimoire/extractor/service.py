@@ -437,18 +437,26 @@ class ExtractorService:
             if not conflicts:
                 out.append(delta)
                 continue
+            # Subtract the configured penalty as before, then cap below the
+            # auto-apply threshold so a high-confidence (e.g. 0.99) fact still
+            # lands in the review bucket — spec extractor-remaining §2 calls
+            # out that contradicting facts must never silently auto-apply,
+            # regardless of starting confidence.
             penalty = self._config.contradiction_confidence_penalty
             adjusted = max(0.0, delta.confidence - penalty)
+            review_cap = max(0.0, self._config.auto_apply_threshold - 0.001)
+            forced = min(adjusted, review_cap)
+            conflict_dicts = [c.model_dump() for c in conflicts]
             updated_extra = dict(delta.extra)
-            updated_extra["contradictions"] = list(conflicts)
-            out.append(delta.model_copy(update={"confidence": adjusted, "extra": updated_extra}))
+            updated_extra["contradictions"] = list(conflict_dicts)
+            out.append(delta.model_copy(update={"confidence": forced, "extra": updated_extra}))
             flags.append(
                 ExtractionFlag(
                     level=FlagLevel.CONTRADICTION,
                     code="fact_contradiction",
                     message=f"fact contradicts existing state ({len(conflicts)})",
                     evidence=fact_text,
-                    payload={"conflicts": list(conflicts)},
+                    payload={"conflicts": list(conflict_dicts)},
                 )
             )
         return out, flags
