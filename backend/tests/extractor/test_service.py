@@ -331,6 +331,101 @@ async def test_extract_speaker_authority_penalty_floors_at_zero(
 
 
 @pytest.mark.asyncio
+async def test_extract_flags_unresolved_commitment_id_and_routes_to_review(
+    scene: Scene,
+):
+    # The LLM hallucinates `c_4521` — there are no open commitments to match.
+    snapshot = StateSnapshot(
+        campaign_id="camp-1",
+        branch_id="main",
+        scene_id="scene-1",
+        open_commitments=[{"id": "c_001", "text": "winifred owes julian the silver ring."}],
+    )
+    gateway = FakeGateway(
+        queue=[
+            {
+                "commitment_resolutions": [
+                    {"commitment_id": "c_4521", "outcome": "paid", "confidence": 0.95}
+                ]
+            }
+        ]
+    )
+    service = ExtractorService(
+        gateway=gateway,
+        config=ExtractorConfig(contradiction_confidence_penalty=0.25),
+    )
+    result = await service.extract(
+        "winifred handed back what she owed.", scene, "camp-1", snapshot
+    )
+    resolved = next(d for d in result.deltas if d.kind == DeltaKind.COMMITMENT_RESOLVE)
+    # Penalised from 0.95 -> 0.70, which falls inside the review band [0.6, 0.85).
+    assert resolved.confidence == pytest.approx(0.70, rel=1e-6)
+    routing = route_deltas(result.deltas, config=ExtractorConfig())
+    assert resolved in routing.review
+    assert any(
+        f.level == FlagLevel.CONTRADICTION and f.code == "unresolved_commitment_reference"
+        for f in result.flags
+    )
+
+
+@pytest.mark.asyncio
+async def test_extract_leaves_matching_commitment_id_alone(scene: Scene):
+    snapshot = StateSnapshot(
+        campaign_id="camp-1",
+        branch_id="main",
+        scene_id="scene-1",
+        open_commitments=[{"id": "c_001", "text": "winifred owes julian the silver ring."}],
+    )
+    gateway = FakeGateway(
+        queue=[
+            {
+                "commitment_resolutions": [
+                    {"commitment_id": "c_001", "outcome": "paid", "confidence": 0.9}
+                ]
+            }
+        ]
+    )
+    service = ExtractorService(gateway=gateway, config=ExtractorConfig())
+    result = await service.extract(
+        "winifred handed back the silver ring.", scene, "camp-1", snapshot
+    )
+    resolved = next(d for d in result.deltas if d.kind == DeltaKind.COMMITMENT_RESOLVE)
+    assert resolved.confidence == pytest.approx(0.9, rel=1e-6)
+    assert not any(
+        f.code == "unresolved_commitment_reference" for f in result.flags
+    )
+
+
+@pytest.mark.asyncio
+async def test_extract_skips_commitment_resolution_check_without_snapshot(scene: Scene):
+    # If we have no snapshot to consult, we can't tell — emit the delta verbatim
+    # and let the State Store reject at apply-time.
+    gateway = FakeGateway(
+        queue=[
+            {
+                "commitment_resolutions": [
+                    {"commitment_id": "c_4521", "outcome": "paid", "confidence": 0.9}
+                ]
+            }
+        ]
+    )
+    service = ExtractorService(gateway=gateway, config=ExtractorConfig())
+    result = await service.extract_from_user_text(
+        "winifred handed it back.",
+        scene,
+        "camp-1",
+        snapshot=None,
+    )
+    # We can't tell without a snapshot, so the resolution check is skipped —
+    # confidence may still be clamped by other player-text rules, but the
+    # unresolved-commitment flag must NOT fire.
+    assert any(d.kind == DeltaKind.COMMITMENT_RESOLVE for d in result.deltas)
+    assert not any(
+        f.code == "unresolved_commitment_reference" for f in result.flags
+    )
+
+
+@pytest.mark.asyncio
 async def test_extract_invokes_mechanics_validator(scene: Scene, snapshot: StateSnapshot):
     gateway = FakeGateway(
         queue=[
