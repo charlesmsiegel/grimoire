@@ -39,6 +39,16 @@ def main() -> None:
 
     abs_path = os.path.abspath(file_path)
 
+    # Claude Code's auto-memory directory lives outside the repo at
+    # ~/.claude/projects/<slug>/memory/ — writes there are always allowed,
+    # they're how the assistant maintains its cross-conversation memory.
+    home = os.path.expanduser("~")
+    memory_root = os.path.normcase(
+        os.path.abspath(os.path.join(home, ".claude", "projects"))
+    )
+    if os.path.normcase(abs_path).startswith(memory_root + os.sep):
+        return
+
     try:
         cwd_repo_root = subprocess.check_output(
             ["git", "rev-parse", "--show-toplevel"],
