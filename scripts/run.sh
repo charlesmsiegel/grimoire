@@ -9,7 +9,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$REPO_ROOT/scripts/_lib.sh"
 
 BACKEND_HOST="${GRIMOIRE_BACKEND_HOST:-127.0.0.1}"
-BACKEND_PORT="${GRIMOIRE_BACKEND_PORT:-8000}"
+BACKEND_PORT="${GRIMOIRE_BACKEND_PORT:-8173}"
 FRONTEND_HOST="${GRIMOIRE_FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${GRIMOIRE_FRONTEND_PORT:-5173}"
 OPEN_BROWSER="${GRIMOIRE_OPEN_BROWSER:-1}"
@@ -27,7 +27,7 @@ Starts the backend (uvicorn) and frontend (vite) dev servers, then opens
 the site in the default browser. Ctrl-C stops both.
 
 Options:
-  --backend-port N      Backend port (default 8000)
+  --backend-port N      Backend port (default 8173)
   --frontend-port N     Frontend port (default 5173)
   --backend-host H      Backend bind host (default 127.0.0.1)
   --frontend-host H     Frontend bind host (default 127.0.0.1)
