@@ -246,8 +246,13 @@ def _satisfies_protocol(instance: Any, protocol: type) -> bool:
     """
     annotations = getattr(protocol, "__annotations__", {})
     for member in annotations:
-        if not hasattr(instance, member):
-            return False
+        if hasattr(instance, member):
+            continue
+        # Annotation with a class-level default on the protocol is optional —
+        # implementations may omit it and the gateway falls back to that default.
+        if member in vars(protocol):
+            continue
+        return False
     callable_members = [
         name
         for name in dir(protocol)
