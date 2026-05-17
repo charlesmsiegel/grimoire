@@ -247,6 +247,7 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
         "tier_pin",
         "current_scene_id",
         "updated_at_turn",
+        "appearances_since_last_drift_check",
     ],
     "location_state": [
         "location_ref",

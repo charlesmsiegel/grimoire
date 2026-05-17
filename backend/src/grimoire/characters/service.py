@@ -11,11 +11,14 @@ imports.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 from grimoire.library import LibraryService
 from grimoire.mechanics.service import MechanicsService
@@ -52,6 +55,8 @@ from grimoire.types.state import CharacterState, ContextTier, DeltaKind, StateDe
 from .drift import (
     CallableDriftChecker,
     DriftChecker,
+    DriftEvent,
+    DriftEventSink,
     DriftInput,
     HeuristicDriftChecker,
     LLMCallable,
@@ -127,6 +132,8 @@ class CharactersService:
         post_fetcher: PostFetcher | None = None,
         drift_checker: DriftChecker | None = None,
         drift_threshold: float = 0.4,
+        drift_check_every_n_appearances: int = 5,
+        drift_event_sink: DriftEventSink | None = None,
         ingest_llm: LLMEnrichCallable | None = None,
         auto_capsule_llm: LLMCapsuleDrafter | None = None,
         voice_anchor_llm: LLMVoiceAnchorDrafter | None = None,
@@ -143,6 +150,8 @@ class CharactersService:
             drift_threshold=drift_threshold
         )
         self._drift_threshold = drift_threshold
+        self._drift_check_every_n_appearances = drift_check_every_n_appearances
+        self._drift_event_sink = drift_event_sink
         self._ingest_llm = ingest_llm
         self._auto_capsule_llm = auto_capsule_llm
         self._voice_anchor_llm = voice_anchor_llm
@@ -616,6 +625,11 @@ class CharactersService:
         ``recent_posts`` may be supplied directly; otherwise the service
         falls back to the injected ``post_fetcher``. With no fetcher and no
         posts, drift is 0.
+
+        When the computed ``drift_score`` meets or exceeds
+        ``drift_threshold`` and a ``drift_event_sink`` is configured, a
+        :class:`DriftEvent` is dispatched (spec characters-remaining §4).
+        Sink failures are logged and swallowed.
         """
         resolved = await self.resolve(ref, campaign_id)
         posts: list[Post] = recent_posts or []
@@ -631,14 +645,91 @@ class CharactersService:
         state = resolved.current_state
         state.drift_score = report.drift_score
         await self._save_state(ref, campaign_id, state, source="characters:drift-check")
+
+        if (
+            self._drift_event_sink is not None
+            and report.drift_score >= self._drift_threshold
+        ):
+            event = DriftEvent(
+                character_ref=ref,
+                campaign_id=campaign_id,
+                drift_score=report.drift_score,
+                threshold=self._drift_threshold,
+                report=report,
+            )
+            try:
+                await self._drift_event_sink(event)
+            except Exception:  # noqa: BLE001 — sink must not block extraction
+                _log.warning(
+                    "drift_event_sink raised for %s in %s", ref, campaign_id, exc_info=True
+                )
         return report
 
-    async def drift_corrective_context(self, ref: CharacterRef, campaign_id: CampaignId) -> str:
+    async def maybe_check_drift(
+        self,
+        ref: CharacterRef,
+        campaign_id: CampaignId,
+        *,
+        recent_posts: list[Post] | None = None,
+        force: bool = False,
+    ) -> DriftReport | None:
+        """Run :meth:`check_drift` on the configured appearance cadence.
+
+        Spec characters-remaining §3: the Orchestrator's post-turn fan-out
+        calls this for each present character. The counter on
+        ``CharacterState.appearances_since_last_drift_check`` (bumped by
+        :meth:`mark_screen_time`) gates the actual drift check; the counter
+        resets to zero through ``_save_state`` so the reset itself goes into
+        the delta log. Returns ``None`` when the cadence threshold has not
+        been reached and ``force`` is false.
+        """
+        state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
+        threshold = self._drift_check_every_n_appearances
+        if (
+            not force
+            and threshold > 0
+            and state.appearances_since_last_drift_check < threshold
+        ):
+            return None
+
+        report = await self.check_drift(ref, campaign_id, recent_posts=recent_posts)
+        # Reset the counter through the standard persist path so undo_turn
+        # can reverse it. Re-load to capture drift_score written by
+        # check_drift, then zero the counter on top.
+        state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
+        state.appearances_since_last_drift_check = 0
+        await self._save_state(
+            ref, campaign_id, state, source="characters:drift-cadence-reset"
+        )
+        return report
+
+    async def drift_corrective_context(
+        self,
+        ref: CharacterRef,
+        campaign_id: CampaignId,
+        *,
+        inject_corrective_context: bool = True,
+    ) -> str:
         """Return a corrective voice snippet for the next prompt.
 
-        If the cached drift score is below threshold, returns an empty string
-        — callers should skip the injection.
+        Spec characters-remaining §4 — when the cached drift score on
+        ``character_state`` is at or above ``drift_threshold``, return a
+        non-empty voice-anchor reminder; the Context Builder prepends the
+        result to the next prompt featuring ``ref`` so the model gets
+        explicit corrective guidance. Below threshold returns an empty
+        string so callers skip the injection.
+
+        Pass ``inject_corrective_context=False`` to short-circuit the lookup
+        entirely (returns ``""``) — useful for callers that have an
+        out-of-band reason to suppress the injection on a given turn (e.g.
+        a regenerate flow that's already including a stronger guidance
+        block).
+
+        Context Builder integration is wired separately — this method is
+        the source of truth for the snippet content.
         """
+        if not inject_corrective_context:
+            return ""
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
         if state.drift_score < self._drift_threshold:
             return ""
@@ -713,6 +804,9 @@ class CharactersService:
     ) -> None:
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
         state.last_screen_time_turn = turn_id
+        # Drift-cadence counter (spec characters-remaining §3); reset by
+        # ``maybe_check_drift`` once it actually runs the checker.
+        state.appearances_since_last_drift_check += 1
         await self._save_state(
             ref, campaign_id, state, source="characters:screen-time", turn_id=turn_id
         )
@@ -1426,6 +1520,9 @@ class CharactersService:
             tier_pin=(ContextTier(row["tier_pin"]) if row.get("tier_pin") else None),
             current_scene_id=row.get("current_scene_id"),
             updated_at_turn=row.get("updated_at_turn"),
+            appearances_since_last_drift_check=int(
+                row.get("appearances_since_last_drift_check") or 0
+            ),
         )
 
     async def _save_state(
@@ -1466,6 +1563,9 @@ class CharactersService:
             "tier_pin": state.tier_pin.value if state.tier_pin else None,
             "current_scene_id": state.current_scene_id,
             "updated_at_turn": turn_id or state.updated_at_turn or _now_iso(),
+            "appearances_since_last_drift_check": int(
+                state.appearances_since_last_drift_check
+            ),
         }
 
         if record_in_delta_log:
@@ -1495,9 +1595,9 @@ class CharactersService:
               emotional_state, physical_state, immediate_intent,
               knowledge_state, last_action, last_screen_time_turn,
               visible_to_pc, drift_score, tier_pin, current_scene_id,
-              updated_at_turn
+              updated_at_turn, appearances_since_last_drift_check
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(character_ref, branch_id) DO UPDATE SET
               campaign_id = excluded.campaign_id,
               location_ref = excluded.location_ref,
@@ -1511,7 +1611,8 @@ class CharactersService:
               drift_score = excluded.drift_score,
               tier_pin = excluded.tier_pin,
               current_scene_id = excluded.current_scene_id,
-              updated_at_turn = excluded.updated_at_turn
+              updated_at_turn = excluded.updated_at_turn,
+              appearances_since_last_drift_check = excluded.appearances_since_last_drift_check
             """,
             (
                 after["character_ref"],
@@ -1529,6 +1630,7 @@ class CharactersService:
                 after["tier_pin"],
                 after["current_scene_id"],
                 after["updated_at_turn"],
+                after["appearances_since_last_drift_check"],
             ),
         )
 

@@ -120,6 +120,7 @@ class CharacterState(BaseModel):
     tier_pin: ContextTier | None = None
     current_scene_id: str | None = None
     updated_at_turn: TurnId | None = None
+    appearances_since_last_drift_check: int = 0
 
 
 class LocationState(BaseModel):
