@@ -13,6 +13,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 from grimoire.event_bus import Event, EventBus
@@ -33,6 +34,7 @@ from grimoire.types.llm import (
     CompletionChunk,
     CompletionRequest,
     CompletionResponse,
+    ModelInfo,
     TokenUsage,
 )
 from grimoire.types.protocols import EmbeddingProvider, LLMProvider, Plugins
@@ -69,6 +71,8 @@ class LLMGatewayService:
             response_excerpt_chars=self._config.observability.response_excerpt_chars,
         )
         self._loaded_campaigns: set[CampaignId] = set()
+        # (provider_id, model) → ModelInfo or None (None = "no pricing available")
+        self._pricing_cache: dict[tuple[str, str], ModelInfo | None] = {}
 
     # ------------------------------------------------------------------ #
     # Event helpers
@@ -86,6 +90,37 @@ class LLMGatewayService:
             await self._event_bus.emit(Event(type=event_type, payload=payload))
         except Exception:
             logger.exception("event emission failed for event_type=%s", event_type)
+
+    # ------------------------------------------------------------------ #
+    # Pricing cache
+    # ------------------------------------------------------------------ #
+
+    async def _get_pricing(self, provider_id: str, model: str) -> ModelInfo | None:
+        """Return cached ModelInfo for (provider_id, model), or None if unavailable.
+
+        Calls provider.list_models() on the first miss and caches the result.
+        Exceptions from list_models() are swallowed; None is cached so we do not
+        re-attempt on every subsequent call.
+        """
+        key = (provider_id, model)
+        if key in self._pricing_cache:
+            return self._pricing_cache[key]
+        provider = self._plugins.get_llm_provider(provider_id)
+        if provider is None:
+            self._pricing_cache[key] = None
+            return None
+        try:
+            models = await provider.list_models()
+        except Exception:
+            logger.debug(
+                "llm_gateway: list_models() failed for provider=%s; pricing unavailable",
+                provider_id,
+            )
+            self._pricing_cache[key] = None
+            return None
+        info = next((m for m in models if m.id == model), None)
+        self._pricing_cache[key] = info
+        return info
 
     # ------------------------------------------------------------------ #
     # Introspection
@@ -264,6 +299,17 @@ class LLMGatewayService:
             response = response.model_copy(update={"usage": usage})
         if response.latency_ms == 0:
             response = response.model_copy(update={"latency_ms": latency_ms})
+        # §5: fill cost_estimate_usd from real token usage when the provider
+        # did not supply it.
+        if response.cost_estimate_usd is None:
+            info = await self._get_pricing(route.provider_id, route.model)
+            if info is not None and not (
+                info.input_cost_per_1k is None and info.output_cost_per_1k is None
+            ):
+                cost = response.usage.input_tokens / 1000.0 * (
+                    info.input_cost_per_1k or 0.0
+                ) + response.usage.output_tokens / 1000.0 * (info.output_cost_per_1k or 0.0)
+                response = response.model_copy(update={"cost_estimate_usd": cost})
         if self._config.observability.log_all_requests:
             await self._log.record(
                 task=task,
@@ -661,14 +707,23 @@ class LLMGatewayService:
     # ------------------------------------------------------------------ #
 
     async def health_check(self, provider_id: str) -> HealthStatus:
+        now_iso = datetime.now(UTC).isoformat()
         provider = self._plugins.get_llm_provider(
             provider_id
         ) or self._plugins.get_embedding_provider(provider_id)
         if provider is None:
-            return HealthStatus(level=HealthLevel.UNCONFIGURED, target_id=provider_id)
+            return HealthStatus(
+                level=HealthLevel.UNCONFIGURED,
+                target_id=provider_id,
+                checked_at=now_iso,
+            )
         probe = getattr(provider, "health_check", None)
         if probe is None:
-            return HealthStatus(level=HealthLevel.HEALTHY, target_id=provider_id)
+            return HealthStatus(
+                level=HealthLevel.HEALTHY,
+                target_id=provider_id,
+                checked_at=now_iso,
+            )
         try:
             result = await probe()
         except Exception as exc:
@@ -676,10 +731,20 @@ class LLMGatewayService:
                 level=HealthLevel.UNHEALTHY,
                 target_id=provider_id,
                 message=f"{type(exc).__name__}: {exc}",
+                checked_at=now_iso,
             )
         if isinstance(result, HealthStatus):
-            return result
-        return HealthStatus(level=HealthLevel.HEALTHY, target_id=provider_id)
+            return result.model_copy(
+                update={
+                    "target_id": provider_id,
+                    "checked_at": result.checked_at or now_iso,
+                }
+            )
+        return HealthStatus(
+            level=HealthLevel.HEALTHY,
+            target_id=provider_id,
+            checked_at=now_iso,
+        )
 
     async def health_check_all(self) -> dict[str, HealthStatus]:
         ids: set[str] = set()
