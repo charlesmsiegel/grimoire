@@ -245,6 +245,92 @@ async def test_extract_downgrades_facts_on_contradiction(scene: Scene, snapshot:
 
 
 @pytest.mark.asyncio
+async def test_extract_applies_speaker_authority_penalty_for_testimony(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # A fact whose `speaker_id` is a character (not the GM narrator) gets
+    # the testimony penalty subtracted from its confidence.
+    gateway = FakeGateway(
+        queue=[
+            {
+                "facts": [
+                    {
+                        "text": "winifred claims she has the deed",
+                        "speaker_id": "winifred",
+                        "confidence": 0.9,
+                        "about": {"character_ids": ["winifred"]},
+                    }
+                ]
+            }
+        ]
+    )
+    service = ExtractorService(
+        gateway=gateway,
+        config=ExtractorConfig(testimony_confidence_penalty=0.2),
+    )
+    result = await service.extract(
+        '"I have the deed," winifred said.', scene, "camp-1", snapshot
+    )
+    fact = next(d for d in result.deltas if d.kind == DeltaKind.FACT_ADD)
+    assert fact.confidence == pytest.approx(0.7, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_extract_no_penalty_when_narrator_speaks(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # `speaker_id` of None means GM-voice narration — no penalty.
+    gateway = FakeGateway(
+        queue=[
+            {
+                "facts": [
+                    {
+                        "text": "The deed sits in winifred's pocket",
+                        "speaker_id": None,
+                        "confidence": 0.9,
+                        "about": {"character_ids": ["winifred"]},
+                    }
+                ]
+            }
+        ]
+    )
+    service = ExtractorService(
+        gateway=gateway,
+        config=ExtractorConfig(testimony_confidence_penalty=0.2),
+    )
+    result = await service.extract("The deed bulged from her pocket.", scene, "camp-1", snapshot)
+    fact = next(d for d in result.deltas if d.kind == DeltaKind.FACT_ADD)
+    assert fact.confidence == pytest.approx(0.9, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_extract_speaker_authority_penalty_floors_at_zero(
+    scene: Scene, snapshot: StateSnapshot
+):
+    gateway = FakeGateway(
+        queue=[
+            {
+                "facts": [
+                    {
+                        "text": "wild claim",
+                        "speaker_id": "winifred",
+                        "confidence": 0.05,
+                        "about": {"character_ids": ["winifred"]},
+                    }
+                ]
+            }
+        ]
+    )
+    service = ExtractorService(
+        gateway=gateway,
+        config=ExtractorConfig(testimony_confidence_penalty=0.2),
+    )
+    result = await service.extract("winifred boasted improbably.", scene, "camp-1", snapshot)
+    fact = next(d for d in result.deltas if d.kind == DeltaKind.FACT_ADD)
+    assert fact.confidence == pytest.approx(0.0, abs=1e-9)
+
+
+@pytest.mark.asyncio
 async def test_extract_invokes_mechanics_validator(scene: Scene, snapshot: StateSnapshot):
     gateway = FakeGateway(
         queue=[
