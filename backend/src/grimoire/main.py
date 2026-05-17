@@ -29,6 +29,7 @@ from grimoire.imagegen import BackendRegistry, ImageGenService
 from grimoire.library import LibraryService
 from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.mechanics import MechanicsConfig, MechanicsService
+from grimoire.observability.health import HealthMonitorService
 from grimoire.orchestrator.service import OrchestratorService
 from grimoire.plugins import PluginsConfig, PluginsService
 from grimoire.scenes import SceneManager
@@ -161,13 +162,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # up at construction time, so the rest of the routes (library,
         # images, worlds, etc.) keep working.
         if container.extras.get("llm_gateway") is None:
+            # §3: Construct a standalone HealthMonitorService for the gateway.
+            # When ObservabilityService is wired here, pass its health_monitor
+            # instance instead and remove this standalone construction.
+            gateway_health_monitor = HealthMonitorService(db)
             container.extras["llm_gateway"] = LLMGatewayService(
                 plugins=container.plugins,
                 db=db,
                 config=settings.llm_gateway.to_gateway_config(),
                 data_root=settings.data_root,
                 event_bus=container.event_bus,
+                health_monitor=gateway_health_monitor,
             )
+            await container.extras["llm_gateway"].register_with_health_monitor()
+            await gateway_health_monitor.start_periodic()
+            container.extras["gateway_health_monitor"] = gateway_health_monitor
         llm_gateway = container.extras["llm_gateway"]
         if container.extras.get("extractor") is None:
             container.extras["extractor"] = ExtractorService(gateway=llm_gateway)
@@ -260,6 +269,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
     if container is not None:
+        # §3: Stop the gateway health monitor periodic loop if it was started.
+        gateway_health_monitor = (
+            container.extras.get("gateway_health_monitor") if container.extras else None
+        )
+        if gateway_health_monitor is not None:
+            try:
+                await gateway_health_monitor.stop()
+            except Exception:
+                log.exception("gateway health monitor stop failed during shutdown")
         if container.imagegen is not None:
             try:
                 await container.imagegen.aclose()
