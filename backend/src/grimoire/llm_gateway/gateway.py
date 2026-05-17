@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import logging
 import os
 import time
@@ -19,7 +20,7 @@ from pathlib import Path
 from grimoire.event_bus import Event, EventBus
 from grimoire.files.yaml_io import dump_yaml, load_yaml
 from grimoire.llm_gateway.cache import EmbeddingCache
-from grimoire.llm_gateway.config import GatewayConfig
+from grimoire.llm_gateway.config import GatewayConfig, RetryConfig, TimeoutConfig
 from grimoire.llm_gateway.errors import (
     GatewayError,
     PermanentError,
@@ -153,6 +154,28 @@ class LLMGatewayService:
             self._persist_campaign_route(campaign_id, task, route)
 
     # ------------------------------------------------------------------ #
+    # Per-call override resolvers
+    # ------------------------------------------------------------------ #
+
+    def _resolved_retry(self, override: RetryConfig | None) -> RetryConfig:
+        """Return the per-call override if given, else the global config value."""
+        return override if override is not None else self._config.retry
+
+    def _resolved_timeout(self, override: TimeoutConfig | None) -> TimeoutConfig:
+        """Return the per-call override if given, else the global config value."""
+        return override if override is not None else self._config.timeout
+
+    @staticmethod
+    def _retry_dict(cfg: RetryConfig | None) -> dict | None:
+        """Serialise a RetryConfig to a plain dict for event payloads (None → None)."""
+        return dataclasses.asdict(cfg) if cfg is not None else None
+
+    @staticmethod
+    def _timeout_dict(cfg: TimeoutConfig | None) -> dict | None:
+        """Serialise a TimeoutConfig to a plain dict for event payloads (None → None)."""
+        return dataclasses.asdict(cfg) if cfg is not None else None
+
+    # ------------------------------------------------------------------ #
     # Completion
     # ------------------------------------------------------------------ #
 
@@ -163,6 +186,8 @@ class LLMGatewayService:
         campaign_id: CampaignId | None = None,
         *,
         turn_id: TurnId | None = None,
+        retry: RetryConfig | None = None,
+        timeout: TimeoutConfig | None = None,
     ) -> CompletionResponse:
         if campaign_id is not None and campaign_id not in self._loaded_campaigns:
             await self._load_campaign_routing(campaign_id)
@@ -175,6 +200,8 @@ class LLMGatewayService:
             campaign_id=campaign_id,
             turn_id=turn_id,
             fallback=fallback,
+            retry=retry,
+            timeout=timeout,
         )
 
     async def _complete_one(
@@ -186,7 +213,10 @@ class LLMGatewayService:
         campaign_id: CampaignId | None,
         turn_id: TurnId | None,
         fallback: Route | None,
+        retry: RetryConfig | None = None,
+        timeout: TimeoutConfig | None = None,
     ) -> CompletionResponse:
+        resolved_retry = self._resolved_retry(retry)
         try:
             response, _retries = await self._invoke_complete(
                 task=task,
@@ -195,6 +225,8 @@ class LLMGatewayService:
                 campaign_id=campaign_id,
                 turn_id=turn_id,
                 fallback_used=False,
+                retry=retry,
+                timeout=timeout,
             )
             return response
         except PermanentError as exc:
@@ -217,7 +249,7 @@ class LLMGatewayService:
                 campaign_id=campaign_id,
                 turn_id=turn_id,
                 error=exc,
-                retries=self._config.retry.max_retries,
+                retries=resolved_retry.max_retries,
                 fallback_used=False,
             )
             if fallback is None or fallback.raw == route.raw:
@@ -236,6 +268,8 @@ class LLMGatewayService:
                     campaign_id=campaign_id,
                     turn_id=turn_id,
                     fallback_used=True,
+                    retry=retry,
+                    timeout=timeout,
                 )
                 return response
             except PermanentError as fallback_exc:
@@ -258,7 +292,7 @@ class LLMGatewayService:
                     campaign_id=campaign_id,
                     turn_id=turn_id,
                     error=fallback_exc,
-                    retries=self._config.retry.max_retries,
+                    retries=resolved_retry.max_retries,
                     fallback_used=True,
                 )
                 raise
@@ -272,10 +306,14 @@ class LLMGatewayService:
         campaign_id: CampaignId | None,
         turn_id: TurnId | None,
         fallback_used: bool,
+        retry: RetryConfig | None = None,
+        timeout: TimeoutConfig | None = None,
     ) -> tuple[CompletionResponse, int]:
         provider = self._require_llm(route.provider_id)
         scoped = request.model_copy(update={"model": route.model})
-        timeout = self._config.timeout.total_seconds
+        resolved_retry = self._resolved_retry(retry)
+        resolved_timeout = self._resolved_timeout(timeout)
+        timeout_seconds = resolved_timeout.total_seconds
 
         await self._emit(
             "llm_request_started",
@@ -286,14 +324,16 @@ class LLMGatewayService:
                 "campaign_id": campaign_id,
                 "turn_id": turn_id,
                 "fallback_used": fallback_used,
+                "retry_override": self._retry_dict(retry),
+                "timeout_override": self._timeout_dict(timeout),
             },
         )
 
         async def _call() -> CompletionResponse:
-            return await asyncio.wait_for(provider.complete(scoped), timeout=timeout)
+            return await asyncio.wait_for(provider.complete(scoped), timeout=timeout_seconds)
 
         started = time.monotonic()
-        response, retries = await run_with_retries(_call, policy=self._config.retry)
+        response, retries = await run_with_retries(_call, policy=resolved_retry)
         latency_ms = int((time.monotonic() - started) * 1000)
         # Ensure usage totals are populated.
         usage = response.usage
@@ -349,6 +389,8 @@ class LLMGatewayService:
                     "total_tokens": response.usage.total_tokens,
                 },
                 "cost_estimate_usd": response.cost_estimate_usd,
+                "retry_override": self._retry_dict(retry),
+                "timeout_override": self._timeout_dict(timeout),
             },
         )
         return response, retries
@@ -407,6 +449,8 @@ class LLMGatewayService:
         campaign_id: CampaignId | None = None,
         *,
         turn_id: TurnId | None = None,
+        retry: RetryConfig | None = None,
+        timeout: TimeoutConfig | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         """Stream completion chunks, retrying / falling back on zero-chunk failures.
 
@@ -432,9 +476,10 @@ class LLMGatewayService:
         # followed by fallback (a single attempt with its own internal retry).
         # We drive the retry loop explicitly here because async generators don't
         # compose cleanly with run_with_retries.
-        max_retries = self._config.retry.max_retries
-        delay_s = max(0, self._config.retry.initial_delay_ms) / 1000.0
-        backoff = max(1.0, self._config.retry.backoff_factor)
+        resolved_retry = self._resolved_retry(retry)
+        max_retries = resolved_retry.max_retries
+        delay_s = max(0, resolved_retry.initial_delay_ms) / 1000.0
+        backoff = max(1.0, resolved_retry.backoff_factor)
 
         first_chunk_delivered = False
         last_exc: BaseException | None = None
@@ -453,6 +498,8 @@ class LLMGatewayService:
                     campaign_id=campaign_id,
                     turn_id=turn_id,
                     fallback_used=False,
+                    retry=retry,
+                    timeout=timeout,
                 ):
                     first_chunk_delivered = True
                     yield chunk
@@ -539,6 +586,8 @@ class LLMGatewayService:
                     campaign_id=campaign_id,
                     turn_id=turn_id,
                     fallback_used=True,
+                    retry=retry,
+                    timeout=timeout,
                 ):
                     first_chunk_delivered = True
                     yield chunk
@@ -572,6 +621,8 @@ class LLMGatewayService:
         campaign_id: CampaignId | None,
         turn_id: TurnId | None,
         fallback_used: bool = False,
+        retry: RetryConfig | None = None,
+        timeout: TimeoutConfig | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         """Attempt a single streaming call to `provider` and yield chunks.
 
@@ -585,8 +636,9 @@ class LLMGatewayService:
           uncaught — mid-stream crashes are not retried.
         * ``fallback_used`` is forwarded into emitted event payloads.
         """
-        first_token_timeout = self._config.timeout.first_token_seconds
-        total_timeout = self._config.timeout.total_seconds
+        resolved_timeout = self._resolved_timeout(timeout)
+        first_token_timeout = resolved_timeout.first_token_seconds
+        total_timeout = resolved_timeout.total_seconds
         started = time.monotonic()
 
         await self._emit(
@@ -598,6 +650,8 @@ class LLMGatewayService:
                 "campaign_id": campaign_id,
                 "turn_id": turn_id,
                 "fallback_used": fallback_used,
+                "retry_override": self._retry_dict(retry),
+                "timeout_override": self._timeout_dict(timeout),
             },
         )
 
@@ -660,6 +714,8 @@ class LLMGatewayService:
                     "total_tokens": usage.total_tokens if usage else 0,
                 },
                 "cost_estimate_usd": None,
+                "retry_override": self._retry_dict(retry),
+                "timeout_override": self._timeout_dict(timeout),
             },
         )
 
@@ -674,6 +730,8 @@ class LLMGatewayService:
         campaign_id: CampaignId | None = None,
         *,
         turn_id: TurnId | None = None,
+        retry: RetryConfig | None = None,
+        timeout: TimeoutConfig | None = None,
     ) -> list[list[float]]:
         if not texts:
             return []
@@ -697,6 +755,9 @@ class LLMGatewayService:
 
         new_vectors: dict[str, list[float]] = {}
         if missing:
+            resolved_retry = self._resolved_retry(retry)
+            resolved_timeout = self._resolved_timeout(timeout)
+
             await self._emit(
                 "embedding_request_started",
                 {
@@ -706,6 +767,8 @@ class LLMGatewayService:
                     "campaign_id": campaign_id,
                     "turn_id": turn_id,
                     "input_count": len(missing),
+                    "retry_override": self._retry_dict(retry),
+                    "timeout_override": self._timeout_dict(timeout),
                 },
             )
             started = time.monotonic()
@@ -734,14 +797,17 @@ class LLMGatewayService:
                     # "late binding" pitfall in Python async closures.
                     _batch = batch
 
-                    async def _call(_b: list[str] = _batch) -> list[list[float]]:
+                    async def _call(
+                        _b: list[str] = _batch,
+                        _tout: float = resolved_timeout.total_seconds,
+                    ) -> list[list[float]]:
                         return await asyncio.wait_for(
                             provider.embed(_b),
-                            timeout=self._config.timeout.total_seconds,
+                            timeout=_tout,
                         )
 
                     batch_vectors, batch_retries = await run_with_retries(
-                        _call, policy=self._config.retry
+                        _call, policy=resolved_retry
                     )
                     total_retries += batch_retries
                     all_vectors.extend(batch_vectors)
@@ -767,13 +833,15 @@ class LLMGatewayService:
                         "error": f"{type(exc).__name__}: {exc}",
                         "retries": total_retries,
                         "fallback_used": False,
+                        "retry_override": self._retry_dict(retry),
+                        "timeout_override": self._timeout_dict(timeout),
                     },
                 )
                 raise
             except RETRIABLE_EXCEPTIONS as exc:
                 # `total_retries` sums batches that succeeded; add the
                 # exhausted-retries count for the batch that finally failed.
-                final_retries = total_retries + self._config.retry.max_retries
+                final_retries = total_retries + resolved_retry.max_retries
                 if self._config.observability.log_all_requests:
                     await self._log.record(
                         task=task,
@@ -795,6 +863,8 @@ class LLMGatewayService:
                         "error": f"{type(exc).__name__}: {exc}",
                         "retries": final_retries,
                         "fallback_used": False,
+                        "retry_override": self._retry_dict(retry),
+                        "timeout_override": self._timeout_dict(timeout),
                     },
                 )
                 raise
@@ -837,6 +907,8 @@ class LLMGatewayService:
                     "vector_count": len(vectors),
                     "input_count": len(missing),
                     "dimensions": len(vectors[0]) if vectors else 0,
+                    "retry_override": self._retry_dict(retry),
+                    "timeout_override": self._timeout_dict(timeout),
                 },
             )
 
