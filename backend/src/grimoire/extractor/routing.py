@@ -7,11 +7,14 @@ the Orchestrator.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from grimoire.extractor.config import ExtractorConfig
 from grimoire.types.state import StateDelta
+
+logger = logging.getLogger(__name__)
 
 
 class Decision(StrEnum):
@@ -56,6 +59,21 @@ def route_deltas(deltas: list[StateDelta], *, config: ExtractorConfig) -> Routin
             routing.review.append(delta)
         else:
             routing.dropped.append(delta)
+            # Feeds the calibration loop (spec 04 §Open questions item 4):
+            # silently-dropped deltas are otherwise invisible.
+            logger.debug(
+                "dropped delta kind=%s target_id=%s confidence=%.3f evidence=%r",
+                str(delta.kind),
+                delta.target_id,
+                delta.confidence,
+                delta.evidence,
+                extra={
+                    "kind": str(delta.kind),
+                    "target_id": delta.target_id,
+                    "confidence": delta.confidence,
+                    "evidence": delta.evidence,
+                },
+            )
     return routing
 
 
