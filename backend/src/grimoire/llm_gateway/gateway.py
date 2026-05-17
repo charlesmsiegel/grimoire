@@ -15,6 +15,7 @@ import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from grimoire.event_bus import Event, EventBus
 from grimoire.files.yaml_io import dump_yaml, load_yaml
 from grimoire.llm_gateway.cache import EmbeddingCache
 from grimoire.llm_gateway.config import GatewayConfig
@@ -47,11 +48,13 @@ class LLMGatewayService:
         config: GatewayConfig | None = None,
         *,
         data_root: Path | None = None,
+        event_bus: EventBus | None = None,
     ) -> None:
         self._plugins = plugins
         self._db = db
         self._config = config or GatewayConfig()
         self._data_root = data_root
+        self._event_bus = event_bus
         self._router = RouteResolver(
             self._config.default_routes,
             self._config.fallback_routes,
@@ -66,6 +69,23 @@ class LLMGatewayService:
             response_excerpt_chars=self._config.observability.response_excerpt_chars,
         )
         self._loaded_campaigns: set[CampaignId] = set()
+
+    # ------------------------------------------------------------------ #
+    # Event helpers
+    # ------------------------------------------------------------------ #
+
+    async def _emit(self, event_type: str, payload: dict) -> None:
+        """Emit a bus event. No-ops when no bus is configured.
+
+        Exceptions from handlers are caught and logged so that emission never
+        breaks the LLM call path.
+        """
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.emit(Event(type=event_type, payload=payload))
+        except Exception:
+            logger.exception("event emission failed for event_type=%s", event_type)
 
     # ------------------------------------------------------------------ #
     # Introspection
@@ -215,6 +235,18 @@ class LLMGatewayService:
         scoped = request.model_copy(update={"model": route.model})
         timeout = self._config.timeout.total_seconds
 
+        await self._emit(
+            "llm_request_started",
+            {
+                "task": task,
+                "provider": route.provider_id,
+                "model": route.model,
+                "campaign_id": campaign_id,
+                "turn_id": turn_id,
+                "fallback_used": fallback_used,
+            },
+        )
+
         async def _call() -> CompletionResponse:
             return await asyncio.wait_for(provider.complete(scoped), timeout=timeout)
 
@@ -247,6 +279,25 @@ class LLMGatewayService:
                 campaign_id=campaign_id,
                 turn_id=turn_id,
             )
+        await self._emit(
+            "llm_response_received",
+            {
+                "task": task,
+                "provider": route.provider_id,
+                "model": route.model,
+                "campaign_id": campaign_id,
+                "turn_id": turn_id,
+                "latency_ms": response.latency_ms or latency_ms,
+                "retries": retries,
+                "fallback_used": fallback_used,
+                "usage": {
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                },
+                "cost_estimate_usd": response.cost_estimate_usd,
+            },
+        )
         return response, retries
 
     async def _record_failure(
@@ -261,6 +312,19 @@ class LLMGatewayService:
         retries: int,
         fallback_used: bool,
     ) -> None:
+        await self._emit(
+            "llm_request_failed",
+            {
+                "task": task,
+                "provider": route.provider_id,
+                "model": route.model,
+                "campaign_id": campaign_id,
+                "turn_id": turn_id,
+                "error": f"{type(error).__name__}: {error}",
+                "retries": retries,
+                "fallback_used": fallback_used,
+            },
+        )
         if not self._config.observability.log_all_requests:
             return
         try:
@@ -319,6 +383,19 @@ class LLMGatewayService:
         first_token_timeout = self._config.timeout.first_token_seconds
         total_timeout = self._config.timeout.total_seconds
         started = time.monotonic()
+
+        await self._emit(
+            "llm_request_started",
+            {
+                "task": task,
+                "provider": route.provider_id,
+                "model": route.model,
+                "campaign_id": campaign_id,
+                "turn_id": turn_id,
+                "fallback_used": False,
+            },
+        )
+
         stream = provider.stream(request)
         usage: TokenUsage | None = None
         text_parts: list[str] = []
@@ -373,6 +450,25 @@ class LLMGatewayService:
                 campaign_id=campaign_id,
                 turn_id=turn_id,
             )
+        await self._emit(
+            "llm_response_received",
+            {
+                "task": task,
+                "provider": route.provider_id,
+                "model": route.model,
+                "campaign_id": campaign_id,
+                "turn_id": turn_id,
+                "latency_ms": latency_ms,
+                "retries": 0,
+                "fallback_used": False,
+                "usage": {
+                    "input_tokens": usage.input_tokens if usage else 0,
+                    "output_tokens": usage.output_tokens if usage else 0,
+                    "total_tokens": usage.total_tokens if usage else 0,
+                },
+                "cost_estimate_usd": None,
+            },
+        )
 
     # ------------------------------------------------------------------ #
     # Embeddings
@@ -408,6 +504,17 @@ class LLMGatewayService:
 
         new_vectors: dict[str, list[float]] = {}
         if missing:
+            await self._emit(
+                "embedding_request_started",
+                {
+                    "task": task,
+                    "provider": route.provider_id,
+                    "model": model_id,
+                    "campaign_id": campaign_id,
+                    "turn_id": turn_id,
+                    "input_count": len(missing),
+                },
+            )
             started = time.monotonic()
 
             async def _call() -> list[list[float]]:
@@ -429,6 +536,19 @@ class LLMGatewayService:
                         campaign_id=campaign_id,
                         turn_id=turn_id,
                     )
+                await self._emit(
+                    "llm_request_failed",
+                    {
+                        "task": task,
+                        "provider": route.provider_id,
+                        "model": model_id,
+                        "campaign_id": campaign_id,
+                        "turn_id": turn_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "retries": 0,
+                        "fallback_used": False,
+                    },
+                )
                 raise
             except RETRIABLE_EXCEPTIONS as exc:
                 if self._config.observability.log_all_requests:
@@ -441,6 +561,19 @@ class LLMGatewayService:
                         campaign_id=campaign_id,
                         turn_id=turn_id,
                     )
+                await self._emit(
+                    "llm_request_failed",
+                    {
+                        "task": task,
+                        "provider": route.provider_id,
+                        "model": model_id,
+                        "campaign_id": campaign_id,
+                        "turn_id": turn_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "retries": self._config.retry.max_retries,
+                        "fallback_used": False,
+                    },
+                )
                 raise
             latency_ms = int((time.monotonic() - started) * 1000)
             if len(vectors) != len(missing):
@@ -463,6 +596,21 @@ class LLMGatewayService:
                     campaign_id=campaign_id,
                     turn_id=turn_id,
                 )
+            await self._emit(
+                "embedding_response_received",
+                {
+                    "task": task,
+                    "provider": route.provider_id,
+                    "model": model_id,
+                    "campaign_id": campaign_id,
+                    "turn_id": turn_id,
+                    "latency_ms": latency_ms,
+                    "retries": retries,
+                    "vector_count": len(vectors),
+                    "input_count": len(missing),
+                    "dimensions": len(vectors[0]) if vectors else 0,
+                },
+            )
 
         return [cached[text] if text in cached else new_vectors[text] for text in texts]
 
