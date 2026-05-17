@@ -189,6 +189,14 @@ class ExtractorService:
         # than GM-voice narration (spec 04 §Confidence scoring).
         merged_deltas = [self._apply_speaker_authority(d) for d in merged_deltas]
 
+        # Commitment-id resolution: catch hallucinated commitment refs before
+        # they reach the State Store (spec extractor-remaining §7).
+        if snapshot is not None:
+            merged_deltas, commitment_flags = self._resolve_commitment_ids(
+                merged_deltas, snapshot=snapshot
+            )
+            flags.extend(commitment_flags)
+
         # Player text: clamp confidence on non-PC subjects.
         if from_player and player_pc_ref:
             merged_deltas = [
@@ -287,6 +295,52 @@ class ExtractorService:
             return delta
         adjusted = max(0.0, delta.confidence - penalty)
         return delta.model_copy(update={"confidence": adjusted})
+
+    def _resolve_commitment_ids(
+        self,
+        deltas: list[StateDelta],
+        *,
+        snapshot: StateSnapshot,
+    ) -> tuple[list[StateDelta], list[ExtractionFlag]]:
+        """Validate COMMITMENT_RESOLVE deltas against the snapshot's open commitments.
+
+        Unmatched ids get demoted by `contradiction_confidence_penalty` (which
+        normally lands them in the review band) and produce a CONTRADICTION
+        flag so the orchestrator routes them to the review queue.
+        """
+        flags: list[ExtractionFlag] = []
+        known_ids = {
+            str(c.get("id"))
+            for c in snapshot.open_commitments
+            if isinstance(c, dict) and c.get("id") is not None
+        }
+        out: list[StateDelta] = []
+        for delta in deltas:
+            if delta.kind != DeltaKind.COMMITMENT_RESOLVE:
+                out.append(delta)
+                continue
+            commitment_id = delta.after.get("commitment_id")
+            if not isinstance(commitment_id, str) or commitment_id in known_ids:
+                out.append(delta)
+                continue
+            penalty = self._config.contradiction_confidence_penalty
+            adjusted = max(0.0, delta.confidence - penalty)
+            out.append(delta.model_copy(update={"confidence": adjusted}))
+            flags.append(
+                ExtractionFlag(
+                    level=FlagLevel.CONTRADICTION,
+                    code="unresolved_commitment_reference",
+                    message=(
+                        f"commitment_id {commitment_id!r} does not match any open commitment"
+                    ),
+                    evidence=delta.evidence,
+                    payload={
+                        "commitment_id": commitment_id,
+                        "known_ids": sorted(known_ids),
+                    },
+                )
+            )
+        return out, flags
 
     def _clamp_player_authority(self, delta: StateDelta, *, player_pc_ref: str) -> StateDelta:
         """Apply the player-authority heuristic (spec 04 §Handling player text).
