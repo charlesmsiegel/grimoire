@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from grimoire.extractor import ExtractorConfig, ExtractorService
+from grimoire.extractor.protocols import ConflictRecord
 from grimoire.extractor.routing import route_deltas
 from grimoire.extractor.service import _delta_is_about
 from grimoire.types.common import Scope, ValidationResult
@@ -229,7 +230,15 @@ async def test_extract_downgrades_facts_on_contradiction(scene: Scene, snapshot:
         ]
     )
     checker = FakeContradictionChecker(
-        conflicts_for={"winifred is in Paris": ["fact_201: winifred is in Sion"]}
+        conflicts_for={
+            "winifred is in Paris": [
+                ConflictRecord(
+                    fact_id="fact_201",
+                    text="winifred is in Sion",
+                    source_turn="turn-12",
+                )
+            ]
+        }
     )
     service = ExtractorService(
         gateway=gateway,
@@ -238,10 +247,130 @@ async def test_extract_downgrades_facts_on_contradiction(scene: Scene, snapshot:
     )
     result = await service.extract("winifred appeared in Paris.", scene, "camp-1", snapshot)
     fact = next(d for d in result.deltas if d.kind == DeltaKind.FACT_ADD)
+    # Starting confidence 0.95 - 0.3 penalty = 0.65, which is already below the
+    # 0.85 auto-apply threshold, so the force-route cap is a no-op here.
     assert pytest.approx(fact.confidence, rel=1e-6) == 0.65
     routing = route_deltas(result.deltas, config=ExtractorConfig())
     assert fact in routing.review
     assert any(f.level == FlagLevel.CONTRADICTION for f in result.flags)
+
+
+@pytest.mark.asyncio
+async def test_extract_force_routes_high_confidence_contradiction_to_review(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # Regression for spec extractor-remaining §2: a high-confidence (>= auto_apply)
+    # fact must NOT auto-apply when it contradicts existing state, even when the
+    # configured penalty alone would leave it in the auto-apply band.
+    gateway = FakeGateway(
+        queue=[
+            {
+                "facts": [
+                    {
+                        "text": "winifred is in Paris",
+                        "confidence": 0.99,
+                        "about": {"character_ids": ["winifred"]},
+                    }
+                ]
+            }
+        ]
+    )
+    checker = FakeContradictionChecker(
+        conflicts_for={
+            "winifred is in Paris": [
+                ConflictRecord(fact_id="fact_201", text="winifred is in Sion")
+            ]
+        }
+    )
+    # Penalty intentionally tiny: 0.99 - 0.05 = 0.94 still >= 0.85, so without
+    # the force-route cap this delta would auto-apply.
+    service = ExtractorService(
+        gateway=gateway,
+        contradictions=checker,
+        config=ExtractorConfig(
+            contradiction_confidence_penalty=0.05,
+            auto_apply_threshold=0.85,
+        ),
+    )
+    result = await service.extract("winifred appeared in Paris.", scene, "camp-1", snapshot)
+    fact = next(d for d in result.deltas if d.kind == DeltaKind.FACT_ADD)
+    # Confidence is capped just below the auto-apply threshold.
+    assert fact.confidence < 0.85
+    assert fact.confidence == pytest.approx(0.849, abs=1e-9)
+    routing = route_deltas(
+        result.deltas,
+        config=ExtractorConfig(auto_apply_threshold=0.85),
+    )
+    assert fact in routing.review
+    assert fact not in routing.auto_apply
+
+
+@pytest.mark.asyncio
+async def test_extract_contradiction_emits_structured_conflict_records(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # Spec extractor-remaining §2: conflicts must be threaded through as
+    # structured records (id + text + source turn) on both the flag payload
+    # and `delta.extra["contradictions"]`, not free-form strings.
+    gateway = FakeGateway(
+        queue=[
+            {
+                "facts": [
+                    {
+                        "text": "winifred is in Paris",
+                        "confidence": 0.7,
+                        "about": {"character_ids": ["winifred"]},
+                    }
+                ]
+            }
+        ]
+    )
+    checker = FakeContradictionChecker(
+        conflicts_for={
+            "winifred is in Paris": [
+                ConflictRecord(
+                    fact_id="fact_201",
+                    text="winifred is in Sion",
+                    source_turn="turn-12",
+                ),
+                ConflictRecord(
+                    fact_id="fact_202",
+                    text="winifred has not left Sion this week",
+                    source_turn=None,
+                ),
+            ]
+        }
+    )
+    service = ExtractorService(
+        gateway=gateway,
+        contradictions=checker,
+        config=ExtractorConfig(contradiction_confidence_penalty=0.25),
+    )
+    result = await service.extract("winifred appeared in Paris.", scene, "camp-1", snapshot)
+    fact = next(d for d in result.deltas if d.kind == DeltaKind.FACT_ADD)
+    # delta.extra["contradictions"] is a list of dicts (model_dump output).
+    extra_conflicts = fact.extra["contradictions"]
+    assert isinstance(extra_conflicts, list)
+    assert len(extra_conflicts) == 2
+    assert all(isinstance(c, dict) for c in extra_conflicts)
+    assert extra_conflicts[0] == {
+        "fact_id": "fact_201",
+        "text": "winifred is in Sion",
+        "source_turn": "turn-12",
+    }
+    assert extra_conflicts[1]["fact_id"] == "fact_202"
+    assert extra_conflicts[1]["source_turn"] is None
+    # The CONTRADICTION flag payload carries the same structured records.
+    flag = next(
+        f
+        for f in result.flags
+        if f.level == FlagLevel.CONTRADICTION and f.code == "fact_contradiction"
+    )
+    payload_conflicts = flag.payload["conflicts"]
+    assert isinstance(payload_conflicts, list)
+    assert len(payload_conflicts) == 2
+    assert payload_conflicts[0]["fact_id"] == "fact_201"
+    assert payload_conflicts[0]["text"] == "winifred is in Sion"
 
 
 @pytest.mark.asyncio
