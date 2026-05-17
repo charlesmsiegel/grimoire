@@ -46,7 +46,10 @@ def output_schema() -> JsonSchema:
         },
         "required": ["character_id", "field", "after", "confidence"],
     }
-    new_character = {
+    # Shared schema for every new_* candidate array — characters, locations,
+    # factions, and items all carry the same proposal shape (spec
+    # extractor-remaining §8); the kind comes from which array the item is in.
+    new_entity = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
@@ -147,7 +150,10 @@ def output_schema() -> JsonSchema:
         "properties": {
             "facts": {"type": "array", "items": fact},
             "character_updates": {"type": "array", "items": character_update},
-            "new_characters": {"type": "array", "items": new_character},
+            "new_characters": {"type": "array", "items": new_entity},
+            "new_locations": {"type": "array", "items": new_entity},
+            "new_factions": {"type": "array", "items": new_entity},
+            "new_items": {"type": "array", "items": new_entity},
             "scene_changes": {"type": "array", "items": scene_change},
             "time_advances": {"type": "array", "items": time_advance},
             "commitments": {"type": "array", "items": commitment},
@@ -165,6 +171,9 @@ def empty_payload() -> dict:
         "facts": [],
         "character_updates": [],
         "new_characters": [],
+        "new_locations": [],
+        "new_factions": [],
+        "new_items": [],
         "scene_changes": [],
         "time_advances": [],
         "commitments": [],

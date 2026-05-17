@@ -10,6 +10,8 @@ from grimoire.extractor.llm_strategy import (
     extract_with_llm,
     parse_llm_payload,
 )
+from grimoire.extractor.schema import output_schema
+from grimoire.types.common import EntityKind
 from grimoire.types.scene import Scene
 from grimoire.types.state import DeltaKind, StateSnapshot
 
@@ -103,6 +105,46 @@ def test_parse_payload_truncates_new_characters_to_budget():
     }
     out = parse_llm_payload(payload, campaign_id="c1", source="extractor", max_new_entities=3)
     assert len(out.candidates) == 3
+
+
+def test_parse_payload_emits_candidates_for_all_kinds():
+    payload = {
+        "new_characters": [
+            {"proposed_name": "Margaux", "confidence": 0.8},
+        ],
+        "new_locations": [
+            {"proposed_name": "The Orchard", "confidence": 0.7},
+        ],
+        "new_factions": [
+            {"proposed_name": "Florentine Society", "confidence": 0.75},
+        ],
+        "new_items": [
+            {"proposed_name": "Silver Ring", "confidence": 0.65},
+        ],
+    }
+    out = parse_llm_payload(payload, campaign_id="c1", source="extractor", max_new_entities=10)
+    by_name = {c.proposed_name: c for c in out.candidates}
+    assert by_name["Margaux"].kind == EntityKind.CHARACTER
+    assert by_name["The Orchard"].kind == EntityKind.LOCATION
+    assert by_name["Florentine Society"].kind == EntityKind.FACTION
+    assert by_name["Silver Ring"].kind == EntityKind.ITEM
+
+
+def test_parse_payload_caps_combined_candidates_across_kinds():
+    payload = {
+        "new_characters": [{"proposed_name": f"NPC{i}", "confidence": 0.8} for i in range(3)],
+        "new_locations": [{"proposed_name": f"Loc{i}", "confidence": 0.7} for i in range(3)],
+        "new_factions": [{"proposed_name": f"Fac{i}", "confidence": 0.7} for i in range(3)],
+    }
+    out = parse_llm_payload(payload, campaign_id="c1", source="extractor", max_new_entities=5)
+    assert len(out.candidates) == 5
+
+
+def test_schema_advertises_all_new_entity_arrays():
+    schema = output_schema()
+    for key in ("new_characters", "new_locations", "new_factions", "new_items"):
+        assert key in schema["properties"], f"missing schema array: {key}"
+        assert schema["properties"][key]["type"] == "array"
 
 
 @pytest.mark.asyncio

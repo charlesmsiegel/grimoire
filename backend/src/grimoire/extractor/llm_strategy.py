@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from grimoire.extractor.config import ExtractorConfig
 from grimoire.extractor.schema import empty_payload, output_schema
 from grimoire.templates import render as render_template
-from grimoire.types.common import CampaignId, Duration, Scope
+from grimoire.types.common import CampaignId, Duration, EntityKind, Scope
 from grimoire.types.extraction import EntityCandidate, ExtractionFlag, FlagLevel
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
 from grimoire.types.scene import Scene
@@ -331,12 +331,12 @@ def _slugify_id(name: str) -> str:
     return slug or "unknown"
 
 
-def _make_entity_candidate(item: dict) -> EntityCandidate:
+def _make_entity_candidate(item: dict, *, kind: EntityKind) -> EntityCandidate:
     name = str(item.get("proposed_name", "")).strip()
     proposed_id = str(item.get("proposed_id", "")).strip() or _slugify_id(name)
     confidence = float(item.get("confidence", 0.0))
     return EntityCandidate(
-        kind="character",  # other kinds emerge from scene_changes / etc.
+        kind=kind,
         proposed_id=proposed_id,
         proposed_name=name,
         role_hint=str(item.get("role", "")),
@@ -344,6 +344,17 @@ def _make_entity_candidate(item: dict) -> EntityCandidate:
         confidence=confidence,
         suggested_card={"name": name, "scope": "campaign-local"},
     )
+
+
+# Per spec extractor-remaining §8 we let the LLM strategy classify candidate
+# kinds by *which array* the item appears in, rather than running a fragile
+# heuristic classifier over freeform names.
+_CANDIDATE_KIND_BY_KEY: dict[str, EntityKind] = {
+    "new_characters": EntityKind.CHARACTER,
+    "new_locations": EntityKind.LOCATION,
+    "new_factions": EntityKind.FACTION,
+    "new_items": EntityKind.ITEM,
+}
 
 
 _BUILDER_MAP = {
@@ -369,18 +380,23 @@ def parse_llm_payload(
     """Convert a raw JSON payload into typed deltas + candidates."""
     out = LLMStrategyOutput()
     confidences: list[float] = []
+    candidate_budget = max_new_entities
     template = empty_payload()
     for key, default in template.items():
         items = payload.get(key, default) or []
         if not isinstance(items, list):
             continue
-        if key == "new_characters":
-            for item in items[:max_new_entities]:
+        candidate_kind = _CANDIDATE_KIND_BY_KEY.get(key)
+        if candidate_kind is not None:
+            for item in items:
+                if candidate_budget <= 0:
+                    break
                 if not isinstance(item, dict):
                     continue
-                cand = _make_entity_candidate(item)
+                cand = _make_entity_candidate(item, kind=candidate_kind)
                 out.candidates.append(cand)
                 confidences.append(cand.confidence)
+                candidate_budget -= 1
             continue
         builder_entry = _BUILDER_MAP.get(key)
         if builder_entry is None:
