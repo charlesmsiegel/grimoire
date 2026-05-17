@@ -12,7 +12,7 @@ from __future__ import annotations
 from grimoire.types.characters import Character, VoiceAnchor
 
 
-def render_full(character: Character) -> str:
+def render_full(character: Character, *, seed: int | None = None) -> str:
     parts: list[str] = [f"# {character.name}"]
     if character.aliases:
         parts.append(f"_aliases:_ {', '.join(character.aliases)}")
@@ -26,7 +26,7 @@ def render_full(character: Character) -> str:
     if character.body:
         parts.append("")
         parts.append(character.body)
-    voice = _render_voice(character.voice)
+    voice = _render_voice(character.voice, seed=seed)
     if voice:
         parts.append("")
         parts.append("## Voice")
@@ -34,7 +34,7 @@ def render_full(character: Character) -> str:
     return "\n".join(parts).strip()
 
 
-def render_compressed(character: Character) -> str:
+def render_compressed(character: Character, *, seed: int | None = None) -> str:
     """Frontmatter line + description + (at most) one canonical sample."""
     bits: list[str] = []
     header = character.name
@@ -48,18 +48,30 @@ def render_compressed(character: Character) -> str:
     if character.voice.summary:
         bits.append(f"Voice: {character.voice.summary.strip()}")
     if character.voice.samples:
-        bits.append(f'Sample: "{character.voice.samples[0].strip()}"')
+        samples = (
+            rotate_samples(character.voice, seed=seed)
+            if seed is not None
+            else character.voice.samples
+        )
+        bits.append(f'Sample: "{samples[0].strip()}"')
     return "\n".join(bits)
 
 
-def render_voice_only(character: Character, *, max_samples: int = 3) -> str:
+def render_voice_only(
+    character: Character, *, max_samples: int = 3, seed: int | None = None
+) -> str:
     """Voice-anchor block alone; used when only dialogue voice is needed."""
-    rendered = _render_voice(character.voice, max_samples=max_samples)
+    rendered = _render_voice(character.voice, max_samples=max_samples, seed=seed)
     return rendered or f"{character.name}: no voice anchor"
 
 
-def render_capsule(character: Character) -> str:
-    """One-line gloss: name + role + first tag (if any)."""
+def render_capsule(character: Character, *, seed: int | None = None) -> str:
+    """One-line gloss: name + role + first tag (if any).
+
+    ``seed`` is accepted for API symmetry with the other renderers but has no
+    effect — capsules carry no sample dialogue.
+    """
+    del seed
     parts = [character.name]
     if character.role:
         parts.append(character.role.value)
@@ -68,7 +80,9 @@ def render_capsule(character: Character) -> str:
     return " · ".join(parts)
 
 
-def _render_voice(voice: VoiceAnchor, *, max_samples: int = 5) -> str:
+def _render_voice(
+    voice: VoiceAnchor, *, max_samples: int = 5, seed: int | None = None
+) -> str:
     if not (voice.summary or voice.samples or voice.dos or voice.donts or voice.speech_patterns):
         return ""
     lines: list[str] = []
@@ -79,8 +93,11 @@ def _render_voice(voice: VoiceAnchor, *, max_samples: int = 5) -> str:
     if voice.speech_patterns:
         lines.append("Patterns: " + "; ".join(voice.speech_patterns))
     if voice.samples:
+        # Rotate before slicing so different seeds surface different samples
+        # within the max_samples cap; seed=None preserves source order.
+        ordered = rotate_samples(voice, seed=seed) if seed is not None else voice.samples
         lines.append("Samples:")
-        for sample in voice.samples[:max_samples]:
+        for sample in ordered[:max_samples]:
             lines.append(f'  - "{sample.strip()}"')
     if voice.dos:
         lines.append("Dos: " + "; ".join(voice.dos))
