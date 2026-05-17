@@ -20,6 +20,7 @@ from grimoire.library import LibraryService
 from grimoire.mechanics.service import MechanicsService
 from grimoire.state_store import StateStore
 from grimoire.state_store.indexers import make_library_id
+from grimoire.state_store.paths import library_path
 from grimoire.types.characters import (
     CapsuleDraft,
     Character,
@@ -34,6 +35,7 @@ from grimoire.types.characters import (
     IngestedCharacterCard,
     IngestOptions,
     PCEntry,
+    PromotionProposal,
     RelationshipEvent,
     RelationshipState,
     ResolvedCharacter,
@@ -60,6 +62,7 @@ from .errors import (
 )
 from .imports import parse_plaintext
 from .ingest import LLMEnrichCallable, enrich_with_llm, ingest_character_card_v2
+from .protocols import SheetMigrator
 from .views import (
     render_capsule,
     render_compressed,
@@ -128,6 +131,7 @@ class CharactersService:
         voice_anchor_llm: LLMVoiceAnchorDrafter | None = None,
         tier_demote_to_background_after_turns: int = 3,
         tier_demote_to_archive_after_turns: int = 10,
+        sheet_migrator: SheetMigrator | None = None,
     ) -> None:
         self.library = library
         self.mechanics = mechanics
@@ -142,6 +146,7 @@ class CharactersService:
         self._voice_anchor_llm = voice_anchor_llm
         self._tier_demote_to_background_after = tier_demote_to_background_after_turns
         self._tier_demote_to_archive_after = tier_demote_to_archive_after_turns
+        self._sheet_migrator = sheet_migrator
         # Per-PC current scene cache; mirrors SceneManager._pc_current_scene
         # but keyed by ``(campaign_id, character_ref)``. The authoritative
         # source is the active-scene id stored on character_state.
@@ -915,6 +920,68 @@ class CharactersService:
     # Promotion
     # ------------------------------------------------------------------ #
 
+    async def propose_promotion(
+        self,
+        campaign_id: CampaignId,
+        character_id: str,
+        target_world_id: str,
+        *,
+        target_character_id: str | None = None,
+    ) -> PromotionProposal:
+        """Render a preview of the library write without executing it.
+
+        Caller shows the proposal to the user; once confirmed, the same
+        args plus ``confirm=True`` go to :meth:`promote_to_library`. See
+        spec ``2026-05-17-characters-remaining-design`` §9.
+
+        Warnings call out conditions the UI should highlight before commit:
+        id collision in the target world, missing voice anchor, missing
+        description. Empty warnings = safe to commit unattended.
+        """
+        emergent = await self.store.get_emergent(campaign_id, "character", character_id)
+        if emergent is None:
+            raise PromotionError(
+                f"no emergent character {character_id!r} in campaign {campaign_id!r}"
+            )
+        target_id = target_character_id or character_id
+        fm = dict(emergent.get("frontmatter") or {})
+        fm["id"] = target_id
+        body = emergent.get("body") or ""
+        library_id = make_library_id(target_world_id, "character", target_id)
+        target_path = library_path(self.store.data_root, library_id)
+
+        warnings: list[str] = []
+        # Id collision: a real character already lives at this target slot.
+        try:
+            await self.library.get_entity(target_world_id, "character", target_id)
+        except Exception:
+            pass
+        else:
+            warnings.append(
+                f"target world {target_world_id!r} already has a character "
+                f"with id {target_id!r}; promotion would overwrite it"
+            )
+        # Voice anchor sanity — at minimum a summary or at least one sample.
+        voice = fm.get("voice") or {}
+        if not isinstance(voice, dict) or not (
+            str(voice.get("summary") or "").strip() or (voice.get("samples") or [])
+        ):
+            warnings.append("character has no voice anchor (summary or samples)")
+        # Description sanity.
+        if not str(fm.get("description") or "").strip():
+            warnings.append("character has no description")
+
+        return PromotionProposal(
+            campaign_id=campaign_id,
+            character_id=character_id,
+            target_world_id=target_world_id,
+            target_library_id=library_id,
+            target_path=str(target_path),
+            frontmatter=fm,
+            body=body,
+            warnings=warnings,
+        )
+
     async def promote_to_library(
         self,
         campaign_id: CampaignId,
@@ -923,28 +990,72 @@ class CharactersService:
         *,
         source: str = "characters:promote",
         delete_emergent: bool = False,
+        target_character_id: str | None = None,
+        confirm: bool = False,
+        proposal: PromotionProposal | None = None,
     ) -> str:
         """Promote an emergent character into the library.
+
+        Two flows (spec ``2026-05-17-characters-remaining-design`` §9):
+
+        * ``confirm=False`` (default): generate a proposal and raise
+          :class:`PromotionError` if any warnings would fire — the
+          two-step UI flow forces the caller to acknowledge them.
+        * ``confirm=True``: commit the write. Programmatic / single-shot
+          callers (tests, batch tools) opt in here.
+
+        Pass ``proposal`` to reuse a previously generated preview verbatim;
+        otherwise a fresh proposal is rendered from the current emergent
+        data.
+
+        When ``self._sheet_migrator`` is wired (§13), ``migrate_sheet`` is
+        invoked after the markdown lands. Failures bubble up as
+        :class:`PromotionError` — silent swallow would leave the new
+        library character without the mechanics the user expected.
 
         Wraps the store's ``write_library_file`` rather than going through
         ``LibraryService.promote_to_library`` because that path explicitly
         excludes ``character``. Returns the new library path.
         """
-        emergent = await self.store.get_emergent(campaign_id, "character", character_id)
-        if emergent is None:
-            raise PromotionError(
-                f"no emergent character {character_id!r} in campaign {campaign_id!r}"
+        if proposal is None:
+            proposal = await self.propose_promotion(
+                campaign_id,
+                character_id,
+                target_world_id,
+                target_character_id=target_character_id,
             )
-        fm = dict(emergent.get("frontmatter") or {})
-        fm.setdefault("id", character_id)
-        library_id = make_library_id(target_world_id, "character", character_id)
+        if not confirm:
+            if proposal.warnings:
+                raise PromotionError(
+                    "promotion has unresolved warnings; resolve or call with "
+                    f"confirm=True: {proposal.warnings}"
+                )
+            raise PromotionError(
+                "promote_to_library requires confirm=True; use propose_promotion "
+                "first to preview the write"
+            )
+
         result = await self.store.write_library_file(
-            library_id=library_id,
-            frontmatter=fm,
-            body=emergent.get("body") or "",
+            library_id=proposal.target_library_id,
+            frontmatter=dict(proposal.frontmatter),
+            body=proposal.body,
             source=source,
             campaign_id=campaign_id,
         )
+
+        if self._sheet_migrator is not None:
+            emergent_ref = f"campaign:emergent/character/{character_id}"
+            try:
+                await self._sheet_migrator.migrate_sheet(
+                    campaign_id,
+                    emergent_ref,
+                    proposal.target_library_id,
+                )
+            except Exception as exc:
+                raise PromotionError(
+                    f"sheet migration failed for {character_id!r}: {exc}"
+                ) from exc
+
         if delete_emergent:
             from grimoire.state_store.paths import emergent_path
 

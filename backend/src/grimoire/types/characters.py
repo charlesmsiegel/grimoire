@@ -187,6 +187,25 @@ class CapsuleDraft(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class PromotionProposal(BaseModel):
+    """Preview of what :meth:`CharactersService.promote_to_library` would write.
+
+    Returned by ``propose_promotion``; the UI shows this to the user, who then
+    confirms by calling ``promote_to_library(..., confirm=True)``. Warnings
+    flag conditions that should block an automatic commit (id collision in
+    the target world, missing voice anchor, missing description, etc.).
+    """
+
+    campaign_id: str
+    character_id: str
+    target_world_id: str
+    target_library_id: str
+    target_path: str
+    frontmatter: Json = Field(default_factory=dict)
+    body: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ImportResult(BaseModel):
     created: list[str] = Field(default_factory=list)
     updated: list[str] = Field(default_factory=list)

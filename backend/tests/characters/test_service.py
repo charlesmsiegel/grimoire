@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from grimoire.characters import CharactersService
-from grimoire.characters.errors import CharactersError
+from grimoire.characters.errors import CharactersError, PromotionError
 from grimoire.library import LibraryService
 from grimoire.mechanics import MechanicsService
 from grimoire.state_store import StateStore
@@ -19,6 +21,7 @@ from grimoire.types.characters import (
     Character,
     CharacterData,
     CharacterRole,
+    PromotionProposal,
     VoiceAnchor,
 )
 from grimoire.types.scene import AuthorKind, Post, Scene
@@ -872,13 +875,230 @@ async def test_promote_emergent_to_library(
     )
 
     new_path = await characters.promote_to_library(
-        "camp-1", "the-bartender", "wod-london", delete_emergent=True
+        "camp-1", "the-bartender", "wod-london", delete_emergent=True, confirm=True
     )
     assert "wod-london" in new_path
 
     # Now resolvable via the library.
     char = await characters.get("wod-london", "the-bartender")
     assert char.name == "The Bartender"
+
+
+# ---------------------------------------------------------------------------
+# Promotion confirmation flow (spec characters-remaining §9)
+# ---------------------------------------------------------------------------
+
+
+async def test_propose_promotion_returns_preview_without_writing(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """§9: propose_promotion returns a preview and does NOT write the file."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create_emergent(
+        "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
+    )
+
+    proposal = await characters.propose_promotion(
+        "camp-1", "the-bartender", "wod-london"
+    )
+
+    assert isinstance(proposal, PromotionProposal)
+    assert proposal.target_world_id == "wod-london"
+    assert proposal.target_library_id == "worlds/wod-london/characters/the-bartender"
+    assert proposal.frontmatter.get("id") == "the-bartender"
+    assert "the-bartender.md" in proposal.target_path
+    # No write happened — library lookup must still 404.
+    from grimoire.library.errors import LibraryNotFoundError
+
+    with pytest.raises(LibraryNotFoundError):
+        await characters.get("wod-london", "the-bartender")
+
+
+async def test_propose_promotion_flags_id_collision(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """§9: target id already exists in the world → warning."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    # An existing library character with the same id.
+    await characters.create("wod-london", _character_data("the-bartender"))
+    await characters.create_emergent(
+        "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
+    )
+
+    proposal = await characters.propose_promotion(
+        "camp-1", "the-bartender", "wod-london"
+    )
+    assert any("already has a character" in w for w in proposal.warnings)
+
+
+async def test_propose_promotion_flags_missing_voice_and_description(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """§9: missing voice anchor / description fire warnings."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    sparse = CharacterData(
+        id="ghost",
+        name="Ghost",
+        role=CharacterRole.MINOR_NPC,
+        voice=VoiceAnchor(),
+        description="",
+    )
+    await characters.create_emergent("camp-1", sparse)
+
+    proposal = await characters.propose_promotion("camp-1", "ghost", "wod-london")
+    assert any("voice" in w for w in proposal.warnings)
+    assert any("description" in w for w in proposal.warnings)
+
+
+async def test_promote_to_library_without_confirm_raises_when_warnings(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """§9: confirm=False + warnings → PromotionError."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    sparse = CharacterData(
+        id="ghost",
+        name="Ghost",
+        role=CharacterRole.MINOR_NPC,
+        voice=VoiceAnchor(),
+        description="",
+    )
+    await characters.create_emergent("camp-1", sparse)
+
+    with pytest.raises(PromotionError):
+        await characters.promote_to_library("camp-1", "ghost", "wod-london")
+
+
+async def test_promote_to_library_without_confirm_raises_even_when_clean(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """§9: confirm=False is a safety gate; commit requires explicit confirm=True."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create_emergent(
+        "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
+    )
+
+    with pytest.raises(PromotionError):
+        await characters.promote_to_library("camp-1", "the-bartender", "wod-london")
+
+
+async def test_promote_to_library_accepts_pregenerated_proposal(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """§9: callers can pass a previously rendered proposal."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create_emergent(
+        "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
+    )
+
+    proposal = await characters.propose_promotion("camp-1", "the-bartender", "wod-london")
+    new_path = await characters.promote_to_library(
+        "camp-1",
+        "the-bartender",
+        "wod-london",
+        confirm=True,
+        proposal=proposal,
+    )
+    assert "wod-london" in new_path
+    char = await characters.get("wod-london", "the-bartender")
+    assert char.name == "The Bartender"
+
+
+# ---------------------------------------------------------------------------
+# Promote-with-sheet-migration (spec characters-remaining §13)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingSheetMigrator:
+    """Test double for ``SheetMigrator``: captures invocations."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    async def migrate_sheet(
+        self,
+        campaign_id: str,
+        character_ref: str,
+        target_library_id: str,
+    ) -> None:
+        self.calls.append((campaign_id, character_ref, target_library_id))
+
+
+class _FailingSheetMigrator:
+    async def migrate_sheet(
+        self,
+        campaign_id: str,
+        character_ref: str,
+        target_library_id: str,
+    ) -> None:
+        raise RuntimeError("mechanics blew up")
+
+
+async def test_promote_invokes_sheet_migrator_after_write(
+    library: LibraryService,
+    mechanics: MechanicsService,
+    store: StateStore,
+) -> None:
+    """§13: when a sheet_migrator is wired, migrate_sheet runs post-write."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    migrator = _RecordingSheetMigrator()
+    chars = CharactersService(library, mechanics, sheet_migrator=migrator)
+    await chars.create_emergent(
+        "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
+    )
+
+    await chars.promote_to_library(
+        "camp-1", "the-bartender", "wod-london", confirm=True
+    )
+
+    assert migrator.calls == [
+        (
+            "camp-1",
+            "campaign:emergent/character/the-bartender",
+            "worlds/wod-london/characters/the-bartender",
+        )
+    ]
+
+
+async def test_promote_without_sheet_migrator_works(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """§13: sheet migration is optional — no migrator wired, no problem."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create_emergent(
+        "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
+    )
+
+    new_path = await characters.promote_to_library(
+        "camp-1", "the-bartender", "wod-london", confirm=True
+    )
+    assert "wod-london" in new_path
+
+
+async def test_promote_sheet_migrator_failure_raises_promotion_error(
+    library: LibraryService,
+    mechanics: MechanicsService,
+    store: StateStore,
+) -> None:
+    """§13: migrator exceptions bubble up as PromotionError (no silent swallow)."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    chars = CharactersService(library, mechanics, sheet_migrator=_FailingSheetMigrator())
+    await chars.create_emergent(
+        "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
+    )
+
+    with pytest.raises(PromotionError):
+        await chars.promote_to_library(
+            "camp-1", "the-bartender", "wod-london", confirm=True
+        )
 
 
 # ---------------------------------------------------------------------------

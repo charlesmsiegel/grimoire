@@ -141,6 +141,7 @@ class ReviewUpdatePayload(BaseModel):
 class PromotePayload(BaseModel):
     target_world_id: str
     source: str = "user"
+    confirm: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -695,6 +696,7 @@ async def promote_character(
                 entity_id,
                 payload.target_world_id,
                 source=payload.source,
+                confirm=payload.confirm,
             )
         )
     except Exception as exc:

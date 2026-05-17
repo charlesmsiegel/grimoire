@@ -29,6 +29,7 @@ from grimoire.characters.ingest import (
     extract_relationships_deterministic,
     ingest_character_card_v2,
 )
+from grimoire.characters.protocols import SheetMigrator
 from grimoire.characters.service import (
     CharactersService,
     LLMCapsuleDrafter,
@@ -58,6 +59,7 @@ __all__ = [
     "LLMVoiceAnchorDrafter",
     "PostFetcher",
     "PromotionError",
+    "SheetMigrator",
     "enrich_with_llm",
     "extract_relationships_deterministic",
     "ingest_character_card_v2",
