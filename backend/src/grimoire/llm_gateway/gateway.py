@@ -563,14 +563,41 @@ class LLMGatewayService:
             )
             started = time.monotonic()
 
-            async def _call() -> list[list[float]]:
-                return await asyncio.wait_for(
-                    provider.embed(missing),
-                    timeout=self._config.timeout.total_seconds,
-                )
+            # Determine whether to chunk into batches.
+            # If the provider exposes max_batch_size and it is smaller than the
+            # number of missing texts, split into chunks of that size.  Each
+            # batch is retried independently; total retries reported in the
+            # audit/event payload is the SUM across all batches (i.e. how many
+            # extra network round-trips this request required overall).
+            batch_size: int | None = getattr(provider, "max_batch_size", None)
+            use_batching = batch_size is not None and batch_size > 0 and batch_size < len(missing)
+
+            if use_batching:
+                assert batch_size is not None  # narrowing for type checker
+                batches = [missing[i : i + batch_size] for i in range(0, len(missing), batch_size)]
+            else:
+                batches = [missing]
+
+            all_vectors: list[list[float]] = []
+            total_retries = 0
 
             try:
-                vectors, retries = await run_with_retries(_call, policy=self._config.retry)
+                for batch in batches:
+                    # Capture `batch` in a closure-safe variable to avoid the
+                    # "late binding" pitfall in Python async closures.
+                    _batch = batch
+
+                    async def _call(_b: list[str] = _batch) -> list[list[float]]:
+                        return await asyncio.wait_for(
+                            provider.embed(_b),
+                            timeout=self._config.timeout.total_seconds,
+                        )
+
+                    batch_vectors, batch_retries = await run_with_retries(
+                        _call, policy=self._config.retry
+                    )
+                    total_retries += batch_retries
+                    all_vectors.extend(batch_vectors)
             except PermanentError as exc:
                 if self._config.observability.log_all_requests:
                     await self._log.record(
@@ -621,6 +648,11 @@ class LLMGatewayService:
                     },
                 )
                 raise
+
+            # All-or-nothing: only assign if every batch succeeded.
+            vectors = all_vectors
+            retries = total_retries
+
             latency_ms = int((time.monotonic() - started) * 1000)
             if len(vectors) != len(missing):
                 raise GatewayError(
