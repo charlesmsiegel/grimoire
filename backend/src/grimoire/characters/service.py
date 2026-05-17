@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
@@ -52,6 +53,7 @@ from grimoire.types.mechanics import Capability
 from grimoire.types.scene import Post, Scene
 from grimoire.types.state import CharacterState, ContextTier, DeltaKind, StateDelta
 
+from .config import CharactersConfig
 from .drift import (
     CallableDriftChecker,
     DriftChecker,
@@ -108,6 +110,17 @@ def _branch_for(campaign_id: str, branch_id: str | None) -> str:
     return branch_id or f"{campaign_id}:main"
 
 
+def _slugify_id(raw: str) -> str:
+    """Lower-case + collapse non-alphanumeric runs into ``-``.
+
+    Used by :meth:`CharactersService.cross_world_lookup` when
+    ``cross_world_lookup.case_sensitive`` is False (the default) so callers
+    can pass ``Alistair-Hyde-Smythe`` and find ``alistair-hyde-smythe``.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+    return slug or raw.lower()
+
+
 class CharactersService:
     """Spec 08 implementation.
 
@@ -129,34 +142,29 @@ class CharactersService:
         library: LibraryService,
         mechanics: MechanicsService,
         *,
+        config: CharactersConfig | None = None,
+        # Hook-shaped dependencies stay as ctor kwargs; only numeric /
+        # boolean / string knobs live on :class:`CharactersConfig`.
         post_fetcher: PostFetcher | None = None,
         drift_checker: DriftChecker | None = None,
-        drift_threshold: float = 0.4,
-        drift_check_every_n_appearances: int = 5,
         drift_event_sink: DriftEventSink | None = None,
         ingest_llm: LLMEnrichCallable | None = None,
         auto_capsule_llm: LLMCapsuleDrafter | None = None,
         voice_anchor_llm: LLMVoiceAnchorDrafter | None = None,
-        tier_demote_to_background_after_turns: int = 3,
-        tier_demote_to_archive_after_turns: int = 10,
         sheet_migrator: SheetMigrator | None = None,
-        cache_max_size: int = 256,
     ) -> None:
         self.library = library
         self.mechanics = mechanics
         self.store: StateStore = library.store
+        self._config = config or CharactersConfig()
         self._post_fetcher = post_fetcher
         self._drift_checker = drift_checker or HeuristicDriftChecker(
-            drift_threshold=drift_threshold
+            drift_threshold=self._config.drift.threshold
         )
-        self._drift_threshold = drift_threshold
-        self._drift_check_every_n_appearances = drift_check_every_n_appearances
         self._drift_event_sink = drift_event_sink
         self._ingest_llm = ingest_llm
         self._auto_capsule_llm = auto_capsule_llm
         self._voice_anchor_llm = voice_anchor_llm
-        self._tier_demote_to_background_after = tier_demote_to_background_after_turns
-        self._tier_demote_to_archive_after = tier_demote_to_archive_after_turns
         self._sheet_migrator = sheet_migrator
         # Per-PC current scene cache; mirrors SceneManager._pc_current_scene
         # but keyed by ``(campaign_id, character_ref)``. The authoritative
@@ -171,7 +179,6 @@ class CharactersService:
         # ``clear`` for cross-campaign library writes), so staleness is
         # impossible as long as Library writes go through ``self.library``.
         self._view_cache: OrderedDict[tuple[str, str, str, int | None], str] = OrderedDict()
-        self._view_cache_max_size = cache_max_size
 
     # ------------------------------------------------------------------ #
     # CRUD (delegated to Library)
@@ -408,7 +415,10 @@ class CharactersService:
     async def cross_world_lookup(
         self, character_id: str, exclude_world: str | None = None
     ) -> list[Character]:
-        rows = await self.library.variants_of(character_id, "character")
+        lookup_id = character_id
+        if not self._config.cross_world_lookup.case_sensitive:
+            lookup_id = _slugify_id(character_id)
+        rows = await self.library.variants_of(lookup_id, "character")
         if exclude_world:
             rows = [r for r in rows if r.world_id != exclude_world]
         return [_character_from_entity(r) for r in rows]
@@ -491,7 +501,7 @@ class CharactersService:
         key = (ref, campaign_id, view, seed)
         self._view_cache[key] = value
         self._view_cache.move_to_end(key)
-        while len(self._view_cache) > self._view_cache_max_size:
+        while len(self._view_cache) > self._config.cache.max_size:
             self._view_cache.popitem(last=False)
 
     def _view_cache_invalidate(
@@ -558,9 +568,9 @@ class CharactersService:
                 turns_off_screen = _turns_since(last_seen, recent_turn_ids)
                 if turns_off_screen is None:
                     continue
-                if turns_off_screen >= self._tier_demote_to_archive_after:
+                if turns_off_screen >= self._config.tiers.demote_to_archive_after_turns:
                     out[ref] = ContextTier.ARCHIVE
-                elif turns_off_screen >= self._tier_demote_to_background_after:
+                elif turns_off_screen >= self._config.tiers.demote_to_background_after_turns:
                     out[ref] = ContextTier.BACKGROUND
 
         # Mentioned in recent posts → at least BACKGROUND. We match against
@@ -648,13 +658,13 @@ class CharactersService:
 
         if (
             self._drift_event_sink is not None
-            and report.drift_score >= self._drift_threshold
+            and report.drift_score >= self._config.drift.threshold
         ):
             event = DriftEvent(
                 character_ref=ref,
                 campaign_id=campaign_id,
                 drift_score=report.drift_score,
-                threshold=self._drift_threshold,
+                threshold=self._config.drift.threshold,
                 report=report,
             )
             try:
@@ -684,7 +694,7 @@ class CharactersService:
         been reached and ``force`` is false.
         """
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
-        threshold = self._drift_check_every_n_appearances
+        threshold = self._config.drift.check_every_n_appearances
         if (
             not force
             and threshold > 0
@@ -731,7 +741,7 @@ class CharactersService:
         if not inject_corrective_context:
             return ""
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
-        if state.drift_score < self._drift_threshold:
+        if state.drift_score < self._config.drift.threshold:
             return ""
         resolved = await self.resolve(ref, campaign_id)
         # Use the heuristic checker's renderer; it works on any character.
