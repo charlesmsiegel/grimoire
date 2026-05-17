@@ -280,6 +280,47 @@ async def test_embed_timeout_override_raises_quickly(db, plugins) -> None:
 # --------------------------------------------------------------------------- #
 
 
+async def test_complete_audit_row_records_overrides(db, plugins) -> None:
+    """retry_override / timeout_override land in the llm_requests audit row."""
+    import json as _json
+
+    provider = FakeLLMProvider(id="prov", response_text="ok")
+    plugins.add_llm(provider)
+    gw = LLMGatewayService(
+        plugins, db, _config(observability=ObservabilityConfig(log_all_requests=True))
+    )
+
+    retry_override = RetryConfig(max_retries=0, initial_delay_ms=0, backoff_factor=1.0)
+    timeout_override = TimeoutConfig(total_seconds=10.0, first_token_seconds=5.0)
+    await gw.complete("main", _request(), retry=retry_override, timeout=timeout_override)
+
+    row = await db.fetchone("SELECT retry_override, timeout_override FROM llm_requests")
+    assert _json.loads(row["retry_override"]) == {
+        "max_retries": 0,
+        "initial_delay_ms": 0,
+        "backoff_factor": 1.0,
+    }
+    assert _json.loads(row["timeout_override"]) == {
+        "total_seconds": 10.0,
+        "first_token_seconds": 5.0,
+    }
+
+
+async def test_complete_audit_row_overrides_null_when_unset(db, plugins) -> None:
+    """retry_override / timeout_override are NULL when no override is passed."""
+    provider = FakeLLMProvider(id="prov", response_text="ok")
+    plugins.add_llm(provider)
+    gw = LLMGatewayService(
+        plugins, db, _config(observability=ObservabilityConfig(log_all_requests=True))
+    )
+
+    await gw.complete("main", _request())
+
+    row = await db.fetchone("SELECT retry_override, timeout_override FROM llm_requests")
+    assert row["retry_override"] is None
+    assert row["timeout_override"] is None
+
+
 async def test_complete_event_payload_carries_retry_override(db, plugins) -> None:
     """llm_request_started and llm_response_received carry retry_override."""
     provider = FakeLLMProvider(id="prov", response_text="ok")

@@ -61,6 +61,8 @@ class LLMRequestLog:
         error: str | None = None,
         campaign_id: CampaignId | None = None,
         turn_id: TurnId | None = None,
+        retry_override: dict | None = None,
+        timeout_override: dict | None = None,
     ) -> str:
         excerpt = self._excerpt(response_text)
         record_id = uuid.uuid4().hex
@@ -69,12 +71,15 @@ class LLMRequestLog:
         total = usage.total_tokens if usage else None
         if usage and not total:
             total = (prompt_tokens or 0) + (completion_tokens or 0)
+        retry_json = json.dumps(retry_override) if retry_override is not None else None
+        timeout_json = json.dumps(timeout_override) if timeout_override is not None else None
         await self._db.execute(
             "INSERT INTO llm_requests ("
             "id, campaign_id, turn_id, task, provider, model, "
             "prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, "
-            "retries, fallback_used, request_hash, response_excerpt, error, created_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "retries, fallback_used, request_hash, response_excerpt, error, "
+            "retry_override, timeout_override, created_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record_id,
                 campaign_id,
@@ -92,6 +97,8 @@ class LLMRequestLog:
                 request_hash,
                 excerpt,
                 error,
+                retry_json,
+                timeout_json,
                 datetime.now(UTC).isoformat(),
             ),
         )
