@@ -1,6 +1,6 @@
 # Characters — Design (Shipped)
 
-> Captures the Characters module as actually built. The companion `2026-05-17-characters-remaining-design.md` covers everything from the original `specs/08-characters.md` that did **not** land.
+> Captures the Characters module as actually built. The companion `2026-05-17-characters-COMPLETED.md` covers everything from the original `specs/08-characters.md` that did **not** land.
 
 **Commit:** `cce2113` — "Implement Characters module (task 12)" (followed by `cd15e0e`, `0ba0ef4`)
 **Module:** `backend/src/grimoire/characters/`
