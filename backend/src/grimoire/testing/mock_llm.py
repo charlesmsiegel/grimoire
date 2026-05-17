@@ -175,6 +175,8 @@ class MockLLMGateway:
         task: str,
         request: CompletionRequest,
         campaign_id: CampaignId | None = None,
+        *,
+        turn_id: str | None = None,
     ) -> CompletionResponse:
         queued = self._pop_completion(task)
         self.llm_calls.append(
@@ -196,6 +198,8 @@ class MockLLMGateway:
         task: str,
         request: CompletionRequest,
         campaign_id: CampaignId | None = None,
+        *,
+        turn_id: str | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         queued = self._pop_completion(task)
         self.llm_calls.append(
@@ -213,6 +217,8 @@ class MockLLMGateway:
         task: str,
         texts: list[str],
         campaign_id: CampaignId | None = None,
+        *,
+        turn_id: str | None = None,
     ) -> list[list[float]]:
         self.embed_calls.append(_EmbedCall(task=task, texts=list(texts), campaign_id=campaign_id))
         if not texts:

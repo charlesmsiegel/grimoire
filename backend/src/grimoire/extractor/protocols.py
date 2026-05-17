@@ -16,7 +16,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
-from grimoire.types.common import CampaignId, EntityKind, Json, Scope, ValidationResult
+from grimoire.types.common import CampaignId, EntityKind, Json, Scope, TurnId, ValidationResult
 from grimoire.types.mechanics import NarratedEvent
 from grimoire.types.scene import SceneContext
 
@@ -65,6 +65,8 @@ class ContradictionChecker(Protocol):
         campaign_id: CampaignId,
         fact_text: str,
         about: dict[str, list[str]],
+        *,
+        turn_id: TurnId | None = None,
     ) -> list[ConflictRecord]: ...
 
 

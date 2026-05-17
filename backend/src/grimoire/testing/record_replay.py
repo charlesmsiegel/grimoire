@@ -96,6 +96,8 @@ class RecordReplayLLM:
         task: str,
         request: CompletionRequest,
         campaign_id: CampaignId | None = None,
+        *,
+        turn_id: str | None = None,
     ) -> CompletionResponse:
         rh = request_hash(request)
         if self.mode is ReplayMode.REPLAY:
@@ -112,6 +114,8 @@ class RecordReplayLLM:
         task: str,
         request: CompletionRequest,
         campaign_id: CampaignId | None = None,
+        *,
+        turn_id: str | None = None,
     ) -> AsyncIterator[CompletionChunk]:
         if self.mode is ReplayMode.REPLAY:
             response = self._load_completion(request_hash(request))
@@ -152,6 +156,8 @@ class RecordReplayLLM:
         task: str,
         texts: list[str],
         campaign_id: CampaignId | None = None,
+        *,
+        turn_id: str | None = None,
     ) -> list[list[float]]:
         if self.mode is ReplayMode.REPLAY:
             return [self._load_embedding(text) for text in texts]

@@ -30,6 +30,7 @@ from grimoire.continuity.types import (
     InGameTime,
     KnowledgeEntry,
 )
+from grimoire.types.common import TurnId
 
 
 @runtime_checkable
@@ -69,7 +70,13 @@ class ContradictionJudge(Protocol):
     judge.
     """
 
-    async def judge(self, candidate: Fact, existing: Fact) -> ContradictionCandidate: ...
+    async def judge(
+        self,
+        candidate: Fact,
+        existing: Fact,
+        *,
+        turn_id: TurnId | None = None,
+    ) -> ContradictionCandidate: ...
 
 
 @runtime_checkable
@@ -114,7 +121,12 @@ class Continuity(Protocol):
     async def recent_facts(self, since: InGameTime, limit: int = 50) -> list[Fact]: ...
 
     # Contradictions
-    async def check_contradictions(self, candidate: Fact) -> ContradictionReport: ...
+    async def check_contradictions(
+        self,
+        candidate: Fact,
+        *,
+        turn_id: TurnId | None = None,
+    ) -> ContradictionReport: ...
     async def resolve_contradiction(
         self, report_id: ContradictionReportId, resolution: dict
     ) -> None: ...

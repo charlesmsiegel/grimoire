@@ -337,7 +337,7 @@ async def test_archive_retrieval_uses_gateway_and_store() -> None:
 
     class GW:
         async def embed(
-            self, task: str, texts: list[str], campaign_id: str = ""
+            self, task: str, texts: list[str], campaign_id: str = "", turn_id: str | None = None
         ) -> list[list[float]]:
             calls["embed"] = (task, texts, campaign_id)
             return [[0.1, 0.2, 0.3]]

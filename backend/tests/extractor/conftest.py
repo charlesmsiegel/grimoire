@@ -34,6 +34,7 @@ class FakeGateway:
         task: str,
         request: CompletionRequest,
         campaign_id: CampaignId | None = None,
+        turn_id: str | None = None,
     ) -> CompletionResponse:
         self.seen.append((task, request, campaign_id))
         if self.raise_on_next is not None:
@@ -86,6 +87,8 @@ class FakeContradictionChecker:
         campaign_id: CampaignId,
         fact_text: str,
         about: dict[str, list[str]],
+        *,
+        turn_id: str | None = None,
     ) -> list[ConflictRecord]:
         self.seen.append((campaign_id, fact_text, about))
         if self.raise_on_next is not None:

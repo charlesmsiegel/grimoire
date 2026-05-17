@@ -23,7 +23,9 @@ class ScriptedJudge(ContradictionJudge):
         self._scripts = scripts
         self.calls: list[tuple[str, str]] = []
 
-    async def judge(self, candidate: Fact, existing: Fact) -> ContradictionCandidate:
+    async def judge(
+        self, candidate: Fact, existing: Fact, *, turn_id=None
+    ) -> ContradictionCandidate:
         key = (candidate.text, existing.text)
         self.calls.append(key)
         verdict = self._scripts.get(key, ContradictionVerdict.NO_CONFLICT)
