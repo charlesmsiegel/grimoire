@@ -597,6 +597,102 @@ async def test_compressed_views(characters: CharactersService, store: StateStore
     assert capsule.startswith("Alistair")
 
 
+def _voice_many_samples() -> VoiceAnchor:
+    # 7 samples — exceeds the max_samples=5 cap used by _render_voice so
+    # rotation order is observable through the slice.
+    return VoiceAnchor(
+        summary="Crisp, formal, archaic.",
+        voice_register="formal",
+        samples=[
+            "Sample one: indeed.",
+            "Sample two: pray.",
+            "Sample three: one does not.",
+            "Sample four: quite.",
+            "Sample five: peculiar.",
+            "Sample six: hardly.",
+            "Sample seven: a curious notion.",
+        ],
+        speech_patterns=["uses 'one' instead of 'I'"],
+    )
+
+
+def _character_data_many_samples() -> CharacterData:
+    return CharacterData(
+        id="verbose",
+        name="Verbose",
+        role=CharacterRole.MAJOR_NPC,
+        voice=_voice_many_samples(),
+        description="A character with many sample dialogues.",
+    )
+
+
+async def test_get_full_card_rotates_samples_with_seed(
+    characters: CharactersService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data_many_samples())
+    ref = "library:worlds/wod-london/characters/verbose"
+
+    card_seed_0 = await characters.get_full_card(ref, "camp-1", seed=0)
+    card_seed_1 = await characters.get_full_card(ref, "camp-1", seed=1)
+    card_seed_3 = await characters.get_full_card(ref, "camp-1", seed=3)
+
+    # Different seeds rotate the sample list so the first surfaced sample differs.
+    assert card_seed_0 != card_seed_1
+    assert card_seed_1 != card_seed_3
+    # seed=0 → offset 0, so sample one comes first.
+    assert "Sample one" in card_seed_0
+    # seed=1 → offset 1, so sample two comes first (sample one drops out of the [:5] slice).
+    first_block_seed_1 = card_seed_1.split("Dos:")[0] if "Dos:" in card_seed_1 else card_seed_1
+    assert "Sample two" in first_block_seed_1
+    # Same seed is deterministic.
+    assert card_seed_0 == await characters.get_full_card(ref, "camp-1", seed=0)
+
+
+async def test_get_full_card_seed_none_is_noop(
+    characters: CharactersService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data_many_samples())
+    ref = "library:worlds/wod-london/characters/verbose"
+
+    default_card = await characters.get_full_card(ref, "camp-1")
+    explicit_none = await characters.get_full_card(ref, "camp-1", seed=None)
+    seed_zero = await characters.get_full_card(ref, "camp-1", seed=0)
+
+    # No-seed == explicit-None.
+    assert default_card == explicit_none
+    # seed=0 is also a no-op rotation (offset 0) so output matches the no-seed
+    # case — proves the seed plumbing didn't accidentally change the cap or
+    # reorder unconditionally.
+    assert default_card == seed_zero
+
+
+async def test_get_compressed_and_voice_only_honor_seed(
+    characters: CharactersService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data_many_samples())
+    ref = "library:worlds/wod-london/characters/verbose"
+
+    compressed_0 = await characters.get_compressed_card(ref, "camp-1", seed=0)
+    compressed_1 = await characters.get_compressed_card(ref, "camp-1", seed=1)
+    # render_compressed surfaces only sample[0]; rotation should change which line shows.
+    assert "Sample one" in compressed_0
+    assert "Sample two" in compressed_1
+
+    voice_0 = await characters.get_voice_only(ref, "camp-1", seed=0)
+    voice_2 = await characters.get_voice_only(ref, "camp-1", seed=2)
+    assert voice_0 != voice_2
+
+    # Capsule has no samples but should still accept the kwarg.
+    capsule = await characters.get_capsule(ref, "camp-1", seed=4)
+    assert capsule.startswith("Verbose")
+
+
 # ---------------------------------------------------------------------------
 # Cross-world variants
 # ---------------------------------------------------------------------------

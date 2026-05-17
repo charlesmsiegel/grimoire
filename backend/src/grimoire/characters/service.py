@@ -334,21 +334,29 @@ class CharactersService:
     # Compressed views
     # ------------------------------------------------------------------ #
 
-    async def get_full_card(self, ref: str, campaign_id: CampaignId) -> str:
+    async def get_full_card(
+        self, ref: str, campaign_id: CampaignId, *, seed: int | None = None
+    ) -> str:
         resolved = await self.resolve(ref, campaign_id)
-        return render_full(resolved.character)
+        return render_full(resolved.character, seed=seed)
 
-    async def get_compressed_card(self, ref: str, campaign_id: CampaignId) -> str:
+    async def get_compressed_card(
+        self, ref: str, campaign_id: CampaignId, *, seed: int | None = None
+    ) -> str:
         resolved = await self.resolve(ref, campaign_id)
-        return render_compressed(resolved.character)
+        return render_compressed(resolved.character, seed=seed)
 
-    async def get_voice_only(self, ref: str, campaign_id: CampaignId) -> str:
+    async def get_voice_only(
+        self, ref: str, campaign_id: CampaignId, *, seed: int | None = None
+    ) -> str:
         resolved = await self.resolve(ref, campaign_id)
-        return render_voice_only(resolved.character)
+        return render_voice_only(resolved.character, seed=seed)
 
-    async def get_capsule(self, ref: str, campaign_id: CampaignId) -> str:
+    async def get_capsule(
+        self, ref: str, campaign_id: CampaignId, *, seed: int | None = None
+    ) -> str:
         resolved = await self.resolve(ref, campaign_id)
-        return render_capsule(resolved.character)
+        return render_capsule(resolved.character, seed=seed)
 
     # ------------------------------------------------------------------ #
     # Tier management
