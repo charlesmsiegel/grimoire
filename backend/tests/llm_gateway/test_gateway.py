@@ -9,8 +9,6 @@ from grimoire.llm_gateway.config import (
     EmbeddingCacheConfig,
     GatewayConfig,
     ObservabilityConfig,
-    RetryConfig,
-    TimeoutConfig,
 )
 from grimoire.llm_gateway.errors import (
     InvalidRequestError,
@@ -24,6 +22,8 @@ from grimoire.types.llm import (
     Message,
     MessageRole,
     ModelInfo,
+    RetryPolicy,
+    TimeoutPolicy,
     TokenUsage,
 )
 from tests.llm_gateway.conftest import FakeEmbeddingProvider, FakeLLMProvider
@@ -41,8 +41,8 @@ def _request(model: str = "ignored") -> CompletionRequest:
 def _config(**overrides) -> GatewayConfig:
     base = dict(
         default_routes={"main": "anthropic.opus", "drift_check": "anthropic.haiku"},
-        retry=RetryConfig(max_retries=2, initial_delay_ms=0, backoff_factor=1.0),
-        timeout=TimeoutConfig(total_seconds=2.0, first_token_seconds=1.0),
+        retry=RetryPolicy(max_retries=2, initial_delay_ms=0, backoff_factor=1.0),
+        timeout=TimeoutPolicy(total_seconds=2.0, first_token_seconds=1.0),
         embedding_cache=EmbeddingCacheConfig(enabled=True, max_entries=100),
         observability=ObservabilityConfig(log_all_requests=True),
     )

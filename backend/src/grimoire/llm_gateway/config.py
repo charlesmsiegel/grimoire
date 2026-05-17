@@ -5,24 +5,17 @@ so a fresh install with the `llm-anthropic` and `embed-sentence-transformers`
 plugins works without extra setup, but the gateway is happy with empty
 routes (everything will then raise `RouteNotFoundError` until the user
 configures one).
+
+The retry and timeout policies use the canonical pydantic types from
+:mod:`grimoire.types.llm` (``RetryPolicy`` / ``TimeoutPolicy``) so that
+``retry_on`` is YAML-configurable and there is a single source of truth.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
-@dataclass(frozen=True)
-class RetryConfig:
-    max_retries: int = 3
-    initial_delay_ms: int = 500
-    backoff_factor: float = 2.0
-
-
-@dataclass(frozen=True)
-class TimeoutConfig:
-    total_seconds: float = 120.0
-    first_token_seconds: float = 30.0
+from grimoire.types.llm import RetryPolicy, TimeoutPolicy
 
 
 @dataclass(frozen=True)
@@ -42,7 +35,7 @@ class ObservabilityConfig:
 class GatewayConfig:
     default_routes: dict[str, str] = field(default_factory=dict)
     fallback_routes: dict[str, str] = field(default_factory=dict)
-    retry: RetryConfig = field(default_factory=RetryConfig)
-    timeout: TimeoutConfig = field(default_factory=TimeoutConfig)
+    retry: RetryPolicy = field(default_factory=RetryPolicy)
+    timeout: TimeoutPolicy = field(default_factory=TimeoutPolicy)
     embedding_cache: EmbeddingCacheConfig = field(default_factory=EmbeddingCacheConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)

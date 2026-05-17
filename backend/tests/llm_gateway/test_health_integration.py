@@ -62,14 +62,13 @@ def _gw(
         EmbeddingCacheConfig,
         GatewayConfig,
         ObservabilityConfig,
-        RetryConfig,
-        TimeoutConfig,
     )
+    from grimoire.types.llm import RetryPolicy, TimeoutPolicy
 
     config = GatewayConfig(
         default_routes={"main": "llm-a.model-x"},
-        retry=RetryConfig(max_retries=0, initial_delay_ms=0, backoff_factor=1.0),
-        timeout=TimeoutConfig(total_seconds=5.0, first_token_seconds=2.0),
+        retry=RetryPolicy(max_retries=0, initial_delay_ms=0, backoff_factor=1.0),
+        timeout=TimeoutPolicy(total_seconds=5.0, first_token_seconds=2.0),
         embedding_cache=EmbeddingCacheConfig(enabled=False, max_entries=100),
         observability=ObservabilityConfig(log_all_requests=False),
     )

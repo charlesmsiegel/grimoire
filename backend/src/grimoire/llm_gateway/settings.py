@@ -19,27 +19,30 @@ the frozen dataclass hierarchy.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from grimoire.llm_gateway.config import (
     EmbeddingCacheConfig,
     GatewayConfig,
     ObservabilityConfig,
-    RetryConfig,
-    TimeoutConfig,
 )
+from grimoire.types.llm import RetryPolicy, TimeoutPolicy
 
 
 class _RetrySettings(BaseModel):
     max_retries: int = 3
     initial_delay_ms: int = 500
     backoff_factor: float = 2.0
+    retry_on: list[str] = Field(
+        default_factory=lambda: ["TimeoutError", "RateLimitError", "TransientError"]
+    )
 
-    def to_dataclass(self) -> RetryConfig:
-        return RetryConfig(
+    def to_policy(self) -> RetryPolicy:
+        return RetryPolicy(
             max_retries=self.max_retries,
             initial_delay_ms=self.initial_delay_ms,
             backoff_factor=self.backoff_factor,
+            retry_on=list(self.retry_on),
         )
 
 
@@ -47,8 +50,8 @@ class _TimeoutSettings(BaseModel):
     total_seconds: float = 120.0
     first_token_seconds: float = 30.0
 
-    def to_dataclass(self) -> TimeoutConfig:
-        return TimeoutConfig(
+    def to_policy(self) -> TimeoutPolicy:
+        return TimeoutPolicy(
             total_seconds=self.total_seconds,
             first_token_seconds=self.first_token_seconds,
         )
@@ -99,8 +102,8 @@ class GatewaySettings(BaseModel):
         return GatewayConfig(
             default_routes=dict(self.default_routes),
             fallback_routes=dict(self.fallback_routes),
-            retry=self.retry.to_dataclass(),
-            timeout=self.timeout.to_dataclass(),
+            retry=self.retry.to_policy(),
+            timeout=self.timeout.to_policy(),
             embedding_cache=self.embedding_cache.to_dataclass(),
             observability=self.observability.to_dataclass(),
         )

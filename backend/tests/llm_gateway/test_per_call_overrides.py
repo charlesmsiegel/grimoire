@@ -19,8 +19,6 @@ from grimoire.llm_gateway.config import (
     EmbeddingCacheConfig,
     GatewayConfig,
     ObservabilityConfig,
-    RetryConfig,
-    TimeoutConfig,
 )
 from grimoire.llm_gateway.errors import TransientError
 from grimoire.types.llm import (
@@ -28,6 +26,8 @@ from grimoire.types.llm import (
     CompletionRequest,
     Message,
     MessageRole,
+    RetryPolicy,
+    TimeoutPolicy,
     TokenUsage,
 )
 from tests.llm_gateway.conftest import (
@@ -54,8 +54,8 @@ def _config(**overrides) -> GatewayConfig:
     base = dict(
         default_routes={"main": "prov.model-a"},
         # Generous global defaults — tests will override per call.
-        retry=RetryConfig(max_retries=3, initial_delay_ms=0, backoff_factor=1.0),
-        timeout=TimeoutConfig(total_seconds=30.0, first_token_seconds=10.0),
+        retry=RetryPolicy(max_retries=3, initial_delay_ms=0, backoff_factor=1.0),
+        timeout=TimeoutPolicy(total_seconds=30.0, first_token_seconds=10.0),
         embedding_cache=EmbeddingCacheConfig(enabled=False, max_entries=100),
         observability=ObservabilityConfig(log_all_requests=False),
     )
@@ -162,7 +162,7 @@ async def test_complete_no_override_uses_global_retry(db, plugins) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# §7.2 — complete() retry=RetryConfig(max_retries=0): no retries
+# §7.2 — complete() retry=RetryPolicy(max_retries=0): no retries
 # --------------------------------------------------------------------------- #
 
 
@@ -176,7 +176,7 @@ async def test_complete_retry_override_zero_retries(db, plugins) -> None:
     gw = LLMGatewayService(plugins, db, _config())
 
     with pytest.raises(TransientError):
-        await gw.complete("main", _request(), retry=RetryConfig(max_retries=0))
+        await gw.complete("main", _request(), retry=RetryPolicy(max_retries=0))
 
     # Only one call was made (no retry).
     assert provider.call_count == 1
@@ -197,12 +197,12 @@ async def test_complete_timeout_override_raises_quickly(db, plugins) -> None:
         await gw.complete(
             "main",
             _request(),
-            timeout=TimeoutConfig(total_seconds=0.05, first_token_seconds=0.05),
+            timeout=TimeoutPolicy(total_seconds=0.05, first_token_seconds=0.05),
         )
 
 
 # --------------------------------------------------------------------------- #
-# §7.4 — stream() retry=RetryConfig(max_retries=0): first-chunk failure no retry
+# §7.4 — stream() retry=RetryPolicy(max_retries=0): first-chunk failure no retry
 # --------------------------------------------------------------------------- #
 
 
@@ -216,7 +216,7 @@ async def test_stream_retry_override_zero_retries_no_retry(db, plugins) -> None:
     gw = LLMGatewayService(plugins, db, _config())
 
     with pytest.raises(TransientError):
-        async for _ in gw.stream("main", _request(), retry=RetryConfig(max_retries=0)):
+        async for _ in gw.stream("main", _request(), retry=RetryPolicy(max_retries=0)):
             pass
 
     # Only one attempt.
@@ -240,7 +240,7 @@ async def test_stream_retry_override_zero_retries_falls_back(db, plugins) -> Non
     gw = LLMGatewayService(plugins, db, cfg)
 
     chunks = []
-    async for chunk in gw.stream("main", _request(), retry=RetryConfig(max_retries=0)):
+    async for chunk in gw.stream("main", _request(), retry=RetryPolicy(max_retries=0)):
         chunks.append(chunk)
 
     # Fallback was used after 0 retries on primary.
@@ -271,7 +271,7 @@ async def test_embed_timeout_override_raises_quickly(db, plugins) -> None:
         await gw.embed(
             "posts",
             ["hello"],
-            timeout=TimeoutConfig(total_seconds=0.05, first_token_seconds=0.05),
+            timeout=TimeoutPolicy(total_seconds=0.05, first_token_seconds=0.05),
         )
 
 
@@ -290,8 +290,8 @@ async def test_complete_audit_row_records_overrides(db, plugins) -> None:
         plugins, db, _config(observability=ObservabilityConfig(log_all_requests=True))
     )
 
-    retry_override = RetryConfig(max_retries=0, initial_delay_ms=0, backoff_factor=1.0)
-    timeout_override = TimeoutConfig(total_seconds=10.0, first_token_seconds=5.0)
+    retry_override = RetryPolicy(max_retries=0, initial_delay_ms=0, backoff_factor=1.0)
+    timeout_override = TimeoutPolicy(total_seconds=10.0, first_token_seconds=5.0)
     await gw.complete("main", _request(), retry=retry_override, timeout=timeout_override)
 
     row = await db.fetchone("SELECT retry_override, timeout_override FROM llm_requests")
@@ -329,7 +329,7 @@ async def test_complete_event_payload_carries_retry_override(db, plugins) -> Non
     collector = EventCollector(bus)
     gw = LLMGatewayService(plugins, db, _config(), event_bus=bus)
 
-    override = RetryConfig(max_retries=0, initial_delay_ms=0, backoff_factor=1.0)
+    override = RetryPolicy(max_retries=0, initial_delay_ms=0, backoff_factor=1.0)
     await gw.complete("main", _request(), retry=override)
 
     started = collector.by_type("llm_request_started")[0]
@@ -358,7 +358,7 @@ async def test_complete_event_payload_carries_timeout_override(db, plugins) -> N
     collector = EventCollector(bus)
     gw = LLMGatewayService(plugins, db, _config(), event_bus=bus)
 
-    t_override = TimeoutConfig(total_seconds=10.0, first_token_seconds=5.0)
+    t_override = TimeoutPolicy(total_seconds=10.0, first_token_seconds=5.0)
     await gw.complete("main", _request(), timeout=t_override)
 
     started = collector.by_type("llm_request_started")[0]
@@ -378,7 +378,7 @@ async def test_embed_event_payload_carries_timeout_override(db, plugins) -> None
     collector = EventCollector(bus)
     gw = LLMGatewayService(plugins, db, cfg, event_bus=bus)
 
-    t_override = TimeoutConfig(total_seconds=15.0, first_token_seconds=5.0)
+    t_override = TimeoutPolicy(total_seconds=15.0, first_token_seconds=5.0)
     await gw.embed("posts", ["hello"], timeout=t_override)
 
     started = collector.by_type("embedding_request_started")[0]
@@ -435,7 +435,7 @@ async def test_override_does_not_affect_subsequent_call(db, plugins) -> None:
 
     # First call with zero-retry override: should raise.
     with pytest.raises(TransientError):
-        await gw.complete("main", _request(), retry=RetryConfig(max_retries=0))
+        await gw.complete("main", _request(), retry=RetryPolicy(max_retries=0))
 
     # After the failing override call, the global default still works.
     resp = await gw.complete("main", _request())
@@ -460,7 +460,7 @@ async def test_stream_override_does_not_affect_subsequent_call(db, plugins) -> N
 
     # Override call: fails immediately (0 retries).
     with pytest.raises(TransientError):
-        async for _ in gw.stream("main", _request(), retry=RetryConfig(max_retries=0)):
+        async for _ in gw.stream("main", _request(), retry=RetryPolicy(max_retries=0)):
             pass
 
     # Second call uses global retry=3: recovers after 1 blip.

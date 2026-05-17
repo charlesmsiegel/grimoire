@@ -12,12 +12,10 @@ from grimoire.llm_gateway.config import (
     EmbeddingCacheConfig,
     GatewayConfig,
     ObservabilityConfig,
-    RetryConfig,
-    TimeoutConfig,
 )
 from grimoire.llm_gateway.errors import PermanentError, TransientError
 from grimoire.types.common import HealthLevel, HealthStatus
-from grimoire.types.llm import ModelInfo
+from grimoire.types.llm import ModelInfo, RetryPolicy, TimeoutPolicy
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -83,8 +81,8 @@ class EventCollector:
 def _config(**overrides) -> GatewayConfig:
     base = dict(
         default_routes={"posts": "embed-fake.fake-model"},
-        retry=RetryConfig(max_retries=2, initial_delay_ms=0, backoff_factor=1.0),
-        timeout=TimeoutConfig(total_seconds=5.0, first_token_seconds=2.0),
+        retry=RetryPolicy(max_retries=2, initial_delay_ms=0, backoff_factor=1.0),
+        timeout=TimeoutPolicy(total_seconds=5.0, first_token_seconds=2.0),
         embedding_cache=EmbeddingCacheConfig(enabled=True, max_entries=100),
         observability=ObservabilityConfig(log_all_requests=False),
     )
@@ -276,7 +274,7 @@ async def test_retry_count_summed_across_batches(db, plugins) -> None:
     collector = EventCollector(bus)
     # Allow up to 3 retries so 2 failures + 1 success is within budget
     cfg = _config(
-        retry=RetryConfig(max_retries=3, initial_delay_ms=0, backoff_factor=1.0),
+        retry=RetryPolicy(max_retries=3, initial_delay_ms=0, backoff_factor=1.0),
     )
     gw = LLMGatewayService(plugins, db, cfg, event_bus=bus)
 
