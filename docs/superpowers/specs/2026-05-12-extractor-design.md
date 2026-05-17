@@ -1,6 +1,6 @@
 # Extractor — Design (Shipped)
 
-> Captures the Extractor design as actually built. The matching "remaining" spec at `2026-05-16-extractor-remaining-design.md` covers everything from the original `specs/04-extractor.md` that did **not** land in this work.
+> Captures the Extractor design as actually built. The matching "remaining" spec at `2026-05-16-extractor-COMPLETED.md` covered everything from the original `specs/04-extractor.md` that hadn't landed in this work and has since been fully addressed (see its commits).
 
 **Commit:** `2ded8e3` — "Build Extractor (task 19)" (templates moved to `templates/` in follow-up `e13de4a`)
 **Module:** `backend/src/grimoire/extractor/`
@@ -53,7 +53,7 @@ class ExtractorService:
 
 ## Timing — runs after streaming, not during
 
-Spec 04 §Performance imagined extraction running in parallel with the response stream ("extraction starts immediately"). The shipped Orchestrator calls `extract(response_text, ...)` once, after the full response has finished streaming (see `_run_turn` in `2026-05-12-orchestrator-design.md`). This is a deliberate deviation: the structured-LLM strategy needs the full text, and the rule-based + heuristic strategies are fast enough on a complete buffer that splitting into `extract_partial` / `extract_full` would add coordination cost without saving user-perceived latency until profiling proves otherwise. Documented in `2026-05-16-extractor-remaining-design.md` §6, resolved as option (b).
+Spec 04 §Performance imagined extraction running in parallel with the response stream ("extraction starts immediately"). The shipped Orchestrator calls `extract(response_text, ...)` once, after the full response has finished streaming (see `_run_turn` in `2026-05-12-orchestrator-design.md`). This is a deliberate deviation: the structured-LLM strategy needs the full text, and the rule-based + heuristic strategies are fast enough on a complete buffer that splitting into `extract_partial` / `extract_full` would add coordination cost without saving user-perceived latency until profiling proves otherwise. Documented in `2026-05-16-extractor-COMPLETED.md` §6, resolved as option (b).
 
 ## Extraction flow (`_run`)
 
