@@ -13,7 +13,14 @@ from grimoire.types.extraction import FlagLevel
 from grimoire.types.scene import Scene
 from grimoire.types.state import CharacterState, DeltaKind, StateDelta, StateSnapshot
 
-from .conftest import FakeContradictionChecker, FakeGateway, FakeMechanics
+from .conftest import (
+    FakeContradictionChecker,
+    FakeEntityResolver,
+    FakeGateway,
+    FakeMechanics,
+    make_campaign_entity,
+    make_library_entity,
+)
 
 
 @pytest.mark.asyncio
@@ -650,3 +657,248 @@ async def test_extract_includes_known_chars_in_snapshot(
     )
     # Margaux is in snapshot, so no candidate for her.
     assert not any(c.proposed_name == "Margaux" for c in result.candidates)
+
+
+# ---------------------------------------------------------------------- #
+# Library-targeted change detection (spec extractor-remaining §1)
+# ---------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_extract_flags_library_character_drift_and_forces_review(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # vivienne resolves through the library; the LLM proposes a mood
+    # update whose new value diverges from her library card. The drift
+    # step must annotate the delta, emit a `library_drift` flag, and
+    # clamp confidence into the review band even though it started above
+    # auto-apply.
+    gateway = FakeGateway(
+        queue=[
+            {
+                "character_updates": [
+                    {
+                        "character_id": "vivienne",
+                        "field": "appearance",
+                        "after": "wearing crimson silk",
+                        "confidence": 0.95,
+                        "evidence": "vivienne wore crimson silk.",
+                    }
+                ]
+            }
+        ]
+    )
+    resolver = FakeEntityResolver(
+        entries={
+            ("vivienne", "character"): make_library_entity(
+                {"name": "vivienne", "appearance": "plain grey dress"}
+            )
+        }
+    )
+    config = ExtractorConfig()
+    service = ExtractorService(gateway=gateway, resolver=resolver, config=config)
+    result = await service.extract(
+        "vivienne wore crimson silk.", scene, "camp-1", snapshot
+    )
+    update = next(d for d in result.deltas if d.kind == DeltaKind.CHARACTER_STATE_UPDATE)
+    assert update.extra.get("override_of_library") is True
+    # Clamped into [review_threshold, auto_apply_threshold).
+    assert config.review_threshold <= update.confidence < config.auto_apply_threshold
+    routing = route_deltas(result.deltas, config=config)
+    assert update in routing.review
+    assert any(
+        f.level == FlagLevel.CONTRADICTION and f.code == "library_drift"
+        for f in result.flags
+    )
+
+
+@pytest.mark.asyncio
+async def test_extract_no_drift_when_value_matches_library_card(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # If the proposed update equals the library card's current value
+    # there is no override — pass through untouched.
+    gateway = FakeGateway(
+        queue=[
+            {
+                "character_updates": [
+                    {
+                        "character_id": "vivienne",
+                        "field": "appearance",
+                        "after": "plain grey dress",
+                        "confidence": 0.95,
+                    }
+                ]
+            }
+        ]
+    )
+    resolver = FakeEntityResolver(
+        entries={
+            ("vivienne", "character"): make_library_entity(
+                {"name": "vivienne", "appearance": "plain grey dress"}
+            )
+        }
+    )
+    service = ExtractorService(gateway=gateway, resolver=resolver, config=ExtractorConfig())
+    result = await service.extract("vivienne looked the same.", scene, "camp-1", snapshot)
+    update = next(d for d in result.deltas if d.kind == DeltaKind.CHARACTER_STATE_UPDATE)
+    assert "override_of_library" not in update.extra
+    assert update.confidence == pytest.approx(0.95, rel=1e-6)
+    assert not any(f.code == "library_drift" for f in result.flags)
+
+
+@pytest.mark.asyncio
+async def test_extract_no_drift_for_campaign_local_character(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # winifred is campaign-local — divergence from her card is *not* a
+    # library override; it just updates the campaign card.
+    gateway = FakeGateway(
+        queue=[
+            {
+                "character_updates": [
+                    {
+                        "character_id": "winifred",
+                        "field": "mood",
+                        "after": "ecstatic",
+                        "confidence": 0.95,
+                    }
+                ]
+            }
+        ]
+    )
+    resolver = FakeEntityResolver(
+        entries={
+            ("winifred", "character"): make_campaign_entity(
+                {"name": "winifred", "mood": "morose"}
+            )
+        }
+    )
+    service = ExtractorService(gateway=gateway, resolver=resolver, config=ExtractorConfig())
+    result = await service.extract("winifred beamed.", scene, "camp-1", snapshot)
+    update = next(d for d in result.deltas if d.kind == DeltaKind.CHARACTER_STATE_UPDATE)
+    assert "override_of_library" not in update.extra
+    assert update.confidence == pytest.approx(0.95, rel=1e-6)
+    assert not any(f.code == "library_drift" for f in result.flags)
+
+
+@pytest.mark.asyncio
+async def test_extract_drift_raises_low_confidence_into_review_band(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # Drift must FORCE review even for low-confidence updates that would
+    # otherwise be dropped — the user has to make the override choice.
+    gateway = FakeGateway(
+        queue=[
+            {
+                "character_updates": [
+                    {
+                        "character_id": "vivienne",
+                        "field": "mood",
+                        "after": "wild",
+                        "confidence": 0.2,
+                    }
+                ]
+            }
+        ]
+    )
+    resolver = FakeEntityResolver(
+        entries={
+            ("vivienne", "character"): make_library_entity(
+                {"name": "vivienne", "mood": "stoic"}
+            )
+        }
+    )
+    config = ExtractorConfig()
+    service = ExtractorService(gateway=gateway, resolver=resolver, config=config)
+    result = await service.extract("vivienne raged.", scene, "camp-1", snapshot)
+    update = next(d for d in result.deltas if d.kind == DeltaKind.CHARACTER_STATE_UPDATE)
+    assert update.extra.get("override_of_library") is True
+    assert config.review_threshold <= update.confidence < config.auto_apply_threshold
+    routing = route_deltas(result.deltas, config=config)
+    assert update in routing.review
+
+
+@pytest.mark.asyncio
+async def test_extract_drift_no_op_without_resolver(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # When no resolver is wired up, the drift step degrades gracefully
+    # (same shape as `_check_contradictions` does with `contradictions=None`).
+    gateway = FakeGateway(
+        queue=[
+            {
+                "character_updates": [
+                    {
+                        "character_id": "vivienne",
+                        "field": "appearance",
+                        "after": "wearing crimson silk",
+                        "confidence": 0.95,
+                    }
+                ]
+            }
+        ]
+    )
+    service = ExtractorService(gateway=gateway, config=ExtractorConfig())
+    result = await service.extract("vivienne wore crimson silk.", scene, "camp-1", snapshot)
+    update = next(d for d in result.deltas if d.kind == DeltaKind.CHARACTER_STATE_UPDATE)
+    assert "override_of_library" not in update.extra
+    assert update.confidence == pytest.approx(0.95, rel=1e-6)
+    assert not any(f.code == "library_drift" for f in result.flags)
+
+
+@pytest.mark.asyncio
+async def test_extract_drift_skipped_when_character_unresolved(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # An unresolved entity (e.g. the LLM invented a ref) cannot drift —
+    # the resolver returns None and the delta passes through unchanged.
+    gateway = FakeGateway(
+        queue=[
+            {
+                "character_updates": [
+                    {
+                        "character_id": "unknown_ghost",
+                        "field": "mood",
+                        "after": "translucent",
+                        "confidence": 0.9,
+                    }
+                ]
+            }
+        ]
+    )
+    resolver = FakeEntityResolver(entries={})  # nothing resolves
+    service = ExtractorService(gateway=gateway, resolver=resolver, config=ExtractorConfig())
+    result = await service.extract("A ghost wavered.", scene, "camp-1", snapshot)
+    update = next(d for d in result.deltas if d.kind == DeltaKind.CHARACTER_STATE_UPDATE)
+    assert "override_of_library" not in update.extra
+    assert update.confidence == pytest.approx(0.9, rel=1e-6)
+    assert not any(f.code == "library_drift" for f in result.flags)
+
+
+@pytest.mark.asyncio
+async def test_extract_drift_swallows_resolver_failure(
+    scene: Scene, snapshot: StateSnapshot
+):
+    # A resolver that raises must not break extraction — emit a warning
+    # flag, leave deltas untouched (mirrors `_check_contradictions`).
+    gateway = FakeGateway(
+        queue=[
+            {
+                "character_updates": [
+                    {
+                        "character_id": "vivienne",
+                        "field": "appearance",
+                        "after": "wearing crimson silk",
+                        "confidence": 0.95,
+                    }
+                ]
+            }
+        ]
+    )
+    resolver = FakeEntityResolver(raise_on_next=RuntimeError("library backend down"))
+    service = ExtractorService(gateway=gateway, resolver=resolver, config=ExtractorConfig())
+    result = await service.extract("vivienne wore crimson silk.", scene, "camp-1", snapshot)
+    update = next(d for d in result.deltas if d.kind == DeltaKind.CHARACTER_STATE_UPDATE)
+    assert "override_of_library" not in update.extra
+    assert update.confidence == pytest.approx(0.95, rel=1e-6)
