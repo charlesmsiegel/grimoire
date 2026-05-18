@@ -15,6 +15,11 @@ export interface PCEntry {
   name: string;
   owner: string;
   active: boolean;
+  // Rich switcher fields (backend extends these in spec frontend §8).
+  // Missing on older servers; the switcher tolerates undefined.
+  current_scene_id?: string | null;
+  current_location_ref?: string | null;
+  last_played_at?: string | null;
 }
 
 export interface ApiPost {

@@ -170,6 +170,21 @@ export interface UpgradeReport {
   removed_entities: string[];
 }
 
+export interface WorldDiffChange {
+  path: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+}
+
+export interface WorldDiff {
+  world_id: string;
+  from_version: number;
+  to_version: number;
+  added: string[];
+  removed: string[];
+  changed: WorldDiffChange[];
+}
+
 export interface WorldMeta {
   id: string;
   name: string;

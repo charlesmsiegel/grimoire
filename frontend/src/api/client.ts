@@ -71,8 +71,22 @@ async function request<T>(
   return (await parseBody(res)) as T;
 }
 
+async function requestText(
+  method: string,
+  path: string,
+  opts: RequestOptions = {},
+): Promise<string> {
+  const res = await fetch(buildUrl(path, opts.query), { method, signal: opts.signal });
+  if (!res.ok) {
+    const detail = await parseBody(res).catch(() => null);
+    throw new ApiError(res.status, detail);
+  }
+  return res.text();
+}
+
 export const api = {
   get: <T>(path: string, opts?: RequestOptions) => request<T>("GET", path, undefined, opts),
+  getText: (path: string, opts?: RequestOptions) => requestText("GET", path, opts),
   post: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
     request<T>("POST", path, body, opts),
   put: <T>(path: string, body?: unknown, opts?: RequestOptions) =>

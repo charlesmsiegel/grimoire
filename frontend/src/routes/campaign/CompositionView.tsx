@@ -5,23 +5,43 @@
  * the mechanics / style guide / image preset ids. Reorders mutate locally and
  * PUT the new composition to the backend; the upgrade-available banner
  * surfaces refs that drifted from their bound version and offers a one-click
- * upgrade per ref.
+ * upgrade per ref plus a preview-diff modal.
+ *
+ * Reorder uses native HTML5 drag-and-drop. The ▲/▼ buttons remain as a
+ * keyboard-accessible fallback.
+ *
+ * Mechanics / style guide / image preset selectors render as dropdowns
+ * populated from the existing catalog endpoints.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { viewsApi } from "../../api/views";
-import type { Composition, WorldRef, WorldMeta } from "../../api/types";
+import type {
+  Composition,
+  RegisteredMechanicsModule,
+  WorldDiff,
+  WorldRef,
+  WorldMeta,
+} from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { Loading } from "./common";
 
 const KINDS = ["characters", "items", "locations", "lore", "factions", "greetings"] as const;
 
+interface CatalogOption {
+  id: string;
+  name: string;
+}
+
 export function CompositionView() {
   const { campaignId = "" } = useParams();
   const composition = useApi(() => viewsApi.getComposition(campaignId), [campaignId]);
   const worlds = useApi(() => viewsApi.listWorlds(), []);
+  const mechanics = useApi(() => viewsApi.installedMechanics(), []);
+  const styleGuides = useApi(() => viewsApi.listStyleGuides(), []);
+  const imagePresets = useApi(() => viewsApi.listImagePresets(), []);
 
   return (
     <section className="route campaign-composition" aria-labelledby="comp-heading">
@@ -32,7 +52,18 @@ export function CompositionView() {
         {(comp) => (
           <Loading state={worlds}>
             {(worldsList) => (
-              <CompositionEditor campaignId={campaignId} initial={comp} catalog={worldsList} />
+              <CompositionEditor
+                campaignId={campaignId}
+                initial={comp}
+                catalog={worldsList}
+                mechanicsList={mechanics.status === "ok" ? mechanics.data : []}
+                styleGuides={
+                  styleGuides.status === "ok" ? styleGuides.data.map(asOption) : []
+                }
+                imagePresets={
+                  imagePresets.status === "ok" ? imagePresets.data.map(asOption) : []
+                }
+              />
             )}
           </Loading>
         )}
@@ -41,17 +72,34 @@ export function CompositionView() {
   );
 }
 
+function asOption(row: { id?: string; asset_id?: string; name?: string }): CatalogOption {
+  const id = row.asset_id ?? row.id ?? "";
+  return { id, name: row.name ?? id };
+}
+
 interface EditorProps {
   campaignId: string;
   initial: Composition;
   catalog: WorldMeta[];
+  mechanicsList: RegisteredMechanicsModule[];
+  styleGuides: CatalogOption[];
+  imagePresets: CatalogOption[];
 }
 
-function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
+function CompositionEditor({
+  campaignId,
+  initial,
+  catalog,
+  mechanicsList,
+  styleGuides,
+  imagePresets,
+}: EditorProps) {
   const [comp, setComp] = useState<Composition>(initial);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [diffOpenFor, setDiffOpenFor] = useState<UpgradeHint | null>(null);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
 
   const catalogById = new Map(catalog.map((s) => [s.id, s]));
   const upgrades = collectUpgrades(comp.worlds, catalogById);
@@ -66,12 +114,15 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
   const move = (idx: number, dir: -1 | 1) => {
     const target = idx + dir;
     if (target < 0 || target >= reorderedRefs.length) return;
+    reorder(idx, target);
+  };
+
+  const reorder = (from: number, to: number) => {
+    if (from === to) return;
     const swap = reorderedRefs.slice();
-    const a = swap[idx];
-    const b = swap[target];
-    if (!a || !b) return;
-    swap[idx] = b;
-    swap[target] = a;
+    const [picked] = swap.splice(from, 1);
+    if (!picked) return;
+    swap.splice(to, 0, picked);
     const renumbered = swap.map((r, i) => ({ ...r, priority: i + 1 }));
     mutate({ ...comp, worlds: renumbered });
   };
@@ -138,7 +189,7 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
             {upgrades.map((u) => (
               <li key={u.world_id}>
                 <strong>{u.world_id}</strong> has new version {u.latest} (currently v{u.bound}).
-                <button type="button" disabled title="Diff preview ships in a follow-up task.">
+                <button type="button" onClick={() => setDiffOpenFor(u)}>
                   Preview diff
                 </button>
                 <button type="button" onClick={() => upgrade(u.world_id)}>
@@ -154,8 +205,41 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
         <h3>Worlds (priority order)</h3>
         <ol className="world-refs">
           {reorderedRefs.map((ref, idx) => (
-            <li key={ref.world_id} className="world-ref">
+            <li
+              key={ref.world_id}
+              className={
+                dragIndex === idx ? "world-ref world-ref-dragging" : "world-ref"
+              }
+              draggable
+              onDragStart={(e) => {
+                setDragIndex(idx);
+                e.dataTransfer.effectAllowed = "move";
+                // Some browsers require setData for the drag to register.
+                e.dataTransfer.setData("text/plain", ref.world_id);
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragIndex === null || dragIndex === idx) {
+                  setDragIndex(null);
+                  return;
+                }
+                reorder(dragIndex, idx);
+                setDragIndex(null);
+              }}
+              onDragEnd={() => setDragIndex(null)}
+            >
               <div className="world-ref-head">
+                <span
+                  className="drag-handle"
+                  aria-hidden="true"
+                  title="Drag to reorder"
+                >
+                  ⠿
+                </span>
                 <span className="priority">{idx + 1}.</span>
                 <strong>{ref.world_id}</strong>
                 <span className="muted">
@@ -213,28 +297,45 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
       <section className="composition-extras">
         <label className="field">
           <span>Mechanics module</span>
-          <input
-            type="text"
+          <select
             value={comp.mechanics ?? ""}
-            placeholder="e.g. wod-mechanics or empty for none"
             onChange={(e) => mutate({ ...comp, mechanics: e.target.value || null })}
-          />
+          >
+            <option value="">— none —</option>
+            {mechanicsList.map((m) => (
+              <option key={m.manifest.id} value={m.manifest.id}>
+                {m.manifest.name} ({m.manifest.id})
+              </option>
+            ))}
+          </select>
         </label>
         <label className="field">
           <span>Style guide</span>
-          <input
-            type="text"
+          <select
             value={comp.style_guide_id ?? ""}
             onChange={(e) => mutate({ ...comp, style_guide_id: e.target.value || null })}
-          />
+          >
+            <option value="">— none —</option>
+            {styleGuides.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="field">
           <span>Image preset</span>
-          <input
-            type="text"
+          <select
             value={comp.image_preset_id ?? ""}
             onChange={(e) => mutate({ ...comp, image_preset_id: e.target.value || null })}
-          />
+          >
+            <option value="">— none —</option>
+            {imagePresets.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
         </label>
       </section>
 
@@ -259,6 +360,10 @@ function CompositionEditor({ campaignId, initial, catalog }: EditorProps) {
           </p>
         )}
       </div>
+
+      {diffOpenFor && (
+        <DiffPreviewModal hint={diffOpenFor} onClose={() => setDiffOpenFor(null)} />
+      )}
     </div>
   );
 }
@@ -315,6 +420,127 @@ function IncludeEditor({
         />
         track_latest (auto-pull library updates)
       </label>
+    </div>
+  );
+}
+
+function DiffPreviewModal({ hint, onClose }: { hint: UpgradeHint; onClose: () => void }) {
+  const [diff, setDiff] = useState<WorldDiff | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    viewsApi
+      .worldDiff(hint.world_id, hint.bound, hint.latest)
+      .then((d) => {
+        if (!cancelled) setDiff(d);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hint.world_id, hint.bound, hint.latest]);
+
+  return (
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="diff-title"
+      onClick={onClose}
+    >
+      <div
+        className="modal-panel diff-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header>
+          <h3 id="diff-title">
+            Diff: {hint.world_id} v{hint.bound} → v{hint.latest}
+          </h3>
+          <button type="button" aria-label="Close" onClick={onClose}>
+            ×
+          </button>
+        </header>
+        <div className="diff-body">
+          {loading && <p>Loading diff…</p>}
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          {diff && <DiffRenderer diff={diff} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DiffRenderer({ diff }: { diff: WorldDiff }) {
+  const nothing =
+    diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0;
+  if (nothing) {
+    return <p className="muted">No changes detected between these versions.</p>;
+  }
+  return (
+    <div className="diff-sections">
+      {diff.added.length > 0 && (
+        <section>
+          <h4>Added ({diff.added.length})</h4>
+          <ul>
+            {diff.added.map((path) => (
+              <li key={path}>{path}</li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {diff.removed.length > 0 && (
+        <section>
+          <h4>Removed ({diff.removed.length})</h4>
+          <ul>
+            {diff.removed.map((path) => (
+              <li key={path}>{path}</li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {diff.changed.length > 0 && (
+        <section>
+          <h4>Changed ({diff.changed.length})</h4>
+          <ul className="diff-changed">
+            {diff.changed.map((change) => (
+              <li key={change.path}>
+                <div className="diff-change-head">
+                  <strong>{change.path}</strong>
+                </div>
+                <div className="diff-sides">
+                  <div className="diff-side diff-before">
+                    <h5>Before</h5>
+                    <pre>
+                      {change.before === null
+                        ? "(not available — only the latest entity content is retained)"
+                        : JSON.stringify(change.before, null, 2)}
+                    </pre>
+                  </div>
+                  <div className="diff-side diff-after">
+                    <h5>After</h5>
+                    <pre>
+                      {change.after === null ? "(removed)" : JSON.stringify(change.after, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

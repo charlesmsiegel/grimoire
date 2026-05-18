@@ -867,6 +867,19 @@ class StateStore:
         )
         return [dict(row) for row in rows]
 
+    async def mark_pc_played(self, *, campaign_id: str, character_ref: str) -> None:
+        """Stamp ``last_played_at`` on the PC row.
+
+        Called by the orchestrator whenever a turn runs for a PC so the
+        rich PC switcher can show "last played 12m ago" rows. A no-op if
+        the PC is not registered for the campaign.
+        """
+        await self.db.execute(
+            "UPDATE campaign_pcs SET last_played_at = ? "
+            "WHERE campaign_id = ? AND character_ref = ?",
+            (_now_iso(), campaign_id, character_ref),
+        )
+
     async def list_world_refs(self, campaign_id: str) -> list[dict]:
         rows = await self.db.fetchall(
             "SELECT * FROM campaign_world_refs WHERE campaign_id = ? ORDER BY priority",

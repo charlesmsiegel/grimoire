@@ -8,7 +8,7 @@
  */
 
 import { useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { viewsApi } from "../../api/views";
 import type { SceneSummary, Thread } from "../../api/types";
@@ -17,12 +17,19 @@ import { Loading } from "./common";
 
 export function TimelineView() {
   const { campaignId = "" } = useParams();
+  const navigate = useNavigate();
   const state = useApi(() => viewsApi.listScenes(campaignId), [campaignId]);
 
   const [search, setSearch] = useState("");
   const [moodFilter, setMoodFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "open" | "closed">("all");
   const [selected, setSelected] = useState<string | null>(null);
+
+  const jumpToScene = (sceneId: string) => {
+    // ``?scene=`` is read by usePlayState (spec frontend §9). Keeping it in
+    // the URL means reload still lands on the same scene.
+    navigate(`/campaigns/${encodeURIComponent(campaignId)}?scene=${encodeURIComponent(sceneId)}`);
+  };
 
   return (
     <section className="route campaign-timeline" aria-labelledby="timeline-heading">
@@ -100,7 +107,9 @@ export function TimelineView() {
                 </aside>
               )}
 
-              {selectedScene && <SceneDetail scene={selectedScene} />}
+              {selectedScene && (
+                <SceneDetail scene={selectedScene} onJump={() => jumpToScene(selectedScene.id)} />
+              )}
             </div>
           );
         }}
@@ -147,12 +156,17 @@ function SceneCard({
   );
 }
 
-function SceneDetail({ scene }: { scene: SceneSummary }) {
+function SceneDetail({ scene, onJump }: { scene: SceneSummary; onJump: () => void }) {
   return (
     <section className="scene-detail" aria-label="Scene detail">
-      <h3>
-        Scene {scene.ordinal}: {scene.title || scene.slug}
-      </h3>
+      <header className="scene-detail-head">
+        <h3>
+          Scene {scene.ordinal}: {scene.title || scene.slug}
+        </h3>
+        <button type="button" className="primary" onClick={onJump}>
+          Jump to scene
+        </button>
+      </header>
       {scene.summary && <p>{scene.summary}</p>}
       {scene.key_beats.length > 0 && (
         <>

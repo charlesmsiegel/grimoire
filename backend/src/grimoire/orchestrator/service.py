@@ -167,6 +167,16 @@ class OrchestratorService:
             author_pc_ref=pc_ref,
         )
         await self._scenes.append_post(scene.id, post)
+        # Stamp last_played_at on the PC row so the rich PC switcher can
+        # show "last played 12m ago" without joining the post stream.
+        # Best-effort: the store is async-safe and a missing row is a
+        # no-op when the PC was just removed.
+        try:
+            await self._store.mark_pc_played(
+                campaign_id=campaign_id, character_ref=pc_ref
+            )
+        except Exception:  # pragma: no cover - never blocks a turn
+            logger.warning("mark_pc_played failed", exc_info=True)
 
         decision = await self._scenes.on_post_submitted(scene.id, post)
         if not decision.auto_respond:
