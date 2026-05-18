@@ -41,6 +41,17 @@ class InvariantSnapshot:
     post_count: int = 0
     embedded_row_count: int = 0
     max_turn_id: str | None = None
+    # Sorted list of turn ids observed in the delta log (used to assert
+    # the log is contiguous — no missing turn ids).
+    delta_turn_ids: tuple[str, ...] = ()
+    # Embedding counts grouped by the embedding's source kind
+    # (``post``, ``scene_summary``, ``fact``, …). Lets ``validate``
+    # assert that per-kind counts never decrease across a turn.
+    embeddings_by_kind: dict[str, int] = field(default_factory=dict)
+    # Optional: voice anchor count (TODO §7 — wires up once Characters
+    # exposes a counting API; until then this stays at None / 0 and
+    # ``validate`` skips the check cleanly).
+    voice_anchor_count: int | None = None
 
     def diff(self, other: InvariantSnapshot) -> dict[str, tuple[int, int]]:
         out: dict[str, tuple[int, int]] = {}
@@ -124,6 +135,16 @@ class FrozenCampaignHarness:
                 "SELECT MAX(turn_id) FROM deltas",
                 default=None,
             )
+            delta_turn_ids = await _list(
+                conn,
+                "SELECT DISTINCT turn_id FROM deltas WHERE turn_id IS NOT NULL ORDER BY turn_id",
+            )
+            embeddings_by_kind = await _group_count(
+                conn,
+                "SELECT COALESCE(source_kind, '__unknown__') AS kind, COUNT(*)"
+                " FROM embeddings GROUP BY source_kind",
+            )
+            voice_anchor_count = await _voice_anchor_count(conn)
         return InvariantSnapshot(
             character_count=character_count,
             scene_count=scene_count,
@@ -132,6 +153,9 @@ class FrozenCampaignHarness:
             post_count=post_count,
             embedded_row_count=embedded,
             max_turn_id=max_turn,
+            delta_turn_ids=tuple(delta_turn_ids),
+            embeddings_by_kind=embeddings_by_kind,
+            voice_anchor_count=voice_anchor_count,
         )
 
     # ------------------------------------------------------------------ #
@@ -173,7 +197,57 @@ class FrozenCampaignHarness:
                 f"fact_count decreased: {before.fact_count} → {after.fact_count}; "
                 "retirement should preserve the row (status flip)"
             )
+
+        # Delta log must remain contiguous (no missing turn ids).
+        gaps = _delta_gaps(after.delta_turn_ids)
+        if gaps:
+            report.violations.append(
+                f"delta log has missing turn ids between observed entries: {gaps[:5]}"
+            )
+
+        # Embedding counts per source kind must not decrease.
+        for kind, before_count in before.embeddings_by_kind.items():
+            after_count = after.embeddings_by_kind.get(kind, 0)
+            if after_count < before_count:
+                report.violations.append(
+                    f"embedding count for kind {kind!r} decreased: {before_count} → {after_count}"
+                )
+
+        # Voice anchor count — only enforced if Characters surfaced a
+        # count. Otherwise we skip silently (the snapshot reports
+        # ``None``); see TODO in :func:`_voice_anchor_count`.
+        if (
+            before.voice_anchor_count is not None
+            and after.voice_anchor_count is not None
+            and after.voice_anchor_count < before.voice_anchor_count
+        ):
+            report.violations.append(
+                "voice_anchor_count decreased: "
+                f"{before.voice_anchor_count} → {after.voice_anchor_count}"
+            )
         return report
+
+    # ------------------------------------------------------------------ #
+    # Schema drift detection
+    # ------------------------------------------------------------------ #
+
+    async def assert_snapshot_matches_current_migrations(self) -> None:
+        """Re-run migrations and fail loudly if any actually applied.
+
+        Frozen snapshots are expected to be exported with every migration
+        in the codebase already applied. If new migrations have shipped
+        since the snapshot was taken, this will raise a
+        :class:`SnapshotStaleError` pointing at the offending versions so
+        the snapshot can be regenerated.
+        """
+        assert self.db is not None
+        run = await apply_migrations(self.db)
+        if run:
+            versions = ", ".join(f"{m.version}:{m.name}" for m in run)
+            raise SnapshotStaleError(
+                "snapshot is missing migrations; re-export via "
+                f"scripts/export_snapshot.py. Newly applied: {versions}"
+            )
 
 
 async def _scalar(conn: Any, sql: str, default: Any = 0) -> Any:
@@ -190,4 +264,91 @@ async def _scalar(conn: Any, sql: str, default: Any = 0) -> Any:
         return default
 
 
-__all__ = ["FrozenCampaignHarness", "InvariantReport", "InvariantSnapshot"]
+async def _list(conn: Any, sql: str) -> list[Any]:
+    try:
+        cursor = await conn.execute(sql)
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [row[0] for row in rows if row[0] is not None]
+    except Exception:
+        return []
+
+
+async def _group_count(conn: Any, sql: str) -> dict[str, int]:
+    try:
+        cursor = await conn.execute(sql)
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return {str(row[0]): int(row[1]) for row in rows}
+    except Exception:
+        return {}
+
+
+async def _voice_anchor_count(conn: Any) -> int | None:
+    """Return the number of PC voice anchors in the snapshot, or
+    ``None`` if the count cannot be determined.
+
+    TODO(§7): wire voice anchor count once Characters API exposes it.
+    For now we approximate by counting character rows in the content
+    index — but only when the column we'd query exists. The harness
+    skips the check (returns ``None``) so frozen snapshots that
+    predate Characters don't break.
+    """
+    # Once `characters.service.CharactersService.count_voice_anchors`
+    # lands, replace this body with a call into that service.
+    try:
+        cursor = await conn.execute(
+            "SELECT COUNT(*) FROM campaign_content_index"
+            " WHERE kind = 'character' AND entity_subkind = 'pc'"
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
+        if row is None:
+            return None
+        return int(row[0]) if row[0] is not None else 0
+    except Exception:
+        return None
+
+
+def _delta_gaps(turn_ids: tuple[str, ...]) -> list[tuple[str, str]]:
+    """Detect gaps in a sorted list of integer-shaped turn ids.
+
+    Returns the (prev, current) pairs where a gap was found. Non-numeric
+    turn ids are skipped — only the integer-suffix slice is checked so
+    string ids like ``turn-3`` and ``turn-5`` correctly flag a gap.
+    """
+    pairs: list[tuple[str, str]] = []
+    previous_n: int | None = None
+    previous_raw: str | None = None
+    for raw in turn_ids:
+        n = _extract_int(raw)
+        if n is None:
+            continue
+        if previous_n is not None and n != previous_n + 1:
+            pairs.append((str(previous_raw), str(raw)))
+        previous_n = n
+        previous_raw = raw
+    return pairs
+
+
+def _extract_int(value: str) -> int | None:
+    # Accept either bare numbers or ``<prefix>-<n>`` style ids.
+    s = str(value)
+    if s.isdigit():
+        return int(s)
+    tail = s.rsplit("-", 1)[-1]
+    if tail.isdigit():
+        return int(tail)
+    return None
+
+
+class SnapshotStaleError(RuntimeError):
+    """Raised when a frozen snapshot is missing migrations the code now requires."""
+
+
+__all__ = [
+    "FrozenCampaignHarness",
+    "InvariantReport",
+    "InvariantSnapshot",
+    "SnapshotStaleError",
+]
