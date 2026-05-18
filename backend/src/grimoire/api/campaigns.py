@@ -566,7 +566,11 @@ async def end_scene(
 ) -> Any:
     try:
         await _require_scene_owned(scenes, campaign_id, scene_id)
-        return to_payload(await scenes.close_scene(scene_id))
+        # No turn id is available at this endpoint (a player-initiated end is
+        # not tied to an orchestrator turn). Use a stable sentinel so the
+        # ``closed_at_turn`` audit column always has a value; downstream
+        # tooling treats "manual" as "ended outside the play loop".
+        return to_payload(await scenes.close_scene(scene_id, closed_at_turn="manual"))
     except HTTPException:
         raise
     except Exception as exc:

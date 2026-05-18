@@ -25,6 +25,7 @@ from grimoire.scenes.events import (
     POST_APPENDED,
     POST_DELETED,
     POST_EDITED,
+    RUNNING_SUMMARY_DUE,
     RUNNING_SUMMARY_UPDATED,
     SCENE_ENDED,
     SCENE_FILE_CHANGED,
@@ -38,9 +39,11 @@ from grimoire.scenes.events import (
 from grimoire.scenes.storage import (
     _from_safe_segment,
     append_post_to_body,
+    content_hash,
     next_ordinal,
     read_posts,
     read_sidecar,
+    read_sidecar_post_records,
     scene_basename,
     scene_paths,
     scenes_dir,
@@ -63,6 +66,10 @@ from grimoire.scenes.types import (
 
 Summarizer = Callable[[str | None, list[Post]], Awaitable[str]]
 FinalSummarizer = Callable[[Scene, list[Post]], Awaitable[tuple[str, list[str]]]]
+ThreadDetector = Callable[[Scene, list[Post]], Awaitable[list[tuple[Thread, str]]]]
+SceneBreakClassifier = Callable[
+    [Scene | None, str, list[Post]], Awaitable[SceneBreakDecision]
+]
 
 
 class _NullEventBus:
@@ -71,10 +78,37 @@ class _NullEventBus:
 
 
 @dataclass
+class RunningSummaryConfig:
+    model: str | None = None
+    max_tokens: int = 512
+
+
+@dataclass
+class ThreadDetectionConfig:
+    enabled: bool = False
+    model: str | None = None
+
+
+@dataclass
+class FilesConfig:
+    scene_naming_pattern: str = "{ordinal:04d}-{slug}"
+    post_heading_pattern: str = "## Post {order} — {author}"
+
+
+@dataclass
+class MultiPCConfig:
+    show_pending_count_in_ui: bool = True
+
+
+@dataclass
 class SceneManagerConfig:
     running_summary_every_n_posts: int = 5
     boundary: BoundaryConfig = field(default_factory=BoundaryConfig)
     require_advance_with_multiple_pcs: bool = True
+    running_summary: RunningSummaryConfig = field(default_factory=RunningSummaryConfig)
+    thread_detection: ThreadDetectionConfig = field(default_factory=ThreadDetectionConfig)
+    files: FilesConfig = field(default_factory=FilesConfig)
+    multi_pc: MultiPCConfig = field(default_factory=MultiPCConfig)
 
 
 @dataclass
@@ -103,6 +137,8 @@ class SceneManager:
         event_bus: EventBus | None = None,
         summarizer: Summarizer | None = None,
         final_summarizer: FinalSummarizer | None = None,
+        thread_detector: ThreadDetector | None = None,
+        scene_break_classifier: SceneBreakClassifier | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.data_root = Path(data_root)
@@ -110,10 +146,18 @@ class SceneManager:
         self.event_bus: EventBus = event_bus or _NullEventBus()
         self._summarizer = summarizer
         self._final_summarizer = final_summarizer
+        self._thread_detector = thread_detector
+        self._scene_break_classifier = scene_break_classifier
         self._clock = clock
 
         # Per-scene in-memory state. Persisted lazily where needed.
         self._post_records: dict[str, dict[str, _PostRecord]] = {}
+        # Loaded sidecars whose `posts:` block we've already hydrated; avoids
+        # re-reading the same file every time get_posts is called.
+        self._records_hydrated: set[str] = set()
+        # Hash of the .md file as we last wrote it. Used by reindex_from_disk
+        # to detect concurrent external edits (last-write-wins + warning).
+        self._known_body_hashes: dict[str, str] = {}
         # active scene per (campaign_id, branch_id) and per-PC current scene
         self._active_scene: dict[tuple[str, str], str] = {}
         self._pc_current_scene: dict[tuple[str, str], str] = {}  # (campaign_id, pc_ref) -> scene_id
@@ -130,7 +174,8 @@ class SceneManager:
 
     def _scene_id(self, campaign_id: str, branch_id: str, ordinal: int, slug: str) -> str:
         prefix = "" if branch_id == "main" else f"{branch_id}:"
-        return f"{prefix}{campaign_id}:{scene_basename(ordinal, slug)}"
+        base = scene_basename(ordinal, slug, self.config.files.scene_naming_pattern)
+        return f"{prefix}{campaign_id}:{base}"
 
     async def _emit(self, type_: str, scene: Scene, **payload: object) -> None:
         await self.event_bus.emit(
@@ -143,10 +188,46 @@ class SceneManager:
         )
 
     def _scene_file_paths(self, scene: Scene) -> tuple[Path, Path]:
-        return scene_paths(self.data_root, scene)
+        return scene_paths(
+            self.data_root,
+            scene,
+            naming_pattern=self.config.files.scene_naming_pattern,
+        )
 
     def _records_for(self, scene_id: str) -> dict[str, _PostRecord]:
         return self._post_records.setdefault(scene_id, {})
+
+    def _hydrate_records(self, scene: Scene) -> dict[str, _PostRecord]:
+        """Lazily load ``_PostRecord`` entries from the sidecar's ``posts:`` block.
+
+        After process restart the in-memory cache is empty; the sidecar is the
+        source of truth for post identity. Each scene is hydrated at most once
+        per process lifetime (the local cache is then authoritative).
+        """
+        cached = self._post_records.get(scene.id)
+        if scene.id in self._records_hydrated:
+            return cached if cached is not None else self._records_for(scene.id)
+        _, yaml_path = self._scene_file_paths(scene)
+        loaded = read_sidecar_post_records(yaml_path)
+        # If the cache already has entries (e.g., writes happened between
+        # construction and the first read), merge — in-memory wins.
+        merged = {**loaded, **(cached or {})}
+        self._post_records[scene.id] = merged
+        self._records_hydrated.add(scene.id)
+        return merged
+
+    def _write_sidecar(self, scene: Scene) -> None:
+        """Persist ``scene`` and the in-memory post records together.
+
+        Centralizing this keeps the sidecar's ``posts:`` block in sync — every
+        mutation that writes the sidecar must include the live records.
+        """
+        # Ensure the records are loaded from disk before overwriting, otherwise
+        # a sidecar-update-without-post-mutation (e.g., set_pov) would drop
+        # the persisted block on the floor.
+        self._hydrate_records(scene)
+        _, yaml_path = self._scene_file_paths(scene)
+        write_sidecar(yaml_path, scene, post_records=self._records_for(scene.id))
 
     # -- CRUD / read-only ------------------------------------------------
 
@@ -260,7 +341,14 @@ class SceneManager:
         md_path.parent.mkdir(parents=True, exist_ok=True)
         if not md_path.exists():
             md_path.write_text("", encoding="utf-8")
-        write_sidecar(yaml_path, scene)
+        # Initialize the records cache so the sidecar persists an (empty)
+        # posts: block right from the start.
+        self._post_records.setdefault(scene.id, {})
+        self._records_hydrated.add(scene.id)
+        self._write_sidecar(scene)
+        self._known_body_hashes[scene.id] = content_hash(
+            md_path.read_text(encoding="utf-8")
+        )
 
         self._active_scene[(scene.campaign_id, scene.branch_id)] = scene.id
         for pc_ref in scene.present_pc_refs:
@@ -270,19 +358,26 @@ class SceneManager:
         return scene
 
     async def close_scene(
-        self, scene_id: str, *, closed_at_turn: str | None = None
+        self, scene_id: str, *, closed_at_turn: str
     ) -> SceneCloseReport:
+        """Close a scene; ``closed_at_turn`` is the orchestrator's turn id.
+
+        Required so downstream audit queries (``WHERE closed_at_turn = ?``)
+        always have a value. Callers without a turn id (admin tools, tests)
+        can synthesize one (``"manual"``, a UUID, etc.).
+        """
         async with self._lock_for(scene_id):
             scene = await self.get_scene(scene_id)
             if scene.closed:
+                paid_off_texts = {t.text for t in scene.threads_paid_off}
                 return SceneCloseReport(
                     scene=scene,
                     final_summary=scene.final_summary or scene.running_summary or "",
                     key_beats=list(scene.key_beats),
                     threads_resolved=list(scene.threads_paid_off),
-                    threads_unresolved=list(
-                        t for t in scene.threads_introduced if t not in scene.threads_paid_off
-                    ),
+                    threads_unresolved=[
+                        t for t in scene.threads_introduced if t.text not in paid_off_texts
+                    ],
                 )
 
             posts = await self.get_posts(scene_id)
@@ -294,10 +389,12 @@ class SceneManager:
             if scene.in_game_end is None:
                 scene.in_game_end = scene.in_game_start
 
-            _, yaml_path = self._scene_file_paths(scene)
-            write_sidecar(yaml_path, scene)
+            self._write_sidecar(scene)
 
-            unresolved = [t for t in scene.threads_introduced if t not in scene.threads_paid_off]
+            paid_off_texts = {t.text for t in scene.threads_paid_off}
+            unresolved = [
+                t for t in scene.threads_introduced if t.text not in paid_off_texts
+            ]
             report = SceneCloseReport(
                 scene=scene,
                 final_summary=final_summary,
@@ -310,7 +407,8 @@ class SceneManager:
                 scene,
                 final_summary=final_summary,
                 key_beats=list(key_beats),
-                threads_unresolved=unresolved,
+                threads_unresolved=[t.text for t in unresolved],
+                closed_at_turn=closed_at_turn,
             )
             if self._active_scene.get((scene.campaign_id, scene.branch_id)) == scene.id:
                 self._active_scene.pop((scene.campaign_id, scene.branch_id), None)
@@ -347,8 +445,12 @@ class SceneManager:
             else:
                 post = replace(post, scene_id=scene_id)
 
-            md_path, yaml_path = self._scene_file_paths(scene)
-            append_post_to_body(md_path, post)
+            md_path, _ = self._scene_file_paths(scene)
+            append_post_to_body(
+                md_path,
+                post,
+                heading_pattern=self.config.files.post_heading_pattern,
+            )
 
             scene.post_count = post.order_in_scene
             if post.author_kind == AuthorKind.PC and post.author_pc_ref:
@@ -361,17 +463,28 @@ class SceneManager:
                 if post.author_npc_ref not in scene.present_character_refs:
                     scene.present_character_refs.append(post.author_npc_ref)
 
-            write_sidecar(yaml_path, scene)
-
+            # Update record cache before writing sidecar so the posts: block
+            # serializes the new entry.
+            self._hydrate_records(scene)
             self._records_for(scene_id)[str(post.order_in_scene)] = _PostRecord(
                 id=post.id,
                 turn_id=post.turn_id,
                 created_at=post.created_at,
                 is_player=post.is_player,
             )
+            self._write_sidecar(scene)
+            self._known_body_hashes[scene.id] = content_hash(
+                md_path.read_text(encoding="utf-8")
+            )
 
             await self._emit(
-                POST_APPENDED, scene, order=post.order_in_scene, author=post.author_label
+                POST_APPENDED,
+                scene,
+                order=post.order_in_scene,
+                author=post.author_label,
+                post_id=post.id,
+                turn_id=post.turn_id,
+                is_player=post.is_player,
             )
             if post.author_kind == AuthorKind.PC:
                 await self._emit(
@@ -381,17 +494,24 @@ class SceneManager:
                     pc_ref=post.author_pc_ref,
                 )
 
+            # Cadence-based running summary kicks off out-of-band so a slow LLM
+            # call doesn't block the next post append. Tests still drive
+            # ``update_running_summary`` directly for the legacy inline path.
             if (
                 self.config.running_summary_every_n_posts > 0
                 and scene.post_count > 0
                 and scene.post_count % self.config.running_summary_every_n_posts == 0
             ):
-                await self._update_running_summary_locked(scene)
+                await self._emit(
+                    RUNNING_SUMMARY_DUE,
+                    scene,
+                    post_count=scene.post_count,
+                )
 
     async def get_posts(self, scene_id: str, range: tuple[int, int] | None = None) -> list[Post]:
         scene = await self.get_scene(scene_id)
         md_path, _ = self._scene_file_paths(scene)
-        records = self._records_for(scene_id)
+        records = self._hydrate_records(scene)
         posts: list[Post] = []
         for order, kind, pc_ref, npc_ref, body in read_posts(md_path, scene_id):
             record = records.get(str(order))
@@ -433,8 +553,7 @@ class SceneManager:
             if character_ref in scene.present_character_refs:
                 return
             scene.present_character_refs.append(character_ref)
-            _, yaml_path = self._scene_file_paths(scene)
-            write_sidecar(yaml_path, scene)
+            self._write_sidecar(scene)
 
     async def remove_present_character(self, scene_id: str, character_ref: str) -> None:
         async with self._lock_for(scene_id):
@@ -448,11 +567,21 @@ class SceneManager:
                 scene.present_pc_refs.remove(character_ref)
                 changed = True
                 self._pc_current_scene.pop((scene.campaign_id, character_ref), None)
+            # §8 — when a PC leaves and we drop to ≤1 PCs, auto-respond resumes.
+            # The advance watermark must catch up to the current post count so
+            # the now-single PC's pending posts don't get treated as fresh
+            # input on the next on_post_submitted call.
+            flush = was_pc and len(scene.present_pc_refs) <= 1
+            if flush:
+                scene.last_advance_at_post = scene.post_count
             if changed:
-                _, yaml_path = self._scene_file_paths(scene)
-                write_sidecar(yaml_path, scene)
-                if was_pc and len(scene.present_pc_refs) <= 1:
-                    await self._emit(ADVANCE_ENABLED, scene)
+                self._write_sidecar(scene)
+                if flush:
+                    await self._emit(
+                        ADVANCE_ENABLED,
+                        scene,
+                        flushed_to_post=scene.post_count,
+                    )
 
     async def add_present_pc(self, scene_id: str, pc_ref: str) -> None:
         async with self._lock_for(scene_id):
@@ -463,10 +592,13 @@ class SceneManager:
             if pc_ref not in scene.present_character_refs:
                 scene.present_character_refs.append(pc_ref)
             self._pc_current_scene[(scene.campaign_id, pc_ref)] = scene.id
-            _, yaml_path = self._scene_file_paths(scene)
-            write_sidecar(yaml_path, scene)
+            self._write_sidecar(scene)
             if previous <= 1 and len(scene.present_pc_refs) >= 2:
-                await self._emit(ADVANCE_DISABLED, scene)
+                pending = scene.post_count - scene.last_advance_at_post
+                payload: dict = {}
+                if self.config.multi_pc.show_pending_count_in_ui:
+                    payload["pending_count"] = pending
+                await self._emit(ADVANCE_DISABLED, scene, **payload)
 
     async def set_pov(self, scene_id: str, character_ref: str) -> None:
         async with self._lock_for(scene_id):
@@ -474,8 +606,7 @@ class SceneManager:
             scene.pov_character_ref = character_ref
             if character_ref not in scene.present_character_refs:
                 scene.present_character_refs.append(character_ref)
-            _, yaml_path = self._scene_file_paths(scene)
-            write_sidecar(yaml_path, scene)
+            self._write_sidecar(scene)
 
     # -- Decisions -------------------------------------------------------
 
@@ -489,7 +620,7 @@ class SceneManager:
         proposed_location_ref: str | None = None,
     ) -> SceneBreakDecision:
         scene = await self.get_scene(scene_id) if scene_id else None
-        return detect_scene_break(
+        decision = detect_scene_break(
             scene,
             player_input,
             now_in_game=now_in_game,
@@ -497,6 +628,27 @@ class SceneManager:
             proposed_location_ref=proposed_location_ref,
             config=self.config.boundary,
         )
+        # §7 — optional LLM refinement for borderline-confidence heuristic
+        # results. Auto-break (>= auto_threshold) and clearly-not-break
+        # (< prompt_threshold) decisions are left alone. The classifier
+        # never sees the entire post history; we cap it at the recent window
+        # used elsewhere so a long scene doesn't blow the model's context.
+        if self._scene_break_classifier is None or scene is None:
+            return decision
+        cfg = self.config.boundary
+        ambiguous = (
+            cfg.confidence_threshold_prompt - 0.1
+            <= decision.confidence
+            < cfg.confidence_threshold_auto
+        )
+        if not ambiguous:
+            return decision
+        try:
+            recent = await self.recent_posts(scene.id, n=8)
+            refined = await self._scene_break_classifier(scene, player_input, recent)
+        except Exception:  # pragma: no cover - defensive; keep heuristic
+            return decision
+        return refined
 
     async def on_post_submitted(self, scene_id: str, post: Post) -> AdvanceDecision:
         scene = await self.get_scene(scene_id)
@@ -512,8 +664,7 @@ class SceneManager:
             if not pending:
                 raise NothingToAdvance(scene_id)
             scene.last_advance_at_post = scene.post_count
-            _, yaml_path = self._scene_file_paths(scene)
-            write_sidecar(yaml_path, scene)
+            self._write_sidecar(scene)
             await self._emit(ADVANCE_REQUESTED, scene, post_count=scene.post_count)
             return AdvanceResult(scene=scene, pending_posts=pending)
 
@@ -528,11 +679,15 @@ class SceneManager:
         except Exception:
             return
         scene.running_summary = new_summary
-        _, yaml_path = self._scene_file_paths(scene)
-        write_sidecar(yaml_path, scene)
+        self._write_sidecar(scene)
         await self._emit(RUNNING_SUMMARY_UPDATED, scene, summary=new_summary)
 
     async def update_running_summary(self, scene_id: str) -> str:
+        """Explicit-trigger summary update — used by the background worker,
+        tests, and admin endpoints. Append-driven scenes emit
+        ``running_summary_due`` on the bus and the background worker calls
+        this method to do the actual LLM work outside the append lock.
+        """
         async with self._lock_for(scene_id):
             scene = await self.get_scene(scene_id)
             await self._update_running_summary_locked(scene)
@@ -546,20 +701,58 @@ class SceneManager:
         async with self._lock_for(scene_id):
             scene = await self.get_scene(scene_id)
             target = scene.threads_introduced if kind == "introduced" else scene.threads_paid_off
-            if thread.text in target:
+            if any(t.text == thread.text for t in target):
                 return
-            target.append(thread.text)
-            _, yaml_path = self._scene_file_paths(scene)
-            write_sidecar(yaml_path, scene)
+            # Auto-stamp the provenance to the current post if the caller
+            # didn't already set it. Continuity uses these refs to backlink
+            # thread payoffs to their introducing post.
+            if kind == "introduced" and thread.introduced_at_post is None:
+                thread = Thread(
+                    text=thread.text,
+                    introduced_at_post=scene.post_count or None,
+                    paid_off_at_post=thread.paid_off_at_post,
+                )
+            elif kind == "paid_off" and thread.paid_off_at_post is None:
+                thread = Thread(
+                    text=thread.text,
+                    introduced_at_post=thread.introduced_at_post,
+                    paid_off_at_post=scene.post_count or None,
+                )
+            target.append(thread)
+            self._write_sidecar(scene)
             event = THREAD_INTRODUCED if kind == "introduced" else THREAD_PAID_OFF
-            await self._emit(event, scene, thread=thread.text)
+            await self._emit(
+                event,
+                scene,
+                thread=thread.text,
+                introduced_at_post=thread.introduced_at_post,
+                paid_off_at_post=thread.paid_off_at_post,
+            )
 
     async def list_threads(self, scene_id: str) -> SceneThreads:
         scene = await self.get_scene(scene_id)
         return SceneThreads(
-            introduced=[Thread(text=t) for t in scene.threads_introduced],
-            paid_off=[Thread(text=t) for t in scene.threads_paid_off],
+            introduced=list(scene.threads_introduced),
+            paid_off=list(scene.threads_paid_off),
         )
+
+    async def detect_threads(self, scene_id: str) -> list[tuple[Thread, str]]:
+        """Invoke the configured LLM thread detector for this scene.
+
+        Returns the list of ``(Thread, kind)`` tuples the detector produced —
+        the caller is expected to feed them through :meth:`add_thread` (the
+        detector itself is intentionally side-effect-free so a dry-run pass
+        can preview proposals before persisting). When no detector is wired
+        or thread detection is disabled, returns an empty list.
+        """
+        if not self.config.thread_detection.enabled or self._thread_detector is None:
+            return []
+        scene = await self.get_scene(scene_id)
+        posts = await self.get_posts(scene_id)
+        try:
+            return await self._thread_detector(scene, posts)
+        except Exception:  # pragma: no cover - defensive
+            return []
 
     # -- Editing ---------------------------------------------------------
 
@@ -574,12 +767,20 @@ class SceneManager:
                 else:
                     updated.append(existing)
             md_path, _ = self._scene_file_paths(scene)
-            write_body(md_path, updated)
+            write_body(
+                md_path,
+                updated,
+                heading_pattern=self.config.files.post_heading_pattern,
+            )
+            self._known_body_hashes[scene.id] = content_hash(
+                md_path.read_text(encoding="utf-8")
+            )
             await self._emit(
                 POST_EDITED,
                 scene,
                 order=post.order_in_scene,
                 source=source,
+                post_id=post.id,
             )
 
     async def delete_post(self, post_id: str, source: str) -> None:
@@ -594,13 +795,17 @@ class SceneManager:
                 if existing.order_in_scene > removed_order:
                     existing = replace(existing, order_in_scene=existing.order_in_scene - 1)
                 kept.append(existing)
-            md_path, yaml_path = self._scene_file_paths(scene)
-            write_body(md_path, kept)
+            md_path, _ = self._scene_file_paths(scene)
+            write_body(
+                md_path,
+                kept,
+                heading_pattern=self.config.files.post_heading_pattern,
+            )
             scene.post_count = len(kept)
             if scene.last_advance_at_post > scene.post_count:
                 scene.last_advance_at_post = scene.post_count
-            write_sidecar(yaml_path, scene)
             # Re-key record metadata for shifted posts.
+            self._hydrate_records(scene)
             records = self._records_for(scene.id)
             shifted = {}
             for key, record in list(records.items()):
@@ -612,7 +817,17 @@ class SceneManager:
                 else:
                     shifted[key] = record
             self._post_records[scene.id] = shifted
-            await self._emit(POST_DELETED, scene, order=removed_order, source=source)
+            self._write_sidecar(scene)
+            self._known_body_hashes[scene.id] = content_hash(
+                md_path.read_text(encoding="utf-8")
+            )
+            await self._emit(
+                POST_DELETED,
+                scene,
+                order=removed_order,
+                source=source,
+                post_id=post_id,
+            )
 
     async def _find_post(self, post_id: str) -> tuple[Scene, Post]:
         # Search active and known scenes first; fall back to a filesystem walk.
@@ -658,13 +873,16 @@ class SceneManager:
             shutil.copytree(source_dir, target_dir)
         else:
             target_dir.mkdir(parents=True)
-        # Rewrite sidecars to set the new branch_id and id prefix.
+        # Rewrite sidecars to set the new branch_id and id prefix; carry the
+        # `posts:` block over so post identity (and therefore retcon by id)
+        # survives the fork.
         new_scenes: list[Scene] = []
         for yaml_path in sorted(target_dir.glob("*.yaml")):
             scene = read_sidecar(yaml_path)
             scene.branch_id = new_branch_id
             scene.id = self._scene_id(campaign_id, new_branch_id, scene.ordinal, scene.slug)
-            write_sidecar(yaml_path, scene)
+            records = read_sidecar_post_records(yaml_path)
+            write_sidecar(yaml_path, scene, post_records=records)
             new_scenes.append(scene)
         return new_scenes
 
@@ -676,16 +894,55 @@ class SceneManager:
         Called by the watcher (task #9) when the user edits a scene file
         directly. We rebuild ``post_count`` from the markdown and emit a
         ``scene_file_changed`` event so consumers can refresh.
+
+        Conflict policy: last-write-wins. If the on-disk body hash doesn't
+        match the hash we last wrote, the ``scene_file_changed`` event
+        includes ``conflict=True`` so the frontend can surface a warning;
+        the disk version is still accepted as the new source of truth.
         """
         scene = await self.get_scene(scene_id)
         md_path, yaml_path = self._scene_file_paths(scene)
+        body_text = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+        new_hash = content_hash(body_text)
+        prior_hash = self._known_body_hashes.get(scene_id)
+        conflict = prior_hash is not None and prior_hash != new_hash
         if yaml_path.exists():
             scene = read_sidecar(yaml_path)
         posts = read_posts(md_path, scene_id) if md_path.exists() else []
         scene.post_count = len(posts)
-        write_sidecar(yaml_path, scene)
-        await self._emit(SCENE_FILE_CHANGED, scene, post_count=scene.post_count)
+        # Drop in-memory records that no longer correspond to a parsed post
+        # (e.g., the user deleted a heading on disk) and reload from the
+        # sidecar's posts: block, which the watcher path doesn't update.
+        self._records_hydrated.discard(scene_id)
+        self._hydrate_records(scene)
+        records = self._records_for(scene_id)
+        valid_orders = {str(p[0]) for p in posts}
+        for stale in [k for k in records if k not in valid_orders]:
+            records.pop(stale, None)
+        self._write_sidecar(scene)
+        self._known_body_hashes[scene_id] = new_hash
+        await self._emit(
+            SCENE_FILE_CHANGED,
+            scene,
+            post_count=scene.post_count,
+            conflict=conflict,
+        )
         return scene
+
+    async def hydrate_post_records(self, scene_id: str) -> None:
+        """Force-load the sidecar's ``posts:`` block into the in-memory cache.
+
+        Useful on startup or after a fork so the first call to ``get_posts``
+        returns durable identity without an extra disk round-trip.
+        """
+        scene = await self.get_scene(scene_id)
+        self._records_hydrated.discard(scene_id)
+        self._hydrate_records(scene)
+        md_path, _ = self._scene_file_paths(scene)
+        if md_path.exists():
+            self._known_body_hashes[scene_id] = content_hash(
+                md_path.read_text(encoding="utf-8")
+            )
 
 
 class NothingToAdvance(RuntimeError):
