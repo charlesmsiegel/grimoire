@@ -224,6 +224,7 @@ class PromptComposer:
 
         character_prompts: list[str] = []
         character_negatives: list[str] = []
+        canonical_seeds: list[int] = []
         if scene_present_refs and self.characters is not None:
             for ref in scene_present_refs:
                 try:
@@ -240,6 +241,10 @@ class PromptComposer:
                     character_prompts.append(base)
                 if negative:
                     character_negatives.append(negative)
+                # §11 per-character canonical seed: collect for fold-in
+                seed = getattr(image, "canonical_seed", None)
+                if isinstance(seed, int):
+                    canonical_seeds.append(int(seed) & 0x7FFFFFFF)
 
         scene_elements: list[str] = []
         if extra_elements:
@@ -265,6 +270,12 @@ class PromptComposer:
             preset_negative=preset_negative,
             character_negatives=character_negatives,
         )
+
+        if canonical_seeds:
+            combined = canonical_seeds[0]
+            for s in canonical_seeds[1:]:
+                combined ^= s
+            preset_params = {**preset_params, "seed": combined & 0x7FFFFFFF}
 
         return ComposedPrompt(
             prompt=prompt,
