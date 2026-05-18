@@ -93,6 +93,48 @@ export interface OpenCommitment {
   owed_to?: string | null;
 }
 
+export type Commitment = OpenCommitment;
+
+export interface FactScope {
+  character_ids?: string[];
+  location_ids?: string[];
+  faction_ids?: string[];
+  item_ids?: string[];
+  scope?: string;
+}
+
+export interface Fact {
+  id: string;
+  text: string;
+  established_in_post: string;
+  confidence: number;
+  about: FactScope;
+}
+
+export interface ContradictionCandidate {
+  existing_fact: Fact;
+  similarity: number;
+  verdict: string;
+  confidence: number;
+  rationale: string;
+}
+
+export interface ContradictionReport {
+  id: string;
+  candidate_fact: Fact;
+  conflicts: ContradictionCandidate[];
+  resolved: boolean;
+}
+
+export interface ContinuityLedger {
+  campaign_id: string;
+  open_commitments: Commitment[];
+  overdue_commitments: Commitment[];
+  stale_commitments: Commitment[];
+  recent_facts: Fact[];
+  unresolved_contradictions: ContradictionReport[];
+}
+
 const enc = encodeURIComponent;
 
 export const campaignApi = {
@@ -141,6 +183,9 @@ export const campaignApi = {
 
   listCommitments: (id: string) =>
     api.get<OpenCommitment[]>(`/api/campaigns/${enc(id)}/commitments`),
+
+  getLedger: (id: string) =>
+    api.get<ContinuityLedger>(`/api/campaigns/${enc(id)}/continuity/ledger`),
 
   listImages: (id: string, sceneId?: string) =>
     api.get<{ id: string; thumb_path?: string; image_path?: string; post_id?: string }[]>(

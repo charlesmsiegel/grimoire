@@ -74,6 +74,7 @@ from grimoire.continuity.types import (
 
 __all__ = [
     "AGES_LIKE_OPEN",
+    "TERMINAL_STATUSES",
     "AgingReport",
     "Commitment",
     "CommitmentId",
@@ -115,7 +116,6 @@ __all__ = [
     "SceneBriefing",
     "SqliteContinuityStore",
     "StubContradictionJudge",
-    "TERMINAL_STATUSES",
     "make_judge_request_factory",
     "resolve_continuity",
 ]

@@ -30,9 +30,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from grimoire.context.config import ContextBuilderConfig
-from grimoire.continuity.registry import resolve_continuity
 from grimoire.context.errors import LockInOverflowError
 from grimoire.context.tokens import TokenEstimator, cheap_estimator, estimate_tokens
+from grimoire.continuity.registry import resolve_continuity
 from grimoire.templates import render as render_template
 from grimoire.types.common import CampaignId, TurnId
 from grimoire.types.composition import Composition
