@@ -1,0 +1,45 @@
+{
+  "results": [
+    {
+      "budget_ms": 50.0,
+      "iterations": 5,
+      "mean_ms": 0.0017142000160674797,
+      "median_ms": 0.0005809999947814504,
+      "name": "turn_submission_latency_mock_llm",
+      "stdev_ms": 0.0020580348060043057
+    },
+    {
+      "budget_ms": 200.0,
+      "iterations": 5,
+      "mean_ms": 0.0004076000095665222,
+      "median_ms": 0.0003339999921081471,
+      "name": "context_builder_100_character_campaign",
+      "stdev_ms": 0.00015648899068593935
+    },
+    {
+      "budget_ms": 2000.0,
+      "iterations": 3,
+      "mean_ms": 0.00039933331663633,
+      "median_ms": 0.00035699997624760726,
+      "name": "frozen_campaign_load_plus_one_turn",
+      "stdev_ms": 9.579315791615697e-05
+    },
+    {
+      "budget_ms": 500.0,
+      "iterations": 5,
+      "mean_ms": 0.00037019997307652375,
+      "median_ms": 0.0003330000026835478,
+      "name": "plugin_discovery_load_10_plugins",
+      "stdev_ms": 8.274781961088848e-05
+    },
+    {
+      "budget_ms": 100.0,
+      "iterations": 5,
+      "mean_ms": 4.83142539999335,
+      "median_ms": 4.109892999963449,
+      "name": "state_store_vector_search_10k",
+      "stdev_ms": 1.0411006752200558
+    }
+  ],
+  "threshold_pct": 20.0
+}
