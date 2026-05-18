@@ -1100,3 +1100,66 @@ async def test_save_override_to_library_requires_existing_override(
         await library.save_override_to_library(
             "camp-1", "worlds/wod-london/characters/alistair"
         )
+
+
+# ---------------------------------------------------------------------------
+# Upgrade diff preview (§8)
+# ---------------------------------------------------------------------------
+
+
+async def test_preview_upgrade_world_ref_returns_per_entity_diff(
+    library: LibraryService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _seed_character(store, "wod-london", "alistair", name="Alistair v1")
+    await _seed_character(store, "wod-london", "winifred", name="winifred v1")
+
+    await store.upsert_campaign(campaign_id="camp-1", name="Camp")
+    await library.set_composition(
+        "camp-1",
+        Composition(
+            worlds=[
+                WorldRef(world_id="wod-london", priority=1, include=None, track_latest=False)
+            ]
+        ),
+    )
+
+    # Mutate one entity, add another.
+    await _seed_character(store, "wod-london", "alistair", name="Alistair v2")
+    await _seed_character(store, "wod-london", "edgar", name="Edgar v1")
+
+    preview = await library.preview_upgrade_world_ref("camp-1", "wod-london")
+    assert preview.world_id == "wod-london"
+    assert preview.from_version > 0
+    assert preview.to_version > preview.from_version
+    entries = {e.library_id: e for e in preview.entries}
+
+    # Alistair changed: both sides populated, different versions.
+    alistair = entries["worlds/wod-london/characters/alistair"]
+    assert alistair.before_frontmatter is not None
+    assert alistair.after_frontmatter is not None
+    assert alistair.before_frontmatter["name"] == "Alistair v1"
+    assert alistair.after_frontmatter["name"] == "Alistair v2"
+    assert alistair.before_version != alistair.after_version
+
+    # Edgar was added: no snapshot side.
+    edgar = entries["worlds/wod-london/characters/edgar"]
+    assert edgar.before_frontmatter is None
+    assert edgar.after_frontmatter is not None
+
+    assert "worlds/wod-london/characters/alistair" in preview.changed_entities
+    assert "worlds/wod-london/characters/edgar" in preview.added_entities
+
+    # The preview did not mutate snapshots.
+    pinned = await library.resolve(
+        "worlds/wod-london/characters/alistair", "camp-1"
+    )
+    assert pinned.frontmatter["name"] == "Alistair v1"
+
+
+async def test_preview_upgrade_world_ref_missing_ref_raises(
+    library: LibraryService, store: StateStore
+) -> None:
+    await store.upsert_campaign(campaign_id="camp-x", name="Camp")
+    with pytest.raises(LibraryNotFoundError):
+        await library.preview_upgrade_world_ref("camp-x", "wod-london")

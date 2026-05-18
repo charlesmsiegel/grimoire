@@ -138,3 +138,39 @@ class UpgradeReport(BaseModel):
     added_entities: list[str] = Field(default_factory=list)
     removed_entities: list[str] = Field(default_factory=list)
     diff: Any | None = None
+
+
+class UpgradeEntityChange(BaseModel):
+    """Per-entity diff payload for an :class:`UpgradePreview`.
+
+    ``before`` is the pinned-snapshot frontmatter/body the campaign sees
+    today; ``after`` is what the live library row would show post-upgrade.
+    Either side may be missing — entities added or removed by the upgrade
+    surface here as well.
+    """
+
+    library_id: str
+    before_version: int | None = None
+    after_version: int | None = None
+    before_frontmatter: dict[str, Any] | None = None
+    after_frontmatter: dict[str, Any] | None = None
+    before_body: str | None = None
+    after_body: str | None = None
+
+
+class UpgradePreview(BaseModel):
+    """Dry-run output for :meth:`LibraryService.preview_upgrade_world_ref`.
+
+    Pairs the existing :class:`UpgradeReport` shape (version numbers +
+    diff map) with the per-entity content the frontend needs to render an
+    inline diff before the user commits the upgrade.
+    """
+
+    campaign_id: CampaignId
+    world_id: str
+    from_version: int
+    to_version: int
+    changed_entities: list[str] = Field(default_factory=list)
+    added_entities: list[str] = Field(default_factory=list)
+    removed_entities: list[str] = Field(default_factory=list)
+    entries: list[UpgradeEntityChange] = Field(default_factory=list)
