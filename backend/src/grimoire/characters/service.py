@@ -19,8 +19,6 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
-_log = logging.getLogger(__name__)
-
 from grimoire.library import LibraryService
 from grimoire.mechanics.service import MechanicsService
 from grimoire.state_store import StateStore
@@ -77,6 +75,8 @@ from .views import (
     render_full,
     render_voice_only,
 )
+
+_log = logging.getLogger(__name__)
 
 PostFetcher = Callable[[str], Awaitable[list[Post]]]
 
@@ -583,9 +583,10 @@ class CharactersService:
                 ref = _ref_from_resolved(resolved)
                 if ref in present:
                     continue
-                if _mentions_character(joined_body, resolved.character):
-                    if _tier_rank(out.get(ref)) < _tier_rank(ContextTier.BACKGROUND):
-                        out[ref] = ContextTier.BACKGROUND
+                if _mentions_character(joined_body, resolved.character) and _tier_rank(
+                    out.get(ref)
+                ) < _tier_rank(ContextTier.BACKGROUND):
+                    out[ref] = ContextTier.BACKGROUND
 
         # Open commitments to a PC → at least BACKGROUND. Caller passes the
         # set; we don't reach into Continuity here.
@@ -669,7 +670,7 @@ class CharactersService:
             )
             try:
                 await self._drift_event_sink(event)
-            except Exception:  # noqa: BLE001 — sink must not block extraction
+            except Exception:  # sink must not block extraction
                 _log.warning(
                     "drift_event_sink raised for %s in %s", ref, campaign_id, exc_info=True
                 )
