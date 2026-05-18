@@ -25,7 +25,12 @@ from grimoire.event_bus import EventBus
 from grimoire.export.service import ExportService
 from grimoire.export.sources import DataSources
 from grimoire.extractor.service import ExtractorService
-from grimoire.imagegen import BackendRegistry, ImageGenConfig, ImageGenService
+from grimoire.imagegen import (
+    BackendRegistry,
+    ImageGenConfig,
+    ImageGenIntegration,
+    ImageGenService,
+)
 from grimoire.library import LibraryService
 from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.mechanics import MechanicsConfig, MechanicsService
@@ -158,6 +163,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 event_bus=container.event_bus,
                 config=imagegen_cfg,
             )
+        if container.extras.get("imagegen_integration") is None and container.event_bus is not None:
+            integration = ImageGenIntegration(container.imagegen, container.event_bus)
+            integration.start()
+            container.extras["imagegen_integration"] = integration
 
         # LLM-adjacent services: gateway + extractor + context builder are
         # the substrate the orchestrator drives. They're wired even when no
@@ -282,6 +291,14 @@ async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
                 await gateway_health_monitor.stop()
             except Exception:
                 log.exception("gateway health monitor stop failed during shutdown")
+        imagegen_integration = (
+            container.extras.get("imagegen_integration") if container.extras else None
+        )
+        if imagegen_integration is not None:
+            try:
+                imagegen_integration.stop()
+            except Exception:
+                log.exception("imagegen integration stop failed during shutdown")
         if container.imagegen is not None:
             try:
                 await container.imagegen.aclose()
