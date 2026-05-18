@@ -12,6 +12,12 @@ instead of raw rows. Writes are mediated so files and the index stay in
 sync; reads follow the cascade documented in the spec.
 """
 
+from grimoire.library.config import (
+    LibraryConfig,
+    LibraryIndexingConfig,
+    LibraryPromotionConfig,
+    LibraryVersionPinningConfig,
+)
 from grimoire.library.errors import (
     LibraryConflictError,
     LibraryError,
@@ -21,9 +27,13 @@ from grimoire.library.errors import (
 from grimoire.library.service import LibraryService
 
 __all__ = [
+    "LibraryConfig",
     "LibraryConflictError",
     "LibraryError",
+    "LibraryIndexingConfig",
     "LibraryNotFoundError",
+    "LibraryPromotionConfig",
     "LibraryService",
+    "LibraryVersionPinningConfig",
     "PromotionError",
 ]

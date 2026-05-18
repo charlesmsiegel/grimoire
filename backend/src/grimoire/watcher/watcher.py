@@ -29,6 +29,7 @@ from grimoire.files import (
     load_yaml,
     read_markdown,
 )
+from grimoire.library.config import LibraryConfig
 from grimoire.state_store import StateStore
 from grimoire.state_store.indexers import (
     delete_campaign_content_row,
@@ -134,6 +135,7 @@ class FileWatcher:
         loop: asyncio.AbstractEventLoop | None = None,
         embedding_queue: EmbeddingQueue | None = None,
         scene_manager: object | None = None,
+        config: LibraryConfig | None = None,
     ) -> None:
         self.data_root = Path(data_root).resolve()
         self.store = store
@@ -142,6 +144,7 @@ class FileWatcher:
         self._observer: Observer | None = None
         self._known_hashes: dict[Path, str | None] = {}
         self.embedding_queue = embedding_queue or EmbeddingQueue()
+        self.config = config or LibraryConfig()
         # Paths the app is about to write, keyed to the content_hash the app
         # expects to land on disk. Used to distinguish "watcher saw our own
         # write" (silent reindex) from "external user wrote during/after our
@@ -416,7 +419,11 @@ class FileWatcher:
             self._known_hashes[path] = new_hash
             assert parsed is not None
             await self._apply_upsert(watched, parsed.frontmatter, parsed.body)
-            if watched.kind in _EMBEDDABLE_KINDS and parsed.body.strip():
+            if (
+                self.config.indexing.embed_on_index
+                and watched.kind in _EMBEDDABLE_KINDS
+                and parsed.body.strip()
+            ):
                 self._enqueue_embedding(watched, parsed.frontmatter, parsed.body)
 
         # §3 — forward scene file changes into the Scene Manager so it can

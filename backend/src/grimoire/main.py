@@ -34,7 +34,7 @@ from grimoire.imagegen import (
     ImageGenIntegration,
     ImageGenService,
 )
-from grimoire.library import LibraryService
+from grimoire.library import LibraryConfig, LibraryService
 from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.mechanics import MechanicsConfig, MechanicsService
 from grimoire.observability.health import HealthMonitorService
@@ -128,8 +128,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         if container.state_store is None:
             container.state_store = StateStore(db=db, data_root=data_root)
+        library_cfg = LibraryConfig.from_yaml(data_root / "config" / "library.yaml")
         if container.library is None:
-            container.library = LibraryService(container.state_store)
+            container.library = LibraryService(container.state_store, config=library_cfg)
         if container.world is None:
             world_cfg = WorldConfig.from_yaml(data_root / "config" / "world.yaml")
             container.world = WorldService(container.library, config=world_cfg)
@@ -325,17 +326,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # auto-index, but in-app writes go through StateStore which updates
         # the index directly.
         _seed_defaults(data_root)
-        file_watcher = FileWatcher(
-            data_root=data_root,
-            store=container.state_store,
-            bus=container.event_bus,
-            scene_manager=container.scenes,
-        )
-        container.extras["file_watcher"] = file_watcher
-        try:
-            await file_watcher.scan_now()
-        except Exception:
-            log.exception("initial library scan failed at startup")
+        if library_cfg.watch:
+            file_watcher = FileWatcher(
+                data_root=data_root,
+                store=container.state_store,
+                bus=container.event_bus,
+                scene_manager=container.scenes,
+                config=library_cfg,
+            )
+            container.extras["file_watcher"] = file_watcher
+            if library_cfg.scan_on_startup:
+                try:
+                    await file_watcher.scan_now()
+                except Exception:
+                    log.exception("initial library scan failed at startup")
 
         app.state.container = container
     except Exception:

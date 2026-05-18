@@ -722,6 +722,7 @@ class StateStore:
         include: list[str] | None,
         track_latest: bool,
         bound_at_version: int | None = None,
+        snapshot_on_bind: bool = True,
     ) -> None:
         if bound_at_version is None:
             row = await self.db.fetchone(
@@ -755,7 +756,7 @@ class StateStore:
                     _now_iso(),
                 ),
             )
-            if not track_latest:
+            if not track_latest and snapshot_on_bind:
                 await write_snapshots_for_world(
                     conn,
                     campaign_id=campaign_id,
