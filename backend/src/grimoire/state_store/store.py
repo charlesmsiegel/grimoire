@@ -621,12 +621,25 @@ class StateStore:
         prefer_snapshot = bool(ref_row and not int(ref_row["track_latest"]))
 
         if prefer_snapshot:
+            # Walk the branch chain (child → parent → ... → main) so a forked
+            # branch reads its parent's snapshot row. Without this, a fork
+            # made when ``track_latest=False`` would have no snapshot rows of
+            # its own and fall back to the live index — picking up library
+            # upgrades that happened on main after the fork, which defeats
+            # the pinning semantics. See §3 of the library remaining-design.
+            chain = await self.branch_chain(branch_id)
+            placeholders = ",".join("?" * len(chain))
             snap = await self.db.fetchone(
-                """
-                SELECT version, frontmatter, body FROM library_snapshots
-                WHERE campaign_id = ? AND branch_id = ? AND library_id = ?
+                f"""
+                SELECT branch_id, version, frontmatter, body FROM library_snapshots
+                WHERE campaign_id = ? AND library_id = ?
+                  AND branch_id IN ({placeholders})
+                ORDER BY CASE branch_id
+                  {" ".join(f"WHEN ? THEN {i}" for i in range(len(chain)))}
+                END ASC
+                LIMIT 1
                 """,
-                (campaign_id, branch_id, library_id),
+                (campaign_id, library_id, *chain, *chain),
             )
             if snap is not None:
                 return {
