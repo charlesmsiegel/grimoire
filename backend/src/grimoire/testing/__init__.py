@@ -22,6 +22,7 @@ same harnesses. Tests import what they need:
   threshold (default 20%).
 """
 
+from grimoire.testing.anonymizer import Anonymizer, sidecar_path
 from grimoire.testing.app import TestApp, TestAppFixture
 from grimoire.testing.benchmark import (
     BenchmarkResult,
@@ -43,6 +44,7 @@ from grimoire.testing.frozen import (
     FrozenCampaignHarness,
     InvariantReport,
     InvariantSnapshot,
+    SnapshotStaleError,
 )
 from grimoire.testing.mock_llm import (
     MockEmbeddingProvider,
@@ -57,6 +59,7 @@ from grimoire.testing.record_replay import (
 from grimoire.testing.scenario import ScenarioApp
 
 __all__ = [
+    "Anonymizer",
     "BenchmarkResult",
     "BenchmarkRunner",
     "BenchmarkSpec",
@@ -78,7 +81,9 @@ __all__ = [
     "RegressionReport",
     "ReplayMode",
     "ScenarioApp",
+    "SnapshotStaleError",
     "TestApp",
     "TestAppFixture",
     "TestingConfig",
+    "sidecar_path",
 ]
