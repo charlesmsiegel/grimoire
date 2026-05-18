@@ -14,6 +14,7 @@ import inspect
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from grimoire.event_bus import Event as BusEvent
@@ -205,11 +206,60 @@ class PluginsService:
         self._records.pop(plugin_id, None)
 
     async def load(self, plugin_id: PluginId) -> None:
-        # `rescan` already does the heavy work for us. Calling `load` for a
-        # specific plugin without rescanning makes sense only when the
-        # caller wants to retry a previously failed plugin; we do that by
-        # running a targeted rescan filtered to the one directory.
-        await self.rescan()
+        """Reload a single plugin without re-discovering every directory.
+
+        Two callers want this:
+
+        * the UI retry button after a plugin failed — we don't want to pay
+          the import cost of every healthy plugin just to retry the one
+          broken one;
+        * :meth:`set_config`, which needs the live instance rebuilt with
+          the fresh config (plugins commonly cache the API key on
+          ``__init__``).
+
+        Missing plugins are surfaced as ``KeyError`` so callers can decide
+        whether to fall back to a full rescan or report 404.
+        """
+        discovered = self._discover_one(plugin_id)
+        if discovered is None:
+            raise KeyError(f"plugin {plugin_id!r} not found on disk")
+
+        config_dict = self._load_config_for_load(plugin_id, discovered.raw_manifest)
+        result = load_plugin(discovered, config_dict)
+        # Whether the new load succeeded or not, drop any previous record
+        # so a rebuild from a fresh start (e.g. fixing a syntax error in
+        # plugin.py) doesn't leave the old broken instance live in the
+        # registry.
+        self._unregister_record(plugin_id)
+        if result.ok and result.manifest is not None:
+            self._failed.pop(plugin_id, None)
+            await self._install(result)
+        else:
+            self._failed[plugin_id] = list(result.errors)
+            await self._emit(
+                EventType.PLUGIN_FAILED,
+                {"plugin_id": plugin_id, "errors": list(result.errors)},
+            )
+
+    def _discover_one(self, plugin_id: PluginId):
+        """Find a single plugin on disk by id.
+
+        Walks the configured roots looking for a directory whose
+        ``manifest.yaml`` declares the requested id. We compare on the
+        manifest's declared id rather than the directory name so a plugin
+        renamed on disk still resolves (the loader's id-mismatch check
+        catches the discrepancy later if the user forgot to rename one of
+        the two).
+        """
+        roots: list[Path] = [self._config.root]
+        bundled = [self._config.bundled_root] if self._config.bundled_root else None
+        discovered, _ = discover(roots=roots, bundled_roots=bundled)
+        for d in discovered:
+            raw_id = d.raw_manifest.get("id") if isinstance(d.raw_manifest, dict) else None
+            candidate = raw_id if isinstance(raw_id, str) else d.plugin_dir.name
+            if candidate == plugin_id:
+                return d
+        return None
 
     async def unload(self, plugin_id: PluginId) -> None:
         was_known = plugin_id in self._records or plugin_id in self._failed
@@ -327,9 +377,18 @@ class PluginsService:
                 "; ".join(e.message for e in validation.errors) or "invalid plugin config"
             )
         self._config_store.save(plugin_id, config, manifest.config_schema)
-        record = self._records.get(plugin_id)
-        if record is not None and record.lifecycle == PluginLifecycle.LOADED:
-            record.lifecycle = PluginLifecycle.ACTIVE
+        # Rebuild the live instance against the fresh config. Most bundled
+        # plugins cache the API key on ``__init__``; without this step the
+        # user would have to hit "Rescan" before a new key took effect.
+        # Falls back to the in-place LOADED→ACTIVE transition only when
+        # the plugin can't be re-loaded (e.g. removed from disk between
+        # the get_manifest call and now) so behavior stays predictable.
+        try:
+            await self.load(plugin_id)
+        except KeyError:
+            record = self._records.get(plugin_id)
+            if record is not None and record.lifecycle == PluginLifecycle.LOADED:
+                record.lifecycle = PluginLifecycle.ACTIVE
 
     async def validate_config(self, plugin_id: PluginId, config: dict) -> ValidationResult:
         manifest = await self.get_manifest(plugin_id)
@@ -479,7 +538,6 @@ class PluginsService:
             target_id=target_id,
             message=f"completed in {time.monotonic() - started:.2f}s",
         )
-
 
     async def _emit(
         self,
