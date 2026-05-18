@@ -57,6 +57,11 @@ def map_lookup_errors(exc: Exception) -> HTTPException:
     # 409 so the UI can show the message instead of a generic 500.
     if "orchestrator" in name or "state" in name or "conflict" in name:
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+    # NoBackendAvailableError ("install an imagegen plugin first") is a
+    # service-not-ready signal, not a server bug — return 503 so the UI can
+    # render a "configure a backend" prompt instead of an opaque 500.
+    if "nobackendavailable" in name:
+        return HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
     return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail)
 
 
