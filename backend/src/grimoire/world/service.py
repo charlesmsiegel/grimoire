@@ -51,6 +51,7 @@ from grimoire.types.world import (
     Location,
     LocationConnection,
     LocationKind,
+    LocationStateData,
     LoreEntry,
     Season,
     Weather,
@@ -1012,9 +1013,7 @@ class WorldService:
         campaign_id: CampaignId,
         *,
         branch_id: str | None = None,
-    ) -> "LocationStateData":  # noqa: UP037 — string for lazy import
-        from grimoire.types.world import LocationStateData
-
+    ) -> LocationStateData:
         branch = branch_id or f"{campaign_id}:main"
         row = await self.store.db.fetchone(
             "SELECT * FROM location_state WHERE location_ref = ? AND branch_id = ?",
@@ -1063,7 +1062,7 @@ class WorldService:
         branch_id: str | None = None,
         source: str = "user",
         turn_id: str | None = None,
-    ) -> "LocationStateData":  # noqa: UP037
+    ) -> LocationStateData:
         from grimoire.types.state import DeltaKind, StateDelta
 
         branch = branch_id or f"{campaign_id}:main"
