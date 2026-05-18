@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from grimoire.api.deps import ImageGenDep
 from grimoire.api.util import map_lookup_errors, to_payload
@@ -39,6 +39,26 @@ async def prewarm_backend(backend_id: str, imagegen: ImageGenDep) -> Any:
         await imagegen.prewarm(backend_id)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+    return {"ok": True}
+
+
+@router.post("/backends/{backend_id}/confirm-download")
+async def confirm_download(backend_id: str, imagegen: ImageGenDep) -> Any:
+    """§9 Confirm a deferred first-launch model download.
+
+    Only meaningful when the backend's ``download_on_first_use`` is set to
+    ``"prompt"`` and the backend exposes a ``confirm_download()`` hook.
+    """
+    backend = imagegen.registry.get(backend_id)
+    if backend is None:
+        raise HTTPException(status_code=404, detail=f"no backend {backend_id!r}")
+    confirm = getattr(backend, "confirm_download", None)
+    if confirm is None or not callable(confirm):
+        raise HTTPException(
+            status_code=400,
+            detail=f"backend {backend_id!r} does not support download confirmation",
+        )
+    confirm()
     return {"ok": True}
 
 

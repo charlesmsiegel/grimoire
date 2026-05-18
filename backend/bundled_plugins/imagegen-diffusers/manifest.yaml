@@ -136,6 +136,17 @@ config_schema:
         because the first call also downloads weights.
       default: 600
       minimum: 1
+    download_on_first_use:
+      type: string
+      enum: ["prompt", "auto", "never"]
+      default: "auto"
+      title: Download on first use
+      description: |
+        What to do when the configured model is not locally cached.
+        "auto" downloads silently (~6 GB for SDXL base 1.0).
+        "prompt" requires the user to confirm via the UI
+        (POST /api/imagegen/backends/{id}/confirm-download).
+        "never" disables generation until the model is cached locally.
   additionalProperties: false
 
 requirements:

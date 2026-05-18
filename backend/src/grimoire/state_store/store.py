@@ -1374,9 +1374,7 @@ def _character_state_row_to_dict(row: aiosqlite.Row) -> dict:
         "tier_pin": row["tier_pin"],
         "current_scene_id": row["current_scene_id"],
         "updated_at_turn": row["updated_at_turn"],
-        "appearances_since_last_drift_check": int(
-            row["appearances_since_last_drift_check"] or 0
-        ),
+        "appearances_since_last_drift_check": int(row["appearances_since_last_drift_check"] or 0),
     }
 
 
