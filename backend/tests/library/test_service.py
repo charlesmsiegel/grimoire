@@ -792,7 +792,7 @@ async def test_promote_writes_override_when_emergent_diverged_after_read(
     real_get = store.get_emergent
     calls = {"n": 0}
 
-    async def _flip(campaign_id: str, kind: str, eid: str):  # noqa: ANN001
+    async def _flip(campaign_id: str, kind: str, eid: str):
         calls["n"] += 1
         if calls["n"] == 1:
             return await real_get(campaign_id, kind, eid)
@@ -834,7 +834,7 @@ async def test_promote_emits_library_entity_promoted_event(
     bus = EventBus()
     seen: list = []
 
-    async def _on(event):  # noqa: ANN001
+    async def _on(event):
         seen.append(event)
 
     bus.subscribe("library_entity_promoted", _on)
@@ -1010,7 +1010,7 @@ async def test_demote_emits_library_entity_demoted_event(store: StateStore) -> N
     bus = EventBus()
     seen: list = []
 
-    async def _on(event):  # noqa: ANN001
+    async def _on(event):
         seen.append(event)
 
     bus.subscribe("library_entity_demoted", _on)

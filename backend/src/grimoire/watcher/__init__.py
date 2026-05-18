@@ -11,12 +11,20 @@ See spec 03 §File watcher and spec 18 §File watcher.
 """
 
 from grimoire.watcher.classifier import WatchedFile, classify_path
-from grimoire.watcher.watcher import EmbeddingJob, EmbeddingQueue, FileWatcher
+from grimoire.watcher.watcher import (
+    EmbeddingJob,
+    EmbeddingQueue,
+    FileWatcher,
+    SummaryJob,
+    SummaryQueue,
+)
 
 __all__ = [
     "EmbeddingJob",
     "EmbeddingQueue",
     "FileWatcher",
+    "SummaryJob",
+    "SummaryQueue",
     "WatchedFile",
     "classify_path",
 ]

@@ -551,6 +551,40 @@ class StateStore:
     # Reads — library + campaign content
     # ------------------------------------------------------------------
 
+    async def set_body_compressed(
+        self,
+        library_id: str,
+        text: str | None,
+        *,
+        expected_content_hash: str | None = None,
+    ) -> bool:
+        """Write the auto-summary into ``library_index.body_compressed``.
+
+        Spec 18 §Indexing + remaining-design §1. The optional
+        ``expected_content_hash`` guard lets a worker pass the
+        content_hash it summarized against; the update is rejected when
+        the row's hash has since drifted (someone re-wrote the file in
+        between, invalidating the summary).
+
+        Returns ``True`` when the row was updated, ``False`` when the
+        guard rejected the write or the row no longer exists.
+        """
+        async with self.db.acquire() as conn:
+            if expected_content_hash is None:
+                cursor = await conn.execute(
+                    "UPDATE library_index SET body_compressed = ? WHERE id = ?",
+                    (text, library_id),
+                )
+            else:
+                cursor = await conn.execute(
+                    """
+                    UPDATE library_index SET body_compressed = ?
+                    WHERE id = ? AND content_hash = ?
+                    """,
+                    (text, library_id, expected_content_hash),
+                )
+            return bool(cursor.rowcount and cursor.rowcount > 0)
+
     async def get_library_entity(self, library_id: str) -> dict | None:
         row = await self.db.fetchone("SELECT * FROM library_index WHERE id = ?", (library_id,))
         if row is None:
@@ -1423,6 +1457,7 @@ def _library_row_to_dict(row: aiosqlite.Row) -> dict:
         "path": row["path"],
         "frontmatter": _json_loads(row["frontmatter"]) or {},
         "body": row["body"] or "",
+        "body_compressed": row["body_compressed"],
         "tags": _json_loads(row["tags"]) or [],
         "keywords": _json_loads(row["keywords"]) or [],
         "file_mtime": row["file_mtime"],
