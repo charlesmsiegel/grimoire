@@ -24,6 +24,7 @@ from grimoire.imagegen.backend import (
     cache_key_for_request,
 )
 from grimoire.imagegen.config import ImageGenConfig
+from grimoire.imagegen.integration import ImageGenIntegration
 from grimoire.imagegen.prompt import (
     ComposedPrompt,
     PromptComposer,
@@ -41,6 +42,7 @@ __all__ = [
     "BackendRegistry",
     "ComposedPrompt",
     "ImageGenConfig",
+    "ImageGenIntegration",
     "ImageGenService",
     "InMemoryDiffusersBackend",
     "IntegratedDiffusersBackend",
