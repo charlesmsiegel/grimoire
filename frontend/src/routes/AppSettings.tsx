@@ -12,7 +12,7 @@
  * provider directly. Plugin/mechanics inventories and rescan are wired today.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
@@ -112,19 +112,112 @@ export function AppSettings() {
   );
 }
 
+interface AppConfig {
+  library_path: string;
+  backup: { schedule: string; retention_days: number; location: string };
+}
+
+/** Debounced PATCH to /api/config/app. */
+function useAppConfig(): {
+  data: AppConfig | null;
+  patch: (next: Partial<AppConfig>) => void;
+  status: "idle" | "loading" | "saving" | "saved" | "error";
+  error: string | null;
+} {
+  const [data, setData] = useState<AppConfig | null>(null);
+  const [status, setStatus] = useState<"idle" | "loading" | "saving" | "saved" | "error">(
+    "loading",
+  );
+  const [error, setError] = useState<string | null>(null);
+  const pending = useRef<Partial<AppConfig> | null>(null);
+  const timer = useRef<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await api.get<AppConfig>("/api/config/app");
+        if (!cancelled) {
+          setData(result);
+          setStatus("idle");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(errorMessage(err));
+          setStatus("error");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const patch = (next: Partial<AppConfig>) => {
+    setData((prev) => (prev ? { ...prev, ...next } : prev));
+    pending.current = { ...(pending.current ?? {}), ...next };
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      const body = pending.current;
+      pending.current = null;
+      timer.current = null;
+      if (!body) return;
+      setStatus("saving");
+      setError(null);
+      void (async () => {
+        try {
+          const result = await api.patch<AppConfig>("/api/config/app", body);
+          setData(result);
+          setStatus("saved");
+        } catch (err) {
+          setError(errorMessage(err));
+          setStatus("error");
+        }
+      })();
+    }, 500);
+  };
+
+  return { data, patch, status, error };
+}
+
+function ConfigSaveIndicator({
+  status,
+  error,
+}: {
+  status: "idle" | "loading" | "saving" | "saved" | "error";
+  error: string | null;
+}) {
+  if (status === "loading") return <small className="wizard-meta">Loading…</small>;
+  if (status === "saving") return <small className="wizard-meta">Saving…</small>;
+  if (status === "error") {
+    return (
+      <small className="wizard-error" role="alert">
+        {error ?? "Save failed"}
+      </small>
+    );
+  }
+  if (status === "saved") return <small className="library-ok">Saved.</small>;
+  return null;
+}
+
 function LibraryPathTab() {
-  const [path, setPath] = useState("data/library");
+  const { data, patch, status, error } = useAppConfig();
   return (
     <div className="settings-form">
       <label className="wizard-field">
         <span>Library path</span>
-        <input type="text" value={path} onChange={(e) => setPath(e.target.value)} />
+        <input
+          type="text"
+          value={data?.library_path ?? ""}
+          onChange={(e) => patch({ library_path: e.target.value })}
+          disabled={!data}
+        />
         <small>Filesystem directory scanned for settings, style guides, presets.</small>
       </label>
       <p className="wizard-meta">
-        Path is read from <code>data/config/app.yaml</code>; in-app editing ships with the
-        configuration editor.
+        Persisted to <code>data/config/app.yaml</code>. Changes save automatically.
       </p>
+      <ConfigSaveIndicator status={status} error={error} />
     </div>
   );
 }
@@ -924,13 +1017,18 @@ function TemplatesTab() {
 }
 
 function BackupTab() {
-  const [schedule, setSchedule] = useState("daily");
-  const [destination, setDestination] = useState("data/backups");
+  const { data, patch, status, error } = useAppConfig();
+  const backup = data?.backup ?? { schedule: "off", retention_days: 30, location: "data/backups" };
+
   return (
     <div className="settings-form">
       <label className="wizard-field">
         <span>Default schedule</span>
-        <select value={schedule} onChange={(e) => setSchedule(e.target.value)}>
+        <select
+          value={backup.schedule}
+          onChange={(e) => patch({ backup: { ...backup, schedule: e.target.value } })}
+          disabled={!data}
+        >
           <option value="off">Off</option>
           <option value="hourly">Hourly</option>
           <option value="daily">Daily</option>
@@ -938,17 +1036,40 @@ function BackupTab() {
         </select>
       </label>
       <label className="wizard-field">
-        <span>Destination</span>
-        <input type="text" value={destination} onChange={(e) => setDestination(e.target.value)} />
+        <span>Retention (days)</span>
+        <input
+          type="number"
+          min={0}
+          value={backup.retention_days}
+          onChange={(e) =>
+            patch({
+              backup: {
+                ...backup,
+                retention_days: Number.isFinite(Number(e.target.value))
+                  ? Number(e.target.value)
+                  : backup.retention_days,
+              },
+            })
+          }
+          disabled={!data}
+        />
       </label>
+      <label className="wizard-field">
+        <span>Destination</span>
+        <input
+          type="text"
+          value={backup.location}
+          onChange={(e) => patch({ backup: { ...backup, location: e.target.value } })}
+          disabled={!data}
+        />
+      </label>
+      <ConfigSaveIndicator status={status} error={error} />
     </div>
   );
 }
 
 function AppearanceTab() {
-  const { mode, setMode } = useTheme();
-  const [fontFamily, setFontFamily] = useState("system");
-  const [density, setDensity] = useState("comfortable");
+  const { mode, setMode, fontFamily, setFontFamily, density, setDensity } = useTheme();
 
   return (
     <div className="settings-form">
@@ -963,7 +1084,12 @@ function AppearanceTab() {
       </fieldset>
       <label className="wizard-field">
         <span>Font family</span>
-        <select value={fontFamily} onChange={(e) => setFontFamily(e.target.value)}>
+        <select
+          value={fontFamily}
+          onChange={(e) =>
+            setFontFamily(e.target.value as "system" | "serif" | "dyslexia")
+          }
+        >
           <option value="system">System</option>
           <option value="serif">Serif</option>
           <option value="dyslexia">Dyslexia-friendly</option>
@@ -971,13 +1097,16 @@ function AppearanceTab() {
       </label>
       <label className="wizard-field">
         <span>Density</span>
-        <select value={density} onChange={(e) => setDensity(e.target.value)}>
+        <select
+          value={density}
+          onChange={(e) => setDensity(e.target.value as "comfortable" | "compact")}
+        >
           <option value="comfortable">Comfortable</option>
           <option value="compact">Compact</option>
         </select>
       </label>
       <p className="wizard-meta">
-        Font family + density wire into the layout in a follow-up theming pass.
+        Font family and density apply across the app and persist locally.
       </p>
     </div>
   );
