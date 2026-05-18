@@ -201,6 +201,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await gateway_health_monitor.start_periodic()
             container.extras["gateway_health_monitor"] = gateway_health_monitor
         llm_gateway = container.extras["llm_gateway"]
+        # §3 wire the gateway into WorldService so create_world can
+        # auto-generate atmosphere blocks. WorldService is constructed
+        # before the gateway exists, so we patch the attribute here.
+        if container.world is not None and getattr(container.world, "gateway", None) is None:
+            container.world.gateway = llm_gateway
         if container.extras.get("extractor") is None:
             container.extras["extractor"] = ExtractorService(gateway=llm_gateway)
         extractor = container.extras["extractor"]

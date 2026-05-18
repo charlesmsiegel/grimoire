@@ -57,6 +57,7 @@ from grimoire.types.world import (
     WorldCalendar,
 )
 
+from .atmosphere import generate_atmosphere
 from .calendar import holiday_at, parse_calendar, season_for
 from .config import WorldConfig
 from .errors import CompositionError, WorldError, WorldNotFoundError
@@ -107,10 +108,14 @@ class WorldService:
         library: LibraryService,
         *,
         config: WorldConfig | None = None,
+        gateway: Any = None,
     ) -> None:
         self.library = library
         self.store: StateStore = library.store
         self.config: WorldConfig = config or WorldConfig()
+        # Optional LLM gateway — used for atmosphere auto-generation (§3)
+        # and emergent location generation (§9). Both are no-ops when None.
+        self.gateway = gateway
 
     def _safe_world_dir(self, world_id: str) -> Path:
         """Resolve ``data/library/worlds/<world_id>`` after path-safety checks.
@@ -146,7 +151,24 @@ class WorldService:
         return await self.library.get_world(world_id)
 
     async def create_world(self, world_id: str, meta: dict | None = None) -> WorldMeta:
-        return await self.library.create_world(world_id, meta or {})
+        meta = dict(meta or {})
+        # §3 atmosphere auto-generation: only when config flag is on, a
+        # gateway is wired, and the caller didn't supply an atmosphere block.
+        if (
+            self.config.atmosphere_auto_generate
+            and self.gateway is not None
+            and not (meta.get("atmosphere") or {})
+        ):
+            atmosphere = await generate_atmosphere(
+                gateway=self.gateway,
+                world_id=world_id,
+                name=str(meta.get("name") or world_id),
+                tags=list(meta.get("tags") or []),
+                description=str(meta.get("description") or ""),
+            )
+            if atmosphere:
+                meta["atmosphere"] = atmosphere
+        return await self.library.create_world(world_id, meta)
 
     async def update_world_meta(self, world_id: str, patch: dict) -> WorldMeta:
         existing = await self.library.get_world(world_id)
