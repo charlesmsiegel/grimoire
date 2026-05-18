@@ -1,9 +1,75 @@
-# Observability — Remaining Work
+# Observability — Remaining Work (COMPLETED 2026-05-18)
 
 > Everything from the original `specs/16-observability.md` (now superseded) that did **not** land in the shipped design (`2026-05-13-observability-design.md`). Use this as the input to a writing-plans pass when picking up the work.
 
 **Companion (already shipped):** `2026-05-13-observability-design.md`
 **Module:** `backend/src/grimoire/observability/`
+
+## Status (2026-05-18)
+
+Backend implementation landed. Frontend UI work (status bar, Worlds panel
+debug views, Health panel, Performance tab) and the WebSocket live-tailing
+pipe are deferred for a follow-up frontend pass.
+
+| #  | Section                                              | Status |
+|----|------------------------------------------------------|--------|
+| 1  | Wire `ObservabilityService` into the running app     | ✅ Done |
+| 2  | Producer event enrichment                            | ✅ Done |
+| 3  | Verbatim assembled prompt capture                    | ✅ Done |
+| 4  | Replay determinism: `seed` pass-through              | ✅ Done |
+| 5  | Debug view "What did the model see?" — HTTP route    | ✅ Backend done (frontend deferred) |
+| 6  | Debug view "What changed?" — HTTP route              | ✅ Backend done (frontend deferred) |
+| 7  | Debug view "Why this character?"                     | ⏸ Deferred — needs ContextBuilder source-attribution upgrade |
+| 8  | Debug view "Cost breakdown" — HTTP route             | ✅ Backend done |
+| 9  | Cost surfacing — HTTP routes                         | ✅ Backend done (frontend deferred) |
+| 10 | Performance metrics — HTTP route                     | ✅ Endpoint done; producer-side `metrics.record(...)` calls still pending in each module |
+| 11 | Health-check auto-registration                       | ✅ LLM gateway already self-registers; ImageGen now does too |
+| 12 | Frontend health panel — HTTP routes                  | ✅ Routes done; frontend deferred |
+| 13 | Live tailing for the debug log                       | ⏸ Deferred (WebSocket work) |
+| 14 | Error de-duplication                                 | ✅ Satisfied display-side via `aggregate_by_module` |
+| 15 | Per-task budget enforcement: fast `total_today`      | ✅ Done |
+| 16 | `error_reported` plugin hook                         | ✅ Done |
+| 17 | Scrubbed PII export                                  | ⏸ v2 (out of scope) |
+| 18 | Performance overhead benchmark                       | ⏸ Not started |
+| 19 | OpenTelemetry                                        | ⏸ v2 (out of scope) |
+| 20 | User-facing analytics                                | ⏸ Out of scope |
+| 21 | Audit-driven test generation                         | ⏸ Out of scope (spec 17) |
+
+### Where the new code landed
+
+- `backend/src/grimoire/observability/service.py` — `start()` now subscribes
+  to `llm_response_received` and writes a `cost_records` row per call;
+  `record_error` fires an `error_reported` event for plugin hooks.
+- `backend/src/grimoire/observability/turn_auditor.py` — subscribes to
+  `llm_response_received` (translating unprefixed keys → `llm_*` audit
+  fields) and stores `assembled_messages` from `context_built`.
+- `backend/src/grimoire/observability/audit.py` — persists / rehydrates
+  the verbatim message list; new `deltas_for_turn(turn_id)` joins
+  `applied_delta_ids` against the `deltas` table.
+- `backend/src/grimoire/observability/costs.py` — new `by_turn(turn_id)`
+  and fast `total_today(campaign_id)` accessors.
+- `backend/src/grimoire/observability/replayer.py` — prefers the stored
+  verbatim messages; forwards `seed` to the gateway.
+- `backend/src/grimoire/orchestrator/service.py` — enriched turn-event
+  payloads (player_input, options, branch_id, messages, hash, sources,
+  composition_snapshot, deltas, strategies, flags) and emits
+  `turn_audit_fragment` for mechanics rolls, applied/queued deltas and
+  scene-appended.
+- `backend/src/grimoire/llm_gateway/gateway.py` — streaming path now
+  computes cost from usage × price book; `llm_response_received`
+  carries `params` (incl. `seed`) and `finish_reason`.
+- `backend/src/grimoire/types/llm.py` — `CompletionRequest.seed: int | None`.
+- `backend/src/grimoire/types/observability.py` — `TurnAudit.assembled_messages`.
+- `backend/src/grimoire/api/observability.py` (new) — 15 endpoints under
+  `/api/observability/...`: turn audits, prompt, deltas, costs (session,
+  rollup, today, by-turn), metrics summary/recent, health (latest, probe),
+  errors (recent, aggregate), debug log query.
+- `backend/src/grimoire/imagegen/service.py` — `register_with_health_monitor`
+  walks the backend registry and registers each as a probeable target.
+- `backend/src/grimoire/main.py` — constructs `ObservabilityService` early,
+  hands its `health_monitor` to the gateway, registers ImageGen backends,
+  builds the replayer once the gateway exists, starts the auditor + health
+  + retention loops, and tears them down on shutdown.
 
 ## 1. Wire `ObservabilityService` into the running app
 

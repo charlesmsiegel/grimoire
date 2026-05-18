@@ -141,6 +141,56 @@ async def test_start_subscribes_auditor_when_event_bus_passed(db) -> None:
         await service.shutdown()
 
 
+async def test_record_error_fires_error_reported_event(db) -> None:
+    """§16: plugin hook for external error reporters."""
+    bus = EventBus()
+    service = ObservabilityService(db=db, event_bus=bus)
+    seen: list[Event] = []
+    bus.subscribe("error_reported", lambda e: seen.append(e) or None)
+    await service.record_error(
+        ErrorRecord(
+            timestamp=datetime.now(UTC),
+            module="orchestrator",
+            operation="turn",
+            error_kind="boom",
+            message="splat",
+            user_visible=True,
+        )
+    )
+    assert len(seen) == 1
+    assert seen[0].payload["module"] == "orchestrator"
+    assert seen[0].payload["error_kind"] == "boom"
+
+
+async def test_llm_response_received_records_cost(db) -> None:
+    """The service's start() subscriber should drop a cost_records row
+    for each llm_response_received event."""
+    bus = EventBus()
+    service = ObservabilityService(db=db, event_bus=bus)
+    await service.start()
+    try:
+        await bus.emit(
+            Event(
+                type="llm_response_received",
+                payload={
+                    "task": "main",
+                    "provider": "anthropic",
+                    "model": "claude-3",
+                    "campaign_id": "c1",
+                    "turn_id": "t1",
+                    "usage": {"input_tokens": 10, "output_tokens": 20},
+                    "cost_estimate_usd": 0.05,
+                    "latency_ms": 100,
+                    "finish_reason": "stop",
+                },
+            )
+        )
+        total = await service.costs_tracker.total(campaign_id="c1")
+        assert total.total_usd == 0.05
+    finally:
+        await service.shutdown()
+
+
 async def _healthy() -> HealthStatus:
     return HealthStatus(
         level=HealthLevel.HEALTHY,

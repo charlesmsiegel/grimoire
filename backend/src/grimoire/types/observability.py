@@ -100,6 +100,10 @@ class TurnAudit(BaseModel):
     context_sources: list[ContextSource] = Field(default_factory=list)
     context_budget_used: dict[ContextTier, int] = Field(default_factory=dict)
     context_messages_hash: str = ""
+    # Verbatim assembled prompt — required for the "What did the model see?"
+    # debug view and for byte-for-byte replay. Captured when
+    # ``AuditConfig.capture_full_prompt`` is true (default).
+    assembled_messages: list[Json] = Field(default_factory=list)
 
     proposed_rolls: list[ProposedRoll] = Field(default_factory=list)
     resolved_rolls: list[MechanicsResult] = Field(default_factory=list)

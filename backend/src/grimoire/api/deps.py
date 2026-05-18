@@ -83,6 +83,10 @@ def get_orchestrator(request: Request) -> Any:
     return _require(get_container(request), "orchestrator")
 
 
+def get_observability(request: Request) -> Any:
+    return _require(get_container(request), "observability")
+
+
 def get_stream(request: Request) -> Any:
     return _require(get_container(request), "stream")
 
@@ -100,6 +104,7 @@ MechanicsDep = Annotated[Any, Depends(get_mechanics)]
 PluginsDep = Annotated[Any, Depends(get_plugins)]
 StateStoreDep = Annotated[Any, Depends(get_state_store)]
 OrchestratorDep = Annotated[Any, Depends(get_orchestrator)]
+ObservabilityDep = Annotated[Any, Depends(get_observability)]
 StreamDep = Annotated[Any, Depends(get_stream)]
 
 
@@ -111,6 +116,7 @@ __all__ = [
     "ImageGenDep",
     "LibraryDep",
     "MechanicsDep",
+    "ObservabilityDep",
     "OrchestratorDep",
     "PluginsDep",
     "ScenesDep",
@@ -125,6 +131,7 @@ __all__ = [
     "get_imagegen",
     "get_library",
     "get_mechanics",
+    "get_observability",
     "get_orchestrator",
     "get_plugins",
     "get_scenes",

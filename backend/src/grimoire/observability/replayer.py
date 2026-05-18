@@ -132,15 +132,24 @@ class TurnReplayerService:
             if sub.temperature is not None:
                 params["temperature"] = sub.temperature
 
-        # The audit doesn't store the original assembled messages list in
-        # full (we keep only the hash + summaries for size reasons). If a
-        # caller wants a true verbatim replay they should supply
-        # ``prompt_edit`` with the full prompt body; otherwise we send a
-        # reconstructed prompt using the player input + an "extra_context"
-        # block.
+        # Prefer the verbatim ``assembled_messages`` stored in the audit
+        # (captured when AuditConfig.capture_full_prompt is true). Falling
+        # back to a player-input stub means the model rarely sees what it
+        # originally saw, so the resulting response_text diff is mostly
+        # noise — only acceptable for very old / compressed audits.
         messages: list[Message] = []
         if sub and sub.prompt_edit:
             messages = [Message(role=MessageRole.USER, content=sub.prompt_edit)]
+        elif audit.assembled_messages:
+            for raw in audit.assembled_messages:
+                try:
+                    messages.append(Message.model_validate(raw))
+                except Exception:
+                    logger.warning("replay: failed to rehydrate stored message: %r", raw)
+            if sub and sub.extra_context:
+                messages.append(
+                    Message(role=MessageRole.USER, content=sub.extra_context)
+                )
         else:
             user_body = audit.player_input or ""
             if sub and sub.extra_context:
@@ -154,6 +163,7 @@ class TurnReplayerService:
             messages=messages,
             max_tokens=int(params.get("max_tokens", 4096)),
             temperature=float(params.get("temperature", 1.0)),
+            seed=params.get("seed"),
         )
 
 

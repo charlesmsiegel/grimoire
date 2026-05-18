@@ -64,6 +64,11 @@ class CompletionRequest(BaseModel):
     max_tokens: int = 4096
     temperature: float = 1.0
     stop_sequences: list[str] = Field(default_factory=list)
+    # Some providers honor ``seed`` for deterministic replay (often-but-
+    # not-always — surface that caveat in the replay UI). The gateway
+    # forwards this verbatim to the provider; providers that don't
+    # support it ignore it.
+    seed: int | None = None
     metadata: Json = Field(default_factory=dict)
 
 

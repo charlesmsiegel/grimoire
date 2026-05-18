@@ -131,6 +131,103 @@ async def test_turn_audit_fragment_event_merges_extra_fields(db) -> None:
     assert audit.options.get("replay_of") == "t_1"
 
 
+async def test_llm_response_received_event_merged_with_translated_keys(db) -> None:
+    """Gateway emits ``llm_response_received`` with unprefixed keys; the
+    auditor should translate them into the ``llm_*`` audit fields."""
+    bus = EventBus()
+    store = AuditStore(db)
+    auditor = TurnAuditor(event_bus=bus, audit_store=store)
+    auditor.start()
+
+    await bus.emit(
+        Event(
+            type="turn_started",
+            payload={
+                "turn_id": "t_llm",
+                "campaign_id": "c_1",
+                "scene_id": "s_1",
+                "branch_id": "c_1:main",
+            },
+        )
+    )
+    await bus.emit(
+        Event(
+            type="llm_response_received",
+            payload={
+                "turn_id": "t_llm",
+                "campaign_id": "c_1",
+                "provider": "anthropic",
+                "model": "claude-3-haiku",
+                "usage": {"input_tokens": 120, "output_tokens": 60},
+                "cost_estimate_usd": 0.0042,
+                "latency_ms": 510,
+                "retries": 1,
+                "finish_reason": "end_turn",
+                "params": {"temperature": 0.7, "max_tokens": 2048, "seed": 99},
+            },
+        )
+    )
+    await bus.emit(
+        Event(
+            type="turn_complete",
+            payload={"turn_id": "t_llm", "campaign_id": "c_1", "scene_id": "s_1"},
+        )
+    )
+    audit = await store.get("t_llm")
+    assert audit is not None
+    assert audit.llm_provider == "anthropic"
+    assert audit.llm_model == "claude-3-haiku"
+    assert audit.llm_prompt_tokens == 120
+    assert audit.llm_completion_tokens == 60
+    assert audit.llm_cost_usd == 0.0042
+    assert audit.llm_latency_ms == 510
+    assert audit.llm_retries == 1
+    assert audit.llm_finish_reason == "end_turn"
+    assert audit.llm_params == {"temperature": 0.7, "max_tokens": 2048, "seed": 99}
+
+
+async def test_assembled_messages_round_trip(db) -> None:
+    """`context_built` event carries the verbatim message list; the
+    auditor stores it on `audit.assembled_messages`."""
+    bus = EventBus()
+    store = AuditStore(db)
+    auditor = TurnAuditor(event_bus=bus, audit_store=store)
+    auditor.start()
+
+    messages_payload = [
+        {"role": "system", "content": "you are a narrator", "metadata": {}, "name": None},
+        {"role": "user", "content": "I open the door.", "metadata": {}, "name": None},
+    ]
+    await bus.emit(
+        Event(
+            type="turn_started",
+            payload={"turn_id": "t_msgs", "campaign_id": "c_1", "scene_id": "s_1"},
+        )
+    )
+    await bus.emit(
+        Event(
+            type="context_built",
+            payload={
+                "turn_id": "t_msgs",
+                "campaign_id": "c_1",
+                "scene_id": "s_1",
+                "budget_used": {"spotlight": 50},
+                "messages_hash": "hh",
+                "assembled_messages": messages_payload,
+            },
+        )
+    )
+    await bus.emit(
+        Event(
+            type="turn_complete",
+            payload={"turn_id": "t_msgs", "campaign_id": "c_1", "scene_id": "s_1"},
+        )
+    )
+    audit = await store.get("t_msgs")
+    assert audit is not None
+    assert audit.assembled_messages == messages_payload
+
+
 async def test_stop_unsubscribes_handlers(db) -> None:
     bus = EventBus()
     store = AuditStore(db)

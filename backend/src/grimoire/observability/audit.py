@@ -80,6 +80,11 @@ class AuditStore:
                     if audit.scene_break_decision
                     else None
                 ),
+                # Verbatim assembled messages — required for the "What did
+                # the model see?" debug view and byte-for-byte replay. The
+                # maintenance compress pass nulls the column past the
+                # configured retention window.
+                "messages": list(audit.assembled_messages),
             }
         )
         prompt_budget = _dump({str(k): v for k, v in audit.context_budget_used.items()})
@@ -190,6 +195,25 @@ class AuditStore:
             return None
         return self._row_to_audit(dict(row))
 
+    async def deltas_for_turn(self, turn_id: TurnId) -> list[dict[str, Any]]:
+        row = await self._db.fetchone(
+            "SELECT applied_delta_ids FROM turn_audits WHERE turn_id = ?",
+            (turn_id,),
+        )
+        if row is None:
+            return []
+        ids = _load(row["applied_delta_ids"]) or []
+        if not isinstance(ids, list) or not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        rows = await self._db.fetchall(
+            f"SELECT id, campaign_id, branch_id, turn_id, kind, target_table, "
+            f"target_id, before, after, confidence, applied_at, reversed_at, notes "
+            f"FROM deltas WHERE id IN ({placeholders})",
+            tuple(ids),
+        )
+        return [dict(r) for r in rows]
+
     async def list(
         self,
         campaign_id: CampaignId,
@@ -241,6 +265,7 @@ class AuditStore:
                 "context_sources": prompt_msgs.get("sources") or [],
                 "context_budget_used": prompt_budget,
                 "context_messages_hash": prompt_msgs.get("hash") or "",
+                "assembled_messages": prompt_msgs.get("messages") or [],
                 "proposed_rolls": mechanics.get("proposed") or [],
                 "resolved_rolls": mechanics.get("resolved") or [],
                 "llm_provider": llm.get("provider") or "",

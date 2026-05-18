@@ -16,6 +16,7 @@ from grimoire.api.container import ServiceContainer
 from grimoire.api.health import router as health_router
 from grimoire.api.imagegen import router as imagegen_router
 from grimoire.api.library import router as library_router
+from grimoire.api.observability import router as observability_router
 from grimoire.api.setup import router as setup_router
 from grimoire.api.stream import StreamManager
 from grimoire.api.templates import router as templates_router
@@ -45,7 +46,8 @@ from grimoire.imagegen import (
 from grimoire.library import LibraryConfig, LibraryService
 from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.mechanics import MechanicsConfig, MechanicsService
-from grimoire.observability.health import HealthMonitorService
+from grimoire.observability.replayer import TurnReplayerService
+from grimoire.observability.service import ObservabilityService
 from grimoire.orchestrator.service import OrchestratorService
 from grimoire.plugins import PluginsConfig, PluginsService
 from grimoire.scenes import SceneManager
@@ -287,23 +289,40 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # gateway will raise a clear "no provider" error rather than blowing
         # up at construction time, so the rest of the routes (library,
         # images, worlds, etc.) keep working.
+        if container.observability is None:
+            obs = ObservabilityService(db=db, event_bus=container.event_bus)
+            container.observability = obs
+        else:
+            obs = container.observability
+        # §11: register imagegen backends with the observability health
+        # monitor. The LLM gateway registers itself via
+        # ``register_with_health_monitor`` below; embedding providers are
+        # registered by the same gateway call.
+        if container.imagegen is not None:
+            try:
+                container.imagegen.register_with_health_monitor(obs.health_monitor)
+            except Exception:
+                log.exception("imagegen register_with_health_monitor failed")
         if container.extras.get("llm_gateway") is None:
-            # §3: Construct a standalone HealthMonitorService for the gateway.
-            # When ObservabilityService is wired here, pass its health_monitor
-            # instance instead and remove this standalone construction.
-            gateway_health_monitor = HealthMonitorService(db)
             container.extras["llm_gateway"] = LLMGatewayService(
                 plugins=container.plugins,
                 db=db,
                 config=settings.llm_gateway.to_gateway_config(),
                 data_root=settings.data_root,
                 event_bus=container.event_bus,
-                health_monitor=gateway_health_monitor,
+                health_monitor=obs.health_monitor,
             )
             await container.extras["llm_gateway"].register_with_health_monitor()
-            await gateway_health_monitor.start_periodic()
-            container.extras["gateway_health_monitor"] = gateway_health_monitor
         llm_gateway = container.extras["llm_gateway"]
+        if obs.replayer is None:
+            obs.replayer = TurnReplayerService(
+                audit_store=obs.audit_store,
+                gateway=llm_gateway,
+                state_store=container.state_store,
+            )
+        await obs.start()
+        await obs.health_monitor.start_periodic()
+        await obs.retention.start_periodic()
         # §3 wire the gateway into WorldService so create_world can
         # auto-generate atmosphere blocks. WorldService is constructed
         # before the gateway exists, so we patch the attribute here.
@@ -555,7 +574,6 @@ async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
                 time_engine_subscriber.stop()
             except Exception:
                 log.exception("time engine subscriber stop failed during shutdown")
-
         # State Store background workers — stop before closing the DB so they
         # don't hit a closed connection mid-loop. Each is independently
         # try/excepted so one failure doesn't strand the others.
@@ -584,15 +602,11 @@ async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
             except Exception:
                 log.exception("embedding_worker stop failed during shutdown")
 
-        # §3: Stop the gateway health monitor periodic loop if it was started.
-        gateway_health_monitor = (
-            container.extras.get("gateway_health_monitor") if container.extras else None
-        )
-        if gateway_health_monitor is not None:
+        if container.observability is not None:
             try:
-                await gateway_health_monitor.stop()
+                await container.observability.shutdown()
             except Exception:
-                log.exception("gateway health monitor stop failed during shutdown")
+                log.exception("observability shutdown failed during shutdown")
         imagegen_integration = (
             container.extras.get("imagegen_integration") if container.extras else None
         )
@@ -656,6 +670,7 @@ def create_app() -> FastAPI:
     app.include_router(templates_router, prefix="/api")
     app.include_router(campaigns_router, prefix="/api")
     app.include_router(imagegen_router, prefix="/api")
+    app.include_router(observability_router, prefix="/api")
     # WebSocket routes mount under /ws so the Vite dev server's `ws: true`
     # proxy block forwards upgrade requests correctly. The HTTP health probe
     # in the same router lands at /ws/health.

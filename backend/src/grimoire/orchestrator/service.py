@@ -604,7 +604,18 @@ class OrchestratorService:
         turn_id: TurnId,
         reuse_prompt_cache: bool = False,
     ) -> None:
-        await self._emit_turn_event("turn_started", turn_id, campaign_id, scene_id)
+        # Resolve the branch id up-front so turn_started carries it; the
+        # scene break path may swap scene_id but the branch is stable.
+        initial_scene = await self._scenes.get_scene(scene_id)
+        await self._emit_turn_event(
+            "turn_started",
+            turn_id,
+            campaign_id,
+            scene_id,
+            branch_id=initial_scene.branch_id,
+            player_input=player_input,
+            options={"pc_ref": triggering_pc},
+        )
         self._check_cancelled(active)
 
         scene_id = await self._maybe_break_scene(
@@ -622,6 +633,12 @@ class OrchestratorService:
         mechanics_results = await self._do_pre_roll(
             campaign_id=campaign_id, scene_id=scene_id, player_input=player_input
         )
+        if mechanics_results:
+            await self._emit_fragment(
+                turn_id,
+                campaign_id,
+                resolved_rolls=[r.model_dump(mode="json") for r in mechanics_results],
+            )
         self._check_cancelled(active)
 
         active.stage = "context_build"
@@ -648,12 +665,20 @@ class OrchestratorService:
                 turn_id=turn_id,
             )
             self._context_cache.put(cache_key, prompt)
+        # ``context_summary`` / ``composition_snapshot`` are deliberately
+        # omitted: ``AssembledPrompt`` exposes them as plain primitives
+        # (str / dict) which don't satisfy ``ContextSummary`` /
+        # ``CompositionSnapshot``. They'll be filled by ContextBuilder
+        # enrichment in a follow-up pass.
         await self._emit_turn_event(
             "context_built",
             turn_id,
             campaign_id,
             scene_id,
             budget_used={str(k): v for k, v in prompt.budget_used.items()},
+            messages_hash=getattr(prompt, "messages_hash", "") or "",
+            context_sources=[s.model_dump(mode="json") for s in getattr(prompt, "sources", [])],
+            assembled_messages=[m.model_dump(mode="json") for m in prompt.messages],
         )
         self._check_cancelled(active)
 
@@ -666,28 +691,47 @@ class OrchestratorService:
         )
         if active.cancel_event.is_set():
             raise TurnCancelledError()
+        # The gateway emits ``llm_response_received`` with provider/model/
+        # tokens/cost/latency/retries; the TurnAuditor merges those into
+        # the audit buffer keyed by turn_id. Here we only carry the
+        # response text and length.
         await self._emit_turn_event(
             "model_response_received",
             turn_id,
             campaign_id,
             scene_id,
             length=len(response_text),
+            response_text=response_text,
         )
 
         active.stage = "extracting"
         scene_obj = await self._scenes.get_scene(scene_id)
+        extract_started = self._clock()
         extraction = await self._do_extract(
             response_text=response_text,
             scene=scene_obj,
             campaign_id=campaign_id,
             turn_id=turn_id,
         )
+        extract_duration_ms = int((self._clock() - extract_started).total_seconds() * 1000)
         await self._emit_turn_event(
             "deltas_extracted",
             turn_id,
             campaign_id,
             scene_id,
             count=len(extraction.deltas) if extraction else 0,
+            deltas=(
+                [d.model_dump(mode="json") for d in extraction.deltas] if extraction else []
+            ),
+            strategies_run=(
+                list(getattr(extraction, "strategies_run", [])) if extraction else []
+            ),
+            flags=(
+                [f.model_dump(mode="json") for f in getattr(extraction, "flags", [])]
+                if extraction
+                else []
+            ),
+            duration_ms=extract_duration_ms,
         )
         self._check_cancelled(active)
 
@@ -702,12 +746,21 @@ class OrchestratorService:
                 time_advance_durations.append(d.model_dump(mode="json"))
 
         active.stage = "applying"
+        applied_ids: list[str] = []
+        queued_ids: list[str] = []
         if extraction is not None:
-            await self._apply_routing(
+            applied_ids, queued_ids = await self._apply_routing(
                 campaign_id=campaign_id,
                 branch_id=scene_obj.branch_id,
                 turn_id=turn_id,
                 extraction=extraction,
+            )
+        if applied_ids or queued_ids:
+            await self._emit_fragment(
+                turn_id,
+                campaign_id,
+                applied_deltas=[{"id": did} for did in applied_ids],
+                queued_for_review=[{"id": qid} for qid in queued_ids],
             )
 
         response_post = self._new_post(
@@ -717,6 +770,7 @@ class OrchestratorService:
             turn_id=turn_id,
         )
         await self._scenes.append_post(scene_id, response_post)
+        await self._emit_fragment(turn_id, campaign_id, scene_appended=True)
 
         await self._emit_turn_event(
             "turn_complete",
@@ -925,11 +979,14 @@ class OrchestratorService:
         prompt: Any,
         active: _ActiveTurn | None = None,
     ) -> str:
+        params = getattr(prompt, "params", None)
+        seed = getattr(params, "seed", None) if params is not None else None
         request = CompletionRequest(
             model="",  # routing resolves the actual model
             messages=list(prompt.messages),
-            max_tokens=getattr(prompt.params, "max_tokens", 4096),
-            temperature=getattr(prompt.params, "temperature", 1.0),
+            max_tokens=getattr(params, "max_tokens", 4096),
+            temperature=getattr(params, "temperature", 1.0),
+            seed=seed,
         )
         accumulated: list[str] = []
         try:
@@ -1010,12 +1067,13 @@ class OrchestratorService:
         branch_id: str,
         turn_id: TurnId,
         extraction: ExtractionResult,
-    ) -> None:
+    ) -> tuple[list[str], list[str]]:
         routing = route_deltas(list(extraction.deltas), config=self._extractor_config)
         auto_deltas = [d for d, dec in routing.decisions() if dec is Decision.AUTO_APPLY]
         review_deltas = [d for d, dec in routing.decisions() if dec is Decision.REVIEW]
 
         applied_ids: list[str] = []
+        queued_ids: list[str] = []
         try:
             for delta in auto_deltas:
                 # §5 Domain-specific dispatch: weather override deltas go
@@ -1092,6 +1150,8 @@ class OrchestratorService:
                     source=delta.source or "extractor",
                     campaign_id=campaign_id,
                 )
+                if review_id:
+                    queued_ids.append(str(review_id))
                 await self._bus.emit(
                     Event(
                         type="review_item_added",
@@ -1109,6 +1169,8 @@ class OrchestratorService:
                     turn_id,
                     exc,
                 )
+
+        return applied_ids, queued_ids
 
     async def _apply_continuity_delta(
         self,
@@ -1354,6 +1416,19 @@ class OrchestratorService:
             is_player=is_player,
             created_at=self._clock(),
             turn_id=turn_id or str(uuid.uuid4()),
+        )
+
+    async def _emit_fragment(
+        self,
+        turn_id: TurnId,
+        campaign_id: CampaignId,
+        **fields: Any,
+    ) -> None:
+        await self._bus.emit(
+            Event(
+                type="turn_audit_fragment",
+                payload={"turn_id": turn_id, "campaign_id": campaign_id, **fields},
+            )
         )
 
     async def _emit_turn_event(

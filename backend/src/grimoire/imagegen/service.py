@@ -282,6 +282,19 @@ class ImageGenService:
         for backend in self.registry.all():
             self._ensure_handle(backend.id)
 
+    def register_with_health_monitor(self, monitor: Any) -> None:
+        """§11: register all currently registered backends as health targets.
+
+        ``monitor`` is duck-typed: it must accept ``register_probeable(target, obj)``.
+        Backends registered later (plugin loads at runtime) aren't picked up
+        automatically; callers can re-invoke after plugins finish loading.
+        """
+        from grimoire.types.observability import HealthTarget
+
+        for backend in self.registry.all():
+            target = HealthTarget(id=backend.id, kind="imagegen_backend")
+            monitor.register_probeable(target, backend)
+
     # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #

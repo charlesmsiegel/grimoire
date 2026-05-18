@@ -123,6 +123,31 @@ class CostTrackerService:
             )
         return out
 
+    async def by_turn(self, turn_id: str) -> dict[str, dict[str, Any]]:
+        rows = await self._db.fetchall(
+            "SELECT task, SUM(cost_usd) AS total, COUNT(id) AS calls "
+            "FROM cost_records WHERE turn_id = ? GROUP BY task",
+            (turn_id,),
+        )
+        return {
+            (r["task"] or ""): {
+                "total_usd": float(r["total"] or 0.0),
+                "call_count": int(r["calls"] or 0),
+            }
+            for r in rows
+        }
+
+    async def total_today(self, campaign_id: CampaignId) -> float:
+        midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        row = await self._db.fetchone(
+            "SELECT COALESCE(SUM(cost_usd), 0.0) AS total FROM cost_records "
+            "WHERE campaign_id = ? AND recorded_at >= ?",
+            (campaign_id, midnight.isoformat()),
+        )
+        if row is None:
+            return 0.0
+        return float(row["total"] or 0.0)
+
     async def by_task(self, campaign_id: CampaignId) -> dict[str, float]:
         rows = await self._db.fetchall(
             "SELECT task, SUM(cost_usd) AS total FROM cost_records "

@@ -427,6 +427,12 @@ class LLMGatewayService:
                     "total_tokens": response.usage.total_tokens,
                 },
                 "cost_estimate_usd": response.cost_estimate_usd,
+                "finish_reason": response.finish_reason,
+                "params": {
+                    "temperature": request.temperature,
+                    "max_tokens": request.max_tokens,
+                    "seed": request.seed,
+                },
                 "retry_override": self._retry_dict(retry),
                 "timeout_override": self._timeout_dict(timeout),
             },
@@ -736,12 +742,24 @@ class LLMGatewayService:
                 with contextlib.suppress(Exception):
                     await close()
         latency_ms = int((time.monotonic() - started) * 1000)
+        # Compute cost from usage + price book so streaming calls populate
+        # cost_records on the same footing as non-streaming complete() does.
+        cost_estimate_usd: float | None = None
+        if usage is not None and (usage.input_tokens or usage.output_tokens):
+            info = await self._get_pricing(route.provider_id, route.model)
+            if info is not None and not (
+                info.input_cost_per_1k is None and info.output_cost_per_1k is None
+            ):
+                cost_estimate_usd = usage.input_tokens / 1000.0 * (
+                    info.input_cost_per_1k or 0.0
+                ) + usage.output_tokens / 1000.0 * (info.output_cost_per_1k or 0.0)
         if self._config.observability.log_all_requests:
             await self._log.record(
                 task=task,
                 provider_id=route.provider_id,
                 model=route.model,
                 usage=usage,
+                cost_usd=cost_estimate_usd,
                 latency_ms=latency_ms,
                 retries=0,
                 fallback_used=fallback_used,
@@ -768,7 +786,14 @@ class LLMGatewayService:
                     "output_tokens": usage.output_tokens if usage else 0,
                     "total_tokens": usage.total_tokens if usage else 0,
                 },
-                "cost_estimate_usd": None,
+                "cost_estimate_usd": cost_estimate_usd,
+                "finish_reason": "stop",
+                "params": {
+                    "temperature": request.temperature,
+                    "max_tokens": request.max_tokens,
+                    "seed": request.seed,
+                    "top_p": None,
+                },
                 "retry_override": self._retry_dict(retry),
                 "timeout_override": self._timeout_dict(timeout),
             },
