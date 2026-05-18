@@ -125,6 +125,38 @@
   color-scheme: dark;
 }
 
+/* ----- Font family override (§17 Appearance) ----- */
+
+:root[data-font="serif"] {
+  font-family: var(--font-display);
+}
+
+:root[data-font="dyslexia"] {
+  /* "OpenDyslexic" is the canonical free option; fall through to a wide,
+     plain sans for systems that don't have it installed. The browser ignores
+     unknown font names so this is safe even when the font isn't shipped. */
+  font-family:
+    "OpenDyslexic", "Comic Sans MS", "Trebuchet MS", "Verdana", -apple-system, BlinkMacSystemFont,
+    system-ui, sans-serif;
+  letter-spacing: 0.01em;
+}
+
+/* ----- Density (§17 Appearance) ----- */
+
+:root[data-density="compact"] {
+  --space-1: 0.125rem;
+  --space-2: 0.25rem;
+  --space-3: 0.5rem;
+  --space-4: 0.75rem;
+  --space-5: 0.875rem;
+  --space-6: 1rem;
+  --space-8: 1.25rem;
+  --space-10: 1.5rem;
+  --space-12: 2rem;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 /* ----- Reset & base ----- */
 
 *,

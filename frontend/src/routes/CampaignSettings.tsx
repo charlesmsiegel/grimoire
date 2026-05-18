@@ -2,15 +2,15 @@
  * Per-campaign settings. Tabs follow spec 14 §Per-campaign settings:
  * General, Model routing, ImageGen, Mechanics, Storage, Advanced.
  *
- * Concrete editors for routing tables and plugin configs are out of scope for
- * task 35 — each tab renders the form scaffolding and a stable structure
- * downstream tabs can extend. The General and Mechanics tabs persist via
- * `PATCH /campaigns/{id}`; other tabs surface their inputs as local-only state
- * marked as "not yet persisted" so users can see the surface area without
- * silently losing data.
+ * Routing / ImageGen / Storage / Advanced persist via dedicated PUT endpoints
+ * (`/api/campaigns/{id}/routing` etc.). Each tab fetches its current value on
+ * mount and auto-saves after a short debounce, with a "Saved" indicator next
+ * to the form. General + Mechanics still use `PATCH /campaigns/{id}` (the
+ * latter has its own explicit Save button because it changes a column the
+ * orchestrator reads on every turn).
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
@@ -116,11 +116,11 @@ export function CampaignSettings() {
       {campaign && (
         <div className="tab-panel">
           {tab === "general" && <GeneralTab campaign={campaign} onUpdate={setCampaign} />}
-          {tab === "routing" && <RoutingTab />}
-          {tab === "imagegen" && <ImageGenTab />}
+          {tab === "routing" && <RoutingTab campaignId={campaignId} />}
+          {tab === "imagegen" && <ImageGenTab campaignId={campaignId} />}
           {tab === "mechanics" && <MechanicsTab campaign={campaign} onUpdate={setCampaign} />}
-          {tab === "storage" && <StorageTab />}
-          {tab === "advanced" && <AdvancedTab />}
+          {tab === "storage" && <StorageTab campaignId={campaignId} />}
+          {tab === "advanced" && <AdvancedTab campaignId={campaignId} />}
         </div>
       )}
     </section>
@@ -193,11 +193,117 @@ const TASKS = [
   "validation",
 ] as const;
 
-function RoutingTab() {
-  const [plugins, setPlugins] = useState<PluginSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+
+/**
+ * Auto-save hook: PUT the latest value after a short debounce. Exposes a
+ * "Saved" / "Saving…" / error indicator alongside the form so users get
+ * feedback without an explicit submit button. Saves on the next tick after
+ * the first GET completes (we wait for `ready` to flip true before we'll
+ * trigger any PUT).
+ */
+function useAutoSavedResource<T>(
+  campaignId: string | undefined,
+  path: string,
+  initial: T,
+): {
+  value: T;
+  setValue: (next: T | ((prev: T) => T)) => void;
+  status: SaveStatus;
+  error: string | null;
+  ready: boolean;
+} {
+  const [value, setValueState] = useState<T>(initial);
+  const [ready, setReady] = useState(false);
+  const [status, setStatus] = useState<SaveStatus>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [overrides, setOverrides] = useState<Record<string, string>>({});
+  const dirty = useRef(false);
+  const lastSent = useRef<string>("");
+
+  // Initial load
+  useEffect(() => {
+    if (!campaignId) return;
+    let cancelled = false;
+    setReady(false);
+    setError(null);
+    void (async () => {
+      try {
+        const data = await api.get<T>(`/api/campaigns/${encodeURIComponent(campaignId)}${path}`);
+        if (!cancelled) {
+          setValueState(data);
+          lastSent.current = JSON.stringify(data);
+          setReady(true);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(errorMessage(err));
+          setReady(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [campaignId, path]);
+
+  // Debounced save
+  useEffect(() => {
+    if (!campaignId || !ready) return;
+    if (!dirty.current) return;
+    const serialized = JSON.stringify(value);
+    if (serialized === lastSent.current) return;
+    const handle = window.setTimeout(() => {
+      void (async () => {
+        setStatus("saving");
+        setError(null);
+        try {
+          await api.put(`/api/campaigns/${encodeURIComponent(campaignId)}${path}`, value);
+          lastSent.current = serialized;
+          setStatus("saved");
+        } catch (err) {
+          setError(errorMessage(err));
+          setStatus("error");
+        }
+      })();
+    }, 400);
+    return () => window.clearTimeout(handle);
+  }, [campaignId, path, value, ready]);
+
+  const setValue = useCallback((next: T | ((prev: T) => T)) => {
+    dirty.current = true;
+    setValueState(next);
+  }, []);
+
+  return { value, setValue, status, error, ready };
+}
+
+function SaveIndicator({ status, error }: { status: SaveStatus; error: string | null }) {
+  if (status === "saving") return <small className="wizard-meta">Saving…</small>;
+  if (status === "error") {
+    return (
+      <small className="wizard-error" role="alert">
+        {error ?? "Save failed"}
+      </small>
+    );
+  }
+  if (status === "saved") return <small className="library-ok">Saved.</small>;
+  return null;
+}
+
+interface RoutingValue {
+  llm: Record<string, string>;
+  embedding: Record<string, string>;
+}
+
+function RoutingTab({ campaignId }: { campaignId: string }) {
+  const [plugins, setPlugins] = useState<PluginSummary[]>([]);
+  const [pluginsLoading, setPluginsLoading] = useState(true);
+  const [pluginsError, setPluginsError] = useState<string | null>(null);
+  const { value, setValue, status, error, ready } = useAutoSavedResource<RoutingValue>(
+    campaignId,
+    "/routing",
+    { llm: {}, embedding: {} },
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -206,12 +312,12 @@ function RoutingTab() {
         const data = await fetchInstalledPlugins();
         if (!cancelled) {
           setPlugins(data);
-          setLoading(false);
+          setPluginsLoading(false);
         }
       } catch (err) {
         if (!cancelled) {
-          setError(errorMessage(err));
-          setLoading(false);
+          setPluginsError(errorMessage(err));
+          setPluginsLoading(false);
         }
       }
     })();
@@ -223,14 +329,30 @@ function RoutingTab() {
   const llmPlugins = plugins.filter((p) => p.kind === "llm_provider");
   const embedPlugins = plugins.filter((p) => p.kind === "embedding_provider");
 
+  const updateLlm = (task: string, plugin: string) =>
+    setValue((prev) => {
+      const next = { ...prev.llm };
+      if (plugin) next[task] = plugin;
+      else delete next[task];
+      return { ...prev, llm: next };
+    });
+  const updateEmbedding = (task: string, plugin: string) =>
+    setValue((prev) => {
+      const next = { ...prev.embedding };
+      if (plugin) next[task] = plugin;
+      else delete next[task];
+      return { ...prev, embedding: next };
+    });
+
   return (
     <div className="settings-form">
       <p className="wizard-step-help">
         Route each task to an installed provider. Empty falls through to the app-wide default for
-        that task.
+        that task. Changes save automatically.
       </p>
-      {loading && <p className="wizard-meta">Loading providers…</p>}
-      {error && <p className="wizard-error">{error}</p>}
+      {pluginsLoading && <p className="wizard-meta">Loading providers…</p>}
+      {pluginsError && <p className="wizard-error">{pluginsError}</p>}
+      {!ready && <p className="wizard-meta">Loading saved routing…</p>}
       <table className="routing-table">
         <thead>
           <tr>
@@ -245,8 +367,9 @@ function RoutingTab() {
               <th scope="row">{task}</th>
               <td>
                 <select
-                  value={overrides[`llm:${task}`] ?? ""}
-                  onChange={(e) => setOverrides((o) => ({ ...o, [`llm:${task}`]: e.target.value }))}
+                  value={value.llm[task] ?? ""}
+                  onChange={(e) => updateLlm(task, e.target.value)}
+                  disabled={!ready}
                 >
                   <option value="">(app default)</option>
                   {llmPlugins.map((p) => (
@@ -258,10 +381,9 @@ function RoutingTab() {
               </td>
               <td>
                 <select
-                  value={overrides[`embed:${task}`] ?? ""}
-                  onChange={(e) =>
-                    setOverrides((o) => ({ ...o, [`embed:${task}`]: e.target.value }))
-                  }
+                  value={value.embedding[task] ?? ""}
+                  onChange={(e) => updateEmbedding(task, e.target.value)}
+                  disabled={!ready}
                 >
                   <option value="">(app default)</option>
                   {embedPlugins.map((p) => (
@@ -275,19 +397,24 @@ function RoutingTab() {
           ))}
         </tbody>
       </table>
-      <p className="wizard-meta">
-        Persistence ships with the routing-table API endpoint; the form surfaces the structure now
-        so a future task only has to wire the PUT call.
-      </p>
+      <SaveIndicator status={status} error={error} />
     </div>
   );
 }
 
-function ImageGenTab() {
+interface ImageGenValue {
+  backend: string | null;
+  preset: string | null;
+  sampler_defaults: unknown;
+}
+
+function ImageGenTab({ campaignId }: { campaignId: string }) {
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
-  const [backend, setBackend] = useState<string>("");
-  const [preset, setPreset] = useState<string>("");
-  const [sampler, setSampler] = useState<string>("");
+  const { value, setValue, status, error, ready } = useAutoSavedResource<ImageGenValue>(
+    campaignId,
+    "/imagegen",
+    { backend: null, preset: null, sampler_defaults: null },
+  );
 
   useEffect(() => {
     void fetchInstalledPlugins().then((data) => setPlugins(data));
@@ -295,11 +422,28 @@ function ImageGenTab() {
 
   const backends = plugins.filter((p) => p.kind === "imagegen_backend");
 
+  // Sampler defaults is stored as arbitrary JSON; the input edits a string and
+  // we round-trip it through JSON.parse on save when possible so structured
+  // configs can be expressed when needed.
+  const samplerText =
+    typeof value.sampler_defaults === "string"
+      ? value.sampler_defaults
+      : value.sampler_defaults === null || value.sampler_defaults === undefined
+        ? ""
+        : JSON.stringify(value.sampler_defaults);
+
   return (
     <div className="settings-form">
+      {!ready && <p className="wizard-meta">Loading saved settings…</p>}
       <label className="wizard-field">
         <span>Backend</span>
-        <select value={backend} onChange={(e) => setBackend(e.target.value)}>
+        <select
+          value={value.backend ?? ""}
+          onChange={(e) =>
+            setValue((prev) => ({ ...prev, backend: e.target.value || null }))
+          }
+          disabled={!ready}
+        >
           <option value="">(integrated diffusers)</option>
           {backends.map((b) => (
             <option key={b.id} value={b.id}>
@@ -312,21 +456,28 @@ function ImageGenTab() {
         <span>Active preset</span>
         <input
           type="text"
-          value={preset}
-          onChange={(e) => setPreset(e.target.value)}
+          value={value.preset ?? ""}
+          onChange={(e) => setValue((prev) => ({ ...prev, preset: e.target.value || null }))}
           placeholder="oil-painting"
+          disabled={!ready}
         />
       </label>
       <label className="wizard-field">
         <span>Sampler defaults</span>
         <input
           type="text"
-          value={sampler}
-          onChange={(e) => setSampler(e.target.value)}
+          value={samplerText}
+          onChange={(e) =>
+            setValue((prev) => ({
+              ...prev,
+              sampler_defaults: e.target.value ? e.target.value : null,
+            }))
+          }
           placeholder="DPM++ 2M Karras, 25 steps"
+          disabled={!ready}
         />
       </label>
-      <p className="wizard-meta">Backend-specific config UIs follow in task 34's Images view.</p>
+      <SaveIndicator status={status} error={error} />
     </div>
   );
 }
@@ -385,14 +536,28 @@ function MechanicsTab({
   );
 }
 
-function StorageTab() {
-  const [schedule, setSchedule] = useState("daily");
-  const [retention, setRetention] = useState("30");
+interface StorageValue {
+  schedule: string;
+  retention_days: number;
+}
+
+function StorageTab({ campaignId }: { campaignId: string }) {
+  const { value, setValue, status, error, ready } = useAutoSavedResource<StorageValue>(
+    campaignId,
+    "/storage",
+    { schedule: "off", retention_days: 30 },
+  );
+
   return (
     <div className="settings-form">
+      {!ready && <p className="wizard-meta">Loading saved settings…</p>}
       <label className="wizard-field">
         <span>Backup schedule</span>
-        <select value={schedule} onChange={(e) => setSchedule(e.target.value)}>
+        <select
+          value={value.schedule}
+          onChange={(e) => setValue((prev) => ({ ...prev, schedule: e.target.value }))}
+          disabled={!ready}
+        >
           <option value="off">Off</option>
           <option value="hourly">Hourly</option>
           <option value="daily">Daily</option>
@@ -404,36 +569,68 @@ function StorageTab() {
         <input
           type="number"
           min={1}
-          value={retention}
-          onChange={(e) => setRetention(e.target.value)}
+          value={value.retention_days}
+          onChange={(e) =>
+            setValue((prev) => ({
+              ...prev,
+              retention_days: Number.isFinite(Number(e.target.value))
+                ? Number(e.target.value)
+                : prev.retention_days,
+            }))
+          }
+          disabled={!ready}
         />
       </label>
-      <p className="wizard-meta">Backup runner ships in the operational tooling pass.</p>
+      <SaveIndicator status={status} error={error} />
     </div>
   );
 }
 
-function AdvancedTab() {
-  const [debug, setDebug] = useState(false);
-  const [systemPrompt, setSystemPrompt] = useState("");
+interface AdvancedValue {
+  debug_log: boolean;
+  per_task_prompts: Record<string, string>;
+}
+
+function AdvancedTab({ campaignId }: { campaignId: string }) {
+  const { value, setValue, status, error, ready } = useAutoSavedResource<AdvancedValue>(
+    campaignId,
+    "/advanced",
+    { debug_log: false, per_task_prompts: {} },
+  );
+
+  const setPromptFor = (task: string, text: string) =>
+    setValue((prev) => {
+      const next = { ...prev.per_task_prompts };
+      if (text) next[task] = text;
+      else delete next[task];
+      return { ...prev, per_task_prompts: next };
+    });
+
   return (
     <div className="settings-form">
+      {!ready && <p className="wizard-meta">Loading saved settings…</p>}
       <label className="wizard-toggle">
-        <input type="checkbox" checked={debug} onChange={(e) => setDebug(e.target.checked)} />
+        <input
+          type="checkbox"
+          checked={value.debug_log}
+          onChange={(e) =>
+            setValue((prev) => ({ ...prev, debug_log: e.target.checked }))
+          }
+          disabled={!ready}
+        />
         <span>Verbose debug log for this campaign</span>
       </label>
       <label className="wizard-field">
         <span>Per-task system prompt override (main)</span>
         <textarea
           rows={6}
-          value={systemPrompt}
-          onChange={(e) => setSystemPrompt(e.target.value)}
+          value={value.per_task_prompts.main ?? ""}
+          onChange={(e) => setPromptFor("main", e.target.value)}
           placeholder="Override the main-task system prompt for this campaign."
+          disabled={!ready}
         />
       </label>
-      <p className="wizard-meta">
-        Per-task prompt overrides land alongside Observability's debug log surface.
-      </p>
+      <SaveIndicator status={status} error={error} />
     </div>
   );
 }

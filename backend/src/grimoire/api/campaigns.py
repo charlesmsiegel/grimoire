@@ -283,6 +283,182 @@ async def delete_campaign(campaign_id: str, state_store: StateStoreDep) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Settings tabs (spec §15: Routing / ImageGen / Storage / Advanced)
+# --------------------------------------------------------------------------- #
+#
+# All four payloads are stored as namespaced keys inside the
+# ``campaigns.config`` JSON column. ImageGen settings here are decoupled from
+# any backend-specific imagegen state stored elsewhere; downstream tasks that
+# unify the two surfaces can read this dict as ``config["imagegen"]``.
+#
+# Each pair is GET (returns the persisted shape, falling back to a stable
+# default when the campaign hasn't saved anything yet) + PUT (overwrite).
+
+
+async def _require_campaign_row(state_store: Any, campaign_id: str) -> dict:
+    row = await state_store.db.fetchone("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"campaign {campaign_id!r} not found")
+    return dict(row)
+
+
+def _load_campaign_config(row: dict) -> dict:
+    """Best-effort parse of ``campaigns.config`` into a dict."""
+    import json as _json
+
+    raw = row.get("config")
+    if not raw:
+        return {}
+    try:
+        data = _json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def _write_campaign_config(state_store: Any, campaign_id: str, config: dict) -> None:
+    import json as _json
+
+    await state_store.db.execute(
+        "UPDATE campaigns SET config = ? WHERE id = ?",
+        (_json.dumps(config, sort_keys=True), campaign_id),
+    )
+
+
+class RoutingPayload(BaseModel):
+    llm: dict[str, str | None] = Field(default_factory=dict)
+    embedding: dict[str, str | None] = Field(default_factory=dict)
+
+
+class ImageGenSettingsPayload(BaseModel):
+    backend: str | None = None
+    preset: str | None = None
+    sampler_defaults: dict[str, Any] | str | None = None
+
+
+class StorageSettingsPayload(BaseModel):
+    schedule: str = "off"
+    retention_days: int = 30
+
+
+class AdvancedSettingsPayload(BaseModel):
+    debug_log: bool = False
+    per_task_prompts: dict[str, str] = Field(default_factory=dict)
+
+
+@router.get("/{campaign_id}/routing")
+async def get_campaign_routing(campaign_id: str, state_store: StateStoreDep) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    routing = cfg.get("routing") or {}
+    return {
+        "llm": dict(routing.get("llm") or {}),
+        "embedding": dict(routing.get("embedding") or {}),
+    }
+
+
+@router.put("/{campaign_id}/routing")
+async def set_campaign_routing(
+    campaign_id: str,
+    payload: RoutingPayload,
+    state_store: StateStoreDep,
+) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    cfg["routing"] = {
+        "llm": {k: v for k, v in payload.llm.items() if v is not None and v != ""},
+        "embedding": {k: v for k, v in payload.embedding.items() if v is not None and v != ""},
+    }
+    await _write_campaign_config(state_store, campaign_id, cfg)
+    return cfg["routing"]
+
+
+@router.get("/{campaign_id}/imagegen")
+async def get_campaign_imagegen(campaign_id: str, state_store: StateStoreDep) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    imagegen = cfg.get("imagegen") or {}
+    return {
+        "backend": imagegen.get("backend"),
+        "preset": imagegen.get("preset"),
+        "sampler_defaults": imagegen.get("sampler_defaults"),
+    }
+
+
+@router.put("/{campaign_id}/imagegen")
+async def set_campaign_imagegen(
+    campaign_id: str,
+    payload: ImageGenSettingsPayload,
+    state_store: StateStoreDep,
+) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    cfg["imagegen"] = {
+        "backend": payload.backend or None,
+        "preset": payload.preset or None,
+        "sampler_defaults": payload.sampler_defaults,
+    }
+    await _write_campaign_config(state_store, campaign_id, cfg)
+    return cfg["imagegen"]
+
+
+@router.get("/{campaign_id}/storage")
+async def get_campaign_storage(campaign_id: str, state_store: StateStoreDep) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    storage = cfg.get("storage") or {}
+    return {
+        "schedule": storage.get("schedule", "off"),
+        "retention_days": int(storage.get("retention_days", 30)),
+    }
+
+
+@router.put("/{campaign_id}/storage")
+async def set_campaign_storage(
+    campaign_id: str,
+    payload: StorageSettingsPayload,
+    state_store: StateStoreDep,
+) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    cfg["storage"] = {
+        "schedule": payload.schedule,
+        "retention_days": int(payload.retention_days),
+    }
+    await _write_campaign_config(state_store, campaign_id, cfg)
+    return cfg["storage"]
+
+
+@router.get("/{campaign_id}/advanced")
+async def get_campaign_advanced(campaign_id: str, state_store: StateStoreDep) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    advanced = cfg.get("advanced") or {}
+    return {
+        "debug_log": bool(advanced.get("debug_log", False)),
+        "per_task_prompts": dict(advanced.get("per_task_prompts") or {}),
+    }
+
+
+@router.put("/{campaign_id}/advanced")
+async def set_campaign_advanced(
+    campaign_id: str,
+    payload: AdvancedSettingsPayload,
+    state_store: StateStoreDep,
+) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    cfg["advanced"] = {
+        "debug_log": bool(payload.debug_log),
+        "per_task_prompts": {
+            k: v for k, v in payload.per_task_prompts.items() if isinstance(v, str)
+        },
+    }
+    await _write_campaign_config(state_store, campaign_id, cfg)
+    return cfg["advanced"]
+
+
+# --------------------------------------------------------------------------- #
 # Composition
 # --------------------------------------------------------------------------- #
 
