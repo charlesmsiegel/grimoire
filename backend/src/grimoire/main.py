@@ -344,17 +344,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
     if container is not None:
-        summary_worker = (
-            container.extras.get("scene_summary_worker") if container.extras else None
-        )
+        summary_worker = container.extras.get("scene_summary_worker") if container.extras else None
         if summary_worker is not None:
             try:
                 await summary_worker.stop()
             except Exception:
                 log.exception("scene summary worker stop failed during shutdown")
-        scene_indexer = (
-            container.extras.get("scene_indexer") if container.extras else None
-        )
+        scene_indexer = container.extras.get("scene_indexer") if container.extras else None
         if scene_indexer is not None:
             try:
                 await scene_indexer.stop()

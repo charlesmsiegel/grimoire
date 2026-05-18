@@ -82,9 +82,7 @@ async def test_final_summarizer_parses_json_payload() -> None:
 
 
 async def test_final_summarizer_handles_fenced_json() -> None:
-    gateway = _FakeGateway(
-        '```json\n{"summary": "Wrap.", "key_beats": []}\n```'
-    )
+    gateway = _FakeGateway('```json\n{"summary": "Wrap.", "key_beats": []}\n```')
     finalize = make_default_final_summarizer(gateway)
     summary, beats = await finalize(_scene(), [_post(1, "x")])
     assert summary == "Wrap."

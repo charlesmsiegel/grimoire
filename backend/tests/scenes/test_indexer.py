@@ -90,8 +90,7 @@ async def test_post_delete_renumbers_index(setup) -> None:
     await manager.delete_post(second.id, source="user")
 
     rows = await db.fetchall(
-        "SELECT order_in_scene, body_excerpt FROM posts WHERE scene_id = ? "
-        "ORDER BY order_in_scene",
+        "SELECT order_in_scene, body_excerpt FROM posts WHERE scene_id = ? ORDER BY order_in_scene",
         (scene.id,),
     )
     assert [int(r["order_in_scene"]) for r in rows] == [1, 2]
@@ -133,9 +132,7 @@ async def test_backfill_reconciles_disk(tmp_path: Path, db) -> None:
     row = await db.fetchone("SELECT post_count FROM scenes WHERE id = ?", (scene.id,))
     assert row is not None
     assert int(row["post_count"]) == 1
-    post_row = await db.fetchone(
-        "SELECT body_excerpt FROM posts WHERE scene_id = ?", (scene.id,)
-    )
+    post_row = await db.fetchone("SELECT body_excerpt FROM posts WHERE scene_id = ?", (scene.id,))
     assert post_row["body_excerpt"] == "silently appended"
 
 
@@ -156,8 +153,7 @@ async def test_scene_file_changed_resyncs_posts(setup) -> None:
     await manager.reindex_from_disk(scene.id)
 
     rows = await db.fetchall(
-        "SELECT order_in_scene, body_excerpt FROM posts WHERE scene_id = ? "
-        "ORDER BY order_in_scene",
+        "SELECT order_in_scene, body_excerpt FROM posts WHERE scene_id = ? ORDER BY order_in_scene",
         (scene.id,),
     )
     assert [int(r["order_in_scene"]) for r in rows] == [1, 2]
