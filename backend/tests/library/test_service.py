@@ -333,6 +333,97 @@ async def test_update_entity_missing_raises(library: LibraryService) -> None:
         await library.update_entity("ghost-world", "character", "ghost")
 
 
+async def test_update_entity_deep_merges_nested_dict(
+    library: LibraryService, store: StateStore
+) -> None:
+    """Save-prompt-template-to-card (§5) only sends the changed image fields.
+
+    The patch ``{image: {base_prompt: "..."}}`` should preserve other
+    sub-keys of the ``image:`` block rather than clobbering it. Lists and
+    scalars still replace wholesale.
+    """
+    await _seed_world(store, "wod-london")
+    await store.write_library_file(
+        library_id="worlds/wod-london/characters/alistair",
+        frontmatter={
+            "id": "alistair",
+            "name": "Alistair",
+            "tags": ["vampire"],
+            "image": {
+                "base_prompt": "old prompt",
+                "negative_prompt": "blurry",
+                "canonical_seed": 42,
+            },
+        },
+        body="A character.",
+        source="user",
+    )
+
+    updated = await library.update_entity(
+        "wod-london",
+        "character",
+        "alistair",
+        frontmatter_patch={
+            "image": {"base_prompt": "new prompt", "canonical_seed": 99}
+        },
+    )
+    assert updated.frontmatter["image"]["base_prompt"] == "new prompt"
+    assert updated.frontmatter["image"]["negative_prompt"] == "blurry"  # preserved
+    assert updated.frontmatter["image"]["canonical_seed"] == 99
+
+    # Lists still replace wholesale.
+    updated2 = await library.update_entity(
+        "wod-london",
+        "character",
+        "alistair",
+        frontmatter_patch={"tags": ["elder"]},
+    )
+    assert updated2.frontmatter["tags"] == ["elder"]
+
+
+# ---------------------------------------------------------------------------
+# Image preset CRUD (§14)
+# ---------------------------------------------------------------------------
+
+
+async def test_image_preset_crud_round_trip(library: LibraryService) -> None:
+    created = await library.create_image_preset(
+        "noir-portraits",
+        name="Noir portraits",
+        description="High-contrast B&W.",
+        tags=["noir"],
+        style_preamble="stark shadows, 35mm film",
+        default_negative_prompt="blurry",
+        default_params={"steps": 24, "width": 512, "height": 768},
+    )
+    assert created.asset_id == "noir-portraits"
+    assert created.frontmatter["style_preamble"] == "stark shadows, 35mm film"
+    assert created.frontmatter["default_params"] == {
+        "steps": 24,
+        "width": 512,
+        "height": 768,
+    }
+
+    with pytest.raises(LibraryConflictError):
+        await library.create_image_preset("noir-portraits", name="dup")
+
+    parsed = await library.parse_image_preset("noir-portraits")
+    assert parsed["style_preamble"] == "stark shadows, 35mm film"
+    assert parsed["default_negative_prompt"] == "blurry"
+
+    updated = await library.update_image_preset(
+        "noir-portraits",
+        style_preamble="softer film grain",
+    )
+    assert updated.frontmatter["style_preamble"] == "softer film grain"
+    # Other fields preserved.
+    assert updated.frontmatter["default_negative_prompt"] == "blurry"
+
+    await library.delete_image_preset("noir-portraits")
+    with pytest.raises(LibraryNotFoundError):
+        await library.get_image_preset("noir-portraits")
+
+
 async def test_delete_entity(library: LibraryService, store: StateStore) -> None:
     await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair")

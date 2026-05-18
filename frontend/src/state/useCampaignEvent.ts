@@ -41,6 +41,15 @@ export function useCampaignEvent(
   }, [socket, typeKey]);
 }
 
+// Delay before terminal image-job entries (complete / failed) are evicted
+// from the live queue panel so the user can briefly see the transition.
+const TERMINAL_IMAGE_JOB_TTL_MS = 4_000;
+
+function stringField(msg: WSMessage, key: string): string | null {
+  const v = msg[key];
+  return typeof v === "string" ? v : null;
+}
+
 export function routeToStore(message: WSMessage, dispatch: (a: Action) => void): void {
   switch (message.type) {
     case "drift_detected": {
@@ -59,6 +68,82 @@ export function routeToStore(message: WSMessage, dispatch: (a: Action) => void):
           dispatch({ type: "push-review", item: { id: obj.id, summary: obj.summary } });
         }
       }
+      break;
+    }
+    // §6 — image queue live panel. The backend fans out `imagegen_job_queued`
+    // / `imagegen_job_started` / `image_ready` / `imagegen_job_failed`; we
+    // mirror them into the global store so the queue panel renders without
+    // needing to subscribe directly to the socket.
+    case "imagegen_job_queued": {
+      const jobId = stringField(message, "job_id");
+      if (!jobId) break;
+      dispatch({
+        type: "image-job-upsert",
+        job: {
+          job_id: jobId,
+          status: "queued",
+          created_at: Date.now(),
+          prompt_preview: stringField(message, "prompt_preview") ?? "",
+          scene_id: stringField(message, "scene_id"),
+        },
+      });
+      break;
+    }
+    case "imagegen_job_started": {
+      const jobId = stringField(message, "job_id");
+      if (!jobId) break;
+      dispatch({
+        type: "image-job-upsert",
+        job: {
+          job_id: jobId,
+          status: "running",
+          created_at: Date.now(),
+          prompt_preview: stringField(message, "prompt_preview") ?? "",
+          scene_id: stringField(message, "scene_id"),
+        },
+      });
+      break;
+    }
+    case "image_ready": {
+      // `image_ready` doesn't always carry the originating job_id (cached
+      // hits don't); when it does, mark the job complete and schedule
+      // eviction. Otherwise this is a no-op for the queue panel.
+      const jobId = stringField(message, "job_id");
+      if (!jobId) break;
+      dispatch({
+        type: "image-job-upsert",
+        job: {
+          job_id: jobId,
+          status: "complete",
+          created_at: Date.now(),
+          prompt_preview: stringField(message, "prompt_preview") ?? "",
+          scene_id: stringField(message, "scene_id"),
+        },
+      });
+      setTimeout(
+        () => dispatch({ type: "image-job-remove", jobId }),
+        TERMINAL_IMAGE_JOB_TTL_MS,
+      );
+      break;
+    }
+    case "imagegen_job_failed": {
+      const jobId = stringField(message, "job_id");
+      if (!jobId) break;
+      dispatch({
+        type: "image-job-upsert",
+        job: {
+          job_id: jobId,
+          status: "failed",
+          created_at: Date.now(),
+          prompt_preview: stringField(message, "prompt_preview") ?? "",
+          scene_id: stringField(message, "scene_id"),
+          reason: stringField(message, "reason"),
+        },
+      });
+      setTimeout(
+        () => dispatch({ type: "image-job-remove", jobId }),
+        TERMINAL_IMAGE_JOB_TTL_MS,
+      );
       break;
     }
     default:

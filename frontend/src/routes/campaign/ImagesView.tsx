@@ -6,12 +6,19 @@
  * / star actions invoke the REST endpoints in `api.client`.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
+import { ApiError, libraryApi } from "../../api/library";
 import { viewsApi } from "../../api/views";
-import type { ResolvedCharacter, ImageMetadata } from "../../api/types";
+import type {
+  ImageMetadata,
+  ResolutionSource,
+  ResolvedCharacter,
+} from "../../api/types";
 import { useApi } from "../../api/useApi";
+import type { ImageJobEntry } from "../../state/storeContext";
+import { useStore } from "../../state/useStore";
 import { Loading } from "./common";
 
 type ImagesTab = "gallery" | "queue" | "templates";
@@ -44,7 +51,7 @@ export function ImagesView() {
         </div>
       </header>
       {tab === "gallery" && <Gallery campaignId={campaignId} />}
-      {tab === "queue" && <Queue />}
+      {tab === "queue" && <Queue campaignId={campaignId} />}
       {tab === "templates" && <Templates campaignId={campaignId} />}
     </section>
   );
@@ -116,19 +123,76 @@ function ImageTile({ image }: { image: ImageMetadata }) {
   );
 }
 
-function Queue() {
-  // Queue events arrive via the campaign WS stream (`image_ready` /
-  // `image_queued`); the orchestrator subscription in `state/campaignStream`
-  // does not route them yet, so the panel renders a static placeholder until
-  // those events are wired through the global store.
+function Queue({ campaignId }: { campaignId: string }) {
+  // §6 — image queue live panel. We rely on the active CampaignStreamProvider
+  // (mounted in CampaignLayout) which feeds `imagegen_*` and `image_ready`
+  // events into `state.imageJobs` via `routeToStore`. This component just
+  // renders the current snapshot; per-job cancel calls the existing REST
+  // endpoint at DELETE /api/campaigns/{id}/images/jobs/{job_id}.
+  const { state } = useStore();
+  const jobs = useMemo<ImageJobEntry[]>(
+    () => Object.values(state.imageJobs).sort((a, b) => a.created_at - b.created_at),
+    [state.imageJobs],
+  );
+
+  if (jobs.length === 0) {
+    return (
+      <div className="image-queue">
+        <p className="muted">No active or queued image jobs.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="image-queue">
-      <p className="muted">
-        Active and queued jobs stream here. The WebSocket bridge for image events lands alongside
-        the orchestrator integration in a follow-up task; until then, queued jobs surface in the
-        backend logs.
-      </p>
+      <ul className="image-queue-list">
+        {jobs.map((job) => (
+          <ImageQueueRow key={job.job_id} campaignId={campaignId} job={job} />
+        ))}
+      </ul>
     </div>
+  );
+}
+
+function ImageQueueRow({ campaignId, job }: { campaignId: string; job: ImageJobEntry }) {
+  const [cancelling, setCancelling] = useState(false);
+  const canCancel = job.status === "queued" || job.status === "running";
+
+  async function cancel() {
+    setCancelling(true);
+    try {
+      await fetch(
+        `/api/campaigns/${encodeURIComponent(campaignId)}/images/jobs/${encodeURIComponent(job.job_id)}`,
+        { method: "DELETE" },
+      );
+    } catch {
+      // Swallow; the backend emits `imagegen_job_failed` if cancel hit the
+      // server, and the row will transition to "failed" with a reason.
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  return (
+    <li className={`image-queue-row image-queue-row-${job.status}`}>
+      <span className="image-queue-status">{job.status}</span>
+      <span className="image-queue-job-id" title={job.job_id}>
+        {job.job_id.slice(0, 12)}
+      </span>
+      {job.prompt_preview && <span className="image-queue-prompt">{job.prompt_preview}</span>}
+      {job.scene_id && <span className="muted">scene {job.scene_id}</span>}
+      {job.reason && <span className="image-queue-reason">{job.reason}</span>}
+      {canCancel && (
+        <button
+          type="button"
+          className="image-queue-cancel"
+          onClick={cancel}
+          disabled={cancelling}
+        >
+          {cancelling ? "Cancelling…" : "Cancel"}
+        </button>
+      )}
+    </li>
   );
 }
 
@@ -147,6 +211,29 @@ function Templates({ campaignId }: { campaignId: string }) {
   );
 }
 
+// A character is a library character when its resolution chain contains a
+// ``library_*`` layer with a concrete ``world_id``. Pure-emergent
+// characters and override-only resolutions don't have a library home we can
+// PATCH today, so the Save-to-card button stays disabled for them.
+function libraryHomeFromSourceChain(
+  chain: ResolutionSource[],
+): { world_id: string; library_id: string } | null {
+  for (const src of chain) {
+    if (
+      (src.layer === "library_live" || src.layer === "library_snapshot") &&
+      src.world_id &&
+      src.library_id
+    ) {
+      // ``library_id`` looks like "worlds/<world>/characters/<id>"; we
+      // need the trailing entity id only.
+      const parts = src.library_id.split("/");
+      const entityId = parts[parts.length - 1];
+      if (entityId) return { world_id: src.world_id, library_id: entityId };
+    }
+  }
+  return null;
+}
+
 function PromptTemplate({
   campaignId,
   character,
@@ -161,12 +248,22 @@ function PromptTemplate({
   const [negative, setNegative] = useState(initialNegative);
   const [seed, setSeed] = useState<string>(initialSeed?.toString() ?? "");
   const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "ok" | "error">("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const libraryHome = useMemo(
+    () => libraryHomeFromSourceChain(character.source_chain),
+    [character.source_chain],
+  );
 
   useEffect(() => {
     setBase(initial);
     setNegative(initialNegative);
     setSeed(initialSeed?.toString() ?? "");
     setDirty(false);
+    setSaveStatus("idle");
+    setSaveError(null);
     // re-run when the resolved character changes
   }, [initial, initialNegative, initialSeed]);
 
@@ -184,6 +281,38 @@ function PromptTemplate({
       // surfaced in the queue / logs
     }
   };
+
+  const save = async () => {
+    if (!libraryHome) return;
+    setSaving(true);
+    setSaveStatus("idle");
+    setSaveError(null);
+    const seedNumber = seed ? Number(seed) : null;
+    try {
+      await libraryApi.patchWorldCharacterImageTemplate(
+        libraryHome.world_id,
+        libraryHome.library_id,
+        {
+          base_prompt: base,
+          negative_prompt: negative,
+          canonical_seed:
+            seedNumber !== null && Number.isFinite(seedNumber) ? seedNumber : null,
+        },
+      );
+      setDirty(false);
+      setSaveStatus("ok");
+      setTimeout(() => setSaveStatus("idle"), 2500);
+    } catch (err) {
+      setSaveStatus("error");
+      setSaveError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveTitle = libraryHome
+    ? "Persist the prompt template to the library character card."
+    : "Override save coming soon";
 
   return (
     <li className="template-row">
@@ -230,11 +359,22 @@ function PromptTemplate({
         </button>
         <button
           type="button"
-          disabled={!dirty}
-          title="Persisting to the character card is wired in a follow-up task."
+          disabled={!dirty || saving || !libraryHome}
+          title={saveTitle}
+          onClick={save}
         >
-          Save to card
+          {saving ? "Saving…" : "Save to card"}
         </button>
+        {saveStatus === "ok" && (
+          <span className="badge badge-ok" role="status">
+            Saved
+          </span>
+        )}
+        {saveStatus === "error" && saveError && (
+          <span className="badge badge-warn" role="alert" title={saveError}>
+            Save failed
+          </span>
+        )}
       </div>
     </li>
   );

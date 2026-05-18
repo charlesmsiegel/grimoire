@@ -76,6 +76,26 @@ def _include_to_kinds(include: list[str] | None) -> set[str] | None:
     return out
 
 
+def _deep_merge_frontmatter(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Merge ``patch`` into ``base``, recursing into nested dicts.
+
+    Used by :meth:`LibraryService.update_entity` so a partial patch like
+    ``{"image": {"base_prompt": "..."}}`` updates only the named subkey of
+    the existing ``image:`` block instead of clobbering the whole section.
+    Non-dict values (including lists) replace wholesale, matching how spec
+    14 §Backend contract describes patches: lists are atomic, scalars are
+    atomic, only dicts merge.
+    """
+    out = dict(base)
+    for key, value in patch.items():
+        existing = out.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            out[key] = _deep_merge_frontmatter(existing, value)
+        else:
+            out[key] = value
+    return out
+
+
 def _parse_iso(value: Any) -> datetime | None:
     if not value:
         return None
@@ -318,6 +338,112 @@ class LibraryService:
             raise LibraryNotFoundError(f"image preset {id!r} not found")
         return _entity_from_row(row)
 
+    async def create_image_preset(
+        self,
+        id: str,
+        *,
+        name: str,
+        description: str = "",
+        tags: list[str] | None = None,
+        style_preamble: str = "",
+        default_negative_prompt: str = "",
+        default_params: dict[str, Any] | None = None,
+        source: str = "user",
+    ) -> LibraryEntity:
+        library_id = f"image-presets/{id}"
+        existing = await self.store.get_library_entity(library_id)
+        if existing is not None:
+            raise LibraryConflictError(f"image preset {id!r} already exists")
+        frontmatter: dict[str, Any] = {"id": id, "name": name or id}
+        if description:
+            frontmatter["description"] = description
+        if tags:
+            frontmatter["tags"] = list(tags)
+        if style_preamble:
+            frontmatter["style_preamble"] = style_preamble
+        if default_negative_prompt:
+            frontmatter["default_negative_prompt"] = default_negative_prompt
+        if default_params:
+            frontmatter["default_params"] = dict(default_params)
+        await self.store.write_library_file(
+            library_id=library_id,
+            frontmatter=frontmatter,
+            body="",
+            source=source,
+        )
+        return await self.get_image_preset(id)
+
+    async def parse_image_preset(self, id: str) -> dict[str, Any]:
+        """Return the editable shape of an image preset for the edit form."""
+        entity = await self.get_image_preset(id)
+        fm = entity.frontmatter or {}
+        return {
+            "id": entity.asset_id,
+            "name": entity.name,
+            "description": fm.get("description") or "",
+            "tags": list(entity.tags),
+            "style_preamble": fm.get("style_preamble") or "",
+            "default_negative_prompt": fm.get("default_negative_prompt") or "",
+            "default_params": dict(fm.get("default_params") or {}),
+        }
+
+    async def update_image_preset(
+        self,
+        id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+        style_preamble: str | None = None,
+        default_negative_prompt: str | None = None,
+        default_params: dict[str, Any] | None = None,
+        source: str = "user",
+    ) -> LibraryEntity:
+        existing = await self.get_image_preset(id)
+        fm = dict(existing.frontmatter or {})
+        fm["id"] = id
+        if name is not None:
+            fm["name"] = name or id
+        if description is not None:
+            if description:
+                fm["description"] = description
+            else:
+                fm.pop("description", None)
+        if tags is not None:
+            if tags:
+                fm["tags"] = list(tags)
+            else:
+                fm.pop("tags", None)
+        if style_preamble is not None:
+            if style_preamble:
+                fm["style_preamble"] = style_preamble
+            else:
+                fm.pop("style_preamble", None)
+        if default_negative_prompt is not None:
+            if default_negative_prompt:
+                fm["default_negative_prompt"] = default_negative_prompt
+            else:
+                fm.pop("default_negative_prompt", None)
+        if default_params is not None:
+            if default_params:
+                fm["default_params"] = dict(default_params)
+            else:
+                fm.pop("default_params", None)
+        await self.store.write_library_file(
+            library_id=f"image-presets/{id}",
+            frontmatter=fm,
+            body=existing.body or "",
+            source=source,
+        )
+        return await self.get_image_preset(id)
+
+    async def delete_image_preset(self, id: str, *, source: str = "user") -> None:
+        library_id = f"image-presets/{id}"
+        row = await self.store.get_library_entity(library_id)
+        if row is None:
+            raise LibraryNotFoundError(f"image preset {id!r} not found")
+        await self.store.delete_library_file(library_id=library_id, source=source)
+
     # ------------------------------------------------------------------ #
     # Greetings
     # ------------------------------------------------------------------ #
@@ -407,7 +533,7 @@ class LibraryService:
             )
         new_frontmatter = dict(row.get("frontmatter") or {})
         if frontmatter_patch:
-            new_frontmatter.update(frontmatter_patch)
+            new_frontmatter = _deep_merge_frontmatter(new_frontmatter, frontmatter_patch)
         new_body = body if body is not None else (row.get("body") or "")
         await self.store.write_library_file(
             library_id=library_id,

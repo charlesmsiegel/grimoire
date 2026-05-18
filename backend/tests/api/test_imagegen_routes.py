@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +18,7 @@ from grimoire.imagegen import (
 )
 from grimoire.state_store import StateStore
 from grimoire.storage import Database, apply_migrations
+from grimoire.types.composition import LibraryEntity
 
 
 @pytest.fixture
@@ -181,3 +183,69 @@ def test_generate_route_returns_job_id(app_client) -> None:
     )
     assert resp.status_code == 202
     assert "job_id" in resp.json()
+
+
+# --------------------------------------------------------------------------- #
+# §13 image preset sample preview route — POST /library/image-presets/{id}/preview
+# --------------------------------------------------------------------------- #
+
+
+class _StubLibrary:
+    """Minimal library stub that only implements ``get_image_preset``."""
+
+    def __init__(self, preset: LibraryEntity) -> None:
+        self._preset = preset
+
+    async def get_image_preset(self, id: str) -> LibraryEntity:
+        if id != self._preset.asset_id:
+            raise KeyError(id)
+        return self._preset
+
+
+def _preset(asset_id: str, **frontmatter: Any) -> LibraryEntity:
+    fm = {"id": asset_id, "name": asset_id.title(), **frontmatter}
+    return LibraryEntity(
+        id=f"image-presets/{asset_id}",
+        world_id=None,
+        kind="image_preset",
+        asset_id=asset_id,
+        name=fm["name"],
+        path=f"image-presets/{asset_id}.yaml",
+        frontmatter=fm,
+        body="",
+    )
+
+
+def test_image_preset_preview_returns_data_url(app_client, container) -> None:
+    container.library = _StubLibrary(
+        _preset(
+            "noir",
+            style_preamble="stark shadows",
+            default_negative_prompt="blurry",
+            default_params={"steps": 4, "width": 64, "height": 64},
+        )
+    )
+    resp = app_client.post(
+        "/api/library/image-presets/noir/preview",
+        json={"prompt": "a portrait of a wizard", "seed": 7},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["image_data_url"].startswith("data:image/png;base64,")
+    assert body["backend"] == "diffusers-memory"
+    assert body["seed"] == 7
+
+
+def test_image_preset_preview_uses_default_prompt(app_client, container) -> None:
+    container.library = _StubLibrary(_preset("plain"))
+    resp = app_client.post("/api/library/image-presets/plain/preview", json={})
+    assert resp.status_code == 200
+    assert "image_data_url" in resp.json()
+
+
+def test_image_preset_preview_404_when_preset_missing(app_client, container) -> None:
+    container.library = _StubLibrary(_preset("noir"))
+    resp = app_client.post(
+        "/api/library/image-presets/missing/preview", json={"seed": 1}
+    )
+    assert resp.status_code == 404

@@ -16,6 +16,17 @@ export interface ReviewQueueItem {
   summary: string;
 }
 
+export type ImageJobStatus = "queued" | "running" | "complete" | "failed";
+
+export interface ImageJobEntry {
+  job_id: string;
+  status: ImageJobStatus;
+  created_at: number;
+  prompt_preview: string;
+  scene_id?: string | null;
+  reason?: string | null;
+}
+
 export interface StatusInfo {
   modelLabel: string | null;
   tokenBudget: { used: number; total: number } | null;
@@ -28,6 +39,7 @@ export interface AppState {
   activeCampaignId: string | null;
   reviewQueue: ReviewQueueItem[];
   status: StatusInfo;
+  imageJobs: Record<string, ImageJobEntry>;
 }
 
 export type Action =
@@ -38,6 +50,8 @@ export type Action =
   | { type: "remove-review"; id: string }
   | { type: "drift-alert"; alert: DriftAlert }
   | { type: "clear-drift"; characterRef: string }
+  | { type: "image-job-upsert"; job: ImageJobEntry }
+  | { type: "image-job-remove"; jobId: string }
   | { type: "replace"; next: AppState };
 
 export interface StoreContextValue {
@@ -54,6 +68,7 @@ export const initialState: AppState = {
   activeCampaignId: null,
   reviewQueue: [],
   status: { modelLabel: null, tokenBudget: null, queueDepth: 0, driftAlerts: [] },
+  imageJobs: {},
 };
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -94,6 +109,17 @@ export function reducer(state: AppState, action: Action): AppState {
           ),
         },
       };
+    case "image-job-upsert":
+      return {
+        ...state,
+        imageJobs: { ...state.imageJobs, [action.job.job_id]: action.job },
+      };
+    case "image-job-remove": {
+      if (!(action.jobId in state.imageJobs)) return state;
+      const next = { ...state.imageJobs };
+      delete next[action.jobId];
+      return { ...state, imageJobs: next };
+    }
     case "replace":
       return action.next;
   }
