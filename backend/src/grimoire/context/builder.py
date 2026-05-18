@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -101,6 +102,7 @@ class ContextBuilderService:
         mechanics: Any | None = None,
         gateway: Any | None = None,
         state_store: Any | None = None,
+        time_engine: Any | None = None,
         config: ContextBuilderConfig | None = None,
     ) -> None:
         self._library = library
@@ -111,6 +113,7 @@ class ContextBuilderService:
         self._mechanics = mechanics
         self._gateway = gateway
         self._store = state_store
+        self._time_engine = time_engine
         self._config = config or ContextBuilderConfig()
         self._estimator: TokenEstimator = self._make_estimator()
 
@@ -201,11 +204,19 @@ class ContextBuilderService:
         else:
             active_pc_ref = pc_ref
         active_pc_card, active_pc_source = await self._active_pc_card(active_pc_ref, campaign_id)
+
+        # Open commitments are reused for both the lock-in commitments block
+        # and the tier-recommendation hint (`commitments_targeting_pcs`).
+        open_commitments = await self._open_commitments(campaign_id)
+        pc_refs = await self._pc_refs(campaign_id)
+        commitments_targeting_pcs = self._commitments_targeting_pcs(open_commitments, pc_refs)
+
         spotlight_items, background_items, voice_corrective = await self._resolve_cast(
             scene=scene,
             campaign_id=campaign_id,
             active_pc_ref=active_pc_ref,
             recent_posts=recent_posts,
+            commitments_targeting_pcs=commitments_targeting_pcs,
         )
 
         # Step 3 — world
@@ -214,12 +225,29 @@ class ContextBuilderService:
         )
         spotlight_items.extend(world_spotlight)
         background_items.extend(world_background)
+        background_items.extend(
+            await self._resolve_factions(scene=scene, campaign_id=campaign_id, branch_id=branch_id)
+        )
+        background_items.extend(
+            await self._resolve_calendar(scene=scene, campaign_id=campaign_id, branch_id=branch_id)
+        )
 
         # Step 4 — continuity
-        commitments_block, commitments_source = await self._render_commitments(
-            campaign_id, active_pc_ref
+        commitments_block, commitments_source = self._render_commitments_block(
+            campaign_id, open_commitments
         )
         background_items.extend(await self._continuity_background(campaign_id))
+        # Relationship deltas (compact, lock-in tier): short summary lines of
+        # the most recent relationship updates between the active PC and any
+        # present cast member.
+        background_items.extend(
+            await self._relationship_deltas(
+                active_pc_ref=active_pc_ref,
+                scene=scene,
+                campaign_id=campaign_id,
+                branch_id=branch_id,
+            )
+        )
 
         # Step 5 — archive retrieval
         archive_items = await self._retrieve_archive(
@@ -228,10 +256,15 @@ class ContextBuilderService:
             scene=scene,
             recent_posts=recent_posts,
             turn_id=turn_id,
+            composition=composition,
         )
 
         # Step 5a — lore keyword triggers (campaign-scoped) — archive tier
         archive_items.extend(await self._lore_triggers(player_input, campaign_id))
+
+        # Step 5b — explicit scene references from the player input. These
+        # bypass the vector/keyword budget — the player asked for them.
+        archive_items.extend(await self._scene_refs_from_input(player_input, campaign_id))
 
         # Mechanics block (lock-in)
         mechanics_block = self._render_mechanics(mechanics_results)
@@ -341,6 +374,7 @@ class ContextBuilderService:
         campaign_id: CampaignId,
         active_pc_ref: str | None,
         recent_posts: list[Any],
+        commitments_targeting_pcs: set[str] | None = None,
     ) -> tuple[list[_TierItem], list[_TierItem], str]:
         spotlight_items: list[_TierItem] = []
         background_items: list[_TierItem] = []
@@ -349,32 +383,109 @@ class ContextBuilderService:
         if scene is not None:
             present_refs = list(getattr(scene, "present_character_refs", []) or [])
 
-        # Spotlight = present chars (excluding active PC; that goes in lock-in).
+        # Ask Characters for its tier recommendation. This bakes in: presence
+        # → spotlight, mentioned in recent posts → background, open commitment
+        # with a PC → background, inactivity → demote, and user pins → forced
+        # tier (spec characters §Tier management; remaining design §1/§2).
+        # If the caller (or test) wires a Characters stub without this method
+        # we fall back to a body-token scan of recent posts.
+        tier_map = await self._recommend_tiers(
+            scene=scene,
+            campaign_id=campaign_id,
+            recent_posts=recent_posts,
+            commitments_targeting_pcs=commitments_targeting_pcs,
+        )
+
         seen: set[str] = set()
         if active_pc_ref:
             seen.add(active_pc_ref)
+
+        # Spotlight tier: present chars (excluding active PC) plus anyone
+        # else recommended to SPOTLIGHT by Characters (e.g. user pin).
+        spotlight_refs: list[str] = []
         for ref in present_refs:
             if ref in seen:
                 continue
+            spotlight_refs.append(ref)
             seen.add(ref)
+        for ref, tier in tier_map.items():
+            if ref in seen or tier != ContextTier.SPOTLIGHT:
+                continue
+            spotlight_refs.append(ref)
+            seen.add(ref)
+
+        for ref in spotlight_refs:
             card = await self._try_full_card(ref, campaign_id)
             if not card:
                 continue
+            # §8: prepend a world-id-aware header so duplicate names in two
+            # worlds render distinctly. Library refs only — campaign-local
+            # entities don't have a world prefix to surface.
             spotlight_items.append(
                 _TierItem(
                     tier=ContextTier.SPOTLIGHT,
                     section="cast",
-                    text=card,
+                    text=_with_cast_header(ref, card),
                     priority=10,
                     source=self._character_source(ref, ContextTier.SPOTLIGHT, campaign_id),
                 )
             )
+            # §9 — Voice anchor: emit a separate spotlight item carrying just
+            # the voice snippet, distinct from the full card.
+            if self._config.enable_voice_anchor:
+                voice_text = await self._voice_anchor(ref, campaign_id)
+                if voice_text:
+                    spotlight_items.append(
+                        _TierItem(
+                            tier=ContextTier.SPOTLIGHT,
+                            section="voice_anchor",
+                            text=f"# Voice anchor — {ref}\n{voice_text}",
+                            priority=9,
+                            source=ContextSource(
+                                kind="character",
+                                scope="library" if ref.startswith("library:") else "campaign-local",
+                                owner_id=ref if ref.startswith("library:") else campaign_id,
+                                tier=ContextTier.SPOTLIGHT,
+                                summary=f"voice:{ref}",
+                            ),
+                        )
+                    )
+            # §10 — recent direct dialogue per spotlighted speaker.
+            dialogue = self._recent_dialogue_for(ref, recent_posts)
+            if dialogue:
+                spotlight_items.append(
+                    _TierItem(
+                        tier=ContextTier.SPOTLIGHT,
+                        section="recent_dialogue",
+                        text=f"# Recent dialogue — {ref}\n{dialogue}",
+                        priority=7,
+                        source=ContextSource(
+                            kind="post",
+                            scope="campaign-local",
+                            owner_id=campaign_id,
+                            tier=ContextTier.SPOTLIGHT,
+                            summary=f"dialogue:{ref}",
+                        ),
+                    )
+                )
 
-        # Background = chars named in the last few posts but not present, plus
-        # user-pinned background chars from the Characters tier recommendation.
-        mentioned = self._mentions_in_posts(recent_posts) - seen
-        budget = self._config.background_character_limit
-        for ref in list(mentioned)[:budget]:
+        # Background tier: anyone recommended to BACKGROUND, plus the
+        # body-token fallback for stubs that don't implement recommend_tiers.
+        background_refs: list[str] = []
+        for ref, tier in tier_map.items():
+            if ref in seen or tier != ContextTier.BACKGROUND:
+                continue
+            background_refs.append(ref)
+            seen.add(ref)
+
+        if not tier_map:
+            # Legacy fallback when Characters lacks recommend_tiers.
+            mentioned = self._mentions_in_posts(recent_posts) - seen
+            for ref in mentioned:
+                background_refs.append(ref)
+                seen.add(ref)
+
+        for ref in background_refs[: self._config.background_character_limit]:
             text = await self._try_compressed_card(ref, campaign_id)
             if not text:
                 continue
@@ -382,12 +493,11 @@ class ContextBuilderService:
                 _TierItem(
                     tier=ContextTier.BACKGROUND,
                     section="cast",
-                    text=text,
+                    text=_with_cast_header(ref, text),
                     priority=5,
                     source=self._character_source(ref, ContextTier.BACKGROUND, campaign_id),
                 )
             )
-            seen.add(ref)
 
         # Drift corrective for the spotlight chars (or active PC).
         corrective_lines: list[str] = []
@@ -399,6 +509,81 @@ class ContextBuilderService:
             if snippet:
                 corrective_lines.append(snippet)
         return spotlight_items, background_items, "\n\n".join(corrective_lines)
+
+    async def _recommend_tiers(
+        self,
+        *,
+        scene: Any,
+        campaign_id: CampaignId,
+        recent_posts: list[Any],
+        commitments_targeting_pcs: set[str] | None,
+    ) -> dict[str, ContextTier]:
+        """Wrap ``CharactersService.recommend_tiers`` with graceful fallback.
+
+        Returns an empty dict when:
+        * the characters service does not expose ``recommend_tiers``
+        * the scene is None (no presence/commitment signal to feed the rule
+          engine)
+        * the call raises (we log at DEBUG and degrade to the legacy
+          body-token fallback in ``_resolve_cast``)
+        """
+        if scene is None:
+            return {}
+        recommend = getattr(self._characters, "recommend_tiers", None)
+        if recommend is None:
+            return {}
+        try:
+            out = await recommend(
+                scene,
+                campaign_id,
+                recent_posts=list(recent_posts),
+                commitments_targeting_pcs=commitments_targeting_pcs or set(),
+            )
+        except TypeError:
+            # Stubs / older signatures.
+            try:
+                out = await recommend(scene)
+            except Exception:
+                return {}
+        except Exception as exc:
+            logger.debug("recommend_tiers failed: %s", exc)
+            return {}
+        return dict(out or {})
+
+    async def _voice_anchor(self, ref: str, campaign_id: CampaignId) -> str:
+        getter = getattr(self._characters, "get_voice_only", None)
+        if getter is None:
+            return ""
+        try:
+            return (await getter(ref, campaign_id)) or ""
+        except Exception as exc:
+            logger.debug("get_voice_only(%s) failed: %s", ref, exc)
+            return ""
+
+    def _recent_dialogue_for(self, ref: str, posts: list[Any]) -> str:
+        """Pull the last ``recent_dialogue_per_speaker`` posts authored by ref.
+
+        We match against both PC and NPC author refs. Posts authored by
+        ``narrator`` / ``system`` are skipped — those are not dialogue.
+        """
+        n = self._config.recent_dialogue_per_speaker
+        if n <= 0 or not ref:
+            return ""
+        lines: list[str] = []
+        for post in reversed(list(posts)):
+            pc_ref = getattr(post, "author_pc_ref", None)
+            npc_ref = getattr(post, "author_npc_ref", None)
+            if pc_ref != ref and npc_ref != ref:
+                continue
+            body = (getattr(post, "body", "") or "").strip()
+            if not body:
+                continue
+            lines.append(f"- {body}")
+            if len(lines) >= n:
+                break
+        if not lines:
+            return ""
+        return "\n".join(reversed(lines))
 
     async def _try_full_card(self, ref: str, campaign_id: CampaignId) -> str:
         try:
@@ -551,17 +736,220 @@ class ContextBuilderService:
 
         return spotlight, background
 
+    async def _resolve_factions(
+        self,
+        *,
+        scene: Any,
+        campaign_id: CampaignId,
+        branch_id: str | None,
+    ) -> list[_TierItem]:
+        """§3 — politically relevant faction state in the background tier.
+
+        Politically relevant = any faction declared in the active composition.
+        We pull faction state via the World service when available, cap the
+        number we surface, and render each as a short compact entry.
+        """
+        if self._world is None:
+            return []
+        faction_refs = await self._faction_refs_for_scene(scene, campaign_id)
+        if not faction_refs:
+            return []
+        getter = getattr(self._world, "faction_state", None)
+        if getter is None:
+            return []
+        items: list[_TierItem] = []
+        for ref in faction_refs[: self._config.faction_state_limit]:
+            try:
+                state = await getter(ref, campaign_id, branch_id=branch_id)
+            except TypeError:
+                try:
+                    state = await getter(ref, campaign_id)
+                except Exception:
+                    continue
+            except Exception:
+                continue
+            if state is None:
+                continue
+            text = _render_faction_state(ref, state)
+            if not text:
+                continue
+            items.append(
+                _TierItem(
+                    tier=ContextTier.BACKGROUND,
+                    section="faction_state",
+                    text=text,
+                    priority=3,
+                    source=ContextSource(
+                        kind="faction",
+                        scope="library" if ref.startswith("library:") else "campaign-local",
+                        owner_id=ref if ref.startswith("library:") else campaign_id,
+                        tier=ContextTier.BACKGROUND,
+                        summary=ref,
+                    ),
+                )
+            )
+        return items
+
+    async def _faction_refs_for_scene(self, scene: Any, campaign_id: CampaignId) -> list[str]:
+        """Enumerate faction refs the builder can surface for this scene.
+
+        Strategy: ask World for the factions declared in each composition
+        world. Falls back to an empty list if the service does not expose
+        ``list_factions``.
+        """
+        lister = getattr(self._world, "list_factions", None)
+        if lister is None:
+            return []
+        composition = await self._safe_call(self._library.get_composition, campaign_id)
+        if composition is None or not composition.worlds:
+            return []
+        refs: list[str] = []
+        for wref in composition.worlds:
+            try:
+                factions = await lister(wref.world_id)
+            except Exception:
+                continue
+            for f in factions or []:
+                asset_id = getattr(f, "asset_id", None) or getattr(f, "id", None)
+                if not asset_id:
+                    continue
+                refs.append(f"library:worlds/{wref.world_id}/factions/{asset_id}")
+        return refs
+
+    async def _resolve_calendar(
+        self,
+        *,
+        scene: Any,
+        campaign_id: CampaignId,
+        branch_id: str | None,
+    ) -> list[_TierItem]:
+        """§4 — calendar / world-time context for the background tier.
+
+        Renders an at-most-one item summarising the current in-game date,
+        season, and any imminent scheduled events.
+        """
+        if self._world is None and self._time_engine is None:
+            return []
+
+        # Prefer the time engine's current() (authoritative campaign clock).
+        when = None
+        if self._time_engine is not None:
+            try:
+                when = await self._time_engine.current(campaign_id, branch_id=branch_id)
+            except TypeError:
+                try:
+                    when = await self._time_engine.current(campaign_id)
+                except Exception:
+                    when = None
+            except Exception:
+                when = None
+        if when is None and scene is not None:
+            when = getattr(scene, "in_game_start", None)
+        if when is None:
+            return []
+
+        season = await self._safe_call(self._world.season_for, when, campaign_id)
+        holiday = await self._safe_call(self._world.holiday_at, when, campaign_id)
+        upcoming: list[Any] = []
+        if self._time_engine is not None:
+            try:
+                upcoming = list(
+                    await self._time_engine.upcoming_events(campaign_id, branch_id=branch_id)
+                )
+            except TypeError:
+                try:
+                    upcoming = list(await self._time_engine.upcoming_events(campaign_id))
+                except Exception:
+                    upcoming = []
+            except Exception:
+                upcoming = []
+
+        lines: list[str] = []
+        when_str = _format_when(when)
+        if when_str:
+            lines.append(f"Current in-game time: {when_str}")
+        if season is not None:
+            name = getattr(season, "name", None) or getattr(season, "id", None) or str(season)
+            lines.append(f"Season: {name}")
+        if holiday is not None:
+            name = getattr(holiday, "name", None) or getattr(holiday, "id", None) or str(holiday)
+            lines.append(f"Holiday: {name}")
+        if upcoming:
+            event_names: list[str] = []
+            for ev in upcoming[:3]:
+                title = (
+                    getattr(ev, "title", None)
+                    or getattr(ev, "label", None)
+                    or getattr(ev, "id", None)
+                    or "event"
+                )
+                event_names.append(str(title))
+            lines.append("Upcoming: " + ", ".join(event_names))
+        if not lines:
+            return []
+        text = "Calendar\n" + "\n".join(lines)
+        return [
+            _TierItem(
+                tier=ContextTier.BACKGROUND,
+                section="calendar",
+                text=text,
+                priority=2,
+                source=ContextSource(
+                    kind="calendar",
+                    scope="campaign-local",
+                    owner_id=campaign_id,
+                    tier=ContextTier.BACKGROUND,
+                    summary="world-time",
+                ),
+            )
+        ]
+
     # -- continuity ----------------------------------------------------- #
 
-    async def _render_commitments(
-        self, campaign_id: CampaignId, active_pc_ref: str | None
-    ) -> tuple[str, ContextSource | None]:
+    async def _open_commitments(self, campaign_id: CampaignId) -> list[Any]:
         if self._continuity is None:
-            return "", None
+            return []
         try:
-            commitments = await self._continuity.open_commitments(limit=20)
+            return list(await self._continuity.open_commitments(limit=20))
         except Exception:
-            return "", None
+            return []
+
+    async def _pc_refs(self, campaign_id: CampaignId) -> set[str]:
+        """The set of every PC ref registered with this campaign."""
+        lister = getattr(self._characters, "list_pcs", None)
+        if lister is None:
+            return set()
+        try:
+            entries = await lister(campaign_id)
+        except Exception:
+            return set()
+        out: set[str] = set()
+        for entry in entries or []:
+            ref = getattr(entry, "character_ref", None) or getattr(entry, "ref", None)
+            if ref:
+                out.add(ref)
+        return out
+
+    def _commitments_targeting_pcs(self, commitments: list[Any], pc_refs: set[str]) -> set[str]:
+        """Set of non-PC refs that owe a commitment to a PC.
+
+        Mirrors the contract expected by ``CharactersService.recommend_tiers``:
+        the caller passes the refs of NPCs whose commitments target the
+        active PCs, and those NPCs are promoted to at least BACKGROUND.
+        """
+        if not pc_refs:
+            return set()
+        out: set[str] = set()
+        for c in commitments:
+            from_id = getattr(c, "from_id", None)
+            to_id = getattr(c, "to_id", None)
+            if from_id and from_id not in pc_refs and to_id in pc_refs:
+                out.add(from_id)
+        return out
+
+    def _render_commitments_block(
+        self, campaign_id: CampaignId, commitments: list[Any]
+    ) -> tuple[str, ContextSource | None]:
         if not commitments:
             return "", None
         lines: list[str] = []
@@ -581,33 +969,120 @@ class ContextBuilderService:
         return block, source
 
     async def _continuity_background(self, campaign_id: CampaignId) -> list[_TierItem]:
+        """§5 — recent facts in compact form (last ``recent_facts_limit``).
+
+        Each fact renders as one line ``- {text}``. Total characters are
+        capped at ``recent_facts_char_cap`` to keep background tight.
+        """
         if self._continuity is None:
             return []
         try:
-            facts = await self._continuity.facts_about(limit=8)
+            facts = await self._continuity.facts_about(limit=self._config.recent_facts_limit)
         except Exception:
             return []
-        items: list[_TierItem] = []
+        if not facts:
+            return []
+        lines: list[str] = []
+        char_cap = self._config.recent_facts_char_cap
+        used = 0
         for fact in facts:
-            text = getattr(fact, "text", "")
+            text = (getattr(fact, "text", "") or "").strip()
             if not text:
                 continue
-            items.append(
-                _TierItem(
+            line = f"- {text}"
+            cost = len(line) + 1
+            if used + cost > char_cap:
+                break
+            lines.append(line)
+            used += cost
+        if not lines:
+            return []
+        block = "Recent facts:\n" + "\n".join(lines)
+        return [
+            _TierItem(
+                tier=ContextTier.BACKGROUND,
+                section="facts",
+                text=block,
+                priority=2,
+                source=ContextSource(
+                    kind="fact",
+                    scope="campaign-local",
+                    owner_id=campaign_id,
                     tier=ContextTier.BACKGROUND,
-                    section="facts",
-                    text=f"Fact: {text}",
-                    priority=2,
-                    source=ContextSource(
-                        kind="fact",
-                        scope="campaign-local",
-                        owner_id=campaign_id,
-                        tier=ContextTier.BACKGROUND,
-                        summary=getattr(fact, "id", ""),
-                    ),
-                )
+                    summary=f"{len(lines)} facts",
+                ),
             )
-        return items
+        ]
+
+    async def _relationship_deltas(
+        self,
+        *,
+        active_pc_ref: str | None,
+        scene: Any,
+        campaign_id: CampaignId,
+        branch_id: str | None,
+    ) -> list[_TierItem]:
+        """§6 — compact relationship deltas since the last scene.
+
+        For each present character (excluding the active PC), we pull the
+        tail of the relationship history with the active PC and render the
+        most recent event as a single line. Calls are best-effort: missing
+        APIs, empty history, or thrown exceptions silently produce nothing.
+        """
+        if not active_pc_ref or scene is None:
+            return []
+        getter = getattr(self._characters, "get_relationship_history", None)
+        if getter is None:
+            return []
+        present = list(getattr(scene, "present_character_refs", []) or [])
+        lines: list[str] = []
+        for other in present:
+            if other == active_pc_ref:
+                continue
+            try:
+                history = await getter(active_pc_ref, other, campaign_id, branch_id=branch_id)
+            except TypeError:
+                try:
+                    history = await getter(active_pc_ref, other, campaign_id)
+                except Exception:
+                    history = []
+            except Exception:
+                history = []
+            if not history:
+                continue
+            event = history[-1]
+            summary = (
+                event.get("summary") if isinstance(event, dict) else getattr(event, "summary", "")
+            )
+            delta = event.get("delta") if isinstance(event, dict) else getattr(event, "delta", {})
+            if not summary and not delta:
+                continue
+            delta_str = _format_delta(delta or {})
+            text_parts = []
+            if delta_str:
+                text_parts.append(delta_str)
+            if summary:
+                text_parts.append(str(summary))
+            line = f"- {active_pc_ref} ↔ {other}: " + " — ".join(text_parts)
+            lines.append(line)
+        if not lines:
+            return []
+        block = "Relationship deltas since last scene:\n" + "\n".join(lines)
+        return [
+            _TierItem(
+                tier=ContextTier.BACKGROUND,
+                section="relationship_deltas",
+                text=block,
+                priority=4,
+                source=ContextSource(
+                    kind="relationship",
+                    scope="campaign-local",
+                    owner_id=campaign_id,
+                    tier=ContextTier.BACKGROUND,
+                    summary=f"{len(lines)} deltas",
+                ),
+            )
+        ]
 
     # -- archive retrieval --------------------------------------------- #
 
@@ -619,14 +1094,17 @@ class ContextBuilderService:
         scene: Any,
         recent_posts: list[Any],
         turn_id: TurnId | None = None,
+        composition: Composition | None = None,
     ) -> list[_TierItem]:
         items: list[_TierItem] = []
         query = self._build_retrieval_query(player_input, scene, recent_posts)
         if not query:
             return items
 
+        priority_hints = self._priority_hints(composition)
+
         # Vector
-        vector_hits = await self._vector_search(query, campaign_id, turn_id)
+        vector_hits = await self._vector_search(query, campaign_id, turn_id, priority_hints)
         for hit in vector_hits:
             text = getattr(hit, "text", "") or ""
             if not text:
@@ -648,7 +1126,7 @@ class ContextBuilderService:
             )
 
         # Keyword
-        keyword_hits = await self._keyword_search(query, campaign_id)
+        keyword_hits = await self._keyword_search(query, campaign_id, priority_hints)
         seen_refs: set[str] = {item.source.owner_id or "" for item in items}
         for hit in keyword_hits:
             if (hit.ref or "") in seen_refs:
@@ -710,6 +1188,7 @@ class ContextBuilderService:
         query: str,
         campaign_id: CampaignId,
         turn_id: TurnId | None = None,
+        priority_hints: dict[str, int] | None = None,
     ) -> list[Any]:
         if self._gateway is None or self._store is None:
             return []
@@ -724,28 +1203,114 @@ class ContextBuilderService:
             return []
         if not vectors:
             return []
+        kwargs: dict[str, Any] = {
+            "query_vector": vectors[0],
+            "campaign_id": campaign_id,
+            "include_library": self._config.retrieval.include_library,
+            "top_k": self._config.retrieval.vector_top_k,
+        }
+        if priority_hints:
+            kwargs["priority_hints"] = priority_hints
+        return await self._invoke_store_search(self._store.vector_search, kwargs)
+
+    async def _keyword_search(
+        self,
+        query: str,
+        campaign_id: CampaignId,
+        priority_hints: dict[str, int] | None = None,
+    ) -> list[Any]:
+        if self._store is None:
+            return []
+        kwargs: dict[str, Any] = {
+            "query": query,
+            "campaign_id": campaign_id,
+            "kinds": self._config.retrieval.keyword_kinds,
+            "top_k": self._config.retrieval.keyword_top_k,
+        }
+        if priority_hints:
+            kwargs["priority_hints"] = priority_hints
+        return await self._invoke_store_search(self._store.keyword_search, kwargs)
+
+    async def _invoke_store_search(self, fn: Any, kwargs: dict[str, Any]) -> list[Any]:
+        """Call a store search with optional ``priority_hints`` retry.
+
+        If the store doesn't yet accept the priority kwarg we drop it and
+        retry once — the builder must keep working against older stores
+        (spec context-builder-remaining §13 is store-gated).
+        """
         try:
-            return await self._store.vector_search(
-                query_vector=vectors[0],
-                campaign_id=campaign_id,
-                include_library=self._config.retrieval.include_library,
-                top_k=self._config.retrieval.vector_top_k,
-            )
+            return await fn(**kwargs)
+        except TypeError as exc:
+            if "priority_hints" in kwargs and "priority_hints" in str(exc):
+                kwargs = {k: v for k, v in kwargs.items() if k != "priority_hints"}
+                try:
+                    return await fn(**kwargs)
+                except Exception:
+                    return []
+            return []
         except Exception:
             return []
 
-    async def _keyword_search(self, query: str, campaign_id: CampaignId) -> list[Any]:
-        if self._store is None:
+    def _priority_hints(self, composition: Composition | None) -> dict[str, int]:
+        """Build a ``{world_id: priority}`` hint dict for the store.
+
+        Returns an empty dict (no hint) when weighting is disabled or the
+        composition is missing — the store should fall back to its own
+        ranking.
+        """
+        if not self._config.retrieval.enable_priority_weighting:
+            return {}
+        if composition is None or not composition.worlds:
+            return {}
+        return {wref.world_id: wref.priority for wref in composition.worlds}
+
+    async def _scene_refs_from_input(
+        self, player_input: str, campaign_id: CampaignId
+    ) -> list[_TierItem]:
+        """§7 — explicit past-scene references.
+
+        Scan the player input for ``scene:<id>`` tokens and emit one archive
+        item per matched scene. These bypass retrieval budget because the
+        player asked for them by ref.
+        """
+        if not player_input or self._scenes is None:
             return []
-        try:
-            return await self._store.keyword_search(
-                query=query,
-                campaign_id=campaign_id,
-                kinds=self._config.retrieval.keyword_kinds,
-                top_k=self._config.retrieval.keyword_top_k,
+        matches = re.findall(r"scene:([A-Za-z0-9_\-:.]+)", player_input)
+        if not matches:
+            return []
+        seen: set[str] = set()
+        items: list[_TierItem] = []
+        getter = getattr(self._scenes, "get_scene", None)
+        for raw in matches:
+            scene_id = raw.strip(".,;:!?)]}").strip()
+            if not scene_id or scene_id in seen:
+                continue
+            seen.add(scene_id)
+            if len(items) >= self._config.scene_ref_limit:
+                break
+            scene = None
+            if getter is not None:
+                try:
+                    scene = await getter(scene_id)
+                except Exception:
+                    scene = None
+            text = _render_scene_reference(scene_id, scene)
+            items.append(
+                _TierItem(
+                    tier=ContextTier.ARCHIVE,
+                    section="scene_ref",
+                    text=text,
+                    priority=20,  # explicit ref wins over vector/keyword hits
+                    source=ContextSource(
+                        kind="scene",
+                        scope="campaign-local",
+                        owner_id=campaign_id,
+                        tier=ContextTier.ARCHIVE,
+                        summary=f"scene:{scene_id}",
+                    ),
+                )
             )
-        except Exception:
-            return []
+        return items
 
     def _build_retrieval_query(
         self, player_input: str, scene: Any, recent_posts: Iterable[Any]
@@ -1033,6 +1598,100 @@ def _render_location(location: Any) -> str:
         body=getattr(location, "body", ""),
         features=getattr(location, "permanent_features", None) or [],
     ).strip()
+
+
+def _format_delta(delta: dict) -> str:
+    """Render a ``{trust: +2, affection: -1}`` style delta into one line."""
+    if not delta:
+        return ""
+    parts: list[str] = []
+    for key in ("affection", "trust", "dominance", "intimacy"):
+        if key not in delta:
+            continue
+        try:
+            val = int(delta[key])
+        except (TypeError, ValueError):
+            continue
+        sign = "+" if val >= 0 else ""
+        parts.append(f"{key} {sign}{val}")
+    return ", ".join(parts)
+
+
+def _format_when(when: Any) -> str:
+    if when is None:
+        return ""
+    moment = getattr(when, "moment", None)
+    if moment is not None:
+        try:
+            return moment.isoformat()
+        except Exception:
+            return str(moment)
+    try:
+        return when.isoformat()  # type: ignore[no-any-return]
+    except Exception:
+        return str(when)
+
+
+def _render_faction_state(ref: str, state: Any) -> str:
+    """Compact one-paragraph dump of a FactionStateData-shaped object."""
+    parts: list[str] = []
+    focus = getattr(state, "current_focus", None) or ""
+    perception = getattr(state, "public_perception", None) or ""
+    goals = list(getattr(state, "goals", []) or [])
+    resources = getattr(state, "resources", None) or {}
+    if focus:
+        parts.append(f"focus: {focus}")
+    if perception:
+        parts.append(f"perception: {perception}")
+    if goals:
+        goal_strs: list[str] = []
+        for g in goals[:3]:
+            if isinstance(g, dict):
+                goal_strs.append(g.get("text") or g.get("summary") or str(g))
+            else:
+                goal_strs.append(getattr(g, "text", None) or getattr(g, "summary", None) or str(g))
+        parts.append("goals: " + "; ".join(goal_strs))
+    if resources and isinstance(resources, dict):
+        rkeys = [str(k) for k in list(resources.keys())[:4]]
+        if rkeys:
+            parts.append("resources: " + ", ".join(rkeys))
+    if not parts:
+        return ""
+    return f"Faction state — {ref}: " + " | ".join(parts)
+
+
+def _with_cast_header(ref: str, card: str) -> str:
+    """Prepend a `[world:<world_id>]` header on a cast card.
+
+    §8 — when two referenced worlds carry a character with the same name,
+    the model needs the world prefix to tell them apart. Campaign-local
+    refs get no prefix.
+    """
+    if not ref.startswith("library:"):
+        return card
+    raw = ref[len("library:") :]
+    parts = raw.strip("/").split("/")
+    if len(parts) >= 2 and parts[0] == "worlds":
+        world_id = parts[1]
+        return f"[world:{world_id}]\n{card}"
+    return card
+
+
+def _render_scene_reference(scene_id: str, scene: Any | None) -> str:
+    """One-paragraph reference card for a scene the player called out."""
+    if scene is None:
+        return f"[explicit scene reference] scene:{scene_id} (not found)"
+    bits: list[str] = []
+    title = getattr(scene, "title", None) or getattr(scene, "slug", None) or scene_id
+    bits.append(f"[explicit scene reference] {title} (scene:{scene_id})")
+    if getattr(scene, "location_ref", None):
+        bits.append(f"Location: {scene.location_ref}")
+    final = getattr(scene, "final_summary", None) or ""
+    running = getattr(scene, "running_summary", None) or ""
+    summary = final or running
+    if summary:
+        bits.append(f"Summary: {summary}")
+    return "\n".join(bits)
 
 
 def _hash_messages(messages: list[Message]) -> str:

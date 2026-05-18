@@ -11,6 +11,7 @@ campaign-local store + its referenced library assets.
 from __future__ import annotations
 
 from grimoire.context.builder import ContextBuilderService
+from grimoire.context.cache import ContextBuilderCache, make_cache_key
 from grimoire.context.config import (
     ContextBuilderConfig,
     RetrievalConfig,
@@ -19,10 +20,12 @@ from grimoire.context.config import (
 from grimoire.context.errors import ContextBuilderError, LockInOverflowError
 
 __all__ = [
+    "ContextBuilderCache",
     "ContextBuilderConfig",
     "ContextBuilderError",
     "ContextBuilderService",
     "LockInOverflowError",
     "RetrievalConfig",
     "TierBudget",
+    "make_cache_key",
 ]

@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from grimoire.context.cache import ContextBuilderCache, make_cache_key
 from grimoire.event_bus import Event, EventBus
 from grimoire.extractor.config import ExtractorConfig
 from grimoire.extractor.routing import Decision, route_deltas
@@ -105,6 +106,8 @@ class OrchestratorService:
         config: OrchestratorConfig | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         rng: random.Random | None = None,
+        library: Any | None = None,
+        context_cache: ContextBuilderCache | None = None,
     ) -> None:
         self._bus = event_bus
         self._scenes = scene_manager
@@ -114,12 +117,17 @@ class OrchestratorService:
         self._store = state_store
         self._mechanics = mechanics
         self._world = world  # §5: optional, used to dispatch weather-override deltas
+        self._library = library
         self._ws_push = ws_push
         self._extractor_config = extractor_config or ExtractorConfig()
         self._config = config or OrchestratorConfig()
         self._clock = clock
         self._rng = rng or random.Random()
         self._campaigns: dict[CampaignId, _CampaignTurnState] = {}
+        # § Spec context-builder-remaining §11. The cache lives at the
+        # orchestrator boundary so invalidation sits next to the regenerate
+        # logic. Defaults to a fresh in-memory store when not provided.
+        self._context_cache = context_cache or ContextBuilderCache()
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -251,6 +259,7 @@ class OrchestratorService:
             scene_id=scene_id,
             player_input=player_input or "",
             triggering_pc=pc_ref,
+            reuse_prompt_cache=True,
         )
         return RegenerateResult(turn_id=turn_id, accepted=True, reason="regenerated")
 
@@ -386,6 +395,7 @@ class OrchestratorService:
         scene_id: SceneId,
         player_input: str,
         triggering_pc: CharacterRef | None,
+        reuse_prompt_cache: bool = False,
     ) -> TurnId:
         state = self._state_for(campaign_id)
         state.queued += 1
@@ -425,13 +435,30 @@ class OrchestratorService:
             )
 
             active.stage = "context_build"
-            prompt = await self._context.build(
-                player_input,
-                campaign_id,
-                mechanics_results=mechanics_results,
+            cache_key: str | None = None
+            scene_obj_for_cache = await self._scenes.get_scene(scene_id)
+            branch_id_for_cache = getattr(scene_obj_for_cache, "branch_id", None)
+            composition_hash = await self._composition_hash(campaign_id)
+            cache_key = make_cache_key(
+                campaign_id=campaign_id,
+                player_input=player_input,
+                composition_hash=composition_hash,
+                scene_id=scene_id,
+                branch_id=branch_id_for_cache,
                 pc_ref=triggering_pc,
-                turn_id=turn_id,
             )
+            cached = self._context_cache.get(cache_key) if reuse_prompt_cache else None
+            if cached is not None:
+                prompt = cached
+            else:
+                prompt = await self._context.build(
+                    player_input,
+                    campaign_id,
+                    mechanics_results=mechanics_results,
+                    pc_ref=triggering_pc,
+                    turn_id=turn_id,
+                )
+                self._context_cache.put(cache_key, prompt)
             await self._emit_turn_event(
                 "context_built",
                 turn_id,
@@ -582,6 +609,30 @@ class OrchestratorService:
             except Exception as exc:
                 logger.warning("mechanics roll resolution failed: %s", exc)
         return results
+
+    async def _composition_hash(self, campaign_id: CampaignId) -> str:
+        """SHA-256 fingerprint of the campaign's current composition.
+
+        Used to key the regenerate prompt cache (spec
+        context-builder-remaining §11). When the library service is not
+        wired we fall back to the empty string — the cache key is still
+        deterministic, it just degrades to "ignore composition changes".
+        """
+        if self._library is None:
+            return ""
+        try:
+            composition = await self._library.get_composition(campaign_id)
+        except Exception:
+            return ""
+        if composition is None:
+            return ""
+        import hashlib as _h
+
+        try:
+            payload = composition.model_dump_json()  # type: ignore[attr-defined]
+        except Exception:
+            payload = str(composition)
+        return _h.sha256(payload.encode("utf-8")).hexdigest()
 
     async def _stream_main_response(
         self,

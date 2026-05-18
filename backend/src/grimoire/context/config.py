@@ -26,6 +26,11 @@ class RetrievalConfig:
     embedding_task: str = "extractor.embed"  # reusing existing embed task
     include_library: bool = True
     keyword_kinds: tuple[str, ...] = ("fact",)
+    # When set, the builder passes `priority_hints={world_id: priority}` to
+    # the store's `vector_search` / `keyword_search`. The store may use the
+    # hint to re-rank library hits. Builder behaviour is unchanged when the
+    # store ignores the kwarg.
+    enable_priority_weighting: bool = True
 
 
 @dataclass
@@ -52,6 +57,26 @@ class ContextBuilderConfig:
     # Generate temperature for downstream LLM calls.
     default_temperature: float = 1.0
     default_max_tokens: int = 4_096
+    # § Recent facts (spec context-builder-remaining §5). Limit applied to
+    # `continuity.facts_about(limit=...)` and a per-tier char cap for the
+    # compact fact-line renderer.
+    recent_facts_limit: int = 50
+    recent_facts_char_cap: int = 4_000
+    # § Per-speaker recent dialogue (§10): last N posts authored by each
+    # spotlighted speaker, rendered as a spotlight item.
+    recent_dialogue_per_speaker: int = 3
+    # § Cast voice anchor (§9): when True, append the character's voice-only
+    # snippet under a "# Voice anchor" heading distinct from the full card.
+    enable_voice_anchor: bool = True
+    # § Faction state in background tier (§3): cap the number of faction
+    # rows we pull per turn to keep background tight.
+    faction_state_limit: int = 4
+    # § Promotion cooldown (§1): a character demoted/promoted in the last
+    # N turns will not be re-demoted automatically (avoid tier churn).
+    promotion_cooldown_turns: int = 3
+    # § Explicit scene refs (§7): cap how many scenes can be force-injected
+    # from a single player input.
+    scene_ref_limit: int = 5
 
 
 __all__ = ["ContextBuilderConfig", "RetrievalConfig", "TierBudget"]
