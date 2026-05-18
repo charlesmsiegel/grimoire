@@ -506,7 +506,8 @@ class ContextBuilderService:
                 # Adjacent locations into background
                 try:
                     adjacent = await self._world.adjacent_locations(
-                        world_id, location_id, campaign_id
+                        f"library:worlds/{world_id}/locations/{location_id}",
+                        campaign_id,
                     )
                 except Exception:
                     adjacent = []

@@ -359,14 +359,31 @@ class WorldService:
     # ------------------------------------------------------------------ #
 
     async def adjacent_locations(
-        self, world_id: str, location_id: str, campaign_id: CampaignId | None = None
+        self,
+        location_ref: str,
+        campaign_id: CampaignId | None = None,
     ) -> list[Location]:
-        """Locations connected to ``location_id`` within the same world.
+        """Locations adjacent to ``location_ref`` (parent + connection targets).
 
-        Returns parent + connection targets that exist in the world's
-        index. Locations not found are silently skipped.
+        ``location_ref`` is a full entity ref
+        (``library:worlds/<world_id>/locations/<asset_id>``). When
+        ``campaign_id`` is provided, connection targets that name another
+        world's ref ('library:worlds/<other>/locations/<asset>') resolve
+        through the campaign's composition cascade — so multi-world
+        campaigns can trace adjacency across world boundaries.
+        Connections whose ``to`` is a bare asset_id resolve against the
+        same world as ``location_ref`` (legacy / common case).
         """
-        center = await self.get_location(world_id, location_id)
+        parsed = _parse_location_ref(location_ref)
+        if parsed is None:
+            return []
+        world_id, asset_id = parsed
+        try:
+            center = await self.get_location(world_id, asset_id)
+        except WorldNotFoundError:
+            return []
+
+        comp_world_ids = await self._comp_world_ids(campaign_id)
         out: list[Location] = []
         seen: set[str] = set()
         if center.parent_id and center.parent_id not in seen:
@@ -379,65 +396,114 @@ class WorldService:
         for conn in center.connections:
             if conn.to in seen:
                 continue
-            try:
-                neighbor = await self.get_location(world_id, conn.to)
-                out.append(neighbor)
-                seen.add(neighbor.id)
-            except WorldNotFoundError:
-                pass
+            resolved = await self._resolve_connection_target(
+                conn.to,
+                source_world=world_id,
+                comp_world_ids=comp_world_ids,
+            )
+            if resolved is None:
+                continue
+            if resolved.id not in seen:
+                out.append(resolved)
+                seen.add(resolved.id)
         return out
 
     async def path_between(
-        self, world_id: str, src_id: str, dst_id: str
+        self,
+        src_ref: str,
+        dst_ref: str,
+        campaign_id: CampaignId | None = None,
     ) -> list[LocationConnection]:
-        """BFS over ``connections`` to find a route. Empty list = no route."""
-        if src_id == dst_id:
+        """BFS path between two location refs. Empty list = no route.
+
+        When ``campaign_id`` is provided, the search graph includes every
+        world in the campaign's composition; otherwise it's scoped to the
+        world named by ``src_ref``.
+        """
+        if src_ref == dst_ref:
             return []
-        locations: dict[str, Location] = {
-            loc.id: loc for loc in await self.list_locations(world_id)
+        src_parsed = _parse_location_ref(src_ref)
+        dst_parsed = _parse_location_ref(dst_ref)
+        if src_parsed is None or dst_parsed is None:
+            return []
+
+        comp_world_ids = await self._comp_world_ids(campaign_id) or {
+            src_parsed[0],
+            dst_parsed[0],
         }
-        if src_id not in locations or dst_id not in locations:
-            return []
-        # BFS storing predecessor + the connection used.
-        prev: dict[str, tuple[str, LocationConnection]] = {}
-        frontier: deque[str] = deque([src_id])
-        visited: set[str] = {src_id}
-        while frontier:
-            current = frontier.popleft()
-            if current == dst_id:
-                break
-            cur_loc = locations.get(current)
-            if cur_loc is None:
+        # Build the cross-world graph keyed by full ref.
+        all_locs: dict[str, tuple[str, Location]] = {}
+        for wid in comp_world_ids:
+            try:
+                for loc in await self.list_locations(wid):
+                    all_locs[_location_ref(wid, loc.id)] = (wid, loc)
+            except WorldNotFoundError:
                 continue
-            for conn in cur_loc.connections:
-                if conn.to in visited or conn.to not in locations:
-                    continue
-                visited.add(conn.to)
-                prev[conn.to] = (current, conn)
-                frontier.append(conn.to)
-        if dst_id not in prev and src_id != dst_id:
+        if src_ref not in all_locs or dst_ref not in all_locs:
             return []
-        # Reconstruct.
+
+        prev: dict[str, tuple[str, LocationConnection]] = {}
+        frontier: deque[str] = deque([src_ref])
+        visited: set[str] = {src_ref}
+        while frontier:
+            cur_ref = frontier.popleft()
+            if cur_ref == dst_ref:
+                break
+            cur_world, cur_loc = all_locs[cur_ref]
+            for conn in cur_loc.connections:
+                neighbor_ref = (
+                    conn.to if _is_entity_ref(conn.to) else _location_ref(cur_world, conn.to)
+                )
+                if neighbor_ref in visited or neighbor_ref not in all_locs:
+                    continue
+                visited.add(neighbor_ref)
+                prev[neighbor_ref] = (cur_ref, conn)
+                frontier.append(neighbor_ref)
+
+        if dst_ref not in prev:
+            return []
         path: list[LocationConnection] = []
-        cursor = dst_id
+        cursor = dst_ref
         while cursor in prev:
-            parent, conn = prev[cursor]
+            parent_ref, conn = prev[cursor]
             path.append(conn)
-            cursor = parent
+            cursor = parent_ref
         path.reverse()
         return path
 
     async def locations_within(
-        self, world_id: str, parent_id: str, depth: int = 1
+        self,
+        parent_ref: str,
+        campaign_id: CampaignId | None = None,
+        depth: int = 1,
     ) -> list[Location]:
-        """Descendants of ``parent_id`` up to ``depth`` levels (parent-id chain)."""
-        all_locs = await self.list_locations(world_id)
+        """Descendants of ``parent_ref`` up to ``depth`` levels.
+
+        Children are matched by ``parent_id`` within the same world as
+        ``parent_ref``; cross-world parenting is not supported (a
+        location can only have one home world).
+        """
+        parsed = _parse_location_ref(parent_ref)
+        if parsed is None:
+            return []
+        parent_world, parent_asset = parsed
+        # campaign_id is accepted for API symmetry, but locations_within
+        # walks parent-id chains which never cross worlds. We still honour
+        # the composition so an excluded world's children aren't surfaced
+        # via a stray parent_ref.
+        if campaign_id is not None:
+            comp_world_ids = await self._comp_world_ids(campaign_id)
+            if parent_world not in comp_world_ids:
+                return []
+
+        all_locs = await self.list_locations(parent_world)
         by_parent: dict[str | None, list[Location]] = {}
         for loc in all_locs:
             by_parent.setdefault(loc.parent_id, []).append(loc)
+
         out: list[Location] = []
         frontier: list[tuple[Location, int]] = [
-            (child, 1) for child in by_parent.get(parent_id, [])
+            (child, 1) for child in by_parent.get(parent_asset, [])
         ]
         while frontier:
             loc, level = frontier.pop(0)
@@ -445,6 +511,43 @@ class WorldService:
             if level < depth:
                 frontier.extend((c, level + 1) for c in by_parent.get(loc.id, []))
         return out
+
+    async def _comp_world_ids(self, campaign_id: CampaignId | None) -> set[str]:
+        """Return the world ids in the campaign's composition (or empty set)."""
+        if campaign_id is None:
+            return set()
+        try:
+            comp = await self.library.get_composition(campaign_id)
+        except Exception:
+            return set()
+        return {ref.world_id for ref in comp.worlds}
+
+    async def _resolve_connection_target(
+        self,
+        target: str,
+        *,
+        source_world: str,
+        comp_world_ids: set[str],
+    ) -> Location | None:
+        """Return the :class:`Location` ``target`` points to, or ``None``."""
+        if _is_entity_ref(target):
+            parsed = _parse_location_ref(target)
+            if parsed is None:
+                return None
+            wid, aid = parsed
+            # If we have a composition, restrict to its worlds. If we
+            # don't (campaign_id=None caller), allow any registered world
+            # so single-world callers still resolve cross-world refs.
+            if comp_world_ids and wid not in comp_world_ids:
+                return None
+            try:
+                return await self.get_location(wid, aid)
+            except WorldNotFoundError:
+                return None
+        try:
+            return await self.get_location(source_world, target)
+        except WorldNotFoundError:
+            return None
 
     # ------------------------------------------------------------------ #
     # Cross-world variants
@@ -915,6 +1018,24 @@ class WorldService:
 
 def _location_ref(world_id: str, asset_id: str) -> str:
     return f"library:worlds/{world_id}/locations/{asset_id}"
+
+
+def _is_entity_ref(value: str) -> bool:
+    return isinstance(value, str) and value.startswith("library:worlds/")
+
+
+def _parse_location_ref(ref: str) -> tuple[str, str] | None:
+    """Parse 'library:worlds/<world_id>/locations/<asset_id>' → (world_id, asset_id)."""
+    if not isinstance(ref, str):
+        return None
+    stripped = ref.removeprefix("library:")
+    parts = stripped.split("/")
+    try:
+        world_idx = parts.index("worlds")
+        loc_idx = parts.index("locations")
+        return parts[world_idx + 1], parts[loc_idx + 1]
+    except (ValueError, IndexError):
+        return None
 
 
 def _location_from_entity(ent: LibraryEntity) -> Location:

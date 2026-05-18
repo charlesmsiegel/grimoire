@@ -179,7 +179,7 @@ async def test_adjacent_locations_via_parent_and_connections(world: WorldService
     )
     await _seed_location(world, "wod-london", "chalk-farm")
 
-    adj = await world.adjacent_locations("wod-london", "camden-market")
+    adj = await world.adjacent_locations("library:worlds/wod-london/locations/camden-market")
     ids = {loc.id for loc in adj}
     assert ids == {"camden", "chalk-farm"}
 
@@ -198,7 +198,7 @@ async def test_adjacent_locations_skips_missing_neighbors(world: WorldService) -
     )
     await _seed_location(world, "wod-london", "chalk-farm")
 
-    adj = await world.adjacent_locations("wod-london", "camden-market")
+    adj = await world.adjacent_locations("library:worlds/wod-london/locations/camden-market")
     assert {loc.id for loc in adj} == {"chalk-farm"}
 
 
@@ -219,7 +219,7 @@ async def test_adjacent_locations_includes_parent_skips_missing_neighbor(
     )
     await _seed_location(world, "wod-london", "chalk-farm")
 
-    adj = await world.adjacent_locations("wod-london", "camden-market")
+    adj = await world.adjacent_locations("library:worlds/wod-london/locations/camden-market")
     ids = {loc.id for loc in adj}
     assert ids == {"camden", "chalk-farm"}
 
@@ -248,15 +248,30 @@ async def test_path_between(world: WorldService) -> None:
         connections=[{"to": "b", "via": "street", "duration_min": 7}],
     )
 
-    path = await world.path_between("wod-london", "a", "c")
+    path = await world.path_between(
+        "library:worlds/wod-london/locations/a",
+        "library:worlds/wod-london/locations/c",
+    )
     assert [c.to for c in path] == ["b", "c"]
     assert sum(c.duration_min for c in path) == 12
 
     # No-op path between identical nodes.
-    assert await world.path_between("wod-london", "a", "a") == []
+    assert (
+        await world.path_between(
+            "library:worlds/wod-london/locations/a",
+            "library:worlds/wod-london/locations/a",
+        )
+        == []
+    )
     # No route → empty list.
     await _seed_location(world, "wod-london", "d")
-    assert await world.path_between("wod-london", "a", "d") == []
+    assert (
+        await world.path_between(
+            "library:worlds/wod-london/locations/a",
+            "library:worlds/wod-london/locations/d",
+        )
+        == []
+    )
 
 
 async def test_locations_within_depth(world: WorldService) -> None:
@@ -266,10 +281,10 @@ async def test_locations_within_depth(world: WorldService) -> None:
     await _seed_location(world, "wod-london", "ward-b", parent_id="city")
     await _seed_location(world, "wod-london", "pub", parent_id="ward-a")
 
-    direct = await world.locations_within("wod-london", "city", depth=1)
+    direct = await world.locations_within("library:worlds/wod-london/locations/city", depth=1)
     assert {loc.id for loc in direct} == {"ward-a", "ward-b"}
 
-    deeper = await world.locations_within("wod-london", "city", depth=2)
+    deeper = await world.locations_within("library:worlds/wod-london/locations/city", depth=2)
     assert {loc.id for loc in deeper} == {"ward-a", "ward-b", "pub"}
 
 
