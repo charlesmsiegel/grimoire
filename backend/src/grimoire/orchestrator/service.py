@@ -662,9 +662,7 @@ class OrchestratorService:
                             await self._world.apply_weather_override_delta(delta)
                             continue
                         except Exception:
-                            logger.exception(
-                                "world weather-override apply failed; falling through"
-                            )
+                            logger.exception("world weather-override apply failed; falling through")
                     await self._store.apply_delta(
                         delta=delta,
                         source=delta.source or "extractor",

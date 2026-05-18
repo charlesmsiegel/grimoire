@@ -401,9 +401,7 @@ async def test_recommend_tiers_promotes_open_commitment_targets_to_background(
         file_path="x.md",
         present_character_refs=[],
     )
-    tiers = await characters.recommend_tiers(
-        scene, commitments_targeting_pcs={alistair_ref}
-    )
+    tiers = await characters.recommend_tiers(scene, commitments_targeting_pcs={alistair_ref})
     assert tiers.get(alistair_ref) == ContextTier.BACKGROUND
 
 
@@ -1210,9 +1208,7 @@ async def test_propose_promotion_returns_preview_without_writing(
         "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
     )
 
-    proposal = await characters.propose_promotion(
-        "camp-1", "the-bartender", "wod-london"
-    )
+    proposal = await characters.propose_promotion("camp-1", "the-bartender", "wod-london")
 
     assert isinstance(proposal, PromotionProposal)
     assert proposal.target_world_id == "wod-london"
@@ -1238,9 +1234,7 @@ async def test_propose_promotion_flags_id_collision(
         "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
     )
 
-    proposal = await characters.propose_promotion(
-        "camp-1", "the-bartender", "wod-london"
-    )
+    proposal = await characters.propose_promotion("camp-1", "the-bartender", "wod-london")
     assert any("already has a character" in w for w in proposal.warnings)
 
 
@@ -1364,9 +1358,7 @@ async def test_promote_invokes_sheet_migrator_after_write(
         "camp-1", _character_data("the-bartender", role=CharacterRole.MINOR_NPC)
     )
 
-    await chars.promote_to_library(
-        "camp-1", "the-bartender", "wod-london", confirm=True
-    )
+    await chars.promote_to_library("camp-1", "the-bartender", "wod-london", confirm=True)
 
     assert migrator.calls == [
         (
@@ -1407,9 +1399,7 @@ async def test_promote_sheet_migrator_failure_raises_promotion_error(
     )
 
     with pytest.raises(PromotionError):
-        await chars.promote_to_library(
-            "camp-1", "the-bartender", "wod-london", confirm=True
-        )
+        await chars.promote_to_library("camp-1", "the-bartender", "wod-london", confirm=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1708,9 +1698,7 @@ async def test_mark_screen_time_records_delta_with_turn_id(
     assert delta.after["last_screen_time_turn"] == "t_42"
 
 
-async def test_check_drift_records_delta(
-    characters: CharactersService, store: StateStore
-) -> None:
+async def test_check_drift_records_delta(characters: CharactersService, store: StateStore) -> None:
     await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
     await characters.create("wod-london", _character_data())
@@ -1906,9 +1894,7 @@ async def test_maybe_check_drift_force_bypasses_threshold(
     await characters.create("wod-london", _character_data())
     ref = "library:worlds/wod-london/characters/alistair"
 
-    report = await characters.maybe_check_drift(
-        ref, "camp-1", recent_posts=[], force=True
-    )
+    report = await characters.maybe_check_drift(ref, "camp-1", recent_posts=[], force=True)
     assert report is not None
     assert checker.calls == 1
 
