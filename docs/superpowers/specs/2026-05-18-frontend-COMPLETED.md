@@ -1,6 +1,8 @@
-# Frontend — Remaining Work
+# Frontend — Remaining Work — COMPLETED 2026-05-18
 
 > Everything from the original `specs/14-frontend.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-frontend-design.md`). Use this as the input to a writing-plans pass when picking up the work.
+
+**Status:** Sections §1–§10, §12–§17, §27, §28 shipped on 2026-05-18 (branch `claude/implement-frontend-design-XwIyV`). §11 stays rejected; §18–§26 stay deferred to v2. See commits 98eca10, 2978566, e055955, e22a316, 7f9cccb, dd1d583 (and intervening WIPs).
 
 **Companion (already shipped):** `2026-05-12-frontend-design.md`
 **Module:** `frontend/src/`
