@@ -752,6 +752,167 @@ class LibraryService:
             return
 
     # ------------------------------------------------------------------ #
+    # Demotion (reverse promotion) — §6
+    # ------------------------------------------------------------------ #
+
+    async def demote(
+        self,
+        world_id: str,
+        kind: EntityKind | str,
+        entity_id: str,
+        *,
+        copy_down_to: list[str] | None = None,
+        source: str = "user",
+    ) -> list[CampaignRef]:
+        """Reverse promotion: remove an entity from the library.
+
+        Spec 18 §Promotion (reverse): dependent campaigns get a
+        dangling-ref warning and an option to copy-down to campaign-local
+        emergent first.
+
+        Order of operations:
+
+        1. Look up dependents up front so the caller sees who will be
+           affected even if the file delete fails.
+        2. If ``copy_down_to`` is supplied, for each campaign id in the
+           list, materialize the current library entity as an emergent
+           file. The copy uses the live library row so what the campaign
+           keeps matches what it just lost.
+        3. Delete the library file + index row.
+        4. Emit ``library_entity_demoted`` with the dependent list and
+           the copy-down summary.
+
+        Returns the dependents list so callers can render the warning.
+        """
+        normalized = _normalize_kind(kind)
+        if normalized not in _World_ENTITY_KINDS:
+            raise LibraryError(
+                f"cannot demote kind {normalized!r}; only world-scoped kinds supported"
+            )
+        library_id = make_library_id(world_id, normalized, entity_id)
+        row = await self.store.get_library_entity(library_id)
+        if row is None:
+            raise LibraryNotFoundError(
+                f"cannot demote missing entity {kind}/{entity_id} in {world_id!r}"
+            )
+
+        dependents = await self.dependents(world_id, normalized, entity_id)
+        copy_down_to = copy_down_to or []
+        copied: list[str] = []
+        for campaign_id in copy_down_to:
+            await self.store.write_emergent(
+                campaign_id=campaign_id,
+                kind=normalized,
+                entity_id=entity_id,
+                frontmatter=row.get("frontmatter") or {},
+                body=row.get("body") or "",
+                source=f"{source}:demote-copy-down",
+            )
+            copied.append(campaign_id)
+
+        await self.store.delete_library_file(library_id=library_id, source=source)
+
+        await self._emit(
+            "library_entity_demoted",
+            {
+                "world_id": world_id,
+                "kind": normalized,
+                "entity_id": entity_id,
+                "library_id": library_id,
+                "dependents": [d.id for d in dependents],
+                "copied_down_to": copied,
+            },
+        )
+        return dependents
+
+    # ------------------------------------------------------------------ #
+    # Save-back-to-library (override → library file) — §7
+    # ------------------------------------------------------------------ #
+
+    async def preview_save_override_to_library(
+        self,
+        campaign_id: str,
+        library_id: str,
+    ) -> dict[str, Any]:
+        """Render the before/after of a save-back without committing.
+
+        The frontend uses this to render an inline diff before the user
+        confirms. Returns ``{"before": {...}, "after": {...}}`` where each
+        side has ``frontmatter`` and ``body``. ``after`` is the merged
+        cascade result (override + base) — what the library file will look
+        like once the override is folded in.
+        """
+        ref = parse_library_id(library_id)
+        if ref.world_id is None:
+            raise LibraryError(f"library_id {library_id!r} is not world-scoped")
+        before_row = await self.store.get_library_entity(library_id)
+        if before_row is None:
+            raise LibraryNotFoundError(f"library entity {library_id!r} does not exist")
+        override = await self.store.get_override(campaign_id, library_id)
+        if not override:
+            raise LibraryError(
+                f"no override on {library_id!r} for campaign {campaign_id!r}"
+            )
+        merged_fm = dict(before_row.get("frontmatter") or {})
+        merged_fm.update(override)
+        return {
+            "library_id": library_id,
+            "before": {
+                "frontmatter": before_row.get("frontmatter") or {},
+                "body": before_row.get("body") or "",
+                "version": int(before_row.get("version") or 0),
+            },
+            "after": {
+                "frontmatter": merged_fm,
+                "body": before_row.get("body") or "",
+            },
+        }
+
+    async def save_override_to_library(
+        self,
+        campaign_id: str,
+        library_id: str,
+        *,
+        source: str = "user",
+    ) -> dict[str, Any]:
+        """Fold a campaign override into the underlying library file.
+
+        Spec 18 §Overrides: "A 'Save back to library' action propagates
+        an override into the underlying library file (writes the file,
+        increments version, clears the override)."
+
+        Returns the preview shape (``before`` / ``after`` plus the new
+        ``version``) so the caller can confirm what was written.
+        """
+        preview = await self.preview_save_override_to_library(campaign_id, library_id)
+        result = await self.store.write_library_file(
+            library_id=library_id,
+            frontmatter=preview["after"]["frontmatter"],
+            body=preview["after"]["body"],
+            source=f"{source}:save-back-from-override",
+            campaign_id=campaign_id,
+        )
+        await self.store.delete_override(
+            campaign_id=campaign_id,
+            library_id=library_id,
+            source=f"{source}:save-back-cleanup",
+        )
+        await self._emit(
+            "library_entity_save_back",
+            {
+                "campaign_id": campaign_id,
+                "library_id": library_id,
+                "from_version": preview["before"]["version"],
+                "to_version": result.version,
+            },
+        )
+        return {
+            "library_id": library_id,
+            "before": preview["before"],
+            "after": {**preview["after"], "version": result.version},
+        }
+
+    # ------------------------------------------------------------------ #
     # Composition
     # ------------------------------------------------------------------ #
 

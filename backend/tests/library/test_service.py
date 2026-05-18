@@ -953,3 +953,150 @@ async def test_list_for_composition_skips_excluded_kinds(
     )
     chars = await library.list_for_composition("camp-1", EntityKind.CHARACTER)
     assert chars == []
+
+
+# ---------------------------------------------------------------------------
+# Demotion (§6) and save-back-to-library (§7)
+# ---------------------------------------------------------------------------
+
+
+async def test_demote_deletes_library_file_and_returns_dependents(
+    library: LibraryService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _seed_character(store, "wod-london", "alistair")
+    await store.upsert_campaign(campaign_id="camp-1", name="Camp")
+    await library.set_composition(
+        "camp-1",
+        Composition(
+            worlds=[
+                WorldRef(world_id="wod-london", priority=1, include=None, track_latest=True)
+            ]
+        ),
+    )
+
+    dependents = await library.demote("wod-london", "character", "alistair")
+    assert [d.id for d in dependents] == ["camp-1"]
+    with pytest.raises(LibraryNotFoundError):
+        await library.get_entity("wod-london", "character", "alistair")
+
+
+async def test_demote_copies_down_to_campaign_emergent(
+    library: LibraryService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _seed_character(store, "wod-london", "alistair", name="Alistair")
+    await store.upsert_campaign(campaign_id="camp-1", name="Camp")
+    await library.set_composition(
+        "camp-1",
+        Composition(
+            worlds=[
+                WorldRef(world_id="wod-london", priority=1, include=None, track_latest=True)
+            ]
+        ),
+    )
+
+    await library.demote(
+        "wod-london", "character", "alistair", copy_down_to=["camp-1"]
+    )
+    emergent = await store.get_emergent("camp-1", "character", "alistair")
+    assert emergent is not None
+    assert emergent["frontmatter"]["name"] == "Alistair"
+
+
+async def test_demote_emits_library_entity_demoted_event(store: StateStore) -> None:
+    from grimoire.event_bus import EventBus
+
+    bus = EventBus()
+    seen: list = []
+
+    async def _on(event):  # noqa: ANN001
+        seen.append(event)
+
+    bus.subscribe("library_entity_demoted", _on)
+    lib = LibraryService(store, event_bus=bus)
+    await _seed_world(store, "wod-london")
+    await _seed_character(store, "wod-london", "alistair")
+
+    await lib.demote("wod-london", "character", "alistair")
+    assert any(e.type == "library_entity_demoted" for e in seen)
+
+
+async def test_demote_missing_entity_raises(library: LibraryService, store: StateStore) -> None:
+    await _seed_world(store, "wod-london")
+    with pytest.raises(LibraryNotFoundError):
+        await library.demote("wod-london", "character", "ghost")
+
+
+async def test_save_override_to_library_folds_override_and_bumps_version(
+    library: LibraryService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _seed_character(store, "wod-london", "alistair", name="Alistair")
+    await store.upsert_campaign(campaign_id="camp-1", name="Camp")
+
+    library_id = "worlds/wod-london/characters/alistair"
+    before = await store.get_library_entity(library_id)
+    assert before is not None
+    before_version = int(before["version"])
+
+    await store.write_override(
+        campaign_id="camp-1",
+        library_id=library_id,
+        patch={"name": "Alistair the Wise"},
+        source="player",
+    )
+
+    result = await library.save_override_to_library("camp-1", library_id)
+    assert result["before"]["frontmatter"]["name"] == "Alistair"
+    assert result["after"]["frontmatter"]["name"] == "Alistair the Wise"
+    assert result["after"]["version"] > before_version
+
+    # The override file + index row are gone.
+    assert (await store.get_override("camp-1", library_id)) is None
+
+    # The library row now reflects the merged state.
+    after = await store.get_library_entity(library_id)
+    assert after is not None
+    assert after["frontmatter"]["name"] == "Alistair the Wise"
+
+
+async def test_preview_save_override_returns_before_and_after(
+    library: LibraryService, store: StateStore
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _seed_character(store, "wod-london", "alistair", name="Alistair")
+    await store.upsert_campaign(campaign_id="camp-1", name="Camp")
+
+    library_id = "worlds/wod-london/characters/alistair"
+    await store.write_override(
+        campaign_id="camp-1",
+        library_id=library_id,
+        patch={"name": "Alistair the Wise", "tags": ["vampire", "elder"]},
+        source="player",
+    )
+
+    preview = await library.preview_save_override_to_library("camp-1", library_id)
+    assert preview["before"]["frontmatter"]["name"] == "Alistair"
+    assert preview["after"]["frontmatter"]["name"] == "Alistair the Wise"
+    assert preview["after"]["frontmatter"]["tags"] == ["vampire", "elder"]
+
+    # Preview does NOT mutate.
+    assert (await store.get_override("camp-1", library_id)) is not None
+    entity = await store.get_library_entity(library_id)
+    assert entity is not None
+    assert entity["frontmatter"]["name"] == "Alistair"
+
+
+async def test_save_override_to_library_requires_existing_override(
+    library: LibraryService, store: StateStore
+) -> None:
+    from grimoire.library import LibraryError
+
+    await _seed_world(store, "wod-london")
+    await _seed_character(store, "wod-london", "alistair")
+    await store.upsert_campaign(campaign_id="camp-1", name="Camp")
+    with pytest.raises(LibraryError, match="no override"):
+        await library.save_override_to_library(
+            "camp-1", "worlds/wod-london/characters/alistair"
+        )
