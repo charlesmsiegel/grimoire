@@ -17,8 +17,6 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
-
 from grimoire.api.deps import (
     CharactersDep,
     ContinuityDep,
@@ -33,6 +31,8 @@ from grimoire.api.deps import (
     WorldDep,
 )
 from grimoire.api.util import map_lookup_errors, to_payload
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/campaigns")
 
