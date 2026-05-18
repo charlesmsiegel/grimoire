@@ -26,9 +26,7 @@ async def test_campaign_override_supersedes_library_for_resolving_campaign(
         assert app.library is not None
 
         # Baseline: the seeded campaign sees the library default.
-        resolved = await app.library.resolve(
-            "settings/ironhold/characters/garrick", "cmp-ironhold-1"
-        )
+        resolved = await app.library.resolve("worlds/ironhold/characters/garrick", "cmp-ironhold-1")
         assert resolved.name == "Garrick"
         baseline_tags = list(resolved.frontmatter.get("tags") or [])
         assert "smith" in baseline_tags
@@ -38,9 +36,9 @@ async def test_campaign_override_supersedes_library_for_resolving_campaign(
             campaign_id="cmp-ironhold-2",
             name="Ironhold Run #2",
         )
-        await app.state_store.upsert_setting_ref(
+        await app.state_store.upsert_world_ref(
             campaign_id="cmp-ironhold-2",
-            setting_id="ironhold",
+            world_id="ironhold",
             priority=1,
             include=None,
             track_latest=True,
@@ -49,16 +47,16 @@ async def test_campaign_override_supersedes_library_for_resolving_campaign(
         # Write an override for the first campaign only.
         await app.state_store.write_override(
             campaign_id="cmp-ironhold-1",
-            library_id="settings/ironhold/characters/garrick",
+            library_id="worlds/ironhold/characters/garrick",
             patch={"tags": ["npc", "smith", "wounded"], "alias": "Old Garrick"},
             source="test",
         )
 
         overridden = await app.library.resolve(
-            "settings/ironhold/characters/garrick", "cmp-ironhold-1"
+            "worlds/ironhold/characters/garrick", "cmp-ironhold-1"
         )
         unaffected = await app.library.resolve(
-            "settings/ironhold/characters/garrick", "cmp-ironhold-2"
+            "worlds/ironhold/characters/garrick", "cmp-ironhold-2"
         )
 
         # Campaign with the override has the patched tags.

@@ -30,17 +30,17 @@ async def test_crossover_picks_characters_from_a_and_locations_from_b(
             name="Crossover",
         )
         # Aurora supplies characters only.
-        await app.state_store.upsert_setting_ref(
+        await app.state_store.upsert_world_ref(
             campaign_id="cmp-crossover",
-            setting_id="aurora",
+            world_id="aurora",
             priority=1,
             include=["characters"],
             track_latest=True,
         )
         # Borealis supplies locations only.
-        await app.state_store.upsert_setting_ref(
+        await app.state_store.upsert_world_ref(
             campaign_id="cmp-crossover",
-            setting_id="borealis",
+            world_id="borealis",
             priority=2,
             include=["locations"],
             track_latest=True,

@@ -37,14 +37,14 @@ async def test_library_campaign_fixture_seeds_library_and_campaign(
         seen["campaign_setup"] = True
         # The library row already exists when the campaign hook runs.
         assert app.library is not None
-        setting = await app.library.get_setting("wod-london")
+        setting = await app.library.get_world("wod-london")
         assert setting.name == "London by Night"
 
     fixture = LibraryCampaignFixture(
         name="probe",
         library_assets=[
             {
-                "library_id": "settings/wod-london",
+                "library_id": "worlds/wod-london/world",
                 "frontmatter": {
                     "id": "wod-london",
                     "name": "London by Night",
@@ -54,7 +54,7 @@ async def test_library_campaign_fixture_seeds_library_and_campaign(
         ],
         library_entities=[
             {
-                "library_id": "settings/wod-london/characters/alistair",
+                "library_id": "worlds/wod-london/characters/alistair",
                 "frontmatter": {
                     "id": "alistair",
                     "name": "Alistair",
@@ -103,7 +103,7 @@ async def test_fixtures_registry_lookup_via_string(tmp_path: Path) -> None:
         name="from-registry",
         library_assets=[
             {
-                "library_id": "settings/minimal",
+                "library_id": "worlds/minimal/world",
                 "frontmatter": {"id": "minimal", "name": "Minimal", "version": 1},
             }
         ],
@@ -113,7 +113,7 @@ async def test_fixtures_registry_lookup_via_string(tmp_path: Path) -> None:
 
     async with TestApp.with_fixtures("from-registry", root=tmp_path) as app:
         assert app.library is not None
-        setting = await app.library.get_setting("minimal")
+        setting = await app.library.get_world("minimal")
         assert setting.name == "Minimal"
 
 
