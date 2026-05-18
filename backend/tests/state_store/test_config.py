@@ -118,6 +118,35 @@ def test_bootstrap_paths_win_over_defaults(tmp_path: Path) -> None:
     assert cfg.library.watch is False
 
 
+def test_bootstrap_database_path_beats_yaml_database_path(tmp_path: Path) -> None:
+    """Explicit bootstrap ``database_path`` is not silently shadowed by YAML.
+
+    Regression test for the config review on PR #375: an env-var-driven
+    deployment must not have its DB path overridden by ``state_store.yaml``.
+    """
+    path = tmp_path / "state_store.yaml"
+    path.write_text("database_path: ./from-yaml.sqlite\n", encoding="utf-8")
+    db = tmp_path / "from-env.sqlite"
+    cfg = StateStoreConfig.from_yaml(path, data_root=tmp_path, database_path=db)
+    assert cfg.database_path == db
+
+
+def test_bootstrap_enable_wal_beats_yaml_enable_wal(tmp_path: Path) -> None:
+    """Same invariant for ``enable_wal``: bootstrap wins."""
+    path = tmp_path / "state_store.yaml"
+    path.write_text("enable_wal: true\n", encoding="utf-8")
+    cfg = StateStoreConfig.from_yaml(path, data_root=tmp_path, enable_wal=False)
+    assert cfg.enable_wal is False
+
+
+def test_yaml_enable_wal_used_when_bootstrap_omits(tmp_path: Path) -> None:
+    """Without a bootstrap value, YAML controls ``enable_wal``."""
+    path = tmp_path / "state_store.yaml"
+    path.write_text("enable_wal: false\n", encoding="utf-8")
+    cfg = StateStoreConfig.from_yaml(path, data_root=tmp_path)
+    assert cfg.enable_wal is False
+
+
 def test_yaml_database_path_overrides_when_bootstrap_absent(tmp_path: Path) -> None:
     path = tmp_path / "state_store.yaml"
     path.write_text("database_path: ./db/foo.sqlite\n", encoding="utf-8")

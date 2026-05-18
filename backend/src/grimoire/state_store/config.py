@@ -141,18 +141,26 @@ class StateStoreConfig:
         *,
         data_root: Path,
         database_path: Path | None = None,
-        enable_wal: bool = True,
+        enable_wal: bool | None = None,
     ) -> StateStoreConfig:
         """Load from ``path`` overlaid on defaults derived from ``data_root``.
 
         Bootstrap values (``data_root`` / ``database_path`` / ``enable_wal``)
         passed in from :class:`grimoire.config.Settings` win over anything
-        the YAML sets, so env-var-driven deployments keep working. Anything
-        the YAML adds beyond that is layered on top of the dataclass
-        defaults.
+        the YAML sets, so env-var-driven deployments keep working. Pass
+        ``None`` to opt a field out of bootstrap-wins (the YAML value, or
+        the default, will be used instead). Anything the YAML adds beyond
+        the bootstrap fields is layered on top of the dataclass defaults.
         """
+        bootstrap_locked: set[str] = set()
+        if database_path is not None:
+            bootstrap_locked.add("database_path")
+        if enable_wal is not None:
+            bootstrap_locked.add("enable_wal")
         base = cls.defaults_for(
-            data_root=data_root, database_path=database_path, enable_wal=enable_wal
+            data_root=data_root,
+            database_path=database_path,
+            enable_wal=enable_wal if enable_wal is not None else True,
         )
         if not path.exists():
             return base
@@ -161,7 +169,9 @@ class StateStoreConfig:
         if not isinstance(raw, dict):
             return base
         block = raw.get("state_store") if isinstance(raw.get("state_store"), dict) else raw
-        return cls._merge(base, block, data_root=Path(data_root))
+        return cls._merge(
+            base, block, data_root=Path(data_root), bootstrap_locked=frozenset(bootstrap_locked)
+        )
 
     @classmethod
     def _merge(
@@ -170,22 +180,26 @@ class StateStoreConfig:
         raw: dict[str, Any],
         *,
         data_root: Path,
+        bootstrap_locked: frozenset[str] = frozenset(),
     ) -> StateStoreConfig:
-        # Top-level paths: YAML may set them, but only when the caller didn't
-        # already supply a bootstrap value. ``defaults_for`` always populates
-        # the three path fields, so YAML overrides them only when explicitly
-        # present.
+        # Bootstrap-supplied fields (per ``bootstrap_locked``) win over YAML —
+        # the env-var-driven Settings layer should not be silently shadowed by
+        # an on-disk config file. Fields the caller didn't pin are free to be
+        # overridden by YAML.
         library_root = base.library_root
         campaigns_root = base.campaigns_root
         database_path = base.database_path
-        if raw.get("library_root"):
+        if raw.get("library_root") and "library_root" not in bootstrap_locked:
             library_root = _resolve_path(raw["library_root"], data_root)
-        if raw.get("campaigns_root"):
+        if raw.get("campaigns_root") and "campaigns_root" not in bootstrap_locked:
             campaigns_root = _resolve_path(raw["campaigns_root"], data_root)
-        if raw.get("database_path"):
+        if raw.get("database_path") and "database_path" not in bootstrap_locked:
             database_path = _resolve_path(raw["database_path"], data_root)
 
-        enable_wal = bool(raw.get("enable_wal", base.enable_wal))
+        if "enable_wal" in bootstrap_locked:
+            enable_wal = base.enable_wal
+        else:
+            enable_wal = bool(raw.get("enable_wal", base.enable_wal))
         vector_extension = str(raw.get("vector_extension") or base.vector_extension)
         if vector_extension not in _VECTOR_EXTENSIONS:
             raise ValueError(
