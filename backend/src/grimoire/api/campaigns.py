@@ -1592,7 +1592,9 @@ async def list_export_history(
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     if limit is not None and limit >= 0:
-        records = records[-limit:]
+        # Slice as ``records[-limit:]`` only when limit > 0; ``records[-0:]``
+        # is ``records[0:]`` (all rows), not an empty list.
+        records = records[-limit:] if limit > 0 else []
     return {"records": [to_payload(record) for record in records]}
 
 

@@ -559,3 +559,8 @@ def test_list_export_history_paginates(client, container) -> None:
     records = response.json()["records"]
     assert len(records) == 2
     assert records[-1]["options"]["title"] == "T2"
+
+    # limit=0 must return zero records, not all of them (Python's -0 == 0).
+    response = client.get("/api/campaigns/c1/exports?limit=0")
+    assert response.status_code == 200
+    assert response.json()["records"] == []
