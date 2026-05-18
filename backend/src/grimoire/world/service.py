@@ -67,6 +67,16 @@ logger = logging.getLogger(__name__)
 # World-internal entity kinds World owns CRUD for.
 _OWNED_KINDS: frozenset[str] = frozenset({"item", "location", "lore", "faction", "greeting"})
 
+# §2 Lore secrecy → player-audience filter
+_PLAYER_HIDDEN_SECRECIES: frozenset[str] = frozenset({"restricted", "secret"})
+_VALID_AUDIENCES: frozenset[str] = frozenset({"model", "player"})
+
+
+def _filter_by_audience(entries: list[LoreEntry], audience: str) -> list[LoreEntry]:
+    if audience == "model":
+        return entries
+    return [e for e in entries if (e.secrecy or "public").lower() not in _PLAYER_HIDDEN_SECRECIES]
+
 
 def _normalize_kind(kind: EntityKind | str) -> str:
     """Accept enums and plural directory names."""
@@ -434,27 +444,55 @@ class WorldService:
     # ------------------------------------------------------------------ #
 
     async def search_lore(
-        self, query: str, campaign_id: CampaignId, top_k: int = 5
+        self,
+        query: str,
+        campaign_id: CampaignId,
+        top_k: int = 5,
+        *,
+        audience: str = "model",
     ) -> list[LoreEntry]:
-        """Naive substring search over lore reachable through composition.
+        """FTS-backed lore search filtered by composition + secrecy.
 
-        FTS-backed search lives on ``StateStore.keyword_search``; this method
-        is a campaign-aware convenience that walks the composition first so
-        results respect the ``include`` filter without leaking content from
-        excluded worlds.
+        Drives :meth:`StateStore.keyword_search` against the lore FTS index,
+        then post-filters by the campaign's composition (so excluded worlds
+        never leak) and by audience (player audience drops restricted +
+        secret entries).
         """
-        q = (query or "").strip().lower()
+        if audience not in _VALID_AUDIENCES:
+            raise ValueError(f"audience must be one of {sorted(_VALID_AUDIENCES)!r}")
+        q = (query or "").strip()
         if not q:
             return []
-        entities = await self.library.list_for_composition(campaign_id, EntityKind.LORE)
-        out: list[tuple[float, LoreEntry]] = []
-        for ent in entities:
-            lore = _lore_from_entity(ent)
-            score = _score_lore(lore, q)
-            if score > 0:
-                out.append((score, lore))
-        out.sort(key=lambda pair: pair[0], reverse=True)
-        return [lore for _, lore in out[:top_k]]
+
+        hits = await self.store.keyword_search(
+            query=q,
+            kinds=("lore",),
+            top_k=top_k * 4,
+        )
+        if not hits:
+            return []
+
+        in_composition = {
+            ent.asset_id: ent
+            for ent in await self.library.list_for_composition(campaign_id, EntityKind.LORE)
+        }
+        out: list[LoreEntry] = []
+        seen_ids: set[str] = set()
+        for hit in hits:
+            # SearchHit.ref is the library_id, shaped 'worlds/<wid>/lore/<asset>'.
+            ref = getattr(hit, "ref", "") or ""
+            asset_id = ref.split("/")[-1] if ref else ""
+            if not asset_id or asset_id in seen_ids:
+                continue
+            ent = in_composition.get(asset_id)
+            if ent is None:
+                continue
+            seen_ids.add(asset_id)
+            out.append(_lore_from_entity(ent))
+            if len(out) >= top_k * 2:
+                break  # leave room for audience filter to trim further
+        filtered = _filter_by_audience(out, audience)
+        return filtered[:top_k]
 
     async def lore_by_keyword(
         self,
@@ -462,8 +500,11 @@ class WorldService:
         campaign_id: CampaignId,
         *,
         min_length: int | None = None,
+        audience: str = "model",
     ) -> list[LoreEntry]:
         """Match lore whose ``keywords`` list contains ``keyword`` (case-insensitive)."""
+        if audience not in _VALID_AUDIENCES:
+            raise ValueError(f"audience must be one of {sorted(_VALID_AUDIENCES)!r}")
         effective_min = self.config.lore.keyword_min_length if min_length is None else min_length
         kw = (keyword or "").strip().lower()
         if len(kw) < effective_min:
@@ -474,7 +515,7 @@ class WorldService:
             lore = _lore_from_entity(ent)
             if any(kw == k.strip().lower() for k in lore.keywords):
                 out.append(lore)
-        return out
+        return _filter_by_audience(out, audience)
 
     async def lore_for_post(
         self,
@@ -483,8 +524,11 @@ class WorldService:
         *,
         min_length: int | None = None,
         max_results: int | None = None,
+        audience: str = "model",
     ) -> list[LoreEntry]:
         """Scan a post for lore-keyword triggers; used by the Context Builder."""
+        if audience not in _VALID_AUDIENCES:
+            raise ValueError(f"audience must be one of {sorted(_VALID_AUDIENCES)!r}")
         effective_min = self.config.lore.keyword_min_length if min_length is None else min_length
         effective_max = self.config.lore.max_lore_in_archive if max_results is None else max_results
         body = (text or "").lower()
@@ -501,7 +545,9 @@ class WorldService:
                 if kw_lower in body:
                     triggered.append(lore)
                     break
-        return triggered[:effective_max]
+        # Apply audience filter BEFORE truncation so the cap counts visible entries only.
+        visible = _filter_by_audience(triggered, audience)
+        return visible[:effective_max]
 
     # ------------------------------------------------------------------ #
     # Greetings
@@ -934,24 +980,6 @@ def _parse_dt(value: Any) -> datetime | None:
         return datetime.fromisoformat(str(value))
     except ValueError:
         return None
-
-
-def _score_lore(lore: LoreEntry, q: str) -> float:
-    score = 0.0
-    if q in (lore.title or "").lower():
-        score += 3.0
-    body_lower = (lore.body or "").lower()
-    if q in body_lower:
-        score += 1.0
-    for tag in lore.tags:
-        if q in tag.lower():
-            score += 0.5
-    for kw in lore.keywords:
-        if q == kw.strip().lower():
-            score += 2.0
-        elif q in kw.lower():
-            score += 1.0
-    return score
 
 
 def _now_iso() -> str:
