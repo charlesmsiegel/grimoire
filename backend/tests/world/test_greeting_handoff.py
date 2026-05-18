@@ -67,9 +67,11 @@ async def test_seed_scene_from_greeting_calls_start_scene(store, library, world)
 
 
 async def test_seed_scene_unknown_greeting_raises(store, library, world) -> None:
+    from grimoire.library.errors import LibraryNotFoundError
+
     await store.upsert_campaign(campaign_id="camp-1", name="t")
     await _seed_world_with_greeting(library)
-    with pytest.raises(Exception):
+    with pytest.raises(LibraryNotFoundError):
         await world.seed_scene_from_greeting(
             campaign_id="camp-1",
             greeting_id="missing",

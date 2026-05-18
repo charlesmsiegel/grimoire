@@ -61,6 +61,7 @@ from .atmosphere import generate_atmosphere
 from .calendar import holiday_at, parse_calendar, season_for
 from .config import WorldConfig
 from .errors import CompositionError, WorldError, WorldNotFoundError
+from .location_generator import generate_location_frontmatter
 from .weather import generate_weather
 
 logger = logging.getLogger(__name__)
@@ -920,6 +921,58 @@ class WorldService:
             campaign_id,
             branch_id=branch_id,
             source=delta.source or "extractor",
+        )
+
+    async def apply_emergent_location_delta(
+        self,
+        delta: Any,
+        *,
+        turn_id: str | None = None,
+    ) -> Path:
+        """§9 Materialize an emergent-location delta to disk + index.
+
+        Calls the LLM gateway to flesh out the location frontmatter (if a
+        gateway is available); writes the result via
+        :meth:`StateStore.write_emergent` so the row is campaign-local
+        and the delta log records the create.
+        """
+        from grimoire.types.state import DeltaKind
+
+        if getattr(delta, "kind", None) != DeltaKind.EMERGENT_CREATE:
+            raise ValueError(
+                f"apply_emergent_location_delta requires kind=EMERGENT_CREATE, "
+                f"got {getattr(delta, 'kind', None)!r}"
+            )
+        after = getattr(delta, "after", None) or {}
+        if (after.get("kind") or "") != "location":
+            raise ValueError("apply_emergent_location_delta requires after.kind='location'")
+
+        campaign_id = str(after.get("campaign_id") or "")
+        if not campaign_id:
+            raise ValueError("apply_emergent_location_delta requires after.campaign_id")
+        name = str(after.get("name") or "")
+        entity_id = name.strip().replace(" ", "-").lower()[:40] or "emergent-location"
+
+        frontmatter: dict[str, Any] = {}
+        if self.gateway is not None:
+            frontmatter = await generate_location_frontmatter(
+                gateway=self.gateway,
+                name=name,
+                context=str(after.get("evidence") or ""),
+                campaign_id=campaign_id,
+            )
+        frontmatter.setdefault("id", entity_id)
+        frontmatter.setdefault("name", name or entity_id)
+        frontmatter.setdefault("kind", "other")
+
+        return await self.store.write_emergent(
+            campaign_id=campaign_id,
+            kind="location",
+            entity_id=entity_id,
+            frontmatter=frontmatter,
+            body=str(frontmatter.get("description") or ""),
+            source=delta.source or "extractor",
+            turn_id=turn_id,
         )
 
     async def _get_weather_override(
