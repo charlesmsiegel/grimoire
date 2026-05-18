@@ -1124,22 +1124,32 @@ async def put_sheet(
 # --------------------------------------------------------------------------- #
 
 
+def _continuity_for(continuity_dep: Any, campaign_id: str) -> Any:
+    """Resolve a per-campaign Continuity from either a registry or a
+    single shared service.
+
+    Routes that came in via ``ContinuityDep`` see the container's
+    ``.continuity`` attribute, which is a :class:`ContinuityRegistry` in
+    production and a single :class:`ContinuityService` in tests. The
+    helper papers over both shapes so route handlers stay tidy.
+    """
+    from grimoire.continuity.registry import resolve_continuity
+
+    return resolve_continuity(continuity_dep, campaign_id)
+
+
 @router.get("/{campaign_id}/facts")
 async def list_facts(
     campaign_id: str,
     continuity: ContinuityDep,
     limit: int = 50,
 ) -> Any:
-    # ContinuityService is a single shared instance with no campaign scope of
-    # its own, so the route applies the filter to keep campaigns isolated.
-    # Fetch with a generous internal limit so the caller's `limit` still works
-    # after we discard rows that belong to other campaigns.
+    service = _continuity_for(continuity, campaign_id)
     try:
-        all_facts = await continuity.facts_about(limit=max(limit * 8, 200))
+        facts = await service.facts_about(limit=limit)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
-    scoped = [f for f in all_facts if getattr(f, "campaign_id", None) == campaign_id]
-    return to_payload(scoped[:limit])
+    return to_payload(facts)
 
 
 @router.post("/{campaign_id}/facts", status_code=201)
@@ -1150,12 +1160,13 @@ async def create_fact(
 ) -> Any:
     from grimoire.types.continuity import Fact
 
+    service = _continuity_for(continuity, campaign_id)
     try:
         # Stamp campaign_id from the path so a forged payload can't write into
         # a different campaign's continuity.
         fact_data = {**payload.fact, "campaign_id": campaign_id}
         fact = Fact.model_validate(fact_data)
-        fact_id = await continuity.add_fact(fact, source=payload.source)
+        fact_id = await service.add_fact(fact, source=payload.source)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return {"fact_id": fact_id}
@@ -1167,12 +1178,84 @@ async def list_commitments(
     continuity: ContinuityDep,
     limit: int = 50,
 ) -> Any:
+    service = _continuity_for(continuity, campaign_id)
     try:
-        all_commitments = await continuity.open_commitments(limit=max(limit * 8, 200))
+        commitments = await service.open_commitments(limit=limit)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
-    scoped = [c for c in all_commitments if getattr(c, "campaign_id", None) == campaign_id]
-    return to_payload(scoped[:limit])
+    return to_payload(commitments)
+
+
+@router.get("/{campaign_id}/continuity/ledger")
+async def continuity_ledger(
+    campaign_id: str,
+    continuity: ContinuityDep,
+    limit_facts: int = 20,
+    limit_commitments: int = 20,
+) -> Any:
+    """Single-shot view of the campaign's continuity state.
+
+    Returns the open / overdue / stale commitment lists, the most recent
+    facts, and any unresolved contradiction reports — the surfaces the
+    §10 "campaign ledger" panel needs in one round-trip so the Frontend
+    doesn't fan out to multiple endpoints.
+
+    ``open_commitments`` returns both OPEN and OVERDUE rows (the aging
+    engine flips a passed due-date to OVERDUE on time advance); the
+    response splits them for the UI rather than asking the caller to
+    re-filter by status.
+    """
+    from grimoire.continuity.types import Duration
+
+    service = _continuity_for(continuity, campaign_id)
+    try:
+        active_rows = await service.open_commitments(limit=limit_commitments * 2)
+        overdue_rows = [
+            c for c in active_rows
+            if getattr(getattr(c, "status", None), "value", "") == "overdue"
+        ]
+        open_rows = [
+            c for c in active_rows
+            if getattr(getattr(c, "status", None), "value", "") != "overdue"
+        ][:limit_commitments]
+        stale_rows = await service.stale_commitments(Duration.months(6))
+        recent_facts = await service.facts_about(limit=limit_facts)
+        unresolved = await service.pending_contradictions(limit=20)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {
+        "campaign_id": campaign_id,
+        "open_commitments": to_payload(open_rows),
+        "overdue_commitments": to_payload(overdue_rows),
+        "stale_commitments": to_payload(stale_rows),
+        "recent_facts": to_payload(recent_facts),
+        "unresolved_contradictions": to_payload(unresolved),
+    }
+
+
+@router.get("/{campaign_id}/continuity/contradictions")
+async def list_contradiction_reports_route(
+    campaign_id: str,
+    continuity: ContinuityDep,
+    resolved: bool | None = None,
+    limit: int = 50,
+) -> Any:
+    """Enumerate contradiction reports for the resolution UI.
+
+    ``resolved=None`` (the default) returns both resolved and pending;
+    pass ``resolved=false`` to drive the "conflict detected — pick a
+    resolution" panel.
+    """
+    service = _continuity_for(continuity, campaign_id)
+    try:
+        store = getattr(service, "_store", None)
+        if store is None or not hasattr(store, "list_contradiction_reports"):
+            reports = await service.pending_contradictions(limit=limit)
+        else:
+            reports = await store.list_contradiction_reports(resolved=resolved, limit=limit)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return to_payload(reports)
 
 
 # --------------------------------------------------------------------------- #

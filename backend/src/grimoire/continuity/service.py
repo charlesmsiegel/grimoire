@@ -8,6 +8,8 @@ outside via `age(to_time)` calls (the Time Engine, task #21).
 from __future__ import annotations
 
 import dataclasses
+import logging
+import re
 import uuid
 from collections.abc import Iterable
 
@@ -24,6 +26,7 @@ from grimoire.continuity.store import (
     StubContradictionJudge,
 )
 from grimoire.continuity.types import (
+    AGES_LIKE_OPEN,
     TERMINAL_STATUSES,
     AgingReport,
     Commitment,
@@ -41,8 +44,14 @@ from grimoire.continuity.types import (
     InGameTime,
     KnowledgeEntry,
     RetirementReason,
+    SceneBriefing,
 )
+from grimoire.event_bus import Event, EventBus
 from grimoire.types.common import TurnId
+
+logger = logging.getLogger(__name__)
+
+_TERM_RE = re.compile(r"\w+", re.UNICODE)
 
 
 class FactNotFoundError(KeyError):
@@ -104,6 +113,9 @@ class ContinuityService(Continuity):
         search_index: FactSearchIndex | None = None,
         judge: ContradictionJudge | None = None,
         config: ContinuityConfig | None = None,
+        event_bus: EventBus | None = None,
+        campaign_id: str | None = None,
+        branch_id: str | None = None,
     ) -> None:
         self._store = store or InMemoryContinuityStore()
         self._config = config or ContinuityConfig()
@@ -112,6 +124,28 @@ class ContinuityService(Continuity):
             min_keyword_length=self._config.keyword_retrieval.min_keyword_length,
         )
         self._judge = judge or StubContradictionJudge()
+        self._event_bus = event_bus
+        self._campaign_id = campaign_id
+        self._branch_id = branch_id
+
+    # ------------------------------------------------------------------
+    # Event emission
+    # ------------------------------------------------------------------
+
+    async def _emit(self, event_type: str, payload: dict) -> None:
+        """Best-effort event emission. Swallows handler exceptions so
+        Continuity writes never fail because of a bus subscriber bug."""
+        if self._event_bus is None:
+            return
+        body = dict(payload)
+        if self._campaign_id is not None and "campaign_id" not in body:
+            body["campaign_id"] = self._campaign_id
+        if self._branch_id is not None and "branch_id" not in body:
+            body["branch_id"] = self._branch_id
+        try:
+            await self._event_bus.emit(Event(type=event_type, payload=body))
+        except Exception:
+            logger.exception("continuity event emit failed for %s", event_type)
 
     # ------------------------------------------------------------------
     # Fact writes
@@ -131,6 +165,10 @@ class ContinuityService(Continuity):
             if src_tag not in fact.tags:
                 fact.tags.append(src_tag)
         await self._store.put_fact(fact)
+        await self._emit(
+            "fact_recorded",
+            {"fact_id": fact.id, "source": source},
+        )
         return fact.id
 
     async def retire_fact(self, fact_id: FactId, in_post: str, reason: str) -> None:
@@ -214,6 +252,84 @@ class ContinuityService(Continuity):
         recent.sort(key=lambda f: f.established_at_in_game, reverse=True)
         return recent[:limit]
 
+    async def facts_known_by(
+        self,
+        character_id: str,
+        *,
+        limit: int = 50,
+        include_retired: bool = False,
+    ) -> list[Fact]:
+        """Return the facts a given character knows about.
+
+        Used by Context Builder to enforce POV: a fact the active PC
+        doesn't know shouldn't seed model reactions. Public facts (i.e.
+        anything with ``about.scope == "public"`` and no narrow audience
+        in ``about.character_ids``) are returned unconditionally so the
+        narrator can still describe what's in the air.
+        """
+        entries = await self._store.knowledge_for_character(character_id)
+        known_ids = {e.fact_id for e in entries if e.knows}
+        all_facts = await self._store.list_facts(include_retired=include_retired)
+        out: list[Fact] = []
+        for fact in all_facts:
+            if fact.id in known_ids:
+                out.append(fact)
+                continue
+            subject = fact.about
+            # No narrow audience and scope is world-level public — everyone
+            # is presumed to be able to know it. Private/household scope
+            # requires explicit knowledge.
+            if subject.scope in ("public", "world") and not subject.character_ids:
+                out.append(fact)
+                continue
+            # Subject explicitly lists this PC — they know about facts
+            # about themselves.
+            if character_id in subject.character_ids:
+                out.append(fact)
+        out.sort(key=lambda f: f.established_at_in_game, reverse=True)
+        return out[:limit]
+
+    async def facts_for_terms(
+        self,
+        terms: Iterable[str],
+        *,
+        limit: int = 10,
+    ) -> list[Fact]:
+        """Return facts whose text or keywords match any of ``terms``.
+
+        Honours ``config.keyword_retrieval.case_insensitive`` and
+        ``min_keyword_length`` so the prose-driven retrieval path agrees
+        with the existing search index on what counts as a token.
+        """
+        cfg = self._config.keyword_retrieval
+        normalised: set[str] = set()
+        for raw in terms:
+            for tok in _TERM_RE.findall(raw):
+                if len(tok) < cfg.min_keyword_length:
+                    continue
+                normalised.add(tok.lower() if cfg.case_insensitive else tok)
+        if not normalised:
+            return []
+        all_facts = await self._store.list_facts(include_retired=False)
+        matched: list[tuple[Fact, int]] = []
+        for fact in all_facts:
+            haystack: set[str] = set()
+            for tok in _TERM_RE.findall(fact.text):
+                if len(tok) < cfg.min_keyword_length:
+                    continue
+                haystack.add(tok.lower() if cfg.case_insensitive else tok)
+            for kw in fact.keywords:
+                if not kw:
+                    continue
+                haystack.add(kw.lower() if cfg.case_insensitive else kw)
+            overlap = len(normalised & haystack)
+            if overlap > 0:
+                matched.append((fact, overlap))
+        matched.sort(
+            key=lambda pair: (-pair[1], -pair[0].established_at_in_game.day_count),
+        )
+        return [fact for fact, _ in matched[:limit]]
+
     # ------------------------------------------------------------------
     # Contradictions
     # ------------------------------------------------------------------
@@ -251,6 +367,11 @@ class ContinuityService(Continuity):
             conflicts=[c for c in conflicts if c.verdict == ContradictionVerdict.CONFLICT],
         )
         await self._store.put_contradiction_report(report)
+        if report.conflicts:
+            await self._emit(
+                "contradiction_detected",
+                {"report_id": report.id, "conflict_count": len(report.conflicts)},
+            )
         return report
 
     async def resolve_contradiction(
@@ -323,6 +444,10 @@ class ContinuityService(Continuity):
         resolved_report = dataclasses.replace(report, resolved=True, resolution=resolution)
         await self._store.put_contradiction_report(resolved_report)
 
+    async def pending_contradictions(self, limit: int = 20) -> list[ContradictionReport]:
+        """Return unresolved contradiction reports for the campaign ledger UI."""
+        return await self._store.list_contradiction_reports(resolved=False, limit=limit)
+
     # ------------------------------------------------------------------
     # Commitments
     # ------------------------------------------------------------------
@@ -356,6 +481,53 @@ class ContinuityService(Continuity):
             resolved_in_post=in_post if status in TERMINAL_STATUSES else existing.resolved_in_post,
         )
         await self._store.put_commitment(updated)
+        if status == CommitmentStatus.PAID:
+            await self._emit(
+                "commitment_paid_off",
+                {"commitment_id": cid, "in_post": in_post},
+            )
+        elif status == CommitmentStatus.BROKEN:
+            await self._emit(
+                "commitment_broken",
+                {"commitment_id": cid, "in_post": in_post},
+            )
+
+    async def reopen_commitment(
+        self,
+        cid: CommitmentId,
+        in_post: str,
+    ) -> Commitment:
+        """Mark a STALE (or terminal) commitment as relevant again.
+
+        Returns the updated record so callers don't have to refetch.
+        """
+        existing = await self._store.get_commitment(cid)
+        if existing is None:
+            raise CommitmentNotFoundError(cid)
+        updated = dataclasses.replace(
+            existing,
+            status=CommitmentStatus.REOPENED,
+            # last_activity_at is what aging uses to decide "is this stale
+            # again?"; bumping it on reopen prevents an immediate flip
+            # back to STALE on the next age() pass.
+            last_activity_at=existing.last_activity_at,
+            resolved_in_post=None,
+        )
+        await self._store.put_commitment(updated)
+        await self._emit(
+            "commitment_reopened",
+            {"commitment_id": cid, "in_post": in_post},
+        )
+        return updated
+
+    async def all_commitments(self) -> list[Commitment]:
+        """Return every commitment in the store (any status).
+
+        Used by the EPUB export appendix which renders the full ledger.
+        """
+        rows = await self._store.list_commitments()
+        rows.sort(key=lambda c: c.in_game_created_at)
+        return rows
 
     async def get_commitment(self, cid: CommitmentId) -> Commitment:
         c = await self._store.get_commitment(cid)
@@ -370,7 +542,11 @@ class ContinuityService(Continuity):
         limit: int = 50,
     ) -> list[Commitment]:
         rows = await self._store.list_commitments(
-            statuses=[CommitmentStatus.OPEN, CommitmentStatus.OVERDUE]
+            statuses=[
+                CommitmentStatus.OPEN,
+                CommitmentStatus.OVERDUE,
+                CommitmentStatus.REOPENED,
+            ]
         )
         if involving:
             rows = [c for c in rows if _involves(c, involving)]
@@ -403,6 +579,39 @@ class ContinuityService(Continuity):
         # callers can also use this to surface long-stale items.
         del threshold
         return rows
+
+    async def brief_for_scene(
+        self,
+        scene_id: str,
+        pc_refs: list[str],
+        *,
+        as_of: InGameTime | None = None,
+    ) -> SceneBriefing:
+        """Compact "active threads involving these PCs" bundle.
+
+        Scene Manager calls this when opening a scene so the narrator's
+        first beat lands on threads the cast already cares about. The
+        returned ``commitments`` list keeps OPEN + REOPENED rows; the
+        ``overdue`` field separates those past their due date, and
+        ``facts`` is the most recent ledger entries about (or known by)
+        the requested PCs.
+        """
+        commitments = await self.open_commitments(involving=pc_refs, limit=20)
+        overdue: list[Commitment] = []
+        if as_of is not None:
+            all_overdue = await self.overdue_commitments(as_of)
+            wanted = set(pc_refs)
+            overdue = [c for c in all_overdue if not wanted or _involves(c, wanted)]
+        facts: list[Fact] = []
+        if pc_refs:
+            facts = await self.facts_about(character_ids=list(pc_refs), limit=10)
+        return SceneBriefing(
+            scene_id=scene_id,
+            pc_refs=list(pc_refs),
+            facts=facts,
+            commitments=commitments,
+            overdue=overdue,
+        )
 
     # ------------------------------------------------------------------
     # Knowledge
@@ -473,12 +682,12 @@ class ContinuityService(Continuity):
             if c.status in TERMINAL_STATUSES:
                 continue
             new_status = c.status
-            # OPEN + due_by passes -> OVERDUE
-            if c.status == CommitmentStatus.OPEN and c.due_by is not None and c.due_by < to_time:
+            # OPEN / REOPENED + due_by passes -> OVERDUE
+            if c.status in AGES_LIKE_OPEN and c.due_by is not None and c.due_by < to_time:
                 new_status = CommitmentStatus.OVERDUE
 
-            # OPEN + inactivity > threshold AND no due_by -> STALE
-            elif c.status == CommitmentStatus.OPEN and c.due_by is None:
+            # OPEN / REOPENED + inactivity > threshold AND no due_by -> STALE
+            elif c.status in AGES_LIKE_OPEN and c.due_by is None:
                 last_active = c.last_activity_at or c.in_game_created_at
                 if to_time - last_active >= stale_threshold:
                     new_status = CommitmentStatus.STALE
@@ -488,8 +697,16 @@ class ContinuityService(Continuity):
                 await self._store.put_commitment(updated)
                 if new_status == CommitmentStatus.OVERDUE:
                     became_overdue.append(updated)
+                    await self._emit(
+                        "commitment_overdue",
+                        {"commitment_id": updated.id},
+                    )
                 elif new_status == CommitmentStatus.STALE:
                     became_stale.append(updated)
+                    await self._emit(
+                        "commitment_stale",
+                        {"commitment_id": updated.id},
+                    )
 
         return AgingReport(
             from_time=from_time,

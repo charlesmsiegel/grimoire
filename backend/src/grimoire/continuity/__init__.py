@@ -29,6 +29,12 @@ from grimoire.continuity.protocols import (
     ContradictionJudge,
     FactSearchIndex,
 )
+from grimoire.continuity.registry import (
+    ContinuityRegistry,
+    ContinuityRegistryExportAdapter,
+    make_judge_request_factory,
+    resolve_continuity,
+)
 from grimoire.continuity.service import (
     CommitmentNotFoundError,
     ConfidenceFloorError,
@@ -43,6 +49,8 @@ from grimoire.continuity.store import (
     StubContradictionJudge,
 )
 from grimoire.continuity.types import (
+    AGES_LIKE_OPEN,
+    TERMINAL_STATUSES,
     AgingReport,
     Commitment,
     CommitmentId,
@@ -61,9 +69,11 @@ from grimoire.continuity.types import (
     InGameTime,
     KnowledgeEntry,
     RetirementReason,
+    SceneBriefing,
 )
 
 __all__ = [
+    "AGES_LIKE_OPEN",
     "AgingReport",
     "Commitment",
     "CommitmentId",
@@ -73,6 +83,8 @@ __all__ = [
     "ConfidenceFloorError",
     "Continuity",
     "ContinuityConfig",
+    "ContinuityRegistry",
+    "ContinuityRegistryExportAdapter",
     "ContinuityService",
     "ContinuityStore",
     "ContradictionCandidate",
@@ -100,6 +112,10 @@ __all__ = [
     "LLMContradictionJudge",
     "QueryEmbedder",
     "RetirementReason",
+    "SceneBriefing",
     "SqliteContinuityStore",
     "StubContradictionJudge",
+    "TERMINAL_STATUSES",
+    "make_judge_request_factory",
+    "resolve_continuity",
 ]

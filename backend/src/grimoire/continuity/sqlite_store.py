@@ -565,6 +565,40 @@ class SqliteContinuityStore(ContinuityStore):
             resolution=_loads(row["resolution"]) if row["resolution"] else None,
         )
 
+    async def list_contradiction_reports(
+        self,
+        *,
+        resolved: bool | None = None,
+        limit: int = 50,
+    ) -> list[ContradictionReport]:
+        where = ["campaign_id = ?", "branch_id = ?"]
+        params: list[object] = [self._campaign_id, self._branch_id]
+        if resolved is True:
+            where.append("resolved = 1")
+        elif resolved is False:
+            where.append("resolved = 0")
+        sql = (
+            "SELECT * FROM contradiction_reports "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY created_at DESC, id DESC LIMIT ?"
+        )
+        rows = await self._db.fetchall(sql, (*params, limit))
+        out: list[ContradictionReport] = []
+        for row in rows:
+            candidate = _deserialise_fact(_loads(row["candidate_fact"]) or {})
+            conflicts_raw = _loads(row["conflicts"]) or []
+            conflicts = [_deserialise_candidate(c) for c in conflicts_raw if isinstance(c, dict)]
+            out.append(
+                ContradictionReport(
+                    id=row["id"],
+                    candidate_fact=candidate,
+                    conflicts=conflicts,
+                    resolved=bool(int(row["resolved"])),
+                    resolution=_loads(row["resolution"]) if row["resolution"] else None,
+                )
+            )
+        return out
+
 
 def _serialise_fact(fact: Fact) -> dict:
     """Serialise a Fact to a JSON-safe dict for contradiction-report storage."""

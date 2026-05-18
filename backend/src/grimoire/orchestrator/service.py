@@ -120,6 +120,7 @@ class OrchestratorService:
         state_store: Any,
         mechanics: Any | None = None,
         world: Any | None = None,
+        continuity: Any | None = None,
         ws_push: WSPushFn | None = None,
         extractor_config: ExtractorConfig | None = None,
         config: OrchestratorConfig | None = None,
@@ -137,6 +138,11 @@ class OrchestratorService:
         self._mechanics = mechanics
         self._world = world  # §5: optional, used to dispatch weather-override deltas
         self._library = library
+        # §5: optional continuity (registry or single service). When wired,
+        # FACT_* / COMMITMENT_* / KNOWLEDGE_REVEAL deltas route to the
+        # continuity store with a contradiction check first, rather than
+        # being applied through the generic state-store path.
+        self._continuity = continuity
         self._ws_push = ws_push
         self._extractor_config = extractor_config or ExtractorConfig()
         self._config = config or OrchestratorConfig()
@@ -1025,6 +1031,27 @@ class OrchestratorService:
                         continue
                     except Exception:
                         logger.exception("world weather-override apply failed; falling through")
+                # §5 (continuity remaining-design): route continuity-shaped
+                # deltas to the per-campaign Continuity service. Falls
+                # through to apply_delta when no continuity is wired so
+                # tests that don't compose the registry still get rows in
+                # the state-store delta log.
+                if self._continuity is not None and delta.kind in (
+                    DeltaKind.FACT_ADD,
+                    DeltaKind.FACT_RETIRE,
+                    DeltaKind.FACT_UPDATE,
+                    DeltaKind.COMMITMENT_ADD,
+                    DeltaKind.COMMITMENT_RESOLVE,
+                    DeltaKind.KNOWLEDGE_REVEAL,
+                ):
+                    handled = await self._apply_continuity_delta(
+                        delta=delta,
+                        campaign_id=campaign_id,
+                        branch_id=branch_id,
+                        turn_id=turn_id,
+                    )
+                    if handled:
+                        continue
                 did = await self._store.apply_delta(
                     delta=delta,
                     source=delta.source or "extractor",
@@ -1082,6 +1109,141 @@ class OrchestratorService:
                     turn_id,
                     exc,
                 )
+
+    async def _apply_continuity_delta(
+        self,
+        *,
+        delta: Any,
+        campaign_id: CampaignId,
+        branch_id: str,
+        turn_id: TurnId,
+    ) -> bool:
+        """Dispatch a continuity-shaped delta to the Continuity service.
+
+        Returns ``True`` when the delta was handled (so the caller skips
+        the generic ``state_store.apply_delta`` fallthrough), ``False``
+        if the routing decided it couldn't translate the payload — in
+        which case the caller falls back to the state-store path so
+        nothing silently disappears.
+
+        FACT_ADD runs a contradiction check first: when the check
+        returns a non-empty conflict list the fact lands in the State
+        Store review queue instead of the ledger so the user can pick a
+        resolution via ``POST /campaigns/{id}/contradictions/{id}``.
+        """
+        from grimoire.continuity.registry import resolve_continuity
+        from grimoire.continuity.service import ContinuityService
+
+        service = resolve_continuity(self._continuity, campaign_id, branch_id=branch_id)
+        if service is None:
+            return False
+
+        payload = delta.after or {}
+        try:
+            if delta.kind == DeltaKind.FACT_ADD:
+                fact = _build_continuity_fact(
+                    payload=payload,
+                    confidence=delta.confidence,
+                    source=delta.source or "extractor",
+                    turn_id=turn_id,
+                )
+                # §5: contradiction check before write. A report with
+                # non-empty conflicts blocks the write and queues the
+                # delta for the State Store review queue.
+                report = await service.check_contradictions(fact, turn_id=turn_id)
+                if report.conflicts:
+                    review_id = await self._store.queue_for_review(
+                        delta=delta,
+                        source=delta.source or "extractor",
+                        campaign_id=campaign_id,
+                    )
+                    await self._bus.emit(
+                        Event(
+                            type="review_item_added",
+                            payload={
+                                "campaign_id": campaign_id,
+                                "review_id": review_id,
+                                "turn_id": turn_id,
+                                "report_id": report.id,
+                                "reason": "contradiction_detected",
+                            },
+                        )
+                    )
+                    return True
+                await service.add_fact(fact, source=delta.source or "extractor")
+                return True
+
+            if delta.kind == DeltaKind.FACT_RETIRE:
+                fact_id = payload.get("fact_id") or payload.get("id")
+                if not fact_id:
+                    return False
+                await service.retire_fact(
+                    fact_id,
+                    in_post=str(payload.get("in_post") or turn_id),
+                    reason=str(payload.get("reason") or "retconned"),
+                )
+                return True
+
+            if delta.kind == DeltaKind.FACT_UPDATE:
+                fact_id = payload.get("fact_id") or payload.get("id")
+                if not fact_id:
+                    return False
+                patch = payload.get("patch") or {}
+                await service.update_fact(fact_id, patch)
+                return True
+
+            if delta.kind == DeltaKind.COMMITMENT_ADD:
+                commitment = _build_continuity_commitment(
+                    payload=payload,
+                    turn_id=turn_id,
+                )
+                if commitment is None:
+                    return False
+                await service.add_commitment(commitment, source=delta.source or "extractor")
+                return True
+
+            if delta.kind == DeltaKind.COMMITMENT_RESOLVE:
+                from grimoire.continuity.types import CommitmentStatus
+
+                cid = payload.get("commitment_id") or payload.get("id")
+                status_raw = str(payload.get("status") or "paid").lower()
+                if not cid:
+                    return False
+                try:
+                    status = CommitmentStatus(status_raw)
+                except ValueError:
+                    return False
+                await service.resolve_commitment(
+                    cid, status, in_post=str(payload.get("in_post") or turn_id)
+                )
+                return True
+
+            if delta.kind == DeltaKind.KNOWLEDGE_REVEAL:
+                fact_id = payload.get("fact_id")
+                to_refs = payload.get("to") or payload.get("character_ids") or []
+                if not fact_id or not to_refs:
+                    return False
+                await service.reveal(
+                    fact_id,
+                    list(to_refs),
+                    in_post=str(payload.get("in_post") or turn_id),
+                    source=delta.source or "extractor",
+                )
+                return True
+        except Exception:
+            logger.exception(
+                "continuity delta apply failed (kind=%s campaign=%s turn=%s)",
+                delta.kind,
+                campaign_id,
+                turn_id,
+            )
+            # Fall back to the state-store path so the delta is still
+            # logged somewhere visible.
+            return False
+
+        # Unknown / unsupported continuity kind — fall back.
+        del ContinuityService  # imported for type-check clarity only
+        return False
 
     # ------------------------------------------------------------------ #
     # Undo helpers
@@ -1290,6 +1452,109 @@ def _pydantic_post(post: SceneFilePost) -> Any:
         turn_id=post.turn_id,
         author_pc_ref=post.author_pc_ref,
         author_npc_ref=post.author_npc_ref,
+    )
+
+
+def _build_continuity_fact(
+    *,
+    payload: dict,
+    confidence: float,
+    source: str,
+    turn_id: TurnId,
+) -> Any:
+    """Build a dataclass :class:`Fact` from an extractor FACT_ADD payload.
+
+    The extractor emits a dict-shaped delta; the Continuity service
+    expects a :mod:`grimoire.continuity.types` dataclass. The
+    conversion lives here rather than in the extractor so the extractor
+    stays JSON-clean and tests of the extractor don't drag in the
+    continuity types.
+    """
+    from grimoire.continuity.types import Fact, FactSource, FactSubject, InGameTime
+
+    about_data = payload.get("about") or {}
+    if isinstance(about_data, FactSubject):
+        about = about_data
+    else:
+        about = FactSubject(
+            character_ids=list(about_data.get("character_ids") or []),
+            location_ids=list(about_data.get("location_ids") or []),
+            faction_ids=list(about_data.get("faction_ids") or []),
+            item_ids=list(about_data.get("item_ids") or []),
+            scope=str(about_data.get("scope") or "public"),
+        )
+    src_raw = payload.get("source") or source
+    try:
+        fact_source = FactSource(str(src_raw))
+    except ValueError:
+        fact_source = FactSource.NARRATOR
+    when_data = payload.get("in_game_when") or {}
+    when = InGameTime(
+        day_count=int(when_data.get("day_count", 0)),
+        label=str(when_data.get("label", "")),
+    )
+    return Fact(
+        id="",
+        text=str(payload.get("text", "")),
+        established_in_post=str(payload.get("established_in_post") or turn_id),
+        established_at_in_game=when,
+        confidence=float(confidence),
+        source=fact_source,
+        speaker_id=payload.get("speaker_id"),
+        about=about,
+        keywords=list(payload.get("keywords") or []),
+    )
+
+
+def _build_continuity_commitment(
+    *,
+    payload: dict,
+    turn_id: TurnId,
+) -> Any | None:
+    """Build a :class:`Commitment` from an extractor COMMITMENT_ADD payload.
+
+    Returns ``None`` when the payload is missing the required ``text``
+    field; the caller falls back to the generic state-store path so the
+    delta stays in the log even if the continuity ledger can't accept it.
+    """
+    from grimoire.continuity.types import (
+        Commitment,
+        CommitmentKind,
+        CommitmentStatus,
+        InGameTime,
+    )
+
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        return None
+    kind_raw = str(payload.get("kind") or "promise").lower()
+    try:
+        kind = CommitmentKind(kind_raw)
+    except ValueError:
+        kind = CommitmentKind.PROMISE
+    when_data = payload.get("in_game_created_at") or {}
+    created_at = InGameTime(
+        day_count=int(when_data.get("day_count", 0)),
+        label=str(when_data.get("label", "")),
+    )
+    due_data = payload.get("due") or payload.get("due_by")
+    due_by: InGameTime | None = None
+    if isinstance(due_data, dict):
+        due_by = InGameTime(
+            day_count=int(due_data.get("day_count", 0)),
+            label=str(due_data.get("label", "")),
+        )
+    return Commitment(
+        id="",
+        kind=kind,
+        text=text,
+        created_in_post=str(payload.get("created_in_post") or turn_id),
+        in_game_created_at=created_at,
+        weight=int(payload.get("weight") or 1),
+        from_id=payload.get("from") or payload.get("from_id"),
+        to_id=payload.get("to") or payload.get("to_id"),
+        due_by=due_by,
+        status=CommitmentStatus.OPEN,
     )
 
 

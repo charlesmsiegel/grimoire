@@ -138,6 +138,7 @@ class SceneManager:
         thread_detector: ThreadDetector | None = None,
         scene_break_classifier: SceneBreakClassifier | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        continuity: object | None = None,
     ) -> None:
         self.data_root = Path(data_root)
         self.config = config or SceneManagerConfig()
@@ -147,6 +148,11 @@ class SceneManager:
         self._thread_detector = thread_detector
         self._scene_break_classifier = scene_break_classifier
         self._clock = clock
+        # §10 Continuity injection: when wired, ``start_scene`` calls
+        # ``brief_for_scene`` and stuffs the result into the
+        # ``scene_started`` event so the Frontend can render a pre-scene
+        # briefing without a follow-up round-trip.
+        self._continuity = continuity
 
         # Per-scene in-memory state. Persisted lazily where needed.
         self._post_records: dict[str, dict[str, _PostRecord]] = {}
@@ -350,8 +356,37 @@ class SceneManager:
         for pc_ref in scene.present_pc_refs:
             self._pc_current_scene[(scene.campaign_id, pc_ref)] = scene.id
 
-        await self._emit(SCENE_STARTED, scene)
+        briefing_payload = await self._build_briefing_payload(scene)
+        await self._emit(SCENE_STARTED, scene, briefing=briefing_payload)
         return scene
+
+    async def _build_briefing_payload(self, scene: Scene) -> dict | None:
+        """Ask Continuity for the active threads involving this scene's
+        PCs so the Frontend can render a pre-scene briefing without an
+        extra round-trip.
+
+        Returns ``None`` when no continuity is wired or the call fails;
+        the rest of ``start_scene`` keeps working without a briefing.
+        """
+        if self._continuity is None:
+            return None
+        try:
+            from grimoire.continuity.registry import resolve_continuity
+
+            service = resolve_continuity(self._continuity, scene.campaign_id)
+            if service is None or not hasattr(service, "brief_for_scene"):
+                return None
+            briefing = await service.brief_for_scene(scene.id, list(scene.present_pc_refs))
+        except Exception:
+            return None
+        return {
+            "scene_id": briefing.scene_id,
+            "pc_refs": list(briefing.pc_refs),
+            "fact_count": len(briefing.facts),
+            "fact_texts": [getattr(f, "text", "") for f in briefing.facts[:5]],
+            "commitment_count": len(briefing.commitments),
+            "overdue_count": len(briefing.overdue),
+        }
 
     async def close_scene(self, scene_id: str, *, closed_at_turn: str) -> SceneCloseReport:
         """Close a scene; ``closed_at_turn`` is the orchestrator's turn id.

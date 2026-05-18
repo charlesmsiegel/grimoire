@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from grimoire.context.config import ContextBuilderConfig
+from grimoire.continuity.registry import resolve_continuity
 from grimoire.context.errors import LockInOverflowError
 from grimoire.context.tokens import TokenEstimator, cheap_estimator, estimate_tokens
 from grimoire.templates import render as render_template
@@ -236,7 +237,9 @@ class ContextBuilderService:
         commitments_block, commitments_source = self._render_commitments_block(
             campaign_id, open_commitments
         )
-        background_items.extend(await self._continuity_background(campaign_id))
+        background_items.extend(
+            await self._continuity_background(campaign_id, active_pc_ref, recent_posts)
+        )
         # Relationship deltas (compact, lock-in tier): short summary lines of
         # the most recent relationship updates between the active PC and any
         # present cast member.
@@ -907,10 +910,11 @@ class ContextBuilderService:
     # -- continuity ----------------------------------------------------- #
 
     async def _open_commitments(self, campaign_id: CampaignId) -> list[Any]:
-        if self._continuity is None:
+        continuity = resolve_continuity(self._continuity, campaign_id)
+        if continuity is None:
             return []
         try:
-            return list(await self._continuity.open_commitments(limit=20))
+            return list(await continuity.open_commitments(limit=20))
         except Exception:
             return []
 
@@ -950,6 +954,23 @@ class ContextBuilderService:
     def _render_commitments_block(
         self, campaign_id: CampaignId, commitments: list[Any]
     ) -> tuple[str, ContextSource | None]:
+        # §8: honour ``surface_overdue_in_context`` (default True) so
+        # OVERDUE rows get an ``[OVERDUE]`` suffix instead of being
+        # silently mixed in with active ones. The builder doesn't carry
+        # the current in-game time, so we split on commitment.status —
+        # the aging engine promotes due-passed items to OVERDUE on time
+        # advance.
+        config = getattr(self._continuity, "_config", None)
+        surface_overdue = getattr(config, "surface_overdue_in_context", True)
+        overdue_ids: set[str] = (
+            {
+                getattr(c, "id", "")
+                for c in commitments
+                if getattr(getattr(c, "status", None), "value", "") == "overdue"
+            }
+            if surface_overdue
+            else set()
+        )
         if not commitments:
             return "", None
         lines: list[str] = []
@@ -957,7 +978,8 @@ class ContextBuilderService:
             text = getattr(c, "text", "") or ""
             due = getattr(c, "due_by", None)
             due_part = f" (due {due.day_count})" if due is not None else ""
-            lines.append(f"- {text}{due_part}")
+            overdue_part = " [OVERDUE]" if getattr(c, "id", "") in overdue_ids else ""
+            lines.append(f"- {text}{due_part}{overdue_part}")
         block = "Active commitments:\n" + "\n".join(lines)
         source = ContextSource(
             kind="commitment",
@@ -968,18 +990,48 @@ class ContextBuilderService:
         )
         return block, source
 
-    async def _continuity_background(self, campaign_id: CampaignId) -> list[_TierItem]:
-        """§5 — recent facts in compact form (last ``recent_facts_limit``).
+    async def _continuity_background(
+        self,
+        campaign_id: CampaignId,
+        active_pc_ref: str | None = None,
+        recent_posts: list[Any] | None = None,
+    ) -> list[_TierItem]:
+        """§5/§6/§7 — recent facts (POV-filtered + keyword-driven).
 
-        Each fact renders as one line ``- {text}``. Total characters are
-        capped at ``recent_facts_char_cap`` to keep background tight.
+        Pulls the most recent facts the active PC knows about (§6) and
+        augments them with any extra facts whose keywords overlap with
+        proper nouns in the recent posts (§7). With no active PC we
+        keep the omniscient narrator view. Total characters are capped
+        at ``recent_facts_char_cap`` to keep background tight.
         """
-        if self._continuity is None:
+        continuity = resolve_continuity(self._continuity, campaign_id)
+        if continuity is None:
             return []
         try:
-            facts = await self._continuity.facts_about(limit=self._config.recent_facts_limit)
+            limit = self._config.recent_facts_limit
+            if active_pc_ref and hasattr(continuity, "facts_known_by"):
+                facts = await continuity.facts_known_by(active_pc_ref, limit=limit)
+            else:
+                facts = await continuity.facts_about(limit=limit)
         except Exception:
             return []
+        # §7 keyword-driven retrieval: pull additional facts whose
+        # keywords overlap with proper nouns in the recent posts. Dedup
+        # by fact id so we don't surface the same fact twice.
+        if recent_posts and hasattr(continuity, "facts_for_terms"):
+            seen_ids = {getattr(f, "id", "") for f in facts}
+            try:
+                terms = _proper_noun_terms(recent_posts)
+                if terms:
+                    extra = await continuity.facts_for_terms(terms, limit=5)
+                    for f in extra:
+                        fid = getattr(f, "id", "")
+                        if fid and fid in seen_ids:
+                            continue
+                        seen_ids.add(fid)
+                        facts.append(f)
+            except Exception:
+                pass
         if not facts:
             return []
         lines: list[str] = []
@@ -1692,6 +1744,31 @@ def _render_scene_reference(scene_id: str, scene: Any | None) -> str:
     if summary:
         bits.append(f"Summary: {summary}")
     return "\n".join(bits)
+
+
+_PROPER_NOUN_RE = __import__("re").compile(r"\b[A-Z][a-zA-Z]{2,}\b")
+
+
+def _proper_noun_terms(recent_posts: Iterable[Any]) -> list[str]:
+    """Pull capitalised tokens (likely proper nouns) from the recent
+    posts so Continuity's keyword retrieval has something to anchor on.
+
+    Filters out single-letter capitals and obvious sentence starters by
+    requiring at least 3 chars; collisions with sentence-initial words
+    are tolerable since the retrieval scorer requires multiple matches
+    to surface anything.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for post in recent_posts:
+        text = getattr(post, "content", "") or getattr(post, "text", "")
+        if not isinstance(text, str):
+            continue
+        for match in _PROPER_NOUN_RE.findall(text):
+            if match not in seen:
+                seen.add(match)
+                out.append(match)
+    return out
 
 
 def _hash_messages(messages: list[Message]) -> str:

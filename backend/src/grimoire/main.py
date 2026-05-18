@@ -4,6 +4,7 @@ import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,7 +24,12 @@ from grimoire.characters import CharactersService
 from grimoire.characters.integration import CharactersIntegration
 from grimoire.config import settings
 from grimoire.context.builder import ContextBuilderService
-from grimoire.continuity import ContinuityService
+from grimoire.continuity import (
+    ContinuityConfig,
+    ContinuityRegistry,
+    ContinuityRegistryExportAdapter,
+    make_judge_request_factory,
+)
 from grimoire.event_bus import EventBus
 from grimoire.export.epub import EpubAdapter
 from grimoire.export.service import ExportService, ExportServiceConfig
@@ -210,6 +216,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if container.characters is None:
             container.characters = CharactersService(container.library, container.mechanics)
         if container.scenes is None:
+            # Continuity registry is wired below; SceneManager picks it up
+            # via the attribute set after that block so the pre-scene
+            # briefing can run.
             container.scenes = SceneManager(data_root, event_bus=container.event_bus)
         # Scene indexer keeps the SQLite scenes/posts tables in sync with the
         # markdown + sidecar source-of-truth. Subscribed to manager events
@@ -226,10 +235,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 log.exception("scene indexer backfill failed at startup")
             container.extras["scene_indexer"] = scene_indexer
         if container.continuity is None:
-            # In-memory store by default — facts/commitments don't persist
-            # across restart. Swap in SqliteContinuityStore when persistence
-            # matters.
-            container.continuity = ContinuityService()
+            # The registry hands out one ContinuityService per
+            # (campaign_id, branch_id) backed by SqliteContinuityStore so
+            # facts survive restart. HybridFactSearchIndex + (when the
+            # gateway is available) LLMContradictionJudge are wired in
+            # below once the gateway is constructed.
+            continuity_config = ContinuityConfig()
+            container.continuity = ContinuityRegistry(
+                db=db,
+                config=continuity_config,
+                event_bus=container.event_bus,
+            )
+        # Hand the (possibly already-constructed) SceneManager the
+        # registry so it can attach a pre-scene briefing to
+        # ``scene_started`` events. SceneManager itself accepts a
+        # ``continuity`` kwarg at construction but the bag is built
+        # earlier — patching the attribute here keeps the wiring linear.
+        if container.scenes is not None and getattr(container.scenes, "_continuity", None) is None:
+            container.scenes._continuity = container.continuity  # noqa: SLF001
         if container.imagegen is None:
             # No image-generation backends registered. /images endpoints (read)
             # work against the SQLite index; queue_generation / active_backend
@@ -311,6 +334,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if container.extras.get("extractor") is None:
             container.extras["extractor"] = ExtractorService(gateway=llm_gateway)
         extractor = container.extras["extractor"]
+        # §3: Now that the gateway exists, wire it through the
+        # ContinuityRegistry so per-campaign services get a real LLM
+        # judge (instead of the always-uncertain stub) and a vector
+        # embedder for HybridFactSearchIndex. Construct in place so the
+        # already-instantiated registry — and any cached services it has
+        # already handed out — pick up the change on first use; the
+        # registry only caches services that have actually been
+        # requested, and api/lifespan order means none have yet.
+        if isinstance(container.continuity, ContinuityRegistry):
+            registry = container.continuity
+            registry._embedder = llm_gateway
+            registry._judge_gateway = llm_gateway
+            registry._judge_request_factory = make_judge_request_factory(
+                registry.config.contradiction_check.model_route
+            )
         if container.extras.get("context_builder") is None:
             container.extras["context_builder"] = ContextBuilderService(
                 library=container.library,
@@ -352,11 +390,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # /export without further wiring.
         if container.export is None:
             cover_generator = _ImageGenCoverGenerator(container.imagegen)
+            continuity_export: Any = container.continuity
+            if isinstance(continuity_export, ContinuityRegistry):
+                continuity_export = ContinuityRegistryExportAdapter(continuity_export)
             sources = DataSources(
                 scenes=container.scenes,
                 characters=container.characters,
                 world=container.world,
-                continuity=container.continuity,
+                continuity=continuity_export,
                 images=container.imagegen,
                 cover_generator=cover_generator,
                 data_root=data_root,
@@ -389,6 +430,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 state_store=container.state_store,
                 mechanics=container.mechanics,
                 world=container.world,
+                continuity=container.continuity,
                 ws_push=container.stream.push,
             )
 
