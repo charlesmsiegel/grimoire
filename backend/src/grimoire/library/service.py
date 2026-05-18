@@ -750,7 +750,8 @@ class LibraryService:
         emergent_ref = f"campaigns/{campaign_id}/emergent/{kind}/{entity_id}"
         try:
             await self.store.delete_embeddings(emergent_ref)
-        except Exception:  # noqa: BLE001 — best-effort cleanup
+        except Exception:
+            # Best-effort cleanup; embeddings are recomputed on next index.
             return
 
     # ------------------------------------------------------------------ #

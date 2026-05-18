@@ -155,6 +155,7 @@ async def test_scan_now_emits_event_on_empty_roots(
         "library_files": 0,
         "campaign_files": 0,
         "embedding_queue_depth": 0,
+        "summary_queue_depth": 0,
     }
 
 

@@ -50,6 +50,14 @@ _EMBEDDABLE_KINDS: frozenset[str] = frozenset(
     {"library_entity", "library_style_guide", "emergent", "scene_body"}
 )
 
+# Kinds whose body is summarized into ``library_index.body_compressed`` for
+# the background-tier context injection (spec 02 §Background tier). Only
+# library-scoped prose-bearing kinds qualify; emergent and scene bodies live
+# in ``campaign_content_index`` which has no body_compressed column.
+_SUMMARIZABLE_KINDS: frozenset[str] = frozenset(
+    {"library_entity", "library_style_guide"}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class EmbeddingJob:
@@ -99,6 +107,53 @@ class EmbeddingQueue:
         return list(self._items)
 
 
+@dataclass(frozen=True, slots=True)
+class SummaryJob:
+    """A unit of pending auto-summary work produced by the watcher.
+
+    Consumed by a worker that fans out to a summarizer (typically an LLM
+    call) and writes the result via :meth:`StateStore.set_body_compressed`.
+    The worker re-reads the row's current body before writing so a stale
+    job cannot overwrite a fresher summary.
+    """
+
+    library_id: str
+    source_kind: str  # entity_kind: character / lore / style_guide / ...
+    text: str
+    content_hash: str
+
+
+class SummaryQueue:
+    """In-memory FIFO of pending body-compressed jobs.
+
+    Mirrors :class:`EmbeddingQueue` — the watcher enqueues whenever a
+    real content change indexes a summarizable prose body that exceeds
+    the configured threshold; a downstream worker drains and processes
+    out-of-band.
+    """
+
+    def __init__(self) -> None:
+        self._items: deque[SummaryJob] = deque()
+
+    def enqueue(self, job: SummaryJob) -> None:
+        self._items.append(job)
+
+    @property
+    def pending(self) -> int:
+        return len(self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def drain(self) -> list[SummaryJob]:
+        out = list(self._items)
+        self._items.clear()
+        return out
+
+    def peek(self) -> list[SummaryJob]:
+        return list(self._items)
+
+
 @dataclass(slots=True)
 class _PendingRename:
     """An unacknowledged directory move awaiting reconciliation.
@@ -134,6 +189,7 @@ class FileWatcher:
         bus: EventBus,
         loop: asyncio.AbstractEventLoop | None = None,
         embedding_queue: EmbeddingQueue | None = None,
+        summary_queue: SummaryQueue | None = None,
         scene_manager: object | None = None,
         config: LibraryConfig | None = None,
     ) -> None:
@@ -144,6 +200,7 @@ class FileWatcher:
         self._observer: Observer | None = None
         self._known_hashes: dict[Path, str | None] = {}
         self.embedding_queue = embedding_queue or EmbeddingQueue()
+        self.summary_queue = summary_queue or SummaryQueue()
         self.config = config or LibraryConfig()
         # Paths the app is about to write, keyed to the content_hash the app
         # expects to land on disk. Used to distinguish "watcher saw our own
@@ -249,6 +306,7 @@ class FileWatcher:
                     "library_files": library_files,
                     "campaign_files": campaign_files,
                     "embedding_queue_depth": self.embedding_queue.pending,
+                    "summary_queue_depth": self.summary_queue.pending,
                 },
             )
         )
@@ -425,6 +483,13 @@ class FileWatcher:
                 and parsed.body.strip()
             ):
                 self._enqueue_embedding(watched, parsed.frontmatter, parsed.body)
+            if (
+                self.config.indexing.summarize_on_index
+                and watched.kind in _SUMMARIZABLE_KINDS
+                and watched.library_id is not None
+                and len(parsed.body) >= self.config.indexing.summarize_min_body_length
+            ):
+                self._enqueue_summary(watched, parsed.body, new_hash or "")
 
         # §3 — forward scene file changes into the Scene Manager so it can
         # re-parse the markdown, rebuild post records, and emit its own
@@ -456,6 +521,28 @@ class FileWatcher:
                 content_hash_value=new_hash,
                 conflict=conflict,
             )
+
+    def _enqueue_summary(
+        self,
+        watched: WatchedFile,
+        body: str,
+        content_hash_value: str,
+    ) -> None:
+        """Push a body-compressed job onto the queue (§1).
+
+        The worker re-reads the row's ``body`` and ``body_compressed`` to
+        skip stale work — see :meth:`StateStore.set_body_compressed`.
+        """
+        if watched.library_id is None:
+            return
+        self.summary_queue.enqueue(
+            SummaryJob(
+                library_id=watched.library_id,
+                source_kind=watched.entity_kind or watched.kind,
+                text=body,
+                content_hash=content_hash_value,
+            )
+        )
 
     def _enqueue_embedding(
         self,
