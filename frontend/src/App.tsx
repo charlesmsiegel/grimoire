@@ -12,6 +12,7 @@ import { NotFound } from "./routes/NotFound";
 import { CastView } from "./routes/campaign/CastView";
 import { CompositionView } from "./routes/campaign/CompositionView";
 import { ImagesView } from "./routes/campaign/ImagesView";
+import { LedgerRoute } from "./routes/campaign/LedgerView";
 import { MechanicsView } from "./routes/campaign/MechanicsView";
 import { TimelineView } from "./routes/campaign/TimelineView";
 import { WorldView } from "./routes/campaign/WorldView";
@@ -48,6 +49,7 @@ export function App() {
                 <Route path="cast" element={<CastView />} />
                 <Route path="world" element={<WorldView />} />
                 <Route path="timeline" element={<TimelineView />} />
+                <Route path="ledger" element={<LedgerRoute />} />
                 <Route path="mechanics" element={<MechanicsView />} />
                 <Route path="composition" element={<CompositionView />} />
                 <Route path="images" element={<ImagesView />} />

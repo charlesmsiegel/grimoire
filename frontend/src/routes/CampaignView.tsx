@@ -9,6 +9,7 @@ const subSections: { to: string; label: string; end?: boolean }[] = [
   { to: "cast", label: "Cast" },
   { to: "world", label: "World" },
   { to: "timeline", label: "Timeline" },
+  { to: "ledger", label: "Ledger" },
   { to: "mechanics", label: "Mechanics" },
   { to: "composition", label: "Composition" },
   { to: "images", label: "Images" },

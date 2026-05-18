@@ -1,4 +1,10 @@
-# Continuity — Remaining Work
+# Continuity — Remaining Work (COMPLETED 2026-05-18)
+
+> Status: **complete**. §1–§11 shipped on 2026-05-18 (branch
+> `claude/implement-continuity-design-CbGXU`). §12 (inferred facts) and
+> §13 (fact graph viz) remain deferred to v2; §14 and §15 are rejected
+> per spec. The end-of-session digest in §10 remains deferred (no
+> "session" concept end to end yet) — every other §10 surface shipped.
 
 > Everything from the original `specs/11-continuity.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-continuity-design.md`). Use this as the input to a writing-plans pass when picking up the work.
 

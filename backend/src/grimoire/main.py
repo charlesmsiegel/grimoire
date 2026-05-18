@@ -252,7 +252,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # ``continuity`` kwarg at construction but the bag is built
         # earlier — patching the attribute here keeps the wiring linear.
         if container.scenes is not None and getattr(container.scenes, "_continuity", None) is None:
-            container.scenes._continuity = container.continuity  # noqa: SLF001
+            container.scenes._continuity = container.continuity
         if container.imagegen is None:
             # No image-generation backends registered. /images endpoints (read)
             # work against the SQLite index; queue_generation / active_backend

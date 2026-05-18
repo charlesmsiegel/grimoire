@@ -47,6 +47,12 @@ class FakeContinuity:
     async def open_commitments(self, **kwargs: Any) -> list[Any]:
         return []
 
+    async def stale_commitments(self, threshold: Any) -> list[Any]:
+        return []
+
+    async def pending_contradictions(self, limit: int = 20) -> list[Any]:
+        return []
+
 
 class FakeCharacters:
     def __init__(self) -> None:
@@ -178,6 +184,101 @@ def test_facts_and_commitments(client, container) -> None:
     response = client.get("/api/campaigns/c1/commitments")
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_continuity_ledger_returns_all_sections(client, container) -> None:
+    container.continuity = FakeContinuity()
+    response = client.get("/api/campaigns/c1/continuity/ledger")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["campaign_id"] == "c1"
+    assert body["open_commitments"] == []
+    assert body["overdue_commitments"] == []
+    assert body["stale_commitments"] == []
+    assert body["recent_facts"] == []
+    assert body["unresolved_contradictions"] == []
+
+
+def test_continuity_ledger_splits_open_and_overdue(client, container) -> None:
+    """An overdue-status commitment lands in overdue_commitments, others in open."""
+    from grimoire.continuity import (
+        Commitment,
+        CommitmentKind,
+        CommitmentStatus,
+        InGameTime,
+    )
+    from tests.continuity.conftest import make_fact
+
+    def _commit(id_: str, status: CommitmentStatus, text: str) -> Commitment:
+        return Commitment(
+            id=id_,
+            kind=CommitmentKind.PROMISE,
+            text=text,
+            created_in_post="p-1",
+            in_game_created_at=InGameTime(day_count=1),
+            status=status,
+        )
+
+    class FakeContinuityWithRows(FakeContinuity):
+        async def open_commitments(self, **kwargs: Any) -> list[Any]:
+            return [
+                _commit("c1", CommitmentStatus.OPEN, "alpha"),
+                _commit("c2", CommitmentStatus.OVERDUE, "beta"),
+            ]
+
+        async def facts_about(self, **kwargs: Any) -> list[Any]:
+            return [make_fact(fact_id="f1", text="fact one")]
+
+    container.continuity = FakeContinuityWithRows()
+    response = client.get("/api/campaigns/c1/continuity/ledger")
+    assert response.status_code == 200
+    body = response.json()
+    open_ids = {c["id"] for c in body["open_commitments"]}
+    overdue_ids = {c["id"] for c in body["overdue_commitments"]}
+    assert open_ids == {"c1"}
+    assert overdue_ids == {"c2"}
+    assert len(body["recent_facts"]) == 1
+
+
+def test_continuity_ledger_via_registry(client, container) -> None:
+    """When container.continuity is a registry, the route resolves per-campaign."""
+
+    class _Registry:
+        def __init__(self) -> None:
+            self.requested_for: list[str] = []
+            self._service = FakeContinuity()
+
+        def for_campaign(self, campaign_id: str, *, branch_id: str | None = None) -> Any:
+            self.requested_for.append(campaign_id)
+            return self._service
+
+    registry = _Registry()
+    container.continuity = registry
+    response = client.get("/api/campaigns/c1/continuity/ledger")
+    assert response.status_code == 200
+    assert "c1" in registry.requested_for
+
+
+def test_list_contradictions_route_passes_resolved_filter(client, container) -> None:
+    class _Store:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, Any] = {}
+
+        async def list_contradiction_reports(self, *, resolved: bool | None, limit: int):
+            self.kwargs = {"resolved": resolved, "limit": limit}
+            return []
+
+    class _Service(FakeContinuity):
+        def __init__(self) -> None:
+            self._store = _Store()
+
+    service = _Service()
+    container.continuity = service
+    response = client.get(
+        "/api/campaigns/c1/continuity/contradictions?resolved=false&limit=5"
+    )
+    assert response.status_code == 200
+    assert service._store.kwargs == {"resolved": False, "limit": 5}
 
 
 def test_orchestrator_503_when_missing(client, container) -> None:
