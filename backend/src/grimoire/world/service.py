@@ -711,6 +711,50 @@ class WorldService:
         # full LocationState contract (intentional — weather override only).
         _ = source
 
+    async def apply_weather_override_delta(self, delta: Any) -> None:
+        """Apply an extractor-emitted weather override delta (§5).
+
+        Validates the delta kind/target_table, parses the payload, and
+        routes through :meth:`override_weather`. Used by the orchestrator's
+        delta-dispatch hook so extractor-detected weather changes ("it
+        began to rain") actually take effect.
+        """
+        from grimoire.types.state import DeltaKind
+
+        if getattr(delta, "kind", None) != DeltaKind.OVERRIDE_WRITE:
+            raise ValueError(
+                f"apply_weather_override_delta requires kind=OVERRIDE_WRITE, "
+                f"got {getattr(delta, 'kind', None)!r}"
+            )
+        if getattr(delta, "target_table", None) != "location_state":
+            raise ValueError(
+                f"apply_weather_override_delta requires target_table='location_state', "
+                f"got {getattr(delta, 'target_table', None)!r}"
+            )
+        after = getattr(delta, "after", None) or {}
+        location_ref = getattr(delta, "target_id", None) or ""
+        campaign_id = after.get("campaign_id") or ""
+        branch_id = after.get("branch_id") or f"{campaign_id}:main"
+        weather_payload = after.get("weather") or {}
+        weather = Weather.model_validate(weather_payload)
+        # location_ref shape: 'library:worlds/<world_id>/locations/<asset_id>'.
+        # Drop the leading 'library:' so split('/') yields stable indices.
+        stripped = location_ref.removeprefix("library:")
+        parts = stripped.split("/")
+        try:
+            world_id = parts[parts.index("worlds") + 1]
+            location_id = parts[parts.index("locations") + 1]
+        except (ValueError, IndexError) as exc:
+            raise ValueError(f"unparseable location_ref {location_ref!r}") from exc
+        await self.override_weather(
+            world_id,
+            location_id,
+            weather,
+            campaign_id,
+            branch_id=branch_id,
+            source=delta.source or "extractor",
+        )
+
     async def _get_weather_override(
         self,
         *,

@@ -51,7 +51,7 @@ from grimoire.types.orchestrator import (
 from grimoire.types.scene import AdvanceResult
 from grimoire.types.scene import Scene as PydanticScene
 from grimoire.types.scene import SceneContext as PydanticSceneContext
-from grimoire.types.state import StateSnapshot
+from grimoire.types.state import DeltaKind, StateSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,7 @@ class OrchestratorService:
         extractor: Any,
         state_store: Any,
         mechanics: Any | None = None,
+        world: Any | None = None,
         ws_push: WSPushFn | None = None,
         extractor_config: ExtractorConfig | None = None,
         config: OrchestratorConfig | None = None,
@@ -112,6 +113,7 @@ class OrchestratorService:
         self._extractor = extractor
         self._store = state_store
         self._mechanics = mechanics
+        self._world = world  # §5: optional, used to dispatch weather-override deltas
         self._ws_push = ws_push
         self._extractor_config = extractor_config or ExtractorConfig()
         self._config = config or OrchestratorConfig()
@@ -648,6 +650,21 @@ class OrchestratorService:
                 continue
             try:
                 if decision is Decision.AUTO_APPLY:
+                    # §5 Domain-specific dispatch: weather override deltas go
+                    # through WorldService.override_weather so the row gets
+                    # tagged source="override" (which the read path looks for).
+                    if (
+                        self._world is not None
+                        and delta.kind == DeltaKind.OVERRIDE_WRITE
+                        and delta.target_table == "location_state"
+                    ):
+                        try:
+                            await self._world.apply_weather_override_delta(delta)
+                            continue
+                        except Exception:
+                            logger.exception(
+                                "world weather-override apply failed; falling through to apply_delta",
+                            )
                     await self._store.apply_delta(
                         delta=delta,
                         source=delta.source or "extractor",

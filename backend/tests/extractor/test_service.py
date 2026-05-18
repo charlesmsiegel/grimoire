@@ -284,9 +284,7 @@ async def test_extract_force_routes_high_confidence_contradiction_to_review(
     )
     checker = FakeContradictionChecker(
         conflicts_for={
-            "winifred is in Paris": [
-                ConflictRecord(fact_id="fact_201", text="winifred is in Sion")
-            ]
+            "winifred is in Paris": [ConflictRecord(fact_id="fact_201", text="winifred is in Sion")]
         }
     )
     # Penalty intentionally tiny: 0.99 - 0.05 = 0.94 still >= 0.85, so without
@@ -404,17 +402,13 @@ async def test_extract_applies_speaker_authority_penalty_for_testimony(
         gateway=gateway,
         config=ExtractorConfig(testimony_confidence_penalty=0.2),
     )
-    result = await service.extract(
-        '"I have the deed," winifred said.', scene, "camp-1", snapshot
-    )
+    result = await service.extract('"I have the deed," winifred said.', scene, "camp-1", snapshot)
     fact = next(d for d in result.deltas if d.kind == DeltaKind.FACT_ADD)
     assert fact.confidence == pytest.approx(0.7, rel=1e-6)
 
 
 @pytest.mark.asyncio
-async def test_extract_no_penalty_when_narrator_speaks(
-    scene: Scene, snapshot: StateSnapshot
-):
+async def test_extract_no_penalty_when_narrator_speaks(scene: Scene, snapshot: StateSnapshot):
     # `speaker_id` of None means GM-voice narration — no penalty.
     gateway = FakeGateway(
         queue=[
@@ -490,9 +484,7 @@ async def test_extract_flags_unresolved_commitment_id_and_routes_to_review(
         gateway=gateway,
         config=ExtractorConfig(contradiction_confidence_penalty=0.25),
     )
-    result = await service.extract(
-        "winifred handed back what she owed.", scene, "camp-1", snapshot
-    )
+    result = await service.extract("winifred handed back what she owed.", scene, "camp-1", snapshot)
     resolved = next(d for d in result.deltas if d.kind == DeltaKind.COMMITMENT_RESOLVE)
     # Penalised from 0.95 -> 0.70, which falls inside the review band [0.6, 0.85).
     assert resolved.confidence == pytest.approx(0.70, rel=1e-6)
@@ -527,9 +519,7 @@ async def test_extract_leaves_matching_commitment_id_alone(scene: Scene):
     )
     resolved = next(d for d in result.deltas if d.kind == DeltaKind.COMMITMENT_RESOLVE)
     assert resolved.confidence == pytest.approx(0.9, rel=1e-6)
-    assert not any(
-        f.code == "unresolved_commitment_reference" for f in result.flags
-    )
+    assert not any(f.code == "unresolved_commitment_reference" for f in result.flags)
 
 
 @pytest.mark.asyncio
@@ -556,9 +546,7 @@ async def test_extract_skips_commitment_resolution_check_without_snapshot(scene:
     # confidence may still be clamped by other player-text rules, but the
     # unresolved-commitment flag must NOT fire.
     assert any(d.kind == DeltaKind.COMMITMENT_RESOLVE for d in result.deltas)
-    assert not any(
-        f.code == "unresolved_commitment_reference" for f in result.flags
-    )
+    assert not any(f.code == "unresolved_commitment_reference" for f in result.flags)
 
 
 @pytest.mark.asyncio
@@ -697,9 +685,7 @@ async def test_extract_flags_library_character_drift_and_forces_review(
     )
     config = ExtractorConfig()
     service = ExtractorService(gateway=gateway, resolver=resolver, config=config)
-    result = await service.extract(
-        "vivienne wore crimson silk.", scene, "camp-1", snapshot
-    )
+    result = await service.extract("vivienne wore crimson silk.", scene, "camp-1", snapshot)
     update = next(d for d in result.deltas if d.kind == DeltaKind.CHARACTER_STATE_UPDATE)
     assert update.extra.get("override_of_library") is True
     # Clamped into [review_threshold, auto_apply_threshold).
@@ -707,8 +693,7 @@ async def test_extract_flags_library_character_drift_and_forces_review(
     routing = route_deltas(result.deltas, config=config)
     assert update in routing.review
     assert any(
-        f.level == FlagLevel.CONTRADICTION and f.code == "library_drift"
-        for f in result.flags
+        f.level == FlagLevel.CONTRADICTION and f.code == "library_drift" for f in result.flags
     )
 
 
@@ -748,9 +733,7 @@ async def test_extract_no_drift_when_value_matches_library_card(
 
 
 @pytest.mark.asyncio
-async def test_extract_no_drift_for_campaign_local_character(
-    scene: Scene, snapshot: StateSnapshot
-):
+async def test_extract_no_drift_for_campaign_local_character(scene: Scene, snapshot: StateSnapshot):
     # winifred is campaign-local — divergence from her card is *not* a
     # library override; it just updates the campaign card.
     gateway = FakeGateway(
@@ -769,9 +752,7 @@ async def test_extract_no_drift_for_campaign_local_character(
     )
     resolver = FakeEntityResolver(
         entries={
-            ("winifred", "character"): make_campaign_entity(
-                {"name": "winifred", "mood": "morose"}
-            )
+            ("winifred", "character"): make_campaign_entity({"name": "winifred", "mood": "morose"})
         }
     )
     service = ExtractorService(gateway=gateway, resolver=resolver, config=ExtractorConfig())
@@ -804,9 +785,7 @@ async def test_extract_drift_raises_low_confidence_into_review_band(
     )
     resolver = FakeEntityResolver(
         entries={
-            ("vivienne", "character"): make_library_entity(
-                {"name": "vivienne", "mood": "stoic"}
-            )
+            ("vivienne", "character"): make_library_entity({"name": "vivienne", "mood": "stoic"})
         }
     )
     config = ExtractorConfig()
@@ -820,9 +799,7 @@ async def test_extract_drift_raises_low_confidence_into_review_band(
 
 
 @pytest.mark.asyncio
-async def test_extract_drift_no_op_without_resolver(
-    scene: Scene, snapshot: StateSnapshot
-):
+async def test_extract_drift_no_op_without_resolver(scene: Scene, snapshot: StateSnapshot):
     # When no resolver is wired up, the drift step degrades gracefully
     # (same shape as `_check_contradictions` does with `contradictions=None`).
     gateway = FakeGateway(
@@ -877,9 +854,7 @@ async def test_extract_drift_skipped_when_character_unresolved(
 
 
 @pytest.mark.asyncio
-async def test_extract_drift_swallows_resolver_failure(
-    scene: Scene, snapshot: StateSnapshot
-):
+async def test_extract_drift_swallows_resolver_failure(scene: Scene, snapshot: StateSnapshot):
     # A resolver that raises must not break extraction — emit a warning
     # flag, leave deltas untouched (mirrors `_check_contradictions`).
     gateway = FakeGateway(

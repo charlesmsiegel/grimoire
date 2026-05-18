@@ -224,9 +224,7 @@ async def test_extract_with_llm_retries_once_on_parse_failure(
 
 
 @pytest.mark.asyncio
-async def test_extract_with_llm_no_retry_when_budget_zero(
-    scene: Scene, snapshot: StateSnapshot
-):
+async def test_extract_with_llm_no_retry_when_budget_zero(scene: Scene, snapshot: StateSnapshot):
     gateway = FakeGateway(queue=["totally not json"])
     out = await extract_with_llm(
         response_text="...",
@@ -264,9 +262,7 @@ async def test_extract_with_llm_gives_up_after_exhausting_retries(
 
 
 @pytest.mark.asyncio
-async def test_extract_with_llm_retry_appends_repair_message(
-    scene: Scene, snapshot: StateSnapshot
-):
+async def test_extract_with_llm_retry_appends_repair_message(scene: Scene, snapshot: StateSnapshot):
     gateway = FakeGateway(
         queue=[
             "totally not json",
@@ -286,6 +282,4 @@ async def test_extract_with_llm_retry_appends_repair_message(
     # the model to return valid JSON.
     retry_request = gateway.seen[1][1]
     assert len(retry_request.messages) > len(gateway.seen[0][1].messages)
-    assert any(
-        "json" in m.content.lower() for m in retry_request.messages[1:]
-    )
+    assert any("json" in m.content.lower() for m in retry_request.messages[1:])

@@ -139,7 +139,7 @@ class ExtractorService:
 
         if "rule_based" in strategies_to_run:
             ran.append("rule_based")
-            coros.append(self._run_rule_based(text, campaign_id))
+            coros.append(self._run_rule_based(text, campaign_id, scene))
         else:
             coros.append(_noop_list())
 
@@ -260,13 +260,20 @@ class ExtractorService:
             duration_ms=int((time.monotonic() - started) * 1000),
         )
 
-    async def _run_rule_based(self, text: str, campaign_id: CampaignId) -> list[StateDelta]:
+    async def _run_rule_based(
+        self,
+        text: str,
+        campaign_id: CampaignId,
+        scene: Scene | None = None,
+    ) -> list[StateDelta]:
         return list(
             extract_rule_based(
                 text,
                 campaign_id=campaign_id,
                 config=self._config,
                 source=self._source,
+                scene_location_ref=getattr(scene, "location_ref", None) if scene else None,
+                scene_branch_id=getattr(scene, "branch_id", None) if scene else None,
             )
         )
 
