@@ -276,9 +276,7 @@ async def test_faction_leader_tick_populates_notable_actions(
 
     time_engine._faction_leader_fn = leader_fn  # type: ignore[attr-defined]
     result = await time_engine.advance(CAMPAIGN, _dur(60), TimeAdvanceReason.EXPLICIT_USER)
-    assert result.faction_summaries[faction_ref].notable_actions == [
-        "Leader alistair schemed."
-    ]
+    assert result.faction_summaries[faction_ref].notable_actions == ["Leader alistair schemed."]
 
 
 async def test_faction_conflicts_surface_on_result(
@@ -413,9 +411,7 @@ async def test_activity_ref_flows_into_mechanics_context(
             return ""
 
     module = _RecordingModule()
-    mechanics.register_module(
-        ModuleManifest(id="test-mech", name="Test", version="0.1"), module
-    )
+    mechanics.register_module(ModuleManifest(id="test-mech", name="Test", version="0.1"), module)
     await store.write_library_file(
         library_id=f"worlds/{World}/world/{World}",
         frontmatter={"id": World, "name": World, "version": 1},
@@ -660,9 +656,7 @@ def test_extract_time_advances_from_deltas_handles_typed_and_dict():
         target_id="time:P1D",
         target_table="calendar",
         after={
-            "duration": Duration(iso8601="P1D", delta=timedelta(days=1)).model_dump(
-                mode="json"
-            )
+            "duration": Duration(iso8601="P1D", delta=timedelta(days=1)).model_dump(mode="json")
         },
     )
     dicty = {
