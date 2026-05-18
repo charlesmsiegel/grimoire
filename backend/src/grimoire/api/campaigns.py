@@ -10,11 +10,14 @@ container. Errors are translated by :func:`grimoire.api.util.map_lookup_errors`.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 from grimoire.api.deps import (
     CharactersDep,
@@ -163,6 +166,8 @@ async def create_campaign(
     payload: CampaignCreatePayload,
     state_store: StateStoreDep,
     library: LibraryDep,
+    world: WorldDep,
+    scenes: ScenesDep,
 ) -> Any:
     comp = payload.composition or CompositionPayload()
     try:
@@ -187,6 +192,21 @@ async def create_campaign(
                 track_latest=ref.track_latest,
                 bound_at_version=ref.bound_at_version,
             )
+        # §8 Greeting handoff: when a greeting is selected, seed scene 1
+        # from it. Best-effort — a missing greeting shouldn't abort the
+        # whole campaign creation. We pick the highest-priority world ref
+        # (lowest priority number) to own the greeting lookup.
+        if payload.greeting_id and comp.worlds:
+            owning_ref = sorted(comp.worlds, key=lambda r: r.priority)[0]
+            try:
+                await world.seed_scene_from_greeting(
+                    campaign_id=payload.id,
+                    greeting_id=payload.greeting_id,
+                    world_id=owning_ref.world_id,
+                    scene_manager=scenes,
+                )
+            except Exception:
+                logger.warning("greeting handoff failed; scene 1 not seeded", exc_info=True)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return await get_campaign(payload.id, state_store=state_store, library=library)
