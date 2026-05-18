@@ -111,6 +111,21 @@ _MECH_DAMAGE = re.compile(
     re.VERBOSE,
 )
 
+# §9 Unresolved location reference — "I enter the X" / "they walk into the Y".
+# Low-confidence (forces review). The structured-LLM strategy may also
+# surface these, but the regex catches the common pattern cheaply.
+_ENTERING_LOCATION = re.compile(
+    r"\b(?:enter|enters|walks?\s+into|step\s+into|arrives?\s+at)\s+"
+    r"(?:the\s+)?(?P<phrase>[a-z][a-z\s']{2,40})\b",
+    re.IGNORECASE,
+)
+
+
+def _slug(text: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return cleaned[:40] or "emergent-location"
+
+
 # §5 Player-prose weather overrides. Each pattern maps to a WeatherKind.
 # Patterns prefer phrasing that explicitly *changes* the weather rather
 # than describing existing weather, to reduce false positives.
@@ -244,6 +259,36 @@ def _make_mechanical_event_delta(
         source=source,
         evidence=evidence,
         extra={"strategy": "rule_based"},
+    )
+
+
+def _make_emergent_location_delta(
+    *,
+    phrase: str,
+    evidence: str,
+    confidence: float,
+    campaign_id: CampaignId,
+    branch_id: str,
+    source: str,
+) -> StateDelta:
+    slug = _slug(phrase)
+    return StateDelta(
+        kind=DeltaKind.EMERGENT_CREATE,
+        target_scope=Scope.CAMPAIGN_FILE,
+        target_table=None,
+        target_path=f"emergent/location/{slug}",
+        target_id=f"emergent:location:{slug}",
+        after={
+            "campaign_id": campaign_id,
+            "branch_id": branch_id,
+            "kind": "location",
+            "name": phrase.strip(),
+            "evidence": evidence,
+        },
+        confidence=confidence,
+        source=source,
+        evidence=evidence,
+        extra={"strategy": "rule_based", "target": "emergent_location"},
     )
 
 
@@ -395,6 +440,26 @@ def extract_rule_based(
                 source=source,
             )
             break  # only one weather override per extraction pass
+
+    # §9 unresolved location reference — emergent-location candidates.
+    # Confidence is deliberately low (0.4) so these route to the review
+    # queue rather than auto-apply. The reviewer-approval path then
+    # materializes via WorldService.apply_emergent_location_delta.
+    seen_phrases: set[str] = set()
+    branch = scene_branch_id or f"{campaign_id}:main"
+    for match in _ENTERING_LOCATION.finditer(text):
+        phrase = match.group("phrase").strip().lower()
+        if phrase in seen_phrases:
+            continue
+        seen_phrases.add(phrase)
+        yield _make_emergent_location_delta(
+            phrase=phrase,
+            evidence=match.group(0),
+            confidence=min(base, 0.4),
+            campaign_id=campaign_id,
+            branch_id=branch,
+            source=source,
+        )
 
 
 __all__ = ["extract_rule_based"]
