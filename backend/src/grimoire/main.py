@@ -448,10 +448,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         container.extras["embedding_worker"] = embedding_worker
 
         body_summarizer = BodySummarizer(
-            db=db,
+            store=container.state_store,
             gateway=llm_gateway,
+            queue=file_watcher.summary_queue,
             bus=container.event_bus,
-            config=state_store_config.library,
         )
         body_summarizer.start()
         container.extras["body_summarizer"] = body_summarizer

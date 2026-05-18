@@ -1,39 +1,34 @@
 """Body-compressed auto-summarizer for ``library_index`` rows.
 
-Fills ``library_index.body_compressed`` with a short LLM-generated summary
-of long body text so the Context Builder can include an entity at background
-tier without consuming the full body budget.
+Drains :class:`grimoire.watcher.SummaryQueue` (filled by ``FileWatcher``)
+and writes plain-text summaries back via
+:meth:`grimoire.state_store.StateStore.set_body_compressed`. The Context
+Builder uses ``body_compressed`` to include an entity at background tier
+without consuming the full body budget.
 
-Stored value format
--------------------
-``body_compressed`` holds a JSON object::
-
-    {"summary": "<prose summary>", "hash": "<source content_hash>", "model": "<provider/model id>"}
-
-A row is considered up-to-date when its stored ``hash`` equals the current
-``content_hash``.  A mismatch (or a missing / malformed envelope) means the
-row needs (re-)summarization.
+The producer half lives on the watcher: every real content change for a
+summarizable library kind whose body exceeds the threshold enqueues a
+:class:`SummaryJob`. This worker pops jobs, calls the LLM gateway, and
+hands the result to ``set_body_compressed`` together with the
+content-hash guard so a stale summary cannot overwrite a fresher one.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 from typing import TYPE_CHECKING
 
 from grimoire.event_bus import Event, EventBus
-from grimoire.state_store.config import LibrarySectionConfig
-from grimoire.storage.db import Database
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
 
 if TYPE_CHECKING:
-    import aiosqlite
+    from grimoire.state_store.store import StateStore
+    from grimoire.watcher.watcher import SummaryQueue
 
 logger = logging.getLogger(__name__)
 
-MIN_BODY_CHARS: int = 1200
 TARGET_SUMMARY_CHARS: int = 400
 TASK_NAME: str = "library.summarize"
 
@@ -43,63 +38,8 @@ _SYSTEM_PROMPT = (
 )
 
 
-async def iter_rows_needing_summary(
-    db: Database,
-    *,
-    min_chars: int,
-    limit: int,
-) -> list[aiosqlite.Row]:
-    """Return up to *limit* rows whose body needs a (re-)summary.
-
-    A row qualifies when:
-    - ``body`` is non-null and ``len(body) >= min_chars``
-    - AND (``body_compressed IS NULL``
-           OR the stored envelope's ``hash`` doesn't match ``content_hash``)
-    """
-    rows = await db.fetchall(
-        """
-        SELECT id, content_hash, body, body_compressed
-        FROM library_index
-        WHERE body IS NOT NULL
-          AND length(body) >= ?
-        LIMIT ?
-        """,
-        (min_chars, limit * 4),  # over-fetch to account for already-current rows
-    )
-    result = []
-    for row in rows:
-        _summary, stored_hash = await parse_existing_envelope(row["body_compressed"])
-        if stored_hash == row["content_hash"]:
-            continue
-        result.append(row)
-        if len(result) >= limit:
-            break
-    return result
-
-
-async def parse_existing_envelope(value: str | None) -> tuple[str | None, str | None]:
-    """Parse a stored body_compressed envelope.
-
-    Returns ``(summary, hash)`` from a valid envelope, or ``(None, None)``
-    when the value is absent, not JSON, or missing the expected keys.
-    """
-    if value is None:
-        return None, None
-    try:
-        obj = json.loads(value)
-    except (json.JSONDecodeError, ValueError):
-        return None, None
-    if not isinstance(obj, dict):
-        return None, None
-    summary = obj.get("summary")
-    stored_hash = obj.get("hash")
-    if not isinstance(summary, str) or not isinstance(stored_hash, str):
-        return None, None
-    return summary, stored_hash
-
-
-async def summarize_row(gateway: object, body: str) -> str:
-    """Call the LLM gateway and return the summary text for *body*."""
+async def summarize_text(gateway: object, body: str) -> str:
+    """Call the LLM gateway and return a compact summary for *body*."""
     request = CompletionRequest(
         model="",  # gateway resolves the model from the task route
         system=_SYSTEM_PROMPT,
@@ -111,52 +51,29 @@ async def summarize_row(gateway: object, body: str) -> str:
     return response.text
 
 
-async def write_envelope(
-    db: Database,
-    *,
-    row_id: str,
-    summary: str,
-    content_hash: str,
-    model_id: str,
-) -> None:
-    """Persist the JSON envelope to ``library_index.body_compressed``."""
-    envelope = json.dumps({"summary": summary, "hash": content_hash, "model": model_id})
-    await db.execute(
-        "UPDATE library_index SET body_compressed = ? WHERE id = ?",
-        (envelope, row_id),
-    )
-
-
 class BodySummarizer:
-    """Background worker that fills ``library_index.body_compressed``.
+    """Background drainer for :class:`SummaryQueue`.
 
-    Pull-based: polls the database for rows needing summarization rather
-    than relying on queue events, so it stays decoupled from the watcher.
-
-    Usage::
-
-        summarizer = BodySummarizer(db=store.db, gateway=gateway, bus=bus, config=config)
-        summarizer.start()
-        # … on shutdown:
-        await summarizer.stop()
+    Pops :class:`SummaryJob` instances, invokes the gateway with task
+    ``library.summarize``, and writes via
+    :meth:`StateStore.set_body_compressed` with the job's ``content_hash``
+    as a guard so stale jobs are dropped silently.
     """
 
     def __init__(
         self,
         *,
-        db: Database,
+        store: StateStore,
         gateway: object,
+        queue: SummaryQueue,
         bus: EventBus | None = None,
-        config: LibrarySectionConfig,
-        min_chars: int = MIN_BODY_CHARS,
-        batch_size: int = 10,
+        batch_size: int = 4,
         idle_seconds: float = 5.0,
     ) -> None:
-        self._db = db
+        self._store = store
         self._gateway = gateway
+        self._queue = queue
         self._bus = bus
-        self._config = config
-        self._min_chars = min_chars
         self._batch_size = batch_size
         self._idle_seconds = idle_seconds
         self._task: asyncio.Task | None = None
@@ -177,41 +94,43 @@ class BodySummarizer:
         self._task = None
 
     async def process_once(self) -> int:
-        """Process one batch and return the count of rows summarized.
-
-        Designed for direct use in tests.
-        """
-        rows = await iter_rows_needing_summary(
-            self._db, min_chars=self._min_chars, limit=self._batch_size
-        )
-        if not rows:
+        """Drain up to ``batch_size`` jobs and return how many succeeded."""
+        if self._queue.pending == 0:
+            return 0
+        drained = self._queue.drain()
+        jobs = drained[: self._batch_size]
+        # ``drain()`` empties the queue; put the overflow back so the next
+        # call can pick up where this one left off.
+        for leftover in drained[self._batch_size :]:
+            self._queue.enqueue(leftover)
+        if not jobs:
             return 0
 
         processed = 0
-        for row in rows:
+        for job in jobs:
             try:
-                summary = await summarize_row(self._gateway, row["body"])
-                model_id = _extract_model_id(self._gateway)
-                await write_envelope(
-                    self._db,
-                    row_id=row["id"],
-                    summary=summary,
-                    content_hash=row["content_hash"],
-                    model_id=model_id,
+                summary = await summarize_text(self._gateway, job.text)
+                wrote = await self._store.set_body_compressed(
+                    job.library_id,
+                    summary,
+                    expected_content_hash=job.content_hash,
                 )
-                processed += 1
+                if wrote:
+                    processed += 1
             except Exception:
                 logger.exception(
-                    "body_summarizer: failed to summarize row id=%s; will retry next pass",
-                    row["id"],
+                    "body_summarizer: failed to summarize library_id=%s; dropping job",
+                    job.library_id,
                 )
 
         if self._bus is not None and processed > 0:
-            pending = await _count_pending(self._db, self._min_chars)
             await self._bus.emit(
                 Event(
                     type="library_summary_progress",
-                    payload={"processed": processed, "pending": pending},
+                    payload={
+                        "processed": processed,
+                        "pending": self._queue.pending,
+                    },
                 )
             )
 
@@ -230,42 +149,9 @@ class BodySummarizer:
                 await asyncio.sleep(self._idle_seconds)
 
 
-def _extract_model_id(gateway: object) -> str:
-    """Best-effort extraction of the model id from the last response.
-
-    The gateway doesn't expose a direct attribute for the currently-routed
-    model, so we fall back to a sentinel string when introspection isn't
-    available.  The model id stored in the envelope is informational only.
-    """
-    return getattr(gateway, "_last_model_id", "unknown")
-
-
-async def _count_pending(db: Database, min_chars: int) -> int:
-    """Count rows that still need summarization (not up-to-date)."""
-    rows = await db.fetchall(
-        """
-        SELECT id, content_hash, body_compressed
-        FROM library_index
-        WHERE body IS NOT NULL
-          AND length(body) >= ?
-        """,
-        (min_chars,),
-    )
-    count = 0
-    for row in rows:
-        _summary, stored_hash = await parse_existing_envelope(row["body_compressed"])
-        if stored_hash != row["content_hash"]:
-            count += 1
-    return count
-
-
 __all__ = [
-    "MIN_BODY_CHARS",
     "TARGET_SUMMARY_CHARS",
     "TASK_NAME",
     "BodySummarizer",
-    "iter_rows_needing_summary",
-    "parse_existing_envelope",
-    "summarize_row",
-    "write_envelope",
+    "summarize_text",
 ]
