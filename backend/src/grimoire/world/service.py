@@ -684,6 +684,48 @@ class WorldService:
     async def get_greeting(self, world_id: str, greeting_id: str) -> Greeting:
         return await self.library.get_greeting(world_id, greeting_id)
 
+    async def seed_scene_from_greeting(
+        self,
+        *,
+        campaign_id: CampaignId,
+        greeting_id: str,
+        world_id: str,
+        scene_manager: Any,
+        branch_id: str | None = None,
+    ) -> Any:
+        """§8 Build a SceneInit from a Greeting and create scene 1.
+
+        Returns the resulting :class:`Scene`. The caller (typically the
+        campaign-creation REST handler) is responsible for any follow-up
+        (opening-narration LLM call, first-post append).
+        """
+        from grimoire.scenes.types import SceneInit  # late import to avoid cycle
+
+        greeting = await self.library.get_greeting(world_id, greeting_id)
+        branch = branch_id or f"{campaign_id}:main"
+
+        in_game_start: datetime | None = None
+        starting_time = getattr(greeting, "starting_time", None)
+        if isinstance(starting_time, str) and starting_time:
+            try:
+                in_game_start = datetime.fromisoformat(starting_time)
+            except ValueError:
+                in_game_start = None
+
+        init = SceneInit(
+            campaign_id=campaign_id,
+            branch_id=branch,
+            greeting_id=greeting_id,
+            title=str(getattr(greeting, "name", None) or "Scene 1"),
+            location_ref=getattr(greeting, "starting_location", None),
+            in_game_start=in_game_start,
+            pov_character_ref=getattr(greeting, "pov_character", None),
+            present_character_refs=list(getattr(greeting, "present_characters", []) or []),
+            mood=str(getattr(greeting, "mood", "") or "") or None,
+            tags=list(getattr(greeting, "tags", []) or []),
+        )
+        return await scene_manager.start_scene(init)
+
     # ------------------------------------------------------------------ #
     # Calendar
     # ------------------------------------------------------------------ #
