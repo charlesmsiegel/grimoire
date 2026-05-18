@@ -34,7 +34,7 @@ from grimoire.library.errors import LibraryNotFoundError
 from grimoire.state_store import StateStore
 from grimoire.state_store.errors import InvalidRefError
 from grimoire.state_store.paths import KIND_TO_DIR, library_root, validate_path_component
-from grimoire.types.common import CampaignId, EntityKind, InGameTime
+from grimoire.types.common import CampaignId, EntityKind, InGameTime, Scope
 from grimoire.types.composition import (
     Greeting,
     LibraryEntity,
@@ -1003,6 +1003,114 @@ class WorldService:
             return None
 
     # ------------------------------------------------------------------ #
+    # Location state (campaign-scoped, SQLite) — §10
+    # ------------------------------------------------------------------ #
+
+    async def get_location_state(
+        self,
+        location_ref: str,
+        campaign_id: CampaignId,
+        *,
+        branch_id: str | None = None,
+    ) -> "LocationStateData":  # noqa: UP037 — string for lazy import
+        from grimoire.types.world import LocationStateData
+
+        branch = branch_id or f"{campaign_id}:main"
+        row = await self.store.db.fetchone(
+            "SELECT * FROM location_state WHERE location_ref = ? AND branch_id = ?",
+            (location_ref, branch),
+        )
+        if row is None:
+            return LocationStateData(
+                location_ref=location_ref,
+                campaign_id=campaign_id,
+                branch_id=branch,
+            )
+        weather: Weather | None = None
+        if row["weather"]:
+            try:
+                weather = Weather.model_validate(json.loads(row["weather"]))
+            except Exception:
+                weather = None
+        return LocationStateData(
+            location_ref=location_ref,
+            campaign_id=campaign_id,
+            branch_id=branch,
+            weather=weather,
+            time_of_day=row["time_of_day"] or "",
+            occupants=[
+                o
+                for o in (json.loads(row["occupants"]) if row["occupants"] else [])
+                if isinstance(o, str)
+            ],
+            condition=row["condition"] or "",
+            transient_features=[
+                t
+                for t in (
+                    json.loads(row["transient_features"]) if row["transient_features"] else []
+                )
+                if isinstance(t, str)
+            ],
+            updated_at_turn=row["updated_at_turn"],
+        )
+
+    async def update_location_state(
+        self,
+        location_ref: str,
+        campaign_id: CampaignId,
+        patch: dict,
+        *,
+        branch_id: str | None = None,
+        source: str = "user",
+        turn_id: str | None = None,
+    ) -> "LocationStateData":  # noqa: UP037
+        from grimoire.types.state import DeltaKind, StateDelta
+
+        branch = branch_id or f"{campaign_id}:main"
+        current = await self.get_location_state(location_ref, campaign_id, branch_id=branch)
+        merged = current.model_dump()
+        for k, v in (patch or {}).items():
+            merged[k] = v
+
+        weather_value = merged.get("weather")
+        weather_json: str | None
+        if weather_value is None:
+            weather_json = None
+        elif isinstance(weather_value, str):
+            weather_json = weather_value
+        else:
+            weather_json = json.dumps(weather_value, default=str)
+
+        after = {
+            "location_ref": location_ref,
+            "campaign_id": campaign_id,
+            "branch_id": branch,
+            "weather": weather_json,
+            "time_of_day": merged.get("time_of_day") or "",
+            "occupants": json.dumps(merged.get("occupants") or []),
+            "condition": merged.get("condition") or "",
+            "transient_features": json.dumps(merged.get("transient_features") or []),
+            "updated_at_turn": turn_id or merged.get("updated_at_turn"),
+        }
+        delta = StateDelta(
+            kind=DeltaKind.LOCATION_STATE_UPDATE,
+            target_scope=Scope.CAMPAIGN_SQLITE,
+            target_table="location_state",
+            target_id=location_ref,
+            after=after,
+            confidence=1.0,
+            source=source,
+        )
+        await self.store.apply_delta(
+            delta=delta,
+            source=source,
+            turn_id=turn_id,
+            branch_id=branch,
+            campaign_id=campaign_id,
+        )
+        return await self.get_location_state(location_ref, campaign_id, branch_id=branch)
+
+    # ------------------------------------------------------------------ #
     # Faction state (campaign-scoped, SQLite)
     # ------------------------------------------------------------------ #
 
@@ -1038,6 +1146,15 @@ class WorldService:
         source: str = "user",
         turn_id: str | None = None,
     ) -> FactionStateData:
+        """§11 Route faction-state writes through apply_delta.
+
+        Previous behaviour bypassed the delta log so undo/fork/retcon
+        couldn't reverse a faction state change. The write now goes
+        through ``apply_delta`` with kind=FACTION_STATE_UPDATE, matching
+        every other long-lived state column.
+        """
+        from grimoire.types.state import DeltaKind, StateDelta
+
         branch = branch_id or f"{campaign_id}:main"
         existing = await self.faction_state(faction_ref, campaign_id, branch_id=branch)
         merged = existing.model_dump()
@@ -1053,26 +1170,29 @@ class WorldService:
             "public_perception": merged.get("public_perception") or "",
             "secrets": merged.get("secrets") or [],
         }
-        await self.store.db.execute(
-            """
-            INSERT INTO faction_state (
-              faction_ref, campaign_id, branch_id, state, updated_at_turn
-            )
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(faction_ref, branch_id) DO UPDATE SET
-              campaign_id = excluded.campaign_id,
-              state = excluded.state,
-              updated_at_turn = excluded.updated_at_turn
-            """,
-            (
-                faction_ref,
-                campaign_id,
-                branch,
-                json.dumps(payload, sort_keys=True, default=str),
-                turn_id or _now_iso(),
-            ),
+        after = {
+            "faction_ref": faction_ref,
+            "campaign_id": campaign_id,
+            "branch_id": branch,
+            "state": json.dumps(payload, sort_keys=True, default=str),
+            "updated_at_turn": turn_id or _now_iso(),
+        }
+        delta = StateDelta(
+            kind=DeltaKind.FACTION_STATE_UPDATE,
+            target_scope=Scope.CAMPAIGN_SQLITE,
+            target_table="faction_state",
+            target_id=faction_ref,
+            after=after,
+            confidence=1.0,
+            source=source,
         )
-        _ = source
+        await self.store.apply_delta(
+            delta=delta,
+            source=source,
+            turn_id=turn_id,
+            branch_id=branch,
+            campaign_id=campaign_id,
+        )
         return await self.faction_state(faction_ref, campaign_id, branch_id=branch)
 
     # ------------------------------------------------------------------ #
