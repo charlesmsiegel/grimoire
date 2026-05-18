@@ -60,6 +60,10 @@ class EventType(StrEnum):
 
     # Plugins
     PLUGIN_LOADED = "plugin_loaded"
+    PLUGIN_FAILED = "plugin_failed"
+    PLUGIN_UNLOADED = "plugin_unloaded"
+    PLUGIN_ACTIVATED = "plugin_activated"
+    PLUGIN_DEACTIVATED = "plugin_deactivated"
     PLUGIN_HEALTH_CHANGED = "plugin_health_changed"
 
     # LLM

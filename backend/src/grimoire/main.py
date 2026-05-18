@@ -142,7 +142,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             except Exception:
                 log.exception("mechanics rescan failed at startup")
         if container.plugins is None:
-            container.plugins = PluginsService(PluginsConfig.for_data_root(data_root))
+            container.plugins = PluginsService(
+                PluginsConfig.for_data_root(data_root),
+                event_bus=container.event_bus,
+            )
             try:
                 await container.plugins.rescan()
             except Exception:

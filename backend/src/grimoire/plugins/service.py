@@ -16,8 +16,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from grimoire.event_bus import Event as BusEvent
+from grimoire.event_bus import EventBus
 from grimoire.plugins.config import PluginsConfig
 from grimoire.plugins.config_store import (
+    ActivationStore,
     KeyringBackend,
     PluginConfigStore,
     secret_property_names,
@@ -26,6 +29,7 @@ from grimoire.plugins.discovery import DiscoveryError, discover
 from grimoire.plugins.loader import LoadResult, load_plugin
 from grimoire.plugins.registry import PluginRegistry
 from grimoire.types.common import HealthLevel, HealthStatus, PluginId
+from grimoire.types.orchestrator import EventType
 from grimoire.types.plugins import (
     PluginKind,
     PluginLifecycle,
@@ -68,6 +72,7 @@ class PluginsService:
         config: PluginsConfig,
         *,
         keyring_backend: KeyringBackend | None = None,
+        event_bus: EventBus | None = None,
     ) -> None:
         self._config = config
         self._registry = PluginRegistry()
@@ -79,6 +84,13 @@ class PluginsService:
             keyring_backend=keyring_backend,
             encrypt_secrets=config.config_store.encrypt_secrets_via_keyring,
         )
+        # Persisted activation flags. A plugin the user explicitly
+        # deactivated stays deactivated across app restarts; absence in
+        # the file means "active by default".
+        self._activations = ActivationStore(config.config_store.root)
+        # When None, emit becomes a no-op so test harnesses that don't
+        # care about events stay terse.
+        self._event_bus = event_bus
 
     # ------------------------------------------------------------------ #
     # Discovery / lifecycle
@@ -117,18 +129,23 @@ class PluginsService:
             result = load_plugin(d, config_dict)
             if result.ok and result.manifest is not None:
                 self._unregister_record(plugin_id)
-                self._install(result)
+                await self._install(result)
                 loaded_ids.append(plugin_id)
             else:
                 self._unregister_record(plugin_id)
                 reason = "; ".join(result.errors) or "unknown load error"
                 failed.append((plugin_id, reason))
                 new_failed[plugin_id] = list(result.errors)
+                await self._emit(
+                    EventType.PLUGIN_FAILED,
+                    {"plugin_id": plugin_id, "errors": list(result.errors)},
+                )
 
         removed = sorted((previous_ids | previous_failed) - seen)
         for plugin_id in removed:
             self._unregister_record(plugin_id)
             self._failed.pop(plugin_id, None)
+            await self._emit(EventType.PLUGIN_UNLOADED, {"plugin_id": plugin_id})
 
         self._failed = new_failed
 
@@ -139,7 +156,7 @@ class PluginsService:
             removed=removed,
         )
 
-    def _install(self, result: LoadResult) -> None:
+    async def _install(self, result: LoadResult) -> None:
         assert result.manifest is not None
         manifest = result.manifest
         plugin_id = manifest.id
@@ -151,16 +168,36 @@ class PluginsService:
             has_config_file or not _has_required(manifest.config_schema)
         )
 
-        lifecycle = PluginLifecycle.ACTIVE if configured else PluginLifecycle.LOADED
+        # Persisted activation state wins over the computed default: a
+        # plugin the user deactivated stays deactivated even when its
+        # config is otherwise valid.
+        persisted_active = self._activations.is_active(plugin_id)
+        if not persisted_active:
+            lifecycle = PluginLifecycle.DEACTIVATED
+        else:
+            lifecycle = PluginLifecycle.ACTIVE if configured else PluginLifecycle.LOADED
+
         record = _PluginRecord(
             manifest=manifest,
             lifecycle=lifecycle,
             bundled=result.bundled,
         )
+        # Keep the instances on the record so a later `activate()` can
+        # re-register them without going through the loader again.
         for loaded in result.instances:
             record.instances[loaded.kind] = loaded.instance
-            self._registry.register(plugin_id, loaded.kind, loaded.instance)
+            if lifecycle != PluginLifecycle.DEACTIVATED:
+                self._registry.register(plugin_id, loaded.kind, loaded.instance)
         self._records[plugin_id] = record
+        await self._emit(
+            EventType.PLUGIN_LOADED,
+            {
+                "plugin_id": plugin_id,
+                "manifest": manifest.model_dump(mode="json"),
+                "bundled": result.bundled,
+                "lifecycle": lifecycle.value,
+            },
+        )
 
     def _unregister_record(self, plugin_id: PluginId) -> None:
         if self._registry.has(plugin_id):
@@ -175,8 +212,11 @@ class PluginsService:
         await self.rescan()
 
     async def unload(self, plugin_id: PluginId) -> None:
+        was_known = plugin_id in self._records or plugin_id in self._failed
         self._unregister_record(plugin_id)
         self._failed.pop(plugin_id, None)
+        if was_known:
+            await self._emit(EventType.PLUGIN_UNLOADED, {"plugin_id": plugin_id})
 
     async def activate(self, plugin_id: PluginId) -> None:
         record = self._records.get(plugin_id)
@@ -185,6 +225,8 @@ class PluginsService:
         for kind, instance in record.instances.items():
             self._registry.register(plugin_id, kind, instance)
         record.lifecycle = PluginLifecycle.ACTIVE
+        self._activations.set_active(plugin_id, True)
+        await self._emit(EventType.PLUGIN_ACTIVATED, {"plugin_id": plugin_id})
 
     async def deactivate(self, plugin_id: PluginId) -> None:
         record = self._records.get(plugin_id)
@@ -192,6 +234,8 @@ class PluginsService:
             return
         self._registry.unregister_all(plugin_id)
         record.lifecycle = PluginLifecycle.DEACTIVATED
+        self._activations.set_active(plugin_id, False)
+        await self._emit(EventType.PLUGIN_DEACTIVATED, {"plugin_id": plugin_id})
 
     # ------------------------------------------------------------------ #
     # Introspection
@@ -371,16 +415,30 @@ class PluginsService:
         record = self._records.get(plugin_id)
         if record is None:
             return HealthStatus(level=HealthLevel.UNCONFIGURED, target_id=plugin_id)
+        previous = record.last_health
         if not record.instances:
             status = HealthStatus(level=HealthLevel.UNCONFIGURED, target_id=plugin_id)
-            record.last_health = status
-            return status
-        statuses: list[HealthStatus] = []
-        for kind, instance in record.instances.items():
-            target = f"{plugin_id}:{kind.value}"
-            statuses.append(await self._probe_instance(instance, target))
-        status = _aggregate_health(plugin_id, statuses)
+        else:
+            statuses: list[HealthStatus] = []
+            for kind, instance in record.instances.items():
+                target = f"{plugin_id}:{kind.value}"
+                statuses.append(await self._probe_instance(instance, target))
+            status = _aggregate_health(plugin_id, statuses)
         record.last_health = status
+        # Only emit when the level transitions so subscribers that mirror
+        # the level into a Prometheus gauge or a WebSocket frame don't see
+        # a stream of "still HEALTHY" updates.
+        previous_level = previous.level if previous is not None else None
+        if previous_level != status.level:
+            await self._emit(
+                EventType.PLUGIN_HEALTH_CHANGED,
+                {
+                    "plugin_id": plugin_id,
+                    "before": previous_level.value if previous_level is not None else None,
+                    "after": status.level.value,
+                    "message": status.message,
+                },
+            )
         return status
 
     async def health_check_all(self) -> dict[str, HealthStatus]:
@@ -421,6 +479,24 @@ class PluginsService:
             target_id=target_id,
             message=f"completed in {time.monotonic() - started:.2f}s",
         )
+
+
+    async def _emit(
+        self,
+        event_type: EventType,
+        payload: dict[str, Any],
+    ) -> None:
+        """Emit a plugin lifecycle event when an event bus is wired.
+
+        Becomes a silent no-op when the service was constructed without
+        ``event_bus``; the in-process test harness almost always omits it.
+        """
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.emit(BusEvent(type=event_type.value, payload=dict(payload)))
+        except Exception:
+            logger.exception("plugins: event_bus.emit raised for %s", event_type.value)
 
 
 def _has_required(schema: dict[str, Any]) -> bool:

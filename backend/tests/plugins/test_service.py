@@ -7,21 +7,30 @@ from pathlib import Path
 
 import pytest
 
+from grimoire.event_bus import Event, EventBus
 from grimoire.plugins.config import ConfigStoreConfig, PluginsConfig
 from grimoire.plugins.config_store import InMemoryKeyring
 from grimoire.plugins.service import PluginsService
 from grimoire.types.common import HealthLevel
+from grimoire.types.orchestrator import EventType
 from grimoire.types.plugins import PluginKind, PluginLifecycle
 
 from .conftest import write_plugin
 
 
-def _service(plugins_root: Path, config_root: Path) -> PluginsService:
+def _service(
+    plugins_root: Path,
+    config_root: Path,
+    *,
+    event_bus: EventBus | None = None,
+) -> PluginsService:
     cfg = PluginsConfig(
         root=plugins_root,
         config_store=ConfigStoreConfig(root=config_root),
     )
-    return PluginsService(cfg, keyring_backend=InMemoryKeyring())
+    return PluginsService(
+        cfg, keyring_backend=InMemoryKeyring(), event_bus=event_bus
+    )
 
 
 async def test_rescan_discovers_and_registers_plugins(
@@ -320,3 +329,144 @@ async def test_unload_clears_record(plugins_root: Path, config_root: Path) -> No
     assert svc.get_llm_provider("alpha") is None
     status = await svc.get_status("alpha")
     assert status.lifecycle == PluginLifecycle.UNLOADED
+
+
+# --------------------------------------------------------------------------- #
+# §5 — persistent activation state
+# --------------------------------------------------------------------------- #
+
+
+async def test_deactivation_persists_across_rescan(
+    plugins_root: Path, config_root: Path
+) -> None:
+    """A plugin the user deactivates stays deactivated when the app restarts.
+
+    Simulates restart by building a fresh ``PluginsService`` against the
+    same config root; the persisted ``.activations.yaml`` should pin the
+    plugin to ``DEACTIVATED`` instead of coming back active.
+    """
+    write_plugin(plugins_root, "alpha")
+    first = _service(plugins_root, config_root)
+    await first.rescan()
+    await first.set_config("alpha", {"api_key": "sk-xxx"})
+    await first.deactivate("alpha")
+    assert first.get_llm_provider("alpha") is None
+
+    # New process: fresh PluginsService against the same data root.
+    second = _service(plugins_root, config_root)
+    await second.rescan()
+    assert second.get_llm_provider("alpha") is None
+    status = await second.get_status("alpha")
+    assert status.lifecycle == PluginLifecycle.DEACTIVATED
+
+
+async def test_activation_clears_persisted_deactivated_flag(
+    plugins_root: Path, config_root: Path
+) -> None:
+    write_plugin(plugins_root, "alpha")
+    first = _service(plugins_root, config_root)
+    await first.rescan()
+    await first.set_config("alpha", {"api_key": "sk-xxx"})
+    await first.deactivate("alpha")
+    await first.activate("alpha")
+
+    second = _service(plugins_root, config_root)
+    await second.rescan()
+    status = await second.get_status("alpha")
+    assert status.lifecycle == PluginLifecycle.ACTIVE
+
+
+# --------------------------------------------------------------------------- #
+# §4 — lifecycle events
+# --------------------------------------------------------------------------- #
+
+
+def _record_events(bus: EventBus) -> list[Event]:
+    seen: list[Event] = []
+
+    async def _handler(event: Event) -> None:
+        seen.append(event)
+
+    bus.subscribe("*", _handler)
+    return seen
+
+
+async def test_rescan_emits_plugin_loaded(plugins_root: Path, config_root: Path) -> None:
+    write_plugin(plugins_root, "alpha")
+    bus = EventBus()
+    events = _record_events(bus)
+    svc = _service(plugins_root, config_root, event_bus=bus)
+    await svc.rescan()
+
+    types = [e.type for e in events]
+    assert EventType.PLUGIN_LOADED.value in types
+    loaded = next(e for e in events if e.type == EventType.PLUGIN_LOADED.value)
+    assert loaded.payload["plugin_id"] == "alpha"
+    assert loaded.payload["bundled"] is False
+
+
+async def test_rescan_emits_plugin_failed(plugins_root: Path, config_root: Path) -> None:
+    write_plugin(plugins_root, "bad", manifest={"version": "not-semver"})
+    bus = EventBus()
+    events = _record_events(bus)
+    svc = _service(plugins_root, config_root, event_bus=bus)
+    await svc.rescan()
+
+    failed = [e for e in events if e.type == EventType.PLUGIN_FAILED.value]
+    assert failed
+    assert failed[0].payload["plugin_id"] == "bad"
+    assert failed[0].payload["errors"]
+
+
+async def test_activate_deactivate_emit_events(
+    plugins_root: Path, config_root: Path
+) -> None:
+    write_plugin(plugins_root, "alpha")
+    bus = EventBus()
+    events = _record_events(bus)
+    svc = _service(plugins_root, config_root, event_bus=bus)
+    await svc.rescan()
+    events.clear()
+
+    await svc.deactivate("alpha")
+    await svc.activate("alpha")
+    types = [e.type for e in events]
+    assert EventType.PLUGIN_DEACTIVATED.value in types
+    assert EventType.PLUGIN_ACTIVATED.value in types
+
+
+async def test_unload_emits_plugin_unloaded(
+    plugins_root: Path, config_root: Path
+) -> None:
+    write_plugin(plugins_root, "alpha")
+    bus = EventBus()
+    events = _record_events(bus)
+    svc = _service(plugins_root, config_root, event_bus=bus)
+    await svc.rescan()
+    events.clear()
+
+    await svc.unload("alpha")
+    assert any(e.type == EventType.PLUGIN_UNLOADED.value for e in events)
+
+
+async def test_health_check_emits_event_only_on_level_change(
+    plugins_root: Path, config_root: Path
+) -> None:
+    write_plugin(plugins_root, "alpha")
+    bus = EventBus()
+    events = _record_events(bus)
+    svc = _service(plugins_root, config_root, event_bus=bus)
+    await svc.rescan()
+    events.clear()
+
+    # First probe: previous level was None, so the transition counts.
+    await svc.health_check("alpha")
+    first = [e for e in events if e.type == EventType.PLUGIN_HEALTH_CHANGED.value]
+    assert len(first) == 1
+    assert first[0].payload["after"] == HealthLevel.HEALTHY.value
+
+    # Second probe with no change should be silent.
+    events.clear()
+    await svc.health_check("alpha")
+    second = [e for e in events if e.type == EventType.PLUGIN_HEALTH_CHANGED.value]
+    assert second == []
