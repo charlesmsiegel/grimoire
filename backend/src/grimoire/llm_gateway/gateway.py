@@ -1145,7 +1145,16 @@ class LLMGatewayService:
         return self._data_root / "campaigns" / campaign_id / "campaign.yaml"
 
     async def _load_campaign_routing(self, campaign_id: CampaignId) -> None:
-        """Lazily read ``model_routing`` from campaign.yaml and apply routes.
+        """Lazily read routing blocks from campaign.yaml and apply them.
+
+        Recognises three top-level blocks:
+          * ``model_routing`` — applied to the resolver for LLM tasks.
+          * ``embedding_routing`` — applied to the same resolver; task name
+            uniqueness keeps it disjoint from LLM entries. Entries here
+            override anything with the same task name in ``model_routing``.
+          * ``imagegen_routing`` — parsed and validated but not yet acted on;
+            a warning is logged per entry so users know the schema is
+            recognised but ImageGenService still uses ``active_backend``.
 
         Always marks the campaign as loaded — even on failure — so we don't
         re-attempt on every subsequent call.
@@ -1164,7 +1173,58 @@ class LLMGatewayService:
             return
         if not isinstance(raw, dict):
             return
-        routing = raw.get("model_routing")
+
+        # model_routing — LLM task routing.
+        await self._apply_routing_block(
+            raw.get("model_routing"),
+            campaign_id,
+            yaml_path,
+            block_name="model_routing",
+            provider_kind="llm",
+        )
+        # embedding_routing — embedding task routing. Same resolver; tasks like
+        # "embed:context" should not collide with LLM task names.
+        await self._apply_routing_block(
+            raw.get("embedding_routing"),
+            campaign_id,
+            yaml_path,
+            block_name="embedding_routing",
+            provider_kind="embedding",
+        )
+        # imagegen_routing — parsed only; not threaded through ImageGenService yet.
+        imagegen = raw.get("imagegen_routing")
+        if isinstance(imagegen, dict):
+            for task, route in imagegen.items():
+                try:
+                    Route.parse(str(route))
+                except ValueError:
+                    logger.warning(
+                        "llm_gateway: skipping bad imagegen_routing entry in %s — "
+                        "task=%r route=%r is not a valid 'provider.model' string",
+                        yaml_path,
+                        task,
+                        route,
+                    )
+                    continue
+                logger.warning(
+                    "llm_gateway: imagegen_routing entry recognised but not yet "
+                    "acted on — task=%r route=%r (campaign=%s); ImageGenService "
+                    "still uses active_backend",
+                    task,
+                    route,
+                    campaign_id,
+                )
+
+    async def _apply_routing_block(
+        self,
+        routing: object,
+        campaign_id: CampaignId,
+        yaml_path: Path,
+        *,
+        block_name: str,
+        provider_kind: str,
+    ) -> None:
+        """Validate and apply a routing block to the resolver."""
         if not isinstance(routing, dict):
             return
         for task, route in routing.items():
@@ -1172,12 +1232,54 @@ class LLMGatewayService:
                 self._router.set_route(str(task), str(route), campaign_id)
             except ValueError:
                 logger.warning(
-                    "llm_gateway: skipping bad model_routing entry in %s — "
+                    "llm_gateway: skipping bad %s entry in %s — "
                     "task=%r route=%r is not a valid 'provider.model' string",
+                    block_name,
                     yaml_path,
                     task,
                     route,
                 )
+                continue
+            # Cross-check: if the referenced provider is loaded, warn when the
+            # model id isn't in its advertised list. Never block on a failed
+            # list_models() — providers commonly raise when unconfigured.
+            await self._warn_unknown_model(str(task), str(route), provider_kind=provider_kind)
+
+    async def _warn_unknown_model(self, task: str, route: str, *, provider_kind: str) -> None:
+        """Emit a warning if route.model is not advertised by the loaded provider."""
+        try:
+            parsed = Route.parse(route)
+        except ValueError:
+            return
+        if provider_kind == "llm":
+            provider = self._plugins.get_llm_provider(parsed.provider_id)
+        elif provider_kind == "embedding":
+            provider = self._plugins.get_embedding_provider(parsed.provider_id)
+        else:
+            return
+        if provider is None:
+            return
+        list_models = getattr(provider, "list_models", None)
+        if list_models is None:
+            return
+        try:
+            models = await list_models()
+        except Exception:
+            # Providers commonly raise when unconfigured; skip silently.
+            return
+        try:
+            known_ids = {m.id for m in models}
+        except Exception:
+            return
+        if parsed.model not in known_ids:
+            logger.warning(
+                "llm_gateway: route task=%r references model %r on provider %r "
+                "which is not in its advertised list (kind=%s); applying anyway",
+                task,
+                parsed.model,
+                parsed.provider_id,
+                provider_kind,
+            )
 
     def _persist_campaign_route(self, campaign_id: CampaignId, task: str, route: str) -> None:
         """Synchronously write the route change back to campaign.yaml atomically."""
