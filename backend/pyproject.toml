@@ -57,4 +57,5 @@ markers = [
     "frozen_campaign: regression tests over a frozen SQLite snapshot (spec 17 §L4)",
     "perf: performance regression benchmarks (spec 17 §Performance regression tests)",
     "scenario: end-to-end user scenario tests through the HTTP API (spec 17 §L5)",
+    "golden: golden-path tests with checked-in LLM fixtures (spec 17 §6)",
 ]
