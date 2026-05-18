@@ -3,6 +3,7 @@ import { Link, Route, Routes, useParams } from "react-router-dom";
 
 import { ApiError, mechanicsApi, type RegisteredModule } from "../../api/library";
 import { useResource } from "../../api/useResource";
+import { LibraryCharacterCreationPreview } from "../campaign/CharacterCreation";
 import { AsyncBoundary } from "./AsyncBoundary";
 
 export function MechanicsView() {
@@ -107,6 +108,7 @@ function MechanicsDetail() {
 
 function ModuleDetailCard({ module: m }: { module: RegisteredModule }) {
   const manifest = m.manifest;
+  const [previewing, setPreviewing] = useState(false);
   return (
     <div className="mechanics-detail">
       <h3>{manifest.name}</h3>
@@ -182,7 +184,44 @@ function ModuleDetailCard({ module: m }: { module: RegisteredModule }) {
           Frontend prefixes its selectors with <code>.mechanics-{manifest.id}</code> to isolate
           styling.
         </p>
+        {m.theme_css ? (
+          <details>
+            <summary>Inlined theme.css ({m.theme_css.length} chars)</summary>
+            <pre className="preset-text">{m.theme_css}</pre>
+          </details>
+        ) : (
+          <p className="library-status muted">
+            This module does not ship a <code>theme.css</code>.
+          </p>
+        )}
       </Section>
+
+      <Section title="Character creation">
+        <p className="library-status">
+          Preview the module's character-creation wizard against the library baseline (no campaign,
+          no persistence) to verify step ordering and schemas.
+        </p>
+        <button type="button" onClick={() => setPreviewing(true)}>
+          Preview character creation
+        </button>
+      </Section>
+
+      {previewing && (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Preview character creation"
+        >
+          <div className="modal character-creation-modal">
+            <LibraryCharacterCreationPreview
+              moduleId={manifest.id}
+              themeCss={m.theme_css ?? null}
+              onCancel={() => setPreviewing(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -211,8 +250,8 @@ function MechanicsRequirements() {
         </h5>
         <ul className="mechanics-requirements-list">
           <li>
-            <code>id</code> — lowercase slug matching <code>^[a-z0-9][a-z0-9_-]*$</code>; must
-            equal the directory name.
+            <code>id</code> — lowercase slug matching <code>^[a-z0-9][a-z0-9_-]*$</code>; must equal
+            the directory name.
           </li>
           <li>
             <code>name</code> — non-empty display name.

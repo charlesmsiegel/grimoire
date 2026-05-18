@@ -1,28 +1,39 @@
 /**
- * Mechanics view (spec 14 §Mechanics view).
+ * Mechanics view (spec 14 §Mechanics view; spec 06 §Sheet UI rendering /
+ * §Character creation / §Responsibilities).
  *
- * Shows the active mechanics module manifest, lists characters in the
- * campaign with a "sheet present / missing" indicator (bulk-create hook), and
- * fetches the selected character's sheet via the Mechanics API. Roll log /
- * combat tracker / content browser are scaffolded as placeholders that wire
- * up once the mechanics modules expose those surfaces over REST.
+ * Wires the campaign's active mechanics module into the Frontend surface:
+ *   - lists characters with sheet present/missing/unknown indicators;
+ *   - renders the selected character's sheet through `SheetRenderer`, with
+ *     the module's scoped `theme_css` applied;
+ *   - exposes the character-creation wizard for missing sheets;
+ *   - mounts the content browser (one tab per declared `content_kind`);
+ *   - warns when the campaign has preserved sheets from a previously-bound
+ *     mechanics module (spec 06 §Switching modules mid-campaign).
+ *
+ * Roll log / combat tracker remain placeholders — those depend on backend
+ * surfaces outside this spec.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { ApiError } from "../../api/client";
+import { mechanicsApi, type RegisteredModule } from "../../api/library";
 import { viewsApi } from "../../api/views";
 import type { ResolvedCharacter } from "../../api/types";
 import { useApi } from "../../api/useApi";
+import { useResource } from "../../api/useResource";
 import { SheetRenderer } from "../../sheets";
 import type { SheetSchema, SheetValue } from "../../sheets/types";
 import { Loading } from "./common";
+import { CampaignCharacterCreation } from "./CharacterCreation";
+import { ContentBrowser } from "./ContentBrowser";
 
 export function MechanicsView() {
   const { campaignId = "" } = useParams();
   const composition = useApi(() => viewsApi.getComposition(campaignId), [campaignId]);
-  const installed = useApi(() => viewsApi.installedMechanics(), []);
+  const installed = useResource(() => mechanicsApi.listInstalled(), []);
   const characters = useApi(() => viewsApi.listCharacters(campaignId), [campaignId]);
 
   if (composition.status !== "ok") {
@@ -51,47 +62,50 @@ export function MechanicsView() {
     );
   }
 
+  const active: RegisteredModule | undefined = (installed.data ?? []).find(
+    (m) => m.manifest.id === moduleId,
+  );
+
   return (
     <section className="route campaign-mechanics" aria-labelledby="mech-heading">
       <header className="route-header">
         <h2 id="mech-heading">Mechanics</h2>
       </header>
 
-      <Loading state={installed}>
-        {(modules) => {
-          const active = modules.find((m) => m.manifest.id === moduleId);
-          return (
-            <article className="module-info">
-              <h3>{active?.manifest.name ?? moduleId}</h3>
-              {active?.manifest.version && (
-                <p className="muted">version {active.manifest.version}</p>
-              )}
-              {active?.manifest.description && <p>{active.manifest.description}</p>}
-              {active?.load_error && (
-                <p className="error" role="alert">
-                  Load error: {active.load_error}
-                </p>
-              )}
-              {!active && (
-                <p className="error" role="alert">
-                  Module <code>{moduleId}</code> is referenced by the campaign but is not installed.
-                </p>
-              )}
-            </article>
-          );
-        }}
-      </Loading>
+      {installed.loading && <p className="muted">Loading module…</p>}
+      {installed.error && (
+        <p className="error" role="alert">
+          Failed to load module list: {installed.error.message}
+        </p>
+      )}
+      {!installed.loading && (
+        <article className="module-info">
+          <h3>{active?.manifest.name ?? moduleId}</h3>
+          {active?.manifest.version && <p className="muted">version {active.manifest.version}</p>}
+          {active?.manifest.description && <p>{active.manifest.description}</p>}
+          {!active && (
+            <p className="error" role="alert">
+              Module <code>{moduleId}</code> is referenced by the campaign but is not installed.
+            </p>
+          )}
+        </article>
+      )}
 
       <Loading state={characters} emptyMessage="No characters in this campaign yet.">
         {(rows) => (
           <SheetsPanel
             campaignId={campaignId}
+            module={active ?? null}
             moduleId={moduleId}
             characters={rows}
             onRefresh={() => characters.reload()}
           />
         )}
       </Loading>
+
+      {active && active.manifest.content_kinds.length > 0 && (
+        <ContentBrowser campaignId={campaignId} module={active} />
+      )}
 
       <section className="placeholder-panel">
         <h3>Roll log</h3>
@@ -108,33 +122,32 @@ export function MechanicsView() {
           panel, so this slot is idle until combat starts.
         </p>
       </section>
-
-      <section className="placeholder-panel">
-        <h3>Content browser</h3>
-        <p className="muted">
-          Mechanics-defined content kinds (spells, magic items, …) appear here when the active
-          module advertises them.
-        </p>
-      </section>
     </section>
   );
 }
 
 interface SheetsPanelProps {
   campaignId: string;
+  module: RegisteredModule | null;
   moduleId: string;
   characters: ResolvedCharacter[];
   onRefresh: () => void;
 }
 
-function SheetsPanel({ campaignId, moduleId, characters, onRefresh }: SheetsPanelProps) {
+function SheetsPanel({ campaignId, module, moduleId, characters, onRefresh }: SheetsPanelProps) {
   const [selected, setSelected] = useState<string | null>(characters[0]?.character.id ?? null);
   const [sheets, setSheets] = useState<Record<string, "present" | "missing" | "unknown">>({});
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [creatingFor, setCreatingFor] = useState<string | null>(null);
+  // Bump after the wizard finishes so the sheet re-fetches and the
+  // "missing" badge flips to "present" without reloading the whole page.
+  const [sheetNonce, setSheetNonce] = useState(0);
 
   const schemaState = useApi(() => viewsApi.getSheetSchema(moduleId, "character"), [moduleId]);
+  // Prefer the inlined `theme_css` on the RegisteredModule payload (one fewer
+  // network hop); fall back to the standalone GET when missing.
   const themeState = useApi(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]);
 
   const selectedRow = characters.find((c) => c.character.id === selected) ?? null;
@@ -157,7 +170,9 @@ function SheetsPanel({ campaignId, moduleId, characters, onRefresh }: SheetsPane
     }
   }, [campaignId, onRefresh]);
 
-  const themeCss = themeState.status === "ok" ? themeState.data : "";
+  // Prefer the inlined `theme_css` on the RegisteredModule payload (one fewer
+  // network hop); fall back to the standalone GET when missing.
+  const themeCss = module?.theme_css ?? (themeState.status === "ok" ? themeState.data : "");
   const schema =
     schemaState.status === "ok" ? (schemaState.data as unknown as SheetSchema) : null;
 
@@ -201,18 +216,45 @@ function SheetsPanel({ campaignId, moduleId, characters, onRefresh }: SheetsPane
       <section className="sheet-detail">
         {selectedRow ? (
           <CharacterSheet
-            key={`${selectedRow.character.id}-${reloadKey}`}
+            key={`${selectedRow.character.id}-${reloadKey}-${sheetNonce}`}
             campaignId={campaignId}
             moduleId={moduleId}
             characterId={selectedRow.character.id}
             schema={schema}
             themeCss={themeCss}
             onStatus={(id, status) => setSheets((m) => ({ ...m, [id]: status }))}
+            onStartCreation={() => setCreatingFor(selectedRow.character.id)}
           />
         ) : (
           <p className="muted">Select a character to view their sheet.</p>
         )}
       </section>
+      {creatingFor && (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Create character sheet"
+        >
+          <div className="modal character-creation-modal">
+            <CampaignCharacterCreation
+              campaignId={campaignId}
+              characterId={creatingFor}
+              moduleId={moduleId}
+              themeCss={themeCss}
+              heading={
+                characters.find((c) => c.character.id === creatingFor)?.character.name ??
+                creatingFor
+              }
+              onCancel={() => setCreatingFor(null)}
+              onComplete={() => {
+                setCreatingFor(null);
+                setSheetNonce((n) => n + 1);
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -230,6 +272,7 @@ interface SheetProps {
   schema: SheetSchema | null;
   themeCss: string;
   onStatus: (id: string, status: "present" | "missing") => void;
+  onStartCreation: () => void;
 }
 
 function CharacterSheet({
@@ -239,6 +282,7 @@ function CharacterSheet({
   schema,
   themeCss,
   onStatus,
+  onStartCreation,
 }: SheetProps) {
   const state = useApi<Record<string, unknown> | null>(
     () =>
@@ -292,7 +336,13 @@ function CharacterSheet({
           return (
             <div className="muted">
               <p>No sheet on file for this character under the active mechanics module.</p>
-              <p>Use the Bulk-create button to initialise sheets, or write one via the API.</p>
+              <p>
+                Walk this character through the module's creation wizard, or use Bulk-create to
+                initialise every missing sheet at once.
+              </p>
+              <button type="button" className="primary" onClick={onStartCreation}>
+                Create sheet
+              </button>
             </div>
           );
         }
@@ -338,3 +388,4 @@ function CharacterSheet({
     </Loading>
   );
 }
+

@@ -14,6 +14,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
+import { campaignApi, type MissingSheet } from "../api/campaign";
+import { mechanicsApi } from "../api/library";
 import {
   type MechanicsModuleSummary,
   type PluginSummary,
@@ -21,6 +23,7 @@ import {
   fetchInstalledPlugins,
   patchCampaign,
 } from "../api/wizard";
+import { BulkSheetCreation } from "./campaign/BulkSheetCreation";
 
 type Tab = "general" | "routing" | "imagegen" | "mechanics" | "storage" | "advanced";
 
@@ -482,6 +485,14 @@ function ImageGenTab({ campaignId }: { campaignId: string }) {
   );
 }
 
+type PreRollPolicy = "never" | "always" | "high_stakes";
+
+const PRE_ROLL_POLICIES: { value: PreRollPolicy; label: string }[] = [
+  { value: "never", label: "Never confirm" },
+  { value: "always", label: "Always confirm" },
+  { value: "high_stakes", label: "High-stakes rolls only" },
+];
+
 function MechanicsTab({
   campaign,
   onUpdate,
@@ -493,17 +504,58 @@ function MechanicsTab({
   const [selected, setSelected] = useState<string | null>(campaign.mechanics_module ?? null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [bulk, setBulk] = useState<{
+    moduleId: string;
+    themeCss: string | null;
+    missing: MissingSheet[];
+  } | null>(null);
+  const [confirmPolicy, setConfirmPolicy] = useState<PreRollPolicy>("never");
+  const [policySaving, setPolicySaving] = useState(false);
+  const [policyError, setPolicyError] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchInstalledMechanics().then(setModules);
   }, []);
 
+  // Best-effort: read existing orchestrator config so the dropdown reflects
+  // the persisted value. The endpoint is best-effort here — failures fall
+  // back to "never" silently so the rest of the tab stays usable.
+  useEffect(() => {
+    void api
+      .get<{ pre_roll?: { confirm_before_executing?: PreRollPolicy } }>(
+        `/api/campaigns/${encodeURIComponent(campaign.id)}/orchestrator-config`,
+      )
+      .then((cfg) => {
+        const v = cfg?.pre_roll?.confirm_before_executing;
+        if (v === "never" || v === "always" || v === "high_stakes") {
+          setConfirmPolicy(v);
+        }
+      })
+      .catch(() => undefined);
+  }, [campaign.id]);
+
   const save = async () => {
     setSaving(true);
     setError(null);
     try {
-      await patchCampaign(campaign.id, { mechanics: selected });
-      onUpdate({ ...campaign, mechanics_module: selected });
+      const result = await campaignApi.switchMechanics(campaign.id, selected);
+      onUpdate({ ...campaign, mechanics_module: result.current });
+      if (result.current && result.missing_sheets.length > 0) {
+        // Best-effort look-up of the inline theme.css; fall back to null on
+        // any failure (the wizard tolerates the absence).
+        let themeCss: string | null = null;
+        try {
+          const installed = await mechanicsApi.listInstalled();
+          themeCss = installed.find((m) => m.manifest.id === result.current)?.theme_css ?? null;
+        } catch {
+          themeCss = null;
+        }
+        setBulk({
+          moduleId: result.current,
+          themeCss,
+          missing: result.missing_sheets,
+        });
+      }
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -511,10 +563,26 @@ function MechanicsTab({
     }
   };
 
+  async function savePolicy() {
+    setPolicySaving(true);
+    setPolicyError(null);
+    try {
+      await api.patch<unknown>(
+        `/api/campaigns/${encodeURIComponent(campaign.id)}/orchestrator-config`,
+        { pre_roll: { confirm_before_executing: confirmPolicy } },
+      );
+    } catch (err) {
+      setPolicyError(errorMessage(err));
+    } finally {
+      setPolicySaving(false);
+    }
+  }
+
   return (
     <div className="settings-form">
       <p className="wizard-step-help">
-        Active mechanics module. Switching modules does not migrate existing sheets.
+        Active mechanics module. Switching modules preserves existing sheets under their old module
+        id and opens a wizard to create new sheets where needed.
       </p>
       <label className="wizard-field">
         <span>Module</span>
@@ -530,8 +598,47 @@ function MechanicsTab({
       </label>
       {error && <p className="wizard-error">{error}</p>}
       <button type="button" className="primary" disabled={saving} onClick={() => void save()}>
-        {saving ? "Saving…" : "Save"}
+        {saving ? "Switching…" : "Save"}
       </button>
+
+      <hr className="wizard-divider" />
+
+      <p className="wizard-step-help">
+        Pre-roll confirmation: when to interrupt a turn and ask the player to accept, modify, or
+        decline the proposed dice rolls before resolving them.
+      </p>
+      <label className="wizard-field">
+        <span>Confirm before executing</span>
+        <select
+          value={confirmPolicy}
+          onChange={(e) => setConfirmPolicy(e.target.value as PreRollPolicy)}
+        >
+          {PRE_ROLL_POLICIES.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {policyError && <p className="wizard-error">{policyError}</p>}
+      <button
+        type="button"
+        className="primary"
+        disabled={policySaving}
+        onClick={() => void savePolicy()}
+      >
+        {policySaving ? "Saving…" : "Save policy"}
+      </button>
+
+      {bulk && (
+        <BulkSheetCreation
+          campaignId={campaign.id}
+          moduleId={bulk.moduleId}
+          themeCss={bulk.themeCss}
+          missing={bulk.missing}
+          onClose={() => setBulk(null)}
+        />
+      )}
     </div>
   );
 }
