@@ -26,12 +26,19 @@ class PerformanceConfig:
 
 @dataclass(frozen=True)
 class ConformanceConfig:
-    run_on_plugin_load: bool = True
+    # Spec 17 §Open questions resolved: default is to run conformance once at
+    # install (i.e. the rescan that first sees a plugin) and skip re-running
+    # on subsequent loads. Set ``run_on_plugin_load=True`` to re-check on
+    # every load — useful when iterating on a plugin locally.
+    run_on_install: bool = True
+    run_on_plugin_load: bool = False
     run_in_ci: bool = True
 
 
 @dataclass(frozen=True)
 class TestingConfig:
+    __test__ = False  # pytest: this is a config dataclass, not a test class
+
     llm_mode: LLMMode = LLMMode.MOCK
     fixture_directory: Path = Path("tests/fixtures")
     fail_on_missing_fixture: bool = True

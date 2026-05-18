@@ -30,6 +30,16 @@ from grimoire.plugins.discovery import DiscoveredPlugin, DiscoveryError, discove
 from grimoire.plugins.loader import LoadResult, load_plugin
 from grimoire.plugins.registry import PluginRegistry
 from grimoire.plugins.venv import cleanup_orphaned_venvs, ensure_plugin_venv
+from grimoire.testing.config import ConformanceConfig, TestingConfig
+from grimoire.testing.conformance import (
+    ConformanceReport,
+    ConformanceSuite,
+    EmbeddingProviderConformance,
+    ExportAdapterConformance,
+    ImageGenBackendConformance,
+    LLMProviderConformance,
+    MechanicsConformance,
+)
 from grimoire.types.common import HealthLevel, HealthStatus, PluginId
 from grimoire.types.orchestrator import EventType
 from grimoire.types.plugins import (
@@ -51,6 +61,20 @@ from grimoire.validation.validator import validate_config
 logger = logging.getLogger(__name__)
 
 
+# Maps each plugin kind we register to its conformance suite (spec 17 §L2).
+# A `"mechanics"` entry is included so the same lookup path works for
+# mechanics adapters once they ship as plugins — for now ``PluginKind`` has no
+# ``MECHANICS`` member but the suite is still exported, and recheck_conformance
+# can be called with a manually-installed mechanics instance.
+_CONFORMANCE_SUITES: dict[str, ConformanceSuite] = {
+    "mechanics": MechanicsConformance(),
+    PluginKind.LLM_PROVIDER.value: LLMProviderConformance(),
+    PluginKind.EMBEDDING_PROVIDER.value: EmbeddingProviderConformance(),
+    PluginKind.IMAGEGEN_BACKEND.value: ImageGenBackendConformance(),
+    PluginKind.EXPORT_ADAPTER.value: ExportAdapterConformance(),
+}
+
+
 @dataclass(slots=True)
 class _PluginRecord:
     """In-memory bookkeeping for one plugin between rescans.
@@ -58,6 +82,11 @@ class _PluginRecord:
     `instances` mirrors the entries pushed into the registry so reload can
     reuse them without re-importing when only the config changed; today we
     always rebuild on rescan, but the structure leaves room.
+
+    `conformance_passed` caches the outcome of the conformance suites so we
+    don't re-run them on every rescan (spec 17 §Open questions: "install
+    only, with a dev-mode flag to re-check on every load"). `conformance_reports`
+    keeps the most recent reports per kind for the UI / `recheck_conformance`.
     """
 
     manifest: PluginManifest
@@ -66,6 +95,8 @@ class _PluginRecord:
     instances: dict[PluginKind, Any] = field(default_factory=dict)
     last_error: str | None = None
     last_health: HealthStatus | None = None
+    conformance_passed: bool = False
+    conformance_reports: dict[str, ConformanceReport] = field(default_factory=dict)
 
 
 class PluginsService:
@@ -75,6 +106,7 @@ class PluginsService:
         *,
         keyring_backend: KeyringBackend | None = None,
         event_bus: EventBus | None = None,
+        testing_config: TestingConfig | ConformanceConfig | None = None,
     ) -> None:
         self._config = config
         self._registry = PluginRegistry()
@@ -96,6 +128,15 @@ class PluginsService:
         # Periodic health loop bookkeeping (see start_periodic_health).
         self._health_task: asyncio.Task[None] | None = None
         self._health_stop: asyncio.Event | None = None
+        # No conformance enforcement by default — callers wire `TestingConfig`
+        # in to opt in. Accepting either the full config or just the
+        # `ConformanceConfig` slice keeps test setup terse.
+        if isinstance(testing_config, TestingConfig):
+            self._conformance_config: ConformanceConfig | None = testing_config.conformance
+        elif isinstance(testing_config, ConformanceConfig):
+            self._conformance_config = testing_config
+        else:
+            self._conformance_config = None
 
     # ------------------------------------------------------------------ #
     # Discovery / lifecycle
@@ -134,8 +175,24 @@ class PluginsService:
             extra_path = self._venv_site_packages_for(plugin_id, d)
             result = load_plugin(d, config_dict, extra_sys_path=extra_path)
             if result.ok and result.manifest is not None:
+                # Decide whether to run conformance: first time we see the
+                # plugin counts as "install" (no prior record); subsequent
+                # rescans only re-run when explicitly opted in. Disabled
+                # conformance config means never run.
+                previously_present = plugin_id in previous_ids
+                should_run_conformance = self._should_run_conformance_for(previously_present)
                 self._unregister_record(plugin_id)
                 await self._install(result)
+                if should_run_conformance:
+                    conformance_errors = await self._run_conformance(plugin_id)
+                    if conformance_errors:
+                        # Tear the just-installed record back out and route to
+                        # the failure path so the UI surfaces the reason.
+                        self._unregister_record(plugin_id)
+                        reason = "; ".join(conformance_errors)
+                        failed.append((plugin_id, reason))
+                        new_failed[plugin_id] = list(conformance_errors)
+                        continue
                 loaded_ids.append(plugin_id)
             else:
                 self._unregister_record(plugin_id)
@@ -216,6 +273,80 @@ class PluginsService:
         if self._registry.has(plugin_id):
             self._registry.unregister_all(plugin_id)
         self._records.pop(plugin_id, None)
+
+    # ------------------------------------------------------------------ #
+    # Conformance (spec 17 §L2)
+    # ------------------------------------------------------------------ #
+
+    def _should_run_conformance_for(self, previously_present: bool) -> bool:
+        cfg = self._conformance_config
+        if cfg is None:
+            return False
+        if previously_present:
+            return cfg.run_on_plugin_load
+        return cfg.run_on_install or cfg.run_on_plugin_load
+
+    async def _run_conformance(self, plugin_id: PluginId) -> list[str]:
+        """Run conformance suites for the just-installed plugin record.
+
+        Returns a list of formatted failure messages — empty when every kind
+        passed (or had no suite). The record is left intact; the caller is
+        responsible for unregistering on failure.
+        """
+        record = self._records.get(plugin_id)
+        if record is None:
+            return []
+        failures: list[str] = []
+        record.conformance_reports.clear()
+        for kind, instance in record.instances.items():
+            suite = _CONFORMANCE_SUITES.get(kind.value)
+            if suite is None:
+                continue
+            try:
+                report = await suite.run(instance)
+            except Exception as exc:
+                failures.append(
+                    f"conformance: {kind.value}: suite raised {type(exc).__name__}: {exc}"
+                )
+                continue
+            record.conformance_reports[kind.value] = report
+            if not report.ok:
+                failure_names = ", ".join(name for name, _ in report.failed)
+                failures.append(f"conformance: {kind.value}: {failure_names}")
+        if failures:
+            record.conformance_passed = False
+            record.last_error = "; ".join(failures)
+        else:
+            record.conformance_passed = True
+        return failures
+
+    async def recheck_conformance(self, plugin_id: PluginId) -> dict[str, ConformanceReport]:
+        """Re-run the conformance suites for an already-loaded plugin.
+
+        Plugin authors call this while iterating locally; the spec calls it
+        out as a dev-loop convenience. If any suite fails the plugin is
+        unregistered and moved into `_failed`, mirroring the install path.
+        Returns the per-kind reports collected on this run.
+        """
+        record = self._records.get(plugin_id)
+        if record is None:
+            raise KeyError(f"plugin {plugin_id!r} is not loaded")
+        failures = await self._run_conformance(plugin_id)
+        reports = dict(record.conformance_reports)
+        if failures:
+            self._unregister_record(plugin_id)
+            self._failed[plugin_id] = list(failures)
+        else:
+            # Make sure a successful recheck clears any prior failure state.
+            self._failed.pop(plugin_id, None)
+        return reports
+
+    def conformance_reports(self, plugin_id: PluginId) -> dict[str, ConformanceReport]:
+        """Most recent per-kind reports for a plugin — empty if not run."""
+        record = self._records.get(plugin_id)
+        if record is None:
+            return {}
+        return dict(record.conformance_reports)
 
     async def load(self, plugin_id: PluginId) -> None:
         """Reload a single plugin without re-discovering every directory.
