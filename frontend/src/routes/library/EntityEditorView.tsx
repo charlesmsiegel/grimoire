@@ -17,6 +17,7 @@ import { FrontmatterEditor } from "./FrontmatterEditor";
 import { ensureFrontmatter, type Frontmatter } from "./frontmatter";
 import { greetingFormToPayload, type GreetingFormValue } from "./greeting-form";
 import { GreetingFormFields } from "./GreetingFormFields";
+import { VariantsBreadcrumb } from "./VariantsBreadcrumb";
 import { VariantsPanel } from "./VariantsPanel";
 
 const CHARACTER_HIDDEN_KEYS = ["voice", "image", "name", "id"];
@@ -154,6 +155,11 @@ function EntityEditorBody({
           <small>
             <code>{entity.path}</code> · v{entity.version}
           </small>
+          <VariantsBreadcrumb
+            kindPlural={kindPlural}
+            assetId={entity.asset_id}
+            currentWorldId={worldId}
+          />
         </div>
         <div className="entity-editor-actions">
           <button onClick={handleSaveClick} disabled={!dirty || saving}>

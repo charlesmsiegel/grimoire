@@ -2291,6 +2291,36 @@ pre {
   color: var(--fg-muted);
 }
 
+.world-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.world-detail-heading h3 {
+  margin: 0;
+}
+
+.world-fork-button {
+  flex-shrink: 0;
+}
+
+.entity-variants-breadcrumb {
+  margin: var(--space-1) 0 0;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+
+.entity-variants-breadcrumb a {
+  color: var(--fg-muted);
+  text-decoration: underline;
+}
+
+.entity-variants-breadcrumb a:hover {
+  color: var(--fg);
+}
+
 /* ----- Entity editor ----- */
 
 .entity-editor-body {
