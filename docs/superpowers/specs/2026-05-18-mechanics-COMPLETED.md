@@ -1,6 +1,8 @@
-# Mechanics — Remaining Work
+# Mechanics — Remaining Work (COMPLETED 2026-05-18)
 
-> Everything from the original `specs/06-mechanics.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-mechanics-design.md`). Use this as the input to a writing-plans pass when picking up the work.
+> Everything from the original `specs/06-mechanics.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-mechanics-design.md`).
+
+**Status:** §1–§7 and §9 implemented on `claude/implement-mechanics-design-Hpv4g` (PR #374). §8 (API-version negotiation) and §10–§17 (sandbox, sheet versioning, localisation, network policy, cross-module communication, server-side multiplayer rolls, hot-swap, custom JS bundles) remain deferred or rejected per the spec.
 
 **Companion (already shipped):** `2026-05-12-mechanics-design.md`
 **Module:** `backend/src/grimoire/mechanics/`
