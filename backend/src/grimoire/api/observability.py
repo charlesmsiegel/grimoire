@@ -61,9 +61,7 @@ async def get_turn_prompt(turn_id: str, observability: ObservabilityDep) -> Any:
     sources = [s.model_dump(mode="json") for s in audit.context_sources]
     budget_used = {str(k): v for k, v in audit.context_budget_used.items()}
     composition = (
-        audit.composition_snapshot.model_dump(mode="json")
-        if audit.composition_snapshot
-        else None
+        audit.composition_snapshot.model_dump(mode="json") if audit.composition_snapshot else None
     )
     summary = audit.context_summary.model_dump(mode="json") if audit.context_summary else None
     return {

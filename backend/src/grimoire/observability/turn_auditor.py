@@ -108,9 +108,9 @@ class TurnAuditor:
         if buf is None:
             return
         payload = event.payload
-        if (val := payload.get("provider")):
+        if val := payload.get("provider"):
             buf["llm_provider"] = val
-        if (val := payload.get("model")):
+        if val := payload.get("model"):
             buf["llm_model"] = val
         usage = payload.get("usage") or {}
         if usage.get("input_tokens") is not None:
@@ -123,7 +123,7 @@ class TurnAuditor:
             buf["llm_latency_ms"] = int(val)
         if (val := payload.get("retries")) is not None:
             buf["llm_retries"] = int(val)
-        if (val := payload.get("finish_reason")):
+        if val := payload.get("finish_reason"):
             buf["llm_finish_reason"] = val
         if (val := payload.get("params")) is not None:
             buf["llm_params"] = val
