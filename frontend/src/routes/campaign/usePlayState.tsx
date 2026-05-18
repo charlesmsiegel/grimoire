@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { campaignApi, type ApiPost, type ApiScene, type PCEntry } from "../../api/campaign";
 import { markEnd, markStart } from "../../state/perf";
@@ -191,6 +192,12 @@ export function usePlayState(campaignId: string): PlayApi {
   const stateRef = useRef(state);
   stateRef.current = state;
 
+  // ``/campaigns/:id?scene=...`` lets TimelineView and other surfaces jump
+  // the play view to a specific scene (spec frontend §9). We persist the
+  // query param so a reload re-applies it.
+  const [searchParams] = useSearchParams();
+  const sceneJumpId = searchParams.get("scene");
+
   // Spec 14 §Performance budgets: scene jump < 500ms to render. We mark on
   // every scene-id transition (initial load, refresh, or scene_started event).
   // The reducer is what actually flips state.scene, so we close the span the
@@ -222,11 +229,23 @@ export function usePlayState(campaignId: string): PlayApi {
       const active = pcs.find((p) => p.active) ?? pcs[0] ?? null;
       const activePcRef = active?.character_ref ?? null;
       const scenes = await campaignApi.listScenes(campaignId);
-      const openScene = scenes.find((s) => !s.closed) ?? scenes[scenes.length - 1] ?? null;
+      // Scene selection priority (spec frontend §8/§9):
+      //   1. ``?scene=`` query param (TimelineView "Jump to scene").
+      //   2. Active PC's ``current_scene_id`` (rich PC switcher restores
+      //      that PC's last position when the user switches).
+      //   3. First open scene; else last scene.
+      const explicitScene = sceneJumpId
+        ? scenes.find((s) => s.id === sceneJumpId)
+        : null;
+      const pcScene = active?.current_scene_id
+        ? scenes.find((s) => s.id === active.current_scene_id)
+        : null;
+      const fallback = scenes.find((s) => !s.closed) ?? scenes[scenes.length - 1] ?? null;
+      const targetScene = explicitScene ?? pcScene ?? fallback;
       let scene: ApiScene | null = null;
       let posts: ApiPost[] = [];
-      if (openScene) {
-        const detail = await campaignApi.getScene(campaignId, openScene.id);
+      if (targetScene) {
+        const detail = await campaignApi.getScene(campaignId, targetScene.id);
         scene = detail.scene;
         posts = detail.posts;
       }
@@ -234,7 +253,7 @@ export function usePlayState(campaignId: string): PlayApi {
     } catch (e) {
       dispatch({ type: "error", message: e instanceof Error ? e.message : String(e) });
     }
-  }, [campaignId]);
+  }, [campaignId, sceneJumpId]);
 
   useEffect(() => {
     void refresh();
@@ -313,8 +332,11 @@ export function usePlayState(campaignId: string): PlayApi {
       } catch {
         // Non-fatal: server still records the post under the chosen ref.
       }
+      // Refresh so the active scene re-orients to the new PC's
+      // ``current_scene_id`` (spec frontend §8).
+      await refresh();
     },
-    [campaignId],
+    [campaignId, refresh],
   );
 
   const submit = useCallback(

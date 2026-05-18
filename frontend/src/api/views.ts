@@ -16,6 +16,7 @@ import type {
   ResolvedCharacter,
   ResolvedEntity,
   SceneSummary,
+  WorldDiff,
   WorldMeta,
   UpgradeReport,
 } from "./types";
@@ -46,6 +47,10 @@ export const viewsApi = {
     api.post<UpgradeReport>(
       `/api/campaigns/${enc(campaignId)}/composition/refs/${enc(worldId)}/upgrade`,
     ),
+  worldDiff: (worldId: string, fromVersion: number, toVersion?: number) =>
+    api.get<WorldDiff>(`/api/library/worlds/${enc(worldId)}/diff`, {
+      query: { from: fromVersion, to: toVersion },
+    }),
 
   listImages: (campaignId: string, opts: { sceneId?: string; starredOnly?: boolean } = {}) =>
     api.get<ImageMetadata[]>(`/api/campaigns/${enc(campaignId)}/images`, {
@@ -65,6 +70,31 @@ export const viewsApi = {
       `/api/campaigns/${enc(campaignId)}/sheets/${enc(kind)}/${enc(entityId)}`,
       sheet,
     ),
+  bulkCreateMissingSheets: (campaignId: string) =>
+    api.post<{
+      created: { kind: string; entity_id: string }[];
+      skipped: { kind: string; entity_id: string }[];
+    }>(`/api/campaigns/${enc(campaignId)}/sheets/bulk-create-missing`),
+
+  patchCharacterOverride: (
+    campaignId: string,
+    entityId: string,
+    payload: { override: Record<string, unknown>; world_id?: string; source?: string },
+  ) =>
+    api.patch<{ ok: true; world_id: string; ref: string }>(
+      `/api/campaigns/${enc(campaignId)}/characters/${enc(entityId)}/override`,
+      payload,
+    ),
+
+  promoteCharacterToLibrary: (
+    campaignId: string,
+    entityId: string,
+    payload: { target_world_id: string; confirm?: boolean; source?: string },
+  ) =>
+    api.post<unknown>(
+      `/api/campaigns/${enc(campaignId)}/characters/${enc(entityId)}/promote-to-library`,
+      payload,
+    ),
 
   // ---------- Library / mechanics ----------
 
@@ -73,4 +103,15 @@ export const viewsApi = {
     api.get<Greeting[]>(`/api/library/worlds/${enc(worldId)}/greetings`),
 
   installedMechanics: () => api.get<RegisteredMechanicsModule[]>(`/api/mechanics/installed`),
+  getSheetSchema: (moduleId: string, kind: string) =>
+    api.get<Record<string, unknown>>(
+      `/api/mechanics/${enc(moduleId)}/sheets/${enc(kind)}`,
+    ),
+  getMechanicsThemeCss: (moduleId: string) =>
+    api.getText(`/api/mechanics/${enc(moduleId)}/theme.css`),
+
+  listStyleGuides: () =>
+    api.get<{ id: string; asset_id: string; name: string }[]>(`/api/library/style-guides`),
+  listImagePresets: () =>
+    api.get<{ id: string; asset_id: string; name: string }[]>(`/api/library/image-presets`),
 };

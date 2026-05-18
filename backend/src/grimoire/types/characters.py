@@ -133,6 +133,11 @@ class PCEntry(BaseModel):
     name: str
     owner: str  # 'local' in v1; account id in v2
     active: bool = True
+    # Rich switcher payload (frontend spec §8). All optional; the switcher
+    # falls back to a bare label when these are missing.
+    current_scene_id: str | None = None
+    current_location_ref: str | None = None
+    last_played_at: datetime | None = None
 
 
 class CharacterFilter(BaseModel):

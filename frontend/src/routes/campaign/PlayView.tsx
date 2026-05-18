@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { campaignApi, type OpenCommitment } from "../../api/campaign";
+import { campaignApi, type CampaignSummary, type OpenCommitment } from "../../api/campaign";
 import { useCampaignEvent } from "../../state/useCampaignEvent";
 import { DriftBanner } from "./DriftBanner";
 import { InputArea } from "./InputArea";
+import { PCSwitcher } from "./PCSwitcher";
 import { SceneHeader } from "./SceneHeader";
 import { ScenePane } from "./ScenePane";
 import { SidePanel } from "./SidePanel";
@@ -16,8 +17,24 @@ interface Props {
 export function PlayView({ campaignId }: Props) {
   const play = usePlayState(campaignId);
   const [commitments, setCommitments] = useState<OpenCommitment[]>([]);
+  const [campaign, setCampaign] = useState<CampaignSummary | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    campaignApi
+      .get(campaignId)
+      .then((c) => {
+        if (!cancelled) setCampaign(c);
+      })
+      .catch(() => {
+        // Best-effort: a missing summary just falls back to the campaign id.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [campaignId]);
 
   const refreshCommitments = useCallback(async () => {
     try {
@@ -90,7 +107,12 @@ export function PlayView({ campaignId }: Props) {
   return (
     <section className="play-view" aria-label="Campaign play view">
       <div className="play-top-bar">
-        <h2 className="play-campaign">Campaign · {campaignId}</h2>
+        <h2 className="play-campaign">{campaign?.name ?? campaignId}</h2>
+        <PCSwitcher
+          pcs={play.state.pcs}
+          activePcRef={play.state.activePcRef}
+          onChange={(ref) => void play.setActivePC(ref)}
+        />
       </div>
 
       <DriftBanner warnings={driftWarnings} onSuppress={play.suppressDrift} />

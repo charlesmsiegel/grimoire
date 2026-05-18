@@ -846,15 +846,35 @@ class CharactersService:
     async def list_pcs(self, campaign_id: CampaignId) -> list[PCEntry]:
         rows = await self.store.list_pcs(campaign_id)
         active_ref = self._seed_active_pc_from_rows(campaign_id, rows)
-        return [
-            PCEntry(
-                character_ref=row["character_ref"],
-                name=row["display_name"],
-                owner=row["owner"],
-                active=active_ref == row["character_ref"],
+        out: list[PCEntry] = []
+        for row in rows:
+            char_ref = row["character_ref"]
+            current_scene_id: str | None = None
+            current_location_ref: str | None = None
+            try:
+                state = await self._load_state(
+                    _asset_id_for_ref(char_ref), char_ref, campaign_id
+                )
+                current_scene_id = state.current_scene_id
+                current_location_ref = state.location_ref
+            except Exception:
+                # State load is best-effort; falling back to bare PC
+                # entry keeps the switcher functional when the per-PC
+                # state row hasn't been created yet (fresh campaign).
+                pass
+            last_played_at = _parse_iso_dt(row.get("last_played_at"))
+            out.append(
+                PCEntry(
+                    character_ref=char_ref,
+                    name=row["display_name"],
+                    owner=row["owner"],
+                    active=active_ref == char_ref,
+                    current_scene_id=current_scene_id,
+                    current_location_ref=current_location_ref,
+                    last_played_at=last_played_at,
+                )
             )
-            for row in rows
-        ]
+        return out
 
     async def add_pc(
         self,
@@ -1952,6 +1972,18 @@ def _parse_character_ref(ref: str) -> _CharacterRefView:
 
 def _asset_id_for_ref(ref: CharacterRef) -> str:
     return _parse_character_ref(ref).asset_id
+
+
+def _parse_iso_dt(value: Any) -> datetime | None:
+    """Best-effort ISO-8601 -> datetime, tolerating None / bad strings."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
 
 
 def _library_id_from_ref(ref: CharacterRef) -> str:

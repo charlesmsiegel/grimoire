@@ -8,13 +8,15 @@
  * up once the mechanics modules expose those surfaces over REST.
  */
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { ApiError } from "../../api/client";
 import { viewsApi } from "../../api/views";
 import type { ResolvedCharacter } from "../../api/types";
 import { useApi } from "../../api/useApi";
+import { SheetRenderer } from "../../sheets";
+import type { SheetSchema, SheetValue } from "../../sheets/types";
 import { Loading } from "./common";
 
 export function MechanicsView() {

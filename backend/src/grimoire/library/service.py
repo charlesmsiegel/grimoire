@@ -558,6 +558,69 @@ class LibraryService:
                 (campaign_id, old),
             )
 
+    async def world_diff(
+        self,
+        world_id: str,
+        from_version: int,
+        to_version: int | None = None,
+    ) -> dict[str, Any]:
+        """Synthesize a flat diff between two versions of a world.
+
+        Compares the world's current ``library_index`` rows against
+        ``from_version``. Entities whose ``version > from_version``
+        appear as ``changed`` (with the current frontmatter+body as
+        ``after``; ``before`` is None because we don't retain historical
+        bodies). Entities whose ``version <= from_version`` are
+        unchanged. ``added`` and ``removed`` are surfaced empty in v1
+        and reserved for a future history table.
+
+        ``to_version`` is accepted for symmetry with the spec but
+        clamped to the world's current max version — we cannot
+        reconstruct future or intermediate state without history.
+        """
+        # Ensure the world exists; raises if not.
+        await self.get_world(world_id)
+        max_row = await self.store.db.fetchone(
+            "SELECT MAX(version) AS v FROM library_index WHERE world_id = ?",
+            (world_id,),
+        )
+        current_max = int((max_row["v"] if max_row else 0) or 0)
+        if to_version is None:
+            to_version = current_max
+        # Clamp; we cannot synthesize state past the latest indexed version.
+        effective_to = min(to_version, current_max)
+
+        rows = await self.store.db.fetchall(
+            "SELECT id, kind, asset_id, name, frontmatter, body, version, world_id "
+            "FROM library_index WHERE world_id = ? AND kind != 'world' "
+            "ORDER BY kind, asset_id",
+            (world_id,),
+        )
+
+        changed: list[dict[str, Any]] = []
+        for raw in rows:
+            row = _normalize_row(raw)
+            version = int(row.get("version") or 0)
+            if version <= from_version:
+                continue
+            path = f"{row.get('kind')}/{row.get('asset_id')}"
+            after = {
+                "name": row.get("name") or row.get("asset_id"),
+                "frontmatter": row.get("frontmatter") or {},
+                "body": row.get("body") or "",
+                "version": version,
+            }
+            changed.append({"path": path, "before": None, "after": after})
+
+        return {
+            "world_id": world_id,
+            "from_version": int(from_version),
+            "to_version": int(effective_to),
+            "added": [],
+            "removed": [],
+            "changed": changed,
+        }
+
     async def upgrade_world_ref(self, campaign_id: str, world_id: str) -> UpgradeReport:
         before_max = await self.store.db.fetchone(
             "SELECT bound_at_version FROM campaign_world_refs "
