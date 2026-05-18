@@ -26,12 +26,14 @@ from grimoire.state_store.paths import (
     parse_library_id,
     sheet_path,
 )
+from grimoire.state_store.embedding_worker import EmbeddingWorker, reenqueue_missing_embeddings
 from grimoire.state_store.store import StateStore
 from grimoire.state_store.summarizer import BodySummarizer
 
 __all__ = [
     "AutoBackupConfig",
     "BodySummarizer",
+    "EmbeddingWorker",
     "KIND_TO_DIR",
     "LibrarySectionConfig",
     "LibraryRef",
@@ -45,5 +47,6 @@ __all__ = [
     "library_path",
     "override_path",
     "parse_library_id",
+    "reenqueue_missing_embeddings",
     "sheet_path",
 ]
