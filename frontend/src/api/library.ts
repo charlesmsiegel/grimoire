@@ -16,15 +16,65 @@ const API_BASE = "/api";
 // across module boundaries is consistent.
 export { ApiError };
 
+// --------------------------------------------------------------------------
+// Tiny in-memory GET cache (spec 14 §Performance budgets: "library cached"
+// across campaign switches).
+//
+// Keyed by URL; entries expire after `CACHE_TTL_MS`. Any non-GET request
+// invalidates the entire cache — this is coarse but library writes are rare
+// compared to reads, and the TTL bounds staleness either way. Resources that
+// must always be fresh (e.g. health probes) can pass `cache: false`.
+// --------------------------------------------------------------------------
+
+const CACHE_TTL_MS = 30_000;
+
+interface CacheEntry {
+  expires: number;
+  value: unknown;
+}
+
+const cache = new Map<string, CacheEntry>();
+
+function cacheGet(url: string): unknown | undefined {
+  const entry = cache.get(url);
+  if (!entry) return undefined;
+  if (entry.expires < Date.now()) {
+    cache.delete(url);
+    return undefined;
+  }
+  return entry.value;
+}
+
+function cacheSet(url: string, value: unknown): void {
+  cache.set(url, { expires: Date.now() + CACHE_TTL_MS, value });
+}
+
+/** Drop all cached responses. Called automatically on any non-GET request. */
+export function clearLibraryCache(): void {
+  cache.clear();
+}
+
+interface RequestOptions {
+  /** Skip the GET cache for this call. Default true for GETs. */
+  cache?: boolean;
+}
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
   init?: RequestInit,
+  opts?: RequestOptions,
 ): Promise<T> {
+  const useCache = method === "GET" && opts?.cache !== false;
+  const url = `${API_BASE}${path}`;
+  if (useCache) {
+    const hit = cacheGet(url);
+    if (hit !== undefined) return hit as T;
+  }
   const headers = new Headers(init?.headers);
   if (body !== undefined) headers.set("Content-Type", "application/json");
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(url, {
     ...init,
     method,
     headers,
@@ -34,10 +84,14 @@ async function request<T>(
     const text = await res.text().catch(() => "");
     throw new ApiError(res.status, text);
   }
+  // Any write invalidates the cache so the next read sees fresh data.
+  if (method !== "GET") clearLibraryCache();
   if (res.status === 204) return undefined as T;
   const ct = res.headers.get("content-type") ?? "";
   if (!ct.includes("application/json")) return undefined as T;
-  return (await res.json()) as T;
+  const parsed = (await res.json()) as T;
+  if (useCache) cacheSet(url, parsed);
+  return parsed;
 }
 
 // --------------------------------------------------------------------------

@@ -1,4 +1,7 @@
+import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
+
+import { markStart } from "../../state/perf";
 
 const tabs = [
   { to: "/library/worlds", label: "Worlds" },
@@ -9,6 +12,13 @@ const tabs = [
 ];
 
 export function LibraryLayout() {
+  // Spec 14 §Performance budgets: library 100 assets < 500ms. The matching
+  // `markEnd("library:render")` lives in `WorldsListView` (the default tab)
+  // so the span covers fetch + render to first content.
+  useEffect(() => {
+    markStart("library:render");
+  }, []);
+
   return (
     <section className="route library-view" aria-labelledby="library-heading">
       <header className="library-header">

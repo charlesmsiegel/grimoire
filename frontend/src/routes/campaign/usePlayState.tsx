@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 
 import { campaignApi, type ApiPost, type ApiScene, type PCEntry } from "../../api/campaign";
+import { markEnd, markStart } from "../../state/perf";
 import { useCampaignEvent } from "../../state/useCampaignEvent";
 import type { WSMessage } from "../../ws/client";
 
@@ -190,7 +191,31 @@ export function usePlayState(campaignId: string): PlayApi {
   const stateRef = useRef(state);
   stateRef.current = state;
 
+  // Spec 14 §Performance budgets: scene jump < 500ms to render. We mark on
+  // every scene-id transition (initial load, refresh, or scene_started event).
+  // The reducer is what actually flips state.scene, so we close the span the
+  // first effect after the new id appears.
+  const lastSceneIdRef = useRef<string | null>(null);
+  const sceneJumpPendingRef = useRef(false);
+  useEffect(() => {
+    const newId = state.scene?.id ?? null;
+    if (newId !== lastSceneIdRef.current) {
+      if (sceneJumpPendingRef.current) {
+        markEnd("scene:jump");
+        sceneJumpPendingRef.current = false;
+      }
+      lastSceneIdRef.current = newId;
+    }
+  }, [state.scene]);
+
   const refresh = useCallback(async () => {
+    // Treat every refresh as a potential scene transition — the effect above
+    // only closes the span when scene.id actually changes, so a refresh that
+    // returns the same scene is a no-op for the measurement.
+    if (!sceneJumpPendingRef.current) {
+      markStart("scene:jump");
+      sceneJumpPendingRef.current = true;
+    }
     dispatch({ type: "loading" });
     try {
       const pcs = await campaignApi.listPCs(campaignId);
