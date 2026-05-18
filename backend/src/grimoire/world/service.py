@@ -1219,7 +1219,15 @@ class WorldService:
     ) -> str:
         normalized = _normalize_kind(kind)
         if normalized == "character":
-            raise WorldError("character promotion goes through the Characters module (task #12)")
+            # Character promotion has its own two-step propose / confirm
+            # flow (see CharactersService.promote_to_library + the
+            # /campaigns/{id}/characters/{eid}/promote-to-library endpoint
+            # in api/campaigns.py). World-side promotion would skip those
+            # safety rails, so we reject the kind here instead.
+            raise WorldError(
+                "character promotion is routed through CharactersService; "
+                "POST /campaigns/{campaign_id}/characters/{entity_id}/promote-to-library"
+            )
         return await self.library.promote_to_library(
             campaign_id, normalized, campaign_entity_id, target_world_id, source=source
         )
