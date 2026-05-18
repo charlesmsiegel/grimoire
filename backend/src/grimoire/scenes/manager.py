@@ -67,9 +67,7 @@ from grimoire.scenes.types import (
 Summarizer = Callable[[str | None, list[Post]], Awaitable[str]]
 FinalSummarizer = Callable[[Scene, list[Post]], Awaitable[tuple[str, list[str]]]]
 ThreadDetector = Callable[[Scene, list[Post]], Awaitable[list[tuple[Thread, str]]]]
-SceneBreakClassifier = Callable[
-    [Scene | None, str, list[Post]], Awaitable[SceneBreakDecision]
-]
+SceneBreakClassifier = Callable[[Scene | None, str, list[Post]], Awaitable[SceneBreakDecision]]
 
 
 class _NullEventBus:
@@ -346,9 +344,7 @@ class SceneManager:
         self._post_records.setdefault(scene.id, {})
         self._records_hydrated.add(scene.id)
         self._write_sidecar(scene)
-        self._known_body_hashes[scene.id] = content_hash(
-            md_path.read_text(encoding="utf-8")
-        )
+        self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
 
         self._active_scene[(scene.campaign_id, scene.branch_id)] = scene.id
         for pc_ref in scene.present_pc_refs:
@@ -357,9 +353,7 @@ class SceneManager:
         await self._emit(SCENE_STARTED, scene)
         return scene
 
-    async def close_scene(
-        self, scene_id: str, *, closed_at_turn: str
-    ) -> SceneCloseReport:
+    async def close_scene(self, scene_id: str, *, closed_at_turn: str) -> SceneCloseReport:
         """Close a scene; ``closed_at_turn`` is the orchestrator's turn id.
 
         Required so downstream audit queries (``WHERE closed_at_turn = ?``)
@@ -392,9 +386,7 @@ class SceneManager:
             self._write_sidecar(scene)
 
             paid_off_texts = {t.text for t in scene.threads_paid_off}
-            unresolved = [
-                t for t in scene.threads_introduced if t.text not in paid_off_texts
-            ]
+            unresolved = [t for t in scene.threads_introduced if t.text not in paid_off_texts]
             report = SceneCloseReport(
                 scene=scene,
                 final_summary=final_summary,
@@ -473,9 +465,7 @@ class SceneManager:
                 is_player=post.is_player,
             )
             self._write_sidecar(scene)
-            self._known_body_hashes[scene.id] = content_hash(
-                md_path.read_text(encoding="utf-8")
-            )
+            self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
 
             await self._emit(
                 POST_APPENDED,
@@ -772,9 +762,7 @@ class SceneManager:
                 updated,
                 heading_pattern=self.config.files.post_heading_pattern,
             )
-            self._known_body_hashes[scene.id] = content_hash(
-                md_path.read_text(encoding="utf-8")
-            )
+            self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
             await self._emit(
                 POST_EDITED,
                 scene,
@@ -818,9 +806,7 @@ class SceneManager:
                     shifted[key] = record
             self._post_records[scene.id] = shifted
             self._write_sidecar(scene)
-            self._known_body_hashes[scene.id] = content_hash(
-                md_path.read_text(encoding="utf-8")
-            )
+            self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
             await self._emit(
                 POST_DELETED,
                 scene,
@@ -940,9 +926,7 @@ class SceneManager:
         self._hydrate_records(scene)
         md_path, _ = self._scene_file_paths(scene)
         if md_path.exists():
-            self._known_body_hashes[scene_id] = content_hash(
-                md_path.read_text(encoding="utf-8")
-            )
+            self._known_body_hashes[scene_id] = content_hash(md_path.read_text(encoding="utf-8"))
 
 
 class NothingToAdvance(RuntimeError):

@@ -484,13 +484,7 @@ async def test_legacy_thread_sidecar_loads(tmp_path: Path) -> None:
     import yaml as _yaml
 
     # Build a sidecar by hand with the legacy schema.
-    sidecar = (
-        tmp_path
-        / "campaigns"
-        / "c"
-        / "scenes"
-        / "0001-scene.yaml"
-    )
+    sidecar = tmp_path / "campaigns" / "c" / "scenes" / "0001-scene.yaml"
     sidecar.parent.mkdir(parents=True)
     (sidecar.parent / "0001-scene.md").write_text("")
     sidecar.write_text(
@@ -520,9 +514,7 @@ async def test_scene_break_classifier_refines_borderline(tmp_path: Path) -> None
     from grimoire.scenes.types import SceneBreakDecision
 
     async def force_break(scene, player_input, recent):
-        return SceneBreakDecision(
-            is_break=True, confidence=0.95, reason="llm:tonal_shift"
-        )
+        return SceneBreakDecision(is_break=True, confidence=0.95, reason="llm:tonal_shift")
 
     bus = InMemoryEventBus()
     manager = SceneManager(

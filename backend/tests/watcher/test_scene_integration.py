@@ -48,9 +48,7 @@ async def setup(tmp_path: Path, db):
         config=SceneManagerConfig(running_summary_every_n_posts=0),
         event_bus=bus,
     )
-    watcher = FileWatcher(
-        data_root=data_root, store=store, bus=bus, scene_manager=manager
-    )
+    watcher = FileWatcher(data_root=data_root, store=store, bus=bus, scene_manager=manager)
     events: list = []
 
     async def on_event(event):
