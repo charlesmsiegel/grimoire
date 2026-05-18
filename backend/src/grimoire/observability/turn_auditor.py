@@ -87,11 +87,19 @@ class TurnAuditor:
         buf["context_budget_used"] = budget
         if hash_val := event.payload.get("messages_hash"):
             buf["context_messages_hash"] = hash_val
-        if (summary := event.payload.get("context_summary")) is not None:
+        # ``context_summary`` and ``composition_snapshot`` must be either a
+        # dict with the schema's required keys or ``None``; the orchestrator
+        # currently sources these from ``AssembledPrompt`` which stores them
+        # as plain primitives (``str`` / ``dict``). A bare ``""`` or ``{}``
+        # would fail ``TurnAudit.model_validate`` and silently drop the row,
+        # so we only buffer non-empty dicts.
+        summary = event.payload.get("context_summary")
+        if isinstance(summary, dict) and summary:
             buf["context_summary"] = summary
         if sources := event.payload.get("context_sources"):
             buf["context_sources"] = sources
-        if (snap := event.payload.get("composition_snapshot")) is not None:
+        snap = event.payload.get("composition_snapshot")
+        if isinstance(snap, dict) and snap:
             buf["composition_snapshot"] = snap
         if self._config.capture_full_prompt and (
             (messages := event.payload.get("assembled_messages")) is not None
