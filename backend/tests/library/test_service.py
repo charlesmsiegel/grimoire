@@ -742,6 +742,123 @@ async def test_promote_missing_emergent_raises(library: LibraryService) -> None:
         await library.promote_to_library("camp-x", "item", "ghost", "wod-london")
 
 
+async def test_promote_deletes_emergent_when_identical(
+    library: LibraryService, store: StateStore
+) -> None:
+    """§4: After promotion the emergent file matches what we wrote → delete it."""
+    await _seed_world(store, "wod-london")
+    await store.upsert_campaign(campaign_id="camp-1", name="Camp")
+    await store.write_emergent(
+        campaign_id="camp-1",
+        kind="item",
+        entity_id="the-camden-blade",
+        frontmatter={"name": "The Camden Blade", "id": "the-camden-blade"},
+        body="A blade.",
+        source="extractor",
+    )
+    await library.promote_to_library("camp-1", "item", "the-camden-blade", "wod-london")
+
+    # Emergent file + index row are both gone.
+    assert (
+        await store.get_emergent("camp-1", "item", "the-camden-blade")
+    ) is None
+    from grimoire.state_store.paths import emergent_path
+
+    assert not emergent_path(
+        store.data_root, "camp-1", "item", "the-camden-blade"
+    ).exists()
+
+
+async def test_promote_writes_override_when_emergent_diverged_after_read(
+    library: LibraryService, store: StateStore
+) -> None:
+    """§4: Continued mutations after the in-memory read survive as an override."""
+    from unittest.mock import AsyncMock
+
+    await _seed_world(store, "wod-london")
+    await store.upsert_campaign(campaign_id="camp-1", name="Camp")
+    await store.write_emergent(
+        campaign_id="camp-1",
+        kind="item",
+        entity_id="the-camden-blade",
+        frontmatter={"name": "The Camden Blade", "id": "the-camden-blade"},
+        body="A blade.",
+        source="extractor",
+    )
+
+    # Promote reads emergent, writes library, then re-reads emergent. Patch
+    # the second get_emergent call to simulate the campaign editing the file
+    # between the two reads — a divergent name + body.
+    real_get = store.get_emergent
+    calls = {"n": 0}
+
+    async def _flip(campaign_id: str, kind: str, eid: str):  # noqa: ANN001
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return await real_get(campaign_id, kind, eid)
+        return {
+            "frontmatter": {
+                "name": "The Camden Blade (engraved)",
+                "id": "the-camden-blade",
+            },
+            "body": "A blade with a new inscription.",
+        }
+
+    store.get_emergent = AsyncMock(side_effect=_flip)  # type: ignore[method-assign]
+    await library.promote_to_library("camp-1", "item", "the-camden-blade", "wod-london")
+    store.get_emergent = real_get  # type: ignore[method-assign]
+
+    # Resolving through the campaign now layers the override on top of the
+    # promoted library row.
+    resolved = await library.resolve(
+        "worlds/wod-london/items/the-camden-blade", "camp-1"
+    )
+    assert resolved.frontmatter["name"] == "The Camden Blade (engraved)"
+    assert resolved.source_chain[0].layer.value == "override"
+
+    # The emergent file is gone.
+    from grimoire.state_store.paths import emergent_path
+
+    assert not emergent_path(
+        store.data_root, "camp-1", "item", "the-camden-blade"
+    ).exists()
+
+
+async def test_promote_emits_library_entity_promoted_event(
+    store: StateStore,
+) -> None:
+    """§4: promotion fires ``library_entity_promoted`` so subscribers can refresh."""
+    from grimoire.event_bus import EventBus
+    from grimoire.library import LibraryService
+
+    bus = EventBus()
+    seen: list = []
+
+    async def _on(event):  # noqa: ANN001
+        seen.append(event)
+
+    bus.subscribe("library_entity_promoted", _on)
+    lib = LibraryService(store, event_bus=bus)
+
+    await _seed_world(store, "wod-london")
+    await store.upsert_campaign(campaign_id="camp-1", name="Camp")
+    await store.write_emergent(
+        campaign_id="camp-1",
+        kind="lore",
+        entity_id="founding-of-london",
+        frontmatter={"name": "Founding of London", "id": "founding-of-london"},
+        body="Long ago.",
+        source="extractor",
+    )
+    await lib.promote_to_library("camp-1", "lore", "founding-of-london", "wod-london")
+
+    assert any(e.type == "library_entity_promoted" for e in seen)
+    payload = next(e.payload for e in seen if e.type == "library_entity_promoted")
+    assert payload["library_id"] == "worlds/wod-london/lore/founding-of-london"
+    assert payload["cleanup"] == "deleted"
+    assert payload["body_diverged"] is False
+
+
 async def test_promote_rejects_top_level_kinds(library: LibraryService) -> None:
     with pytest.raises(PromotionError):
         await library.promote_to_library("camp-1", "style_guide", "g", "wod-london")
