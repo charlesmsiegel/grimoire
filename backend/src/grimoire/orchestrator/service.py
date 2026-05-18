@@ -720,12 +720,8 @@ class OrchestratorService:
             campaign_id,
             scene_id,
             count=len(extraction.deltas) if extraction else 0,
-            deltas=(
-                [d.model_dump(mode="json") for d in extraction.deltas] if extraction else []
-            ),
-            strategies_run=(
-                list(getattr(extraction, "strategies_run", [])) if extraction else []
-            ),
+            deltas=([d.model_dump(mode="json") for d in extraction.deltas] if extraction else []),
+            strategies_run=(list(getattr(extraction, "strategies_run", [])) if extraction else []),
             flags=(
                 [f.model_dump(mode="json") for f in getattr(extraction, "flags", [])]
                 if extraction

@@ -76,9 +76,7 @@ async def test_get_turn_audit_unknown_returns_404(client: TestClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_turn_prompt(
-    container_with_obs: ServiceContainer, client: TestClient
-) -> None:
+async def test_get_turn_prompt(container_with_obs: ServiceContainer, client: TestClient) -> None:
     await _seed_audit(container_with_obs.observability)
     resp = client.get("/api/observability/turns/t_test/prompt")
     assert resp.status_code == 200

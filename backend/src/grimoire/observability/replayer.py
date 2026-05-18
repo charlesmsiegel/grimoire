@@ -147,9 +147,7 @@ class TurnReplayerService:
                 except Exception:
                     logger.warning("replay: failed to rehydrate stored message: %r", raw)
             if sub and sub.extra_context:
-                messages.append(
-                    Message(role=MessageRole.USER, content=sub.extra_context)
-                )
+                messages.append(Message(role=MessageRole.USER, content=sub.extra_context))
         else:
             user_body = audit.player_input or ""
             if sub and sub.extra_context:
