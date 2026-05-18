@@ -853,9 +853,7 @@ class LibraryService:
             raise LibraryNotFoundError(f"library entity {library_id!r} does not exist")
         override = await self.store.get_override(campaign_id, library_id)
         if not override:
-            raise LibraryError(
-                f"no override on {library_id!r} for campaign {campaign_id!r}"
-            )
+            raise LibraryError(f"no override on {library_id!r} for campaign {campaign_id!r}")
         merged_fm = dict(before_row.get("frontmatter") or {})
         merged_fm.update(override)
         return {
@@ -1086,9 +1084,7 @@ class LibraryService:
             (campaign_id, world_id),
         )
         if camp_row is None:
-            raise LibraryNotFoundError(
-                f"campaign {campaign_id!r} does not bind world {world_id!r}"
-            )
+            raise LibraryNotFoundError(f"campaign {campaign_id!r} does not bind world {world_id!r}")
         from_version = int(camp_row["bound_at_version"] or 0)
         branch_id = f"{campaign_id}:main"
 
@@ -1126,11 +1122,7 @@ class LibraryService:
                 added.append(lib_id)
             elif live is None and snap is not None:
                 removed.append(lib_id)
-            elif (
-                snap is not None
-                and live is not None
-                and before_version != after_version
-            ):
+            elif snap is not None and live is not None and before_version != after_version:
                 changed.append(lib_id)
             else:
                 continue

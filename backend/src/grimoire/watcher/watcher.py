@@ -54,9 +54,7 @@ _EMBEDDABLE_KINDS: frozenset[str] = frozenset(
 # the background-tier context injection (spec 02 §Background tier). Only
 # library-scoped prose-bearing kinds qualify; emergent and scene bodies live
 # in ``campaign_content_index`` which has no body_compressed column.
-_SUMMARIZABLE_KINDS: frozenset[str] = frozenset(
-    {"library_entity", "library_style_guide"}
-)
+_SUMMARIZABLE_KINDS: frozenset[str] = frozenset({"library_entity", "library_style_guide"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,17 +340,13 @@ class FileWatcher:
         if _is_under(src_resolved, library_root) or _is_under(dest_resolved, library_root):
             scope = "library"
             event_type = "library_rename_detected"
-        elif _is_under(src_resolved, campaigns_root) or _is_under(
-            dest_resolved, campaigns_root
-        ):
+        elif _is_under(src_resolved, campaigns_root) or _is_under(dest_resolved, campaigns_root):
             scope = "campaign"
             event_type = "campaign_rename_detected"
         else:
             return
 
-        library_ids, content_index_ids = await self._collect_affected_index_rows(
-            src_resolved
-        )
+        library_ids, content_index_ids = await self._collect_affected_index_rows(src_resolved)
 
         pending = _PendingRename(
             src=src_resolved,
@@ -706,9 +700,7 @@ class FileWatcher:
         try:
             await self.handle_directory_move(src, dest)
         except Exception:
-            logger.exception(
-                "watcher: handle_directory_move failed for %s -> %s", src, dest
-            )
+            logger.exception("watcher: handle_directory_move failed for %s -> %s", src, dest)
 
     # ------------------------------------------------------------------ #
     # Suppression + rename bookkeeping
@@ -726,15 +718,11 @@ class FileWatcher:
         if not self._pending_renames:
             return False
         for pending in self._pending_renames.values():
-            if _is_under(resolved_path, pending.src) or _is_under(
-                resolved_path, pending.dest
-            ):
+            if _is_under(resolved_path, pending.src) or _is_under(resolved_path, pending.dest):
                 return True
         return False
 
-    async def _collect_affected_index_rows(
-        self, src: Path
-    ) -> tuple[list[str], list[str]]:
+    async def _collect_affected_index_rows(self, src: Path) -> tuple[list[str], list[str]]:
         """Find the library_index / campaign_content_index rows under ``src``.
 
         Rows are matched by their stored ``path`` column (which is relative to
@@ -924,9 +912,7 @@ class _WatchdogBridge(FileSystemEventHandler):
             src = getattr(event, "src_path", None)
             dest = getattr(event, "dest_path", None)
             if src and dest:
-                self._watcher._schedule_directory_move_from_thread(
-                    Path(src), Path(dest)
-                )
+                self._watcher._schedule_directory_move_from_thread(Path(src), Path(dest))
             return
         src = getattr(event, "src_path", None)
         if src:

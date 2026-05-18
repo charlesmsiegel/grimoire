@@ -759,14 +759,10 @@ async def test_promote_deletes_emergent_when_identical(
     await library.promote_to_library("camp-1", "item", "the-camden-blade", "wod-london")
 
     # Emergent file + index row are both gone.
-    assert (
-        await store.get_emergent("camp-1", "item", "the-camden-blade")
-    ) is None
+    assert (await store.get_emergent("camp-1", "item", "the-camden-blade")) is None
     from grimoire.state_store.paths import emergent_path
 
-    assert not emergent_path(
-        store.data_root, "camp-1", "item", "the-camden-blade"
-    ).exists()
+    assert not emergent_path(store.data_root, "camp-1", "item", "the-camden-blade").exists()
 
 
 async def test_promote_writes_override_when_emergent_diverged_after_read(
@@ -810,18 +806,14 @@ async def test_promote_writes_override_when_emergent_diverged_after_read(
 
     # Resolving through the campaign now layers the override on top of the
     # promoted library row.
-    resolved = await library.resolve(
-        "worlds/wod-london/items/the-camden-blade", "camp-1"
-    )
+    resolved = await library.resolve("worlds/wod-london/items/the-camden-blade", "camp-1")
     assert resolved.frontmatter["name"] == "The Camden Blade (engraved)"
     assert resolved.source_chain[0].layer.value == "override"
 
     # The emergent file is gone.
     from grimoire.state_store.paths import emergent_path
 
-    assert not emergent_path(
-        store.data_root, "camp-1", "item", "the-camden-blade"
-    ).exists()
+    assert not emergent_path(store.data_root, "camp-1", "item", "the-camden-blade").exists()
 
 
 async def test_promote_emits_library_entity_promoted_event(
@@ -969,9 +961,7 @@ async def test_demote_deletes_library_file_and_returns_dependents(
     await library.set_composition(
         "camp-1",
         Composition(
-            worlds=[
-                WorldRef(world_id="wod-london", priority=1, include=None, track_latest=True)
-            ]
+            worlds=[WorldRef(world_id="wod-london", priority=1, include=None, track_latest=True)]
         ),
     )
 
@@ -990,15 +980,11 @@ async def test_demote_copies_down_to_campaign_emergent(
     await library.set_composition(
         "camp-1",
         Composition(
-            worlds=[
-                WorldRef(world_id="wod-london", priority=1, include=None, track_latest=True)
-            ]
+            worlds=[WorldRef(world_id="wod-london", priority=1, include=None, track_latest=True)]
         ),
     )
 
-    await library.demote(
-        "wod-london", "character", "alistair", copy_down_to=["camp-1"]
-    )
+    await library.demote("wod-london", "character", "alistair", copy_down_to=["camp-1"])
     emergent = await store.get_emergent("camp-1", "character", "alistair")
     assert emergent is not None
     assert emergent["frontmatter"]["name"] == "Alistair"
@@ -1097,9 +1083,7 @@ async def test_save_override_to_library_requires_existing_override(
     await _seed_character(store, "wod-london", "alistair")
     await store.upsert_campaign(campaign_id="camp-1", name="Camp")
     with pytest.raises(LibraryError, match="no override"):
-        await library.save_override_to_library(
-            "camp-1", "worlds/wod-london/characters/alistair"
-        )
+        await library.save_override_to_library("camp-1", "worlds/wod-london/characters/alistair")
 
 
 # ---------------------------------------------------------------------------
@@ -1118,9 +1102,7 @@ async def test_preview_upgrade_world_ref_returns_per_entity_diff(
     await library.set_composition(
         "camp-1",
         Composition(
-            worlds=[
-                WorldRef(world_id="wod-london", priority=1, include=None, track_latest=False)
-            ]
+            worlds=[WorldRef(world_id="wod-london", priority=1, include=None, track_latest=False)]
         ),
     )
 
@@ -1151,9 +1133,7 @@ async def test_preview_upgrade_world_ref_returns_per_entity_diff(
     assert "worlds/wod-london/characters/edgar" in preview.added_entities
 
     # The preview did not mutate snapshots.
-    pinned = await library.resolve(
-        "worlds/wod-london/characters/alistair", "camp-1"
-    )
+    pinned = await library.resolve("worlds/wod-london/characters/alistair", "camp-1")
     assert pinned.frontmatter["name"] == "Alistair v1"
 
 

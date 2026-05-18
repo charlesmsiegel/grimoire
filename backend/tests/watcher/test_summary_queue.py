@@ -94,14 +94,7 @@ async def test_summarize_on_index_false_disables_queueing(store: StateStore) -> 
 async def test_emergent_files_do_not_enqueue_summary(store: StateStore) -> None:
     """Emergent (campaign-scoped) bodies have no body_compressed column."""
     watcher = _make_watcher(store, threshold=10)
-    target = (
-        store.data_root
-        / "campaigns"
-        / "c1"
-        / "emergent"
-        / "character"
-        / "new.md"
-    )
+    target = store.data_root / "campaigns" / "c1" / "emergent" / "character" / "new.md"
     _write_md(target, "New", "A reasonably long body that clears the threshold.")
 
     await watcher.process_path(target)
