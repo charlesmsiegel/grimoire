@@ -148,6 +148,7 @@ export function PlayView({ campaignId }: Props) {
           />
         </div>
         <SidePanel
+          campaignId={campaignId}
           scene={play.state.scene}
           pcs={play.state.pcs}
           commitments={commitments}
