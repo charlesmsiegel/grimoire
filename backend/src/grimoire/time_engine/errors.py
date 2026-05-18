@@ -20,4 +20,15 @@ class InvalidSkipError(TimeEngineError):
     """``skip_to`` was given a target that's not strictly in the future."""
 
 
-__all__ = ["InvalidSkipError", "TimeEngineError", "TimeNotSetError"]
+class CheckpointTokenError(TimeEngineError):
+    """``advance`` was handed an unknown / expired checkpoint token, or the
+    token was issued for a different (campaign, branch) tuple than the caller
+    is now passing in."""
+
+
+__all__ = [
+    "CheckpointTokenError",
+    "InvalidSkipError",
+    "TimeEngineError",
+    "TimeNotSetError",
+]

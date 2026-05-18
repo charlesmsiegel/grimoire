@@ -1705,6 +1705,8 @@ def _character_from_frontmatter(frontmatter: dict, body: str, *, world_id: str |
         for r in (fm.get("structural_relationships") or [])
         if isinstance(r, dict)
     ]
+    household_raw = fm.get("household_id")
+    household_id = str(household_raw) if household_raw else None
     return Character(
         id=str(fm.get("id") or ""),
         name=str(fm.get("name") or fm.get("id") or ""),
@@ -1719,6 +1721,7 @@ def _character_from_frontmatter(frontmatter: dict, body: str, *, world_id: str |
         structural_relationships=structural,
         description=str(fm.get("description") or ""),
         body=body or "",
+        household_id=household_id,
     )
 
 
@@ -1752,6 +1755,8 @@ def _frontmatter_from_payload(payload: CharacterData) -> dict:
             {"to_ref": r.to_ref, "kind": r.kind, "note": r.note}
             for r in payload.structural_relationships
         ]
+    if payload.household_id:
+        fm["household_id"] = payload.household_id
     return fm
 
 

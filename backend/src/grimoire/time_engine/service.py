@@ -25,7 +25,7 @@ import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -39,9 +39,13 @@ from grimoire.types.characters import CharacterRole, ResolvedCharacter
 from grimoire.types.common import CampaignId, CharacterRef, Duration, EventId, InGameTime
 from grimoire.types.state import StateDelta
 from grimoire.types.time import (
+    CheckpointSuggestion,
+    DriftWarning,
+    FactionConflict,
     FactionTickSummary,
     NpcTickSummary,
     ScheduledEvent,
+    SharedEvent,
     TimeAdvanceReason,
     TimeAdvanceResult,
     WeatherChange,
@@ -49,8 +53,8 @@ from grimoire.types.time import (
 from grimoire.types.world import WorldCalendar
 from grimoire.world import WorldService
 
-from .config import TimeEngineConfig
-from .errors import InvalidSkipError, TimeNotSetError
+from .config import TimeEngineConfig, TimePrecision
+from .errors import CheckpointTokenError, InvalidSkipError, TimeNotSetError
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +67,10 @@ NpcTickInput = dict[str, Any]
 NpcTickPayload = dict[str, Any]
 NpcTickFn = Callable[[NpcTickInput], Awaitable[NpcTickPayload]]
 DigestFn = Callable[[dict[str, Any]], Awaitable[str]]
+SharedEventsFn = Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]]
+DriftCheckFn = Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]]
+FactionConflictsFn = Callable[[dict[str, Any]], Awaitable[list[dict[str, Any]]]]
+FactionLeaderFn = Callable[[dict[str, Any]], Awaitable[list[str]]]
 
 
 async def _default_npc_tick(_payload: NpcTickInput) -> NpcTickPayload:
@@ -87,6 +95,27 @@ async def _default_npc_tick(_payload: NpcTickInput) -> NpcTickPayload:
 async def _default_digest(_payload: dict[str, Any]) -> str:
     """Fallback narrative digest: empty string (i.e. structured-only)."""
     return ""
+
+
+async def _default_shared_events(_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Fallback shared-events pre-pass: emit nothing.
+
+    Production wiring hands an LLM-backed generator; tests can wire a
+    deterministic stub the same way they do for ``_npc_tick_fn``.
+    """
+    return []
+
+
+async def _default_drift_check(_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return []
+
+
+async def _default_faction_conflicts(_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return []
+
+
+async def _default_faction_leader_actions(_payload: dict[str, Any]) -> list[str]:
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +206,63 @@ class _PresentCharacter:
     is_pc: bool
     location_ref: str | None
     last_screen_time_turn: str | None
+    household_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Precision quantization (§10)
+# ---------------------------------------------------------------------------
+
+
+def _quantize(moment: datetime, precision: TimePrecision) -> datetime:
+    """Snap ``moment`` down to the requested precision.
+
+    ``season`` rounds to whole 90-day buckets anchored to the Unix epoch (a
+    season is a 90-day window in v1; calendars with custom season widths can
+    override this via a future hook). The cheaper buckets just truncate the
+    finer subfields.
+    """
+    if precision == "minute":
+        return moment.replace(second=0, microsecond=0)
+    if precision == "hour":
+        return moment.replace(minute=0, second=0, microsecond=0)
+    if precision == "day":
+        return moment.replace(hour=0, minute=0, second=0, microsecond=0)
+    if precision == "season":
+        floor_day = moment.replace(hour=0, minute=0, second=0, microsecond=0)
+        anchor = datetime(1970, 1, 1, tzinfo=floor_day.tzinfo or UTC)
+        if floor_day.tzinfo is None and anchor.tzinfo is not None:
+            floor_day = floor_day.replace(tzinfo=anchor.tzinfo)
+        days_since_anchor = (floor_day - anchor).days
+        bucket = (days_since_anchor // 90) * 90
+        return anchor + timedelta(days=bucket)
+    return moment
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint tokens (§8)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _CheckpointTokenData:
+    campaign_id: str
+    branch_id: str
+    from_iso: str
+    to_iso: str
+    duration_iso: str
+    reason: str
+    scene_id: str | None
+    activity_ref: str | None
+
+
+@dataclass
+class _CheckpointStore:
+    """In-memory token store. Pure dict by design — tokens are
+    short-lived; if the process restarts the UI just re-proposes.
+    """
+
+    tokens: dict[str, _CheckpointTokenData] = field(default_factory=dict)
 
 
 class TimeEngineService:
@@ -200,6 +286,10 @@ class TimeEngineService:
         event_bus: EventBus | None = None,
         npc_tick_fn: NpcTickFn | None = None,
         digest_fn: DigestFn | None = None,
+        shared_events_fn: SharedEventsFn | None = None,
+        drift_check_fn: DriftCheckFn | None = None,
+        faction_conflicts_fn: FactionConflictsFn | None = None,
+        faction_leader_fn: FactionLeaderFn | None = None,
     ) -> None:
         self._store = store
         self._world = world
@@ -210,6 +300,11 @@ class TimeEngineService:
         self._event_bus = event_bus
         self._npc_tick_fn = npc_tick_fn or _default_npc_tick
         self._digest_fn = digest_fn or _default_digest
+        self._shared_events_fn = shared_events_fn or _default_shared_events
+        self._drift_check_fn = drift_check_fn or _default_drift_check
+        self._faction_conflicts_fn = faction_conflicts_fn or _default_faction_conflicts
+        self._faction_leader_fn = faction_leader_fn or _default_faction_leader_actions
+        self._checkpoints = _CheckpointStore()
 
     # ------------------------------------------------------------------ #
     # Time accessors
@@ -359,11 +454,22 @@ class TimeEngineService:
         scene_id: str | None = None,
         branch_id: str | None = None,
         from_time: InGameTime | None = None,
+        activity_ref: str | None = None,
+        checkpoint_token: str | None = None,
     ) -> TimeAdvanceResult:
         """Advance the campaign clock by ``duration`` and run ticks.
 
         ``from_time`` overrides the stored value, useful for one-off
         backfills. Otherwise the campaign's current clock is required.
+
+        ``activity_ref`` (§7) threads through to ``mechanics.time_tick``'s
+        context so a mechanic can resolve a specific outstanding activity
+        rather than re-deriving it from sheet state.
+
+        ``checkpoint_token`` (§8) confirms a prior ``propose_advance`` call.
+        The token's stored parameters must match the call exactly; if they
+        diverge ``CheckpointTokenError`` is raised. The token is consumed
+        on use.
         """
         branch = _branch_for(campaign_id, branch_id)
         start = from_time or await self.current(campaign_id, branch_id=branch)
@@ -372,18 +478,40 @@ class TimeEngineService:
                 f"campaign {campaign_id!r} has no in-game time yet; "
                 "set one (e.g. via set_current) before advancing"
             )
-        to = InGameTime(
-            moment=start.moment + duration.delta,
+        precision = self._config.precision
+        start_q = InGameTime(
+            moment=_quantize(start.moment, precision),
             calendar_id=start.calendar_id,
         )
+        to_raw = start_q.moment + duration.delta
+        to = InGameTime(
+            moment=_quantize(to_raw, precision),
+            calendar_id=start.calendar_id,
+        )
+        # Re-derive duration from the quantized endpoints so the result
+        # matches the wall-clock movement actually applied.
+        effective_duration = _duration_from_timedelta(to.moment - start_q.moment)
+        if checkpoint_token is not None:
+            self._consume_checkpoint_token(
+                checkpoint_token,
+                campaign_id=campaign_id,
+                branch_id=branch,
+                from_iso=start_q.moment.isoformat(),
+                to_iso=to.moment.isoformat(),
+                duration_iso=effective_duration.iso8601,
+                reason=reason,
+                scene_id=scene_id,
+                activity_ref=activity_ref,
+            )
         return await self._run_pipeline(
             campaign_id=campaign_id,
             branch_id=branch,
             scene_id=scene_id,
             reason=reason,
-            from_time=start,
+            from_time=start_q,
             to_time=to,
-            duration=duration,
+            duration=effective_duration,
+            activity_ref=activity_ref,
         )
 
     async def skip_to(
@@ -395,6 +523,8 @@ class TimeEngineService:
         scene_id: str | None = None,
         branch_id: str | None = None,
         from_time: InGameTime | None = None,
+        activity_ref: str | None = None,
+        checkpoint_token: str | None = None,
     ) -> TimeAdvanceResult:
         """Advance to ``target`` (which must be strictly later than now)."""
         branch = _branch_for(campaign_id, branch_id)
@@ -409,17 +539,191 @@ class TimeEngineService:
                 f"skip_to target {target.moment.isoformat()} is not after "
                 f"current {start.moment.isoformat()}"
             )
-        delta = target.moment - start.moment
-        duration = _duration_from_timedelta(delta)
+        precision = self._config.precision
+        start_q = InGameTime(
+            moment=_quantize(start.moment, precision),
+            calendar_id=start.calendar_id,
+        )
+        target_q = InGameTime(
+            moment=_quantize(target.moment, precision),
+            calendar_id=target.calendar_id,
+        )
+        if target_q.moment <= start_q.moment:
+            # Both ends collapsed onto the same precision bucket — extend
+            # the target by one bucket so the call still moves the clock.
+            target_q = InGameTime(
+                moment=start_q.moment + _precision_step(precision),
+                calendar_id=target.calendar_id,
+            )
+        duration = _duration_from_timedelta(target_q.moment - start_q.moment)
+        if checkpoint_token is not None:
+            self._consume_checkpoint_token(
+                checkpoint_token,
+                campaign_id=campaign_id,
+                branch_id=branch,
+                from_iso=start_q.moment.isoformat(),
+                to_iso=target_q.moment.isoformat(),
+                duration_iso=duration.iso8601,
+                reason=reason,
+                scene_id=scene_id,
+                activity_ref=activity_ref,
+            )
         return await self._run_pipeline(
             campaign_id=campaign_id,
             branch_id=branch,
             scene_id=scene_id,
             reason=reason,
-            from_time=start,
-            to_time=target,
+            from_time=start_q,
+            to_time=target_q,
             duration=duration,
+            activity_ref=activity_ref,
         )
+
+    # ------------------------------------------------------------------ #
+    # §8 Checkpointing — propose_advance
+    # ------------------------------------------------------------------ #
+
+    async def propose_advance(
+        self,
+        campaign_id: CampaignId,
+        duration: Duration,
+        reason: TimeAdvanceReason,
+        *,
+        scene_id: str | None = None,
+        branch_id: str | None = None,
+        from_time: InGameTime | None = None,
+        activity_ref: str | None = None,
+    ) -> CheckpointSuggestion:
+        """Return a checkpoint suggestion for the caller to confirm.
+
+        Does **not** run the pipeline. Issues a token that the UI exchanges
+        for a real :meth:`advance` call (passing ``checkpoint_token=``).
+        If the projected duration exceeds ``config.checkpoint_threshold``
+        we emit ``time_advance_checkpoint_suggested`` so the Frontend can
+        prompt for a state-store fork.
+        """
+        branch = _branch_for(campaign_id, branch_id)
+        start = from_time or await self.current(campaign_id, branch_id=branch)
+        if start is None:
+            raise TimeNotSetError(
+                f"campaign {campaign_id!r} has no in-game time yet; "
+                "set one (e.g. via set_current) before proposing an advance"
+            )
+        precision = self._config.precision
+        start_q = InGameTime(
+            moment=_quantize(start.moment, precision),
+            calendar_id=start.calendar_id,
+        )
+        to = InGameTime(
+            moment=_quantize(start_q.moment + duration.delta, precision),
+            calendar_id=start.calendar_id,
+        )
+        effective_duration = _duration_from_timedelta(to.moment - start_q.moment)
+        exceeded = effective_duration.delta > self._config.checkpoint_threshold
+        token = _new_id("ckpt")
+        self._checkpoints.tokens[token] = _CheckpointTokenData(
+            campaign_id=campaign_id,
+            branch_id=branch,
+            from_iso=start_q.moment.isoformat(),
+            to_iso=to.moment.isoformat(),
+            duration_iso=effective_duration.iso8601,
+            reason=reason.value if hasattr(reason, "value") else str(reason),
+            scene_id=scene_id,
+            activity_ref=activity_ref,
+        )
+        if exceeded:
+            await self._emit(
+                "time_advance_checkpoint_suggested",
+                {
+                    "campaign_id": campaign_id,
+                    "branch_id": branch,
+                    "scene_id": scene_id,
+                    "token": token,
+                    "from": start_q.moment.isoformat(),
+                    "to": to.moment.isoformat(),
+                    "duration_iso": effective_duration.iso8601,
+                    "reason": token_reason_value(reason),
+                    "activity_ref": activity_ref,
+                },
+            )
+        return CheckpointSuggestion(
+            token=token,
+            campaign_id=campaign_id,
+            from_time=start_q,
+            to_time=to,
+            duration=effective_duration,
+            reason=reason,
+            threshold_exceeded=exceeded,
+            scene_id=scene_id,
+            branch_id=branch,
+            activity_ref=activity_ref,
+        )
+
+    def _consume_checkpoint_token(
+        self,
+        token: str,
+        *,
+        campaign_id: str,
+        branch_id: str,
+        from_iso: str,
+        to_iso: str,
+        duration_iso: str,
+        reason: TimeAdvanceReason,
+        scene_id: str | None,
+        activity_ref: str | None,
+    ) -> None:
+        data = self._checkpoints.tokens.pop(token, None)
+        if data is None:
+            raise CheckpointTokenError(f"unknown or expired checkpoint token {token!r}")
+        reason_str = token_reason_value(reason)
+        mismatches = []
+        if data.campaign_id != campaign_id:
+            mismatches.append(("campaign_id", data.campaign_id, campaign_id))
+        if data.branch_id != branch_id:
+            mismatches.append(("branch_id", data.branch_id, branch_id))
+        if data.from_iso != from_iso:
+            mismatches.append(("from", data.from_iso, from_iso))
+        if data.to_iso != to_iso:
+            mismatches.append(("to", data.to_iso, to_iso))
+        if data.duration_iso != duration_iso:
+            mismatches.append(("duration_iso", data.duration_iso, duration_iso))
+        if data.reason != reason_str:
+            mismatches.append(("reason", data.reason, reason_str))
+        if data.scene_id != scene_id:
+            mismatches.append(("scene_id", data.scene_id or "", scene_id or ""))
+        if data.activity_ref != activity_ref:
+            mismatches.append(("activity_ref", data.activity_ref or "", activity_ref or ""))
+        if mismatches:
+            detail = ", ".join(
+                f"{name}: {want!r}!={got!r}" for name, want, got in mismatches
+            )
+            raise CheckpointTokenError(
+                f"checkpoint token {token!r} parameters do not match advance call ({detail})"
+            )
+
+    # ------------------------------------------------------------------ #
+    # §3 subscribe_calendar — thin wrapper around the event bus
+    # ------------------------------------------------------------------ #
+
+    def subscribe_calendar(
+        self,
+        handler: Callable[[Event], Awaitable[None]] | Callable[[Event], None],
+    ) -> Any:
+        """Subscribe ``handler`` to the ``time_advance`` event.
+
+        Returns the underlying :class:`grimoire.event_bus.Subscription`
+        handle; call ``.unsubscribe()`` on it to stop receiving events.
+        Thin convenience wrapper around the shared :class:`EventBus`;
+        callers that already have a bus reference can subscribe directly.
+        Raises :class:`RuntimeError` when no event bus was wired in at
+        construction.
+        """
+        if self._event_bus is None:
+            raise RuntimeError(
+                "subscribe_calendar requires the TimeEngineService to have been "
+                "constructed with an event_bus"
+            )
+        return self._event_bus.subscribe("time_advance", handler)
 
     # ------------------------------------------------------------------ #
     # Pipeline
@@ -435,6 +739,7 @@ class TimeEngineService:
         from_time: InGameTime,
         to_time: InGameTime,
         duration: Duration,
+        activity_ref: str | None = None,
     ) -> TimeAdvanceResult:
         # The order matters: scheduled events first so NPC ticks see the
         # post-event state; ticks before commitment aging so a NPC who pays
@@ -448,15 +753,29 @@ class TimeEngineService:
         )
 
         ticked = await self._significant_npcs(campaign_id=campaign_id, branch_id=branch_id)
+
+        # §2 Shared inter-NPC events pre-pass — seeded with the full
+        # ticked-NPC list so the LLM (or stub) can produce coherent
+        # cross-NPC events once, instead of letting each individual tick
+        # invent its own version.
+        shared_events = await self._run_shared_events(
+            campaign_id=campaign_id,
+            present=ticked,
+            from_time=from_time,
+            to_time=to_time,
+            duration=duration,
+        )
+
         npc_summaries = await self._run_npc_ticks(
             campaign_id=campaign_id,
             duration=duration,
             present=ticked,
             from_time=from_time,
             to_time=to_time,
+            shared_events=shared_events,
         )
 
-        faction_summaries = await self._run_faction_ticks(
+        faction_summaries, faction_conflicts = await self._run_faction_ticks(
             campaign_id=campaign_id,
             branch_id=branch_id,
             duration=duration,
@@ -474,6 +793,13 @@ class TimeEngineService:
             branch_id=branch_id,
             duration=duration,
             present=ticked,
+            activity_ref=activity_ref,
+        )
+
+        drift_warnings = await self._run_drift_check(
+            campaign_id=campaign_id,
+            present=ticked,
+            summaries=npc_summaries,
         )
 
         epoch = await self._epoch_for(campaign_id)
@@ -482,11 +808,23 @@ class TimeEngineService:
 
         await self.set_current(campaign_id, to_time, branch_id=branch_id)
 
+        # §6 Scheduled-event pre-notice — emit ``scheduled_event_imminent``
+        # for events that fall in the post-advance pre-notice window and
+        # have not previously been warned about. Persisted via
+        # ``pre_notice_emitted_at`` on the scheduled_events row so we don't
+        # re-warn on subsequent advances.
+        upcoming_warned = await self._fire_pre_notice_warnings(
+            campaign_id=campaign_id,
+            branch_id=branch_id,
+            from_time=to_time,
+        )
+
         digest_payload: dict[str, Any] = {
             "from": from_time.moment.isoformat(),
             "to": to_time.moment.isoformat(),
             "duration_iso": duration.iso8601,
             "reason": reason.value if hasattr(reason, "value") else str(reason),
+            "precision": self._config.precision,
             "scheduled_events": [e.label for e in triggered],
             "npc_summaries": [
                 {"character_id": s.character_id, "activities": s.activities}
@@ -496,9 +834,15 @@ class TimeEngineService:
                 {"faction_id": s.faction_id, "notable_actions": s.notable_actions}
                 for s in faction_summaries.values()
             ],
+            "shared_events": [
+                {"summary": e.summary, "participants": e.participants}
+                for e in shared_events
+            ],
+            "faction_conflicts": [c.summary for c in faction_conflicts],
             "weather_changes": [w.summary for w in weather_changes],
             "overdue": [c.id for c in aging.became_overdue],
             "stale": [c.id for c in aging.became_stale],
+            "upcoming": [e.label for e in upcoming_warned],
         }
         narrative = ""
         if self._config.digest_narrative:
@@ -533,6 +877,10 @@ class TimeEngineService:
             commitments_overdue=commitments_overdue,
             mechanics_deltas=mechanics_deltas,
             digest=digest_text,
+            shared_events=shared_events,
+            drift_warnings=drift_warnings,
+            faction_conflicts=faction_conflicts,
+            scheduled_events_upcoming=upcoming_warned,
         )
 
         await self._emit(
@@ -547,6 +895,8 @@ class TimeEngineService:
                 "duration_iso": duration.iso8601,
                 "npcs_ticked": list(npc_summaries.keys()),
                 "scheduled_events_triggered": [e.id for e in triggered],
+                "activity_ref": activity_ref,
+                "precision": self._config.precision,
             },
         )
         return result
@@ -608,6 +958,7 @@ class TimeEngineService:
                 is_pc=(r.character.role == CharacterRole.PC),
                 location_ref=r.current_state.location_ref,
                 last_screen_time_turn=r.current_state.last_screen_time_turn,
+                household_id=r.character.household_id,
             )
             by_ref[ref] = entry
 
@@ -639,6 +990,22 @@ class TimeEngineService:
                 if ref in by_ref and not by_ref[ref].is_pc:
                     kept.setdefault(ref, by_ref[ref])
 
+        # §4 Household-based significance — any NPC sharing a household_id
+        # with at least one PC ticks regardless of role / commitments /
+        # recent-post visibility. The "PC household" set is computed once.
+        if cfg.tick_in_household:
+            pc_households = {
+                ent.household_id
+                for ent in by_ref.values()
+                if ent.is_pc and ent.household_id
+            }
+            if pc_households:
+                for ref, ent in by_ref.items():
+                    if ent.is_pc:
+                        continue
+                    if ent.household_id and ent.household_id in pc_households:
+                        kept.setdefault(ref, ent)
+
         ordered = sorted(kept.values(), key=lambda p: (p.role.value, p.asset_id))
         return ordered[: cfg.max_npcs_per_advance]
 
@@ -650,13 +1017,24 @@ class TimeEngineService:
         present: list[_PresentCharacter],
         from_time: InGameTime,
         to_time: InGameTime,
+        shared_events: list[SharedEvent],
     ) -> dict[str, NpcTickSummary]:
         if not present:
             return {}
         semaphore = asyncio.Semaphore(max(1, self._config.npc_tick_parallelism))
+        # Index shared events by participating character_ref / asset_id so we
+        # can slice down the per-NPC view cheaply without re-scanning.
+        events_by_participant: dict[str, list[SharedEvent]] = {}
+        for ev in shared_events:
+            for participant in ev.participants:
+                events_by_participant.setdefault(participant, []).append(ev)
 
         async def _one(p: _PresentCharacter) -> tuple[str, NpcTickSummary]:
             async with semaphore:
+                my_events = (
+                    events_by_participant.get(p.ref, [])
+                    + events_by_participant.get(p.asset_id, [])
+                )
                 payload: NpcTickInput = {
                     "campaign_id": campaign_id,
                     "character_ref": p.ref,
@@ -666,6 +1044,17 @@ class TimeEngineService:
                     "from": from_time.moment.isoformat(),
                     "to": to_time.moment.isoformat(),
                     "location_ref": p.location_ref,
+                    "household_id": p.household_id,
+                    "shared_events": [
+                        {
+                            "id": e.id,
+                            "summary": e.summary,
+                            "participants": list(e.participants),
+                            "in_game_at": e.in_game_at.moment.isoformat(),
+                            "details": dict(e.details),
+                        }
+                        for e in my_events
+                    ],
                 }
                 try:
                     result = await self._npc_tick_fn(payload)
@@ -693,11 +1082,11 @@ class TimeEngineService:
         campaign_id: CampaignId,
         branch_id: str,
         duration: Duration,
-    ) -> dict[str, FactionTickSummary]:
+    ) -> tuple[dict[str, FactionTickSummary], list[FactionConflict]]:
         # Faction ticks are intentionally coarse: spec calls for month-level
         # granularity. Anything shorter than that doesn't run.
         if duration.delta < self._config.faction_tick_resolution:
-            return {}
+            return {}, []
         rows = await self._store.db.fetchall(
             """
             SELECT * FROM faction_state
@@ -707,6 +1096,25 @@ class TimeEngineService:
         )
         out: dict[str, FactionTickSummary] = {}
         months = max(1, int(duration.delta.days // 30))
+        decay = float(self._config.faction_resource_decay_per_month)
+        # Pull library-side leaders for every faction in one sweep so the
+        # leader-tick has a populated ``leaders`` list even when the
+        # per-campaign state blob hasn't materialised them yet (the typical
+        # case — update_faction_state only persists campaign-mutable fields).
+        leaders_by_ref: dict[str, list[str]] = {}
+        seen_worlds: set[str] = set()
+        for row in rows:
+            world_id, _ = _split_faction_ref(row["faction_ref"])
+            if world_id and world_id not in seen_worlds:
+                seen_worlds.add(world_id)
+                try:
+                    for fac in await self._world.list_factions(world_id):
+                        leaders_by_ref[f"library:worlds/{world_id}/factions/{fac.id}"] = list(
+                            fac.leaders
+                        )
+                except Exception:  # pragma: no cover - defensive
+                    logger.exception("list_factions failed for world %s", world_id)
+        faction_views: list[dict[str, Any]] = []
         for row in rows:
             faction_ref = row["faction_ref"]
             try:
@@ -715,6 +1123,8 @@ class TimeEngineService:
                 state = {}
             if not isinstance(state, dict):
                 state = {}
+
+            # Goal progress — same heuristic as before (1%/month), capped.
             goals = state.get("goals") or []
             goal_progress: dict[str, float] = {}
             for g in goals:
@@ -722,11 +1132,57 @@ class TimeEngineService:
                     continue
                 gid = str(g.get("id") or "")
                 prev = float(g.get("progress") or 0.0)
-                # Default: 1% progress per month, capped at 1.0.
                 new_progress = min(1.0, prev + 0.01 * months)
                 g["progress"] = new_progress
                 goal_progress[gid] = new_progress
             state["goals"] = goals
+
+            # Resource decay (§5) — slow drift toward zero for any
+            # numeric resource the faction tracks. Authors can override
+            # by writing fresh resource values via WorldService outside
+            # the engine; the decay only fires here.
+            resources = state.get("resources") or {}
+            resource_changes: dict[str, Any] = {}
+            if isinstance(resources, dict) and decay > 0.0:
+                for key, val in list(resources.items()):
+                    if isinstance(val, int | float) and not isinstance(val, bool):
+                        old = float(val)
+                        delta_val = -decay * months * abs(old)
+                        new = old + delta_val
+                        if abs(new) < 1e-9:
+                            new = 0.0
+                        resources[key] = type(val)(new) if isinstance(val, int) else new
+                        if old != resources[key]:
+                            resource_changes[key] = {"from": old, "to": resources[key]}
+            state["resources"] = resources
+
+            # Leader-tick (§5) — surface "this is what the leader did"
+            # entries as notable_actions. The leader callable defaults to
+            # an empty list; production hands in an LLM-backed generator
+            # that consults the leader's character card. Leaders come from
+            # the library Faction definition; per-campaign state can
+            # override via a ``leaders`` array on the state blob.
+            leaders = list(state.get("leaders") or leaders_by_ref.get(faction_ref, []))
+            notable: list[str] = []
+            if self._config.faction_leader_tick and leaders:
+                try:
+                    notable = list(
+                        await self._faction_leader_fn(
+                            {
+                                "campaign_id": campaign_id,
+                                "faction_ref": faction_ref,
+                                "leaders": leaders,
+                                "goals": goal_progress,
+                                "resources": resources,
+                                "months": months,
+                                "duration_iso": duration.iso8601,
+                            }
+                        )
+                    )
+                except Exception:  # pragma: no cover - defensive
+                    logger.exception("faction_leader_fn failed for %s", faction_ref)
+                    notable = []
+
             await self._store.db.execute(
                 """
                 UPDATE faction_state SET state = ?
@@ -738,10 +1194,48 @@ class TimeEngineService:
                 faction_id=faction_ref,
                 duration=duration,
                 goal_progress=goal_progress,
-                resource_changes={},
-                notable_actions=[],
+                resource_changes=resource_changes,
+                notable_actions=notable,
             )
-        return out
+            faction_views.append(
+                {
+                    "faction_ref": faction_ref,
+                    "goals": goals,
+                    "resources": resources,
+                    "leaders": leaders,
+                }
+            )
+
+        # Inter-faction conflict pass (§5) — analogous to §2's shared-events
+        # pass but for factions. Run once over the full set so we don't
+        # double-count both sides of a rivalry.
+        conflicts: list[FactionConflict] = []
+        if faction_views:
+            try:
+                raw = await self._faction_conflicts_fn(
+                    {
+                        "campaign_id": campaign_id,
+                        "factions": faction_views,
+                        "months": months,
+                        "duration_iso": duration.iso8601,
+                    }
+                )
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("faction_conflicts_fn failed for %s", campaign_id)
+                raw = []
+            for item in raw or []:
+                if not isinstance(item, dict):
+                    continue
+                conflicts.append(
+                    FactionConflict(
+                        factions=[str(f) for f in (item.get("factions") or [])],
+                        summary=str(item.get("summary") or ""),
+                        intensity=str(item.get("intensity") or "latent"),  # type: ignore[arg-type]
+                        details=dict(item.get("details") or {}),
+                    )
+                )
+
+        return out, conflicts
 
     async def _weather_changes(
         self,
@@ -789,12 +1283,31 @@ class TimeEngineService:
         branch_id: str,
         duration: Duration,
         present: list[_PresentCharacter],
+        activity_ref: str | None = None,
     ) -> list[StateDelta]:
         """Fan out ``Mechanics.time_tick`` per character.
 
         With ``mechanics: null`` the call is cheap (returns empty), so we
         don't gate on the module here; the service handles it.
+        ``activity_ref`` (§7) is threaded into the per-character context
+        so a mechanic can resolve a specific outstanding activity rather
+        than re-deriving it from sheet state.
         """
+        # The Mechanics service builds a default TickContext when none is
+        # passed; we only construct one when an activity_ref is in play, so
+        # that mechanic modules can resolve a specific outstanding activity
+        # rather than re-deriving it from sheet state (§7).
+        from grimoire.types.mechanics import TickContext
+        context = (
+            TickContext(
+                campaign_id=campaign_id,
+                branch_id=branch_id,
+                duration=duration,
+                extras={"activity_ref": activity_ref},
+            )
+            if activity_ref
+            else None
+        )
         out: list[StateDelta] = []
         for p in present:
             try:
@@ -802,6 +1315,7 @@ class TimeEngineService:
                     campaign_id=campaign_id,
                     entity_ref=f"character:{p.asset_id}",
                     duration=duration,
+                    context=context,
                     entity_kind="character",
                 )
             except Exception:  # pragma: no cover - defensive
@@ -816,6 +1330,179 @@ class TimeEngineService:
                     except Exception:  # pragma: no cover - defensive
                         continue
         return out
+
+    # ------------------------------------------------------------------ #
+    # §2 Shared inter-NPC events
+    # ------------------------------------------------------------------ #
+
+    async def _run_shared_events(
+        self,
+        *,
+        campaign_id: CampaignId,
+        present: list[_PresentCharacter],
+        from_time: InGameTime,
+        to_time: InGameTime,
+        duration: Duration,
+    ) -> list[SharedEvent]:
+        if not self._config.shared_events_enabled or len(present) < 2:
+            return []
+        payload = {
+            "campaign_id": campaign_id,
+            "from": from_time.moment.isoformat(),
+            "to": to_time.moment.isoformat(),
+            "duration_iso": duration.iso8601,
+            "participants": [
+                {
+                    "character_ref": p.ref,
+                    "character_id": p.asset_id,
+                    "role": p.role.value,
+                    "location_ref": p.location_ref,
+                    "household_id": p.household_id,
+                }
+                for p in present
+            ],
+        }
+        try:
+            raw = await self._shared_events_fn(payload)
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("shared_events_fn failed for campaign %s", campaign_id)
+            return []
+        out: list[SharedEvent] = []
+        for item in raw or []:
+            if not isinstance(item, dict):
+                continue
+            participants = [str(p) for p in (item.get("participants") or [])]
+            summary = str(item.get("summary") or "").strip()
+            if not summary or not participants:
+                continue
+            at_raw = item.get("in_game_at")
+            at_dt: datetime | None = None
+            if isinstance(at_raw, str) and at_raw:
+                try:
+                    at_dt = datetime.fromisoformat(at_raw)
+                except ValueError:
+                    at_dt = None
+            elif isinstance(at_raw, datetime):
+                at_dt = at_raw
+            at = InGameTime(moment=at_dt) if at_dt is not None else to_time
+            event_id = str(item.get("id") or _new_id("se"))
+            out.append(
+                SharedEvent(
+                    id=event_id,
+                    participants=participants,
+                    summary=summary,
+                    in_game_at=at,
+                    details=dict(item.get("details") or {}),
+                )
+            )
+        return out
+
+    # ------------------------------------------------------------------ #
+    # §6 Scheduled-event pre-notice warnings
+    # ------------------------------------------------------------------ #
+
+    async def _fire_pre_notice_warnings(
+        self,
+        *,
+        campaign_id: CampaignId,
+        branch_id: str,
+        from_time: InGameTime,
+    ) -> list[ScheduledEvent]:
+        pre = self._config.scheduled_event_pre_notice
+        if pre is None or pre.total_seconds() <= 0:
+            return []
+        lo = from_time.moment.isoformat()
+        hi = (from_time.moment + pre).isoformat()
+        rows = await self._store.db.fetchall(
+            """
+            SELECT * FROM scheduled_events
+            WHERE campaign_id = ? AND branch_id = ?
+              AND triggered = 0 AND at > ? AND at <= ?
+              AND pre_notice_emitted_at IS NULL
+            ORDER BY at ASC
+            """,
+            (campaign_id, branch_id, lo, hi),
+        )
+        warned: list[ScheduledEvent] = []
+        now_iso = _now_iso()
+        for row in rows:
+            event = _scheduled_event_from_row(row)
+            await self._store.db.execute(
+                "UPDATE scheduled_events SET pre_notice_emitted_at = ? WHERE id = ?",
+                (now_iso, row["id"]),
+            )
+            await self._emit(
+                "scheduled_event_imminent",
+                {
+                    "campaign_id": campaign_id,
+                    "branch_id": branch_id,
+                    "event_id": event.id,
+                    "label": event.label,
+                    "kind": event.kind,
+                    "at": event.at.moment.isoformat(),
+                },
+            )
+            warned.append(event)
+        return warned
+
+    # ------------------------------------------------------------------ #
+    # §9 NPC drift check
+    # ------------------------------------------------------------------ #
+
+    async def _run_drift_check(
+        self,
+        *,
+        campaign_id: CampaignId,
+        present: list[_PresentCharacter],
+        summaries: dict[str, NpcTickSummary],
+    ) -> list[DriftWarning]:
+        if not self._config.drift_check_enabled or not summaries:
+            return []
+        by_asset: dict[str, _PresentCharacter] = {p.asset_id: p for p in present}
+        warnings: list[DriftWarning] = []
+        for asset_id, summary in summaries.items():
+            p = by_asset.get(asset_id)
+            payload = {
+                "campaign_id": campaign_id,
+                "character_id": asset_id,
+                "character_ref": p.ref if p else None,
+                "role": p.role.value if p else None,
+                "summary": {
+                    "activities": list(summary.activities),
+                    "state_at_end": dict(summary.state_at_end),
+                    "relationships_changed": list(summary.relationships_changed),
+                    "new_facts_about_them": list(summary.new_facts_about_them),
+                    "next_intent": summary.next_intent,
+                },
+            }
+            try:
+                raw = await self._drift_check_fn(payload)
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("drift_check_fn failed for %s", asset_id)
+                continue
+            for item in raw or []:
+                if not isinstance(item, dict):
+                    continue
+                severity = str(item.get("severity") or "warning")
+                if severity not in {"info", "warning", "critical"}:
+                    severity = "warning"
+                w = DriftWarning(
+                    character_id=str(item.get("character_id") or asset_id),
+                    severity=severity,  # type: ignore[arg-type]
+                    summary=str(item.get("summary") or ""),
+                    evidence=[str(e) for e in (item.get("evidence") or [])],
+                )
+                warnings.append(w)
+                await self._emit(
+                    "npc_drift_detected",
+                    {
+                        "campaign_id": campaign_id,
+                        "character_id": w.character_id,
+                        "severity": w.severity,
+                        "summary": w.summary,
+                    },
+                )
+        return warnings
 
     # ------------------------------------------------------------------ #
     # Internals
@@ -869,12 +1556,31 @@ class TimeEngineService:
 # ---------------------------------------------------------------------------
 
 
+def token_reason_value(reason: TimeAdvanceReason | str) -> str:
+    return reason.value if hasattr(reason, "value") else str(reason)
+
+
+def _precision_step(precision: TimePrecision) -> timedelta:
+    if precision == "minute":
+        return timedelta(minutes=1)
+    if precision == "hour":
+        return timedelta(hours=1)
+    if precision == "day":
+        return timedelta(days=1)
+    if precision == "season":
+        return timedelta(days=90)
+    return timedelta(minutes=1)
+
+
 def _structured_digest(payload: dict[str, Any]) -> str:
     """Build a compact human-readable structured digest from the payload."""
     parts: list[str] = []
     parts.append(f"From {payload['from']} to {payload['to']} ({payload['duration_iso']}).")
     if payload["scheduled_events"]:
         parts.append("Events: " + ", ".join(payload["scheduled_events"]))
+    if payload.get("shared_events"):
+        for e in payload["shared_events"]:
+            parts.append(f"Together ({', '.join(e['participants'])}): {e['summary']}")
     if payload["npc_summaries"]:
         for s in payload["npc_summaries"]:
             acts = s["activities"]
@@ -884,12 +1590,16 @@ def _structured_digest(payload: dict[str, Any]) -> str:
         parts.append(
             "Factions: " + ", ".join(s["faction_id"] for s in payload["faction_summaries"])
         )
+    if payload.get("faction_conflicts"):
+        parts.append("Conflicts: " + "; ".join(payload["faction_conflicts"]))
     if payload["weather_changes"]:
         parts.append("Weather: " + "; ".join(payload["weather_changes"]))
     if payload["overdue"]:
         parts.append("Overdue commitments: " + ", ".join(payload["overdue"]))
     if payload["stale"]:
         parts.append("Stale commitments: " + ", ".join(payload["stale"]))
+    if payload.get("upcoming"):
+        parts.append("Imminent: " + ", ".join(payload["upcoming"]))
     return "\n".join(parts)
 
 
@@ -915,6 +1625,17 @@ def _npc_summary_from_payload(
         should_seek_pc=bool(payload.get("should_seek_pc") or False),
         events_pc_would_witness=[str(e) for e in (payload.get("events_pc_would_witness") or [])],
     )
+
+
+def _split_faction_ref(ref: str) -> tuple[str | None, str | None]:
+    """``library:worlds/<s>/factions/<id>`` → ``(s, id)``."""
+    if not ref or not ref.startswith("library:"):
+        return None, None
+    _, _, path = ref.partition("library:")
+    parts = path.strip("/").split("/")
+    if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"factions", "faction"}:
+        return parts[1], parts[3]
+    return None, None
 
 
 def _split_location_ref(ref: str) -> tuple[str | None, str | None]:
