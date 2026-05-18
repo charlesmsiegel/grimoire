@@ -15,10 +15,10 @@ import json
 import logging
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from watchdog.events import FileSystemEvent, FileSystemEventHandler
+from watchdog.events import EVENT_TYPE_MOVED, FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from grimoire.event_bus import Event, EventBus
@@ -98,6 +98,24 @@ class EmbeddingQueue:
         return list(self._items)
 
 
+@dataclass(slots=True)
+class _PendingRename:
+    """An unacknowledged directory move awaiting reconciliation.
+
+    While a rename is pending, per-file events under ``src`` or ``dest`` are
+    suppressed so the cascade of delete-then-create events watchdog produces
+    for the moved subtree does not silently re-key index rows. The user must
+    call :meth:`FileWatcher.reconcile_directory_rename` to either accept
+    (re-key index rows to the new paths) or reject (leave rows untouched).
+    """
+
+    src: Path
+    dest: Path
+    scope: str  # "library" | "campaign"
+    library_ids: list[str] = field(default_factory=list)
+    content_index_ids: list[str] = field(default_factory=list)
+
+
 class FileWatcher:
     """Reindex on file change; emit ``*_file_changed`` events on the bus.
 
@@ -137,6 +155,10 @@ class FileWatcher:
         # watcher suppresses its own scene_file_changed emit so consumers
         # only see one event per change.
         self._scene_manager = scene_manager
+        # Directory renames awaiting user reconciliation. Keyed by the moved
+        # subtree's destination path; an entry's ``src`` and ``dest`` together
+        # define the prefixes whose per-file events should be suppressed.
+        self._pending_renames: dict[Path, _PendingRename] = {}
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -233,10 +255,112 @@ class FileWatcher:
 
         Tests call this directly; the watchdog bridge funnels real events here.
         """
+        resolved = self._resolve_for_suppression(path)
+        if self._is_suppressed(resolved):
+            return
         watched = classify_path(self.data_root, path)
         if watched is None:
             return
         await self._reindex(watched, emit=True)
+
+    async def handle_directory_move(self, src: Path, dest: Path) -> None:
+        """Handle a directory rename/move under ``data/library`` or ``data/campaigns``.
+
+        Suppresses the per-file delete/create cascade for the moved subtree and
+        emits a single ``library_rename_detected`` or ``campaign_rename_detected``
+        event the user must acknowledge via :meth:`reconcile_directory_rename`.
+        Until reconciliation, the SQLite index rows for the moved subtree are
+        left untouched (still pointing at the old paths) so an accidental
+        rename can be reverted without losing index state.
+        """
+        src_resolved = Path(src).resolve(strict=False)
+        dest_resolved = Path(dest).resolve(strict=False)
+
+        library_root = self.data_root / "library"
+        campaigns_root = self.data_root / "campaigns"
+        if _is_under(src_resolved, library_root) or _is_under(dest_resolved, library_root):
+            scope = "library"
+            event_type = "library_rename_detected"
+        elif _is_under(src_resolved, campaigns_root) or _is_under(
+            dest_resolved, campaigns_root
+        ):
+            scope = "campaign"
+            event_type = "campaign_rename_detected"
+        else:
+            return
+
+        library_ids, content_index_ids = await self._collect_affected_index_rows(
+            src_resolved
+        )
+
+        pending = _PendingRename(
+            src=src_resolved,
+            dest=dest_resolved,
+            scope=scope,
+            library_ids=library_ids,
+            content_index_ids=content_index_ids,
+        )
+        # Keying on dest gives reconcile_directory_rename a unique lookup,
+        # but we also need to know about pending renames keyed on either
+        # prefix when filtering live events. The list-scan in _is_suppressed
+        # handles that — we don't need a parallel index.
+        self._pending_renames[dest_resolved] = pending
+
+        await self.bus.emit(
+            Event(
+                type=event_type,
+                payload={
+                    "src_path": str(src_resolved),
+                    "dest_path": str(dest_resolved),
+                    "scope": scope,
+                    "library_ids": list(library_ids),
+                    "content_index_ids": list(content_index_ids),
+                },
+            )
+        )
+
+    async def reconcile_directory_rename(
+        self,
+        src: Path,
+        dest: Path,
+        *,
+        accept: bool,
+    ) -> None:
+        """Resolve a pending directory rename.
+
+        ``accept=True`` re-keys the moved subtree's index rows to the new paths
+        (drops stale rows whose old library_id embedded the old directory name,
+        then walks the new tree and reindexes from disk). ``accept=False``
+        clears the suppression without touching the index — index rows continue
+        to point at the now-missing original paths, and the caller is expected
+        to either undo the rename on disk or trigger a manual cleanup.
+        """
+        src_resolved = Path(src).resolve(strict=False)
+        dest_resolved = Path(dest).resolve(strict=False)
+        pending = self._pending_renames.pop(dest_resolved, None)
+        if pending is None:
+            # Unknown rename — nothing to do. Don't raise; reconciliation is
+            # best-effort and the caller may retry after a missed event.
+            return
+
+        if not accept:
+            # Drop the in-memory hashes for the old subtree so a later
+            # genuine edit at the same paths (e.g. after the user undoes
+            # the rename on disk) isn't deduped against stale state.
+            self._forget_hashes_under(src_resolved)
+            return
+
+        # Accept: tear down old rows tied to the moved subtree, then rescan
+        # the destination tree to insert fresh rows whose ids embed the new
+        # directory names.
+        await self._delete_index_rows(pending)
+        self._forget_hashes_under(pending.src)
+        if dest_resolved.exists():
+            for path in _iter_files(dest_resolved):
+                watched = classify_path(self.data_root, path)
+                if watched is None:
+                    continue
+                await self._reindex(watched, emit=False)
 
     # ------------------------------------------------------------------ #
     # Write coordination (conflict detection)
@@ -472,11 +596,103 @@ class FileWatcher:
             return
         asyncio.run_coroutine_threadsafe(self._safe_process(path), loop)
 
+    def _schedule_directory_move_from_thread(self, src: Path, dest: Path) -> None:
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            return
+        asyncio.run_coroutine_threadsafe(self._safe_handle_directory_move(src, dest), loop)
+
     async def _safe_process(self, path: Path) -> None:
         try:
             await self.process_path(path)
         except Exception:
             logger.exception("watcher: process_path failed for %s", path)
+
+    async def _safe_handle_directory_move(self, src: Path, dest: Path) -> None:
+        try:
+            await self.handle_directory_move(src, dest)
+        except Exception:
+            logger.exception(
+                "watcher: handle_directory_move failed for %s -> %s", src, dest
+            )
+
+    # ------------------------------------------------------------------ #
+    # Suppression + rename bookkeeping
+    # ------------------------------------------------------------------ #
+
+    def _resolve_for_suppression(self, path: Path) -> Path:
+        # ``path`` may not exist (the deleted half of a move); ``Path.resolve``
+        # with strict=False still normalises symlinks in the parent chain.
+        try:
+            return Path(path).resolve(strict=False)
+        except OSError:
+            return Path(path)
+
+    def _is_suppressed(self, resolved_path: Path) -> bool:
+        if not self._pending_renames:
+            return False
+        for pending in self._pending_renames.values():
+            if _is_under(resolved_path, pending.src) or _is_under(
+                resolved_path, pending.dest
+            ):
+                return True
+        return False
+
+    async def _collect_affected_index_rows(
+        self, src: Path
+    ) -> tuple[list[str], list[str]]:
+        """Find the library_index / campaign_content_index rows under ``src``.
+
+        Rows are matched by their stored ``path`` column (which is relative to
+        ``data_root``). The lookup is "starts with the rel-src + '/'" — anything
+        whose stored path falls inside the moved subtree is in scope.
+        """
+        try:
+            rel = str(Path(src).resolve().relative_to(self.data_root))
+        except (ValueError, OSError):
+            return [], []
+        prefix = rel.rstrip("/") + "/"
+        like = prefix.replace("\\", "/") + "%"
+
+        library_rows = await self.store.db.fetchall(
+            "SELECT id FROM library_index WHERE path LIKE ?",
+            (like,),
+        )
+        content_rows = await self.store.db.fetchall(
+            "SELECT id FROM campaign_content_index WHERE path LIKE ?",
+            (like,),
+        )
+        return (
+            [str(r["id"]) for r in library_rows],
+            [str(r["id"]) for r in content_rows],
+        )
+
+    async def _delete_index_rows(self, pending: _PendingRename) -> None:
+        async with self.store.db.acquire() as conn:
+            await conn.execute("BEGIN")
+            try:
+                for library_id in pending.library_ids:
+                    await delete_library_index_row(conn, library_id)
+                for cid in pending.content_index_ids:
+                    await delete_campaign_content_row(conn, cid)
+            except Exception:
+                await conn.execute("ROLLBACK")
+                raise
+            else:
+                await conn.execute("COMMIT")
+        # Stale embeddings are tied to the old refs — drop them so retrieval
+        # doesn't continue scoring rows that no longer exist.
+        for ref in (*pending.library_ids, *pending.content_index_ids):
+            try:
+                await self.store.delete_embeddings(ref)
+            except Exception:
+                logger.exception("watcher: failed to delete embeddings for %s", ref)
+
+    def _forget_hashes_under(self, root: Path) -> None:
+        root_resolved = Path(root).resolve(strict=False)
+        stale = [p for p in self._known_hashes if _is_under(p, root_resolved)]
+        for p in stale:
+            self._known_hashes.pop(p, None)
 
 
 # ----------------------------------------------------------------------- #
@@ -578,6 +794,20 @@ def _resolve_scene_id(watched: WatchedFile) -> str:
     return f"{prefix}{watched.campaign_id}:{watched.scene_basename}"
 
 
+def _is_under(path: Path, root: Path) -> bool:
+    """``True`` if ``path`` equals ``root`` or sits inside it.
+
+    Both arguments must already be resolved (or at least be in the same
+    canonical form) — the comparison is done on parts, not strings, so a
+    rename between ``/foo/bar`` and ``/foo/bar-suffix`` won't falsely match.
+    """
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
 # ----------------------------------------------------------------------- #
 # Watchdog bridge
 # ----------------------------------------------------------------------- #
@@ -591,6 +821,18 @@ class _WatchdogBridge(FileSystemEventHandler):
 
     def on_any_event(self, event: FileSystemEvent) -> None:
         if event.is_directory:
+            # Only one directory event matters for the index: a directory
+            # rename/move. Everything else (mkdir/rmdir of an empty dir, dir
+            # touch) is uninteresting — the per-file events for any contents
+            # already cover what the index cares about.
+            if event.event_type != EVENT_TYPE_MOVED:
+                return
+            src = getattr(event, "src_path", None)
+            dest = getattr(event, "dest_path", None)
+            if src and dest:
+                self._watcher._schedule_directory_move_from_thread(
+                    Path(src), Path(dest)
+                )
             return
         src = getattr(event, "src_path", None)
         if src:
