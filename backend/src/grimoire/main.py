@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from grimoire import __version__
 from grimoire.api.campaigns import router as campaigns_router
+from grimoire.api.imagegen import router as imagegen_router
 from grimoire.api.container import ServiceContainer
 from grimoire.api.health import router as health_router
 from grimoire.api.library import router as library_router
@@ -331,6 +332,7 @@ def create_app() -> FastAPI:
     app.include_router(library_router, prefix="/api")
     app.include_router(templates_router, prefix="/api")
     app.include_router(campaigns_router, prefix="/api")
+    app.include_router(imagegen_router, prefix="/api")
     # WebSocket routes mount under /ws so the Vite dev server's `ws: true`
     # proxy block forwards upgrade requests correctly. The HTTP health probe
     # in the same router lands at /ws/health.
