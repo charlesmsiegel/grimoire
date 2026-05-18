@@ -31,6 +31,7 @@ from typing import Any
 
 from grimoire.characters import CharactersService
 from grimoire.continuity.protocols import Continuity
+from grimoire.continuity.registry import resolve_continuity
 from grimoire.continuity.types import InGameTime as ContinuityInGameTime
 from grimoire.event_bus import Event, EventBus
 from grimoire.mechanics.service import MechanicsService
@@ -801,7 +802,10 @@ class TimeEngineService:
         )
 
         epoch = await self._epoch_for(campaign_id)
-        aging = await self._continuity.age(_to_continuity_time(to_time, epoch))
+        continuity_for_campaign = resolve_continuity(
+            self._continuity, campaign_id, branch_id=branch_id
+        )
+        aging = await continuity_for_campaign.age(_to_continuity_time(to_time, epoch))
         commit_anchor = to_time
 
         await self.set_current(campaign_id, to_time, branch_id=branch_id)
@@ -968,7 +972,10 @@ class TimeEngineService:
                 kept[ref] = ent
 
         if cfg.tick_with_open_commitment:
-            opens = await self._continuity.open_commitments(
+            continuity_for_campaign = resolve_continuity(
+                self._continuity, campaign_id, branch_id=branch_id
+            )
+            opens = await continuity_for_campaign.open_commitments(
                 involving=[ref for ref in by_ref],
                 limit=200,
             )

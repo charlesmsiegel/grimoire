@@ -95,6 +95,17 @@ class InMemoryContinuityStore(ContinuityStore):
     ) -> ContradictionReport | None:
         return self._contradictions.get(report_id)
 
+    async def list_contradiction_reports(
+        self,
+        *,
+        resolved: bool | None = None,
+        limit: int = 50,
+    ) -> list[ContradictionReport]:
+        rows = list(self._contradictions.values())
+        if resolved is not None:
+            rows = [r for r in rows if r.resolved == resolved]
+        return rows[:limit]
+
 
 class KeywordFactSearchIndex(FactSearchIndex):
     """Top-K search by Jaccard overlap on text tokens + stored keywords.

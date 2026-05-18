@@ -126,11 +126,22 @@ class CommitmentStatus(StrEnum):
     BROKEN = "broken"
     OVERDUE = "overdue"
     STALE = "stale"
+    # A commitment that had aged to STALE but became relevant again. From
+    # the aging engine's perspective REOPENED behaves like OPEN: due_by
+    # may push it OVERDUE, inactivity may push it back to STALE.
+    REOPENED = "reopened"
 
 
 # Terminal statuses do not age further.
 TERMINAL_STATUSES: frozenset[CommitmentStatus] = frozenset(
     {CommitmentStatus.PAID, CommitmentStatus.BROKEN}
+)
+
+# Statuses that age the same way OPEN does (due-date → OVERDUE, stale
+# inactivity → STALE). Used by the aging engine so REOPENED items don't
+# have to live with permanent immunity to those transitions.
+AGES_LIKE_OPEN: frozenset[CommitmentStatus] = frozenset(
+    {CommitmentStatus.OPEN, CommitmentStatus.REOPENED}
 )
 
 
@@ -212,14 +223,33 @@ class ContradictionResolutionAction(StrEnum):
 
 
 @dataclass
+class SceneBriefing:
+    """Compact "active threads involving these PCs" bundle.
+
+    Produced by ``Continuity.brief_for_scene`` for Scene Manager to inject
+    when it opens a scene. ``facts`` is the recent fact ledger filtered
+    to entries about (or known by) the provided PCs; ``commitments``
+    keeps both open and overdue threads for the same actors.
+    """
+
+    scene_id: str
+    pc_refs: list[str]
+    facts: list[Fact] = field(default_factory=list)
+    commitments: list[Commitment] = field(default_factory=list)
+    overdue: list[Commitment] = field(default_factory=list)
+
+
+@dataclass
 class AgingReport:
     from_time: InGameTime
     to_time: InGameTime
     became_overdue: list[Commitment] = field(default_factory=list)
     became_stale: list[Commitment] = field(default_factory=list)
+    became_reopened: list[Commitment] = field(default_factory=list)
 
 
 __all__ = [
+    "AGES_LIKE_OPEN",
     "TERMINAL_STATUSES",
     "AgingReport",
     "CharacterId",
@@ -241,4 +271,5 @@ __all__ = [
     "KnowledgeEntry",
     "PostId",
     "RetirementReason",
+    "SceneBriefing",
 ]
