@@ -26,6 +26,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from grimoire.testing.anonymizer import Anonymizer
 from grimoire.types.common import CampaignId
 from grimoire.types.llm import (
     CompletionChunk,
@@ -78,11 +79,13 @@ class RecordReplayLLM:
         mode: ReplayMode = ReplayMode.REPLAY,
         *,
         real_gateway: Any | None = None,
+        anonymizer: Anonymizer | None = None,
     ) -> None:
         self.fixture_dir = Path(fixture_dir)
         self.mode = mode
         self._real = real_gateway
         self._by_hash = self.fixture_dir / "llm" / "by_hash"
+        self.anonymizer = anonymizer
         needs_real = self.mode is ReplayMode.RECORD or self.mode is ReplayMode.PASSTHROUGH
         if needs_real and real_gateway is None:
             raise ValueError(f"{mode.value!r} mode requires real_gateway")
@@ -205,24 +208,31 @@ class RecordReplayLLM:
     ) -> None:
         path = self._completion_path(rh)
         path.parent.mkdir(parents=True, exist_ok=True)
+        anon = self.anonymizer
+
+        def _rewrite(text: str | None) -> str | None:
+            if anon is None or text is None:
+                return text
+            return anon.anonymize_text(text)
+
         payload = {
             "request": {
                 "task": task,
                 "model": request.model,
                 "messages_hash": rh,
                 "messages": [
-                    {"role": m.role.value, "content": m.content, "name": m.name}
+                    {"role": m.role.value, "content": _rewrite(m.content), "name": m.name}
                     for m in request.messages
                 ],
                 "params": {
                     "max_tokens": request.max_tokens,
                     "temperature": request.temperature,
                     "stop_sequences": list(request.stop_sequences),
-                    "system": request.system,
+                    "system": _rewrite(request.system),
                 },
             },
             "response": {
-                "text": response.text,
+                "text": _rewrite(response.text),
                 "model": response.model,
                 "finish_reason": response.finish_reason,
                 "usage": response.usage.model_dump(),
@@ -231,7 +241,7 @@ class RecordReplayLLM:
             },
         }
         if chunks is not None:
-            payload["response"]["chunks"] = chunks
+            payload["response"]["chunks"] = [_rewrite(c) for c in chunks]
         with path.open("w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
 
@@ -253,9 +263,15 @@ class RecordReplayLLM:
     def _save_embedding(self, text: str, vector: list[float]) -> None:
         path = self._embedding_path(text)
         path.parent.mkdir(parents=True, exist_ok=True)
+        # The hash key is computed from the *original* text so replay
+        # still works; only the persisted ``text`` payload (debug echo)
+        # is rewritten.
+        stored_text: str | None = text
+        if self.anonymizer is not None:
+            stored_text = self.anonymizer.anonymize_text(text)
         with path.open("w", encoding="utf-8") as f:
             json.dump(
-                {"text_sha256": path.stem, "vector": list(vector)},
+                {"text_sha256": path.stem, "text": stored_text, "vector": list(vector)},
                 f,
                 ensure_ascii=False,
                 indent=2,
