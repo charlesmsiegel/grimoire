@@ -78,8 +78,8 @@ def _scene_to_dict(record, filters: FilterContext) -> dict[str, Any]:
         "running_summary": s.running_summary,
         "final_summary": s.final_summary,
         "key_beats": list(s.key_beats),
-        "threads_introduced": list(s.threads_introduced),
-        "threads_paid_off": list(s.threads_paid_off),
+        "threads_introduced": [t.text for t in s.threads_introduced],
+        "threads_paid_off": [t.text for t in s.threads_paid_off],
         "posts": [
             {
                 "order": order,

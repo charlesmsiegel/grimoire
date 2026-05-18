@@ -26,6 +26,14 @@ from grimoire.scenes.types import AuthorKind, Post, Scene
 
 POST_HEADING_RE = re.compile(r"^##\s+Post\s+(\d+)\s+[—-]\s+(.+?)\s*$", re.MULTILINE)
 
+# Defaults for the file/heading naming patterns. Both are exposed via
+# ``SceneManagerConfig.files`` so a campaign can override them without
+# patching this module. ``scene_naming_pattern`` is rendered with
+# ``ordinal=<int>`` and ``slug=<str>``; ``post_heading_pattern`` with
+# ``order=<int>`` and ``author=<str>``.
+DEFAULT_SCENE_NAMING_PATTERN = "{ordinal:04d}-{slug}"
+DEFAULT_POST_HEADING_PATTERN = "## Post {order} — {author}"
+
 
 def slugify(text: str) -> str:
     """Convert a title into a stable, filesystem-safe slug."""
@@ -69,13 +77,22 @@ def scenes_dir(data_root: Path, campaign_id: str, branch_id: str = "main") -> Pa
     )
 
 
-def scene_basename(ordinal: int, slug: str) -> str:
-    return f"{ordinal:04d}-{slug}"
+def scene_basename(
+    ordinal: int,
+    slug: str,
+    pattern: str = DEFAULT_SCENE_NAMING_PATTERN,
+) -> str:
+    return pattern.format(ordinal=ordinal, slug=slug)
 
 
-def scene_paths(data_root: Path, scene: Scene) -> tuple[Path, Path]:
+def scene_paths(
+    data_root: Path,
+    scene: Scene,
+    *,
+    naming_pattern: str = DEFAULT_SCENE_NAMING_PATTERN,
+) -> tuple[Path, Path]:
     directory = scenes_dir(data_root, scene.campaign_id, scene.branch_id)
-    base = scene_basename(scene.ordinal, scene.slug)
+    base = scene_basename(scene.ordinal, scene.slug, naming_pattern)
     return directory / f"{base}.md", directory / f"{base}.yaml"
 
 
@@ -108,8 +125,60 @@ def format_author_label(post: Post) -> str:
     return post.author_label
 
 
-def _scene_to_yaml(scene: Scene) -> dict:
-    return {
+def _threads_to_yaml(threads: list) -> list[dict]:
+    """Serialize a list[Thread] to the sidecar's dict form."""
+    return [
+        {
+            "text": t.text,
+            "introduced_at_post": t.introduced_at_post,
+            "paid_off_at_post": t.paid_off_at_post,
+        }
+        for t in threads
+    ]
+
+
+def _yaml_to_threads(value: object) -> list:
+    """Parse the sidecar's thread list back to list[Thread].
+
+    Accepts both the new ``[{text, introduced_at_post, paid_off_at_post}, ...]``
+    shape and the legacy ``["string", ...]`` shape so older sidecars keep
+    loading after the schema bump.
+    """
+    from grimoire.scenes.types import Thread  # local import: avoid cycle
+
+    out: list = []
+    for item in value or []:
+        if isinstance(item, str):
+            out.append(Thread(text=item))
+        elif isinstance(item, dict):
+            out.append(
+                Thread(
+                    text=str(item.get("text", "")),
+                    introduced_at_post=item.get("introduced_at_post"),
+                    paid_off_at_post=item.get("paid_off_at_post"),
+                )
+            )
+    return out
+
+
+def _post_records_to_yaml(records: dict) -> list[dict]:
+    """Serialize the in-memory ``_PostRecord`` cache to the sidecar."""
+    rows = []
+    for order_str, rec in sorted(records.items(), key=lambda kv: int(kv[0])):
+        rows.append(
+            {
+                "order": int(order_str),
+                "id": rec.id,
+                "turn_id": rec.turn_id,
+                "created_at": rec.created_at.isoformat() if rec.created_at else None,
+                "is_player": bool(rec.is_player),
+            }
+        )
+    return rows
+
+
+def _scene_to_yaml(scene: Scene, post_records: dict | None = None) -> dict:
+    data = {
         "id": scene.id,
         "campaign_id": scene.campaign_id,
         "branch_id": scene.branch_id,
@@ -125,8 +194,8 @@ def _scene_to_yaml(scene: Scene) -> dict:
         "present_pc_refs": list(scene.present_pc_refs),
         "mood": scene.mood,
         "post_count": scene.post_count,
-        "threads_introduced": list(scene.threads_introduced),
-        "threads_paid_off": list(scene.threads_paid_off),
+        "threads_introduced": _threads_to_yaml(scene.threads_introduced),
+        "threads_paid_off": _threads_to_yaml(scene.threads_paid_off),
         "tags": list(scene.tags),
         "closed": scene.closed,
         "closed_at_turn": scene.closed_at_turn,
@@ -135,6 +204,9 @@ def _scene_to_yaml(scene: Scene) -> dict:
         "final_summary": scene.final_summary,
         "key_beats": list(scene.key_beats),
     }
+    if post_records is not None:
+        data["posts"] = _post_records_to_yaml(post_records)
+    return data
 
 
 def _yaml_to_scene(data: dict) -> Scene:
@@ -161,8 +233,8 @@ def _yaml_to_scene(data: dict) -> Scene:
         present_pc_refs=list(data.get("present_pc_refs") or []),
         mood=data.get("mood"),
         post_count=int(data.get("post_count") or 0),
-        threads_introduced=list(data.get("threads_introduced") or []),
-        threads_paid_off=list(data.get("threads_paid_off") or []),
+        threads_introduced=_yaml_to_threads(data.get("threads_introduced")),
+        threads_paid_off=_yaml_to_threads(data.get("threads_paid_off")),
         tags=list(data.get("tags") or []),
         closed=bool(data.get("closed", False)),
         closed_at_turn=data.get("closed_at_turn"),
@@ -173,9 +245,52 @@ def _yaml_to_scene(data: dict) -> Scene:
     )
 
 
-def write_sidecar(path: Path, scene: Scene) -> None:
+def read_sidecar_post_records(path: Path) -> dict:
+    """Read the ``posts`` block from a sidecar and return it as the in-memory
+    record dict shape (``{order_str: _PostRecord, ...}``).
+
+    Returns an empty dict if the sidecar has no posts block (legacy file) or
+    the file does not exist.
+    """
+    if not path.exists():
+        return {}
+    from grimoire.scenes.manager import _PostRecord  # local import: avoid cycle
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    rows = data.get("posts") or []
+    out: dict = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        order = row.get("order")
+        if order is None:
+            continue
+        created_at = row.get("created_at")
+        if isinstance(created_at, str):
+            try:
+                created_at = datetime.fromisoformat(created_at)
+            except ValueError:
+                created_at = datetime.fromtimestamp(0)
+        elif not isinstance(created_at, datetime):
+            created_at = datetime.fromtimestamp(0)
+        out[str(int(order))] = _PostRecord(
+            id=str(row.get("id") or ""),
+            turn_id=str(row.get("turn_id") or ""),
+            created_at=created_at,
+            is_player=bool(row.get("is_player", False)),
+        )
+    return out
+
+
+def write_sidecar(path: Path, scene: Scene, *, post_records: dict | None = None) -> None:
+    """Write the YAML sidecar.
+
+    When ``post_records`` is given (the in-memory ``_PostRecord`` cache for
+    the scene) the per-post identity is persisted under a ``posts:`` block so
+    ``id``/``turn_id``/``created_at``/``is_player`` survive process restart.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = _scene_to_yaml(scene)
+    data = _scene_to_yaml(scene, post_records=post_records)
     path.write_text(
         yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
@@ -187,25 +302,47 @@ def read_sidecar(path: Path) -> Scene:
     return _yaml_to_scene(data)
 
 
-def render_body(posts: Iterable[Post]) -> str:
+def render_body(
+    posts: Iterable[Post],
+    heading_pattern: str = DEFAULT_POST_HEADING_PATTERN,
+) -> str:
     parts: list[str] = []
     for post in posts:
-        parts.append(f"## Post {post.order_in_scene} — {format_author_label(post)}")
+        parts.append(
+            heading_pattern.format(
+                order=post.order_in_scene,
+                author=format_author_label(post),
+            )
+        )
         parts.append("")
         parts.append(post.body.rstrip())
         parts.append("")
     return "\n".join(parts).rstrip() + "\n"
 
 
-def write_body(path: Path, posts: Iterable[Post]) -> None:
+def write_body(
+    path: Path,
+    posts: Iterable[Post],
+    *,
+    heading_pattern: str = DEFAULT_POST_HEADING_PATTERN,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_body(posts), encoding="utf-8")
+    path.write_text(render_body(posts, heading_pattern), encoding="utf-8")
 
 
-def append_post_to_body(path: Path, post: Post) -> None:
+def append_post_to_body(
+    path: Path,
+    post: Post,
+    *,
+    heading_pattern: str = DEFAULT_POST_HEADING_PATTERN,
+) -> None:
     """Append a single post heading + body to the .md file without rewriting it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    heading = f"## Post {post.order_in_scene} — {format_author_label(post)}\n\n"
+    heading_line = heading_pattern.format(
+        order=post.order_in_scene,
+        author=format_author_label(post),
+    )
+    heading = f"{heading_line}\n\n"
     body = post.body.rstrip() + "\n\n"
     with path.open("a", encoding="utf-8") as fh:
         if path.stat().st_size > 0:

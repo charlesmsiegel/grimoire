@@ -98,7 +98,7 @@ async def test_append_post_updates_files_and_counts(tmp_path: Path) -> None:
 async def test_cannot_append_to_closed_scene(tmp_path: Path) -> None:
     manager, _ = _manager(tmp_path)
     scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
-    await manager.close_scene(scene.id)
+    await manager.close_scene(scene.id, closed_at_turn="t1")
     with pytest.raises(RuntimeError):
         await manager.append_post(
             scene.id,
@@ -182,6 +182,8 @@ async def test_pc_entering_disables_advance(tmp_path: Path) -> None:
 
 
 async def test_running_summary_triggers_on_cadence(tmp_path: Path) -> None:
+    from grimoire.scenes.summary_jobs import RunningSummaryWorker
+
     calls: list[tuple[str | None, int]] = []
 
     async def summarize(previous, recent):
@@ -189,12 +191,15 @@ async def test_running_summary_triggers_on_cadence(tmp_path: Path) -> None:
         return f"summary after {len(recent)}"
 
     config = SceneManagerConfig(running_summary_every_n_posts=2)
+    bus = InMemoryEventBus()
     manager = SceneManager(
         tmp_path,
         config=config,
-        event_bus=InMemoryEventBus(),
+        event_bus=bus,
         summarizer=summarize,
     )
+    worker = RunningSummaryWorker(manager, bus)
+    worker.start()
     scene = await manager.start_scene(
         SceneInit(campaign_id="c", title="Scene", present_pc_refs=["alistair"])
     )
@@ -203,9 +208,13 @@ async def test_running_summary_triggers_on_cadence(tmp_path: Path) -> None:
             scene.id,
             new_post(author_kind=AuthorKind.NARRATOR, body=f"line {i}", is_player=False),
         )
+    await worker.drain()
+    await worker.stop()
     refreshed = await manager.get_scene(scene.id)
     assert refreshed.running_summary == "summary after 4"
-    assert len(calls) == 2  # at post 2 and post 4
+    # Coalesced: the two cadence events (post 2 + post 4) collapse into a
+    # single trailing pass when they arrive during the same scheduling slice.
+    assert len(calls) in (1, 2)
 
 
 async def test_threads_introduced_and_paid_off(tmp_path: Path) -> None:
@@ -241,7 +250,8 @@ async def test_close_scene_returns_report(tmp_path: Path) -> None:
     report = await manager.close_scene(scene.id, closed_at_turn="t123")
     assert report.scene.closed is True
     assert report.scene.closed_at_turn == "t123"
-    assert "Unresolved mystery" in report.threads_unresolved
+    assert any(t.text == "Unresolved mystery" for t in report.threads_unresolved)
+    assert report.threads_unresolved[0].introduced_at_post == 2
     assert any(e.type == SCENE_ENDED for e in bus.events)
 
 

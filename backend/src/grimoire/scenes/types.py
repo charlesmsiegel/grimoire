@@ -68,8 +68,8 @@ class Scene:
     mood: str | None = None
 
     post_count: int = 0
-    threads_introduced: list[str] = field(default_factory=list)
-    threads_paid_off: list[str] = field(default_factory=list)
+    threads_introduced: list[Thread] = field(default_factory=list)
+    threads_paid_off: list[Thread] = field(default_factory=list)
 
     tags: list[str] = field(default_factory=list)
     closed: bool = False
@@ -122,5 +122,5 @@ class SceneCloseReport:
     scene: Scene
     final_summary: str
     key_beats: list[str]
-    threads_resolved: list[str]
-    threads_unresolved: list[str]
+    threads_resolved: list[Thread]
+    threads_unresolved: list[Thread]

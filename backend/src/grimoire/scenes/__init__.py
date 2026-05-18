@@ -13,6 +13,7 @@ from grimoire.scenes.events import (
     POST_APPENDED,
     POST_DELETED,
     POST_EDITED,
+    RUNNING_SUMMARY_DUE,
     RUNNING_SUMMARY_UPDATED,
     SCENE_ENDED,
     SCENE_FILE_CHANGED,
@@ -24,9 +25,13 @@ from grimoire.scenes.events import (
     SceneEvent,
 )
 from grimoire.scenes.manager import (
+    FilesConfig,
+    MultiPCConfig,
     NothingToAdvance,
+    RunningSummaryConfig,
     SceneManager,
     SceneManagerConfig,
+    ThreadDetectionConfig,
     new_post,
 )
 from grimoire.scenes.types import (
@@ -50,6 +55,7 @@ __all__ = [
     "POST_APPENDED",
     "POST_DELETED",
     "POST_EDITED",
+    "RUNNING_SUMMARY_DUE",
     "RUNNING_SUMMARY_UPDATED",
     "SCENE_ENDED",
     "SCENE_FILE_CHANGED",
@@ -61,8 +67,12 @@ __all__ = [
     "AuthorKind",
     "BoundaryConfig",
     "EventBus",
+    "FilesConfig",
     "InMemoryEventBus",
+    "MultiPCConfig",
     "NothingToAdvance",
+    "RunningSummaryConfig",
+    "ThreadDetectionConfig",
     "Post",
     "Scene",
     "SceneBreakDecision",
