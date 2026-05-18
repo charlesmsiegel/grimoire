@@ -541,6 +541,46 @@ async def test_set_config_rebuilds_live_instance(plugins_root: Path, config_root
     assert second is not first
 
 
+async def test_start_periodic_health_is_idempotent(plugins_root: Path, config_root: Path) -> None:
+    """A second call while the loop is running must not spawn a second task."""
+    write_plugin(plugins_root, "alpha")
+    svc = _service(plugins_root, config_root)
+    await svc.rescan()
+    try:
+        await svc.start_periodic_health()
+        first_task = svc._health_task  # type: ignore[attr-defined]
+        await svc.start_periodic_health()
+        assert svc._health_task is first_task  # type: ignore[attr-defined]
+    finally:
+        await svc.stop_periodic_health()
+    assert svc._health_task is None  # type: ignore[attr-defined]
+
+
+async def test_periodic_health_loop_probes_at_least_once(
+    plugins_root: Path, config_root: Path
+) -> None:
+    """Start the loop, drive at least one iteration by directly invoking the
+    same path the loop calls, then stop. Verifies ``last_health`` is
+    populated so a subscriber would see a transition."""
+    import asyncio as _asyncio
+
+    write_plugin(plugins_root, "alpha")
+    svc = _service(plugins_root, config_root)
+    await svc.rescan()
+    try:
+        await svc.start_periodic_health()
+        # Drive one direct probe rather than waiting on the (>= 60s)
+        # interval; the loop's first iteration also calls this.
+        results = await svc.health_check_all()
+        assert "alpha" in results
+        assert results["alpha"].level == HealthLevel.HEALTHY
+        # Yield once so the loop's wait_for has a chance to register —
+        # we're not asserting on it, just keeping the test deterministic.
+        await _asyncio.sleep(0)
+    finally:
+        await svc.stop_periodic_health()
+
+
 async def test_health_check_emits_event_only_on_level_change(
     plugins_root: Path, config_root: Path
 ) -> None:

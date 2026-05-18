@@ -26,9 +26,10 @@ from grimoire.plugins.config_store import (
     PluginConfigStore,
     secret_property_names,
 )
-from grimoire.plugins.discovery import DiscoveryError, discover
+from grimoire.plugins.discovery import DiscoveredPlugin, DiscoveryError, discover
 from grimoire.plugins.loader import LoadResult, load_plugin
 from grimoire.plugins.registry import PluginRegistry
+from grimoire.plugins.venv import cleanup_orphaned_venvs, ensure_plugin_venv
 from grimoire.types.common import HealthLevel, HealthStatus, PluginId
 from grimoire.types.orchestrator import EventType
 from grimoire.types.plugins import (
@@ -92,6 +93,9 @@ class PluginsService:
         # When None, emit becomes a no-op so test harnesses that don't
         # care about events stay terse.
         self._event_bus = event_bus
+        # Periodic health loop bookkeeping (see start_periodic_health).
+        self._health_task: asyncio.Task[None] | None = None
+        self._health_stop: asyncio.Event | None = None
 
     # ------------------------------------------------------------------ #
     # Discovery / lifecycle
@@ -127,7 +131,8 @@ class PluginsService:
             seen.add(plugin_id)
 
             config_dict = self._load_config_for_load(plugin_id, d.raw_manifest)
-            result = load_plugin(d, config_dict)
+            extra_path = self._venv_site_packages_for(plugin_id, d)
+            result = load_plugin(d, config_dict, extra_sys_path=extra_path)
             if result.ok and result.manifest is not None:
                 self._unregister_record(plugin_id)
                 await self._install(result)
@@ -149,6 +154,13 @@ class PluginsService:
             await self._emit(EventType.PLUGIN_UNLOADED, {"plugin_id": plugin_id})
 
         self._failed = new_failed
+
+        # Clean up venv directories for plugins that have disappeared
+        # from disk. Idempotent and safe to call even when isolation is
+        # off — the venv root won't exist in that case.
+        venv_root = self._venv_root()
+        if venv_root is not None:
+            cleanup_orphaned_venvs(venv_root, set(loaded_ids) | set(new_failed))
 
         return RescanReport(
             discovered=[d.raw_manifest.get("id", d.plugin_dir.name) for d in discovered],
@@ -225,7 +237,8 @@ class PluginsService:
             raise KeyError(f"plugin {plugin_id!r} not found on disk")
 
         config_dict = self._load_config_for_load(plugin_id, discovered.raw_manifest)
-        result = load_plugin(discovered, config_dict)
+        extra_path = self._venv_site_packages_for(plugin_id, discovered)
+        result = load_plugin(discovered, config_dict, extra_sys_path=extra_path)
         # Whether the new load succeeded or not, drop any previous record
         # so a rebuild from a fresh start (e.g. fixing a syntax error in
         # plugin.py) doesn't leave the old broken instance live in the
@@ -538,6 +551,88 @@ class PluginsService:
             target_id=target_id,
             message=f"completed in {time.monotonic() - started:.2f}s",
         )
+
+    # ------------------------------------------------------------------ #
+    # Per-plugin venv isolation
+    # ------------------------------------------------------------------ #
+
+    def _venv_root(self) -> Path | None:
+        """Resolve the directory under which per-plugin venvs live.
+
+        Returns ``None`` when isolation is off so callers can branch with
+        a single check. Defaults to ``<plugins_root>/.venvs`` when the
+        feature is on but no explicit path is configured.
+        """
+        if not self._config.isolation.per_plugin_venv:
+            return None
+        return self._config.isolation.venv_root or (self._config.root / ".venvs")
+
+    def _venv_site_packages_for(
+        self, plugin_id: PluginId, discovered: DiscoveredPlugin
+    ) -> Path | None:
+        """If this plugin opted into venv isolation, build it and return
+        its ``site-packages`` for the loader to prepend onto ``sys.path``.
+
+        Plugins opt in via ``isolated_venv: true`` in their manifest
+        *and* the app-level :class:`IsolationConfig` must enable the
+        feature. Missing ``requirements.txt`` is treated as "no extra
+        deps" — we return ``None`` and the plugin imports against the
+        host env, same as today.
+        """
+        venv_root = self._venv_root()
+        if venv_root is None:
+            return None
+        raw = discovered.raw_manifest if isinstance(discovered.raw_manifest, dict) else {}
+        if not raw.get("isolated_venv"):
+            return None
+        requirements = discovered.plugin_dir / "requirements.txt"
+        return ensure_plugin_venv(plugin_id, requirements, venv_root)
+
+    # ------------------------------------------------------------------ #
+    # Periodic health loop
+    # ------------------------------------------------------------------ #
+
+    async def start_periodic_health(self) -> None:
+        """Start a background task that probes every loaded plugin at the
+        interval declared in :class:`HealthConfig`.
+
+        Idempotent: a second call while a task is already running is a
+        no-op. The loop emits ``plugin_health_changed`` events through the
+        normal :meth:`health_check` path, so subscribers (WebSocket relay,
+        cost tracker, etc.) hear about transitions without each module
+        needing its own scheduler.
+        """
+        if self._health_task is not None:
+            return
+        self._health_stop = asyncio.Event()
+        self._health_task = asyncio.create_task(self._run_health_loop(), name="plugins-health-loop")
+
+    async def stop_periodic_health(self) -> None:
+        if self._health_task is None:
+            return
+        assert self._health_stop is not None
+        self._health_stop.set()
+        import contextlib
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._health_task
+        self._health_task = None
+        self._health_stop = None
+
+    async def _run_health_loop(self) -> None:
+        assert self._health_stop is not None
+        interval = max(1, int(self._config.health.check_interval_minutes) * 60)
+        while not self._health_stop.is_set():
+            try:
+                await self.health_check_all()
+            except Exception:
+                logger.exception("plugins: periodic health_check_all raised")
+            try:
+                # Sleep until either the interval elapses or the service
+                # asks us to stop — whichever comes first.
+                await asyncio.wait_for(self._health_stop.wait(), timeout=interval)
+            except TimeoutError:
+                continue
 
     async def _emit(
         self,

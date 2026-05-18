@@ -1,9 +1,24 @@
-# Plugins — Remaining Work
+# Plugins — Remaining Work (COMPLETED 2026-05-18)
 
-> Everything from the original `specs/15-plugins.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-plugins-design.md`). Use this as the input to a writing-plans pass when picking up the work.
+> Everything from the original `specs/15-plugins.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-plugins-design.md`).
 
 **Companion (already shipped):** `2026-05-12-plugins-design.md`
 **Module:** `backend/src/grimoire/plugins/`
+
+## Status
+
+All v1 items (§1–§10) are implemented; v2/v3 items (§11–§17) remain deferred as noted in each section.
+
+- §1 Per-plugin venv isolation — sys.path-augmentation approach (in-process), opt-in via `IsolationConfig.per_plugin_venv` + manifest `isolated_venv: true`. Subprocess/WASM sandboxing still deferred (§12).
+- §2 Periodic health loop — `PluginsService.start_periodic_health()` wired into the FastAPI lifespan.
+- §3 Stricter protocol satisfaction check — async-ness + parameter name/count checks via `inspect`.
+- §4 Lifecycle events — `plugin_loaded` / `plugin_failed` / `plugin_unloaded` / `plugin_activated` / `plugin_deactivated` / `plugin_health_changed` on the event bus.
+- §5 Persistent activation state — `ActivationStore` backed by `data/config/plugins/.activations.yaml`.
+- §6 Capabilities on the manifest — typed `LLMCapabilities` / `EmbeddingCapabilities` / `ImageGenCapabilities` / `ExportCapabilities` projected onto `PluginManifest.capabilities`.
+- §7 Per-campaign routing — `embedding_routing` and `imagegen_routing` blocks parsed (imagegen routes are validated and warned but not yet routed into ImageGenService — future work).
+- §8 Targeted single-plugin load / reload — `PluginsService.load(plugin_id)` no longer delegates to a full rescan.
+- §9 Discovery error API — `GET /api/plugins/discovery-errors`.
+- §10 Reload on `set_config` — `set_config` now rebuilds the live instance against the fresh config.
 
 ## 1. Per-plugin venv isolation
 
