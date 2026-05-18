@@ -15,6 +15,7 @@ from pathlib import Path
 class ValidationConfig:
     strict_sheets: bool = True
     strict_events: bool = False
+    strict_content: bool = True
 
 
 @dataclass(frozen=True)

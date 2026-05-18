@@ -51,6 +51,7 @@ from grimoire.state_store.indexers import (
 )
 from grimoire.state_store.paths import (
     campaign_id_for_path,
+    content_path,
     emergent_path,
     image_metadata_path,
     library_path,
@@ -501,6 +502,92 @@ class StateStore:
             )
         return target
 
+    async def write_content(
+        self,
+        *,
+        campaign_id: str,
+        kind: str,
+        content_id: str,
+        mechanics_id: str,
+        payload: dict,
+        source: str,
+        turn_id: str | None = None,
+    ) -> Path:
+        """Persist a mechanics content instance to disk and index it."""
+        target = content_path(self.data_root, campaign_id, kind, content_id, mechanics_id)
+        before_payload: dict | None = None
+        if target.exists():
+            before_payload = load_yaml(target) or {}
+
+        write_yaml(target, payload)
+
+        composite_id = f"campaigns/{campaign_id}/content/{kind}/{content_id}.{mechanics_id}"
+        async with self._txn() as conn:
+            await upsert_campaign_content_index(
+                conn,
+                data_root=self.data_root,
+                campaign_id=campaign_id,
+                composite_id=composite_id,
+                kind="content",
+                entity_subkind=kind,
+                asset_id=content_id,
+                path=target,
+                frontmatter=payload,
+                body=None,
+            )
+            await insert_delta(
+                conn,
+                campaign_id=campaign_id,
+                branch_id=None,
+                turn_id=turn_id,
+                source=source,
+                kind="content_update",
+                target_scope="campaign-file",
+                target_table=None,
+                target_path=str(target),
+                target_id=composite_id,
+                before=before_payload,
+                after=payload,
+            )
+        return target
+
+    async def get_content(
+        self,
+        campaign_id: str,
+        kind: str,
+        content_id: str,
+        mechanics_id: str,
+    ) -> dict | None:
+        target = content_path(self.data_root, campaign_id, kind, content_id, mechanics_id)
+        if not target.exists():
+            return None
+        return load_yaml(target) or {}
+
+    async def list_content(
+        self,
+        campaign_id: str,
+        kind: str,
+        mechanics_id: str,
+    ) -> list[dict]:
+        """Return every content instance of ``kind`` for ``mechanics_id``.
+
+        Reads from the filesystem (rather than the index) so callers see
+        files even when the index hasn't been re-scanned.
+        """
+        # Reuse the validated path so all id components are checked.
+        base = content_path(self.data_root, campaign_id, kind, "x", mechanics_id).parent
+        if not base.is_dir():
+            return []
+        suffix = f".{mechanics_id}.yaml"
+        out: list[dict] = []
+        for entry in sorted(base.iterdir()):
+            if not entry.is_file() or not entry.name.endswith(suffix):
+                continue
+            content_id = entry.name[: -len(suffix)]
+            payload = load_yaml(entry) or {}
+            out.append({"content_id": content_id, "payload": payload})
+        return out
+
     async def write_image_metadata(
         self,
         *,
@@ -846,6 +933,43 @@ class StateStore:
             """,
             (f"{campaign_id}:main", campaign_id, _seed_for("main"), _now_iso()),
         )
+
+    async def record_mechanics_switch(
+        self,
+        *,
+        campaign_id: str,
+        previous: str | None,
+        current: str | None,
+        source: str = "user",
+    ) -> None:
+        """Append a row to ``campaign_mechanics_history``.
+
+        Both ``previous`` and ``current`` may be ``None`` (a campaign with
+        ``mechanics: null``). The timestamp is generated here so callers
+        don't need to coordinate clocks.
+        """
+        await self.db.execute(
+            """
+            INSERT INTO campaign_mechanics_history
+              (campaign_id, mechanics_module, switched_at, switched_from, source)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (campaign_id, current, _now_iso(), previous, source),
+        )
+
+    async def previous_mechanics_modules(self, campaign_id: str) -> list[str]:
+        """Return every distinct non-null mechanics_module ever set on ``campaign_id``."""
+        rows = await self.db.fetchall(
+            """
+            SELECT DISTINCT mechanics_module FROM campaign_mechanics_history
+            WHERE campaign_id = ? AND mechanics_module IS NOT NULL
+            UNION
+            SELECT DISTINCT switched_from FROM campaign_mechanics_history
+            WHERE campaign_id = ? AND switched_from IS NOT NULL
+            """,
+            (campaign_id, campaign_id),
+        )
+        return [row[0] for row in rows if row[0]]
 
     async def upsert_world_ref(
         self,

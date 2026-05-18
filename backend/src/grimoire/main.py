@@ -46,6 +46,7 @@ from grimoire.imagegen import (
 from grimoire.library import LibraryConfig, LibraryService
 from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.mechanics import MechanicsConfig, MechanicsService
+from grimoire.mechanics.file_watcher import MechanicsFileWatcher
 from grimoire.observability.replayer import TurnReplayerService
 from grimoire.observability.service import ObservabilityService
 from grimoire.orchestrator.service import OrchestratorService
@@ -195,6 +196,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             container.mechanics = MechanicsService(
                 MechanicsConfig.for_data_root(data_root),
                 state_store=container.state_store,
+                event_bus=container.event_bus,
             )
             try:
                 await container.mechanics.rescan()
@@ -534,6 +536,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         backup_scheduler.start()
         container.extras["backup_scheduler"] = backup_scheduler
 
+        mechanics_watcher: MechanicsFileWatcher | None = None
+        if container.mechanics.config.reload_on_file_change:
+            mechanics_watcher = MechanicsFileWatcher(container.mechanics)
+            try:
+                await mechanics_watcher.start()
+            except Exception:
+                log.exception("mechanics file watcher failed to start")
+                mechanics_watcher = None
+        app.state.mechanics_watcher = mechanics_watcher
+
         app.state.container = container
     except Exception:
         # Tear down anything we managed to construct before re-raising,
@@ -546,6 +558,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await _stop_mechanics_watcher(app)
         await _shutdown(container, db)
 
 
@@ -651,6 +664,16 @@ async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
         await db.close()
     except Exception:
         log.exception("db close failed during shutdown")
+
+
+async def _stop_mechanics_watcher(app: FastAPI) -> None:
+    watcher = getattr(app.state, "mechanics_watcher", None)
+    if watcher is None:
+        return
+    try:
+        await watcher.stop()
+    except Exception:
+        log.exception("mechanics watcher stop failed")
 
 
 def create_app() -> FastAPI:

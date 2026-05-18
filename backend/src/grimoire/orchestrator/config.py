@@ -20,7 +20,18 @@ class HeartbeatConfig:
 
 @dataclass
 class PreRollConfig:
-    # 'always' | 'never' | 'high_stakes_only'. Spec 01.
+    """When to surface ``ProposedRoll``s to the player before resolving.
+
+    - ``"never"`` (default): the orchestrator resolves every proposal
+      inline and threads results into the prompt; the player never sees a
+      confirmation step.
+    - ``"always"``: every proposal is paused for confirmation. The turn
+      emits ``pre_roll_pending`` and waits for
+      :meth:`OrchestratorService.resolve_pre_roll`.
+    - ``"high_stakes"``: only proposals flagged ``high_stakes=True`` pause
+      the turn. Other proposals resolve inline.
+    """
+
     confirm_before_executing: str = "never"
 
 

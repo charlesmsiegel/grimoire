@@ -42,7 +42,13 @@ from grimoire.scenes.types import SceneInit as SceneFileInit
 from grimoire.types.common import CampaignId, CharacterRef, PostId, SceneId, TurnId
 from grimoire.types.extraction import ExtractionResult
 from grimoire.types.llm import CompletionRequest
-from grimoire.types.mechanics import MechanicsResult, ProposedRoll
+from grimoire.types.mechanics import (
+    MechanicsResult,
+    ProposalResolution,
+    ProposedRoll,
+    Roll,
+    RollModifier,
+)
 from grimoire.types.orchestrator import (
     ForkResult,
     RegenerateResult,
@@ -72,6 +78,10 @@ class _ActiveTurn:
     last_chunk_at: datetime | None = None
     player_post_id: PostId | None = None
     scene_break_choice: asyncio.Future | None = None
+    # Captured at the start of the turn so a resumed continuation has the
+    # original inputs available.
+    player_input: str = ""
+    triggering_pc: CharacterRef | None = None
 
 
 class _StreamFailure(Exception):
@@ -88,6 +98,21 @@ class _StreamFailure(Exception):
 
 
 @dataclass
+class _PendingPreRoll:
+    """Per-campaign state for a turn paused on pre_roll_pending."""
+
+    turn_id: TurnId
+    campaign_id: CampaignId
+    scene_id: SceneId
+    player_input: str
+    triggering_pc: CharacterRef | None
+    proposals: list[ProposedRoll]
+    # Proposals that were auto-resolved (high_stakes filtering) and don't
+    # need user confirmation but should be threaded into the final results.
+    auto_resolved: list[MechanicsResult] = field(default_factory=list)
+
+
+@dataclass
 class _CampaignTurnState:
     """Lightweight per-campaign coordination state.
 
@@ -99,6 +124,7 @@ class _CampaignTurnState:
     queued: int = 0
     active: _ActiveTurn | None = None
     last_turn_id: TurnId | None = None
+    pending_pre_roll: _PendingPreRoll | None = None
 
 
 class OrchestratorService:
@@ -506,15 +532,23 @@ class OrchestratorService:
             started_at=self._clock(),
             stage="starting",
             player_post_id=player_post_id,
+            player_input=player_input,
+            triggering_pc=triggering_pc,
         )
         state.active = active
 
         heartbeat_task: asyncio.Task | None = None
+        # The lock is released either at the end of the body (normal
+        # completion) or by ``resolve_pre_roll`` when it picks up a paused
+        # turn. The pause path returns the turn_id early and lets the
+        # campaign sit in ``stage = pre_roll_pending`` until a follow-up
+        # call finishes the work.
+        release_lock = True
         try:
             if self._config.heartbeat.enabled and self._ws_push is not None:
                 heartbeat_task = asyncio.create_task(self._heartbeat_loop(active))
             try:
-                await asyncio.wait_for(
+                paused = await asyncio.wait_for(
                     self._run_turn_body(
                         active=active,
                         campaign_id=campaign_id,
@@ -526,7 +560,12 @@ class OrchestratorService:
                     ),
                     timeout=self._config.turn_timeout_seconds,
                 )
-                state.last_turn_id = turn_id
+                if paused:
+                    # The turn parked on pre_roll_pending; ``resolve_pre_roll``
+                    # owns lock release once the user submits their answer.
+                    release_lock = False
+                else:
+                    state.last_turn_id = turn_id
             except TimeoutError:
                 active.cancel_event.set()
                 await self._emit_turn_event(
@@ -589,8 +628,9 @@ class OrchestratorService:
                 heartbeat_task.cancel()
                 with contextlib.suppress(BaseException):
                     await heartbeat_task
-            state.active = None
-            state.lock.release()
+            if release_lock:
+                state.active = None
+                state.lock.release()
         return turn_id
 
     async def _run_turn_body(
@@ -603,7 +643,13 @@ class OrchestratorService:
         triggering_pc: CharacterRef | None,
         turn_id: TurnId,
         reuse_prompt_cache: bool = False,
-    ) -> None:
+    ) -> bool:
+        """Run the turn until completion or a pre_roll_pending pause.
+
+        Returns ``True`` when the turn parked on a pre-roll confirmation (the
+        caller leaves the per-campaign lock held so ``resolve_pre_roll`` can
+        pick up where this left off). Returns ``False`` for normal completion.
+        """
         # Resolve the branch id up-front so turn_started carries it; the
         # scene break path may swap scene_id but the branch is stable.
         initial_scene = await self._scenes.get_scene(scene_id)
@@ -630,16 +676,67 @@ class OrchestratorService:
         self._check_cancelled(active)
 
         active.stage = "mechanics_pre_roll"
-        mechanics_results = await self._do_pre_roll(
+        pre_roll = await self._do_pre_roll(
             campaign_id=campaign_id, scene_id=scene_id, player_input=player_input
         )
-        if mechanics_results:
+        # Emit any rolls that were auto-resolved (high_stakes filtering may
+        # leave the rest in ``pre_roll.pending``); the paused proposals are
+        # surfaced via the pre_roll_pending event below.
+        if pre_roll.results:
             await self._emit_fragment(
                 turn_id,
                 campaign_id,
-                resolved_rolls=[r.model_dump(mode="json") for r in mechanics_results],
+                resolved_rolls=[r.model_dump(mode="json") for r in pre_roll.results],
             )
         self._check_cancelled(active)
+
+        state = self._campaigns.get(campaign_id)
+        if pre_roll.pending and state is not None:
+            state.pending_pre_roll = _PendingPreRoll(
+                turn_id=turn_id,
+                campaign_id=campaign_id,
+                scene_id=scene_id,
+                player_input=player_input,
+                triggering_pc=triggering_pc,
+                proposals=list(pre_roll.pending),
+                auto_resolved=list(pre_roll.results),
+            )
+            active.stage = "pre_roll_pending"
+            await self._emit_turn_event(
+                "pre_roll_pending",
+                turn_id,
+                campaign_id,
+                scene_id,
+                proposals=[p.model_dump(mode="json") for p in pre_roll.pending],
+            )
+            return True
+
+        await self._continue_turn_after_pre_roll(
+            active=active,
+            resolved_results=pre_roll.results,
+            reuse_prompt_cache=reuse_prompt_cache,
+        )
+        return False
+
+    async def _continue_turn_after_pre_roll(
+        self,
+        *,
+        active: _ActiveTurn,
+        resolved_results: list[MechanicsResult],
+        reuse_prompt_cache: bool = False,
+    ) -> None:
+        """Drive the turn from context-build through turn_complete.
+
+        Shared by ``_run_turn_body`` (when no pre-roll pause is needed) and
+        ``resolve_pre_roll`` (when a paused turn is resumed). The active
+        turn carries the original player_input / triggering_pc captured at
+        ``submit_post`` time.
+        """
+        campaign_id = active.campaign_id
+        turn_id = active.turn_id
+        scene_id = active.scene_id
+        player_input = active.player_input
+        triggering_pc = active.triggering_pc
 
         active.stage = "context_build"
         scene_obj_for_cache = await self._scenes.get_scene(scene_id)
@@ -660,7 +757,7 @@ class OrchestratorService:
             prompt = await self._context.build(
                 player_input,
                 campaign_id,
-                mechanics_results=mechanics_results,
+                mechanics_results=resolved_results,
                 pc_ref=triggering_pc,
                 turn_id=turn_id,
             )
@@ -912,13 +1009,22 @@ class OrchestratorService:
         campaign_id: CampaignId,
         scene_id: SceneId,
         player_input: str,
-    ) -> list[MechanicsResult]:
+    ) -> _PreRollOutcome:
+        """Evaluate, partition (auto-resolve vs. pending), and resolve proposals.
+
+        The mode selector is :attr:`PreRollConfig.confirm_before_executing`:
+
+        - ``"never"``: resolve every proposal inline.
+        - ``"always"``: every proposal is pending.
+        - ``"high_stakes"``: resolve only proposals with ``high_stakes=False``;
+          the rest go to pending.
+        """
         if self._mechanics is None:
-            return []
+            return _PreRollOutcome([], [])
         try:
             scene = await self._scenes.get_scene(scene_id)
         except KeyError:
-            return []
+            return _PreRollOutcome([], [])
         ctx = PydanticSceneContext(scene=_pydantic_scene(scene))
         try:
             proposed: list[ProposedRoll] = await self._mechanics.evaluate_pre_roll(
@@ -926,22 +1032,103 @@ class OrchestratorService:
             )
         except Exception as exc:
             logger.warning("mechanics pre-roll failed: %s", exc)
-            return []
+            return _PreRollOutcome([], [])
         if not proposed:
-            return []
-        if self._config.pre_roll.confirm_before_executing == "always":
-            return []
-        results: list[MechanicsResult] = []
-        for proposal in proposed:
+            return _PreRollOutcome([], [])
+
+        mode = self._config.pre_roll.confirm_before_executing
+        pending: list[ProposedRoll] = []
+        inline: list[ProposedRoll] = []
+        if mode == "always":
+            pending = list(proposed)
+        elif mode == "high_stakes":
+            for p in proposed:
+                if p.high_stakes:
+                    pending.append(p)
+                else:
+                    inline.append(p)
+        else:  # "never" or unknown → resolve everything inline
+            inline = list(proposed)
+
+        results = await self._resolve_proposals(campaign_id, inline)
+        return _PreRollOutcome(results=results, pending=pending)
+
+    async def _resolve_proposals(
+        self,
+        campaign_id: CampaignId,
+        proposals: list[ProposedRoll],
+    ) -> list[MechanicsResult]:
+        out: list[MechanicsResult] = []
+        for proposal in proposals:
+            roll = _proposed_to_roll(proposal)
             try:
-                roll = proposal.to_roll() if hasattr(proposal, "to_roll") else None
-                if roll is None:
-                    continue
                 outcome = await self._mechanics.resolve_roll(campaign_id, roll)
-                results.append(MechanicsResult(roll=roll, result=outcome))
+                out.append(MechanicsResult(roll=roll, result=outcome))
             except Exception as exc:
                 logger.warning("mechanics roll resolution failed: %s", exc)
-        return results
+        return out
+
+    async def resolve_pre_roll(
+        self,
+        campaign_id: CampaignId,
+        turn_id: TurnId,
+        resolutions: list[ProposalResolution],
+    ) -> SubmitResult:
+        """Resume a paused turn after the user accepts / modifies / declines.
+
+        For each proposal: ``accepted=False`` drops it; ``modifications`` is
+        a dict whose keys (``pool``, ``difficulty``, ``modifiers``, ...)
+        override the corresponding fields on the proposal.
+        """
+        state = self._state_for(campaign_id)
+        pending = state.pending_pre_roll
+        if pending is None or pending.turn_id != turn_id:
+            raise OrchestratorError(
+                f"no pre_roll_pending turn {turn_id!r} for campaign {campaign_id!r}"
+            )
+
+        active = state.active
+        if active is None or active.turn_id != turn_id:
+            raise OrchestratorError(f"active turn {turn_id!r} not in pre_roll_pending stage")
+
+        # Index resolutions by label; missing labels are treated as accepted
+        # with no modifications so the caller can omit them.
+        by_label: dict[str, ProposalResolution] = {r.label: r for r in resolutions}
+        final_proposals: list[ProposedRoll] = []
+        for proposal in pending.proposals:
+            resolution = by_label.get(proposal.label)
+            if resolution is None:
+                final_proposals.append(proposal)
+                continue
+            if not resolution.accepted:
+                continue
+            if resolution.modifications:
+                merged = proposal.model_copy(update=_clean_modifications(resolution.modifications))
+                final_proposals.append(merged)
+            else:
+                final_proposals.append(proposal)
+
+        resolved = await self._resolve_proposals(campaign_id, final_proposals)
+        # Combine with any inline (non-high-stakes) results from the pause.
+        all_results = list(pending.auto_resolved) + resolved
+
+        # Clear pending so a second call doesn't double-process.
+        state.pending_pre_roll = None
+        try:
+            await self._continue_turn_after_pre_roll(
+                active=active,
+                resolved_results=all_results,
+            )
+            state.last_turn_id = turn_id
+        finally:
+            state.active = None
+            state.lock.release()
+        return SubmitResult(
+            accepted=True,
+            turn_id=turn_id,
+            auto_responding=True,
+            reason="pre_roll resolved",
+        )
 
     async def _composition_hash(self, campaign_id: CampaignId) -> str:
         """SHA-256 fingerprint of the campaign's current composition.
@@ -1627,6 +1814,65 @@ def _build_continuity_commitment(
         due_by=due_by,
         status=CommitmentStatus.OPEN,
     )
+
+
+@dataclass
+class _PreRollOutcome:
+    """Result of partitioning + resolving pre-roll proposals."""
+
+    results: list[MechanicsResult]
+    pending: list[ProposedRoll]
+
+
+def _proposed_to_roll(proposal: ProposedRoll) -> Roll:
+    """Materialise a ``ProposedRoll`` into a concrete ``Roll`` ready for resolve.
+
+    The proposal carries label/kind/pool/difficulty/modifiers; the Roll
+    needs an id and a seed. The id is derived from the label so retries
+    of the same proposal stay deterministic; the seed is zero by default
+    and the mechanics service mixes it with the branch seed.
+    """
+    return Roll(
+        id=f"proposal:{proposal.label}",
+        kind=proposal.kind,
+        pool=proposal.pool,
+        seed=0,
+        actor_ref=proposal.actor_ref,
+        target_ref=proposal.target_ref,
+        difficulty=proposal.difficulty,
+        modifiers=list(proposal.modifiers),
+        metadata=dict(proposal.metadata),
+    )
+
+
+def _clean_modifications(modifications: dict) -> dict:
+    """Filter caller-supplied overrides to fields ``ProposedRoll`` actually accepts.
+
+    Modifiers are re-validated through ``RollModifier`` so a malformed
+    entry surfaces as a ``ValueError`` before resolution.
+    """
+    allowed = {
+        "kind",
+        "pool",
+        "difficulty",
+        "actor_ref",
+        "target_ref",
+        "rationale",
+        "high_stakes",
+        "modifiers",
+        "metadata",
+    }
+    out: dict = {}
+    for key, value in modifications.items():
+        if key not in allowed:
+            continue
+        if key == "modifiers" and isinstance(value, list):
+            out[key] = [
+                v if isinstance(v, RollModifier) else RollModifier.model_validate(v) for v in value
+            ]
+        else:
+            out[key] = value
+    return out
 
 
 __all__ = ["OrchestratorService", "WSPushFn"]

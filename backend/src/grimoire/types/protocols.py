@@ -90,7 +90,9 @@ from .llm import (
 )
 from .mechanics import (
     Capability,
+    CreationStep,
     MechanicsResult,
+    MechanicsSwitchResult,
     ModuleManifest,
     NarratedEvent,
     PowerDefinition,
@@ -409,6 +411,52 @@ class Mechanics(Protocol):
     async def list_installed_modules(self) -> list[ModuleManifest]: ...
 
     async def module_info(self, module_id: MechanicsModuleId) -> ModuleManifest | None: ...
+
+    # Content browsers (§2)
+    async def list_content_kinds(self, campaign_id: CampaignId) -> list[str]: ...
+
+    async def content_schema(self, campaign_id: CampaignId, kind: str) -> JsonSchema | None: ...
+
+    async def list_content(self, campaign_id: CampaignId, kind: str) -> list[dict]: ...
+
+    async def get_content(
+        self, campaign_id: CampaignId, kind: str, content_id: str
+    ) -> dict | None: ...
+
+    async def put_content(
+        self,
+        campaign_id: CampaignId,
+        kind: str,
+        content_id: str,
+        payload: dict,
+    ) -> dict: ...
+
+    # Character creation (§4)
+    async def character_creation_steps(
+        self, campaign_id_or_module_id: str
+    ) -> list[CreationStep]: ...
+
+    async def finalize_character_creation(
+        self,
+        campaign_id: CampaignId,
+        character_ref: str,
+        step_outputs: dict,
+    ) -> dict: ...
+
+    # Powers (§9)
+    async def power_definitions(self, campaign_id: CampaignId) -> list[PowerDefinition]: ...
+
+    async def power_definition(
+        self, campaign_id: CampaignId, power_id: str
+    ) -> PowerDefinition | None: ...
+
+    # Mid-campaign switching (§6)
+    async def switch_module(
+        self,
+        campaign_id: CampaignId,
+        new_mechanics_id: str | None,
+        source: str = "user",
+    ) -> MechanicsSwitchResult: ...
 
 
 # --------------------------------------------------------------------------- #

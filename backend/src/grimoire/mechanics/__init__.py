@@ -10,6 +10,7 @@ No mechanics modules ship with Grimoire — this package is the API
 contract and the loader, not a system implementation.
 """
 
+from grimoire.mechanics.base import DiskBackedMechanicsModule
 from grimoire.mechanics.config import (
     DefaultsConfig,
     MechanicsConfig,
@@ -43,6 +44,7 @@ __all__ = [
     "DefaultsConfig",
     "DiscoveredModule",
     "DiscoveryError",
+    "DiskBackedMechanicsModule",
     "LoadResult",
     "MechanicsConfig",
     "MechanicsRegistry",

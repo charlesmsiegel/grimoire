@@ -231,6 +231,31 @@ def sheet_path(
     )
 
 
+def content_path(
+    data_root: Path,
+    campaign_id: str,
+    kind: str,
+    content_id: str,
+    mechanics_id: str,
+) -> Path:
+    """Return the on-disk path for a mechanics content instance.
+
+    Mirrors :func:`sheet_path`. ``kind`` is taken verbatim as the directory
+    name (content kinds are module-defined, not in ``KIND_TO_DIR``).
+    """
+    validate_path_component(campaign_id, name="campaign_id")
+    validate_path_component(content_id, name="content_id")
+    validate_path_component(mechanics_id, name="mechanics_id")
+    validate_path_component(kind, name="kind")
+    return (
+        campaigns_root(data_root)
+        / campaign_id
+        / "content"
+        / kind
+        / f"{content_id}.{mechanics_id}.yaml"
+    )
+
+
 def image_metadata_path(data_root: Path, campaign_id: str, image_id: str) -> Path:
     validate_path_component(campaign_id, name="campaign_id")
     validate_path_component(image_id, name="image_id")
