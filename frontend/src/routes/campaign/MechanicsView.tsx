@@ -83,7 +83,14 @@ export function MechanicsView() {
       </Loading>
 
       <Loading state={characters} emptyMessage="No characters in this campaign yet.">
-        {(rows) => <SheetsPanel campaignId={campaignId} moduleId={moduleId} characters={rows} />}
+        {(rows) => (
+          <SheetsPanel
+            campaignId={campaignId}
+            moduleId={moduleId}
+            characters={rows}
+            onRefresh={() => characters.reload()}
+          />
+        )}
       </Loading>
 
       <section className="placeholder-panel">
@@ -117,16 +124,42 @@ interface SheetsPanelProps {
   campaignId: string;
   moduleId: string;
   characters: ResolvedCharacter[];
+  onRefresh: () => void;
 }
 
-function SheetsPanel({ campaignId, characters }: SheetsPanelProps) {
+function SheetsPanel({ campaignId, moduleId, characters, onRefresh }: SheetsPanelProps) {
   const [selected, setSelected] = useState<string | null>(characters[0]?.character.id ?? null);
   const [sheets, setSheets] = useState<Record<string, "present" | "missing" | "unknown">>({});
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const schemaState = useApi(() => viewsApi.getSheetSchema(moduleId, "character"), [moduleId]);
+  const themeState = useApi(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]);
 
   const selectedRow = characters.find((c) => c.character.id === selected) ?? null;
 
   const present = Object.entries(sheets).filter(([, v]) => v === "present").length;
   const missing = Object.entries(sheets).filter(([, v]) => v === "missing").length;
+
+  const handleBulk = useCallback(async () => {
+    setBulkBusy(true);
+    setBulkError(null);
+    try {
+      await viewsApi.bulkCreateMissingSheets(campaignId);
+      setSheets({});
+      setReloadKey((k) => k + 1);
+      onRefresh();
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [campaignId, onRefresh]);
+
+  const themeCss = themeState.status === "ok" ? themeState.data : "";
+  const schema =
+    schemaState.status === "ok" ? (schemaState.data as unknown as SheetSchema) : null;
 
   return (
     <div className="mechanics-sheets-layout">
@@ -153,16 +186,27 @@ function SheetsPanel({ campaignId, characters }: SheetsPanelProps) {
           ))}
         </ul>
         {missing > 0 && (
-          <button type="button" className="primary" disabled title="Wired in a follow-up task.">
-            Bulk-create {missing} missing sheet{missing === 1 ? "" : "s"}
+          <button type="button" className="primary" onClick={handleBulk} disabled={bulkBusy}>
+            {bulkBusy
+              ? "Creating…"
+              : `Bulk-create ${missing} missing sheet${missing === 1 ? "" : "s"}`}
           </button>
+        )}
+        {bulkError && (
+          <p className="error" role="alert">
+            {bulkError}
+          </p>
         )}
       </aside>
       <section className="sheet-detail">
         {selectedRow ? (
           <CharacterSheet
+            key={`${selectedRow.character.id}-${reloadKey}`}
             campaignId={campaignId}
+            moduleId={moduleId}
             characterId={selectedRow.character.id}
+            schema={schema}
+            themeCss={themeCss}
             onStatus={(id, status) => setSheets((m) => ({ ...m, [id]: status }))}
           />
         ) : (
@@ -181,11 +225,21 @@ function SheetStatus({ status }: { status: "present" | "missing" | "unknown" }) 
 
 interface SheetProps {
   campaignId: string;
+  moduleId: string;
   characterId: string;
+  schema: SheetSchema | null;
+  themeCss: string;
   onStatus: (id: string, status: "present" | "missing") => void;
 }
 
-function CharacterSheet({ campaignId, characterId, onStatus }: SheetProps) {
+function CharacterSheet({
+  campaignId,
+  moduleId,
+  characterId,
+  schema,
+  themeCss,
+  onStatus,
+}: SheetProps) {
   const state = useApi<Record<string, unknown> | null>(
     () =>
       viewsApi.getSheet(campaignId, "character", characterId).then(
@@ -204,6 +258,33 @@ function CharacterSheet({ campaignId, characterId, onStatus }: SheetProps) {
     [campaignId, characterId],
   );
 
+  const [working, setWorking] = useState<SheetValue | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const dirtyRef = useRef(false);
+
+  // Reset working copy when the underlying sheet changes (e.g. switching
+  // characters). The `key={...}` on the parent makes this remount on
+  // bulk-create completion as well.
+  const fetchedSheet = state.status === "ok" ? state.data : null;
+  useEffect(() => {
+    if (fetchedSheet !== null) {
+      setWorking(fetchedSheet as SheetValue);
+      dirtyRef.current = false;
+    }
+  }, [fetchedSheet]);
+
+  const persist = useCallback(
+    async (next: SheetValue) => {
+      try {
+        await viewsApi.putSheet(campaignId, "character", characterId, next);
+        setSaveError(null);
+      } catch (err) {
+        setSaveError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [campaignId, characterId],
+  );
+
   return (
     <Loading state={state}>
       {(sheet) => {
@@ -211,16 +292,47 @@ function CharacterSheet({ campaignId, characterId, onStatus }: SheetProps) {
           return (
             <div className="muted">
               <p>No sheet on file for this character under the active mechanics module.</p>
-              <button type="button" disabled title="Wired in a follow-up task.">
-                Initialize sheet
-              </button>
+              <p>Use the Bulk-create button to initialise sheets, or write one via the API.</p>
             </div>
           );
         }
+        if (!schema) {
+          return (
+            <pre className="sheet-raw">
+              <code>{JSON.stringify(sheet, null, 2)}</code>
+            </pre>
+          );
+        }
         return (
-          <pre className="sheet-raw">
-            <code>{JSON.stringify(sheet, null, 2)}</code>
-          </pre>
+          <>
+            <SheetRenderer
+              moduleId={moduleId}
+              schema={schema}
+              value={(working ?? sheet) as SheetValue}
+              themeCss={themeCss || undefined}
+              onChange={(next) => {
+                setWorking(next);
+                dirtyRef.current = true;
+              }}
+            />
+            <div className="sheet-actions">
+              <button
+                type="button"
+                disabled={!dirtyRef.current && working === null}
+                onClick={() => {
+                  if (working) void persist(working);
+                  dirtyRef.current = false;
+                }}
+              >
+                Save
+              </button>
+              {saveError && (
+                <span className="error" role="alert">
+                  {saveError}
+                </span>
+              )}
+            </div>
+          </>
         );
       }}
     </Loading>
