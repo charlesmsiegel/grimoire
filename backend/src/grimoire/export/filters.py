@@ -40,6 +40,10 @@ class FilterContext:
     strip_narrator_scaffolding: bool = True
     anonymize: dict[str, str] = field(default_factory=dict)
     skip_tags: list[str] = field(default_factory=list)
+    # POV consolidation (spec 13, sixth filter): merge adjacent posts that
+    # share an author. Values: "off" | "by_kind" (PCs collapse together,
+    # NPCs collapse together) | "by_author" (only literal same author).
+    pov_consolidation_mode: str = "off"
 
 
 def strip_ooc(text: str) -> str:

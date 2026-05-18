@@ -18,7 +18,12 @@ from grimoire.export import (
     word_count,
 )
 from grimoire.export.selection import filter_context_from_dict
-from grimoire.types.export import ExportOptions, ExportResult, ExportSelection
+from grimoire.types.export import (
+    ExportCapabilities,
+    ExportOptions,
+    ExportResult,
+    ExportSelection,
+)
 
 _DEFAULT_CSS = """\
 body {
@@ -75,6 +80,12 @@ class HtmlExportAdapter:
     name: ClassVar[str] = "Standalone HTML"
     extensions: ClassVar[list[str]] = ["html"]
     mime_type: ClassVar[str] = "text/html"
+    capabilities: ClassVar[ExportCapabilities] = ExportCapabilities(
+        supports_images=True,
+        supports_appendices=False,
+        supports_filters=True,
+        supported_style_presets=[],
+    )
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config: dict[str, Any] = dict(config or {})

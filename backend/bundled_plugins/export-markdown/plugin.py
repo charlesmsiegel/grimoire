@@ -23,7 +23,12 @@ from grimoire.export import (
     word_count,
 )
 from grimoire.export.selection import filter_context_from_dict
-from grimoire.types.export import ExportOptions, ExportResult, ExportSelection
+from grimoire.types.export import (
+    ExportCapabilities,
+    ExportOptions,
+    ExportResult,
+    ExportSelection,
+)
 
 
 def _data_root(config: dict[str, Any] | None) -> Path:
@@ -138,6 +143,12 @@ class MarkdownBundleAdapter:
     name: ClassVar[str] = "Markdown Bundle"
     extensions: ClassVar[list[str]] = ["zip"]
     mime_type: ClassVar[str] = "application/zip"
+    capabilities: ClassVar[ExportCapabilities] = ExportCapabilities(
+        supports_images=True,
+        supports_appendices=True,
+        supports_filters=True,
+        supported_style_presets=[],
+    )
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config: dict[str, Any] = dict(config or {})
