@@ -163,6 +163,7 @@ class _DeltaRow:
         self.campaign_id = entry["campaign_id"]
         self.branch_id = entry["branch_id"]
         self.delta = entry["delta"]
+        self.target_id = getattr(entry["delta"], "target_id", None)
 
 
 @dataclass
