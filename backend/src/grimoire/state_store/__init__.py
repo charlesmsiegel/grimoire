@@ -27,9 +27,11 @@ from grimoire.state_store.paths import (
     sheet_path,
 )
 from grimoire.state_store.store import StateStore
+from grimoire.state_store.summarizer import BodySummarizer
 
 __all__ = [
     "AutoBackupConfig",
+    "BodySummarizer",
     "KIND_TO_DIR",
     "LibrarySectionConfig",
     "LibraryRef",

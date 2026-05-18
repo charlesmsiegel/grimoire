@@ -17,6 +17,7 @@ from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from watchdog.events import EVENT_TYPE_MOVED, FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
@@ -30,7 +31,6 @@ from grimoire.files import (
     read_markdown,
 )
 from grimoire.library.config import LibraryConfig
-from grimoire.state_store import StateStore
 from grimoire.state_store.indexers import (
     delete_campaign_content_row,
     delete_library_index_row,
@@ -38,6 +38,9 @@ from grimoire.state_store.indexers import (
     upsert_library_index,
 )
 from grimoire.watcher.classifier import WatchedFile, classify_path
+
+if TYPE_CHECKING:
+    from grimoire.state_store.store import StateStore
 
 logger = logging.getLogger(__name__)
 
