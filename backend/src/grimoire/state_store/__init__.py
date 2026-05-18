@@ -8,6 +8,13 @@ The :class:`StateStore` mediates every write so the file and the index stay
 consistent, records reversible deltas, and supports undo / fork / retcon.
 """
 
+from grimoire.state_store.config import (
+    AutoBackupConfig,
+    LibrarySectionConfig,
+    RetentionConfig,
+    SnapshotsConfig,
+    StateStoreConfig,
+)
 from grimoire.state_store.errors import StateStoreError
 from grimoire.state_store.paths import (
     KIND_TO_DIR,
@@ -22,9 +29,14 @@ from grimoire.state_store.paths import (
 from grimoire.state_store.store import StateStore
 
 __all__ = [
+    "AutoBackupConfig",
     "KIND_TO_DIR",
+    "LibrarySectionConfig",
     "LibraryRef",
+    "RetentionConfig",
+    "SnapshotsConfig",
     "StateStore",
+    "StateStoreConfig",
     "StateStoreError",
     "emergent_path",
     "image_metadata_path",
