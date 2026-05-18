@@ -84,9 +84,7 @@ class CoverGenerator(Protocol):
     plain title page.
     """
 
-    async def generate_cover(
-        self, campaign_id: CampaignId, prompt: str
-    ) -> bytes | None: ...
+    async def generate_cover(self, campaign_id: CampaignId, prompt: str) -> bytes | None: ...
 
 
 @runtime_checkable

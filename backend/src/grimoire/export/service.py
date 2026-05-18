@@ -193,9 +193,7 @@ class ExportService:
         ext = adapter.extensions[0] if adapter.extensions else "bin"
         return self.config.output_directory / campaign_id / f"{stem}-{ts}.{ext}"
 
-    async def _capture_world_versions(
-        self, campaign_id: CampaignId
-    ) -> list[dict[str, Any]]:
+    async def _capture_world_versions(self, campaign_id: CampaignId) -> list[dict[str, Any]]:
         """Best-effort snapshot of the library versions used by this export.
 
         Spec 13 §Responsibilities lists "against what library versions"
@@ -273,9 +271,7 @@ class ExportService:
             ),
         )
 
-    async def _load_persisted_history(
-        self, campaign_id: CampaignId
-    ) -> list[ExportRecord]:
+    async def _load_persisted_history(self, campaign_id: CampaignId) -> list[ExportRecord]:
         rows = await self._state_store.db.fetchall(
             """
             SELECT id, campaign_id, adapter_id,

@@ -137,9 +137,7 @@ def _apply_audience_policy(appendices: set[str], audience: str | None) -> set[st
     return appendices
 
 
-def _consolidate_by_pov(
-    posts: list[FormattedPost], mode: str
-) -> list[FormattedPost]:
+def _consolidate_by_pov(posts: list[FormattedPost], mode: str) -> list[FormattedPost]:
     """Merge runs of consecutive posts that share an author.
 
     Spec 13 §Filter and transformation hooks lists POV consolidation as the
@@ -247,9 +245,7 @@ async def build_snapshot(
                     body=body,
                 )
             )
-        formatted_posts = _consolidate_by_pov(
-            formatted_posts, filter_ctx.pov_consolidation_mode
-        )
+        formatted_posts = _consolidate_by_pov(formatted_posts, filter_ctx.pov_consolidation_mode)
 
         scene_images: list[ImageMetadata] = []
         if selection.include_images:
@@ -311,9 +307,7 @@ def _build_filter_context(
     # ``selection.filters`` does not override the same key.
     strip_ooc_default = True if defaults is None else defaults.strip_ooc_default
     strip_mech_default = False if defaults is None else defaults.strip_mechanics_default
-    strip_narr_default = (
-        True if defaults is None else defaults.strip_narrator_scaffolding_default
-    )
+    strip_narr_default = True if defaults is None else defaults.strip_narrator_scaffolding_default
     anonymize_default = False if defaults is None else defaults.anonymize_default
 
     ctx = FilterContext(

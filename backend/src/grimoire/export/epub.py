@@ -276,9 +276,7 @@ class EpubAdapter:
                 f"campaign {campaign_id!r}: selection produced no exportable scenes"
             )
 
-        snapshot.options = await self._maybe_generate_cover(
-            campaign_id, options, snapshot
-        )
+        snapshot.options = await self._maybe_generate_cover(campaign_id, options, snapshot)
 
         book = _build_book(snapshot, self._clock())
         _write_epub(output_path, book)
@@ -319,9 +317,7 @@ class EpubAdapter:
             return options
         generator = getattr(self.sources, "cover_generator", None)
         if generator is None:
-            snapshot.warnings.append(
-                "generate_cover requested but no cover generator is wired"
-            )
+            snapshot.warnings.append("generate_cover requested but no cover generator is wired")
             return options
         prompt = _cover_prompt(options, snapshot)
         try:
@@ -715,7 +711,7 @@ def _render_chapter(
         for note_id, body in footnotes:
             body_parts.append(
                 f'<aside id="{note_id}" epub:type="footnote">'
-                f'<p>{html.escape(body)} '
+                f"<p>{html.escape(body)} "
                 f'<a href="#{note_id}-ref" epub:type="backlink">↩</a></p>'
                 "</aside>"
             )
@@ -770,12 +766,8 @@ def _render_appendices(
     if "cast" in appendices and snapshot.characters:
         items.append(_appendix_item("cast", "Cast", _render_cast(snapshot.characters)))
     if any(name in appendices for name in ("world", "locations", "lore", "factions", "items")):
-        show_attribution = bool(
-            (options.extra or {}).get("show_source_attribution", False)
-        )
-        body = _render_world_appendix(
-            snapshot, appendices, show_attribution=show_attribution
-        )
+        show_attribution = bool((options.extra or {}).get("show_source_attribution", False))
+        body = _render_world_appendix(snapshot, appendices, show_attribution=show_attribution)
         if body:
             items.append(_appendix_item("world", "World", body))
     if "continuity" in appendices and (snapshot.facts or snapshot.commitments):
@@ -889,8 +881,7 @@ def _render_library_dl(
             version = versions.get(entity.world_id)
             label = f"{entity.world_id} v{version}" if version is not None else entity.world_id
             attribution = (
-                f' <span class="source-attribution">&lt;source: '
-                f"{html.escape(label)}&gt;</span>"
+                f' <span class="source-attribution">&lt;source: {html.escape(label)}&gt;</span>'
             )
         rows.append(f"<dt>{name}{attribution}</dt><dd>{body}</dd>")
     rows.append("</dl>")
