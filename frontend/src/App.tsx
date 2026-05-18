@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { AppSettings } from "./routes/AppSettings";
@@ -15,10 +16,22 @@ import { MechanicsView } from "./routes/campaign/MechanicsView";
 import { TimelineView } from "./routes/campaign/TimelineView";
 import { WorldView } from "./routes/campaign/WorldView";
 import { AppShell } from "./shell/AppShell";
+import { markEnd, markStart } from "./state/perf";
 import { StoreProvider } from "./state/store";
 import { ThemeProvider } from "./state/theme";
 
+// Spec 14 §Performance budgets: initial load < 2s.
+// Mark as soon as this module evaluates so the span captures bundle parse +
+// React mount, not just the first render commit.
+markStart("app:initial-load");
+
 export function App() {
+  useEffect(() => {
+    // Fires once after the first commit; this is the earliest moment the user
+    // sees any UI, which is what the budget targets.
+    markEnd("app:initial-load");
+  }, []);
+
   return (
     <ThemeProvider>
       <StoreProvider>

@@ -1,13 +1,25 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { ApiError, libraryApi } from "../../api/library";
 import { useResource } from "../../api/useResource";
+import { markEnd } from "../../state/perf";
 import { AsyncBoundary } from "./AsyncBoundary";
 
 export function WorldsListView() {
   const navigate = useNavigate();
   const { data, loading, error, reload } = useResource(() => libraryApi.listWorlds(), []);
+
+  // End the `library:render` span started in `LibraryLayout` the first time
+  // the worlds list completes loading without error. Reloads don't restart
+  // the measurement — the budget targets initial render to first content.
+  const measuredRef = useRef(false);
+  useEffect(() => {
+    if (!measuredRef.current && !loading && !error && data) {
+      measuredRef.current = true;
+      markEnd("library:render");
+    }
+  }, [loading, error, data]);
 
   const [creating, setCreating] = useState(false);
   const [newId, setNewId] = useState("");

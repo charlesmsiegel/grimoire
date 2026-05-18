@@ -1,5 +1,7 @@
+import { useEffect, useRef } from "react";
 import { NavLink, Outlet, useParams } from "react-router-dom";
 
+import { markEnd, markStart } from "../state/perf";
 import { PlayView } from "./campaign/PlayView";
 
 const subSections: { to: string; label: string; end?: boolean }[] = [
@@ -14,6 +16,23 @@ const subSections: { to: string; label: string; end?: boolean }[] = [
 
 export function CampaignView() {
   const { campaignId } = useParams();
+
+  // Spec 14 §Performance budgets: campaign switch < 300ms with library cached.
+  // We mark on every campaignId change; the first frame after the new value
+  // shows up in the DOM ends the measurement. This is a coarse approximation
+  // — it does not wait for nested async loads — but matches the budget which
+  // targets perceived layout, not data hydration.
+  const prevIdRef = useRef<string | undefined>(undefined);
+  if (campaignId && prevIdRef.current !== campaignId) {
+    markStart("campaign:switch");
+    prevIdRef.current = campaignId;
+  }
+  useEffect(() => {
+    if (campaignId) {
+      markEnd("campaign:switch");
+    }
+  }, [campaignId]);
+
   if (!campaignId) {
     return (
       <section className="route campaign-view">

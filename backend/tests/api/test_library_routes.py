@@ -49,6 +49,29 @@ class FakeLibrary:
         return []
 
     async def variants_of(self, asset_id: str, kind: str) -> list[Any]:
+        if asset_id == "alistair" and kind == "character":
+            return [
+                LibraryEntity(
+                    id="worlds/wod-london/characters/alistair",
+                    world_id="wod-london",
+                    kind="character",
+                    asset_id="alistair",
+                    name="Alistair",
+                    path="worlds/wod-london/characters/alistair.md",
+                    frontmatter={"name": "Alistair", "clan": "Ventrue"},
+                    body="A polished elder in a Savile Row suit.",
+                ),
+                LibraryEntity(
+                    id="worlds/wod-paris/characters/alistair",
+                    world_id="wod-paris",
+                    kind="character",
+                    asset_id="alistair",
+                    name="Alistair",
+                    path="worlds/wod-paris/characters/alistair.md",
+                    frontmatter={"name": "Alistair", "clan": "Toreador"},
+                    body="A salon-haunting aesthete.",
+                ),
+            ]
         return []
 
     async def dependents(self, world_id: str, kind: str, entity_id: str) -> list[Any]:
@@ -243,6 +266,33 @@ def test_get_style_guide_edit_returns_parsed_shape(client, container) -> None:
     assert body["id"] == "cozy-mystery"
     assert body["pacing"] == ["one"]
     assert "extra_sections" in body
+
+
+def test_variants_returns_frontmatter_and_body_for_diff(client, container) -> None:
+    """The variants endpoint must surface the full body and frontmatter so the
+    frontend's cross-world diff preview (spec 14 §12) can compute a key/value
+    comparison and a body-length delta entirely on the client."""
+    container.library = FakeLibrary()
+    response = client.get("/api/library/variants/character/alistair")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 2
+    assert {row["world_id"] for row in body} == {"wod-london", "wod-paris"}
+    for row in body:
+        assert "frontmatter" in row
+        assert "body" in row
+        assert row["frontmatter"].get("name") == "Alistair"
+        assert row["body"]
+    # The frontmatter differs on `clan` — the diff UI keys off this row.
+    clans = {row["world_id"]: row["frontmatter"]["clan"] for row in body}
+    assert clans == {"wod-london": "Ventrue", "wod-paris": "Toreador"}
+
+
+def test_variants_returns_empty_list_for_unique_asset(client, container) -> None:
+    container.library = FakeLibrary()
+    response = client.get("/api/library/variants/character/nobody")
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 def test_mechanics_installed(client, container) -> None:
