@@ -58,7 +58,64 @@ PLUGIN_MANIFEST_SCHEMA: dict = {
             "additionalProperties": {"type": "string", "minLength": 1},
         },
         "config_schema": {"type": "object"},
-        "capabilities": {"type": "object"},
+        # Typed per-kind capability blocks. The schema is permissive
+        # (``additionalProperties: true``) so legacy free-form metadata
+        # still validates; the loader projects only the recognised keys
+        # onto :class:`PluginCapabilities`.
+        "capabilities": {
+            "type": "object",
+            "properties": {
+                "llm_provider": {
+                    "type": "object",
+                    "properties": {
+                        "streaming": {"type": "boolean"},
+                        "tools": {"type": "boolean"},
+                        "vision": {"type": "boolean"},
+                        "embeddings": {"type": "boolean"},
+                        "max_context": {"type": "integer", "minimum": 0},
+                    },
+                    "additionalProperties": True,
+                },
+                "embedding_provider": {
+                    "type": "object",
+                    "properties": {
+                        "dimensions": {"type": "integer", "minimum": 0},
+                        "max_batch_size": {"type": ["integer", "null"]},
+                        "model_id": {"type": ["string", "null"]},
+                    },
+                    "additionalProperties": True,
+                },
+                "imagegen_backend": {
+                    "type": "object",
+                    "properties": {
+                        "text_to_image": {"type": "boolean"},
+                        "image_to_image": {"type": "boolean"},
+                        "inpainting": {"type": "boolean"},
+                        "controlnet": {"type": "boolean"},
+                        "lora": {"type": "boolean"},
+                        "max_resolution": {
+                            "type": "array",
+                            "items": {"type": "integer", "minimum": 0},
+                            "minItems": 2,
+                            "maxItems": 2,
+                        },
+                    },
+                    "additionalProperties": True,
+                },
+                "export_adapter": {
+                    "type": "object",
+                    "properties": {
+                        "extensions": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                        },
+                        "mime_type": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
+            },
+            "additionalProperties": True,
+        },
         "requirements": {
             "type": "array",
             "items": {"type": "string"},
@@ -141,6 +198,23 @@ def _cross_check_plugin(manifest: dict) -> list[ValidationError]:
                             f"`classes` declares '{kind}' but it is not listed in `implements`"
                         ),
                         path=("classes", kind),
+                        validator="consistency",
+                    )
+                )
+    capabilities = manifest.get("capabilities")
+    if isinstance(capabilities, dict) and isinstance(implements, list):
+        # Per-kind capability blocks must match a kind the plugin
+        # implements; an `llm_provider` capability block on an export
+        # adapter is almost certainly a typo.
+        for kind in capabilities:
+            if kind in PLUGIN_KINDS and kind not in implements:
+                errors.append(
+                    ValidationError(
+                        message=(
+                            f"`capabilities.{kind}` is declared but `{kind}` "
+                            "is not listed in `implements`"
+                        ),
+                        path=("capabilities", kind),
                         validator="consistency",
                     )
                 )
