@@ -59,9 +59,7 @@ async def test_pov_consolidation_by_kind_merges_adjacent_posts() -> None:
             ]
         },
     )
-    selection = ExportSelection(
-        branch_id="main", filters={"pov_consolidation": "by_kind"}
-    )
+    selection = ExportSelection(branch_id="main", filters={"pov_consolidation": "by_kind"})
     snapshot = await build_snapshot("campaign-a", selection, ExportOptions(), sources)
     posts = snapshot.scenes[0].posts
     assert len(posts) == 2
@@ -145,9 +143,7 @@ async def test_epub_emits_real_footnotes_for_mech_chips() -> None:
         await adapter.export(
             "campaign-a",
             ExportSelection(branch_id="main"),
-            ExportOptions(
-                title="Test", extra={"include_mechanics_footnotes": True}
-            ),
+            ExportOptions(title="Test", extra={"include_mechanics_footnotes": True}),
             out,
         )
         # Crack the EPUB zip and inspect the chapter.
@@ -182,9 +178,7 @@ async def test_epub_attribution_renders_source_label() -> None:
         out = Path(tmp) / "book.epub"
         await adapter.export(
             "campaign-a",
-            ExportSelection(
-                branch_id="main", include_appendices=["world", "locations"]
-            ),
+            ExportSelection(branch_id="main", include_appendices=["world", "locations"]),
             ExportOptions(title="T", extra={"show_source_attribution": True}),
             out,
         )

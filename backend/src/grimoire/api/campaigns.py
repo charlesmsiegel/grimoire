@@ -1557,9 +1557,7 @@ async def list_export_adapters(
                 "name": getattr(adapter, "name", adapter.id),
                 "extensions": list(getattr(adapter, "extensions", []) or []),
                 "mime_type": getattr(adapter, "mime_type", "application/octet-stream"),
-                "capabilities": (
-                    capabilities.model_dump() if capabilities is not None else None
-                ),
+                "capabilities": (capabilities.model_dump() if capabilities is not None else None),
                 "option_schema": option_schema,
             }
         )
