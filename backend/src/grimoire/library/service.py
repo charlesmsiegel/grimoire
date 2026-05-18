@@ -13,6 +13,7 @@ import json
 from datetime import datetime
 from typing import Any
 
+from grimoire.library.config import LibraryConfig
 from grimoire.library.errors import (
     LibraryConflictError,
     LibraryError,
@@ -172,8 +173,19 @@ class LibraryService:
     service only does file-mediated writes through the store.
     """
 
-    def __init__(self, store: StateStore) -> None:
+    def __init__(self, store: StateStore, config: LibraryConfig | None = None) -> None:
         self.store = store
+        self.config = config or LibraryConfig()
+
+    @property
+    def default_track_latest(self) -> bool:
+        """Spec 18 ``library.version_pinning.default`` projected to a bool.
+
+        API endpoints / wizards that create a new ``WorldRef`` without an
+        explicit ``track_latest`` should consult this to honor user-configured
+        defaults rather than hard-coding the pydantic field default (``False``).
+        """
+        return self.config.default_track_latest
 
     # ------------------------------------------------------------------ #
     # Discovery / listing
@@ -664,6 +676,7 @@ class LibraryService:
                 include=list(ref.include or []),
                 track_latest=ref.track_latest,
                 bound_at_version=(ref.bound_at_version if ref.bound_at_version else None),
+                snapshot_on_bind=self.config.version_pinning.snapshot_on_bind,
             )
 
         for old in existing - desired_ids:
