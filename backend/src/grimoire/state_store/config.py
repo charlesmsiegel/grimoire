@@ -178,11 +178,11 @@ class StateStoreConfig:
         library_root = base.library_root
         campaigns_root = base.campaigns_root
         database_path = base.database_path
-        if "library_root" in raw and raw["library_root"]:
+        if raw.get("library_root"):
             library_root = _resolve_path(raw["library_root"], data_root)
-        if "campaigns_root" in raw and raw["campaigns_root"]:
+        if raw.get("campaigns_root"):
             campaigns_root = _resolve_path(raw["campaigns_root"], data_root)
-        if "database_path" in raw and raw["database_path"]:
+        if raw.get("database_path"):
             database_path = _resolve_path(raw["database_path"], data_root)
 
         enable_wal = bool(raw.get("enable_wal", base.enable_wal))
@@ -195,9 +195,7 @@ class StateStoreConfig:
 
         library = _library_from(raw.get("library"), base.library)
         snapshots = _snapshots_from(raw.get("snapshots"), base.snapshots)
-        auto_backup = _backup_from(
-            raw.get("auto_backup"), base.auto_backup, data_root=data_root
-        )
+        auto_backup = _backup_from(raw.get("auto_backup"), base.auto_backup, data_root=data_root)
         retention = _retention_from(raw.get("retention"), base.retention)
 
         return replace(
@@ -276,9 +274,7 @@ def _backup_from(raw: Any, base: AutoBackupConfig, *, data_root: Path) -> AutoBa
             includes.append(s)
     interval = int(raw.get("interval_hours", base.interval_hours))
     if interval <= 0:
-        raise ValueError(
-            f"state_store.auto_backup.interval_hours must be positive, got {interval}"
-        )
+        raise ValueError(f"state_store.auto_backup.interval_hours must be positive, got {interval}")
     retention_count = int(raw.get("retention_count", base.retention_count))
     if retention_count <= 0:
         raise ValueError(
@@ -298,17 +294,23 @@ def _backup_from(raw: Any, base: AutoBackupConfig, *, data_root: Path) -> AutoBa
 def _retention_from(raw: Any, base: RetentionConfig) -> RetentionConfig:
     if not isinstance(raw, dict):
         return base
-    embeddings = _parse_duration(
-        raw.get("embeddings_for_retired_facts", base.embeddings_for_retired_facts_seconds),
-        field_name="state_store.retention.embeddings_for_retired_facts",
-    ) if "embeddings_for_retired_facts" in raw else base.embeddings_for_retired_facts_seconds
-    delta_log = _parse_duration(
-        raw.get("delta_log", base.delta_log_seconds),
-        field_name="state_store.retention.delta_log",
-    ) if "delta_log" in raw else base.delta_log_seconds
-    sweep_interval = int(
-        raw.get("sweep_interval_seconds", base.sweep_interval_seconds)
+    embeddings = (
+        _parse_duration(
+            raw.get("embeddings_for_retired_facts", base.embeddings_for_retired_facts_seconds),
+            field_name="state_store.retention.embeddings_for_retired_facts",
+        )
+        if "embeddings_for_retired_facts" in raw
+        else base.embeddings_for_retired_facts_seconds
     )
+    delta_log = (
+        _parse_duration(
+            raw.get("delta_log", base.delta_log_seconds),
+            field_name="state_store.retention.delta_log",
+        )
+        if "delta_log" in raw
+        else base.delta_log_seconds
+    )
+    sweep_interval = int(raw.get("sweep_interval_seconds", base.sweep_interval_seconds))
     if sweep_interval <= 0:
         raise ValueError(
             f"state_store.retention.sweep_interval_seconds must be positive, got {sweep_interval}"

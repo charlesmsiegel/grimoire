@@ -1,9 +1,28 @@
-# State Store — Remaining Work
+# State Store — Remaining Work (COMPLETED 2026-05-18)
 
-> Everything from the original `specs/03-state-store.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-state-store-design.md`). Use this as the input to a writing-plans pass when picking up the work.
+> Everything from the original `specs/03-state-store.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-state-store-design.md`). Closed out on 2026-05-18 — see the status table below; the original write-up follows.
 
 **Companion (already shipped):** `2026-05-12-state-store-design.md`
 **Modules:** `backend/src/grimoire/state_store/`, `backend/src/grimoire/storage/`, `backend/src/grimoire/watcher/`
+
+## Status — 2026-05-18
+
+| § | Topic                                  | Status                                                  |
+|---|----------------------------------------|---------------------------------------------------------|
+| 1 | Drain the embedding queue              | **Shipped** — `state_store/embedding_worker.py`        |
+| 2 | `state_store:` YAML configuration block| **Shipped** — `state_store/config.py`                  |
+| 3 | Auto-backup                            | **Shipped** — `state_store/backup.py`                  |
+| 4 | Retention policy enforcement           | **Shipped** — `state_store/retention.py`               |
+| 5 | `body_compressed` auto-summaries       | **Shipped** — `state_store/summarizer.py`              |
+| 6 | `promote_to_library` on StateStore     | **Closed (no-op)** — kept on domain services per recommendation |
+| 7 | Domain-specific write helpers          | **Closed (no-op)** — covered by Continuity / Time Engine |
+| 8 | `library_root` multi-root support      | Deferred (v2)                                           |
+| 9 | Snapshot dedup by content hash         | Deferred (v2)                                           |
+| 10| Per-campaign SQLite databases          | Rejected                                                |
+| 11| Collaborative merge for library edits  | Deferred (v2)                                           |
+| 12| Scene file branching strategy          | Coordinated with Scene Manager (lazy-copy via `fork_scenes_for_branch`); no State Store action |
+
+The four new background workers (embedding drainer, body summarizer, retention sweeper, backup scheduler) are wired into `main.py:lifespan` and read from a layered `StateStoreConfig` loaded from `{data_root}/config/state_store.yaml`.
 
 ## 1. Drain the embedding queue
 

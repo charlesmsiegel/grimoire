@@ -138,7 +138,7 @@ def test_rejects_unknown_backup_component(tmp_path: Path) -> None:
         "auto_backup:\n  includes:\n    - library\n    - somethingelse\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="auto_backup.includes"):
+    with pytest.raises(ValueError, match=r"auto_backup\.includes"):
         StateStoreConfig.from_yaml(path, data_root=tmp_path)
 
 
