@@ -49,7 +49,15 @@ from grimoire.scenes.default_summarizers import (
 )
 from grimoire.scenes.indexer import SceneIndexer
 from grimoire.scenes.summary_jobs import RunningSummaryWorker
-from grimoire.state_store import StateStore, StateStoreConfig
+from grimoire.state_store import (
+    BackupScheduler,
+    BodySummarizer,
+    EmbeddingWorker,
+    RetentionSweeper,
+    StateStore,
+    StateStoreConfig,
+    reenqueue_missing_embeddings,
+)
 from grimoire.storage import Database, apply_migrations
 from grimoire.time_engine.service import TimeEngineService
 from grimoire.time_engine.subscriber import TimeEngineSubscriber
@@ -421,6 +429,50 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 except Exception:
                     log.exception("initial library scan failed at startup")
 
+        # State Store background workers — embedding drainer (§1), auto-backup
+        # (§3), retention sweep (§4), body_compressed summarizer (§5). All
+        # honor `state_store_config`; the embedding worker and summarizer
+        # quietly back off when no LLM provider is registered yet.
+        embedding_worker = EmbeddingWorker(
+            store=container.state_store,
+            gateway=llm_gateway,
+            queue=file_watcher.embedding_queue,
+            bus=container.event_bus,
+            config=state_store_config.library,
+        )
+        try:
+            await reenqueue_missing_embeddings(container.state_store, file_watcher.embedding_queue)
+        except Exception:
+            log.exception("reenqueue_missing_embeddings failed at startup")
+        await embedding_worker.start()
+        container.extras["embedding_worker"] = embedding_worker
+
+        body_summarizer = BodySummarizer(
+            db=db,
+            gateway=llm_gateway,
+            bus=container.event_bus,
+            config=state_store_config.library,
+        )
+        body_summarizer.start()
+        container.extras["body_summarizer"] = body_summarizer
+
+        retention_sweeper = RetentionSweeper(
+            db=db,
+            config=state_store_config.retention,
+            bus=container.event_bus,
+        )
+        await retention_sweeper.start()
+        container.extras["retention_sweeper"] = retention_sweeper
+
+        backup_scheduler = BackupScheduler(
+            data_root=data_root,
+            database_path=settings.resolved_database_path,
+            config=state_store_config.auto_backup,
+            bus=container.event_bus,
+        )
+        backup_scheduler.start()
+        container.extras["backup_scheduler"] = backup_scheduler
+
         app.state.container = container
     except Exception:
         # Tear down anything we managed to construct before re-raising,
@@ -461,6 +513,35 @@ async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
                 time_engine_subscriber.stop()
             except Exception:
                 log.exception("time engine subscriber stop failed during shutdown")
+
+        # State Store background workers — stop before closing the DB so they
+        # don't hit a closed connection mid-loop. Each is independently
+        # try/excepted so one failure doesn't strand the others.
+        backup_scheduler = container.extras.get("backup_scheduler") if container.extras else None
+        if backup_scheduler is not None:
+            try:
+                backup_scheduler.stop()
+            except Exception:
+                log.exception("backup_scheduler stop failed during shutdown")
+        retention_sweeper = container.extras.get("retention_sweeper") if container.extras else None
+        if retention_sweeper is not None:
+            try:
+                await retention_sweeper.stop()
+            except Exception:
+                log.exception("retention_sweeper stop failed during shutdown")
+        body_summarizer = container.extras.get("body_summarizer") if container.extras else None
+        if body_summarizer is not None:
+            try:
+                await body_summarizer.stop()
+            except Exception:
+                log.exception("body_summarizer stop failed during shutdown")
+        embedding_worker = container.extras.get("embedding_worker") if container.extras else None
+        if embedding_worker is not None:
+            try:
+                await embedding_worker.stop()
+            except Exception:
+                log.exception("embedding_worker stop failed during shutdown")
+
         # §3: Stop the gateway health monitor periodic loop if it was started.
         gateway_health_monitor = (
             container.extras.get("gateway_health_monitor") if container.extras else None
