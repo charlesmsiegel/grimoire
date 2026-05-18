@@ -585,7 +585,7 @@ class StateStore:
                 continue
             content_id = entry.name[: -len(suffix)]
             payload = load_yaml(entry) or {}
-            out.append({"content_id": content_id, "payload": payload})
+            out.append({"id": content_id, "payload": payload, "mechanics_id": mechanics_id})
         return out
 
     async def write_image_metadata(

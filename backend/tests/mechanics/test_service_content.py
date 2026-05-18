@@ -112,7 +112,8 @@ async def test_put_and_get_content_roundtrip(
 
     listed = await service.list_content("c-content", "spell")
     assert len(listed) == 1
-    assert listed[0]["content_id"] == "fireball"
+    assert listed[0]["id"] == "fireball"
+    assert listed[0]["mechanics_id"] == "content-sys"
     assert listed[0]["payload"]["name"] == "Fireball"
 
     fetched = await service.get_content("c-content", "spell", "fireball")
