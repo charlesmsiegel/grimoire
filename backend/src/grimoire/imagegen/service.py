@@ -277,6 +277,7 @@ class ImageGenService:
         self._lock = asyncio.Lock()
         self._closed = False
         self._last_health: dict[str, HealthLevel] = {}
+        self._cancel_tokens: dict[str, asyncio.Event] = {}
 
         for backend in self.registry.all():
             self._ensure_handle(backend.id)
@@ -379,6 +380,32 @@ class ImageGenService:
             backend_id = raw.get("active_backend") or self.default_backend_id
             if backend_id is not None:
                 self._campaign_backend[campaign_id] = backend_id
+
+        # Health-aware fallback: if the chosen backend is UNHEALTHY and a
+        # fallback is configured, route there instead. If no fallback,
+        # leave the job queued and emit a warning event so the UI can
+        # surface "your imagegen backend is broken" instead of silently
+        # piling up jobs against a dead worker.
+        if backend_id and self._last_health.get(backend_id) == HealthLevel.UNHEALTHY:
+            fallback = (await self._load_imagegen_config_row(campaign_id)).get("fallback_backend")
+            if fallback and fallback in self.registry:
+                logger.info(
+                    "imagegen: routing %s job to fallback %s (active %s unhealthy)",
+                    campaign_id,
+                    fallback,
+                    backend_id,
+                )
+                backend_id = fallback
+            else:
+                await self._emit(
+                    "imagegen_warning",
+                    {
+                        "campaign_id": campaign_id,
+                        "reason": f"active backend {backend_id!r} unhealthy "
+                        "and no fallback configured",
+                    },
+                )
+
         if backend_id not in self.registry:
             raise KeyError(f"no backend registered with id {backend_id!r}")
         self._ensure_handle(backend_id)
@@ -447,11 +474,15 @@ class ImageGenService:
                 raise KeyError(f"no such job {job_id!r}")
             if job.status not in (JobStatus.QUEUED, JobStatus.RUNNING):
                 return
+            was_running = job.status == JobStatus.RUNNING
             job.status = JobStatus.CANCELLED
             job.finished_at = _now()
             handle = self._handles.get(job.backend)
             if handle is not None:
                 handle._pending_jobs.discard(job_id)
+            token = self._cancel_tokens.get(job_id) if was_running else None
+        if token is not None:
+            token.set()
         await self._emit("imagegen_job_failed", {"job_id": job_id, "reason": "cancelled"})
 
     async def prioritize_job(self, job_id: str, priority: int) -> None:
@@ -775,6 +806,13 @@ class ImageGenService:
             try:
                 result = await self._run_job(backend, job)
             except asyncio.CancelledError:
+                # If the user cancelled in flight, status is already
+                # CANCELLED — drop the half-done work and keep the worker
+                # alive. If we ourselves were cancelled (service shutdown),
+                # break out instead. The trailing `finally` calls
+                # task_done() either way.
+                if job.status == JobStatus.CANCELLED:
+                    continue
                 break
             except Exception as exc:
                 logger.exception("imagegen job %s failed", job_id)
@@ -825,7 +863,26 @@ class ImageGenService:
                 )
                 return cached
 
-        result = await backend.generate(request)
+        async def _on_progress(info: dict[str, Any]) -> None:
+            await self._emit(
+                "imagegen_progress",
+                {
+                    "job_id": job.id,
+                    "campaign_id": job.campaign_id,
+                    **info,
+                },
+            )
+
+        token = asyncio.Event()
+        self._cancel_tokens[job.id] = token
+        try:
+            try:
+                result = await backend.generate(request, progress=_on_progress, cancel_token=token)
+            except TypeError:
+                # Older backends that don't accept progress/cancel kwargs.
+                result = await backend.generate(request)
+        finally:
+            self._cancel_tokens.pop(job.id, None)
         # The job may have been cancelled while the backend was running.
         # Skip persistence + `image_ready` so the caller doesn't see a
         # completed image for a job they explicitly cancelled.
