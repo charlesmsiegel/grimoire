@@ -7,10 +7,11 @@ protocol for its declared kind. Errors are returned in the result rather
 than raised so the caller can decide whether to fail loudly or skip and
 continue.
 
-Per-plugin virtual environments are *recognised* via the `isolated_venv`
-manifest flag but actually creating them is left to v2 (spec 15 §Open
-questions). The loader records the flag so the UI can show "this plugin
-wanted an isolated venv but isolation is off" status.
+When the caller passes an ``extra_sys_path`` (typically the
+``site-packages`` of a per-plugin venv built by
+:mod:`grimoire.plugins.venv`), the loader prepends it to ``sys.path``
+only for the duration of the plugin's import so the deps in that venv
+are visible without leaking into other plugins' import resolution.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from grimoire.plugins.discovery import DiscoveredPlugin
+from grimoire.plugins.venv import prepended_sys_path
 from grimoire.types.plugins import (
     EmbeddingCapabilities,
     ExportCapabilities,
@@ -83,8 +85,17 @@ class LoadResult:
 def load_plugin(
     discovered: DiscoveredPlugin,
     config: dict[str, Any] | None = None,
+    *,
+    extra_sys_path: Path | None = None,
 ) -> LoadResult:
-    """Validate the manifest, import `plugin.py`, instantiate each class."""
+    """Validate the manifest, import `plugin.py`, instantiate each class.
+
+    When ``extra_sys_path`` is provided, it is prepended to ``sys.path``
+    while ``plugin.py`` is being imported. Callers use this to thread the
+    ``site-packages`` of a per-plugin venv through so plugins that
+    declared ``isolated_venv: true`` resolve their declared
+    ``requirements`` independently of the host environment.
+    """
     plugin_dir = discovered.plugin_dir
     raw = discovered.raw_manifest
     declared_id = raw.get("id") if isinstance(raw, dict) else None
@@ -122,45 +133,54 @@ def load_plugin(
             bundled=discovered.bundled,
         )
 
-    try:
-        module = _import_plugin_module(plugin_id, discovered.entry_path)
-    except Exception as exc:
-        errors.append(f"failed to import plugin.py: {exc!r}")
-        return LoadResult(
-            plugin_dir=plugin_dir,
-            plugin_id=plugin_id,
-            manifest=manifest,
-            instances=[],
-            errors=errors,
-            bundled=discovered.bundled,
-        )
-
-    instances: list[LoadedInstance] = []
-    config_arg = dict(config or {})
-    for kind in manifest.implements:
-        class_name = manifest.classes.get(kind.value)
-        if not class_name:
-            errors.append(f"`classes` is missing an entry for kind '{kind.value}'")
-            continue
-        cls = getattr(module, class_name, None)
-        if cls is None:
-            errors.append(f"plugin.py does not define class '{class_name}' for kind '{kind.value}'")
-            continue
+    # Both the module import *and* the per-class instantiation may resolve
+    # imports from the plugin's venv (some plugins do lazy imports inside
+    # ``__init__`` to defer heavy deps until they're needed). Keep the
+    # site-packages prepended for both phases.
+    with prepended_sys_path(extra_sys_path):
         try:
-            instance = _instantiate(cls, config_arg)
+            module = _import_plugin_module(plugin_id, discovered.entry_path)
         except Exception as exc:
-            errors.append(f"failed to instantiate {class_name} for kind '{kind.value}': {exc!r}")
-            continue
-        protocol = PROTOCOL_FOR_KIND[kind]
-        ok, proto_errors = _check_protocol(instance, protocol)
-        if not ok:
-            joined = "; ".join(proto_errors)
-            errors.append(
-                f"{class_name} does not satisfy the {protocol.__name__} protocol "
-                f"for kind '{kind.value}': {joined}"
+            errors.append(f"failed to import plugin.py: {exc!r}")
+            return LoadResult(
+                plugin_dir=plugin_dir,
+                plugin_id=plugin_id,
+                manifest=manifest,
+                instances=[],
+                errors=errors,
+                bundled=discovered.bundled,
             )
-            continue
-        instances.append(LoadedInstance(kind=kind, instance=instance))
+
+        instances: list[LoadedInstance] = []
+        config_arg = dict(config or {})
+        for kind in manifest.implements:
+            class_name = manifest.classes.get(kind.value)
+            if not class_name:
+                errors.append(f"`classes` is missing an entry for kind '{kind.value}'")
+                continue
+            cls = getattr(module, class_name, None)
+            if cls is None:
+                errors.append(
+                    f"plugin.py does not define class '{class_name}' for kind '{kind.value}'"
+                )
+                continue
+            try:
+                instance = _instantiate(cls, config_arg)
+            except Exception as exc:
+                errors.append(
+                    f"failed to instantiate {class_name} for kind '{kind.value}': {exc!r}"
+                )
+                continue
+            protocol = PROTOCOL_FOR_KIND[kind]
+            ok, proto_errors = _check_protocol(instance, protocol)
+            if not ok:
+                joined = "; ".join(proto_errors)
+                errors.append(
+                    f"{class_name} does not satisfy the {protocol.__name__} protocol "
+                    f"for kind '{kind.value}': {joined}"
+                )
+                continue
+            instances.append(LoadedInstance(kind=kind, instance=instance))
 
     return LoadResult(
         plugin_dir=plugin_dir,

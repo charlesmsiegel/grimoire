@@ -150,6 +150,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await container.plugins.rescan()
             except Exception:
                 log.exception("plugins rescan failed at startup")
+            # Kick off the periodic health loop so plugin_health_changed
+            # events flow even when no UI request triggers a probe.
+            try:
+                await container.plugins.start_periodic_health()
+            except Exception:
+                log.exception("plugins periodic health loop start failed")
         if container.characters is None:
             container.characters = CharactersService(container.library, container.mechanics)
         if container.scenes is None:
@@ -384,6 +390,11 @@ async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
                 await imagegen_health_prober.stop()
             except Exception:
                 log.exception("imagegen health prober stop failed during shutdown")
+        if container.plugins is not None:
+            try:
+                await container.plugins.stop_periodic_health()
+            except Exception:
+                log.exception("plugins periodic health stop failed during shutdown")
         if container.imagegen is not None:
             try:
                 await container.imagegen.aclose()
