@@ -44,7 +44,7 @@ from grimoire.state_store import StateStore
 from grimoire.storage import Database, apply_migrations
 from grimoire.time_engine.service import TimeEngineService
 from grimoire.watcher.watcher import FileWatcher
-from grimoire.world import WorldService
+from grimoire.world import WorldConfig, WorldService
 
 log = logging.getLogger(__name__)
 
@@ -124,7 +124,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if container.library is None:
             container.library = LibraryService(container.state_store)
         if container.world is None:
-            container.world = WorldService(container.library)
+            world_cfg = WorldConfig.from_yaml(data_root / "config" / "world.yaml")
+            container.world = WorldService(container.library, config=world_cfg)
         if container.mechanics is None:
             container.mechanics = MechanicsService(
                 MechanicsConfig.for_data_root(data_root),
