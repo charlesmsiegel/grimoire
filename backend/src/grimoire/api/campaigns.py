@@ -1211,12 +1211,10 @@ async def continuity_ledger(
     try:
         active_rows = await service.open_commitments(limit=limit_commitments * 2)
         overdue_rows = [
-            c for c in active_rows
-            if getattr(getattr(c, "status", None), "value", "") == "overdue"
+            c for c in active_rows if getattr(getattr(c, "status", None), "value", "") == "overdue"
         ]
         open_rows = [
-            c for c in active_rows
-            if getattr(getattr(c, "status", None), "value", "") != "overdue"
+            c for c in active_rows if getattr(getattr(c, "status", None), "value", "") != "overdue"
         ][:limit_commitments]
         stale_rows = await service.stale_commitments(Duration.months(6))
         recent_facts = await service.facts_about(limit=limit_facts)
