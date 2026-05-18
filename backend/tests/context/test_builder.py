@@ -550,3 +550,471 @@ async def test_background_chars_compressed_only() -> None:
     # The mentioned-but-absent character is compressed, not full.
     assert "compressed-winifred" in body
     assert "full-card-winifred" not in body
+
+
+# --------------------------------------------------------------------------- #
+# Spec context-builder-remaining tests
+# --------------------------------------------------------------------------- #
+
+
+class StubCharactersWithRecommend(StubCharacters):
+    """Stub Characters service that honours :meth:`recommend_tiers`.
+
+    The handful of new builder pathways (tier recommendations, voice
+    anchors, relationship deltas, PC enumeration) live behind optional
+    attributes so the basic :class:`StubCharacters` from above can stay
+    minimal. Tests that exercise those paths opt in via this subclass.
+    """
+
+    def __init__(
+        self,
+        cards: dict[str, _Card] | None = None,
+        active: str | None = None,
+        tier_recs: dict[str, ContextTier] | None = None,
+        voice: dict[str, str] | None = None,
+        relationship_history: dict[tuple[str, str], list[dict]] | None = None,
+        pcs: list[str] | None = None,
+    ) -> None:
+        super().__init__(cards=cards, active=active)
+        self._tier_recs = tier_recs or {}
+        self._voice = voice or {}
+        self._rel = relationship_history or {}
+        self._pcs = pcs or []
+        self.recommend_calls: list[dict[str, Any]] = []
+
+    async def recommend_tiers(
+        self,
+        scene: Any,
+        campaign_id: str,
+        *,
+        recent_posts: list[Any] | None = None,
+        commitments_targeting_pcs: set[str] | None = None,
+    ) -> dict[str, ContextTier]:
+        self.recommend_calls.append(
+            {
+                "scene": scene,
+                "campaign_id": campaign_id,
+                "recent_posts": list(recent_posts or []),
+                "commitments_targeting_pcs": set(commitments_targeting_pcs or set()),
+            }
+        )
+        return dict(self._tier_recs)
+
+    async def get_voice_only(self, ref: str, campaign_id: str) -> str:
+        return self._voice.get(ref, "")
+
+    async def get_relationship_history(
+        self,
+        from_ref: str,
+        to_ref: str,
+        campaign_id: str,
+        *,
+        branch_id: str | None = None,
+    ) -> list[dict]:
+        return list(self._rel.get((from_ref, to_ref), []))
+
+    async def list_pcs(self, campaign_id: str) -> list[Any]:
+        @dataclass
+        class _PC:
+            character_ref: str
+
+        return [_PC(character_ref=r) for r in self._pcs]
+
+
+async def test_recommend_tiers_promotes_background_character() -> None:
+    chars = StubCharactersWithRecommend(
+        cards={
+            "library:worlds/wod/characters/marcus": _Card(
+                compressed="compressed-marcus",
+            ),
+        },
+        tier_recs={
+            # Not in present_character_refs, but Characters says BACKGROUND
+            # (e.g. mentioned in recent posts).
+            "library:worlds/wod/characters/marcus": ContextTier.BACKGROUND,
+        },
+    )
+    scenes = StubScenes(scene=_Scene())
+    builder = _builder(characters=chars, scenes=scenes)
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "compressed-marcus" in body
+    assert chars.recommend_calls, "recommend_tiers should be called"
+
+
+async def test_recommend_tiers_receives_pc_commitments() -> None:
+    @dataclass
+    class _Commit:
+        text: str = ""
+        from_id: str | None = None
+        to_id: str | None = None
+        id: str = ""
+        due_by: Any = None
+
+    cont = StubContinuity(
+        commitments=[_Commit(text="owe pc favour", from_id="npc:alistair", to_id="pc:elena")]
+    )
+    chars = StubCharactersWithRecommend(
+        active="pc:elena",
+        cards={"pc:elena": _Card(full="# Elena")},
+        pcs=["pc:elena"],
+    )
+    builder = _builder(
+        characters=chars,
+        scenes=StubScenes(scene=_Scene()),
+        continuity=cont,
+    )
+    await builder.build("hi", "camp")
+    call = chars.recommend_calls[-1]
+    assert "npc:alistair" in call["commitments_targeting_pcs"]
+
+
+async def test_user_tier_pin_forces_spotlight() -> None:
+    chars = StubCharactersWithRecommend(
+        cards={"library:worlds/wod/characters/pinned": _Card(full="full-pinned")},
+        tier_recs={
+            # Pin forces SPOTLIGHT even though they aren't present.
+            "library:worlds/wod/characters/pinned": ContextTier.SPOTLIGHT,
+        },
+    )
+    builder = _builder(characters=chars, scenes=StubScenes(scene=_Scene()))
+    prompt = await builder.build("scene", "camp")
+    spotlight = [m for m in prompt.messages if m.content.startswith("# Spotlight")]
+    assert spotlight
+    assert "full-pinned" in spotlight[0].content
+
+
+async def test_voice_anchor_emitted_for_present_character() -> None:
+    chars = StubCharactersWithRecommend(
+        cards={"library:worlds/wod/characters/winifred": _Card(full="card")},
+        voice={"library:worlds/wod/characters/winifred": "Speak with weight."},
+    )
+    scene = _Scene(present_character_refs=["library:worlds/wod/characters/winifred"])
+    builder = _builder(characters=chars, scenes=StubScenes(scene=scene))
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "# Voice anchor" in body
+    assert "Speak with weight." in body
+
+
+async def test_voice_anchor_can_be_disabled() -> None:
+    chars = StubCharactersWithRecommend(
+        cards={"library:worlds/wod/characters/winifred": _Card(full="card")},
+        voice={"library:worlds/wod/characters/winifred": "Speak with weight."},
+    )
+    scene = _Scene(present_character_refs=["library:worlds/wod/characters/winifred"])
+    config = ContextBuilderConfig(enable_voice_anchor=False)
+    builder = _builder(characters=chars, scenes=StubScenes(scene=scene), config=config)
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "# Voice anchor" not in body
+
+
+async def test_recent_dialogue_per_speaker_emitted() -> None:
+    @dataclass
+    class _PostWithAuthor:
+        body: str
+        author_pc_ref: str | None = None
+        author_npc_ref: str | None = None
+        author_label: str = "narrator"
+
+    ref = "library:worlds/wod/characters/winifred"
+    chars = StubCharactersWithRecommend(
+        cards={ref: _Card(full="card")},
+    )
+    scene = _Scene(present_character_refs=[ref])
+    posts = [
+        _PostWithAuthor(body="I shall not yield.", author_npc_ref=ref),
+        _PostWithAuthor(body="The night is long.", author_label="narrator"),
+        _PostWithAuthor(body="Bring the lantern.", author_npc_ref=ref),
+    ]
+    builder = _builder(characters=chars, scenes=StubScenes(scene=scene, posts=posts))
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "Recent dialogue" in body
+    assert "Bring the lantern." in body
+    assert "I shall not yield." in body
+    # Narrator post should not leak in.
+    assert "The night is long." in body  # appears as a recent post, not as dialogue
+    dialogue_block = next(m.content for m in prompt.messages if "Recent dialogue" in m.content)
+    assert "The night is long." not in dialogue_block
+
+
+async def test_cast_header_disambiguates_duplicate_names() -> None:
+    a_ref = "library:worlds/world-a/characters/margaret"
+    b_ref = "library:worlds/world-b/characters/margaret"
+    chars = StubCharactersWithRecommend(
+        cards={a_ref: _Card(full="# Margaret\nA"), b_ref: _Card(full="# Margaret\nB")},
+    )
+    scene = _Scene(present_character_refs=[a_ref, b_ref])
+    builder = _builder(characters=chars, scenes=StubScenes(scene=scene))
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "[world:world-a]" in body
+    assert "[world:world-b]" in body
+
+
+async def test_recent_facts_use_compact_render() -> None:
+    facts = [_Fact(text=f"fact #{i}", id=f"f-{i}") for i in range(20)]
+    cont = StubContinuity(facts=facts)
+    builder = _builder(continuity=cont)
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "Recent facts:" in body
+    assert "- fact #0" in body
+    # Old per-fact "Fact:" verbose prefix should be gone.
+    assert "Fact: fact #0" not in body
+
+
+async def test_relationship_deltas_in_background() -> None:
+    pc = "pc:elena"
+    other = "library:worlds/wod/characters/winifred"
+    chars = StubCharactersWithRecommend(
+        active=pc,
+        cards={pc: _Card(full="# Elena"), other: _Card(full="# winifred")},
+        relationship_history={
+            (pc, other): [
+                {"summary": "orchard promise", "delta": {"trust": 2}},
+            ]
+        },
+    )
+    scene = _Scene(present_character_refs=[other])
+    builder = _builder(characters=chars, scenes=StubScenes(scene=scene))
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "Relationship deltas" in body
+    assert "trust +2" in body
+    assert "orchard promise" in body
+
+
+async def test_scene_refs_force_archive_inclusion() -> None:
+    @dataclass
+    class _PastScene:
+        id: str = "scene-7"
+        title: str = "First meeting"
+        slug: str = "first-meeting"
+        location_ref: str | None = None
+        final_summary: str = "winifred and Elena first met."
+        running_summary: str = ""
+
+    class _Scenes(StubScenes):
+        def __init__(self) -> None:
+            super().__init__(scene=_Scene())
+
+        async def get_scene(self, scene_id: str) -> Any:
+            return _PastScene()
+
+    builder = _builder(scenes=_Scenes())
+    prompt = await builder.build("Remember scene:scene-7?", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "scene:scene-7" in body
+    assert "First meeting" in body
+    assert "winifred and Elena first met." in body
+
+
+async def test_priority_hints_passed_to_store() -> None:
+    captured: dict[str, Any] = {}
+
+    @dataclass
+    class _Hit:
+        ref: str
+        scope: str
+        source_kind: str
+        text: str
+        score: float
+
+    class GW:
+        async def embed(self, task: str, texts: list[str], **kwargs: Any) -> list[list[float]]:
+            return [[0.1]]
+
+    class Store:
+        async def vector_search(self, **kwargs: Any) -> list[_Hit]:
+            captured["vector"] = kwargs
+            return []
+
+        async def keyword_search(self, **kwargs: Any) -> list[_Hit]:
+            captured["keyword"] = kwargs
+            return []
+
+    composition = Composition(
+        worlds=[
+            WorldRef(world_id="wod-a", priority=1),
+            WorldRef(world_id="wod-b", priority=5),
+        ]
+    )
+    builder = _builder(
+        library=StubLibrary(composition=composition),
+        gateway=GW(),
+        state_store=Store(),
+    )
+    await builder.build("query", "camp")
+    assert captured["vector"]["priority_hints"] == {"wod-a": 1, "wod-b": 5}
+    assert captured["keyword"]["priority_hints"] == {"wod-a": 1, "wod-b": 5}
+
+
+async def test_priority_hints_disabled_when_store_lacks_kwarg() -> None:
+    @dataclass
+    class _Hit:
+        ref: str
+        scope: str
+        source_kind: str
+        text: str
+        score: float
+
+    captured: dict[str, Any] = {}
+
+    class GW:
+        async def embed(self, task: str, texts: list[str], **kwargs: Any) -> list[list[float]]:
+            return [[0.1]]
+
+    class OldStore:
+        async def vector_search(
+            self,
+            *,
+            query_vector: list[float],
+            campaign_id: str,
+            include_library: bool = True,
+            top_k: int = 8,
+        ) -> list[_Hit]:
+            captured["vector"] = {"top_k": top_k}
+            return []
+
+        async def keyword_search(
+            self,
+            *,
+            query: str,
+            campaign_id: str,
+            kinds: Any,
+            top_k: int = 5,
+        ) -> list[_Hit]:
+            captured["keyword"] = {"top_k": top_k}
+            return []
+
+    composition = Composition(worlds=[WorldRef(world_id="wod", priority=1)])
+    builder = _builder(
+        library=StubLibrary(composition=composition),
+        gateway=GW(),
+        state_store=OldStore(),
+    )
+    # Should NOT raise even though the store rejects ``priority_hints``.
+    prompt = await builder.build("query", "camp")
+    assert prompt is not None
+    assert captured["vector"] == {"top_k": 8}
+    assert captured["keyword"] == {"top_k": 5}
+
+
+async def test_faction_state_rendered_into_background() -> None:
+    @dataclass
+    class _Faction:
+        asset_id: str
+        name: str = ""
+
+    @dataclass
+    class _FactionState:
+        current_focus: str = ""
+        public_perception: str = ""
+        goals: list = field(default_factory=list)
+        resources: dict = field(default_factory=dict)
+
+    class _World(StubWorld):
+        def __init__(self) -> None:
+            super().__init__()
+
+        async def list_factions(self, world_id: str) -> list[_Faction]:
+            return [_Faction(asset_id="court")]
+
+        async def faction_state(
+            self, ref: str, campaign_id: str, *, branch_id: str | None = None
+        ) -> _FactionState:
+            return _FactionState(
+                current_focus="press the orchard claim",
+                public_perception="cautious",
+                goals=[{"text": "secure the orchard"}],
+            )
+
+    composition = Composition(worlds=[WorldRef(world_id="wod", priority=1)])
+    builder = _builder(
+        library=StubLibrary(composition=composition),
+        world=_World(),
+        scenes=StubScenes(scene=_Scene()),
+    )
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "Faction state" in body
+    assert "press the orchard claim" in body
+
+
+async def test_calendar_item_uses_time_engine() -> None:
+    from datetime import datetime
+
+    @dataclass
+    class _Moment:
+        moment: datetime = field(default_factory=lambda: datetime(2026, 5, 18))
+
+    @dataclass
+    class _Event:
+        title: str = "Festival of the Orchard"
+
+    class _TE:
+        async def current(self, campaign_id: str, *, branch_id: str | None = None) -> _Moment:
+            return _Moment()
+
+        async def upcoming_events(
+            self, campaign_id: str, *, branch_id: str | None = None
+        ) -> list[_Event]:
+            return [_Event()]
+
+    class _World(StubWorld):
+        async def season_for(self, when: Any, campaign_id: str) -> Any:
+            @dataclass
+            class _Season:
+                name: str = "late spring"
+
+            return _Season()
+
+        async def holiday_at(self, when: Any, campaign_id: str) -> None:
+            return None
+
+    builder = _builder(
+        world=_World(),
+        scenes=StubScenes(scene=_Scene()),
+        time_engine=_TE(),
+    )
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "Calendar" in body
+    assert "late spring" in body
+    assert "Festival of the Orchard" in body
+
+
+async def test_cache_module_round_trip() -> None:
+    from grimoire.context.cache import ContextBuilderCache, make_cache_key
+
+    cache = ContextBuilderCache(max_entries=3)
+    builder = _builder()
+    prompt = await builder.build("hi", "camp")
+    key = make_cache_key(
+        campaign_id="camp",
+        player_input="hi",
+        composition_hash="abc",
+        scene_id="s1",
+        branch_id="main",
+        pc_ref=None,
+    )
+    cache.put(key, prompt)
+    assert cache.get(key) is prompt
+    # Eviction order: oldest first.
+    for i in range(4):
+        cache.put(
+            make_cache_key(
+                campaign_id="camp",
+                player_input=f"input-{i}",
+                composition_hash="abc",
+                scene_id="s1",
+                branch_id="main",
+                pc_ref=None,
+            ),
+            prompt,
+        )
+    assert cache.get(key) is None
+    assert len(cache) == 3
