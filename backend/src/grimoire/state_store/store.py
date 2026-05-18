@@ -317,6 +317,50 @@ class StateStore:
             )
         return target
 
+    async def delete_emergent(
+        self,
+        *,
+        campaign_id: str,
+        kind: str,
+        entity_id: str,
+        source: str,
+        turn_id: str | None = None,
+    ) -> bool:
+        """Delete a campaign-local emergent file and its index row.
+
+        Symmetrical with :meth:`write_emergent`. Returns ``True`` when the
+        file existed and was deleted, ``False`` when nothing was on disk.
+        The deletion is captured in ``before`` of an ``emergent_delete``
+        delta so it remains reversible.
+        """
+        target = emergent_path(self.data_root, campaign_id, kind, entity_id)
+        if not target.exists():
+            return False
+        doc = read_markdown(target)
+        before_payload = {"frontmatter": doc.frontmatter, "body": doc.body}
+        target.unlink()
+
+        composite_id = f"campaigns/{campaign_id}/emergent/{kind}/{entity_id}"
+        async with self._txn() as conn:
+            from grimoire.state_store.indexers import delete_campaign_content_row
+
+            await delete_campaign_content_row(conn, composite_id)
+            await insert_delta(
+                conn,
+                campaign_id=campaign_id,
+                branch_id=None,
+                turn_id=turn_id,
+                source=source,
+                kind="emergent_delete",
+                target_scope="campaign-file",
+                target_table=None,
+                target_path=str(target),
+                target_id=composite_id,
+                before=before_payload,
+                after=None,
+            )
+        return True
+
     async def write_emergent(
         self,
         *,

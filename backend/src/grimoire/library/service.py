@@ -13,6 +13,7 @@ import json
 from datetime import datetime
 from typing import Any
 
+from grimoire.event_bus import Event, EventBus
 from grimoire.library.config import LibraryConfig
 from grimoire.library.errors import (
     LibraryConflictError,
@@ -173,9 +174,22 @@ class LibraryService:
     service only does file-mediated writes through the store.
     """
 
-    def __init__(self, store: StateStore, config: LibraryConfig | None = None) -> None:
+    def __init__(
+        self,
+        store: StateStore,
+        config: LibraryConfig | None = None,
+        *,
+        event_bus: EventBus | None = None,
+    ) -> None:
         self.store = store
         self.config = config or LibraryConfig()
+        self._event_bus = event_bus
+
+    async def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Best-effort event emission; no-op when no bus is wired."""
+        if self._event_bus is None:
+            return
+        await self._event_bus.emit(Event(type=event_type, payload=payload))
 
     @property
     def default_track_latest(self) -> bool:
@@ -587,10 +601,24 @@ class LibraryService:
     ) -> str:
         """Promote a campaign-local emergent entity into the library.
 
-        Reads the emergent file, writes it as a library entity in
-        ``target_world_id``, and returns the library path. The original
-        emergent file is left in place; callers may opt to delete it.
-        Characters are not yet supported here — task #12 owns that flow.
+        Spec 18 §Promotion, with §4 of the remaining-design:
+
+        1. Read the emergent.
+        2. Write the library entity in ``target_world_id``.
+        3. Re-read emergent after the library write. If it matches what we
+           just wrote, delete the emergent file (and its index row) —
+           subsequent reads will resolve through the library.
+        4. If it diverges (a race or external edit between read and
+           promote), write the frontmatter diff as a campaign override
+           and delete the emergent. A body-only divergence is logged on
+           the emitted event because overrides only carry frontmatter
+           patches; the body change is dropped.
+        5. Rekey embeddings from the emergent ref to the new library id.
+        6. Emit ``library_entity_promoted`` for subscribers.
+
+        Characters are routed through the Characters module (the World
+        service rejects ``kind == "character"`` and the API maps that
+        kind to its own promotion endpoint).
         """
         normalized = _normalize_kind(entity_kind)
         if normalized not in _World_ENTITY_KINDS:
@@ -604,15 +632,124 @@ class LibraryService:
             )
         frontmatter = dict(emergent.get("frontmatter") or {})
         frontmatter.setdefault("id", campaign_entity_id)
+        body = emergent.get("body") or ""
         library_id = make_library_id(target_world_id, normalized, campaign_entity_id)
         result = await self.store.write_library_file(
             library_id=library_id,
             frontmatter=frontmatter,
-            body=emergent.get("body") or "",
+            body=body,
             source=f"{source}:promotion",
             campaign_id=campaign_id,
         )
+
+        cleanup_action, body_diverged = await self._cleanup_promoted_emergent(
+            campaign_id=campaign_id,
+            kind=normalized,
+            entity_id=campaign_entity_id,
+            target_world_id=target_world_id,
+            promoted_frontmatter=frontmatter,
+            promoted_body=body,
+            source=source,
+        )
+        await self._rekey_embeddings_after_promotion(
+            campaign_id=campaign_id,
+            kind=normalized,
+            entity_id=campaign_entity_id,
+            library_id=library_id,
+        )
+        await self._emit(
+            "library_entity_promoted",
+            {
+                "campaign_id": campaign_id,
+                "kind": normalized,
+                "entity_id": campaign_entity_id,
+                "target_world_id": target_world_id,
+                "library_id": library_id,
+                "library_path": str(result.path),
+                "cleanup": cleanup_action,
+                "body_diverged": body_diverged,
+            },
+        )
         return str(result.path)
+
+    async def _cleanup_promoted_emergent(
+        self,
+        *,
+        campaign_id: str,
+        kind: str,
+        entity_id: str,
+        target_world_id: str,
+        promoted_frontmatter: dict,
+        promoted_body: str,
+        source: str,
+    ) -> tuple[str, bool]:
+        """Finish step 5/6 of spec 18 §Promotion.
+
+        Returns a ``(action, body_diverged)`` tuple where ``action`` is one
+        of ``"deleted"``, ``"override+deleted"``, or ``"missing"``.
+        """
+        current = await self.store.get_emergent(campaign_id, kind, entity_id)
+        if current is None:
+            return ("missing", False)
+
+        current_fm = current.get("frontmatter") or {}
+        current_body = current.get("body") or ""
+        # Normalize 'id' since write_library_file may have stamped one in
+        # promoted_frontmatter; the on-disk emergent's 'id' is whatever the
+        # campaign chose to write.
+        fm_match = _json_equal(current_fm, promoted_frontmatter)
+        body_match = current_body == promoted_body
+
+        if fm_match and body_match:
+            await self.store.delete_emergent(
+                campaign_id=campaign_id,
+                kind=kind,
+                entity_id=entity_id,
+                source=f"{source}:promotion-cleanup",
+            )
+            return ("deleted", False)
+
+        # Mutations after the in-memory read — keep the divergence as a
+        # campaign-local override on the freshly-promoted library entity.
+        if not fm_match:
+            diff = _frontmatter_diff(current_fm, promoted_frontmatter)
+            if diff:
+                library_id = make_library_id(target_world_id, kind, entity_id)
+                await self.store.write_override(
+                    campaign_id=campaign_id,
+                    library_id=library_id,
+                    patch=diff,
+                    source=f"{source}:promotion-override",
+                )
+        await self.store.delete_emergent(
+            campaign_id=campaign_id,
+            kind=kind,
+            entity_id=entity_id,
+            source=f"{source}:promotion-cleanup",
+        )
+        return ("override+deleted", not body_match)
+
+    async def _rekey_embeddings_after_promotion(
+        self,
+        *,
+        campaign_id: str,
+        kind: str,
+        entity_id: str,
+        library_id: str,
+    ) -> None:
+        """Repoint vector rows from the emergent ref to the new library id.
+
+        Spec 18 §Promotion step 6. The watcher will eventually re-embed
+        the new library file out-of-band, but the existing campaign-scoped
+        embedding rows would double-count retrieval results until then —
+        prefer to delete them now and let the embedder repopulate cleanly
+        under the library ref.
+        """
+        emergent_ref = f"campaigns/{campaign_id}/emergent/{kind}/{entity_id}"
+        try:
+            await self.store.delete_embeddings(emergent_ref)
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            return
 
     # ------------------------------------------------------------------ #
     # Composition
@@ -1082,3 +1219,29 @@ _SCOPE_BY_SOURCE = {
     "library-live": "library",
     "library-fallback": "library",
 }
+
+
+def _json_equal(left: Any, right: Any) -> bool:
+    """Structural equality after canonical JSON serialization."""
+    return json.dumps(left, sort_keys=True, default=str) == json.dumps(
+        right, sort_keys=True, default=str
+    )
+
+
+def _frontmatter_diff(current: dict, baseline: dict) -> dict:
+    """Return the frontmatter keys in ``current`` that differ from ``baseline``.
+
+    Used after promotion when the emergent's frontmatter has drifted from
+    what we wrote to the library: the differences become the campaign-side
+    override patch. Keys present in ``current`` but missing in ``baseline``
+    are included; keys removed from ``current`` are written as ``None`` so
+    the merge in :meth:`StateStore.resolve_entity` can null them out.
+    """
+    out: dict[str, Any] = {}
+    for key, value in current.items():
+        if not _json_equal(value, baseline.get(key)):
+            out[key] = value
+    for key in baseline:
+        if key not in current:
+            out[key] = None
+    return out
