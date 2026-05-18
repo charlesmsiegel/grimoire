@@ -22,6 +22,7 @@ Character behaviors live in ``08-characters.md`` and layer on top.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from collections import deque
 from datetime import UTC, datetime
@@ -57,8 +58,11 @@ from grimoire.types.world import (
 )
 
 from .calendar import holiday_at, parse_calendar, season_for
+from .config import WorldConfig
 from .errors import CompositionError, WorldError, WorldNotFoundError
 from .weather import generate_weather
+
+logger = logging.getLogger(__name__)
 
 # World-internal entity kinds World owns CRUD for.
 _OWNED_KINDS: frozenset[str] = frozenset({"item", "location", "lore", "faction", "greeting"})
@@ -88,9 +92,15 @@ class WorldService:
     per-campaign behaviors derive from inputs.
     """
 
-    def __init__(self, library: LibraryService) -> None:
+    def __init__(
+        self,
+        library: LibraryService,
+        *,
+        config: WorldConfig | None = None,
+    ) -> None:
         self.library = library
         self.store: StateStore = library.store
+        self.config: WorldConfig = config or WorldConfig()
 
     def _safe_world_dir(self, world_id: str) -> Path:
         """Resolve ``data/library/worlds/<world_id>`` after path-safety checks.
@@ -447,11 +457,16 @@ class WorldService:
         return [lore for _, lore in out[:top_k]]
 
     async def lore_by_keyword(
-        self, keyword: str, campaign_id: CampaignId, *, min_length: int = 4
+        self,
+        keyword: str,
+        campaign_id: CampaignId,
+        *,
+        min_length: int | None = None,
     ) -> list[LoreEntry]:
         """Match lore whose ``keywords`` list contains ``keyword`` (case-insensitive)."""
+        effective_min = self.config.lore.keyword_min_length if min_length is None else min_length
         kw = (keyword or "").strip().lower()
-        if len(kw) < min_length:
+        if len(kw) < effective_min:
             return []
         entities = await self.library.list_for_composition(campaign_id, EntityKind.LORE)
         out: list[LoreEntry] = []
@@ -462,9 +477,16 @@ class WorldService:
         return out
 
     async def lore_for_post(
-        self, text: str, campaign_id: CampaignId, *, min_length: int = 4, max_results: int = 5
+        self,
+        text: str,
+        campaign_id: CampaignId,
+        *,
+        min_length: int | None = None,
+        max_results: int | None = None,
     ) -> list[LoreEntry]:
         """Scan a post for lore-keyword triggers; used by the Context Builder."""
+        effective_min = self.config.lore.keyword_min_length if min_length is None else min_length
+        effective_max = self.config.lore.max_lore_in_archive if max_results is None else max_results
         body = (text or "").lower()
         if not body:
             return []
@@ -474,12 +496,12 @@ class WorldService:
             lore = _lore_from_entity(ent)
             for kw in lore.keywords:
                 kw_lower = kw.strip().lower()
-                if len(kw_lower) < min_length:
+                if len(kw_lower) < effective_min:
                     continue
                 if kw_lower in body:
                     triggered.append(lore)
                     break
-        return triggered[:max_results]
+        return triggered[:effective_max]
 
     # ------------------------------------------------------------------ #
     # Greetings
@@ -500,17 +522,59 @@ class WorldService:
         return parse_calendar(world_id, meta.calendar)
 
     async def calendar_for_campaign(self, campaign_id: CampaignId) -> WorldCalendar:
-        """The calendar of the highest-priority world in the composition.
+        """The calendar for ``campaign_id`` honouring multi-world policy.
 
-        Multi-world campaigns with conflicting calendars are resolved at
-        composition time per spec §Configuration (``multiple_calendars_policy``
-        is ``pick`` by default).
+        Multi-world campaigns with conflicting calendars are resolved per
+        ``WorldConfig.composition.multiple_calendars_policy`` (default:
+        ``pick`` — highest priority wins silently). ``merge_warn`` logs;
+        ``error`` raises :class:`CompositionError`.
         """
         comp = await self.library.get_composition(campaign_id)
         refs = sorted(comp.worlds, key=lambda r: r.priority)
         if not refs:
             raise CompositionError(f"campaign {campaign_id!r} has no world refs")
-        return await self.calendar_for(refs[0].world_id)
+
+        # Resolve each ref's calendar block; we treat an empty/missing
+        # ``calendar`` field as "this world does not contribute a calendar"
+        # so a multi-world campaign in which only one world has a calendar
+        # never trips the merge_warn / error branches.
+        ref_cals: list[tuple[str, WorldCalendar]] = []
+        for ref in refs:
+            meta = await self.library.get_world(ref.world_id)
+            raw = meta.calendar if isinstance(meta.calendar, dict) else {}
+            if not raw:
+                continue
+            ref_cals.append((ref.world_id, parse_calendar(ref.world_id, raw)))
+
+        if not ref_cals:
+            return await self.calendar_for(refs[0].world_id)
+
+        picked_world, picked_cal = ref_cals[0]
+        if len(ref_cals) == 1:
+            return picked_cal
+
+        conflicting = [world_id for world_id, cal in ref_cals[1:] if cal != picked_cal]
+        if not conflicting:
+            return picked_cal
+
+        policy = self.config.composition.multiple_calendars_policy
+        if policy == "merge_warn":
+            logger.warning(
+                "multiple worlds declare calendars for campaign %s; picking %s, "
+                "conflicting refs: %s",
+                campaign_id,
+                picked_world,
+                conflicting,
+            )
+            return picked_cal
+        if policy == "error":
+            raise CompositionError(
+                f"campaign {campaign_id!r} has conflicting calendars across worlds "
+                f"({picked_world!r} vs {conflicting!r}); set "
+                f"composition.multiple_calendars_policy = 'pick' or 'merge_warn'"
+            )
+        # 'pick' is the default — silent.
+        return picked_cal
 
     async def season_for(self, when: InGameTime, campaign_id: CampaignId) -> Season | None:
         cal = await self.calendar_for_campaign(campaign_id)
