@@ -50,6 +50,7 @@ from grimoire.scenes.summary_jobs import RunningSummaryWorker
 from grimoire.state_store import StateStore
 from grimoire.storage import Database, apply_migrations
 from grimoire.time_engine.service import TimeEngineService
+from grimoire.time_engine.subscriber import TimeEngineSubscriber
 from grimoire.watcher.watcher import FileWatcher
 from grimoire.world import WorldConfig, WorldService
 
@@ -285,6 +286,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 continuity=container.continuity,
                 event_bus=container.event_bus,
             )
+        # §1 (time-engine remaining): wire the orchestrator's
+        # ``turn_complete`` event to drive Time Engine advances. The
+        # subscription lives on the container extras so shutdown can
+        # disengage it cleanly.
+        if container.extras.get("time_engine_subscriber") is None:
+            subscriber = TimeEngineSubscriber(
+                time_engine=container.time_engine,
+                event_bus=container.event_bus,
+            )
+            subscriber.start()
+            container.extras["time_engine_subscriber"] = subscriber
 
         # Export: scenes is the only required source; others use the bundled
         # services as duck-typed sources. Adapters come from the plugin
@@ -370,6 +382,17 @@ async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
                 await scene_indexer.stop()
             except Exception:
                 log.exception("scene indexer stop failed during shutdown")
+        # Disengage the Time Engine ``turn_complete`` subscriber so the bus
+        # doesn't keep forwarding events into a torn-down engine after the
+        # lifespan ends.
+        time_engine_subscriber = (
+            container.extras.get("time_engine_subscriber") if container.extras else None
+        )
+        if time_engine_subscriber is not None:
+            try:
+                time_engine_subscriber.stop()
+            except Exception:
+                log.exception("time engine subscriber stop failed during shutdown")
         # §3: Stop the gateway health monitor periodic loop if it was started.
         gateway_health_monitor = (
             container.extras.get("gateway_health_monitor") if container.extras else None

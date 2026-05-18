@@ -99,6 +99,10 @@ class Character(BaseModel):
     file_path: str = ""
     file_mtime: datetime | None = None
     version: int = 0
+    household_id: str | None = None
+    """Optional household membership key (Time Engine §4 significance).
+    Free-form; characters sharing the same value tick together when at least
+    one member is a PC."""
 
 
 class CharacterData(BaseModel):
@@ -116,6 +120,7 @@ class CharacterData(BaseModel):
     structural_relationships: list[StructuralRelationship] = Field(default_factory=list)
     description: str = ""
     body: str = ""
+    household_id: str | None = None
 
 
 class ResolvedCharacter(BaseModel):

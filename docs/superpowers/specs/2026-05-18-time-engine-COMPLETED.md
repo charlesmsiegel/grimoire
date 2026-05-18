@@ -1,9 +1,30 @@
-# Time Engine — Remaining Work
+# Time Engine — Remaining Work (COMPLETED 2026-05-18)
 
 > Everything from the original `specs/07-time-engine.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-time-engine-design.md`). Use this as the input to a writing-plans pass when picking up the work.
 
 **Companion (already shipped):** `2026-05-12-time-engine-design.md`
 **Module:** `backend/src/grimoire/time_engine/`
+
+## Status
+
+All actionable items implemented on `claude/implement-time-engine-spec-Q1vHK`:
+
+- §1 — `TimeEngineSubscriber` + orchestrator `turn_complete` wiring (with `time_advances` payload).
+- §2 — Shared inter-NPC events pre-pass with injectable `shared_events_fn` and `SharedEvent` type.
+- §3 — `subscribe_calendar` thin wrapper around `event_bus.subscribe("time_advance", …)`.
+- §4 — Household-based significance via `Character.household_id`.
+- §5 — Faction tick depth: resource decay, library-side leader actions, inter-faction conflict pass; surfaced via `FactionConflict` and the existing `FactionTickSummary` fields.
+- §6 — `scheduled_event_pre_notice` emits `scheduled_event_imminent`; `pre_notice_emitted_at` column on `scheduled_events` (migration `020_time_engine_extensions.sql`) keeps it once-per-event.
+- §7 — `advance(..., activity_ref=...)` threads through to `mechanics.time_tick` via `TickContext.extras["activity_ref"]`.
+- §8 — `propose_advance` issues a `CheckpointSuggestion` + token, emits `time_advance_checkpoint_suggested` over the configured threshold; `advance(..., checkpoint_token=...)` consumes the token.
+- §9 — Optional drift check callable; warnings on `TimeAdvanceResult.drift_warnings`; `npc_drift_detected` event per warning.
+- §10 — `TimeEngineConfig.precision` quantizes both ends of every advance to the configured granularity (`minute` | `hour` | `day` | `season`).
+
+Deferred / dropped per the original spec ordering:
+
+- §11 — Frontend digest display path (engine side already done).
+- §12, §13 — v2 deferred.
+- §14 — Rejected; orchestrator continues to own the apply path.
 
 ## 1. Orchestrator wiring — advance on `turn_complete`
 

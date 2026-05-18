@@ -7,6 +7,7 @@ with the modules they describe events about.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,31 @@ class TimeAdvanceReason(StrEnum):
     SCENE_BREAK = "scene_break"
     ACTIVITY_DURATION = "activity_duration"
     SCHEDULED_EVENT = "scheduled_event"
+
+
+class SharedEvent(BaseModel):
+    """An inter-NPC event produced by the shared-events pre-pass (§2).
+
+    Generated once per advance, seeded with the full list of significant NPCs,
+    then surfaced to each participating NPC's individual tick so their
+    individual summaries can reference the same factual occurrence rather
+    than each NPC inventing an independent version of "we had a party".
+    """
+
+    id: str
+    participants: list[str] = Field(default_factory=list)
+    summary: str
+    in_game_at: InGameTime
+    details: Json = Field(default_factory=dict)
+
+
+class DriftWarning(BaseModel):
+    """An NPC-tick coherence flag from the post-tick drift check (§9)."""
+
+    character_id: str
+    severity: Literal["info", "warning", "critical"] = "warning"
+    summary: str
+    evidence: list[str] = Field(default_factory=list)
 
 
 class ScheduledEvent(BaseModel):
@@ -61,6 +87,32 @@ class FactionTickSummary(BaseModel):
     notable_actions: list[str] = Field(default_factory=list)
 
 
+class FactionConflict(BaseModel):
+    """An inter-faction conflict surfaced by the faction shared-events pass (§5)."""
+
+    factions: list[str] = Field(default_factory=list)
+    summary: str
+    intensity: Literal["latent", "open", "resolved"] = "latent"
+    details: Json = Field(default_factory=dict)
+
+
+class CheckpointSuggestion(BaseModel):
+    """Returned from ``propose_advance`` (§8) when the projected advance
+    exceeds the configured checkpoint threshold; the caller exchanges the
+    ``token`` for an actual ``advance`` to confirm."""
+
+    token: str
+    campaign_id: str
+    from_time: InGameTime
+    to_time: InGameTime
+    duration: Duration
+    reason: TimeAdvanceReason
+    threshold_exceeded: bool
+    scene_id: str | None = None
+    branch_id: str | None = None
+    activity_ref: str | None = None
+
+
 class TimeAdvanceResult(BaseModel):
     from_time: InGameTime
     to_time: InGameTime
@@ -73,3 +125,8 @@ class TimeAdvanceResult(BaseModel):
     commitments_overdue: list[Commitment] = Field(default_factory=list)
     mechanics_deltas: list[StateDelta] = Field(default_factory=list)
     digest: str = ""
+    shared_events: list[SharedEvent] = Field(default_factory=list)
+    drift_warnings: list[DriftWarning] = Field(default_factory=list)
+    faction_conflicts: list[FactionConflict] = Field(default_factory=list)
+    scheduled_events_upcoming: list[ScheduledEvent] = Field(default_factory=list)
+    """Events that fell into the pre-notice window but have not yet triggered."""

@@ -497,6 +497,18 @@ class OrchestratorService:
                 count=len(extraction.deltas) if extraction else 0,
             )
 
+            # Pull the time-advance durations off the extraction before
+            # routing applies them. The Time Engine subscriber drives the
+            # real advance from these — applying TIME_ADVANCE deltas
+            # directly to the calendar would race the engine's own
+            # pipeline.
+            time_advance_durations: list[dict[str, Any]] = []
+            if extraction is not None:
+                from grimoire.time_engine import extract_time_advances_from_deltas
+
+                for d in extract_time_advances_from_deltas(list(extraction.deltas)):
+                    time_advance_durations.append(d.model_dump(mode="json"))
+
             active.stage = "applying"
             if extraction is not None:
                 await self._apply_routing(
@@ -520,6 +532,8 @@ class OrchestratorService:
                 turn_id,
                 campaign_id,
                 scene_id,
+                branch_id=scene_obj.branch_id,
+                time_advances=time_advance_durations,
             )
             state.last_turn_id = turn_id
         finally:
