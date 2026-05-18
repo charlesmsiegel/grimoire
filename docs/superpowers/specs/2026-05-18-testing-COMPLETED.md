@@ -1,6 +1,37 @@
-# Testing — Remaining Work
+# Testing — COMPLETED (2026-05-18)
 
-> Everything from the original `specs/17-testing.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-testing-design.md`). Use this as the input to a writing-plans pass when picking up the work.
+> Implementation of §1-§12 from the original `specs/17-testing.md`
+> remaining work. §13-§15 (real-LLM smoke, mutation testing, property-based
+> testing) remain deferred to v2 by design.
+
+**Companion (shipped earlier):** `2026-05-12-testing-design.md`
+**Module:** `backend/src/grimoire/testing/`
+**Tests:** `backend/tests/testing/`, `backend/tests/integration/`, `backend/tests/perf/`, `backend/tests/scenario/`
+
+## Status per section
+
+- §1 — DONE. `PluginsService.__init__` accepts `TestingConfig | ConformanceConfig`; ran-once cache + `recheck_conformance(plugin_id)`. Tests: `backend/tests/plugins/test_conformance_wiring.py`.
+- §2 — DONE. `LibraryCampaignFixture` + `CampaignFixture` + `fixtures_registry` (process-wide). Integration suite root at `backend/tests/integration/`.
+- §3 — PARTIAL. (a/b/c) skip cleanly because `TestApp` doesn't compose Orchestrator/TimeEngine yet — skip reason references the spec. (d/e/f/g/h/i) pass against real APIs.
+- §4 — DONE. `backend/scripts/export_snapshot.py` runs migrations + anonymizer + `VACUUM`. `backend/tests/fixtures/campaigns/minimal_test_campaign.sqlite` (~84 KB; floor set by FTS shadow tables in current migrations). Snapshot-vs-migrations assertion shipped.
+- §5 — DONE. `grimoire.testing.Anonymizer` with regex + sqlite in-place + sidecar mapping + `with_passthrough` escape hatch. Wired into `RecordReplayLLM`.
+- §6 — DONE. `golden_llm` fixture + `--record` CLI flag + `golden` marker. Two replay fixtures shipped (extractor, scene summary). `backend-golden` CI job. Workflow docs at `backend/tests/fixtures/llm/README.md`.
+- §7 — DONE. `validate()` now enforces delta-log contiguity and per-kind embedding non-decrease. Voice-anchor count carries a `TODO(§7)` until `CharactersService` exposes a counter.
+- §8 — DONE for the pin-vs-tracks-latest case. Explicit upgrade-flow diff format skips with a comment until the API surface stabilizes.
+- §9 — PARTIAL. Real bench: 10k embedding vector search. Four other benches registered as stubs with `TODO(§9)` to wire when upstream APIs (orchestrator.submit_turn, ContextBuilder.build, frozen-campaign turn loop, plugin discovery) land.
+- §10 — DONE (skeletons). Four scenario tests + `ScenarioApp` harness. All four skip cleanly today; reasons reference the missing API endpoints (e.g. SillyTavern import route) or fixtures (8-NPC household snapshot).
+- §11 — DONE. `pnpm test` runs Vitest with one smoke test; wired into the `frontend` CI job.
+- §12 — CLOSED WITHOUT ACTION. No `depends_on` / topological-sort surface exists for user plugins today; existing manifest validation in `tests/plugins/` is sufficient. Documented in `tests/plugins/test_conformance_wiring.py`.
+
+**Deferred (per spec):** §13 real-LLM smoke, §14 mutation testing, §15 property-based testing.
+
+---
+
+## Original remaining-work spec
+
+Below is the original `2026-05-16-testing-remaining-design.md` content, preserved for traceability.
+
+---
 
 **Companion (already shipped):** `2026-05-12-testing-design.md`
 **Module:** `backend/src/grimoire/testing/`
