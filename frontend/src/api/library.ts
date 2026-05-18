@@ -186,6 +186,28 @@ export interface RegisteredModule {
   // The instance is opaque on the wire; backend serializes the dataclass and
   // the instance comes back as a stringy summary (often the class name).
   instance?: unknown;
+  /**
+   * Inline theme CSS for the module, if it ships one. Backend reads
+   * `manifest.ui.theme_css` at load time and inlines the file contents here
+   * so the Frontend can scope it via `SheetRenderer` without a second request.
+   * `null` when the module declares no theme. The legacy
+   * `GET /api/library/mechanics/{id}/theme.css` route is still available as a
+   * fallback when this field is absent.
+   */
+  theme_css?: string | null;
+}
+
+/**
+ * One step in a mechanics module's character-creation wizard
+ * (spec 06 §Character creation).
+ */
+export interface CreationStep {
+  id: string;
+  title: string;
+  /** JSON Schema 2020-12 object describing the inputs collected by this step. */
+  step_schema: Record<string, unknown>;
+  description: string;
+  optional: boolean;
 }
 
 export type PluginKind =
@@ -303,10 +325,7 @@ export const libraryApi = {
   getStyleGuide: (id: string) =>
     request<LibraryEntity>("GET", `/library/style-guides/${encodeURIComponent(id)}`),
   getStyleGuideEdit: (id: string) =>
-    request<StyleGuideEditPayload>(
-      "GET",
-      `/library/style-guides/${encodeURIComponent(id)}/edit`,
-    ),
+    request<StyleGuideEditPayload>("GET", `/library/style-guides/${encodeURIComponent(id)}/edit`),
   createStyleGuide: (payload: {
     id: string;
     name: string;
@@ -328,12 +347,7 @@ export const libraryApi = {
       themes?: string[];
       avoid?: string[];
     },
-  ) =>
-    request<LibraryEntity>(
-      "PATCH",
-      `/library/style-guides/${encodeURIComponent(id)}`,
-      patch,
-    ),
+  ) => request<LibraryEntity>("PATCH", `/library/style-guides/${encodeURIComponent(id)}`, patch),
 
   listImagePresets: () => request<LibraryEntity[]>("GET", `/library/image-presets`),
   getImagePreset: (id: string) =>
@@ -412,6 +426,30 @@ export interface ImagePresetEditPayload {
 export const mechanicsApi = {
   listInstalled: () => request<RegisteredModule[]>("GET", `/mechanics/installed`),
   rescan: () => request<RescanReport | Record<string, unknown>>("POST", `/mechanics/rescan`),
+  /**
+   * Fetch raw `theme.css` for a module. Prefer `RegisteredModule.theme_css`
+   * when available (avoids the extra round-trip). Returns `null` on 404.
+   */
+  themeCss: async (moduleId: string): Promise<string | null> => {
+    const res = await fetch(
+      `${API_BASE}/library/mechanics/${encodeURIComponent(moduleId)}/theme.css`,
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => ""));
+    return res.text();
+  },
+  /** JSON Schema for the content entries of `kind` declared by `moduleId`. */
+  contentSchema: (moduleId: string, kind: string) =>
+    request<Record<string, unknown>>(
+      "GET",
+      `/library/mechanics/${encodeURIComponent(moduleId)}/content/${encodeURIComponent(kind)}/schema`,
+    ),
+  /** Character-creation steps for the library-baseline preview (no campaign). */
+  characterCreation: (moduleId: string) =>
+    request<CreationStep[]>(
+      "GET",
+      `/library/mechanics/${encodeURIComponent(moduleId)}/character-creation`,
+    ),
 };
 
 export interface PluginConfig {

@@ -9,6 +9,7 @@
  */
 
 import { api } from "./client";
+import type { CreationStep } from "./library";
 
 export interface PCEntry {
   character_ref: string;
@@ -135,6 +136,82 @@ export interface ContinuityLedger {
   unresolved_contradictions: ContradictionReport[];
 }
 
+// ---------------------------------------------------------------------------
+// Mechanics: content browsers (spec 06 §Responsibilities)
+// ---------------------------------------------------------------------------
+
+/** One content entry under a campaign's active mechanics module. */
+export interface ContentEntry {
+  id: string;
+  payload: Record<string, unknown>;
+  mechanics_id: string;
+}
+
+// ---------------------------------------------------------------------------
+// Mechanics: pre-roll confirmation (spec 06 §Pre-roll evaluation)
+// ---------------------------------------------------------------------------
+
+export interface RollModifier {
+  label: string;
+  delta: number;
+  multiplier: number;
+}
+
+export interface ProposedRoll {
+  label: string;
+  kind: string;
+  pool: number;
+  difficulty?: number | null;
+  actor_ref?: string | null;
+  target_ref?: string | null;
+  rationale: string;
+  high_stakes: boolean;
+  modifiers: RollModifier[];
+  metadata: Record<string, unknown>;
+}
+
+/** Player decision for a single proposed roll. */
+export interface RollResolution {
+  label: string;
+  accepted: boolean;
+  /**
+   * Patch over the original proposal applied before resolving. Used when the
+   * player accepts with edits (e.g. dropping the pool by one). Ignored when
+   * `accepted` is `false`.
+   */
+  modifications?: Partial<ProposedRoll> | null;
+}
+
+/**
+ * Inbound `pre_roll_pending` WebSocket event shape. The backend
+ * `_emit_turn_event` does not include `campaign_id` on the WS payload
+ * because the stream is already campaign-scoped (`/ws/campaigns/{id}/stream`),
+ * so consumers filter by event `type` + `turn_id` rather than re-checking
+ * the campaign id.
+ */
+export interface PreRollPendingEvent {
+  type: "pre_roll_pending";
+  turn_id: string;
+  scene_id: string;
+  proposals: ProposedRoll[];
+}
+
+// ---------------------------------------------------------------------------
+// Mechanics: mid-campaign switch (spec 06 §Switching modules mid-campaign)
+// ---------------------------------------------------------------------------
+
+export interface MissingSheet {
+  kind: string;
+  entity_id: string;
+  character_name: string | null;
+}
+
+export interface MechanicsSwitchResult {
+  previous: string | null;
+  current: string | null;
+  missing_sheets: MissingSheet[];
+}
+
 const enc = encodeURIComponent;
 
 export const campaignApi = {
@@ -191,5 +268,70 @@ export const campaignApi = {
     api.get<{ id: string; thumb_path?: string; image_path?: string; post_id?: string }[]>(
       `/api/campaigns/${enc(id)}/images`,
       { query: { scene_id: sceneId } },
+    ),
+
+  // ----- Content browsers ------------------------------------------------
+
+  listContent: (campaignId: string, kind: string) =>
+    api.get<ContentEntry[]>(`/api/campaigns/${enc(campaignId)}/content/${enc(kind)}`),
+
+  getContent: (campaignId: string, kind: string, contentId: string) =>
+    api.get<Record<string, unknown>>(
+      `/api/campaigns/${enc(campaignId)}/content/${enc(kind)}/${enc(contentId)}`,
+    ),
+
+  putContent: (
+    campaignId: string,
+    kind: string,
+    contentId: string,
+    payload: Record<string, unknown>,
+  ) =>
+    api.put<Record<string, unknown>>(
+      `/api/campaigns/${enc(campaignId)}/content/${enc(kind)}/${enc(contentId)}`,
+      payload,
+    ),
+
+  // ----- Character creation ---------------------------------------------
+
+  characterCreationSteps: (campaignId: string, characterId: string) =>
+    api.get<CreationStep[]>(
+      `/api/campaigns/${enc(campaignId)}/characters/${enc(characterId)}/creation`,
+    ),
+
+  submitCharacterCreation: (
+    campaignId: string,
+    characterId: string,
+    payload: { step_outputs: Record<string, Record<string, unknown>>; source?: string },
+  ) =>
+    api.post<Record<string, unknown>>(
+      `/api/campaigns/${enc(campaignId)}/characters/${enc(characterId)}/creation/submit`,
+      payload,
+    ),
+
+  // ----- Pre-roll confirmation ------------------------------------------
+
+  resolveProposals: (campaignId: string, turnId: string, resolutions: RollResolution[]) =>
+    api.post<{ ok: boolean }>(
+      `/api/campaigns/${enc(campaignId)}/turns/${enc(turnId)}/resolve-proposals`,
+      { resolutions },
+    ),
+
+  // ----- Mechanics switch -----------------------------------------------
+
+  switchMechanics: (campaignId: string, mechanics: string | null, source: string = "user") =>
+    api.post<MechanicsSwitchResult>(`/api/campaigns/${enc(campaignId)}/mechanics/switch`, {
+      mechanics,
+      source,
+    }),
+
+  /**
+   * Best-effort look-up: summarise the campaign's stored sheets by mechanics
+   * id. Used by the preserved-sheets banner — the route is expected to be
+   * additive on the backend; callers should treat 404 as "no preserved
+   * sheets to surface" and continue silently.
+   */
+  preservedSheets: (campaignId: string) =>
+    api.get<{ active: string | null; preserved: { mechanics_id: string; count: number }[] }>(
+      `/api/campaigns/${enc(campaignId)}/mechanics/preserved-sheets`,
     ),
 };

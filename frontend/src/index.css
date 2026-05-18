@@ -5158,3 +5158,140 @@ button.primary:disabled {
 .providers-wizard-launch p {
   margin: var(--space-1) 0 0;
 }
+
+/* ---- Mechanics: content browser, pre-roll, bulk creation ---- */
+
+.content-browser {
+  margin-top: var(--space-5);
+}
+
+.content-browser-layout {
+  display: grid;
+  grid-template-columns: 18rem 1fr;
+  gap: var(--space-5);
+  align-items: start;
+  margin-top: var(--space-3);
+}
+
+.content-list h4 {
+  margin: 0 0 var(--space-2);
+}
+
+.content-detail {
+  background: var(--bg-elev);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  min-height: 12rem;
+  box-shadow: var(--shadow-xs);
+}
+
+.content-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.character-creation-modal,
+.bulk-creation-modal,
+.pre-roll-modal {
+  max-width: 48rem;
+  width: min(48rem, 92vw);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.wizard-step-heading {
+  margin: 0 0 var(--space-3);
+}
+
+.wizard-divider {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: var(--space-4) 0;
+}
+
+.pre-roll-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.pre-roll-item {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: var(--bg-sunken);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pre-roll-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.pre-roll-rationale {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.pre-roll-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(6rem, 1fr));
+  gap: var(--space-3);
+}
+
+.pre-roll-mods {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.pre-roll-decision {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.bulk-creation-footer {
+  margin-top: var(--space-2);
+}
+
+.preserved-sheets-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-3) 0;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--warn, #b88200);
+  background: var(--bg-elev);
+  border-radius: var(--radius-sm);
+  font-size: 0.92rem;
+}
+
+.preserved-sheets-banner button {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+
+.sheet-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}

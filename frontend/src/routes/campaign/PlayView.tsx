@@ -5,6 +5,7 @@ import { useCampaignEvent } from "../../state/useCampaignEvent";
 import { DriftBanner } from "./DriftBanner";
 import { InputArea } from "./InputArea";
 import { PCSwitcher } from "./PCSwitcher";
+import { PreRollConfirmation } from "./PreRollConfirmation";
 import { SceneHeader } from "./SceneHeader";
 import { ScenePane } from "./ScenePane";
 import { SidePanel } from "./SidePanel";
@@ -116,6 +117,8 @@ export function PlayView({ campaignId }: Props) {
       </div>
 
       <DriftBanner warnings={driftWarnings} onSuppress={play.suppressDrift} />
+
+      <PreRollConfirmation campaignId={campaignId} />
 
       {actionError && (
         <div className="play-error" role="alert">
