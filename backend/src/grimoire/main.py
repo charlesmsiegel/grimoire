@@ -574,6 +574,7 @@ async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
                 time_engine_subscriber.stop()
             except Exception:
                 log.exception("time engine subscriber stop failed during shutdown")
+
         # State Store background workers — stop before closing the DB so they
         # don't hit a closed connection mid-loop. Each is independently
         # try/excepted so one failure doesn't strand the others.

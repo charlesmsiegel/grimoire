@@ -228,6 +228,50 @@ async def test_assembled_messages_round_trip(db) -> None:
     assert audit.assembled_messages == messages_payload
 
 
+async def test_audit_persists_when_context_summary_is_empty_primitive(db) -> None:
+    """Regression: the orchestrator used to emit ``context_summary=""`` and
+    ``composition_snapshot={}`` because ``AssembledPrompt`` carries them as
+    primitives. The TurnAudit schema requires either a ``ContextSummary`` /
+    ``CompositionSnapshot`` model or ``None``, so a bare ``""`` or ``{}``
+    poisoned ``model_validate`` and silently dropped every audit row.
+    Verify the auditor now skips those values."""
+    bus = EventBus()
+    store = AuditStore(db)
+    auditor = TurnAuditor(event_bus=bus, audit_store=store)
+    auditor.start()
+
+    await bus.emit(
+        Event(
+            type="turn_started",
+            payload={"turn_id": "t_p", "campaign_id": "c_1", "scene_id": "s_1"},
+        )
+    )
+    await bus.emit(
+        Event(
+            type="context_built",
+            payload={
+                "turn_id": "t_p",
+                "campaign_id": "c_1",
+                "scene_id": "s_1",
+                "budget_used": {"spotlight": 10},
+                "messages_hash": "h",
+                "context_summary": "",
+                "composition_snapshot": {},
+            },
+        )
+    )
+    await bus.emit(
+        Event(
+            type="turn_complete",
+            payload={"turn_id": "t_p", "campaign_id": "c_1", "scene_id": "s_1"},
+        )
+    )
+    audit = await store.get("t_p")
+    assert audit is not None
+    assert audit.context_summary is None
+    assert audit.composition_snapshot is None
+
+
 async def test_stop_unsubscribes_handlers(db) -> None:
     bus = EventBus()
     store = AuditStore(db)
