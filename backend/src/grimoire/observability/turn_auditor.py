@@ -48,6 +48,7 @@ class TurnAuditor:
             self._bus.subscribe("turn_started", self._on_turn_started),
             self._bus.subscribe("context_built", self._on_context_built),
             self._bus.subscribe("model_response_received", self._on_model_response),
+            self._bus.subscribe("llm_response_received", self._on_llm_response),
             self._bus.subscribe("deltas_extracted", self._on_deltas_extracted),
             self._bus.subscribe("turn_audit_fragment", self._on_fragment),
             self._bus.subscribe("turn_complete", self._on_turn_complete),
@@ -86,10 +87,46 @@ class TurnAuditor:
         buf["context_budget_used"] = budget
         if hash_val := event.payload.get("messages_hash"):
             buf["context_messages_hash"] = hash_val
-        if summary := event.payload.get("context_summary"):
+        if (summary := event.payload.get("context_summary")) is not None:
             buf["context_summary"] = summary
         if sources := event.payload.get("context_sources"):
             buf["context_sources"] = sources
+        if (snap := event.payload.get("composition_snapshot")) is not None:
+            buf["composition_snapshot"] = snap
+        if self._config.capture_full_prompt and (
+            (messages := event.payload.get("assembled_messages")) is not None
+        ):
+            buf["assembled_messages"] = messages
+
+    async def _on_llm_response(self, event: Event) -> None:
+        """Translate the gateway's ``llm_response_received`` payload into the
+        ``llm_*`` audit fields. The gateway uses unprefixed keys (``provider``,
+        ``model``, ``latency_ms``, ``retries`` …) while the audit record uses
+        the ``llm_`` prefix; this handler bridges them.
+        """
+        buf = self._buf(event)
+        if buf is None:
+            return
+        payload = event.payload
+        if (val := payload.get("provider")):
+            buf["llm_provider"] = val
+        if (val := payload.get("model")):
+            buf["llm_model"] = val
+        usage = payload.get("usage") or {}
+        if usage.get("input_tokens") is not None:
+            buf["llm_prompt_tokens"] = int(usage.get("input_tokens") or 0)
+        if usage.get("output_tokens") is not None:
+            buf["llm_completion_tokens"] = int(usage.get("output_tokens") or 0)
+        if (val := payload.get("cost_estimate_usd")) is not None:
+            buf["llm_cost_usd"] = float(val)
+        if (val := payload.get("latency_ms")) is not None:
+            buf["llm_latency_ms"] = int(val)
+        if (val := payload.get("retries")) is not None:
+            buf["llm_retries"] = int(val)
+        if (val := payload.get("finish_reason")):
+            buf["llm_finish_reason"] = val
+        if (val := payload.get("params")) is not None:
+            buf["llm_params"] = val
 
     async def _on_model_response(self, event: Event) -> None:
         buf = self._buf(event)

@@ -9,9 +9,11 @@ gateway pair (so replay can fork branches and re-run prompts).
 
 from __future__ import annotations
 
+import logging
+import uuid
 from datetime import datetime
 
-from grimoire.event_bus import EventBus
+from grimoire.event_bus import Event, EventBus, Subscription
 from grimoire.observability.audit import AuditStore
 from grimoire.observability.config import ObservabilityConfig
 from grimoire.observability.costs import CostTrackerService
@@ -24,6 +26,7 @@ from grimoire.observability.replayer import TurnReplayerService
 from grimoire.observability.turn_auditor import TurnAuditor
 from grimoire.storage.db import Database
 from grimoire.types.common import CampaignId, TurnId
+from grimoire.types.llm import LLMCallRecord
 from grimoire.types.observability import (
     ErrorRecord,
     LogEvent,
@@ -32,6 +35,8 @@ from grimoire.types.observability import (
     ReplayResult,
     TurnAudit,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ObservabilityService:
@@ -48,6 +53,7 @@ class ObservabilityService:
     ) -> None:
         self._db = db
         self._config = config or ObservabilityConfig()
+        self._event_bus = event_bus
 
         self.audit_store = AuditStore(db)
         self.costs_tracker = CostTrackerService(db)
@@ -73,18 +79,48 @@ class ObservabilityService:
                 state_store=state_store,  # type: ignore[arg-type]
             )
 
+        self._cost_subscription: Subscription | None = None
+
     async def start(self) -> None:
         """Subscribe the turn auditor and start the health probe + retention
         loops. Safe to call once at app startup."""
         if self.turn_auditor is not None:
             self.turn_auditor.start()
+        if self._event_bus is not None and self._cost_subscription is None:
+            self._cost_subscription = self._event_bus.subscribe(
+                "llm_response_received", self._on_llm_response
+            )
         await self.health_monitor.load_latest()
 
     async def shutdown(self) -> None:
         if self.turn_auditor is not None:
             self.turn_auditor.stop()
+        if self._cost_subscription is not None:
+            self._cost_subscription.unsubscribe()
+            self._cost_subscription = None
         await self.health_monitor.stop()
         await self.retention.stop()
+
+    async def _on_llm_response(self, event: Event) -> None:
+        try:
+            payload = event.payload or {}
+            usage = payload.get("usage") or {}
+            call = LLMCallRecord(
+                id=uuid.uuid4().hex,
+                task=str(payload.get("task") or ""),
+                provider_id=str(payload.get("provider") or ""),
+                model=str(payload.get("model") or ""),
+                input_tokens=int(usage.get("input_tokens") or 0),
+                output_tokens=int(usage.get("output_tokens") or 0),
+                cost_usd=payload.get("cost_estimate_usd"),
+                latency_ms=int(payload.get("latency_ms") or 0),
+                finish_reason=str(payload.get("finish_reason") or ""),
+                campaign_id=payload.get("campaign_id"),
+                turn_id=payload.get("turn_id"),
+            )
+            await self.costs_tracker.record(call)
+        except Exception:
+            logger.exception("failed to record cost from llm_response_received")
 
     # ------------------------------------------------------------------ #
     # Observability protocol
@@ -131,6 +167,26 @@ class ObservabilityService:
 
     async def record_error(self, err: ErrorRecord) -> None:
         await self.errors_store.record(err)
+        # §16: fire an ``error_reported`` event so plugin hooks (Sentry,
+        # external loggers) can subscribe via the event bus.
+        if self._event_bus is not None:
+            try:
+                await self._event_bus.emit(
+                    Event(
+                        type="error_reported",
+                        payload={
+                            "module": err.module,
+                            "operation": err.operation,
+                            "error_kind": err.error_kind,
+                            "message": err.message,
+                            "turn_id": err.turn_id,
+                            "user_visible": err.user_visible,
+                            "context": err.context or {},
+                        },
+                    )
+                )
+            except Exception:
+                logger.exception("error_reported event emit failed")
 
     async def recent_errors(self, limit: int = 50) -> list[ErrorRecord]:
         return await self.errors_store.recent(limit=limit)

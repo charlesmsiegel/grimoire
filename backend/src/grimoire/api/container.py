@@ -41,6 +41,7 @@ class ServiceContainer:
     plugins: Any = None
     state_store: Any = None
     orchestrator: Any = None
+    observability: Any = None
 
     extras: dict[str, Any] = field(default_factory=dict)
 
