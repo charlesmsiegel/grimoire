@@ -520,8 +520,7 @@ class CharactersService:
         doomed = [
             key
             for key in self._view_cache
-            if (ref is None or key[0] == ref)
-            and (campaign_id is None or key[1] == campaign_id)
+            if (ref is None or key[0] == ref) and (campaign_id is None or key[1] == campaign_id)
         ]
         for key in doomed:
             del self._view_cache[key]
@@ -696,11 +695,7 @@ class CharactersService:
         """
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
         threshold = self._config.drift.check_every_n_appearances
-        if (
-            not force
-            and threshold > 0
-            and state.appearances_since_last_drift_check < threshold
-        ):
+        if not force and threshold > 0 and state.appearances_since_last_drift_check < threshold:
             return None
 
         report = await self.check_drift(ref, campaign_id, recent_posts=recent_posts)
@@ -709,9 +704,7 @@ class CharactersService:
         # check_drift, then zero the counter on top.
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
         state.appearances_since_last_drift_check = 0
-        await self._save_state(
-            ref, campaign_id, state, source="characters:drift-cadence-reset"
-        )
+        await self._save_state(ref, campaign_id, state, source="characters:drift-cadence-reset")
         return report
 
     async def drift_corrective_context(
@@ -781,9 +774,7 @@ class CharactersService:
         wired at construction.
         """
         if self._voice_anchor_llm is None:
-            raise CharactersError(
-                "draft_voice_anchor requires a voice_anchor_llm to be configured"
-            )
+            raise CharactersError("draft_voice_anchor requires a voice_anchor_llm to be configured")
         resolved = await self.resolve(character_ref, campaign_id)
         posts: list[Post] = []
         if self._post_fetcher is not None:
@@ -1263,9 +1254,7 @@ class CharactersService:
                     proposal.target_library_id,
                 )
             except Exception as exc:
-                raise PromotionError(
-                    f"sheet migration failed for {character_id!r}: {exc}"
-                ) from exc
+                raise PromotionError(f"sheet migration failed for {character_id!r}: {exc}") from exc
 
         if delete_emergent:
             from grimoire.state_store.paths import emergent_path
@@ -1574,9 +1563,7 @@ class CharactersService:
             "tier_pin": state.tier_pin.value if state.tier_pin else None,
             "current_scene_id": state.current_scene_id,
             "updated_at_turn": turn_id or state.updated_at_turn or _now_iso(),
-            "appearances_since_last_drift_check": int(
-                state.appearances_since_last_drift_check
-            ),
+            "appearances_since_last_drift_check": int(state.appearances_since_last_drift_check),
         }
 
         if record_in_delta_log:

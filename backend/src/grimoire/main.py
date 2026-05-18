@@ -171,6 +171,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             prober = ImageGenHealthProber(container.imagegen, interval_seconds=30.0)
             prober.start()
             container.extras["imagegen_health_prober"] = prober
+        # §8 Reload any jobs that were queued at shutdown.
+        try:
+            await container.imagegen.reload_pending_jobs()
+        except Exception:
+            log.exception("imagegen: reload_pending_jobs failed at startup")
 
         # LLM-adjacent services: gateway + extractor + context builder are
         # the substrate the orchestrator drives. They're wired even when no

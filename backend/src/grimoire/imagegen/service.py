@@ -425,12 +425,117 @@ class ImageGenService:
             self._jobs[job_id] = job
             handle = self._handles[backend_id]
             handle._pending_jobs.add(job_id)
+        if self.config.queue_persist_pending:
+            await self.store.db.execute(
+                """
+                INSERT INTO imagegen_jobs (
+                  id, campaign_id, backend, status, priority, request_json,
+                  scene_id, post_id, queued_at, started_at, finished_at, error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+                """,
+                (
+                    job_id,
+                    campaign_id,
+                    backend_id,
+                    JobStatus.QUEUED.value,
+                    priority,
+                    request.model_dump_json(),
+                    scene_id,
+                    post_id,
+                    _now().isoformat(),
+                ),
+            )
         await handle.queue.put(_QueueEntry(job_id=job_id))
         await self._emit(
             "imagegen_job_queued",
             {"job_id": job_id, "campaign_id": campaign_id, "backend": backend_id},
         )
         return job_id
+
+    async def _update_persistent_job(
+        self,
+        job_id: str,
+        *,
+        status: str | None = None,
+        started_at: datetime | None = None,
+        finished_at: datetime | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Best-effort update of the persisted job row. No-op when persistence is off."""
+        if not self.config.queue_persist_pending:
+            return
+        sets: list[str] = []
+        values: list[Any] = []
+        if status is not None:
+            sets.append("status = ?")
+            values.append(status)
+        if started_at is not None:
+            sets.append("started_at = ?")
+            values.append(started_at.isoformat())
+        if finished_at is not None:
+            sets.append("finished_at = ?")
+            values.append(finished_at.isoformat())
+        if error is not None:
+            sets.append("error = ?")
+            values.append(error)
+        if not sets:
+            return
+        values.append(job_id)
+        await self.store.db.execute(
+            f"UPDATE imagegen_jobs SET {', '.join(sets)} WHERE id = ?",
+            tuple(values),
+        )
+
+    async def reload_pending_jobs(self) -> None:
+        """Re-enqueue jobs that were QUEUED at last shutdown (§8).
+
+        RUNNING jobs at shutdown are marked FAILED (we can't recover the
+        in-flight state) so the user can re-queue manually.
+        """
+        if not self.config.queue_persist_pending:
+            return
+        rows = await self.store.db.fetchall(
+            "SELECT * FROM imagegen_jobs WHERE status IN ('queued','running')"
+        )
+        for row in rows:
+            job_id = str(row["id"])
+            status = str(row["status"])
+            if status == "running":
+                await self.store.db.execute(
+                    "UPDATE imagegen_jobs SET status = 'failed', error = ?, "
+                    "finished_at = ? WHERE id = ?",
+                    ("interrupted by shutdown", _now().isoformat(), job_id),
+                )
+                continue
+            request = GenerationRequest.model_validate_json(row["request_json"])
+            job = GenerationJob(
+                id=job_id,
+                campaign_id=str(row["campaign_id"]),
+                backend=str(row["backend"]),
+                request=request,
+                status=JobStatus.QUEUED,
+                priority=int(row["priority"]),
+                queued_at=_now(),
+                scene_id=row["scene_id"],
+                post_id=row["post_id"],
+            )
+            self._jobs[job_id] = job
+            backend_id = str(row["backend"])
+            if backend_id not in self.registry:
+                # The backend that owned this job is gone; mark FAILED.
+                job.status = JobStatus.FAILED
+                job.error = f"backend {backend_id!r} no longer registered"
+                await self._update_persistent_job(
+                    job_id,
+                    status=JobStatus.FAILED.value,
+                    error=job.error,
+                    finished_at=_now(),
+                )
+                continue
+            self._ensure_handle(backend_id)
+            handle = self._handles[backend_id]
+            handle._pending_jobs.add(job_id)
+            await handle.queue.put(_QueueEntry(job_id=job_id))
 
     async def generate_sync(
         self,
@@ -483,6 +588,9 @@ class ImageGenService:
             token = self._cancel_tokens.get(job_id) if was_running else None
         if token is not None:
             token.set()
+        await self._update_persistent_job(
+            job_id, status=JobStatus.CANCELLED.value, finished_at=_now()
+        )
         await self._emit("imagegen_job_failed", {"job_id": job_id, "reason": "cancelled"})
 
     async def prioritize_job(self, job_id: str, priority: int) -> None:
@@ -874,6 +982,9 @@ class ImageGenService:
                 handle._pending_jobs.discard(job_id)
                 job.status = JobStatus.RUNNING
                 job.started_at = _now()
+            await self._update_persistent_job(
+                job_id, status=JobStatus.RUNNING.value, started_at=job.started_at
+            )
             await self._emit(
                 "imagegen_job_started",
                 {"job_id": job_id, "campaign_id": job.campaign_id, "backend": backend_id},
@@ -899,6 +1010,12 @@ class ImageGenService:
                         job.finished_at = _now()
                         job.error = str(exc)
                 if job.status == JobStatus.FAILED:
+                    await self._update_persistent_job(
+                        job_id,
+                        status=JobStatus.FAILED.value,
+                        finished_at=job.finished_at,
+                        error=str(exc),
+                    )
                     await self._emit(
                         "imagegen_job_failed",
                         {
@@ -915,6 +1032,12 @@ class ImageGenService:
                         job.status = JobStatus.COMPLETE
                         job.finished_at = _now()
                         job.result = result
+                if job.status == JobStatus.COMPLETE:
+                    await self._update_persistent_job(
+                        job_id,
+                        status=JobStatus.COMPLETE.value,
+                        finished_at=job.finished_at,
+                    )
             finally:
                 handle.queue.task_done()
 

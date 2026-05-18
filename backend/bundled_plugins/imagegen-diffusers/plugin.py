@@ -139,6 +139,10 @@ class DiffusersImageGenBackend:
         self._cache_folder: str | None = cfg.get("cache_folder") or None
         self._hf_token: str | None = cfg.get("hf_token") or None
         self._timeout: float = float(cfg.get("timeout_seconds") or 600)
+        self._download_mode: str = str(cfg.get("download_on_first_use") or "auto").lower()
+        if self._download_mode not in ("prompt", "auto", "never"):
+            self._download_mode = "auto"
+        self._download_confirmed: bool = False
 
         # Resolved device — set on first load.
         self._device: str | None = None
@@ -266,6 +270,33 @@ class DiffusersImageGenBackend:
             return torch.bfloat16, "bfloat16"
         return torch.float16, "float16"
 
+    def confirm_download(self) -> None:
+        """User-facing hook for ``download_on_first_use=prompt`` mode.
+
+        Sets the gate that ``_ensure_pipeline`` checks. Called by the
+        REST verb ``POST /imagegen/backends/{id}/confirm-download``.
+        """
+        self._download_confirmed = True
+
+    def _is_model_cached_locally(self, model_id: str) -> bool:
+        """Best-effort check: do we already have the weights on disk?
+
+        Uses huggingface_hub's snapshot cache layout when available; falls
+        back to "False" (i.e. assume not cached, will trigger the gate)
+        when the helper isn't importable or raises.
+        """
+        try:  # pragma: no cover - depends on hf_hub being installed
+            from huggingface_hub import try_to_load_from_cache  # type: ignore
+
+            # Probe a sentinel file most SDXL repos have. If the helper
+            # returns a path string, the model is cached.
+            path = try_to_load_from_cache(
+                model_id, filename="model_index.json", cache_dir=self._cache_folder
+            )
+            return path is not None and path != "/_CACHED_BUT_MISSING_FILE"
+        except Exception:
+            return False
+
     async def _ensure_pipeline(self, model_id: str, *, img2img: bool) -> Any:
         async with self._load_lock:
             device = self._device or self._resolve_device()
@@ -275,6 +306,20 @@ class DiffusersImageGenBackend:
             cached = pipelines.get(key)
             if cached is not None:
                 return cached
+            # §9 download_on_first_use gating: only consult when the
+            # model is NOT already cached locally. Once cached, every
+            # subsequent load is free regardless of mode.
+            if not self._is_model_cached_locally(model_id):
+                if self._download_mode == "never":
+                    raise RuntimeError(
+                        f"download disabled by config (download_on_first_use=never); "
+                        f"place {model_id!r} weights in the local HF cache to enable"
+                    )
+                if self._download_mode == "prompt" and not self._download_confirmed:
+                    raise RuntimeError(
+                        f"model download for {model_id!r} requires user confirmation "
+                        "(POST /imagegen/backends/{id}/confirm-download)"
+                    )
             try:
                 pipe = await asyncio.to_thread(
                     self._build_pipeline,

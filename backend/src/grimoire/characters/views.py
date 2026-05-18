@@ -80,9 +80,7 @@ def render_capsule(character: Character, *, seed: int | None = None) -> str:
     return " · ".join(parts)
 
 
-def _render_voice(
-    voice: VoiceAnchor, *, max_samples: int = 5, seed: int | None = None
-) -> str:
+def _render_voice(voice: VoiceAnchor, *, max_samples: int = 5, seed: int | None = None) -> str:
     if not (voice.summary or voice.samples or voice.dos or voice.donts or voice.speech_patterns):
         return ""
     lines: list[str] = []
