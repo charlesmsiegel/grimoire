@@ -317,6 +317,49 @@ class StateStore:
             )
         return target
 
+    async def delete_override(
+        self,
+        *,
+        campaign_id: str,
+        library_id: str,
+        source: str,
+        turn_id: str | None = None,
+    ) -> bool:
+        """Delete a campaign-local override file and its index row.
+
+        Symmetrical with :meth:`write_override`. Returns ``True`` when the
+        file existed and was deleted, ``False`` when nothing was on disk.
+        """
+        ref = parse_library_id(library_id)
+        if ref.world_id is None:
+            raise InvalidRefError("overrides are only valid for world-scoped library entities")
+        target = override_path(self.data_root, campaign_id, ref.world_id, ref.kind, ref.asset_id)
+        if not target.exists():
+            return False
+        before_payload = load_yaml(target) or {}
+        target.unlink()
+
+        composite_id = f"campaigns/{campaign_id}/overrides/{library_id}"
+        async with self._txn() as conn:
+            from grimoire.state_store.indexers import delete_campaign_content_row
+
+            await delete_campaign_content_row(conn, composite_id)
+            await insert_delta(
+                conn,
+                campaign_id=campaign_id,
+                branch_id=None,
+                turn_id=turn_id,
+                source=source,
+                kind="override_delete",
+                target_scope="campaign-file",
+                target_table=None,
+                target_path=str(target),
+                target_id=composite_id,
+                before=before_payload,
+                after=None,
+            )
+        return True
+
     async def delete_emergent(
         self,
         *,
