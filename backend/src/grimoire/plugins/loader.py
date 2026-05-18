@@ -325,9 +325,7 @@ def _check_protocol(instance: Any, protocol: type) -> tuple[bool, list[str]]:
         # (presence of a class-level default value of None makes the slot
         # explicitly optional).
         if getattr(instance, member, None) is None and proto_vars.get(member) is not None:
-            errors.append(
-                f"attribute '{member}' is None but {proto_name} requires a value"
-            )
+            errors.append(f"attribute '{member}' is None but {proto_name} requires a value")
 
     callable_members = [
         name
@@ -349,8 +347,7 @@ def _check_protocol(instance: Any, protocol: type) -> tuple[bool, list[str]]:
         # we can use them as the source of truth for async-ness.
         if inspect.iscoroutinefunction(proto_attr) and not inspect.iscoroutinefunction(impl):
             errors.append(
-                f"method '{name}' on {proto_name} must be async "
-                "(declare with `async def`)"
+                f"method '{name}' on {proto_name} must be async (declare with `async def`)"
             )
 
         try:
@@ -404,16 +401,13 @@ def _check_protocol(instance: Any, protocol: type) -> tuple[bool, list[str]]:
         # Each protocol-declared positional name must be addressable on
         # the implementation — either as a named param or absorbed by
         # **kwargs. Renames (e.g. `request` → `payload`) trip this.
-        impl_has_var_kw = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in impl_params
-        )
+        impl_has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in impl_params)
         if not impl_has_var_kw:
             impl_names = set(impl_positional_names)
             for proto_param in proto_params:
                 if proto_param.name not in impl_names:
                     errors.append(
-                        f"method '{name}' on {proto_name} is missing "
-                        f"parameter '{proto_param.name}'"
+                        f"method '{name}' on {proto_name} is missing parameter '{proto_param.name}'"
                     )
 
     return not errors, errors

@@ -28,9 +28,7 @@ def _service(
         root=plugins_root,
         config_store=ConfigStoreConfig(root=config_root),
     )
-    return PluginsService(
-        cfg, keyring_backend=InMemoryKeyring(), event_bus=event_bus
-    )
+    return PluginsService(cfg, keyring_backend=InMemoryKeyring(), event_bus=event_bus)
 
 
 async def test_rescan_discovers_and_registers_plugins(
@@ -336,9 +334,7 @@ async def test_unload_clears_record(plugins_root: Path, config_root: Path) -> No
 # --------------------------------------------------------------------------- #
 
 
-async def test_deactivation_persists_across_rescan(
-    plugins_root: Path, config_root: Path
-) -> None:
+async def test_deactivation_persists_across_rescan(plugins_root: Path, config_root: Path) -> None:
     """A plugin the user deactivates stays deactivated when the app restarts.
 
     Simulates restart by building a fresh ``PluginsService`` against the
@@ -418,9 +414,7 @@ async def test_rescan_emits_plugin_failed(plugins_root: Path, config_root: Path)
     assert failed[0].payload["errors"]
 
 
-async def test_activate_deactivate_emit_events(
-    plugins_root: Path, config_root: Path
-) -> None:
+async def test_activate_deactivate_emit_events(plugins_root: Path, config_root: Path) -> None:
     write_plugin(plugins_root, "alpha")
     bus = EventBus()
     events = _record_events(bus)
@@ -435,9 +429,7 @@ async def test_activate_deactivate_emit_events(
     assert EventType.PLUGIN_ACTIVATED.value in types
 
 
-async def test_unload_emits_plugin_unloaded(
-    plugins_root: Path, config_root: Path
-) -> None:
+async def test_unload_emits_plugin_unloaded(plugins_root: Path, config_root: Path) -> None:
     write_plugin(plugins_root, "alpha")
     bus = EventBus()
     events = _record_events(bus)
@@ -447,6 +439,106 @@ async def test_unload_emits_plugin_unloaded(
 
     await svc.unload("alpha")
     assert any(e.type == EventType.PLUGIN_UNLOADED.value for e in events)
+
+
+# --------------------------------------------------------------------------- #
+# §8 — targeted single-plugin load / reload
+# --------------------------------------------------------------------------- #
+
+
+async def test_load_single_plugin_recovers_from_prior_failure(
+    plugins_root: Path, config_root: Path
+) -> None:
+    """``load(plugin_id)`` retries one plugin without re-importing every other.
+
+    Simulates the "Retry" UI button: a plugin starts off broken, the user
+    fixes the manifest on disk, then hits Retry — the previously-failed
+    state should clear and the plugin should land in the registry.
+    """
+    write_plugin(plugins_root, "alpha", manifest={"version": "not-semver"})
+    svc = _service(plugins_root, config_root)
+    await svc.rescan()
+    assert svc.get_llm_provider("alpha") is None
+    assert "alpha" in svc.failed_plugins()
+
+    # Fix the manifest on disk; targeted load should pick it up.
+    write_plugin(plugins_root, "alpha")
+    await svc.load("alpha")
+    assert svc.get_llm_provider("alpha") is not None
+    assert "alpha" not in svc.failed_plugins()
+
+
+async def test_load_unknown_plugin_raises_key_error(plugins_root: Path, config_root: Path) -> None:
+    svc = _service(plugins_root, config_root)
+    with pytest.raises(KeyError):
+        await svc.load("nope")
+
+
+async def test_load_records_failure_when_targeted_reload_fails(
+    plugins_root: Path, config_root: Path
+) -> None:
+    """A targeted reload that fails should land in ``failed_plugins`` rather
+    than leaving stale state, so the UI surface stays accurate."""
+    write_plugin(plugins_root, "alpha")
+    svc = _service(plugins_root, config_root)
+    await svc.rescan()
+    assert svc.get_llm_provider("alpha") is not None
+
+    # Break the manifest on disk and reload just this plugin.
+    write_plugin(plugins_root, "alpha", manifest={"version": "not-semver"})
+    await svc.load("alpha")
+    assert svc.get_llm_provider("alpha") is None
+    assert "alpha" in svc.failed_plugins()
+
+
+# --------------------------------------------------------------------------- #
+# §10 — set_config rebuilds the live instance
+# --------------------------------------------------------------------------- #
+
+
+async def test_set_config_rebuilds_live_instance(plugins_root: Path, config_root: Path) -> None:
+    """``set_config`` should hand the new config to a freshly-built
+    instance, not just persist to disk and wait for the next rescan."""
+    py = textwrap.dedent(
+        """
+        from grimoire.types.common import HealthLevel, HealthStatus
+
+
+        class Provider:
+            def __init__(self, config=None):
+                self.config = config or {}
+                self.id = "rec"
+                self.name = "Rec"
+                self.capabilities = object()
+
+            async def complete(self, request): return None
+            def stream(self, request):
+                async def _g():
+                    if False:
+                        yield None
+                return _g()
+            async def list_models(self): return []
+            async def estimate_tokens(self, text): return 0
+            async def health_check(self):
+                return HealthStatus(level=HealthLevel.HEALTHY, target_id=self.id)
+        """
+    ).strip()
+    write_plugin(plugins_root, "alpha", plugin_py=py)
+    svc = _service(plugins_root, config_root)
+    await svc.rescan()
+
+    await svc.set_config("alpha", {"api_key": "sk-first"})
+    first = svc.get_llm_provider("alpha")
+    assert first is not None
+    assert first.config.get("api_key") == "sk-first"
+
+    await svc.set_config("alpha", {"api_key": "sk-second"})
+    second = svc.get_llm_provider("alpha")
+    assert second is not None
+    assert second.config.get("api_key") == "sk-second"
+    # The instance should have been rebuilt — same id is fine, but the new
+    # config must be visible without a rescan.
+    assert second is not first
 
 
 async def test_health_check_emits_event_only_on_level_change(

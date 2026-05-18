@@ -276,9 +276,7 @@ def test_plugins_discovery_errors_returns_recent_failures(client, container) -> 
     response = client.get("/api/plugins/discovery-errors")
     assert response.status_code == 200
     body = response.json()
-    assert body == [
-        {"plugin_dir": "/data/plugins/oops", "message": "manifest.yaml is empty"}
-    ]
+    assert body == [{"plugin_dir": "/data/plugins/oops", "message": "manifest.yaml is empty"}]
 
 
 def test_plugins_discovery_errors_empty_when_unsupported(client, container) -> None:
