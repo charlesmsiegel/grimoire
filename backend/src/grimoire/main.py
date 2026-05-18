@@ -49,7 +49,7 @@ from grimoire.scenes.default_summarizers import (
 )
 from grimoire.scenes.indexer import SceneIndexer
 from grimoire.scenes.summary_jobs import RunningSummaryWorker
-from grimoire.state_store import StateStore
+from grimoire.state_store import StateStore, StateStoreConfig
 from grimoire.storage import Database, apply_migrations
 from grimoire.time_engine.service import TimeEngineService
 from grimoire.time_engine.subscriber import TimeEngineSubscriber
@@ -148,6 +148,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         data_root = settings.data_root
         for sub in ("library", "mechanics", "plugins", "config/plugins", "templates"):
             (data_root / sub).mkdir(parents=True, exist_ok=True)
+
+        # State Store config: layered (file overlaid on bootstrap settings).
+        # Stashed on the container so the embedding worker / backup scheduler /
+        # retention sweep can read it without re-parsing.
+        state_store_config = StateStoreConfig.from_yaml(
+            data_root / "config" / "state_store.yaml",
+            data_root=data_root,
+            database_path=settings.resolved_database_path,
+            enable_wal=settings.enable_wal,
+        )
+        container.extras["state_store_config"] = state_store_config
 
         # User-supplied prompt template variants live under {data_root}/templates
         # and take precedence over the bundled defaults so a user can drop in a
