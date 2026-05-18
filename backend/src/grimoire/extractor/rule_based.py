@@ -111,6 +111,30 @@ _MECH_DAMAGE = re.compile(
     re.VERBOSE,
 )
 
+# §5 Player-prose weather overrides. Each pattern maps to a WeatherKind.
+# Patterns prefer phrasing that explicitly *changes* the weather rather
+# than describing existing weather, to reduce false positives.
+_WEATHER_OVERRIDE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\b(?:began|started)\s+to\s+rain\b|\brain\s+began\b", re.I), "rain"),
+    (
+        re.compile(
+            r"\bsnow\s+(?:began|started)\s+falling\b|\b(?:began|started)\s+to\s+snow\b",
+            re.I,
+        ),
+        "snow",
+    ),
+    (
+        re.compile(r"\b(?:thunder|storm)\s+rolled\b|\b(?:began|started)\s+to\s+storm\b", re.I),
+        "storm",
+    ),
+    (
+        re.compile(r"\b(?:fog|mist)\s+(?:rolled\s+in|descended|crept)\b", re.I),
+        "fog",
+    ),
+    (re.compile(r"\bwind\s+picked\s+up\b|\bwinds\s+rose\b", re.I), "wind"),
+    (re.compile(r"\bskies?\s+cleared\b|\bsun\s+broke\s+through\b", re.I), "clear"),
+)
+
 
 def _number_for(token: str) -> int | None:
     tok = token.strip().lower()
@@ -223,14 +247,48 @@ def _make_mechanical_event_delta(
     )
 
 
+def _make_weather_override_delta(
+    *,
+    weather_kind: str,
+    evidence: str,
+    confidence: float,
+    campaign_id: CampaignId,
+    branch_id: str,
+    location_ref: str,
+    source: str,
+) -> StateDelta:
+    return StateDelta(
+        kind=DeltaKind.OVERRIDE_WRITE,
+        target_scope=Scope.CAMPAIGN_SQLITE,
+        target_table="location_state",
+        target_id=location_ref,
+        after={
+            "campaign_id": campaign_id,
+            "branch_id": branch_id,
+            "weather": {"kind": weather_kind, "source": "override"},
+        },
+        confidence=confidence,
+        source=source,
+        evidence=evidence,
+        extra={"strategy": "rule_based", "target": "weather_override"},
+    )
+
+
 def extract_rule_based(
     text: str,
     *,
     campaign_id: CampaignId,
     config: ExtractorConfig,
     source: str = "extractor",
+    scene_location_ref: str | None = None,
+    scene_branch_id: str | None = None,
 ) -> Iterable[StateDelta]:
-    """Yield deltas pulled out by the rule-based strategy."""
+    """Yield deltas pulled out by the rule-based strategy.
+
+    ``scene_location_ref`` + ``scene_branch_id``: when provided, enables
+    §5 weather-override detection. Without a known location ref we have
+    nowhere to attach the override, so the rule simply skips.
+    """
     base = config.rule_based_base_confidence
 
     for match in _TIME_PHRASE.finditer(text):
@@ -319,6 +377,24 @@ def extract_rule_based(
             campaign_id=campaign_id,
             source=source,
         )
+
+    # §5 weather-override detection — only when we know which location to write to.
+    if scene_location_ref:
+        branch = scene_branch_id or f"{campaign_id}:main"
+        for pattern, weather_kind in _WEATHER_OVERRIDE_PATTERNS:
+            match = pattern.search(text)
+            if match is None:
+                continue
+            yield _make_weather_override_delta(
+                weather_kind=weather_kind,
+                evidence=match.group(0),
+                confidence=min(base, 0.85),
+                campaign_id=campaign_id,
+                branch_id=branch,
+                location_ref=scene_location_ref,
+                source=source,
+            )
+            break  # only one weather override per extraction pass
 
 
 __all__ = ["extract_rule_based"]

@@ -258,6 +258,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 extractor=extractor,
                 state_store=container.state_store,
                 mechanics=container.mechanics,
+                world=container.world,
                 ws_push=container.stream.push,
             )
 
