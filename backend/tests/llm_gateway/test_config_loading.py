@@ -20,8 +20,15 @@ from grimoire.llm_gateway.config import (
 )
 from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.llm_gateway.settings import GatewaySettings
-from grimoire.types.llm import CompletionRequest, Message, MessageRole, RetryPolicy, TimeoutPolicy
-from tests.llm_gateway.conftest import FakeLLMProvider
+from grimoire.types.llm import (
+    CompletionRequest,
+    Message,
+    MessageRole,
+    ModelInfo,
+    RetryPolicy,
+    TimeoutPolicy,
+)
+from tests.llm_gateway.conftest import FakeEmbeddingProvider, FakeLLMProvider
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -343,3 +350,175 @@ class TestSetRoutePersistence:
         gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=None)
         # Should not raise even though we can't write
         await gw.set_route("main", "p.m", campaign_id="camp-x")
+
+
+# ---------------------------------------------------------------------------
+# §7  embedding_routing / imagegen_routing on campaign.yaml
+# ---------------------------------------------------------------------------
+
+
+class TestEmbeddingRoutingBlock:
+    async def test_embedding_routing_picked_up_by_resolver(
+        self, db, plugins, tmp_path: Path
+    ) -> None:
+        """An ``embedding_routing`` block on campaign.yaml is loaded into the resolver."""
+        embed_provider = FakeEmbeddingProvider(id="oai")
+        plugins.add_embedding(embed_provider)
+
+        campaign_dir = tmp_path / "campaigns" / "camp-embed"
+        campaign_dir.mkdir(parents=True)
+        (campaign_dir / "campaign.yaml").write_text(
+            "embedding_routing:\n  'embed:context': oai.text-embedding-3-small\n",
+            encoding="utf-8",
+        )
+
+        gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        # Trigger lazy load by calling the private hook directly.
+        await gw._load_campaign_routing("camp-embed")
+
+        route = gw._router.resolve("embed:context", campaign_id="camp-embed")
+        assert route.provider_id == "oai"
+        assert route.model == "text-embedding-3-small"
+
+    async def test_embedding_routing_overrides_model_routing_same_task(
+        self, db, plugins, tmp_path: Path
+    ) -> None:
+        """When both blocks list the same task, embedding_routing wins (loaded last)."""
+        plugins.add_embedding(FakeEmbeddingProvider(id="oai"))
+
+        campaign_dir = tmp_path / "campaigns" / "camp-both"
+        campaign_dir.mkdir(parents=True)
+        (campaign_dir / "campaign.yaml").write_text(
+            "model_routing:\n"
+            "  'embed:context': oai.old-model\n"
+            "embedding_routing:\n"
+            "  'embed:context': oai.new-model\n",
+            encoding="utf-8",
+        )
+
+        gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        await gw._load_campaign_routing("camp-both")
+
+        route = gw._router.resolve("embed:context", campaign_id="camp-both")
+        assert route.model == "new-model"
+
+
+class TestImagegenRoutingBlock:
+    async def test_imagegen_routing_parses_and_warns(
+        self, db, plugins, tmp_path: Path, caplog
+    ) -> None:
+        """``imagegen_routing`` is parsed, a warning fires per entry, no error."""
+        campaign_dir = tmp_path / "campaigns" / "camp-img"
+        campaign_dir.mkdir(parents=True)
+        (campaign_dir / "campaign.yaml").write_text(
+            "imagegen_routing:\n  portrait: diffusers.sdxl-base\n",
+            encoding="utf-8",
+        )
+
+        gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        with caplog.at_level(logging.WARNING, logger="grimoire.llm_gateway.gateway"):
+            await gw._load_campaign_routing("camp-img")
+
+        # Warning names the task and notes the route is not yet acted on.
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("portrait" in m and "not yet" in m and "imagegen_routing" in m for m in msgs), (
+            f"expected per-task imagegen warning, got: {msgs!r}"
+        )
+
+    async def test_imagegen_routing_bad_entry_skipped(
+        self, db, plugins, tmp_path: Path, caplog
+    ) -> None:
+        """Malformed imagegen route logs a warning and is skipped."""
+        campaign_dir = tmp_path / "campaigns" / "camp-img-bad"
+        campaign_dir.mkdir(parents=True)
+        (campaign_dir / "campaign.yaml").write_text(
+            "imagegen_routing:\n  portrait: NO_DOT\n",
+            encoding="utf-8",
+        )
+
+        gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        with caplog.at_level(logging.WARNING, logger="grimoire.llm_gateway.gateway"):
+            await gw._load_campaign_routing("camp-img-bad")
+
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("bad imagegen_routing" in m and "NO_DOT" in m for m in msgs), msgs
+
+
+class TestRoutingCrossCheckUnknownModel:
+    async def test_unknown_model_logs_warning_but_route_applied(
+        self, db, plugins, tmp_path: Path, caplog
+    ) -> None:
+        """Provider is loaded; route names a model the provider doesn't advertise.
+
+        A warning is emitted, but the route is still applied and resolvable.
+        """
+        provider = FakeLLMProvider(
+            id="anthropic",
+            models=[ModelInfo(id="claude-known", name="Claude Known")],
+        )
+        plugins.add_llm(provider)
+
+        campaign_dir = tmp_path / "campaigns" / "camp-unknown"
+        campaign_dir.mkdir(parents=True)
+        (campaign_dir / "campaign.yaml").write_text(
+            "model_routing:\n  main: anthropic.claude-unknown\n",
+            encoding="utf-8",
+        )
+
+        gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        with caplog.at_level(logging.WARNING, logger="grimoire.llm_gateway.gateway"):
+            await gw._load_campaign_routing("camp-unknown")
+
+        # Warning fired
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("claude-unknown" in m and "advertised list" in m for m in msgs), msgs
+        # Route still applied
+        route = gw._router.resolve("main", campaign_id="camp-unknown")
+        assert route.provider_id == "anthropic"
+        assert route.model == "claude-unknown"
+
+    async def test_unknown_provider_does_not_warn(
+        self, db, plugins, tmp_path: Path, caplog
+    ) -> None:
+        """If the referenced provider isn't loaded, the cross-check is silent."""
+        # No providers registered.
+        campaign_dir = tmp_path / "campaigns" / "camp-noprov"
+        campaign_dir.mkdir(parents=True)
+        (campaign_dir / "campaign.yaml").write_text(
+            "model_routing:\n  main: nosuch.model-x\n",
+            encoding="utf-8",
+        )
+
+        gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        with caplog.at_level(logging.WARNING, logger="grimoire.llm_gateway.gateway"):
+            await gw._load_campaign_routing("camp-noprov")
+
+        msgs = [r.getMessage() for r in caplog.records]
+        assert not any("advertised list" in m for m in msgs), msgs
+
+    async def test_list_models_raises_is_silent(self, db, plugins, tmp_path: Path, caplog) -> None:
+        """If provider.list_models() raises, the cross-check stays silent."""
+
+        class RaisingProvider(FakeLLMProvider):
+            async def list_models(self) -> list[ModelInfo]:
+                raise RuntimeError("not configured")
+
+        provider = RaisingProvider(id="raising")
+        plugins.add_llm(provider)
+
+        campaign_dir = tmp_path / "campaigns" / "camp-raise"
+        campaign_dir.mkdir(parents=True)
+        (campaign_dir / "campaign.yaml").write_text(
+            "model_routing:\n  main: raising.any-model\n",
+            encoding="utf-8",
+        )
+
+        gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        with caplog.at_level(logging.WARNING, logger="grimoire.llm_gateway.gateway"):
+            await gw._load_campaign_routing("camp-raise")
+
+        msgs = [r.getMessage() for r in caplog.records]
+        assert not any("advertised list" in m for m in msgs), msgs
+        # Route still applied
+        route = gw._router.resolve("main", campaign_id="camp-raise")
+        assert route.model == "any-model"

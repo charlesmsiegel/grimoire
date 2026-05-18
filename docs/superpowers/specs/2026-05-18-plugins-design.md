@@ -62,6 +62,8 @@ Grep across the backend (`model_routing|embedding_routing|imagegen_routing`) ret
 
 Needs: a routing schema on the campaign config, a resolver in the Gateway/ImageGen/Export modules that prefers campaign routing over global defaults, validation that the referenced plugin id is loaded and exposes the named model. UI exposure on the Campaign Settings screen.
 
+**Implemented (2026-05-18):** `_load_campaign_routing` on the LLM Gateway now reads `embedding_routing` and `imagegen_routing` blocks alongside `model_routing`. Embedding routes are applied to the same `RouteResolver` (task-name uniqueness keeps them disjoint); when the referenced plugin is loaded, the gateway calls `list_models()` and logs a warning if the model id is not advertised (the route is still applied — providers can return dynamic lists). `imagegen_routing` is parsed and validated but **not yet acted on**; an explicit warning is logged per entry. `_persist_campaign_route` continues to write only to `model_routing`. Deferred future work: thread `imagegen_routing` through `ImageGenService` so per-task image backends actually take effect, persist `embedding_routing` / `imagegen_routing` from `set_route`, and surface all three blocks on the Campaign Settings screen.
+
 ## 8. Targeted single-plugin load / reload
 
 `PluginsService.load(plugin_id)` (`service.py:171`) currently just calls `rescan()`. Spec 15 §Interface treats `load` as the per-plugin operation for retrying a failed plugin without re-importing everything.
