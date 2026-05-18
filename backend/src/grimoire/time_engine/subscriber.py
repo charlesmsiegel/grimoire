@@ -55,9 +55,7 @@ def _iso_to_timedelta(iso: str) -> timedelta:
     hours = int(parts.get("hours") or 0)
     minutes = int(parts.get("minutes") or 0)
     seconds = float(parts.get("seconds") or 0)
-    return sign * timedelta(
-        weeks=weeks, days=days, hours=hours, minutes=minutes, seconds=seconds
-    )
+    return sign * timedelta(weeks=weeks, days=days, hours=hours, minutes=minutes, seconds=seconds)
 
 
 def _ensure_duration_delta(duration: Duration) -> Duration:

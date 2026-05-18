@@ -694,9 +694,7 @@ class TimeEngineService:
         if data.activity_ref != activity_ref:
             mismatches.append(("activity_ref", data.activity_ref or "", activity_ref or ""))
         if mismatches:
-            detail = ", ".join(
-                f"{name}: {want!r}!={got!r}" for name, want, got in mismatches
-            )
+            detail = ", ".join(f"{name}: {want!r}!={got!r}" for name, want, got in mismatches)
             raise CheckpointTokenError(
                 f"checkpoint token {token!r} parameters do not match advance call ({detail})"
             )
@@ -835,8 +833,7 @@ class TimeEngineService:
                 for s in faction_summaries.values()
             ],
             "shared_events": [
-                {"summary": e.summary, "participants": e.participants}
-                for e in shared_events
+                {"summary": e.summary, "participants": e.participants} for e in shared_events
             ],
             "faction_conflicts": [c.summary for c in faction_conflicts],
             "weather_changes": [w.summary for w in weather_changes],
@@ -995,9 +992,7 @@ class TimeEngineService:
         # recent-post visibility. The "PC household" set is computed once.
         if cfg.tick_in_household:
             pc_households = {
-                ent.household_id
-                for ent in by_ref.values()
-                if ent.is_pc and ent.household_id
+                ent.household_id for ent in by_ref.values() if ent.is_pc and ent.household_id
             }
             if pc_households:
                 for ref, ent in by_ref.items():
@@ -1031,9 +1026,8 @@ class TimeEngineService:
 
         async def _one(p: _PresentCharacter) -> tuple[str, NpcTickSummary]:
             async with semaphore:
-                my_events = (
-                    events_by_participant.get(p.ref, [])
-                    + events_by_participant.get(p.asset_id, [])
+                my_events = events_by_participant.get(p.ref, []) + events_by_participant.get(
+                    p.asset_id, []
                 )
                 payload: NpcTickInput = {
                     "campaign_id": campaign_id,
@@ -1298,6 +1292,7 @@ class TimeEngineService:
         # that mechanic modules can resolve a specific outstanding activity
         # rather than re-deriving it from sheet state (§7).
         from grimoire.types.mechanics import TickContext
+
         context = (
             TickContext(
                 campaign_id=campaign_id,
