@@ -338,7 +338,76 @@ export const libraryApi = {
   listImagePresets: () => request<LibraryEntity[]>("GET", `/library/image-presets`),
   getImagePreset: (id: string) =>
     request<LibraryEntity>("GET", `/library/image-presets/${encodeURIComponent(id)}`),
+  getImagePresetEdit: (id: string) =>
+    request<ImagePresetEditPayload>(
+      "GET",
+      `/library/image-presets/${encodeURIComponent(id)}/edit`,
+    ),
+  createImagePreset: (payload: {
+    id: string;
+    name: string;
+    description?: string;
+    tags?: string[];
+    style_preamble?: string;
+    default_negative_prompt?: string;
+    default_params?: Record<string, unknown>;
+  }) => request<LibraryEntity>("POST", `/library/image-presets`, payload),
+  updateImagePreset: (
+    id: string,
+    patch: {
+      name?: string;
+      description?: string;
+      tags?: string[];
+      style_preamble?: string;
+      default_negative_prompt?: string;
+      default_params?: Record<string, unknown>;
+    },
+  ) =>
+    request<LibraryEntity>(
+      "PATCH",
+      `/library/image-presets/${encodeURIComponent(id)}`,
+      patch,
+    ),
+  deleteImagePreset: (id: string) =>
+    request<void>("DELETE", `/library/image-presets/${encodeURIComponent(id)}`),
+  previewImagePreset: (
+    id: string,
+    body: { prompt?: string | null; seed?: number | null } = {},
+  ) =>
+    request<{ image_data_url: string; backend: string; model: string; seed: number }>(
+      "POST",
+      `/library/image-presets/${encodeURIComponent(id)}/preview`,
+      body,
+    ),
+
+  // §5 — save-prompt-template-to-card. The image template lives under the
+  // `image:` key in the character's frontmatter; the backend deep-merges
+  // nested dicts so we only need to send the changed sub-fields.
+  patchWorldCharacterImageTemplate: (
+    worldId: string,
+    characterId: string,
+    image: {
+      base_prompt?: string;
+      negative_prompt?: string;
+      canonical_seed?: number | null;
+    },
+  ) =>
+    request<LibraryEntity>(
+      "PATCH",
+      `/library/worlds/${encodeURIComponent(worldId)}/characters/${encodeURIComponent(characterId)}`,
+      { frontmatter_patch: { image } },
+    ),
 };
+
+export interface ImagePresetEditPayload {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  style_preamble: string;
+  default_negative_prompt: string;
+  default_params: Record<string, unknown>;
+}
 
 export const mechanicsApi = {
   listInstalled: () => request<RegisteredModule[]>("GET", `/mechanics/installed`),

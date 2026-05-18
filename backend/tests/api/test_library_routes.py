@@ -133,6 +133,90 @@ class FakeLibrary:
             "extra_sections": [],
         }
 
+    async def update_entity(
+        self,
+        world_id: str,
+        kind: str,
+        entity_id: str,
+        frontmatter_patch: dict | None = None,
+        body: str | None = None,
+        *,
+        source: str = "user",
+    ) -> LibraryEntity:
+        self.created.append(("entity_update", f"{world_id}/{kind}/{entity_id}"))
+        merged_fm = dict(frontmatter_patch or {})
+        return LibraryEntity(
+            id=f"worlds/{world_id}/{kind}s/{entity_id}",
+            world_id=world_id,
+            kind=kind,
+            asset_id=entity_id,
+            name=entity_id,
+            path="",
+            frontmatter=merged_fm,
+            body=body or "",
+        )
+
+    async def get_image_preset(self, id: str) -> LibraryEntity:
+        return LibraryEntity(
+            id=f"image-presets/{id}",
+            world_id=None,
+            kind="image_preset",
+            asset_id=id,
+            name=id.title(),
+            path=f"image-presets/{id}.yaml",
+            frontmatter={
+                "id": id,
+                "name": id.title(),
+                "style_preamble": "cinematic, dramatic lighting",
+                "default_negative_prompt": "blurry",
+                "default_params": {"steps": 18, "width": 256, "height": 256},
+            },
+            body="",
+        )
+
+    async def create_image_preset(self, id: str, **kwargs: Any) -> LibraryEntity:
+        self.created.append(("image_preset", id))
+        fm: dict[str, Any] = {"id": id, "name": kwargs.get("name") or id}
+        if kwargs.get("description"):
+            fm["description"] = kwargs["description"]
+        if kwargs.get("tags"):
+            fm["tags"] = list(kwargs["tags"])
+        if kwargs.get("style_preamble"):
+            fm["style_preamble"] = kwargs["style_preamble"]
+        if kwargs.get("default_negative_prompt"):
+            fm["default_negative_prompt"] = kwargs["default_negative_prompt"]
+        if kwargs.get("default_params"):
+            fm["default_params"] = dict(kwargs["default_params"])
+        return LibraryEntity(
+            id=f"image-presets/{id}",
+            world_id=None,
+            kind="image_preset",
+            asset_id=id,
+            name=kwargs.get("name") or id,
+            path=f"image-presets/{id}.yaml",
+            frontmatter=fm,
+            body="",
+            tags=list(kwargs.get("tags") or []),
+        )
+
+    async def update_image_preset(self, id: str, **kwargs: Any) -> LibraryEntity:
+        self.created.append(("image_preset_update", id))
+        return await self.create_image_preset(id, **kwargs)
+
+    async def parse_image_preset(self, id: str) -> dict[str, Any]:
+        return {
+            "id": id,
+            "name": id.title(),
+            "description": "",
+            "tags": [],
+            "style_preamble": "cinematic",
+            "default_negative_prompt": "blurry",
+            "default_params": {"steps": 18},
+        }
+
+    async def delete_image_preset(self, id: str, **kwargs: Any) -> None:
+        self.created.append(("image_preset_delete", id))
+
 
 class FakeMechanics:
     def __init__(self) -> None:
@@ -592,3 +676,86 @@ def test_world_diff_404_when_world_missing(client, container) -> None:
     container.library = FakeLibraryWithDiff()
     response = client.get("/api/library/worlds/unknown/diff?from=0")
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# §14 image preset create/edit/delete parity
+# --------------------------------------------------------------------------- #
+
+
+def test_create_image_preset(client, container) -> None:
+    fake = FakeLibrary()
+    container.library = fake
+    response = client.post(
+        "/api/library/image-presets",
+        json={
+            "id": "noir-portraits",
+            "name": "Noir portraits",
+            "description": "High-contrast B&W.",
+            "tags": ["noir"],
+            "style_preamble": "stark shadows, 35mm film",
+            "default_negative_prompt": "blurry, low quality",
+            "default_params": {"width": 512, "height": 768, "steps": 24},
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["asset_id"] == "noir-portraits"
+    assert body["frontmatter"]["style_preamble"] == "stark shadows, 35mm film"
+    assert ("image_preset", "noir-portraits") in fake.created
+
+
+def test_update_image_preset(client, container) -> None:
+    fake = FakeLibrary()
+    container.library = fake
+    response = client.patch(
+        "/api/library/image-presets/noir-portraits",
+        json={"style_preamble": "softer film grain"},
+    )
+    assert response.status_code == 200
+    assert response.json()["asset_id"] == "noir-portraits"
+    assert ("image_preset_update", "noir-portraits") in fake.created
+
+
+def test_get_image_preset_edit_returns_parsed_shape(client, container) -> None:
+    container.library = FakeLibrary()
+    response = client.get("/api/library/image-presets/noir-portraits/edit")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == "noir-portraits"
+    assert body["style_preamble"] == "cinematic"
+    assert body["default_params"] == {"steps": 18}
+
+
+def test_delete_image_preset(client, container) -> None:
+    fake = FakeLibrary()
+    container.library = fake
+    response = client.delete("/api/library/image-presets/noir-portraits")
+    assert response.status_code == 204
+    assert ("image_preset_delete", "noir-portraits") in fake.created
+
+
+# --------------------------------------------------------------------------- #
+# §5 nested-frontmatter patch on world entity (image.* save-to-card)
+# --------------------------------------------------------------------------- #
+
+
+def test_update_entity_accepts_nested_image_patch(client, container) -> None:
+    fake = FakeLibrary()
+    container.library = fake
+    response = client.patch(
+        "/api/library/worlds/wod-london/character/alistair",
+        json={
+            "frontmatter_patch": {
+                "image": {
+                    "base_prompt": "tall vampire in a London alley",
+                    "negative_prompt": "blurry",
+                    "canonical_seed": 14201,
+                }
+            }
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["frontmatter"]["image"]["base_prompt"] == "tall vampire in a London alley"
+    assert ("entity_update", "wod-london/character/alistair") in fake.created

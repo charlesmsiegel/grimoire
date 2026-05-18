@@ -15,6 +15,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from grimoire.api.deps import (
+    ImageGenDep,
     LibraryDep,
     MechanicsDep,
     PluginsDep,
@@ -79,6 +80,32 @@ class UpdateStyleGuidePayload(BaseModel):
     themes: list[str] | None = None
     avoid: list[str] | None = None
     source: str = "user"
+
+
+class CreateImagePresetPayload(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    style_preamble: str = ""
+    default_negative_prompt: str = ""
+    default_params: dict[str, Any] = Field(default_factory=dict)
+    source: str = "user"
+
+
+class UpdateImagePresetPayload(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    style_preamble: str | None = None
+    default_negative_prompt: str | None = None
+    default_params: dict[str, Any] | None = None
+    source: str = "user"
+
+
+class ImagePresetPreviewPayload(BaseModel):
+    prompt: str | None = None
+    seed: int | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -353,12 +380,135 @@ async def list_image_presets(library: LibraryDep) -> Any:
     return to_payload(await library.list_image_presets())
 
 
+@router.post("/library/image-presets", status_code=201)
+async def create_image_preset(
+    payload: CreateImagePresetPayload,
+    library: LibraryDep,
+) -> Any:
+    try:
+        result = await library.create_image_preset(
+            payload.id,
+            name=payload.name,
+            description=payload.description,
+            tags=payload.tags,
+            style_preamble=payload.style_preamble,
+            default_negative_prompt=payload.default_negative_prompt,
+            default_params=payload.default_params,
+            source=payload.source,
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return to_payload(result)
+
+
 @router.get("/library/image-presets/{preset_id}")
 async def get_image_preset(preset_id: str, library: LibraryDep) -> Any:
     try:
         return to_payload(await library.get_image_preset(preset_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+
+
+@router.get("/library/image-presets/{preset_id}/edit")
+async def get_image_preset_edit(preset_id: str, library: LibraryDep) -> Any:
+    """Return an image preset parsed into the structured shape the edit form uses."""
+    try:
+        return to_payload(await library.parse_image_preset(preset_id))
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.patch("/library/image-presets/{preset_id}")
+async def update_image_preset(
+    preset_id: str,
+    payload: UpdateImagePresetPayload,
+    library: LibraryDep,
+) -> Any:
+    try:
+        result = await library.update_image_preset(
+            preset_id,
+            name=payload.name,
+            description=payload.description,
+            tags=payload.tags,
+            style_preamble=payload.style_preamble,
+            default_negative_prompt=payload.default_negative_prompt,
+            default_params=payload.default_params,
+            source=payload.source,
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return to_payload(result)
+
+
+@router.delete("/library/image-presets/{preset_id}", status_code=204)
+async def delete_image_preset(
+    preset_id: str,
+    library: LibraryDep,
+    source: str = "user",
+) -> None:
+    try:
+        await library.delete_image_preset(preset_id, source=source)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.post("/library/image-presets/{preset_id}/preview")
+async def preview_image_preset(
+    preset_id: str,
+    payload: ImagePresetPreviewPayload,
+    library: LibraryDep,
+    imagegen: ImageGenDep,
+) -> Any:
+    """Render a one-shot sample image using the preset's style and params.
+
+    Uses :meth:`ImageGenService.generate_sync` against the service's default
+    backend (the in-memory diffusers stub in tests, or whatever plugin is
+    configured in production) so the editor can show a deterministic
+    preview without queueing a job or persisting the result. Returns the
+    bytes inline as a data URL.
+    """
+    try:
+        preset = await library.get_image_preset(preset_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+    fm = preset.frontmatter or {}
+    style_preamble = str(fm.get("style_preamble") or "")
+    sample_prompt = (payload.prompt or "a portrait of a wizard in a library").strip()
+    composed_prompt = (
+        f"{style_preamble}, {sample_prompt}" if style_preamble else sample_prompt
+    )
+    default_negative = fm.get("default_negative_prompt") or None
+    default_params = fm.get("default_params") or {}
+
+    from grimoire.types.imagegen import GenerationRequest
+
+    request_kwargs: dict[str, Any] = {
+        "prompt": composed_prompt,
+        "negative_prompt": default_negative,
+    }
+    # Whitelist the param overrides we trust to pass through verbatim.
+    for key in ("width", "height", "steps", "cfg_scale", "sampler", "model"):
+        if key in default_params:
+            request_kwargs[key] = default_params[key]
+    if payload.seed is not None:
+        request_kwargs["seed"] = payload.seed
+    request = GenerationRequest.model_validate(request_kwargs)
+
+    try:
+        result = await imagegen.generate_sync(campaign_id="preview", request=request)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+    import base64
+
+    encoded = base64.b64encode(result.image_bytes).decode("ascii")
+    return {
+        "image_data_url": f"data:image/png;base64,{encoded}",
+        "backend": result.backend,
+        "model": result.model,
+        "seed": result.seed,
+    }
 
 
 # --------------------------------------------------------------------------- #
