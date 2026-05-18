@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, HTTPException, Query
-from fastapi.responses import Response
+from fastapi import APIRouter, Body, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from grimoire.api.deps import (
@@ -557,6 +556,75 @@ def mechanics_theme_css(module_id: str, mechanics: MechanicsDep) -> Response:
     """
     css = mechanics.theme_css_for_module(module_id)
     return Response(content=css, media_type="text/css")
+
+
+@router.get("/library/mechanics/{module_id}/theme.css")
+def library_mechanics_theme_css(module_id: str, mechanics: MechanicsDep) -> Response:
+    """Serve a module's ``theme.css`` as ``text/css``.
+
+    Mirrors ``/mechanics/{module_id}/theme.css`` but returns 404 when the
+    module has no CSS, which is what the library-tab mechanics view
+    expects (its UI treats absence as a separate signal from "empty
+    stylesheet").
+    """
+    record = next(
+        (r for r in mechanics.installed() if getattr(r.manifest, "id", "") == module_id),
+        None,
+    )
+    if record is None or not getattr(record, "theme_css", None):
+        raise HTTPException(status_code=404, detail="theme.css not found")
+    return Response(content=record.theme_css, media_type="text/css")
+
+
+@router.get("/library/mechanics/{module_id}/content/{kind}/schema")
+async def mechanics_content_schema(
+    module_id: str,
+    kind: str,
+    mechanics: MechanicsDep,
+) -> Any:
+    """Return the JSON Schema a module defines for ``kind`` content."""
+    record = next(
+        (r for r in mechanics.installed() if getattr(r.manifest, "id", "") == module_id),
+        None,
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"module {module_id!r} not loaded")
+    instance = record.instance
+    schema = instance.content_schema(kind) if instance is not None else None
+    if not schema:
+        schema = record.content_schemas.get(kind)
+    if not schema:
+        raise HTTPException(status_code=404, detail=f"no content schema for {kind!r}")
+    return schema
+
+
+@router.get("/library/mechanics/{module_id}/character-creation")
+async def mechanics_character_creation_steps(
+    module_id: str,
+    mechanics: MechanicsDep,
+) -> Any:
+    """Library-baseline creation flow: returns the module's step list."""
+    try:
+        steps = await mechanics.character_creation_steps(module_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return to_payload(steps)
+
+
+@router.get("/library/mechanics/{module_id}/powers")
+async def mechanics_powers(module_id: str, mechanics: MechanicsDep) -> Any:
+    """Library-level vocabulary listing for a module's power definitions."""
+    record = next(
+        (r for r in mechanics.installed() if getattr(r.manifest, "id", "") == module_id),
+        None,
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"module {module_id!r} not loaded")
+    try:
+        defs = record.instance.power_definitions()
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return to_payload(defs)
 
 
 @router.get("/plugins/installed")

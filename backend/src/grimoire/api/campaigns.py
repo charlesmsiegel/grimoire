@@ -153,6 +153,26 @@ class CharacterOverridePayload(BaseModel):
     source: str = "user"
 
 
+class CharacterCreationSubmitPayload(BaseModel):
+    step_outputs: dict[str, Any]
+    source: str = "user"
+
+
+class MechanicsSwitchPayload(BaseModel):
+    mechanics: str | None = None
+    source: str = "user"
+
+
+class ProposalResolutionPayload(BaseModel):
+    label: str
+    accepted: bool = True
+    modifications: dict[str, Any] | None = None
+
+
+class ResolveProposalsPayload(BaseModel):
+    resolutions: list[ProposalResolutionPayload] = Field(default_factory=list)
+
+
 # --------------------------------------------------------------------------- #
 # Campaign CRUD
 # --------------------------------------------------------------------------- #
@@ -240,21 +260,30 @@ async def update_campaign(
     campaign_id: str,
     payload: CampaignUpdatePayload,
     state_store: StateStoreDep,
+    mechanics: MechanicsDep,
 ) -> Any:
     row = await state_store.db.fetchone("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
     if row is None:
         raise HTTPException(status_code=404, detail=f"campaign {campaign_id!r} not found")
     current = dict(row)
     try:
+        # If the caller is changing ``mechanics``, route through
+        # MechanicsService.switch_module so the history table and event
+        # bus see the transition. Other fields are updated by the
+        # subsequent upsert; the spec keeps PATCH working as before.
+        if payload.mechanics is not None and payload.mechanics != current.get("mechanics_module"):
+            await mechanics.switch_module(campaign_id, payload.mechanics or None)
+            row = await state_store.db.fetchone(
+                "SELECT * FROM campaigns WHERE id = ?", (campaign_id,)
+            )
+            current = dict(row) if row else current
         await state_store.upsert_campaign(
             campaign_id=campaign_id,
             name=payload.name if payload.name is not None else current["name"],
             description=payload.description
             if payload.description is not None
             else current.get("description"),
-            mechanics_module=payload.mechanics
-            if payload.mechanics is not None
-            else current.get("mechanics_module"),
+            mechanics_module=current.get("mechanics_module"),
             style_guide_id=payload.style_guide_id
             if payload.style_guide_id is not None
             else current.get("style_guide_id"),
@@ -1117,6 +1146,133 @@ async def put_sheet(
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# Mechanics content (§2)
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/{campaign_id}/content/{kind}")
+async def list_mechanics_content(
+    campaign_id: str,
+    kind: str,
+    mechanics: MechanicsDep,
+) -> Any:
+    try:
+        return to_payload(await mechanics.list_content(campaign_id, kind))
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.get("/{campaign_id}/content/{kind}/{content_id}")
+async def get_mechanics_content(
+    campaign_id: str,
+    kind: str,
+    content_id: str,
+    mechanics: MechanicsDep,
+) -> Any:
+    try:
+        payload = await mechanics.get_content(campaign_id, kind, content_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    if payload is None:
+        raise HTTPException(status_code=404, detail="content not found")
+    return payload
+
+
+@router.put("/{campaign_id}/content/{kind}/{content_id}")
+async def put_mechanics_content(
+    campaign_id: str,
+    kind: str,
+    content_id: str,
+    mechanics: MechanicsDep,
+    payload: Annotated[dict[str, Any], Body()],
+) -> Any:
+    try:
+        return await mechanics.put_content(campaign_id, kind, content_id, payload)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+# --------------------------------------------------------------------------- #
+# Character creation (§4)
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/{campaign_id}/characters/{character_id}/creation")
+async def get_character_creation_steps(
+    campaign_id: str,
+    character_id: str,
+    mechanics: MechanicsDep,
+) -> Any:
+    # ``character_id`` is part of the URL for symmetry with the submit route;
+    # the steps themselves are per-module, not per-character.
+    _ = character_id
+    try:
+        return to_payload(await mechanics.character_creation_steps(campaign_id))
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.post("/{campaign_id}/characters/{character_id}/creation/submit")
+async def submit_character_creation(
+    campaign_id: str,
+    character_id: str,
+    payload: CharacterCreationSubmitPayload,
+    mechanics: MechanicsDep,
+) -> Any:
+    try:
+        return await mechanics.finalize_character_creation(
+            campaign_id, character_id, payload.step_outputs, source=payload.source
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+# --------------------------------------------------------------------------- #
+# Mid-campaign mechanics switching (§6)
+# --------------------------------------------------------------------------- #
+
+
+@router.post("/{campaign_id}/mechanics/switch")
+async def switch_mechanics(
+    campaign_id: str,
+    payload: MechanicsSwitchPayload,
+    mechanics: MechanicsDep,
+) -> Any:
+    try:
+        result = await mechanics.switch_module(
+            campaign_id, payload.mechanics, source=payload.source
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return to_payload(result)
+
+
+# --------------------------------------------------------------------------- #
+# Pre-roll confirmation (§5)
+# --------------------------------------------------------------------------- #
+
+
+@router.post("/{campaign_id}/turns/{turn_id}/resolve-proposals")
+async def resolve_pre_roll_proposals(
+    campaign_id: str,
+    turn_id: str,
+    payload: ResolveProposalsPayload,
+    orchestrator: OrchestratorDep,
+) -> Any:
+    from grimoire.types.mechanics import ProposalResolution
+
+    resolutions = [
+        ProposalResolution(label=r.label, accepted=r.accepted, modifications=r.modifications)
+        for r in payload.resolutions
+    ]
+    try:
+        await orchestrator.resolve_pre_roll(campaign_id, turn_id, resolutions)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {"accepted": True, "turn_id": turn_id}
 
 
 # --------------------------------------------------------------------------- #

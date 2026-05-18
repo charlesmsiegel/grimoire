@@ -269,6 +269,17 @@ class ContextBuilderService:
         # bypass the vector/keyword budget — the player asked for them.
         archive_items.extend(await self._scene_refs_from_input(player_input, campaign_id))
 
+        # Step 5c — power-definition lookups for capabilities named by
+        # spotlight characters (archive tier so they don't crowd the
+        # spotlight budget).
+        archive_items.extend(
+            await self._power_definition_archive(
+                campaign_id=campaign_id,
+                scene=scene,
+                active_pc_ref=active_pc_ref,
+            )
+        )
+
         # Mechanics block (lock-in)
         mechanics_block = self._render_mechanics(mechanics_results)
 
@@ -1202,6 +1213,81 @@ class ContextBuilderService:
                 )
             )
             seen_refs.add(hit.ref or "")
+        return items
+
+    async def _power_definition_archive(
+        self,
+        *,
+        campaign_id: CampaignId,
+        scene: Any,
+        active_pc_ref: str | None,
+    ) -> list[_TierItem]:
+        """Surface power definitions for capabilities held by spotlight chars.
+
+        For each unique capability id collected across the spotlight cast,
+        ask the mechanics module for its ``PowerDefinition``; format any
+        hits as archive-tier items.
+        """
+        if self._mechanics is None:
+            return []
+        refs: list[str] = []
+        if active_pc_ref:
+            refs.append(active_pc_ref)
+        if scene is not None:
+            refs.extend(getattr(scene, "present_character_refs", []) or [])
+        if not refs:
+            return []
+        # Dedupe while preserving order.
+        seen: set[str] = set()
+        ordered_refs = [r for r in refs if not (r in seen or seen.add(r))]
+
+        # Collect capability ids across all spotlight characters.
+        capability_ids: list[str] = []
+        seen_caps: set[str] = set()
+        for ref in ordered_refs:
+            try:
+                caps = await self._mechanics.capabilities_of(campaign_id, ref)
+            except Exception as exc:
+                logger.debug("capabilities_of(%s) failed: %s", ref, exc)
+                continue
+            for cap in caps or []:
+                cap_id = cap.get("id") if isinstance(cap, dict) else getattr(cap, "id", None)
+                if not cap_id or cap_id in seen_caps:
+                    continue
+                seen_caps.add(cap_id)
+                capability_ids.append(cap_id)
+
+        items: list[_TierItem] = []
+        for cap_id in capability_ids:
+            try:
+                power = await self._mechanics.power_definition(campaign_id, cap_id)
+            except Exception as exc:
+                logger.debug("power_definition(%s) failed: %s", cap_id, exc)
+                continue
+            if power is None:
+                continue
+            name = getattr(power, "name", cap_id) or cap_id
+            description = getattr(power, "description", "") or ""
+            effect = getattr(power, "effect", "") or ""
+            rating = getattr(power, "rating", None)
+            header = f"[power: {name}" + (f" ({rating})" if rating is not None else "") + "]"
+            body = " ".join(p for p in (description, effect) if p).strip()
+            text = f"{header} {body}".strip()
+            items.append(
+                _TierItem(
+                    tier=ContextTier.ARCHIVE,
+                    section="power",
+                    text=text,
+                    priority=3,
+                    source=ContextSource(
+                        kind="power",
+                        scope="library",
+                        owner_id=f"power:{cap_id}",
+                        tier=ContextTier.ARCHIVE,
+                        summary=name,
+                    ),
+                )
+            )
         return items
 
     async def _lore_triggers(self, player_input: str, campaign_id: CampaignId) -> list[_TierItem]:

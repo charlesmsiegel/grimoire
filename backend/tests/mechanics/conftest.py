@@ -31,8 +31,13 @@ def write_module(
     manifest: dict[str, Any] | None = None,
     mechanics_py: str | None = None,
     omit_mechanics_py: bool = False,
+    sheets: dict[str, dict] | None = None,
+    content: dict[str, dict] | None = None,
+    theme_css: str | None = None,
 ) -> Path:
     """Materialise a mechanics module directory and return its path."""
+    import json
+
     module_dir = root / module_id
     module_dir.mkdir(parents=True, exist_ok=True)
 
@@ -51,6 +56,21 @@ def write_module(
     if not omit_mechanics_py:
         body = mechanics_py or default_mechanics_py(module_id)
         (module_dir / "mechanics.py").write_text(body, encoding="utf-8")
+
+    if sheets:
+        sheet_dir = module_dir / "sheets"
+        sheet_dir.mkdir(exist_ok=True)
+        for kind, schema in sheets.items():
+            (sheet_dir / f"{kind}.json").write_text(json.dumps(schema), encoding="utf-8")
+
+    if content:
+        content_dir = module_dir / "content"
+        content_dir.mkdir(exist_ok=True)
+        for kind, schema in content.items():
+            (content_dir / f"{kind}.json").write_text(json.dumps(schema), encoding="utf-8")
+
+    if theme_css is not None:
+        (module_dir / "theme.css").write_text(theme_css, encoding="utf-8")
     return module_dir
 
 

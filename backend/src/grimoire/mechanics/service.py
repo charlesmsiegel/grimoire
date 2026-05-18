@@ -32,8 +32,12 @@ from grimoire.types.common import (
 )
 from grimoire.types.mechanics import (
     Capability,
+    CreationStep,
+    MechanicsSwitchResult,
+    MissingSheet,
     ModuleManifest,
     NarratedEvent,
+    PowerDefinition,
     ProposedRoll,
     Roll,
     RollResult,
@@ -41,6 +45,7 @@ from grimoire.types.mechanics import (
 )
 from grimoire.types.protocols import MechanicsModule
 from grimoire.types.scene import SceneContext
+from grimoire.validation.validator import validate
 
 logger = logging.getLogger(__name__)
 
@@ -79,13 +84,21 @@ class MechanicsService:
         self,
         config: MechanicsConfig,
         state_store: StateStore,
+        *,
+        event_bus: Any | None = None,
     ) -> None:
         self._config = config
         self._state_store = state_store
         self._registry = MechanicsRegistry()
         self._discovery_errors: list[DiscoveryError] = []
         self._failed: dict[str, list[str]] = {}
+        self._warnings: dict[str, list[str]] = {}
+        self._event_bus = event_bus
         self._null = NullMechanicsModule()
+
+    @property
+    def config(self) -> MechanicsConfig:
+        return self._config
 
     # ------------------------------------------------------------------
     # Discovery
@@ -105,20 +118,31 @@ class MechanicsService:
         for derr in errors:
             failed.append((derr.module_dir.name, derr.message))
 
+        new_warnings: dict[str, list[str]] = {}
         for d in discovered:
             module_id = d.raw_manifest.get("id") if isinstance(d.raw_manifest, dict) else None
             if not isinstance(module_id, str):
                 module_id = d.module_dir.name
             seen.add(module_id)
             result = load_module(d)
+            if result.warnings:
+                new_warnings[module_id] = list(result.warnings)
             if result.ok and result.manifest is not None and result.instance is not None:
-                self._registry.register(result.manifest, result.instance, module_dir=d.module_dir)
+                self._registry.register(
+                    result.manifest,
+                    result.instance,
+                    module_dir=result.module_dir,
+                    sheet_schemas=result.sheet_schemas,
+                    content_schemas=result.content_schemas,
+                    theme_css=result.theme_css,
+                )
                 loaded.append(module_id)
             else:
                 self._registry.unregister(module_id)
                 reason = "; ".join(result.errors) or "unknown load error"
                 failed.append((module_id, reason))
                 new_failed[module_id] = list(result.errors)
+        self._warnings = new_warnings
 
         removed = sorted(previous_ids - seen)
         for module_id in removed:
@@ -138,6 +162,10 @@ class MechanicsService:
 
     def failed_modules(self) -> dict[str, list[str]]:
         return {mid: list(errs) for mid, errs in self._failed.items()}
+
+    def module_warnings(self) -> dict[str, list[str]]:
+        """Per-module non-fatal load warnings (e.g. missing sheet/content/theme)."""
+        return {mid: list(ws) for mid, ws in self._warnings.items()}
 
     # ------------------------------------------------------------------
     # Direct registry access — useful for in-memory tests and helpers
@@ -198,7 +226,20 @@ class MechanicsService:
         module = await self.active_module(campaign_id)
         if module is None:
             return None
-        return module.sheet_schema(entity_kind)
+        # Explicit overrides on the instance win over the disk cache, so a
+        # module can compute schemas dynamically; fall back to the loader's
+        # ``sheets/<kind>.json`` when the instance returns None.
+        schema = module.sheet_schema(entity_kind)
+        if schema is not None:
+            return schema
+        module_id = getattr(module, "id", None)
+        if isinstance(module_id, str):
+            record = self._registry.get(module_id)
+            if record is not None:
+                cached = record.sheet_schemas.get(entity_kind)
+                if cached is not None:
+                    return cached
+        return None
 
     async def get_sheet(
         self,
@@ -362,6 +403,329 @@ class MechanicsService:
             duration=duration,
         )
         return module.time_tick(entity_ref, sheet or {}, duration, ctx)
+
+    # ------------------------------------------------------------------
+    # Content schemas + content instances (§2)
+    # ------------------------------------------------------------------
+
+    async def list_content_kinds(self, campaign_id: CampaignId) -> list[str]:
+        module = await self.active_module(campaign_id)
+        if module is None:
+            return []
+        kinds = list(module.list_content_kinds() or [])
+        if kinds:
+            return kinds
+        module_id = getattr(module, "id", None)
+        if isinstance(module_id, str):
+            record = self._registry.get(module_id)
+            if record is not None:
+                return sorted(record.content_schemas)
+        return []
+
+    async def content_schema(self, campaign_id: CampaignId, kind: str) -> JsonSchema | None:
+        module = await self.active_module(campaign_id)
+        if module is None:
+            return None
+        schema = module.content_schema(kind)
+        if schema:
+            return schema
+        module_id = getattr(module, "id", None)
+        if isinstance(module_id, str):
+            record = self._registry.get(module_id)
+            if record is not None:
+                return record.content_schemas.get(kind)
+        return None
+
+    async def list_content(self, campaign_id: CampaignId, kind: str) -> list[dict]:
+        module_id = await self._campaign_mechanics_id(campaign_id)
+        if module_id is None:
+            return []
+        return await self._state_store.list_content(
+            campaign_id=campaign_id, kind=kind, mechanics_id=module_id
+        )
+
+    async def get_content(self, campaign_id: CampaignId, kind: str, content_id: str) -> dict | None:
+        module_id = await self._campaign_mechanics_id(campaign_id)
+        if module_id is None:
+            return None
+        return await self._state_store.get_content(
+            campaign_id=campaign_id,
+            kind=kind,
+            content_id=content_id,
+            mechanics_id=module_id,
+        )
+
+    async def put_content(
+        self,
+        campaign_id: CampaignId,
+        kind: str,
+        content_id: str,
+        payload: dict,
+        *,
+        source: str = "user",
+        turn_id: str | None = None,
+    ) -> dict:
+        """Validate and persist a content instance for the active module.
+
+        Raises :class:`ValueError` on validation failure when
+        ``config.validation.strict_content`` is on (default).
+        """
+        module_id = await self._campaign_mechanics_id(campaign_id)
+        if module_id is None:
+            raise ValueError(f"campaign {campaign_id!r} has mechanics: null; content is not stored")
+        if self._config.validation.strict_content:
+            schema = await self.content_schema(campaign_id, kind)
+            if schema:
+                result = validate(payload, schema)
+                if not result.ok:
+                    raise ValueError(
+                        "content failed validation: " + "; ".join(e.message for e in result.errors)
+                    )
+        await self._state_store.write_content(
+            campaign_id=campaign_id,
+            kind=kind,
+            content_id=content_id,
+            mechanics_id=module_id,
+            payload=payload,
+            source=f"mechanics:{module_id}" if source == "mechanics" else source,
+            turn_id=turn_id,
+        )
+        return payload
+
+    # ------------------------------------------------------------------
+    # Character creation (§4)
+    # ------------------------------------------------------------------
+
+    async def character_creation_steps(
+        self, campaign_id_or_module_id: CampaignId | MechanicsModuleId
+    ) -> list[CreationStep]:
+        """Return creation steps. Accepts either a campaign_id or a module_id."""
+        module = await self._resolve_module_or_campaign(campaign_id_or_module_id)
+        if module is None:
+            return []
+        steps = module.character_creation_steps() or []
+        # Coerce raw dicts into CreationStep instances so the response is typed.
+        normalised: list[CreationStep] = []
+        for step in steps:
+            if isinstance(step, CreationStep):
+                normalised.append(step)
+            elif isinstance(step, dict):
+                normalised.append(CreationStep.model_validate(step))
+        return normalised
+
+    async def finalize_character_creation(
+        self,
+        campaign_id: CampaignId,
+        character_ref: str,
+        step_outputs: dict,
+        *,
+        source: str = "user",
+        turn_id: str | None = None,
+    ) -> dict:
+        """Compose, validate, and persist a starting sheet from step outputs."""
+        module_id = await self._campaign_mechanics_id(campaign_id)
+        if module_id is None:
+            raise ValueError(
+                f"campaign {campaign_id!r} has mechanics: null; cannot finalize creation"
+            )
+        module = await self._active_or_null(campaign_id)
+        if not isinstance(step_outputs, dict):
+            raise ValueError("step_outputs must be a mapping of step_id → form data")
+
+        steps = await self.character_creation_steps(campaign_id)
+        merged: dict = {}
+        for step in steps:
+            data = step_outputs.get(step.id)
+            if data is None:
+                if step.optional:
+                    continue
+                raise ValueError(f"missing output for required step {step.id!r}")
+            if not isinstance(data, dict):
+                raise ValueError(f"step {step.id!r} output must be a JSON object")
+            step_result = validate(data, step.step_schema)
+            if not step_result.ok:
+                raise ValueError(
+                    f"step {step.id!r} failed validation: "
+                    + "; ".join(e.message for e in step_result.errors)
+                )
+            merged = _deep_merge(merged, data)
+
+        kind, entity_id = _parse_entity_ref(character_ref, fallback_kind="character")
+        sheet_result = module.validate_sheet(kind, merged)
+        if not sheet_result.valid:
+            raise ValueError("composed sheet failed validation: " + "; ".join(sheet_result.errors))
+
+        await self._state_store.write_sheet(
+            campaign_id=campaign_id,
+            kind=kind,
+            entity_id=entity_id,
+            mechanics_id=module_id,
+            sheet=merged,
+            source=f"mechanics:{module_id}" if source in ("user", "mechanics") else source,
+            turn_id=turn_id,
+        )
+        return merged
+
+    # ------------------------------------------------------------------
+    # Power definitions (§9)
+    # ------------------------------------------------------------------
+
+    async def power_definitions(self, campaign_id: CampaignId) -> list[PowerDefinition]:
+        module = await self.active_module(campaign_id)
+        if module is None:
+            return []
+        defs = module.power_definitions() or []
+        return [
+            d if isinstance(d, PowerDefinition) else PowerDefinition.model_validate(d) for d in defs
+        ]
+
+    async def power_definition(
+        self, campaign_id: CampaignId, power_id: str
+    ) -> PowerDefinition | None:
+        module = await self.active_module(campaign_id)
+        if module is None:
+            return None
+        result = module.power_definition(power_id)
+        if result is None:
+            return None
+        if isinstance(result, PowerDefinition):
+            return result
+        return PowerDefinition.model_validate(result)
+
+    # ------------------------------------------------------------------
+    # Mid-campaign module switching (§6)
+    # ------------------------------------------------------------------
+
+    async def switch_module(
+        self,
+        campaign_id: CampaignId,
+        new_mechanics_id: MechanicsModuleId | None,
+        source: str = "user",
+    ) -> MechanicsSwitchResult:
+        """Change a campaign's bound mechanics module.
+
+        Records the transition in ``campaign_mechanics_history`` and
+        returns the list of PC sheets that exist for the previous module
+        but lack one under the new module.
+        """
+        row = await self._state_store.db.fetchone(
+            "SELECT * FROM campaigns WHERE id = ?", (campaign_id,)
+        )
+        if row is None:
+            raise NotFoundError(f"campaign {campaign_id!r} not found")
+        current = dict(row)
+        previous = current.get("mechanics_module")
+        # Normalise '' → None so callers don't have to distinguish.
+        target = new_mechanics_id or None
+
+        await self._state_store.upsert_campaign(
+            campaign_id=campaign_id,
+            name=current["name"],
+            description=current.get("description"),
+            mechanics_module=target,
+            style_guide_id=current.get("style_guide_id"),
+            image_preset_id=current.get("image_preset_id"),
+            inline_style_guide=current.get("inline_style_guide"),
+            content_boundaries=current.get("content_boundaries"),
+            greeting_id=current.get("greeting_id"),
+        )
+        await self._state_store.record_mechanics_switch(
+            campaign_id=campaign_id,
+            previous=previous,
+            current=target,
+            source=source,
+        )
+
+        missing = await self._compute_missing_sheets(campaign_id, target)
+
+        if self._event_bus is not None:
+            try:
+                from grimoire.event_bus import Event  # local import — avoid cycles
+
+                await self._event_bus.emit(
+                    Event(
+                        type="mechanics_switched",
+                        payload={
+                            "campaign_id": campaign_id,
+                            "previous": previous,
+                            "current": target,
+                            "missing_count": len(missing),
+                        },
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("event emit failed for mechanics_switched: %s", exc)
+
+        return MechanicsSwitchResult(previous=previous, current=target, missing_sheets=missing)
+
+    async def _compute_missing_sheets(
+        self,
+        campaign_id: CampaignId,
+        new_mechanics_id: MechanicsModuleId | None,
+    ) -> list[MissingSheet]:
+        if new_mechanics_id is None:
+            return []
+        # PCs for the campaign.
+        pcs = await self._state_store.list_pcs(campaign_id)
+        if not pcs:
+            return []
+        from grimoire.state_store.paths import campaigns_root
+
+        sheets_dir = (
+            campaigns_root(self._state_store.data_root) / campaign_id / "sheets" / "characters"
+        )
+        missing: list[MissingSheet] = []
+        for pc in pcs:
+            ref = pc.get("character_ref") or ""
+            # Parse to the entity_id used in filenames.
+            _, entity_id = _parse_entity_ref(ref, fallback_kind="character")
+            new_sheet_file = sheets_dir / f"{entity_id}.{new_mechanics_id}.yaml"
+            if new_sheet_file.exists():
+                continue
+            # Detect "previous-module sheet exists" by scanning the dir.
+            has_other = False
+            if sheets_dir.is_dir():
+                prefix = f"{entity_id}."
+                for entry in sheets_dir.iterdir():
+                    if not entry.is_file():
+                        continue
+                    matches_entity = entry.name.startswith(prefix) and entry.name.endswith(".yaml")
+                    if matches_entity and entry.name != new_sheet_file.name:
+                        has_other = True
+                        break
+            if has_other:
+                missing.append(
+                    MissingSheet(
+                        kind="character",
+                        entity_id=entity_id,
+                        character_name=pc.get("display_name") or pc.get("name"),
+                    )
+                )
+        return missing
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    async def _resolve_module_or_campaign(self, ref: str) -> MechanicsModule | None:
+        """Accept either a campaign_id or a module_id; return the module instance."""
+        # Try as campaign_id first (campaigns have prefixed style ids in practice,
+        # but the only way to tell is to look it up).
+        try:
+            row = await self._state_store.db.fetchone(
+                "SELECT mechanics_module FROM campaigns WHERE id = ?", (ref,)
+            )
+        except Exception:
+            row = None
+        if row is not None:
+            value = row["mechanics_module"]
+            if value is None or value == "" or value == NULL_MECHANICS_ID:
+                return None
+            record = self._registry.get(value)
+            return record.instance if record is not None else None
+        # Fall back to a direct module_id lookup.
+        record = self._registry.get(ref)
+        return record.instance if record is not None else None
 
     # ------------------------------------------------------------------
     # Registry introspection

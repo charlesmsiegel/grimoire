@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import json
 import sys
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from grimoire.types.mechanics import ModuleManifest
 from grimoire.types.protocols import MechanicsModule
 from grimoire.validation.errors import ValidationError
 from grimoire.validation.manifests import validate_mechanics_manifest
+from grimoire.validation.validator import check_schema
 
 # Names the loader will look up on the imported module when no
 # ``entry_class`` is declared in the manifest. The first one that exists
@@ -62,6 +64,12 @@ class LoadResult:
     On success, ``manifest`` and ``instance`` are both populated. On
     failure, ``errors`` describes what went wrong; ``manifest`` may still
     be populated if only protocol validation failed.
+
+    ``sheet_schemas`` and ``content_schemas`` are JSON Schemas read from
+    ``sheets/<kind>.json`` / ``content/<kind>.json`` under ``module_dir``.
+    ``theme_css`` is the raw CSS body if the manifest declared one and the
+    file was readable. ``warnings`` collects non-fatal complaints (declared
+    sheet/content/theme that didn't show up on disk, malformed schemas).
     """
 
     module_dir: Path
@@ -69,6 +77,10 @@ class LoadResult:
     manifest: ModuleManifest | None
     instance: MechanicsModule | None
     errors: list[str]
+    sheet_schemas: dict[str, dict] = field(default_factory=dict)
+    content_schemas: dict[str, dict] = field(default_factory=dict)
+    theme_css: str | None = None
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -164,13 +176,105 @@ def load_module(discovered: DiscoveredModule) -> LoadResult:
             errors=errors,
         )
 
+    sheet_schemas, sheet_warnings = _load_sheet_schemas(module_dir, manifest)
+    content_schemas, content_warnings = _load_content_schemas(module_dir, manifest)
+    theme_css, theme_warnings = _load_theme_css(module_dir, raw)
+
+    warnings: list[str] = []
+    warnings.extend(sheet_warnings)
+    warnings.extend(content_warnings)
+    warnings.extend(theme_warnings)
+
     return LoadResult(
         module_dir=module_dir,
         module_id=module_id,
         manifest=manifest,
         instance=instance,
         errors=errors,
+        sheet_schemas=sheet_schemas,
+        content_schemas=content_schemas,
+        theme_css=theme_css,
+        warnings=warnings,
     )
+
+
+def _load_sheet_schemas(
+    module_dir: Path, manifest: ModuleManifest
+) -> tuple[dict[str, dict], list[str]]:
+    """Read ``sheets/<kind>.json`` for each declared sheet_kind."""
+    schemas: dict[str, dict] = {}
+    warnings: list[str] = []
+    sheet_dir = module_dir / "sheets"
+    for kind in manifest.sheet_kinds:
+        path = sheet_dir / f"{kind}.json"
+        if not path.is_file():
+            warnings.append(f"sheet_kind {kind!r} declared in manifest but {path.name} is missing")
+            continue
+        schema, err = _read_schema_file(path)
+        if err is not None:
+            warnings.append(f"sheets/{kind}.json: {err}")
+            continue
+        schemas[kind] = schema
+    return schemas, warnings
+
+
+def _load_content_schemas(
+    module_dir: Path, manifest: ModuleManifest
+) -> tuple[dict[str, dict], list[str]]:
+    """Read ``content/<kind>.json`` for each declared content_kind."""
+    schemas: dict[str, dict] = {}
+    warnings: list[str] = []
+    content_dir = module_dir / "content"
+    for kind in manifest.content_kinds:
+        path = content_dir / f"{kind}.json"
+        if not path.is_file():
+            warnings.append(
+                f"content_kind {kind!r} declared in manifest but {path.name} is missing"
+            )
+            continue
+        schema, err = _read_schema_file(path)
+        if err is not None:
+            warnings.append(f"content/{kind}.json: {err}")
+            continue
+        schemas[kind] = schema
+    return schemas, warnings
+
+
+def _read_schema_file(path: Path) -> tuple[dict, str | None]:
+    """Load a JSON Schema from disk and validate it with ``check_schema``."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {}, f"could not read JSON: {exc}"
+    if not isinstance(raw, dict):
+        return {}, "schema must be a JSON object"
+    result = check_schema(raw)
+    if not result.ok:
+        msgs = "; ".join(e.message for e in result.errors)
+        return raw, f"invalid JSON Schema: {msgs}"
+    return raw, None
+
+
+def _load_theme_css(module_dir: Path, raw_manifest: dict[str, Any]) -> tuple[str | None, list[str]]:
+    """Read ``manifest.ui.theme_css`` (a path relative to ``module_dir``)."""
+    ui = raw_manifest.get("ui")
+    if not isinstance(ui, dict):
+        return None, []
+    declared = ui.get("theme_css")
+    if not isinstance(declared, str) or not declared:
+        return None, []
+    target = (module_dir / declared).resolve()
+    # Refuse paths that escape the module directory.
+    try:
+        target.relative_to(module_dir.resolve())
+    except ValueError:
+        return None, [f"theme_css path {declared!r} escapes module directory"]
+    if not target.is_file():
+        return None, [f"theme_css declared as {declared!r} but file is missing"]
+    try:
+        return target.read_text(encoding="utf-8"), []
+    except OSError as exc:
+        return None, [f"theme_css read failed: {exc}"]
 
 
 def _build_manifest(raw: dict[str, Any]) -> ModuleManifest:

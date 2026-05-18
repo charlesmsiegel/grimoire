@@ -142,3 +142,38 @@ class ModuleManifest(BaseModel):
     content_kinds: list[str] = Field(default_factory=list)
     capabilities: list[str] = Field(default_factory=list)
     ui: Json = Field(default_factory=dict)
+
+
+class MissingSheet(BaseModel):
+    """An entity whose sheet is missing under a target mechanics module."""
+
+    kind: str
+    entity_id: str
+    character_name: str | None = None
+
+
+class MechanicsSwitchResult(BaseModel):
+    """Outcome of :meth:`MechanicsService.switch_module`.
+
+    ``missing_sheets`` lists entities that have a sheet for the previous
+    module but lack one for the new module; the UI uses this to drive a
+    bulk character-creation wizard.
+    """
+
+    previous: str | None = None
+    current: str | None = None
+    missing_sheets: list[MissingSheet] = Field(default_factory=list)
+
+
+class ProposalResolution(BaseModel):
+    """Per-proposal disposition for the pre-roll confirmation round-trip.
+
+    Identifies the proposal by its ``label`` (a stable per-turn identifier
+    each module produces). ``accepted=False`` declines the proposal;
+    ``modifications`` overrides fields like pool/difficulty/modifiers on
+    accept.
+    """
+
+    label: str
+    accepted: bool = True
+    modifications: Json | None = None
