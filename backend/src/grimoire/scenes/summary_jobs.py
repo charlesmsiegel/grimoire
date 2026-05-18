@@ -14,6 +14,7 @@ latest scene state.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Protocol
 
@@ -70,10 +71,8 @@ class RunningSummaryWorker:
         for task in tasks:
             task.cancel()
         for task in tasks:
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
         self._tasks.clear()
         self._pending.clear()
 

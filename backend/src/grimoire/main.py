@@ -40,6 +40,12 @@ from grimoire.observability.health import HealthMonitorService
 from grimoire.orchestrator.service import OrchestratorService
 from grimoire.plugins import PluginsConfig, PluginsService
 from grimoire.scenes import SceneManager
+from grimoire.scenes.default_summarizers import (
+    make_default_final_summarizer,
+    make_default_running_summarizer,
+)
+from grimoire.scenes.indexer import SceneIndexer
+from grimoire.scenes.summary_jobs import RunningSummaryWorker
 from grimoire.state_store import StateStore
 from grimoire.storage import Database, apply_migrations
 from grimoire.time_engine.service import TimeEngineService
@@ -145,6 +151,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             container.characters = CharactersService(container.library, container.mechanics)
         if container.scenes is None:
             container.scenes = SceneManager(data_root, event_bus=container.event_bus)
+        # Scene indexer keeps the SQLite scenes/posts tables in sync with the
+        # markdown + sidecar source-of-truth. Subscribed to manager events
+        # post-construction; backfill walks the disk once to catch any
+        # direct-edit-while-down deltas.
+        if container.extras.get("scene_indexer") is None and container.state_store is not None:
+            scene_indexer = SceneIndexer(
+                container.scenes, container.state_store.db, container.event_bus
+            )
+            scene_indexer.start()
+            try:
+                await scene_indexer.backfill()
+            except Exception:
+                log.exception("scene indexer backfill failed at startup")
+            container.extras["scene_indexer"] = scene_indexer
         if container.continuity is None:
             # In-memory store by default — facts/commitments don't persist
             # across restart. Swap in SqliteContinuityStore when persistence
@@ -206,6 +226,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # before the gateway exists, so we patch the attribute here.
         if container.world is not None and getattr(container.world, "gateway", None) is None:
             container.world.gateway = llm_gateway
+        # §4/§5 default summarizers — only attach if the caller didn't already
+        # inject custom ones. The gateway only raises at call-time when no
+        # provider plugin is registered, so wiring is safe even on a bare
+        # install.
+        if getattr(container.scenes, "_summarizer", None) is None:
+            container.scenes._summarizer = make_default_running_summarizer(
+                llm_gateway,
+                max_tokens=container.scenes.config.running_summary.max_tokens,
+                model=container.scenes.config.running_summary.model or "default",
+            )
+        if getattr(container.scenes, "_final_summarizer", None) is None:
+            container.scenes._final_summarizer = make_default_final_summarizer(
+                llm_gateway,
+                max_tokens=container.scenes.config.running_summary.max_tokens,
+                model=container.scenes.config.running_summary.model or "default",
+            )
+        # Background worker drains running_summary_due events so a slow LLM
+        # call doesn't block the next append. Coalesces per-scene FIFO.
+        if container.extras.get("scene_summary_worker") is None:
+            worker = RunningSummaryWorker(container.scenes, container.event_bus)
+            worker.start()
+            container.extras["scene_summary_worker"] = worker
         if container.extras.get("extractor") is None:
             container.extras["extractor"] = ExtractorService(gateway=llm_gateway)
         extractor = container.extras["extractor"]
@@ -274,8 +316,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # the index directly.
         _seed_defaults(data_root)
         file_watcher = FileWatcher(
-            data_root=data_root, store=container.state_store, bus=container.event_bus
+            data_root=data_root,
+            store=container.state_store,
+            bus=container.event_bus,
+            scene_manager=container.scenes,
         )
+        container.extras["file_watcher"] = file_watcher
         try:
             await file_watcher.scan_now()
         except Exception:
@@ -298,6 +344,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
     if container is not None:
+        summary_worker = (
+            container.extras.get("scene_summary_worker") if container.extras else None
+        )
+        if summary_worker is not None:
+            try:
+                await summary_worker.stop()
+            except Exception:
+                log.exception("scene summary worker stop failed during shutdown")
+        scene_indexer = (
+            container.extras.get("scene_indexer") if container.extras else None
+        )
+        if scene_indexer is not None:
+            try:
+                await scene_indexer.stop()
+            except Exception:
+                log.exception("scene indexer stop failed during shutdown")
         # §3: Stop the gateway health monitor periodic loop if it was started.
         gateway_health_monitor = (
             container.extras.get("gateway_health_monitor") if container.extras else None

@@ -337,7 +337,7 @@ class SceneManager:
             tags=list(init.tags),
         )
 
-        md_path, yaml_path = self._scene_file_paths(scene)
+        md_path, _yaml_path = self._scene_file_paths(scene)
         md_path.parent.mkdir(parents=True, exist_ok=True)
         if not md_path.exists():
             md_path.write_text("", encoding="utf-8")

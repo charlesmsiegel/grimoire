@@ -115,6 +115,7 @@ class FileWatcher:
         bus: EventBus,
         loop: asyncio.AbstractEventLoop | None = None,
         embedding_queue: EmbeddingQueue | None = None,
+        scene_manager: object | None = None,
     ) -> None:
         self.data_root = Path(data_root).resolve()
         self.store = store
@@ -128,6 +129,14 @@ class FileWatcher:
         # write" (silent reindex) from "external user wrote during/after our
         # write" (last-write-wins with a conflict warning).
         self._expected_writes: dict[Path, str] = {}
+        # Optional Scene Manager handle. When set, scene_body / scene_sidecar
+        # filesystem events are forwarded to ``scene_manager.reindex_from_disk``
+        # which rebuilds in-memory state, persists the sidecar, and emits its
+        # own ``scene_file_changed`` event (with conflict=True when the
+        # on-disk body hash doesn't match the last app-written hash). The
+        # watcher suppresses its own scene_file_changed emit so consumers
+        # only see one event per change.
+        self._scene_manager = scene_manager
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -285,6 +294,29 @@ class FileWatcher:
             await self._apply_upsert(watched, parsed.frontmatter, parsed.body)
             if watched.kind in _EMBEDDABLE_KINDS and parsed.body.strip():
                 self._enqueue_embedding(watched, parsed.frontmatter, parsed.body)
+
+        # §3 — forward scene file changes into the Scene Manager so it can
+        # re-parse the markdown, rebuild post records, and emit its own
+        # scene_file_changed event with the hash-based conflict flag. Suppress
+        # our own emit for that kind to avoid duplicate notifications.
+        if (
+            self._scene_manager is not None
+            and watched.kind in {"scene_body", "scene_sidecar"}
+            and watched.scene_basename is not None
+            and watched.campaign_id is not None
+            and emit
+        ):
+            scene_id = _resolve_scene_id(watched)
+            try:
+                await self._scene_manager.reindex_from_disk(scene_id)
+            except KeyError:
+                # New scene file (not yet known to the manager) — fall back to
+                # the watcher's own emit so consumers still see the change.
+                pass
+            except Exception:
+                logger.exception("scene manager reindex failed for %s", path)
+            else:
+                return
 
         if emit:
             await self._emit(
@@ -533,6 +565,17 @@ def _iter_files(root: Path) -> Iterable[Path]:
     for path in root.rglob("*"):
         if path.is_file():
             yield path
+
+
+def _resolve_scene_id(watched: WatchedFile) -> str:
+    """Build the Scene Manager's scene_id from a classified scene path.
+
+    Mirrors :meth:`grimoire.scenes.manager.SceneManager._scene_id` —
+    ``"{prefix}{campaign_id}:{basename}"`` where the prefix is empty for
+    ``main`` and ``"{branch_id}:"`` otherwise.
+    """
+    prefix = "" if (watched.branch_id or "main") == "main" else f"{watched.branch_id}:"
+    return f"{prefix}{watched.campaign_id}:{watched.scene_basename}"
 
 
 # ----------------------------------------------------------------------- #
