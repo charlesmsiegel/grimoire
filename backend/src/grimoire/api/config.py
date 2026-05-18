@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from grimoire import config as config_module
 from grimoire.files import load_yaml, write_yaml
@@ -106,9 +106,7 @@ async def patch_app_config(payload: AppConfigPatch) -> Any:
         try:
             Path(candidate).expanduser()
         except Exception as exc:
-            raise HTTPException(
-                status_code=422, detail=f"invalid library_path: {exc}"
-            ) from exc
+            raise HTTPException(status_code=422, detail=f"invalid library_path: {exc}") from exc
         data["library_path"] = candidate
 
     if payload.backup is not None:

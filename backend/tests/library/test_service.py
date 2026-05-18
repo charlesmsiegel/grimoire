@@ -363,9 +363,7 @@ async def test_update_entity_deep_merges_nested_dict(
         "wod-london",
         "character",
         "alistair",
-        frontmatter_patch={
-            "image": {"base_prompt": "new prompt", "canonical_seed": 99}
-        },
+        frontmatter_patch={"image": {"base_prompt": "new prompt", "canonical_seed": 99}},
     )
     assert updated.frontmatter["image"]["base_prompt"] == "new prompt"
     assert updated.frontmatter["image"]["negative_prompt"] == "blurry"  # preserved

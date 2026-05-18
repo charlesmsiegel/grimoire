@@ -112,9 +112,7 @@ class MechanicsService:
             seen.add(module_id)
             result = load_module(d)
             if result.ok and result.manifest is not None and result.instance is not None:
-                self._registry.register(
-                    result.manifest, result.instance, module_dir=d.module_dir
-                )
+                self._registry.register(result.manifest, result.instance, module_dir=d.module_dir)
                 loaded.append(module_id)
             else:
                 self._registry.unregister(module_id)

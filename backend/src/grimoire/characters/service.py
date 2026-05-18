@@ -852,9 +852,7 @@ class CharactersService:
             current_scene_id: str | None = None
             current_location_ref: str | None = None
             try:
-                state = await self._load_state(
-                    _asset_id_for_ref(char_ref), char_ref, campaign_id
-                )
+                state = await self._load_state(_asset_id_for_ref(char_ref), char_ref, campaign_id)
                 current_scene_id = state.current_scene_id
                 current_location_ref = state.location_ref
             except Exception:

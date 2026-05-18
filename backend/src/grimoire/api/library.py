@@ -475,9 +475,7 @@ async def preview_image_preset(
     fm = preset.frontmatter or {}
     style_preamble = str(fm.get("style_preamble") or "")
     sample_prompt = (payload.prompt or "a portrait of a wizard in a library").strip()
-    composed_prompt = (
-        f"{style_preamble}, {sample_prompt}" if style_preamble else sample_prompt
-    )
+    composed_prompt = f"{style_preamble}, {sample_prompt}" if style_preamble else sample_prompt
     default_negative = fm.get("default_negative_prompt") or None
     default_params = fm.get("default_params") or {}
 

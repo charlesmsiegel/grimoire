@@ -245,7 +245,5 @@ def test_image_preset_preview_uses_default_prompt(app_client, container) -> None
 
 def test_image_preset_preview_404_when_preset_missing(app_client, container) -> None:
     container.library = _StubLibrary(_preset("noir"))
-    resp = app_client.post(
-        "/api/library/image-presets/missing/preview", json={"seed": 1}
-    )
+    resp = app_client.post("/api/library/image-presets/missing/preview", json={"seed": 1})
     assert resp.status_code == 404

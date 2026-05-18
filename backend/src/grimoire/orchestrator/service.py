@@ -172,9 +172,7 @@ class OrchestratorService:
         # Best-effort: the store is async-safe and a missing row is a
         # no-op when the PC was just removed.
         try:
-            await self._store.mark_pc_played(
-                campaign_id=campaign_id, character_ref=pc_ref
-            )
+            await self._store.mark_pc_played(campaign_id=campaign_id, character_ref=pc_ref)
         except Exception:  # pragma: no cover - never blocks a turn
             logger.warning("mark_pc_played failed", exc_info=True)
 
