@@ -54,6 +54,7 @@ from grimoire.testing.record_replay import (
     RecordReplayLLM,
     ReplayMode,
 )
+from grimoire.testing.scenario import ScenarioApp
 
 __all__ = [
     "BenchmarkResult",
@@ -76,6 +77,7 @@ __all__ = [
     "RecordReplayLLM",
     "RegressionReport",
     "ReplayMode",
+    "ScenarioApp",
     "TestApp",
     "TestAppFixture",
     "TestingConfig",
