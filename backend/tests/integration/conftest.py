@@ -27,9 +27,9 @@ def _register_simple_world() -> None:
 
     async def bind_setting(app: TestApp, campaign: CampaignFixture) -> None:
         assert app.state_store is not None
-        await app.state_store.upsert_setting_ref(
+        await app.state_store.upsert_world_ref(
             campaign_id=campaign.campaign_id,
-            setting_id="ironhold",
+            world_id="ironhold",
             priority=1,
             include=None,
             track_latest=True,
@@ -39,7 +39,7 @@ def _register_simple_world() -> None:
         name="simple_world",
         library_assets=[
             {
-                "library_id": "settings/ironhold",
+                "library_id": "worlds/ironhold/world",
                 "frontmatter": {
                     "id": "ironhold",
                     "name": "Ironhold",
@@ -54,7 +54,7 @@ def _register_simple_world() -> None:
         ],
         library_entities=[
             {
-                "library_id": "settings/ironhold/characters/garrick",
+                "library_id": "worlds/ironhold/characters/garrick",
                 "frontmatter": {
                     "id": "garrick",
                     "name": "Garrick",
@@ -63,7 +63,7 @@ def _register_simple_world() -> None:
                 "body": "# Garrick\n\nThe town smith.",
             },
             {
-                "library_id": "settings/ironhold/locations/town-square",
+                "library_id": "worlds/ironhold/locations/town-square",
                 "frontmatter": {
                     "id": "town-square",
                     "name": "Town Square",
@@ -90,7 +90,7 @@ def _register_two_worlds() -> None:
         name="two_worlds",
         library_assets=[
             {
-                "library_id": "settings/aurora",
+                "library_id": "worlds/aurora/world",
                 "frontmatter": {
                     "id": "aurora",
                     "name": "Aurora",
@@ -99,7 +99,7 @@ def _register_two_worlds() -> None:
                 },
             },
             {
-                "library_id": "settings/borealis",
+                "library_id": "worlds/borealis/world",
                 "frontmatter": {
                     "id": "borealis",
                     "name": "Borealis",
@@ -110,12 +110,12 @@ def _register_two_worlds() -> None:
         ],
         library_entities=[
             {
-                "library_id": "settings/aurora/characters/nova",
+                "library_id": "worlds/aurora/characters/nova",
                 "frontmatter": {"id": "nova", "name": "Nova", "tags": ["pilot"]},
                 "body": "Pilot.",
             },
             {
-                "library_id": "settings/borealis/locations/orbital-7",
+                "library_id": "worlds/borealis/locations/orbital-7",
                 "frontmatter": {"id": "orbital-7", "name": "Orbital 7"},
                 "body": "A station.",
             },

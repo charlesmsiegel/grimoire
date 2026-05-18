@@ -30,9 +30,9 @@ async def test_two_campaigns_share_setting_with_different_mechanics(
             name="Ironhold (PF2e)",
             mechanics_module="pf2e",
         )
-        await app.state_store.upsert_setting_ref(
+        await app.state_store.upsert_world_ref(
             campaign_id="cmp-ironhold-pf2e",
-            setting_id="ironhold",
+            world_id="ironhold",
             priority=1,
             include=None,
             track_latest=True,
@@ -48,8 +48,8 @@ async def test_two_campaigns_share_setting_with_different_mechanics(
         comp_freeform = await app.library.get_composition("cmp-ironhold-1")
 
         # Same world, different mechanics.
-        pf2e_settings = {ref.setting_id for ref in comp_pf2e.settings}
-        free_settings = {ref.setting_id for ref in comp_freeform.settings}
-        assert pf2e_settings == free_settings == {"ironhold"}
+        pf2e_worlds = {ref.world_id for ref in comp_pf2e.worlds}
+        free_worlds = {ref.world_id for ref in comp_freeform.worlds}
+        assert pf2e_worlds == free_worlds == {"ironhold"}
         assert comp_pf2e.mechanics == "pf2e"
         assert comp_freeform.mechanics == "freeform"

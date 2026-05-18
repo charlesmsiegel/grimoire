@@ -39,7 +39,7 @@ async def test_promoted_emergent_visible_to_new_campaign(tmp_path: Path) -> None
             campaign_id="cmp-ironhold-1",
             entity_kind=EntityKind.LOCATION,
             campaign_entity_id="hidden-shrine",
-            target_setting_id="ironhold",
+            target_world_id="ironhold",
         )
         assert library_path  # promotion returned a path
 
@@ -48,9 +48,9 @@ async def test_promoted_emergent_visible_to_new_campaign(tmp_path: Path) -> None
             campaign_id="cmp-ironhold-fresh",
             name="Fresh Ironhold",
         )
-        await app.state_store.upsert_setting_ref(
+        await app.state_store.upsert_world_ref(
             campaign_id="cmp-ironhold-fresh",
-            setting_id="ironhold",
+            world_id="ironhold",
             priority=1,
             include=None,
             track_latest=True,

@@ -18,13 +18,13 @@ from .conftest import frozen_snapshot_path
 
 
 async def test_time_advance_household(tmp_path: Path) -> None:
-    snapshot = frozen_snapshot_path("minimal_test_campaign")
+    # The minimal §4 snapshot ships an empty migrated DB; this scenario
+    # needs a dedicated 8-NPC household snapshot. Until that ships, skip.
+    snapshot = frozen_snapshot_path("household_of_eight_npcs")
     if snapshot is None:
         pytest.skip(
-            "frozen-campaign snapshot 'minimal_test_campaign.sqlite' not found; "
-            "spec 17 §L4 fixtures are a parallel workstream (testing-design §4). "
-            "Once it ships, this scenario expects the snapshot to include a "
-            "household of 8 significant NPCs."
+            "frozen-campaign snapshot 'household_of_eight_npcs.sqlite' not found; "
+            "spec 17 §L5 needs a campaign pre-seeded with 8 significant NPCs."
         )
 
     async with ScenarioApp(tmp_path, seed_db=snapshot) as app:

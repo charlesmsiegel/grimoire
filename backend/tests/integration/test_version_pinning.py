@@ -30,21 +30,21 @@ async def test_pinned_campaign_keeps_old_version_after_library_edit(
             campaign_id="cmp-pinned",
             name="Pinned",
         )
-        await app.state_store.upsert_setting_ref(
+        await app.state_store.upsert_world_ref(
             campaign_id="cmp-pinned",
-            setting_id="ironhold",
+            world_id="ironhold",
             priority=1,
             include=None,
             track_latest=False,
         )
 
         # Baseline: pinned campaign sees the v1 description.
-        before = await app.library.resolve("settings/ironhold/characters/garrick", "cmp-pinned")
+        before = await app.library.resolve("worlds/ironhold/characters/garrick", "cmp-pinned")
         before_body = before.body
 
         # Mutate the library — Garrick's body changes.
         await app.state_store.write_library_file(
-            library_id="settings/ironhold/characters/garrick",
+            library_id="worlds/ironhold/characters/garrick",
             frontmatter={
                 "id": "garrick",
                 "name": "Garrick",
@@ -56,9 +56,7 @@ async def test_pinned_campaign_keeps_old_version_after_library_edit(
         )
 
         # Pinned campaign should still see the old body.
-        after_pinned = await app.library.resolve(
-            "settings/ironhold/characters/garrick", "cmp-pinned"
-        )
+        after_pinned = await app.library.resolve("worlds/ironhold/characters/garrick", "cmp-pinned")
         assert after_pinned.body == before_body, (
             "pinned campaign should be insulated from a library edit, "
             f"got new body: {after_pinned.body!r}"
@@ -69,12 +67,12 @@ async def test_pinned_campaign_keeps_old_version_after_library_edit(
             campaign_id="cmp-live",
             name="Live",
         )
-        await app.state_store.upsert_setting_ref(
+        await app.state_store.upsert_world_ref(
             campaign_id="cmp-live",
-            setting_id="ironhold",
+            world_id="ironhold",
             priority=1,
             include=None,
             track_latest=True,
         )
-        after_live = await app.library.resolve("settings/ironhold/characters/garrick", "cmp-live")
+        after_live = await app.library.resolve("worlds/ironhold/characters/garrick", "cmp-live")
         assert "rewritten" in after_live.body

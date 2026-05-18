@@ -31,9 +31,9 @@ pytestmark = pytest.mark.integration
 def _build_fixture() -> LibraryCampaignFixture:
     async def setup_pinned(app, campaign: CampaignFixture) -> None:
         assert app.state_store is not None
-        await app.state_store.upsert_setting_ref(
+        await app.state_store.upsert_world_ref(
             campaign_id=campaign.campaign_id,
-            setting_id="replay-world",
+            world_id="replay-world",
             priority=1,
             include=None,
             track_latest=False,
@@ -41,9 +41,9 @@ def _build_fixture() -> LibraryCampaignFixture:
 
     async def setup_unpinned(app, campaign: CampaignFixture) -> None:
         assert app.state_store is not None
-        await app.state_store.upsert_setting_ref(
+        await app.state_store.upsert_world_ref(
             campaign_id=campaign.campaign_id,
-            setting_id="replay-world",
+            world_id="replay-world",
             priority=1,
             include=None,
             track_latest=True,
@@ -53,7 +53,7 @@ def _build_fixture() -> LibraryCampaignFixture:
         name="replay_world_v_n",
         library_assets=[
             {
-                "library_id": "settings/replay-world",
+                "library_id": "worlds/replay-world/world",
                 "frontmatter": {
                     "id": "replay-world",
                     "name": "Replay World",
@@ -63,7 +63,7 @@ def _build_fixture() -> LibraryCampaignFixture:
         ],
         library_entities=[
             {
-                "library_id": "settings/replay-world/characters/anchor",
+                "library_id": "worlds/replay-world/characters/anchor",
                 "frontmatter": {"id": "anchor", "name": "Anchor", "version": 1},
                 "body": "# Anchor (v_n)\n\nThe original.",
             },
@@ -93,17 +93,15 @@ async def test_library_mutation_respects_pin_vs_track_latest(
 
         # 1. Snapshot invariants at v_n.
         pinned_before = await app.library.resolve(
-            "settings/replay-world/characters/anchor", "cmp-pinned"
+            "worlds/replay-world/characters/anchor", "cmp-pinned"
         )
-        live_before = await app.library.resolve(
-            "settings/replay-world/characters/anchor", "cmp-live"
-        )
+        live_before = await app.library.resolve("worlds/replay-world/characters/anchor", "cmp-live")
         assert "v_n" in pinned_before.body
         assert "v_n" in live_before.body
 
         # 2. Mutate the library (v_n → v_n+1).
         await app.state_store.write_library_file(
-            library_id="settings/replay-world/characters/anchor",
+            library_id="worlds/replay-world/characters/anchor",
             frontmatter={"id": "anchor", "name": "Anchor", "version": 2},
             body="# Anchor (v_n+1)\n\nRewritten.",
             source="test",
@@ -111,11 +109,9 @@ async def test_library_mutation_respects_pin_vs_track_latest(
 
         # 3. Re-resolve and assert the semantics.
         pinned_after = await app.library.resolve(
-            "settings/replay-world/characters/anchor", "cmp-pinned"
+            "worlds/replay-world/characters/anchor", "cmp-pinned"
         )
-        live_after = await app.library.resolve(
-            "settings/replay-world/characters/anchor", "cmp-live"
-        )
+        live_after = await app.library.resolve("worlds/replay-world/characters/anchor", "cmp-live")
         assert pinned_after.body == pinned_before.body, (
             "pinned campaign must continue to see v_n after library mutation; "
             f"got: {pinned_after.body!r}"
