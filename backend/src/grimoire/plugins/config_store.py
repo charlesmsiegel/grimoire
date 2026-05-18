@@ -172,7 +172,72 @@ class PluginConfigStore:
                 self._keyring.delete(plugin_id, name)
 
 
+_ACTIVATIONS_FILENAME = ".activations.yaml"
+
+
+class ActivationStore:
+    """Persisted per-plugin activation flags.
+
+    Lives alongside the plugin config files at
+    ``<config_root>/.activations.yaml`` so a plugin that the user explicitly
+    deactivated stays deactivated across app restarts. The file is a flat
+    mapping ``{plugin_id: bool}``; absence is treated as "active by default"
+    so first-run installs and undocumented plugins keep working without
+    needing the file to exist.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def path(self) -> Path:
+        return self.root / _ACTIVATIONS_FILENAME
+
+    def load(self) -> dict[str, bool]:
+        path = self.path()
+        if not path.is_file():
+            return {}
+        try:
+            raw = load_yaml(path)
+        except Exception as exc:
+            logger.warning("could not read %s: %r — assuming all plugins active", path, exc)
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        result: dict[str, bool] = {}
+        for plugin_id, value in raw.items():
+            if isinstance(plugin_id, str):
+                result[plugin_id] = bool(value)
+        return result
+
+    def is_active(self, plugin_id: str) -> bool:
+        """Default to active when the file omits the plugin id."""
+        return self.load().get(plugin_id, True)
+
+    def set_active(self, plugin_id: str, active: bool) -> None:
+        current = self.load()
+        if active:
+            # Drop the explicit "false" entry rather than write "true" —
+            # keeps the file minimal and matches the "active by default"
+            # contract callers rely on.
+            current.pop(plugin_id, None)
+        else:
+            current[plugin_id] = False
+        self._write(current)
+
+    def remove(self, plugin_id: str) -> None:
+        current = self.load()
+        if plugin_id in current:
+            current.pop(plugin_id)
+            self._write(current)
+
+    def _write(self, state: dict[str, bool]) -> None:
+        path = self.path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(dump_yaml(state) if state else "", encoding="utf-8")
+
+
 __all__ = [
+    "ActivationStore",
     "InMemoryKeyring",
     "KeyringBackend",
     "PluginConfigStore",
