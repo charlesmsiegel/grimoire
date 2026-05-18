@@ -1,9 +1,31 @@
-# Library — Remaining Work
+# Library — Completed
 
-> Everything from the original `specs/18-library.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-library-design.md`). Use this as the input to a writing-plans pass when picking up the work.
+> Everything from the original `specs/18-library.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-library-design.md`). All non-deferred items in this document have been implemented; see the per-section "Status" table for landing commits. Items §12-§17 remain marked v2/deferred per the original design.
 
 **Companion (already shipped):** `2026-05-12-library-design.md`
 **Module:** `backend/src/grimoire/library/` (plus `watcher/`, `world/`)
+
+## Status
+
+| § | Title | Status | Commit summary |
+| - | ----- | ------ | -------------- |
+| 1 | Auto-summary into `body_compressed` | ✅ shipped | Wire body_compressed auto-summary queue (§1) |
+| 2 | Configuration surface | ✅ shipped | Add LibraryConfig YAML block and thread toggles through (§2) |
+| 3 | Snapshot-aware fork | ✅ shipped | Walk branch chain when resolving pinned snapshots (§3) |
+| 4 | Promotion: cleanup of campaign-local emergent | ✅ shipped | Finish promotion cleanup: delete emergent / write override + emit event (§4) |
+| 5 | Character promotion path | ✅ shipped | Already routed via CharactersService; rejection message updated (§5) |
+| 6 | Demotion (reverse promotion) | ✅ shipped | Add demote() and save_override_to_library() (§6 + §7) |
+| 7 | Save-back-to-library | ✅ shipped | Add demote() and save_override_to_library() (§6 + §7) |
+| 8 | Upgrade-with-diff-preview UX hook | ✅ shipped | Add preview_upgrade_world_ref returning per-entity content diff (§8) |
+| 9 | Directory rename / move detection | ✅ shipped | Detect directory rename / move and require user reconciliation (§9) |
+| 10 | Variants UI "also exists in" links | ✅ shipped | Surface 'Also exists in' breadcrumb + Fork world button (§10 + §11) |
+| 11 | World forks: "fork world" UI action | ✅ shipped | Surface 'Also exists in' breadcrumb + Fork world button (§10 + §11) |
+| 12 | Renaming with variant-link preservation | ⏸ v2 / deferred | — |
+| 13 | Multi-library roots | ⏸ v2 / deferred | — |
+| 14 | Library sharing tooling | ⏸ v2 / deferred | — |
+| 15 | Cross-variant location families | ⏸ v2 / deferred | — |
+| 16 | Parameterized greetings | ⏸ v2 / deferred | — |
+| 17 | Snapshot deduplication | ⏸ v2 / deferred | — |
 
 ## 1. Auto-summary into `body_compressed`
 
