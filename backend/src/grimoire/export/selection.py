@@ -20,11 +20,13 @@ def filter_scenes(
     *,
     scene_ids: list[str] | None,
     include_drafts: bool,
+    arcs: list[str] | None = None,
 ) -> list[SceneRecord]:
     """Return the subset of ``snapshot.scenes`` matching the selection.
 
     ``scene_ids=None`` means "all scenes". An empty list filters down to
     nothing — matching the conformance fixture for scene selection.
+    ``arcs`` uses the ``arc:<id>`` tag convention (spec 13 §Per-arc).
     """
     if scene_ids is None:
         scenes = list(snapshot.scenes)
@@ -33,6 +35,9 @@ def filter_scenes(
         scenes = [s for s in snapshot.scenes if s.scene.id in wanted]
     if not include_drafts:
         scenes = [s for s in scenes if s.posts or s.scene.closed]
+    if arcs:
+        needles = {f"arc:{arc}" for arc in arcs}
+        scenes = [s for s in scenes if any(tag in needles for tag in s.scene.tags)]
     return scenes
 
 

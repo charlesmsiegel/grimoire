@@ -15,9 +15,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from grimoire.export.filters import FilterContext, apply_filters
 from grimoire.export.sources import DataSources
+
+if TYPE_CHECKING:
+    from grimoire.export.config import ExportFiltersConfig
 from grimoire.scenes.types import Post, Scene
 from grimoire.types.characters import Character
 from grimoire.types.common import CampaignId, CharacterRef, InGameTime
@@ -119,6 +123,51 @@ def _in_range(scene: Scene, window: tuple[InGameTime, InGameTime] | None) -> boo
     return not (hi_dt is not None and moment > hi_dt)
 
 
+def _apply_audience_policy(appendices: set[str], audience: str | None) -> set[str]:
+    """Filter appendices to honour the audience mode (spec 13 §15).
+
+    - ``"share"`` excludes the ``continuity`` appendix even when explicitly
+      requested, so OOC fact / commitment ledgers don't leak into share-
+      style exports.
+    - ``"personal"`` and ``None`` leave the selection untouched. The
+      current explicit-opt-in default for continuity is preserved.
+    """
+    if audience == "share" and "continuity" in appendices:
+        return {a for a in appendices if a != "continuity"}
+    return appendices
+
+
+def _consolidate_by_pov(
+    posts: list[FormattedPost], mode: str
+) -> list[FormattedPost]:
+    """Merge runs of consecutive posts that share an author.
+
+    Spec 13 §Filter and transformation hooks lists POV consolidation as the
+    sixth filter. We treat it as structural rather than text-level: when
+    enabled, neighbouring posts with the same author_kind / display name
+    are concatenated body-wise (separated by a blank line) and the first
+    post's labelling is kept. ``mode == "off"`` is a no-op.
+    """
+    if mode == "off" or len(posts) < 2:
+        return posts
+
+    def key(post: FormattedPost) -> tuple[str, ...]:
+        if mode == "by_kind":
+            return (post.author_kind,)
+        if mode == "by_author":
+            return (post.author_kind, post.author_display)
+        return ("__unknown__", str(id(post)))
+
+    merged: list[FormattedPost] = []
+    for post in posts:
+        if merged and key(post) == key(merged[-1]):
+            prev = merged[-1]
+            prev.body = f"{prev.body}\n\n{post.body}".strip()
+            continue
+        merged.append(post)
+    return merged
+
+
 def _scene_skipped_by_tags(scene: Scene, skip_tags: list[str]) -> bool:
     if not skip_tags:
         return False
@@ -126,11 +175,27 @@ def _scene_skipped_by_tags(scene: Scene, skip_tags: list[str]) -> bool:
     return any(tag in skip_set for tag in scene.tags)
 
 
+def _scene_matches_arcs(scene: Scene, arcs: list[str] | None) -> bool:
+    """Return True when ``scene`` carries any of the requested arc tags.
+
+    Uses the ``arc:<id>`` tag convention (spec 13 §Per-scene and per-arc):
+    selecting arc ``saint-werewolf`` matches scenes tagged
+    ``arc:saint-werewolf``. ``None`` / empty list means "no arc filter".
+    """
+
+    if not arcs:
+        return True
+    needles = {f"arc:{arc}" for arc in arcs}
+    return any(tag in needles for tag in scene.tags)
+
+
 async def build_snapshot(
     campaign_id: CampaignId,
     selection: ExportSelection,
     options: ExportOptions,
     sources: DataSources,
+    *,
+    filter_defaults: ExportFiltersConfig | None = None,
 ) -> CampaignSnapshot:
     """Collect every piece of state the adapters need.
 
@@ -142,7 +207,7 @@ async def build_snapshot(
     # Pull the small things up front so we can label posts and skip filtered
     # scenes consistently.
     pc_names = await sources.pcs.pc_names(campaign_id)
-    filter_ctx = _build_filter_context(selection, options, pc_names)
+    filter_ctx = _build_filter_context(selection, options, pc_names, filter_defaults)
 
     all_scenes = await sources.scenes.list_scenes(campaign_id, selection.branch_id)
     selected_ids = set(selection.scene_ids or [])
@@ -164,6 +229,8 @@ async def build_snapshot(
             continue
         if _scene_skipped_by_tags(scene, filter_ctx.skip_tags):
             continue
+        if not _scene_matches_arcs(scene, selection.arcs):
+            continue
 
         posts = await sources.scenes.get_posts(scene.id)
         formatted_posts: list[FormattedPost] = []
@@ -180,6 +247,9 @@ async def build_snapshot(
                     body=body,
                 )
             )
+        formatted_posts = _consolidate_by_pov(
+            formatted_posts, filter_ctx.pov_consolidation_mode
+        )
 
         scene_images: list[ImageMetadata] = []
         if selection.include_images:
@@ -196,7 +266,10 @@ async def build_snapshot(
         )
         snapshot.scenes.append(part)
 
-    appendices = {a for a in selection.include_appendices}
+    appendices = _apply_audience_policy(
+        {a for a in selection.include_appendices},
+        selection.audience,
+    )
     if "cast" in appendices:
         snapshot.characters = list(await sources.characters.list_for_campaign(campaign_id))
         if filter_ctx.anonymize:
@@ -229,21 +302,36 @@ def _build_filter_context(
     selection: ExportSelection,
     options: ExportOptions,
     pc_names: dict[str, str],
+    defaults: ExportFiltersConfig | None = None,
 ) -> FilterContext:
     extra = dict(options.extra or {})
     filters_meta = dict(selection.filters or {})
 
+    # Per spec 13 §Configuration: ``filters.*_default`` are honoured only when
+    # ``selection.filters`` does not override the same key.
+    strip_ooc_default = True if defaults is None else defaults.strip_ooc_default
+    strip_mech_default = False if defaults is None else defaults.strip_mechanics_default
+    strip_narr_default = (
+        True if defaults is None else defaults.strip_narrator_scaffolding_default
+    )
+    anonymize_default = False if defaults is None else defaults.anonymize_default
+
     ctx = FilterContext(
-        strip_ooc=bool(filters_meta.get("strip_ooc", True)),
-        strip_mechanics=bool(filters_meta.get("strip_mechanics", False)),
-        strip_narrator_scaffolding=bool(filters_meta.get("strip_narrator_scaffolding", True)),
+        strip_ooc=bool(filters_meta.get("strip_ooc", strip_ooc_default)),
+        strip_mechanics=bool(filters_meta.get("strip_mechanics", strip_mech_default)),
+        strip_narrator_scaffolding=bool(
+            filters_meta.get("strip_narrator_scaffolding", strip_narr_default)
+        ),
         skip_tags=list(filters_meta.get("skip_tags") or []),
+        pov_consolidation_mode=str(filters_meta.get("pov_consolidation", "off")),
     )
 
     anonymize = dict(filters_meta.get("anonymize") or {})
     # Convenience: ``anonymize_pcs`` swaps every PC display name for the same
     # pseudonym. Existing explicit mappings always win.
     pc_pseudonym = filters_meta.get("anonymize_pcs") or extra.get("anonymize_pcs")
+    if pc_pseudonym is None and anonymize_default:
+        pc_pseudonym = "Anon"
     if pc_pseudonym:
         for ref, name in pc_names.items():
             anonymize.setdefault(name, str(pc_pseudonym))

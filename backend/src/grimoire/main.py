@@ -25,7 +25,8 @@ from grimoire.config import settings
 from grimoire.context.builder import ContextBuilderService
 from grimoire.continuity import ContinuityService
 from grimoire.event_bus import EventBus
-from grimoire.export.service import ExportService
+from grimoire.export.epub import EpubAdapter
+from grimoire.export.service import ExportService, ExportServiceConfig
 from grimoire.export.sources import DataSources
 from grimoire.extractor.service import ExtractorService
 from grimoire.imagegen import (
@@ -58,6 +59,33 @@ from grimoire.world import WorldConfig, WorldService
 log = logging.getLogger(__name__)
 
 _SEED_ROOT = Path(__file__).resolve().parent / "seed" / "library"
+
+
+class _ImageGenCoverGenerator:
+    """Adapter from :class:`ImageGenService` to the CoverGenerator protocol.
+
+    EPUB auto-cover (§6) calls ``generate_sync`` on the active backend for
+    the campaign; failures are swallowed and reported back as ``None`` so
+    the export falls through to the plain title page.
+    """
+
+    def __init__(self, imagegen: ImageGenService) -> None:
+        self._imagegen = imagegen
+
+    async def generate_cover(self, campaign_id: str, prompt: str) -> bytes | None:
+        from grimoire.types.imagegen import GenerationRequest
+
+        try:
+            result = await self._imagegen.generate_sync(
+                campaign_id,
+                GenerationRequest(prompt=prompt, width=1024, height=1536),
+            )
+        except Exception as exc:
+            log.warning("cover generation failed: %r", exc)
+            return None
+        if result.error:
+            return None
+        return result.image_bytes or None
 
 
 def _seed_defaults(data_root: Path) -> None:
@@ -304,17 +332,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # registry, so installing an export plugin makes it available to
         # /export without further wiring.
         if container.export is None:
+            cover_generator = _ImageGenCoverGenerator(container.imagegen)
             sources = DataSources(
                 scenes=container.scenes,
                 characters=container.characters,
                 world=container.world,
                 continuity=container.continuity,
                 images=container.imagegen,
+                cover_generator=cover_generator,
                 data_root=data_root,
             )
+            export_cfg = settings.export
+            epub_adapter = EpubAdapter(
+                sources,
+                config=export_cfg.adapters.epub,
+                filter_defaults=export_cfg.filters,
+            )
+            # Spec 13 names EPUB as the v1 priority format; we ship it as a
+            # built-in alongside any plugin adapters the registry loaded.
             container.export = ExportService(
                 sources=sources,
-                adapters=container.plugins.export_adapters(),
+                adapters=[epub_adapter, *container.plugins.export_adapters()],
+                config=ExportServiceConfig.from_export_config(export_cfg),
+                state_store=container.state_store,
             )
 
         # Orchestrator ties the play loop together. ws_push forwards

@@ -76,6 +76,20 @@ class ImageSource(Protocol):
 
 
 @runtime_checkable
+class CoverGenerator(Protocol):
+    """Optional cover-image renderer for EPUB auto-cover (§6).
+
+    Implementations should return ``None`` when the backend is unavailable
+    or the prompt produced no usable image; callers then fall back to the
+    plain title page.
+    """
+
+    async def generate_cover(
+        self, campaign_id: CampaignId, prompt: str
+    ) -> bytes | None: ...
+
+
+@runtime_checkable
 class PCSource(Protocol):
     async def pc_names(self, campaign_id: CampaignId) -> dict[CharacterRef, str]: ...
 
@@ -141,6 +155,7 @@ class DataSources:
         continuity: ContinuitySource | None = None,
         images: ImageSource | None = None,
         pcs: PCSource | None = None,
+        cover_generator: CoverGenerator | None = None,
         data_root: Path | None = None,
     ) -> None:
         self.scenes = scenes
@@ -149,12 +164,14 @@ class DataSources:
         self.continuity = continuity or _NullContinuitySource()
         self.images = images or _NullImageSource()
         self.pcs = pcs or _NullPCSource()
+        self.cover_generator = cover_generator
         self.data_root = data_root
 
 
 __all__ = [
     "CharacterSource",
     "ContinuitySource",
+    "CoverGenerator",
     "DataSources",
     "ImageSource",
     "PCSource",

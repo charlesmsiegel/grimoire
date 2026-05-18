@@ -452,3 +452,110 @@ def test_bulk_create_missing_sheets_404_for_unknown_campaign(client, container) 
     container.world = FakeWorld()
     response = client.post("/api/campaigns/c-other/sheets/bulk-create-missing")
     assert response.status_code == 404
+
+
+# Export routes -------------------------------------------------------- #
+
+
+class FakeExportService:
+    """Just enough of the ExportService surface for HTTP-route tests."""
+
+    def __init__(self) -> None:
+        self.history_records: dict[str, list] = {}
+        self.preview_calls: list[tuple] = []
+
+    def list_adapters(self) -> list:
+        from grimoire.types.export import ExportCapabilities
+
+        class _Adapter:
+            id: ClassVar[str] = "epub"
+            name: ClassVar[str] = "EPUB 3"
+            extensions: ClassVar[list[str]] = ["epub"]
+            mime_type: ClassVar[str] = "application/epub+zip"
+            capabilities: ClassVar[ExportCapabilities] = ExportCapabilities(
+                supports_appendices=True
+            )
+
+            def option_schema(self) -> dict:
+                return {"type": "object"}
+
+        return [_Adapter()]
+
+    async def preview(self, campaign_id, adapter_id, selection, options) -> Any:
+        from grimoire.types.export import ExportPreview
+
+        self.preview_calls.append((campaign_id, adapter_id))
+        return ExportPreview(
+            adapter_id=adapter_id,
+            scene_count=2,
+            word_count=200,
+            image_count=0,
+            estimated_size_bytes=8192,
+        )
+
+    async def history(self, campaign_id: str) -> list:
+        return list(self.history_records.get(campaign_id, []))
+
+
+def test_list_export_adapters_returns_capabilities(client, container) -> None:
+    container.export = FakeExportService()
+    response = client.get("/api/campaigns/c1/exports/adapters")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["adapters"][0]["id"] == "epub"
+    assert payload["adapters"][0]["capabilities"]["supports_appendices"] is True
+    assert payload["adapters"][0]["option_schema"] == {"type": "object"}
+
+
+def test_preview_export_returns_preview(client, container) -> None:
+    fake = FakeExportService()
+    container.export = fake
+    response = client.post(
+        "/api/campaigns/c1/exports/preview",
+        json={
+            "adapter_id": "epub",
+            "selection": {"branch_id": "main"},
+            "options": {"title": "Probe"},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["adapter_id"] == "epub"
+    assert body["scene_count"] == 2
+    assert fake.preview_calls == [("c1", "epub")]
+
+
+def test_list_export_history_paginates(client, container) -> None:
+    from datetime import UTC, datetime
+
+    from grimoire.types.export import (
+        ExportOptions,
+        ExportRecord,
+        ExportResult,
+        ExportSelection,
+    )
+
+    fake = FakeExportService()
+    fake.history_records["c1"] = [
+        ExportRecord(
+            id=f"e{i}",
+            campaign_id="c1",
+            adapter_id="epub",
+            selection=ExportSelection(branch_id="main"),
+            options=ExportOptions(title=f"T{i}"),
+            result=ExportResult(format="epub", size_bytes=10),
+            created_at=datetime.now(UTC),
+        )
+        for i in range(3)
+    ]
+    container.export = fake
+
+    response = client.get("/api/campaigns/c1/exports")
+    assert response.status_code == 200
+    assert len(response.json()["records"]) == 3
+
+    response = client.get("/api/campaigns/c1/exports?limit=2")
+    assert response.status_code == 200
+    records = response.json()["records"]
+    assert len(records) == 2
+    assert records[-1]["options"]["title"] == "T2"

@@ -1,7 +1,9 @@
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from grimoire.export.config import ExportConfig
 from grimoire.llm_gateway.settings import GatewaySettings
 
 
@@ -23,6 +25,7 @@ class Settings(BaseSettings):
     enable_wal: bool = True
 
     llm_gateway: GatewaySettings = GatewaySettings()
+    export: ExportConfig = Field(default_factory=ExportConfig)
 
     @property
     def resolved_database_path(self) -> Path:

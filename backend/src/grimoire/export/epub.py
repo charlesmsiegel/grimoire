@@ -20,6 +20,7 @@ truthy; the warning is recorded on the ``ExportResult`` either way.
 from __future__ import annotations
 
 import html
+import re
 import shutil
 import subprocess
 import uuid
@@ -30,6 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
+from grimoire.export.config import EpubAdapterConfig, ExportFiltersConfig
 from grimoire.export.errors import EmptyExportError
 from grimoire.export.snapshot import CampaignSnapshot, ScenePart, build_snapshot
 from grimoire.export.sources import DataSources
@@ -38,7 +40,12 @@ from grimoire.types.characters import Character
 from grimoire.types.common import CampaignId, JsonSchema
 from grimoire.types.composition import LibraryEntity
 from grimoire.types.continuity import Commitment, Fact
-from grimoire.types.export import ExportOptions, ExportResult, ExportSelection
+from grimoire.types.export import (
+    ExportCapabilities,
+    ExportOptions,
+    ExportResult,
+    ExportSelection,
+)
 from grimoire.types.imagegen import ImageMetadata
 
 # ---------- constants ----------------------------------------------------- #
@@ -68,11 +75,18 @@ figure { margin: 1.5em 0; text-align: center; page-break-inside: avoid; }
 figure img { max-width: 100%; height: auto; }
 figcaption { font-size: 0.85em; color: #555; }
 .mech { font-family: 'Courier New', monospace; font-size: 0.85em; color: #644; }
+.mech-noteref { font-family: 'Courier New', monospace; font-size: 0.8em; color: #644;
+                text-decoration: none; vertical-align: super; }
+section.footnotes { margin-top: 3em; border-top: 1px solid #999; padding-top: 1em;
+                    font-size: 0.85em; color: #444; }
+section.footnotes aside { margin: 0.4em 0; }
 .toc-list { list-style: none; padding-left: 0; }
 .toc-list li { margin: 0.4em 0; }
 .appendix h2 { margin-top: 2em; border-bottom: 1px solid #999; padding-bottom: 0.2em; }
 .appendix dl dt { font-weight: bold; margin-top: 0.8em; }
 .appendix dl dd { margin-left: 1em; color: #333; }
+.source-attribution { font-size: 0.8em; color: #777; font-weight: normal;
+                      font-style: italic; }
 """
 
 _MANUSCRIPT_CSS = """\
@@ -87,6 +101,8 @@ p.player { font-style: italic; }
 p.narrator-aside { font-style: italic; }
 figure, img { display: none; }
 .mech { color: #644; }
+.mech-noteref { color: #644; text-decoration: none; vertical-align: super; }
+section.footnotes { margin-top: 2em; }
 .toc-list { list-style: none; padding-left: 0; }
 .toc-list li { margin: 0.4em 0; }
 .appendix h2 { margin-top: 2em; }
@@ -106,13 +122,19 @@ def list_style_presets() -> list[str]:
 # ---------- option / capability helpers ---------------------------------- #
 
 
-def _default_options(title: str = "Untitled Campaign") -> ExportOptions:
+def _default_options(
+    title: str = "Untitled Campaign",
+    *,
+    style_preset: str = "novel",
+    include_appendices: list[str] | None = None,
+    validate: bool = False,
+) -> ExportOptions:
     return ExportOptions(
         title=title,
-        style_preset="novel",
+        style_preset=style_preset,
         extra={
-            "include_appendices": list(DEFAULT_APPENDICES),
-            "validate": False,
+            "include_appendices": list(include_appendices or DEFAULT_APPENDICES),
+            "validate": validate,
         },
     )
 
@@ -154,6 +176,8 @@ def _option_schema() -> JsonSchema:
                     "validate": {"type": "boolean", "default": False},
                     "custom_css": {"type": "string"},
                     "cover_caption": {"type": "string"},
+                    "show_source_attribution": {"type": "boolean", "default": False},
+                    "generate_cover": {"type": "boolean", "default": False},
                 },
             },
         },
@@ -193,6 +217,12 @@ class EpubAdapter:
     name: ClassVar[str] = "EPUB 3"
     extensions: ClassVar[list[str]] = ["epub"]
     mime_type: ClassVar[str] = MIME_TYPE
+    capabilities: ClassVar[ExportCapabilities] = ExportCapabilities(
+        supports_images=True,
+        supports_appendices=True,
+        supports_filters=True,
+        supported_style_presets=["novel", "manuscript"],
+    )
 
     def __init__(
         self,
@@ -200,15 +230,25 @@ class EpubAdapter:
         *,
         epubcheck_path: str | Path | None = None,
         clock: Any = None,
+        config: EpubAdapterConfig | None = None,
+        filter_defaults: ExportFiltersConfig | None = None,
     ) -> None:
         self.sources = sources
-        self.epubcheck_path = str(epubcheck_path) if epubcheck_path else None
+        self.config = config or EpubAdapterConfig()
+        self._filter_defaults = filter_defaults
+        # CLI / explicit arg wins over config to preserve the previous test API.
+        resolved_path = epubcheck_path or self.config.epubcheck_path
+        self.epubcheck_path = str(resolved_path) if resolved_path else None
         self._clock = clock or (lambda: datetime.now(UTC))
 
     # -- ExportAdapter surface ------------------------------------------- #
 
     def default_options(self) -> ExportOptions:
-        return _default_options()
+        return _default_options(
+            style_preset=self.config.default_style,
+            include_appendices=list(self.config.include_appendices_by_default),
+            validate=self.config.validate_with_epubcheck,
+        )
 
     def option_schema(self) -> JsonSchema:
         return _option_schema()
@@ -224,11 +264,21 @@ class EpubAdapter:
         # snapshot builder. Callers can also drop them into selection.include
         # _appendices directly; the union wins.
         merged_selection = _merge_appendix_choices(selection, options)
-        snapshot = await build_snapshot(campaign_id, merged_selection, options, self.sources)
+        snapshot = await build_snapshot(
+            campaign_id,
+            merged_selection,
+            options,
+            self.sources,
+            filter_defaults=self._filter_defaults,
+        )
         if not snapshot.scenes:
             raise EmptyExportError(
                 f"campaign {campaign_id!r}: selection produced no exportable scenes"
             )
+
+        snapshot.options = await self._maybe_generate_cover(
+            campaign_id, options, snapshot
+        )
 
         book = _build_book(snapshot, self._clock())
         _write_epub(output_path, book)
@@ -247,6 +297,65 @@ class EpubAdapter:
             warnings=warnings,
             created_at=self._clock(),
         )
+
+    async def _maybe_generate_cover(
+        self,
+        campaign_id: CampaignId,
+        options: ExportOptions,
+        snapshot: CampaignSnapshot,
+    ) -> ExportOptions:
+        """Render a cover via ImageGen when opted in and none was supplied.
+
+        Off by default; gated on ``options.extra['generate_cover']`` or the
+        per-adapter ``default_cover_generated`` config knob. Returns the
+        possibly-updated ``options`` (with ``cover_image`` populated).
+        """
+
+        if options.cover_image:
+            return options
+        extra = options.extra or {}
+        opt_in = bool(extra.get("generate_cover", self.config.default_cover_generated))
+        if not opt_in:
+            return options
+        generator = getattr(self.sources, "cover_generator", None)
+        if generator is None:
+            snapshot.warnings.append(
+                "generate_cover requested but no cover generator is wired"
+            )
+            return options
+        prompt = _cover_prompt(options, snapshot)
+        try:
+            payload = await generator.generate_cover(campaign_id, prompt)
+        except Exception as exc:  # tolerate any backend failure
+            snapshot.warnings.append(f"cover generation failed: {exc!r}")
+            return options
+        if not payload:
+            snapshot.warnings.append("cover generation returned no image")
+            return options
+        return options.model_copy(update={"cover_image": payload})
+
+
+def _cover_prompt(options: ExportOptions, snapshot: CampaignSnapshot) -> str:
+    """Compose a one-line cover prompt from campaign metadata + first chapter."""
+    bits: list[str] = []
+    if options.title:
+        bits.append(options.title)
+    if options.subtitle:
+        bits.append(options.subtitle)
+    if snapshot.worlds:
+        world = snapshot.worlds[0]
+        if world.genre:
+            bits.append(world.genre)
+        if world.description:
+            bits.append(world.description[:160])
+    if snapshot.scenes:
+        first = snapshot.scenes[0].scene
+        if first.title:
+            bits.append(f"opening scene: {first.title}")
+        if first.mood:
+            bits.append(f"mood: {first.mood}")
+    bits.append("book cover illustration, dramatic lighting")
+    return " — ".join(b for b in bits if b)
 
 
 # ---------- selection helpers -------------------------------------------- #
@@ -486,7 +595,22 @@ def _xhtml_doc(title: str, body: str, *, stylesheet: str = "styles/main.css") ->
     )
 
 
-def _format_paragraphs(body: str, *, css_class: str | None = None) -> str:
+def _format_paragraphs(
+    body: str,
+    *,
+    css_class: str | None = None,
+    footnote_collector: list[tuple[str, str]] | None = None,
+    chapter_index: int = 0,
+) -> str:
+    """Render paragraphs to XHTML.
+
+    When ``footnote_collector`` is supplied, ``[roll …]`` / ``[mech …]`` /
+    ``[stat …]`` chips inside the body are extracted, replaced inline with
+    EPUB ``<a epub:type="noteref">`` refs, and their content appended to the
+    list as ``(note_id, body_text)`` pairs. The caller is expected to render
+    the matching ``<aside epub:type="footnote">`` blocks at chapter end.
+    """
+
     paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
     out: list[str] = []
     for index, paragraph in enumerate(paragraphs):
@@ -496,9 +620,42 @@ def _format_paragraphs(body: str, *, css_class: str | None = None) -> str:
         if css_class:
             klass.append(css_class)
         attr = f' class="{" ".join(klass)}"' if klass else ""
-        text = html.escape(paragraph).replace("\n", "<br/>")
-        out.append(f"<p{attr}>{text}</p>")
+        rendered = _render_inline_text(paragraph, footnote_collector, chapter_index)
+        out.append(f"<p{attr}>{rendered}</p>")
     return "\n".join(out)
+
+
+_MECH_CHIP_RE = re.compile(
+    r"\[\s*(?P<kind>roll|mech|stat|sheet|result)\s*[:\-—]?\s*(?P<body>[^\]]*)\]",
+    re.IGNORECASE,
+)
+
+
+def _render_inline_text(
+    text: str,
+    footnote_collector: list[tuple[str, str]] | None,
+    chapter_index: int,
+) -> str:
+    if footnote_collector is None:
+        return html.escape(text).replace("\n", "<br/>")
+
+    parts: list[str] = []
+    last = 0
+    for match in _MECH_CHIP_RE.finditer(text):
+        parts.append(html.escape(text[last : match.start()]).replace("\n", "<br/>"))
+        kind = match.group("kind").lower()
+        body = match.group("body").strip() or kind
+        note_index = len(footnote_collector) + 1
+        note_id = f"fn-ch{chapter_index}-{note_index}"
+        anchor_id = f"{note_id}-ref"
+        parts.append(
+            f'<a id="{anchor_id}" href="#{note_id}" epub:type="noteref" '
+            f'class="mech-noteref">[{html.escape(kind)}]</a>'
+        )
+        footnote_collector.append((note_id, body))
+        last = match.end()
+    parts.append(html.escape(text[last:]).replace("\n", "<br/>"))
+    return "".join(parts)
 
 
 def _scene_header(index: int, scene: Scene) -> str:
@@ -524,6 +681,7 @@ def _render_chapter(
 ) -> str:
     body_parts: list[str] = [_scene_header(index, part.scene)]
     include_mech = bool((options.extra or {}).get("include_mechanics_footnotes", False))
+    footnotes: list[tuple[str, str]] | None = [] if include_mech else None
     for img in part.images[:3]:  # cap inline illustrations per spec
         href = image_hrefs.get(img.id)
         if href:
@@ -542,9 +700,26 @@ def _render_chapter(
         if post.author_kind in ("pc", "npc"):
             label = html.escape(post.author_display)
             prefix = f'<p class="speaker"><strong>{label}:</strong></p>\n'
-        body_parts.append(prefix + _format_paragraphs(post.body, css_class=css))
-        if include_mech and "[" in post.body and "]" in post.body:
-            body_parts.append('<p class="mech">' + html.escape(post.body) + "</p>")
+        body_parts.append(
+            prefix
+            + _format_paragraphs(
+                post.body,
+                css_class=css,
+                footnote_collector=footnotes,
+                chapter_index=index,
+            )
+        )
+
+    if footnotes:
+        body_parts.append('<section epub:type="footnotes" class="footnotes">')
+        for note_id, body in footnotes:
+            body_parts.append(
+                f'<aside id="{note_id}" epub:type="footnote">'
+                f'<p>{html.escape(body)} '
+                f'<a href="#{note_id}-ref" epub:type="backlink">↩</a></p>'
+                "</aside>"
+            )
+        body_parts.append("</section>")
 
     return _xhtml_doc(
         part.scene.title or f"Chapter {index}",
@@ -595,7 +770,12 @@ def _render_appendices(
     if "cast" in appendices and snapshot.characters:
         items.append(_appendix_item("cast", "Cast", _render_cast(snapshot.characters)))
     if any(name in appendices for name in ("world", "locations", "lore", "factions", "items")):
-        body = _render_world_appendix(snapshot, appendices)
+        show_attribution = bool(
+            (options.extra or {}).get("show_source_attribution", False)
+        )
+        body = _render_world_appendix(
+            snapshot, appendices, show_attribution=show_attribution
+        )
         if body:
             items.append(_appendix_item("world", "World", body))
     if "continuity" in appendices and (snapshot.facts or snapshot.commitments):
@@ -653,14 +833,26 @@ def _render_cast(characters: Iterable[Character]) -> str:
     return "\n".join(rows)
 
 
-def _render_world_appendix(snapshot: CampaignSnapshot, appendices: set[str]) -> str:
+def _render_world_appendix(
+    snapshot: CampaignSnapshot,
+    appendices: set[str],
+    *,
+    show_attribution: bool = False,
+) -> str:
+    world_versions = {w.id: w.version for w in snapshot.worlds}
     parts: list[str] = []
     if snapshot.worlds:
         parts.append("<h2>Worlds</h2><ul>")
         for st in snapshot.worlds:
+            attribution = (
+                f' <span class="source-attribution">&lt;source: {html.escape(st.id)} '
+                f"v{st.version}&gt;</span>"
+                if show_attribution
+                else ""
+            )
             parts.append(
                 f"<li><strong>{html.escape(st.name)}</strong> — "
-                f"{html.escape(st.description or st.genre or '')}</li>"
+                f"{html.escape(st.description or st.genre or '')}{attribution}</li>"
             )
         parts.append("</ul>")
     for kind, label, items in (
@@ -671,16 +863,36 @@ def _render_world_appendix(snapshot: CampaignSnapshot, appendices: set[str]) -> 
     ):
         if (kind in appendices or "world" in appendices) and items:
             parts.append(f"<h2>{label}</h2>")
-            parts.append(_render_library_dl(items))
+            parts.append(
+                _render_library_dl(
+                    items,
+                    show_attribution=show_attribution,
+                    world_versions=world_versions,
+                )
+            )
     return "\n".join(parts)
 
 
-def _render_library_dl(entries: Iterable[LibraryEntity]) -> str:
+def _render_library_dl(
+    entries: Iterable[LibraryEntity],
+    *,
+    show_attribution: bool = False,
+    world_versions: dict[str, int] | None = None,
+) -> str:
+    versions = world_versions or {}
     rows = ["<dl>"]
     for entity in entries:
         name = html.escape(entity.name)
         body = html.escape((entity.body or "").strip().split("\n\n", 1)[0] or "—")
-        rows.append(f"<dt>{name}</dt><dd>{body}</dd>")
+        attribution = ""
+        if show_attribution and entity.world_id:
+            version = versions.get(entity.world_id)
+            label = f"{entity.world_id} v{version}" if version is not None else entity.world_id
+            attribution = (
+                f' <span class="source-attribution">&lt;source: '
+                f"{html.escape(label)}&gt;</span>"
+            )
+        rows.append(f"<dt>{name}{attribution}</dt><dd>{body}</dd>")
     rows.append("</dl>")
     return "\n".join(rows)
 

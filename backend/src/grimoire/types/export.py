@@ -20,11 +20,13 @@ class ExportSelection(BaseModel):
     branch_id: BranchId
     scene_ids: list[str] | None = None
     date_range: tuple[InGameTime, InGameTime] | None = None
+    arcs: list[str] | None = None  # tag-convention: scenes with tag "arc:<id>"
     include_images: bool = True
     include_appendices: list[str] = Field(default_factory=list)
     include_drafts: bool = False
     include_review_queue: bool = False
     filters: Json = Field(default_factory=dict)
+    audience: str | None = None  # "personal" | "share" (spec 13 §15)
 
 
 class ExportOptions(BaseModel):
