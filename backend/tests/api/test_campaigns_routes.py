@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 
 class FakeOrchestrator:
@@ -374,7 +374,7 @@ class FakeStateStoreForBulk:
 
 
 class _FakeModule:
-    sheet_kinds = ["character"]
+    sheet_kinds: ClassVar[list[str]] = ["character"]
 
     def initialize_sheet(self, kind: str, entity_id: str) -> dict:
         return {"kind": kind, "entity_id": entity_id, "initialized": True}
