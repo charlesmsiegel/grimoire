@@ -1,25 +1,14 @@
-"""Tests for the body_compressed auto-summarizer (spec §5)."""
+"""Tests for the body_compressed auto-summarizer drainer (spec §5)."""
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 
 from grimoire.event_bus import Event, EventBus
 from grimoire.state_store import StateStore
-from grimoire.state_store.config import LibrarySectionConfig
-from grimoire.state_store.summarizer import (
-    MIN_BODY_CHARS,
-    BodySummarizer,
-    iter_rows_needing_summary,
-    parse_existing_envelope,
-    write_envelope,
-)
+from grimoire.state_store.summarizer import BodySummarizer, summarize_text
 from grimoire.types.llm import CompletionResponse, TokenUsage
-
-# ---------------------------------------------------------------------------
-# Fake gateway
-# ---------------------------------------------------------------------------
+from grimoire.watcher.watcher import SummaryJob, SummaryQueue
 
 
 class FakeGateway:
@@ -43,153 +32,55 @@ class FailingGateway:
         raise RuntimeError("LLM unavailable")
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-async def _insert_row(
+async def _insert_library_row(
     store: StateStore,
     *,
-    row_id: str,
-    body: str,
-    body_compressed: str | None = None,
-    content_hash: str = "hash-abc",
+    library_id: str = "worlds/wod/characters/winifred",
+    content_hash: str = "h1",
+    body: str = "winifred is a vampire.",
 ) -> None:
-    await store.db.execute(
-        """
-        INSERT INTO library_index (
-            id, world_id, kind, asset_id, name, path, frontmatter, body,
-            body_compressed, tags, keywords, file_mtime, content_hash, indexed_at, version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            body = excluded.body,
-            body_compressed = excluded.body_compressed,
-            content_hash = excluded.content_hash
-        """,
-        (
-            row_id,
-            "test-world",
-            "character",
-            row_id,
-            row_id,
-            f"worlds/test-world/characters/{row_id}.md",
-            "{}",
-            body,
-            body_compressed,
-            None,
-            None,
-            _now_iso(),
-            content_hash,
-            _now_iso(),
-            1,
-        ),
+    """Insert a minimal library_index row directly via the connection pool."""
+    async with store.db.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO library_index (
+              id, kind, asset_id, name, path, frontmatter, body, body_compressed,
+              tags, keywords, file_mtime, content_hash, indexed_at, version
+            ) VALUES (?, ?, ?, ?, ?, '{}', ?, NULL, NULL, NULL, ?, ?, ?, 1)
+            """,
+            (
+                library_id,
+                "character",
+                "winifred",
+                "winifred",
+                "worlds/wod/characters/winifred.md",
+                body,
+                datetime.now(UTC).isoformat(),
+                content_hash,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+
+
+async def _fetch_body_compressed(store: StateStore, library_id: str) -> str | None:
+    row = await store.db.fetchone(
+        "SELECT body_compressed FROM library_index WHERE id = ?", (library_id,)
     )
+    return None if row is None else row["body_compressed"]
 
 
 # ---------------------------------------------------------------------------
-# parse_existing_envelope
+# summarize_text
 # ---------------------------------------------------------------------------
 
 
-async def test_parse_envelope_none() -> None:
-    summary, h = await parse_existing_envelope(None)
-    assert summary is None
-    assert h is None
-
-
-async def test_parse_envelope_invalid_json() -> None:
-    summary, h = await parse_existing_envelope("not-json")
-    assert summary is None
-    assert h is None
-
-
-async def test_parse_envelope_missing_keys() -> None:
-    summary, h = await parse_existing_envelope(json.dumps({"summary": "x"}))
-    assert summary is None
-    assert h is None
-
-
-async def test_parse_envelope_valid() -> None:
-    env = json.dumps({"summary": "Summarized text.", "hash": "abc123", "model": "p/m"})
-    summary, h = await parse_existing_envelope(env)
-    assert summary == "Summarized text."
-    assert h == "abc123"
-
-
-# ---------------------------------------------------------------------------
-# iter_rows_needing_summary
-# ---------------------------------------------------------------------------
-
-
-async def test_short_body_skipped(store: StateStore) -> None:
-    await _insert_row(store, row_id="short", body="Too short.", content_hash="h1")
-    rows = await iter_rows_needing_summary(store.db, min_chars=MIN_BODY_CHARS, limit=10)
-    assert not any(r["id"] == "short" for r in rows)
-
-
-async def test_long_body_no_compressed_returned(store: StateStore) -> None:
-    long_body = "x" * MIN_BODY_CHARS
-    await _insert_row(store, row_id="long", body=long_body, content_hash="h2")
-    rows = await iter_rows_needing_summary(store.db, min_chars=MIN_BODY_CHARS, limit=10)
-    assert any(r["id"] == "long" for r in rows)
-
-
-async def test_up_to_date_row_skipped(store: StateStore) -> None:
-    long_body = "x" * MIN_BODY_CHARS
-    envelope = json.dumps({"summary": "ok", "hash": "h-current", "model": "p/m"})
-    await _insert_row(
-        store,
-        row_id="current",
-        body=long_body,
-        content_hash="h-current",
-        body_compressed=envelope,
-    )
-    rows = await iter_rows_needing_summary(store.db, min_chars=MIN_BODY_CHARS, limit=10)
-    assert not any(r["id"] == "current" for r in rows)
-
-
-async def test_stale_hash_triggers_resummary(store: StateStore) -> None:
-    long_body = "x" * MIN_BODY_CHARS
-    old_envelope = json.dumps({"summary": "old", "hash": "old-hash", "model": "p/m"})
-    await _insert_row(
-        store,
-        row_id="stale",
-        body=long_body,
-        content_hash="new-hash",
-        body_compressed=old_envelope,
-    )
-    rows = await iter_rows_needing_summary(store.db, min_chars=MIN_BODY_CHARS, limit=10)
-    assert any(r["id"] == "stale" for r in rows)
-
-
-# ---------------------------------------------------------------------------
-# write_envelope + round-trip
-# ---------------------------------------------------------------------------
-
-
-async def test_write_envelope_round_trips(store: StateStore) -> None:
-    long_body = "x" * MIN_BODY_CHARS
-    await _insert_row(store, row_id="e1", body=long_body, content_hash="h-e1")
-    await write_envelope(
-        store.db,
-        row_id="e1",
-        summary="Summary text.",
-        content_hash="h-e1",
-        model_id="provider/model",
-    )
-    row = await store.db.fetchone("SELECT body_compressed FROM library_index WHERE id = ?", ("e1",))
-    assert row is not None
-    summary, h = await parse_existing_envelope(row["body_compressed"])
-    assert summary == "Summary text."
-    assert h == "h-e1"
-
-    obj = json.loads(row["body_compressed"])
-    assert obj["model"] == "provider/model"
+async def test_summarize_text_routes_to_library_task() -> None:
+    gateway = FakeGateway(text="Compressed prose.")
+    out = await summarize_text(gateway, "a long body to be compressed")
+    assert out == "Compressed prose."
+    task, request = gateway.calls[0]
+    assert task == "library.summarize"
+    assert request.messages[0].content == "a long body to be compressed"
 
 
 # ---------------------------------------------------------------------------
@@ -197,116 +88,114 @@ async def test_write_envelope_round_trips(store: StateStore) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_process_once_summarizes_long_row(store: StateStore) -> None:
-    long_body = "y" * MIN_BODY_CHARS
-    await _insert_row(store, row_id="p1", body=long_body, content_hash="h-p1")
-
-    gateway = FakeGateway(text="Nice summary.")
-    config = LibrarySectionConfig()
-    s = BodySummarizer(db=store.db, gateway=gateway, config=config)
-    count = await s.process_once()
-
-    assert count == 1
-    assert len(gateway.calls) == 1
-
-    row = await store.db.fetchone("SELECT body_compressed FROM library_index WHERE id = ?", ("p1",))
-    summary, h = await parse_existing_envelope(row["body_compressed"])
-    assert summary == "Nice summary."
-    assert h == "h-p1"
+async def test_process_once_no_jobs(store: StateStore) -> None:
+    queue = SummaryQueue()
+    summarizer = BodySummarizer(store=store, gateway=FakeGateway(), queue=queue)
+    assert await summarizer.process_once() == 0
 
 
-async def test_process_once_skips_short_row(store: StateStore) -> None:
-    await _insert_row(store, row_id="short2", body="Short.", content_hash="h-s")
-    gateway = FakeGateway()
-    s = BodySummarizer(db=store.db, gateway=gateway, config=LibrarySectionConfig())
-    count = await s.process_once()
-    assert count == 0
-    assert len(gateway.calls) == 0
-
-
-async def test_process_once_noop_if_hash_unchanged(store: StateStore) -> None:
-    long_body = "z" * MIN_BODY_CHARS
-    envelope = json.dumps({"summary": "existing", "hash": "h-noop", "model": "x/y"})
-    await _insert_row(
-        store,
-        row_id="noop",
-        body=long_body,
-        content_hash="h-noop",
-        body_compressed=envelope,
+async def test_process_once_drains_queue_and_persists(store: StateStore) -> None:
+    await _insert_library_row(store, library_id="lib/a", content_hash="h-a")
+    queue = SummaryQueue()
+    queue.enqueue(
+        SummaryJob(library_id="lib/a", source_kind="character", text="x" * 1500, content_hash="h-a")
     )
-    gateway = FakeGateway()
-    s = BodySummarizer(db=store.db, gateway=gateway, config=LibrarySectionConfig())
-    count = await s.process_once()
-    assert count == 0
-    assert len(gateway.calls) == 0
-
-
-async def test_process_once_resummaries_on_hash_change(store: StateStore) -> None:
-    long_body = "a" * MIN_BODY_CHARS
-    old_env = json.dumps({"summary": "old", "hash": "hash-old", "model": "x/y"})
-    await _insert_row(
-        store,
-        row_id="rehash",
-        body=long_body,
-        content_hash="hash-new",
-        body_compressed=old_env,
+    summarizer = BodySummarizer(
+        store=store, gateway=FakeGateway(text="A short summary."), queue=queue
     )
-    gateway = FakeGateway(text="Fresh summary.")
-    s = BodySummarizer(db=store.db, gateway=gateway, config=LibrarySectionConfig())
-    count = await s.process_once()
 
-    assert count == 1
-    row = await store.db.fetchone(
-        "SELECT body_compressed FROM library_index WHERE id = ?", ("rehash",)
+    processed = await summarizer.process_once()
+
+    assert processed == 1
+    assert await _fetch_body_compressed(store, "lib/a") == "A short summary."
+    assert queue.pending == 0
+
+
+async def test_process_once_skips_when_content_hash_drifted(store: StateStore) -> None:
+    await _insert_library_row(store, library_id="lib/a", content_hash="h-new")
+    queue = SummaryQueue()
+    queue.enqueue(
+        SummaryJob(
+            library_id="lib/a", source_kind="character", text="x" * 1500, content_hash="h-stale"
+        )
     )
-    _, h = await parse_existing_envelope(row["body_compressed"])
-    assert h == "hash-new"
+    summarizer = BodySummarizer(store=store, gateway=FakeGateway(), queue=queue)
+
+    processed = await summarizer.process_once()
+
+    # set_body_compressed returns False when the guard rejects; we count
+    # only successful writes.
+    assert processed == 0
+    assert await _fetch_body_compressed(store, "lib/a") is None
 
 
-async def test_llm_failure_skips_row_but_continues_batch(store: StateStore) -> None:
-    long_body = "b" * MIN_BODY_CHARS
-    await _insert_row(store, row_id="fail1", body=long_body, content_hash="hf1")
-    await _insert_row(store, row_id="ok1", body=long_body, content_hash="ho1")
+async def test_process_once_drops_failing_jobs(store: StateStore) -> None:
+    await _insert_library_row(store, library_id="lib/a", content_hash="h-a")
+    queue = SummaryQueue()
+    queue.enqueue(
+        SummaryJob(library_id="lib/a", source_kind="character", text="x" * 1500, content_hash="h-a")
+    )
+    summarizer = BodySummarizer(store=store, gateway=FailingGateway(), queue=queue)
 
-    call_count = 0
+    processed = await summarizer.process_once()
 
-    class MixedGateway:
-        async def complete(self, task, request, campaign_id=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise RuntimeError("first row fails")
-            return CompletionResponse(
-                text="Good summary.",
-                model="p/m",
-                finish_reason="stop",
-                usage=TokenUsage(),
+    assert processed == 0
+    assert await _fetch_body_compressed(store, "lib/a") is None
+    # Job was popped — failed jobs are dropped, not requeued forever.
+    assert queue.pending == 0
+
+
+async def test_batch_size_limits_drain(store: StateStore) -> None:
+    for i in range(5):
+        await _insert_library_row(store, library_id=f"lib/{i}", content_hash=f"h-{i}")
+    queue = SummaryQueue()
+    for i in range(5):
+        queue.enqueue(
+            SummaryJob(
+                library_id=f"lib/{i}",
+                source_kind="character",
+                text="x" * 1500,
+                content_hash=f"h-{i}",
             )
-
-    s = BodySummarizer(
-        db=store.db, gateway=MixedGateway(), config=LibrarySectionConfig(), batch_size=10
+        )
+    summarizer = BodySummarizer(
+        store=store, gateway=FakeGateway(text="OK"), queue=queue, batch_size=2
     )
-    count = await s.process_once()
-    assert count == 1  # only the second row succeeded
+
+    first = await summarizer.process_once()
+    assert first == 2
+    assert queue.pending == 3
+    second = await summarizer.process_once()
+    assert second == 2
+    assert queue.pending == 1
 
 
 async def test_library_summary_progress_event_emitted(store: StateStore) -> None:
-    long_body = "c" * MIN_BODY_CHARS
-    await _insert_row(store, row_id="ev1", body=long_body, content_hash="h-ev1")
-
+    await _insert_library_row(store, library_id="lib/a", content_hash="h-a")
+    queue = SummaryQueue()
+    queue.enqueue(
+        SummaryJob(library_id="lib/a", source_kind="character", text="x" * 1500, content_hash="h-a")
+    )
     bus = EventBus()
     received: list[Event] = []
+    bus.subscribe("library_summary_progress", received.append)
+    summarizer = BodySummarizer(store=store, gateway=FakeGateway(), queue=queue, bus=bus)
 
-    async def handler(event: Event) -> None:
-        received.append(event)
-
-    bus.subscribe("library_summary_progress", handler)
-
-    gateway = FakeGateway()
-    s = BodySummarizer(db=store.db, gateway=gateway, bus=bus, config=LibrarySectionConfig())
-    await s.process_once()
+    await summarizer.process_once()
 
     assert len(received) == 1
-    assert received[0].type == "library_summary_progress"
-    assert received[0].payload["processed"] == 1
-    assert isinstance(received[0].payload["pending"], int)
+    assert received[0].payload == {"processed": 1, "pending": 0}
+
+
+async def test_library_summary_progress_not_emitted_when_zero_processed(
+    store: StateStore,
+) -> None:
+    queue = SummaryQueue()
+    bus = EventBus()
+    received: list[Event] = []
+    bus.subscribe("library_summary_progress", received.append)
+    summarizer = BodySummarizer(store=store, gateway=FakeGateway(), queue=queue, bus=bus)
+
+    await summarizer.process_once()
+
+    assert received == []
