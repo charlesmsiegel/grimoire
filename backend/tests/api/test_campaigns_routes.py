@@ -274,9 +274,7 @@ def test_list_contradictions_route_passes_resolved_filter(client, container) -> 
 
     service = _Service()
     container.continuity = service
-    response = client.get(
-        "/api/campaigns/c1/continuity/contradictions?resolved=false&limit=5"
-    )
+    response = client.get("/api/campaigns/c1/continuity/contradictions?resolved=false&limit=5")
     assert response.status_code == 200
     assert service._store.kwargs == {"resolved": False, "limit": 5}
 

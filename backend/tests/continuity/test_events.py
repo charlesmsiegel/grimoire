@@ -31,9 +31,7 @@ def _collect_events(bus: EventBus) -> tuple[list[Event], object]:
 async def test_add_fact_emits_fact_recorded() -> None:
     bus = EventBus()
     captured, _ = _collect_events(bus)
-    service = ContinuityService(
-        event_bus=bus, campaign_id="camp-1", branch_id="camp-1:main"
-    )
+    service = ContinuityService(event_bus=bus, campaign_id="camp-1", branch_id="camp-1:main")
     fid = await service.add_fact(make_fact(text="A new fact"), source="extractor")
     types = [e.type for e in captured]
     assert "fact_recorded" in types
@@ -130,14 +128,10 @@ async def test_check_contradictions_emits_on_conflict() -> None:
                 rationale="forced conflict",
             )
 
-    service = ContinuityService(
-        judge=ConflictJudge(), event_bus=bus, campaign_id="camp-1"
-    )
+    service = ContinuityService(judge=ConflictJudge(), event_bus=bus, campaign_id="camp-1")
     existing = make_fact(text="The orchard is in winifred's hand.")
     await service.add_fact(existing, source="extractor")
-    report = await service.check_contradictions(
-        make_fact(text="The orchard belongs to no one.")
-    )
+    report = await service.check_contradictions(make_fact(text="The orchard belongs to no one."))
     assert report.conflicts
     detected = [e for e in captured if e.type == "contradiction_detected"]
     assert detected, captured

@@ -159,9 +159,7 @@ async def test_pending_contradictions_returns_unresolved_only() -> None:
     pending = await service.pending_contradictions(limit=10)
     assert any(r.id == report.id for r in pending)
 
-    await service.resolve_contradiction(
-        report.id, {"action": "keep_existing", "in_post": "p-9"}
-    )
+    await service.resolve_contradiction(report.id, {"action": "keep_existing", "in_post": "p-9"})
     pending = await service.pending_contradictions(limit=10)
     assert not any(r.id == report.id for r in pending)
 
