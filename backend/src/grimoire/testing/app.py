@@ -32,11 +32,16 @@ from typing import Any
 from grimoire.continuity.config import ContinuityConfig
 from grimoire.continuity.service import ContinuityService
 from grimoire.event_bus import EventBus
+from grimoire.library.service import LibraryService
 from grimoire.mechanics.config import MechanicsConfig
 from grimoire.mechanics.service import MechanicsService
 from grimoire.scenes.manager import SceneManager, SceneManagerConfig
 from grimoire.state_store.store import StateStore
 from grimoire.storage import Database, apply_migrations
+from grimoire.testing.fixtures import (
+    LibraryCampaignFixture,
+    seed_library_campaign_fixture,
+)
 from grimoire.testing.mock_llm import MockLLMGateway
 
 FixtureFactory = Callable[["TestApp"], Awaitable[None]]
@@ -104,6 +109,11 @@ class TestApp:
         self.mechanics: MechanicsService | None = None
         self.continuity: ContinuityService | None = None
         self.scene_manager: SceneManager | None = None
+        self.library: LibraryService | None = None
+        # Raw family records seeded from a LibraryCampaignFixture. Empty
+        # by default; the seeder populates this so integration tests can
+        # assert on family membership without a dedicated service.
+        self.character_families: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -119,6 +129,7 @@ class TestApp:
             self.data_root,
             config=self._scene_config,
         )
+        self.library = LibraryService(self.state_store)
         return self
 
     async def __aexit__(self, *exc: Any) -> None:
@@ -131,38 +142,67 @@ class TestApp:
     @classmethod
     def with_fixtures(
         cls,
-        fixture: str | TestAppFixture,
+        fixture: str | TestAppFixture | LibraryCampaignFixture,
         *,
         root: Path,
-        registry: dict[str, TestAppFixture] | None = None,
+        registry: dict[str, Any] | None = None,
     ) -> _TestAppBuilder:
         """Construct a builder that will load ``fixture`` on entry.
 
-        ``fixture`` may be the name of a registered fixture (looked up
-        in ``registry``) or a :class:`TestAppFixture` instance. The
-        builder is itself an async context manager so call sites can do
+        ``fixture`` may be:
+
+        * a :class:`TestAppFixture` — the file-copy / setup-hook shape;
+        * a :class:`LibraryCampaignFixture` — bundle of library state
+          and one or more campaigns (seeded in-code via the
+          ``StateStore`` + ``LibraryService``);
+        * a ``str`` — looked up in ``registry`` (if provided) or in the
+          process-wide :mod:`grimoire.testing.fixtures_registry`.
+
+        The builder is itself an async context manager so call sites do
         ``async with TestApp.with_fixtures(...) as app:``.
         """
         if isinstance(fixture, str):
-            if registry is None or fixture not in registry:
-                raise KeyError(f"unknown fixture {fixture!r} (no registry passed)")
-            fixture = registry[fixture]
+            if registry is not None and fixture in registry:
+                fixture = registry[fixture]
+            else:
+                # Fall back to the process-wide registry. Imported lazily
+                # so the registry module's import of ``TestAppFixture``
+                # doesn't trip a cycle.
+                from grimoire.testing import fixtures_registry
+
+                try:
+                    fixture = fixtures_registry.get(fixture)
+                except KeyError as exc:
+                    raise KeyError(
+                        f"unknown fixture {fixture!r} "
+                        f"(not in passed registry, not in fixtures_registry)"
+                    ) from exc
         return _TestAppBuilder(fixture, Path(root))
 
 
 class _TestAppBuilder:
-    def __init__(self, fixture: TestAppFixture, data_root: Path) -> None:
+    def __init__(
+        self,
+        fixture: TestAppFixture | LibraryCampaignFixture,
+        data_root: Path,
+    ) -> None:
         self._fixture = fixture
         self._data_root = data_root
         self._app: TestApp | None = None
 
     async def __aenter__(self) -> TestApp:
         app = TestApp(self._data_root)
-        if self._fixture.files_root is not None:
-            _copy_tree(self._fixture.files_root, app.data_root)
-        await app.__aenter__()
-        if self._fixture.setup is not None:
-            await self._fixture.setup(app)
+        if isinstance(self._fixture, TestAppFixture):
+            if self._fixture.files_root is not None:
+                _copy_tree(self._fixture.files_root, app.data_root)
+            await app.__aenter__()
+            if self._fixture.setup is not None:
+                await self._fixture.setup(app)
+        elif isinstance(self._fixture, LibraryCampaignFixture):
+            await app.__aenter__()
+            await seed_library_campaign_fixture(app, self._fixture)
+        else:
+            raise TypeError(f"unsupported fixture type: {type(self._fixture).__name__}")
         self._app = app
         return app
 

@@ -40,6 +40,11 @@ from grimoire.testing.conformance import (
     LLMProviderConformance,
     MechanicsConformance,
 )
+from grimoire.testing.fixtures import (
+    CampaignFixture,
+    LibraryCampaignFixture,
+    seed_library_campaign_fixture,
+)
 from grimoire.testing.frozen import (
     FrozenCampaignHarness,
     InvariantReport,
@@ -63,6 +68,7 @@ __all__ = [
     "BenchmarkResult",
     "BenchmarkRunner",
     "BenchmarkSpec",
+    "CampaignFixture",
     "ConformanceReport",
     "ConformanceSuite",
     "EmbeddingProviderConformance",
@@ -73,6 +79,7 @@ __all__ = [
     "InvariantReport",
     "InvariantSnapshot",
     "LLMProviderConformance",
+    "LibraryCampaignFixture",
     "MechanicsConformance",
     "MockEmbeddingProvider",
     "MockLLMGateway",
@@ -85,5 +92,6 @@ __all__ = [
     "TestApp",
     "TestAppFixture",
     "TestingConfig",
+    "seed_library_campaign_fixture",
     "sidecar_path",
 ]
