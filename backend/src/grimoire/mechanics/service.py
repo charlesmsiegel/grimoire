@@ -112,7 +112,9 @@ class MechanicsService:
             seen.add(module_id)
             result = load_module(d)
             if result.ok and result.manifest is not None and result.instance is not None:
-                self._registry.register(result.manifest, result.instance)
+                self._registry.register(
+                    result.manifest, result.instance, module_dir=d.module_dir
+                )
                 loaded.append(module_id)
             else:
                 self._registry.unregister(module_id)
@@ -376,6 +378,59 @@ class MechanicsService:
 
     def installed(self) -> list[RegisteredModule]:
         return self._registry.list()
+
+    # ------------------------------------------------------------------
+    # Module-scoped lookups (not bound to a campaign) — used by the
+    # Frontend so it can render sheets without first picking a campaign.
+    # ------------------------------------------------------------------
+
+    def sheet_schema_for_module(
+        self,
+        module_id: MechanicsModuleId,
+        entity_kind: str,
+    ) -> JsonSchema | None:
+        """Return ``entity_kind``'s sheet schema for ``module_id`` directly.
+
+        Unlike :meth:`sheet_schema` this skips the campaign lookup so the
+        Frontend can render a schema before a campaign has bound the
+        module.
+        """
+        record = self._registry.get(module_id)
+        if record is None:
+            return None
+        return record.instance.sheet_schema(entity_kind)
+
+    def theme_css_for_module(self, module_id: MechanicsModuleId) -> str:
+        """Return the raw CSS body for ``module_id``'s ``ui.theme_css``.
+
+        Returns ``""`` when the module has no ``theme_css`` declared, the
+        referenced file is missing, or the module is not registered. The
+        path is resolved relative to the module directory recorded at load
+        time; tests that ``register_module`` directly without a directory
+        get an empty string back.
+        """
+        record = self._registry.get(module_id)
+        if record is None:
+            return ""
+        ui = record.manifest.ui or {}
+        ref = ui.get("theme_css") if isinstance(ui, dict) else None
+        if not isinstance(ref, str) or not ref:
+            return ""
+        module_dir = record.module_dir
+        if module_dir is None:
+            return ""
+        target = (module_dir / ref).resolve()
+        # Guard against ``..`` escaping the module directory.
+        try:
+            target.relative_to(module_dir.resolve())
+        except ValueError:
+            return ""
+        if not target.is_file():
+            return ""
+        try:
+            return target.read_text(encoding="utf-8")
+        except OSError:
+            return ""
 
     # ------------------------------------------------------------------
     # Internals

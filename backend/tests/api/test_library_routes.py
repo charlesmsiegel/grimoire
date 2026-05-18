@@ -135,11 +135,21 @@ class FakeLibrary:
 
 
 class FakeMechanics:
+    def __init__(self) -> None:
+        self.schemas: dict[tuple[str, str], dict[str, Any]] = {}
+        self.themes: dict[str, str] = {}
+
     def installed(self) -> list[Any]:
         return []
 
     async def rescan(self) -> dict[str, Any]:
         return {"added": [], "removed": [], "errors": []}
+
+    def sheet_schema_for_module(self, module_id: str, kind: str) -> dict[str, Any] | None:
+        return self.schemas.get((module_id, kind))
+
+    def theme_css_for_module(self, module_id: str) -> str:
+        return self.themes.get(module_id, "")
 
 
 class FakePlugins:
@@ -300,6 +310,42 @@ def test_mechanics_installed(client, container) -> None:
     response = client.get("/api/mechanics/installed")
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_mechanics_sheet_schema_returns_schema(client, container) -> None:
+    mech = FakeMechanics()
+    mech.schemas[("vamp", "character")] = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+    }
+    container.mechanics = mech
+    response = client.get("/api/mechanics/vamp/sheets/character")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["properties"]["name"]["type"] == "string"
+
+
+def test_mechanics_sheet_schema_404_when_missing(client, container) -> None:
+    container.mechanics = FakeMechanics()
+    response = client.get("/api/mechanics/unknown/sheets/character")
+    assert response.status_code == 404
+
+
+def test_mechanics_theme_css_serves_text(client, container) -> None:
+    mech = FakeMechanics()
+    mech.themes["vamp"] = ".sheet { color: red; }"
+    container.mechanics = mech
+    response = client.get("/api/mechanics/vamp/theme.css")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/css")
+    assert response.text == ".sheet { color: red; }"
+
+
+def test_mechanics_theme_css_empty_when_unset(client, container) -> None:
+    container.mechanics = FakeMechanics()
+    response = client.get("/api/mechanics/nope/theme.css")
+    assert response.status_code == 200
+    assert response.text == ""
 
 
 def test_plugins_rescan(client, container) -> None:
@@ -483,3 +529,66 @@ def test_library_503_when_unset(client, container) -> None:
     response = client.get("/api/library/worlds")
     assert response.status_code == 503
     assert "library" in response.json()["detail"]
+
+
+class FakeLibraryWithDiff(FakeLibrary):
+    async def world_diff(
+        self,
+        world_id: str,
+        from_version: int,
+        to_version: int | None = None,
+    ) -> dict[str, Any]:
+        if world_id != "wod-london":
+            raise KeyError(world_id)
+        effective_to = to_version if to_version is not None else 5
+        return {
+            "world_id": world_id,
+            "from_version": from_version,
+            "to_version": effective_to,
+            "added": [],
+            "removed": [],
+            "changed": [
+                {
+                    "path": "character/alistair",
+                    "before": None,
+                    "after": {
+                        "name": "Alistair",
+                        "frontmatter": {"name": "Alistair", "clan": "Ventrue"},
+                        "body": "Updated body.",
+                        "version": effective_to,
+                    },
+                }
+            ],
+        }
+
+
+def test_world_diff_returns_flat_diff(client, container) -> None:
+    container.library = FakeLibraryWithDiff()
+    response = client.get("/api/library/worlds/wod-london/diff?from=2&to=5")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["world_id"] == "wod-london"
+    assert body["from_version"] == 2
+    assert body["to_version"] == 5
+    assert body["added"] == []
+    assert body["removed"] == []
+    assert len(body["changed"]) == 1
+    changed = body["changed"][0]
+    assert changed["path"] == "character/alistair"
+    assert changed["before"] is None
+    assert changed["after"]["frontmatter"]["clan"] == "Ventrue"
+
+
+def test_world_diff_defaults_to_latest_when_no_to(client, container) -> None:
+    container.library = FakeLibraryWithDiff()
+    response = client.get("/api/library/worlds/wod-london/diff?from=0")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["from_version"] == 0
+    assert body["to_version"] == 5
+
+
+def test_world_diff_404_when_world_missing(client, container) -> None:
+    container.library = FakeLibraryWithDiff()
+    response = client.get("/api/library/worlds/unknown/diff?from=0")
+    assert response.status_code == 404

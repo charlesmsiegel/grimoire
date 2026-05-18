@@ -140,6 +140,36 @@ def test_pcs_lifecycle(client, container) -> None:
     assert response.json() == []
 
 
+class FakeRichCharacters(FakeCharacters):
+    """Returns PCEntry-shaped dicts with the rich switcher fields."""
+
+    async def list_pcs(self, campaign_id: str) -> list[dict]:
+        return [
+            {
+                "character_ref": "library:worlds/wod-london/characters/aleksandr",
+                "name": "Aleksandr",
+                "owner": "local",
+                "active": True,
+                "current_scene_id": "scene-47",
+                "current_location_ref": "library:worlds/wod-london/locations/camden-club",
+                "last_played_at": "2026-05-18T10:00:00+00:00",
+            }
+        ]
+
+
+def test_pcs_payload_includes_rich_switcher_fields(client, container) -> None:
+    container.characters = FakeRichCharacters()
+    response = client.get("/api/campaigns/c1/pcs")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    pc = body[0]
+    assert pc["character_ref"] == "library:worlds/wod-london/characters/aleksandr"
+    assert pc["current_scene_id"] == "scene-47"
+    assert pc["current_location_ref"] == "library:worlds/wod-london/locations/camden-club"
+    assert pc["last_played_at"].startswith("2026-05-18")
+
+
 def test_facts_and_commitments(client, container) -> None:
     container.continuity = FakeContinuity()
     response = client.get("/api/campaigns/c1/facts")
@@ -216,4 +246,209 @@ def test_review_unknown_returns_404(client, container) -> None:
     store = FakeStateStoreForReviews({})
     container.state_store = store
     response = client.post("/api/campaigns/c1/reviews/missing/reject")
+    assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Character override + bulk-create-missing-sheets
+# --------------------------------------------------------------------------- #
+
+
+class _FakeChar:
+    def __init__(self, char_id: str, world_id: str | None = None) -> None:
+        self.id = char_id
+        self.world_id = world_id
+
+
+class _FakeResolved:
+    def __init__(self, char_id: str, world_id: str | None = None) -> None:
+        self.character = _FakeChar(char_id, world_id)
+
+
+class FakeCharactersWithOverride(FakeCharacters):
+    def __init__(self) -> None:
+        super().__init__()
+        self.overrides: list[tuple[str, str, dict, str]] = []
+        self.resolved: dict[str, list[_FakeResolved]] = {}
+
+    async def list_for_campaign(self, campaign_id: str) -> list[Any]:
+        return self.resolved.get(campaign_id, [])
+
+    async def upsert_override(
+        self,
+        campaign_id: str,
+        character_ref: str,
+        patch: dict,
+        *,
+        source: str = "user",
+    ) -> None:
+        self.overrides.append((campaign_id, character_ref, dict(patch), source))
+
+
+def test_patch_character_override_writes_override(client, container) -> None:
+    fake = FakeCharactersWithOverride()
+    fake.resolved["c1"] = [_FakeResolved("alistair", "wod-london")]
+    container.characters = fake
+    response = client.patch(
+        "/api/campaigns/c1/characters/alistair/override",
+        json={"override": {"name": "New Name"}},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ref"] == "library:worlds/wod-london/characters/alistair"
+    assert fake.overrides == [
+        ("c1", "library:worlds/wod-london/characters/alistair", {"name": "New Name"}, "user"),
+    ]
+
+
+def test_patch_character_override_accepts_explicit_world(client, container) -> None:
+    fake = FakeCharactersWithOverride()
+    # No resolved cast — server must trust the body's world_id.
+    container.characters = fake
+    response = client.patch(
+        "/api/campaigns/c1/characters/alistair/override",
+        json={"override": {"name": "X"}, "world_id": "wod-rome"},
+    )
+    assert response.status_code == 200
+    assert fake.overrides[0][1] == "library:worlds/wod-rome/characters/alistair"
+
+
+def test_patch_character_override_404_when_world_unresolvable(client, container) -> None:
+    container.characters = FakeCharactersWithOverride()
+    response = client.patch(
+        "/api/campaigns/c1/characters/who/override",
+        json={"override": {}},
+    )
+    assert response.status_code == 404
+
+
+class _BulkRow(dict):
+    pass
+
+
+class FakeStateStoreForBulk:
+    def __init__(
+        self,
+        *,
+        mechanics_module: str | None,
+        existing: set[tuple[str, str]] | None = None,
+    ) -> None:
+        self._mechanics = mechanics_module
+        self.existing = existing or set()
+        self.writes: list[tuple[str, str, str, dict]] = []
+        self.db = self
+
+    async def fetchone(self, sql: str, params: tuple) -> dict | None:
+        if "FROM campaigns WHERE id = ?" in sql:
+            cid = params[0]
+            if cid != "c1":
+                return None
+            return _BulkRow(mechanics_module=self._mechanics)
+        return None
+
+    async def get_sheet(
+        self,
+        *,
+        campaign_id: str,
+        kind: str,
+        entity_id: str,
+        mechanics_id: str,
+    ) -> dict | None:
+        if (kind, entity_id) in self.existing:
+            return {"_existing": True}
+        return None
+
+    async def write_sheet(
+        self,
+        *,
+        campaign_id: str,
+        kind: str,
+        entity_id: str,
+        mechanics_id: str,
+        sheet: dict,
+        source: str,
+        turn_id: str | None = None,
+    ) -> str:
+        self.writes.append((kind, entity_id, mechanics_id, sheet))
+        return "ok"
+
+
+class _FakeModule:
+    sheet_kinds = ["character"]
+
+    def initialize_sheet(self, kind: str, entity_id: str) -> dict:
+        return {"kind": kind, "entity_id": entity_id, "initialized": True}
+
+
+class FakeMechanicsForBulk:
+    def __init__(self, *, module: Any = None) -> None:
+        self._module = module
+
+    def get_module(self, module_id: str) -> Any:
+        return self._module
+
+    async def module_info(self, module_id: str) -> Any:
+        return None
+
+
+def test_bulk_create_missing_sheets_creates_and_skips(client, container) -> None:
+    state_store = FakeStateStoreForBulk(
+        mechanics_module="vamp",
+        existing={("character", "alistair")},
+    )
+    chars = FakeCharactersWithOverride()
+    chars.resolved["c1"] = [
+        _FakeResolved("alistair", "wod-london"),
+        _FakeResolved("dorian", "wod-london"),
+    ]
+    container.state_store = state_store
+    container.characters = chars
+    container.mechanics = FakeMechanicsForBulk(module=_FakeModule())
+
+    class FakeWorld:
+        async def list_for_campaign(self, campaign_id: str, kind: str) -> list[Any]:
+            return []
+
+    container.world = FakeWorld()
+
+    response = client.post("/api/campaigns/c1/sheets/bulk-create-missing")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["skipped"] == [{"kind": "character", "entity_id": "alistair"}]
+    assert body["created"] == [{"kind": "character", "entity_id": "dorian"}]
+    assert state_store.writes == [
+        (
+            "character",
+            "dorian",
+            "vamp",
+            {"kind": "character", "entity_id": "dorian", "initialized": True},
+        )
+    ]
+
+
+def test_bulk_create_missing_sheets_409_when_no_mechanics(client, container) -> None:
+    container.state_store = FakeStateStoreForBulk(mechanics_module=None)
+    container.characters = FakeCharactersWithOverride()
+    container.mechanics = FakeMechanicsForBulk()
+
+    class FakeWorld:
+        async def list_for_campaign(self, campaign_id: str, kind: str) -> list[Any]:
+            return []
+
+    container.world = FakeWorld()
+    response = client.post("/api/campaigns/c1/sheets/bulk-create-missing")
+    assert response.status_code == 409
+
+
+def test_bulk_create_missing_sheets_404_for_unknown_campaign(client, container) -> None:
+    container.state_store = FakeStateStoreForBulk(mechanics_module=None)
+    container.characters = FakeCharactersWithOverride()
+    container.mechanics = FakeMechanicsForBulk()
+
+    class FakeWorld:
+        async def list_for_campaign(self, campaign_id: str, kind: str) -> list[Any]:
+            return []
+
+    container.world = FakeWorld()
+    response = client.post("/api/campaigns/c-other/sheets/bulk-create-missing")
     assert response.status_code == 404
