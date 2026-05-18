@@ -357,8 +357,7 @@ class OrchestratorService:
                     include_reversed=False,
                 )
                 for record in pre_log:
-                    delta = getattr(record, "delta", None)
-                    target = getattr(delta, "target_id", None)
+                    target = getattr(record, "target_id", None)
                     if target:
                         downstream_targets.add(str(target))
             except Exception:
@@ -424,8 +423,7 @@ class OrchestratorService:
                     tid = getattr(record, "turn_id", None)
                     if not tid or tid == post.turn_id or tid in seen:
                         continue
-                    delta = getattr(record, "delta", None)
-                    target = getattr(delta, "target_id", None)
+                    target = getattr(record, "target_id", None)
                     if target and str(target) in downstream_targets:
                         flagged.append(tid)
                         seen.add(tid)
