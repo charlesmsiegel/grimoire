@@ -53,13 +53,9 @@ async def test_caching_disabled_skips_cache_store(store_with_campaign) -> None:
     reg = BackendRegistry()
     reg.register(InMemoryDiffusersBackend())
     cfg = ImageGenConfig(default_backend="diffusers-memory", caching_enabled=False)
-    svc = ImageGenService(
-        store=store_with_campaign, registry=reg, config=cfg, event_bus=EventBus()
-    )
+    svc = ImageGenService(store=store_with_campaign, registry=reg, config=cfg, event_bus=EventBus())
     try:
-        await svc.generate_sync(
-            "camp-1", GenerationRequest(prompt="x", width=8, height=8, seed=42)
-        )
+        await svc.generate_sync("camp-1", GenerationRequest(prompt="x", width=8, height=8, seed=42))
         assert svc._cache == {}
     finally:
         await svc.aclose()

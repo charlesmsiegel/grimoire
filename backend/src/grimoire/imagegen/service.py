@@ -72,13 +72,29 @@ class TriggerConfig:
     def from_config(cls, raw: dict | None) -> TriggerConfig:
         if not raw:
             return cls()
+
+        # Accept both spec-12 YAML keys ("trigger_on_scene_open",
+        # "auto_illustrate_during_combat") and the canonical dataclass
+        # field names (used when round-tripping via set_trigger_config).
+        def _get_bool(*keys: str, default: bool) -> bool:
+            for key in keys:
+                if key in raw:
+                    return bool(raw[key])
+            return default
+
         return cls(
             mode=str(raw.get("trigger_mode") or raw.get("mode") or "per_scene"),
             every_n=int(raw.get("trigger_n") or raw.get("every_n") or 5),
-            on_scene_open=bool(raw.get("trigger_on_scene_open", True)),
-            on_new_location=bool(raw.get("trigger_on_new_location", True)),
-            on_new_character_appearance=bool(raw.get("trigger_on_new_character_appearance", True)),
-            auto_during_combat=bool(raw.get("auto_illustrate_during_combat", False)),
+            on_scene_open=_get_bool("trigger_on_scene_open", "on_scene_open", default=True),
+            on_new_location=_get_bool("trigger_on_new_location", "on_new_location", default=True),
+            on_new_character_appearance=_get_bool(
+                "trigger_on_new_character_appearance",
+                "on_new_character_appearance",
+                default=True,
+            ),
+            auto_during_combat=_get_bool(
+                "auto_illustrate_during_combat", "auto_during_combat", default=False
+            ),
         )
 
 
@@ -312,7 +328,12 @@ class ImageGenService:
         return out
 
     async def active_backend(self, campaign_id: str) -> BackendInfo:
-        backend_id = self._campaign_backend.get(campaign_id) or self.default_backend_id
+        backend_id = self._campaign_backend.get(campaign_id)
+        if backend_id is None:
+            raw = await self._load_imagegen_config_row(campaign_id)
+            backend_id = raw.get("active_backend") or self.default_backend_id
+            if backend_id is not None:
+                self._campaign_backend[campaign_id] = backend_id
         backend = self.registry.get(backend_id) if backend_id else None
         if backend is None and self.default_backend_id:
             # The configured backend was removed — fall back to default.
@@ -333,6 +354,7 @@ class ImageGenService:
             raise KeyError(f"no backend registered with id {backend_id!r}")
         self._campaign_backend[campaign_id] = backend_id
         self._ensure_handle(backend_id)
+        await self._mutate_imagegen_config_row(campaign_id, update={"active_backend": backend_id})
 
     # ------------------------------------------------------------------ #
     # Generation
@@ -351,7 +373,12 @@ class ImageGenService:
             request = await self._compose_request(
                 campaign_id=campaign_id, scene_id=scene_id, post_id=post_id
             )
-        backend_id = self._campaign_backend.get(campaign_id, self.default_backend_id)
+        backend_id = self._campaign_backend.get(campaign_id)
+        if backend_id is None:
+            raw = await self._load_imagegen_config_row(campaign_id)
+            backend_id = raw.get("active_backend") or self.default_backend_id
+            if backend_id is not None:
+                self._campaign_backend[campaign_id] = backend_id
         if backend_id not in self.registry:
             raise KeyError(f"no backend registered with id {backend_id!r}")
         self._ensure_handle(backend_id)
@@ -550,6 +577,65 @@ class ImageGenService:
                 {"backend_id": backend_id, "level": status.level.value, "message": status.message},
             )
         return status
+
+    # ------------------------------------------------------------------ #
+    # Per-campaign config storage (§6)
+    # ------------------------------------------------------------------ #
+
+    async def get_trigger_config(self, campaign_id: str) -> TriggerConfig:
+        raw = await self._load_imagegen_config_row(campaign_id)
+        return TriggerConfig.from_config(raw.get("trigger") if raw else None)
+
+    async def set_trigger_config(self, campaign_id: str, trigger: TriggerConfig) -> None:
+        await self._mutate_imagegen_config_row(
+            campaign_id,
+            update={
+                "trigger": {
+                    "mode": trigger.mode,
+                    "every_n": trigger.every_n,
+                    "on_scene_open": trigger.on_scene_open,
+                    "on_new_location": trigger.on_new_location,
+                    "on_new_character_appearance": trigger.on_new_character_appearance,
+                    "auto_during_combat": trigger.auto_during_combat,
+                }
+            },
+        )
+
+    async def set_fallback_backend(self, campaign_id: str, backend_id: str | None) -> None:
+        if backend_id is not None and backend_id not in self.registry:
+            raise KeyError(f"no backend registered with id {backend_id!r}")
+        await self._mutate_imagegen_config_row(campaign_id, update={"fallback_backend": backend_id})
+
+    async def get_fallback_backend(self, campaign_id: str) -> str | None:
+        raw = await self._load_imagegen_config_row(campaign_id)
+        return raw.get("fallback_backend")
+
+    async def _load_imagegen_config_row(self, campaign_id: str) -> dict[str, Any]:
+        _validate_campaign_id(campaign_id)
+        row = await self.store.db.fetchone(
+            "SELECT imagegen_config FROM campaigns WHERE id = ?", (campaign_id,)
+        )
+        if row is None:
+            return {}
+        raw = row["imagegen_config"]
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    async def _mutate_imagegen_config_row(
+        self, campaign_id: str, *, update: dict[str, Any]
+    ) -> None:
+        _validate_campaign_id(campaign_id)
+        existing = await self._load_imagegen_config_row(campaign_id)
+        merged = {**existing, **update}
+        await self.store.db.execute(
+            "UPDATE campaigns SET imagegen_config = ? WHERE id = ?",
+            (json.dumps(merged, sort_keys=True), campaign_id),
+        )
 
     # ------------------------------------------------------------------ #
     # Internals
