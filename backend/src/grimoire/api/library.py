@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from grimoire.api.deps import (
@@ -106,6 +107,26 @@ async def create_world(
 async def get_world_route(world_id: str, library: LibraryDep) -> Any:
     try:
         return to_payload(await library.get_world(world_id))
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.get("/library/worlds/{world_id}/diff")
+async def diff_world(
+    world_id: str,
+    library: LibraryDep,
+    from_: Annotated[int, Query(alias="from")] = 0,
+    to: int | None = None,
+) -> Any:
+    """Synthesize a flat diff between two versions of a world.
+
+    Returns ``{added, removed, changed: [{path, before, after}]}`` so the
+    composition view's upgrade banner can preview what an upgrade would
+    pull in. The ``from`` query param is the version the composition is
+    currently bound to; ``to`` defaults to the world's latest version.
+    """
+    try:
+        return await library.world_diff(world_id, from_, to)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
@@ -357,6 +378,37 @@ async def rescan_mechanics(mechanics: MechanicsDep) -> Any:
         return to_payload(await mechanics.rescan())
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+
+
+@router.get("/mechanics/{module_id}/sheets/{kind}")
+def mechanics_sheet_schema(
+    module_id: str,
+    kind: str,
+    mechanics: MechanicsDep,
+) -> Any:
+    """Return the JSON Schema for ``kind`` sheets under ``module_id``.
+
+    Lets the Frontend's sheet widget render without first binding a
+    campaign to the module.
+    """
+    schema = mechanics.sheet_schema_for_module(module_id, kind)
+    if schema is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no sheet schema for module {module_id!r} kind {kind!r}",
+        )
+    return schema
+
+
+@router.get("/mechanics/{module_id}/theme.css")
+def mechanics_theme_css(module_id: str, mechanics: MechanicsDep) -> Response:
+    """Return the raw CSS body declared in ``ui.theme_css``.
+
+    Returns ``""`` with 200 when the module has no theme CSS so the
+    Frontend can render without branching on ``theme_css`` being unset.
+    """
+    css = mechanics.theme_css_for_module(module_id)
+    return Response(content=css, media_type="text/css")
 
 
 @router.get("/plugins/installed")

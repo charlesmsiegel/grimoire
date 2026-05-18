@@ -7,6 +7,7 @@ campaign; the loader pushes modules into it after a successful load.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from grimoire.types.mechanics import ModuleManifest
 from grimoire.types.protocols import MechanicsModule
@@ -16,6 +17,7 @@ from grimoire.types.protocols import MechanicsModule
 class RegisteredModule:
     manifest: ModuleManifest
     instance: MechanicsModule
+    module_dir: Path | None = None
 
 
 class MechanicsRegistry:
@@ -24,8 +26,15 @@ class MechanicsRegistry:
     def __init__(self) -> None:
         self._modules: dict[str, RegisteredModule] = {}
 
-    def register(self, manifest: ModuleManifest, instance: MechanicsModule) -> None:
-        self._modules[manifest.id] = RegisteredModule(manifest=manifest, instance=instance)
+    def register(
+        self,
+        manifest: ModuleManifest,
+        instance: MechanicsModule,
+        module_dir: Path | None = None,
+    ) -> None:
+        self._modules[manifest.id] = RegisteredModule(
+            manifest=manifest, instance=instance, module_dir=module_dir
+        )
 
     def unregister(self, module_id: str) -> None:
         self._modules.pop(module_id, None)
