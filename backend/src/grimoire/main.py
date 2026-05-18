@@ -20,6 +20,7 @@ from grimoire.api.stream import StreamManager
 from grimoire.api.templates import router as templates_router
 from grimoire.api.ws import router as ws_router
 from grimoire.characters import CharactersService
+from grimoire.characters.integration import CharactersIntegration
 from grimoire.config import settings
 from grimoire.context.builder import ContextBuilderService
 from grimoire.continuity import ContinuityService
@@ -332,6 +333,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ws_push=container.stream.push,
             )
 
+        # Characters drift fan-out: subscribe to turn_complete and sample
+        # drift checks on present characters. The cadence gate inside
+        # CharactersService.maybe_check_drift is the source of truth.
+        if (
+            container.extras.get("characters_integration") is None
+            and container.event_bus is not None
+            and container.characters is not None
+        ):
+            chars_integration = CharactersIntegration(
+                container.characters,
+                container.scenes,
+                container.event_bus,
+            )
+            chars_integration.start()
+            container.extras["characters_integration"] = chars_integration
+
         # Seed default library assets (style guides, etc.) and run one scan
         # so the library_index is populated. We don't start the live
         # watchdog observer here — file changes during runtime won't
@@ -410,6 +427,14 @@ async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
                 imagegen_integration.stop()
             except Exception:
                 log.exception("imagegen integration stop failed during shutdown")
+        characters_integration = (
+            container.extras.get("characters_integration") if container.extras else None
+        )
+        if characters_integration is not None:
+            try:
+                characters_integration.stop()
+            except Exception:
+                log.exception("characters integration stop failed during shutdown")
         imagegen_health_prober = (
             container.extras.get("imagegen_health_prober") if container.extras else None
         )

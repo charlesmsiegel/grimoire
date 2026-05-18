@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -13,7 +14,7 @@ import pytest
 from grimoire.event_bus import EventBus
 from grimoire.scenes.manager import SceneManager, SceneManagerConfig
 from grimoire.types.context import AssembledPrompt
-from grimoire.types.extraction import ExtractionResult
+from grimoire.types.extraction import ExtractionFlag, ExtractionResult, FlagLevel
 from grimoire.types.llm import CompletionChunk, CompletionRequest, Message, MessageRole, ModelParams
 from grimoire.types.state import StateDelta
 
@@ -63,6 +64,10 @@ class FakeStateStore:
     reviewed: list[dict] = field(default_factory=list)
     reversed_ids: list[str] = field(default_factory=list)
     forks: list[dict] = field(default_factory=list)
+    # When set, apply_delta raises on the Nth call (0-indexed) so tests can
+    # simulate a mid-batch failure.
+    fail_apply_on_call: int | None = None
+    _apply_call_count: int = 0
 
     async def apply_delta(
         self,
@@ -73,6 +78,10 @@ class FakeStateStore:
         branch_id: str | None = None,
         campaign_id: str | None = None,
     ) -> str:
+        idx = self._apply_call_count
+        self._apply_call_count += 1
+        if self.fail_apply_on_call is not None and idx == self.fail_apply_on_call:
+            raise RuntimeError("apply_delta boom")
         did = f"d_{len(self.applied):04d}"
         self.applied.append(
             {
@@ -198,9 +207,15 @@ class FakeGateway:
     chunks: list[str] = field(default_factory=lambda: ["Hello", ", ", "world."])
     seen_requests: list[CompletionRequest] = field(default_factory=list)
     seen_tasks: list[str] = field(default_factory=list)
+    chunk_delay: float = 0.0
+    fail_after: int | None = None  # raise mid-stream after N chunks
 
     async def _stream(self, request: CompletionRequest) -> AsyncIterator[CompletionChunk]:
-        for c in self.chunks:
+        for idx, c in enumerate(self.chunks):
+            if self.chunk_delay:
+                await asyncio.sleep(self.chunk_delay)
+            if self.fail_after is not None and idx >= self.fail_after:
+                raise RuntimeError("gateway boom")
             yield CompletionChunk(delta=c, is_final=False)
         yield CompletionChunk(delta="", is_final=True)
 
@@ -224,6 +239,10 @@ class FakeExtractor:
     deltas: list[StateDelta] = field(default_factory=list)
     seen: list[dict] = field(default_factory=list)
     raise_on_extract: BaseException | None = None
+    # If non-empty, each call pops the next code from this list and emits an
+    # ExtractionFlag with that code (in addition to the default deltas).
+    # ``None`` entries yield a clean result.
+    scripted_flag_codes: list[str | None] = field(default_factory=list)
 
     async def extract(
         self,
@@ -244,7 +263,12 @@ class FakeExtractor:
         )
         if self.raise_on_extract is not None:
             raise self.raise_on_extract
-        return ExtractionResult(deltas=list(self.deltas))
+        flags: list[ExtractionFlag] = []
+        if self.scripted_flag_codes:
+            code = self.scripted_flag_codes.pop(0)
+            if code is not None:
+                flags.append(ExtractionFlag(level=FlagLevel.WARNING, code=code, message=code))
+        return ExtractionResult(deltas=list(self.deltas), flags=flags)
 
     async def extract_from_user_text(
         self,

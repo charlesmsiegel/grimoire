@@ -9,6 +9,13 @@ from dataclasses import dataclass
 class SceneBreakConfig:
     auto_threshold: float = 0.8
     prompt_threshold: float = 0.5
+    prompt_resume_timeout_seconds: float = 60.0
+
+
+@dataclass
+class HeartbeatConfig:
+    enabled: bool = True
+    interval_seconds: float = 10.0
 
 
 @dataclass
@@ -45,6 +52,7 @@ class OrchestratorConfig:
     multi_pc: MultiPCConfig = None  # type: ignore[assignment]
     background_work: BackgroundWorkConfig = None  # type: ignore[assignment]
     errors: ErrorConfig = None  # type: ignore[assignment]
+    heartbeat: HeartbeatConfig = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.scene_break is None:
@@ -57,11 +65,14 @@ class OrchestratorConfig:
             self.background_work = BackgroundWorkConfig()
         if self.errors is None:
             self.errors = ErrorConfig()
+        if self.heartbeat is None:
+            self.heartbeat = HeartbeatConfig()
 
 
 __all__ = [
     "BackgroundWorkConfig",
     "ErrorConfig",
+    "HeartbeatConfig",
     "MultiPCConfig",
     "OrchestratorConfig",
     "PreRollConfig",

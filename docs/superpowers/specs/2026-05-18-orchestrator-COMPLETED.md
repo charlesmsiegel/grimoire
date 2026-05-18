@@ -1,6 +1,8 @@
-# Orchestrator — Remaining Work
+# Orchestrator — Remaining Work (COMPLETED 2026-05-18)
 
-> Everything from the original `specs/01-orchestrator.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-orchestrator-design.md`). Use this as the input to a writing-plans pass when picking up the work.
+> Status: **completed**. §1–§11 implemented on `claude/implement-orchestrator-design-NGTBz` (PR #368). §12 (multi-campaign rate-limit pacing) and §13 (speculative execution) explicitly deferred / rejected per the spec.
+>
+> Everything from the original `specs/01-orchestrator.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-orchestrator-design.md`).
 
 **Companion (already shipped):** `2026-05-12-orchestrator-design.md`
 **Module:** `backend/src/grimoire/orchestrator/`
