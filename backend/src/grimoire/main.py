@@ -10,9 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from grimoire import __version__
 from grimoire.api.campaigns import router as campaigns_router
-from grimoire.api.imagegen import router as imagegen_router
 from grimoire.api.container import ServiceContainer
 from grimoire.api.health import router as health_router
+from grimoire.api.imagegen import router as imagegen_router
 from grimoire.api.library import router as library_router
 from grimoire.api.setup import router as setup_router
 from grimoire.api.stream import StreamManager
@@ -29,6 +29,7 @@ from grimoire.extractor.service import ExtractorService
 from grimoire.imagegen import (
     BackendRegistry,
     ImageGenConfig,
+    ImageGenHealthProber,
     ImageGenIntegration,
     ImageGenService,
 )
@@ -154,9 +155,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # will raise NoBackendAvailableError until a backend plugin is
             # installed and registered with the registry. Routes that need a
             # backend should catch that and 503 with a clear message.
-            imagegen_cfg = ImageGenConfig.from_yaml(
-                data_root / "config" / "imagegen.yaml"
-            )
+            imagegen_cfg = ImageGenConfig.from_yaml(data_root / "config" / "imagegen.yaml")
             container.imagegen = ImageGenService(
                 store=container.state_store,
                 registry=BackendRegistry(),
@@ -168,6 +167,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             integration = ImageGenIntegration(container.imagegen, container.event_bus)
             integration.start()
             container.extras["imagegen_integration"] = integration
+        if container.extras.get("imagegen_health_prober") is None:
+            prober = ImageGenHealthProber(container.imagegen, interval_seconds=30.0)
+            prober.start()
+            container.extras["imagegen_health_prober"] = prober
 
         # LLM-adjacent services: gateway + extractor + context builder are
         # the substrate the orchestrator drives. They're wired even when no
@@ -300,6 +303,14 @@ async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
                 imagegen_integration.stop()
             except Exception:
                 log.exception("imagegen integration stop failed during shutdown")
+        imagegen_health_prober = (
+            container.extras.get("imagegen_health_prober") if container.extras else None
+        )
+        if imagegen_health_prober is not None:
+            try:
+                await imagegen_health_prober.stop()
+            except Exception:
+                log.exception("imagegen health prober stop failed during shutdown")
         if container.imagegen is not None:
             try:
                 await container.imagegen.aclose()

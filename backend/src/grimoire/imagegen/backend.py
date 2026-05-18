@@ -175,13 +175,23 @@ class InMemoryDiffusersBackend:
         self.config = config or {}
         self.model = self.config.get("base_model", "memory:stub-sdxl")
 
-    async def generate(self, request: GenerationRequest) -> GenerationResult:
+    async def generate(
+        self,
+        request: GenerationRequest,
+        *,
+        progress: Any = None,
+        cancel_token: Any = None,
+    ) -> GenerationResult:
         t0 = time.perf_counter()
         seed = (
             request.seed
             if request.seed is not None
             else random.SystemRandom().randint(0, 2**31 - 1)
         )
+        if cancel_token is not None and cancel_token.is_set():
+            raise asyncio.CancelledError()
+        if progress is not None:
+            await progress({"step": 1, "total_steps": 1, "eta_ms": 0})
         image_bytes = synthesize_png(request.width, request.height, seed, request.prompt)
         thumbnail_bytes = synthesize_png(64, 64, seed, request.prompt)
         return GenerationResult(
@@ -289,7 +299,13 @@ class IntegratedDiffusersBackend:
         self.device = device
         return pipe
 
-    async def generate(self, request: GenerationRequest) -> GenerationResult:
+    async def generate(
+        self,
+        request: GenerationRequest,
+        *,
+        progress: Any = None,
+        cancel_token: Any = None,
+    ) -> GenerationResult:
         pipe = await self._ensure_pipeline()
         return await asyncio.to_thread(self._generate_sync, pipe, request)
 

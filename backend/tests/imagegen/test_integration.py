@@ -55,9 +55,7 @@ async def test_manual_only_mode_does_not_queue(bus) -> None:
 
 async def test_scene_started_sets_on_scene_open_flag(bus) -> None:
     svc = AsyncMock()
-    svc.get_trigger_config.return_value = TriggerConfig(
-        mode="per_scene", on_scene_open=True
-    )
+    svc.get_trigger_config.return_value = TriggerConfig(mode="per_scene", on_scene_open=True)
     integ = ImageGenIntegration(svc, bus)
     integ.start()
     try:
@@ -85,9 +83,7 @@ async def test_scene_started_sets_on_scene_open_flag(bus) -> None:
 async def test_turn_complete_without_scene_open_flag_skips(bus) -> None:
     svc = AsyncMock()
     # per_scene with on_scene_open=True but no scene_started latch — should NOT queue
-    svc.get_trigger_config.return_value = TriggerConfig(
-        mode="per_scene", on_scene_open=True
-    )
+    svc.get_trigger_config.return_value = TriggerConfig(mode="per_scene", on_scene_open=True)
     integ = ImageGenIntegration(svc, bus)
     integ.start()
     try:
