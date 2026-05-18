@@ -32,10 +32,20 @@ class NoTurnsToUndoError(OrchestratorError):
         self.campaign_id = campaign_id
 
 
+class TurnCancelledError(OrchestratorError):
+    """Raised internally when an active turn is cooperatively cancelled."""
+
+
+class TurnTimeoutError(OrchestratorError):
+    """Raised when a turn exceeds ``turn_timeout_seconds``."""
+
+
 __all__ = [
     "NoTurnsToUndoError",
     "OrchestratorError",
     "TurnAlreadyInProgressError",
+    "TurnCancelledError",
+    "TurnTimeoutError",
     "UnknownCampaignError",
     "UnknownPCError",
 ]

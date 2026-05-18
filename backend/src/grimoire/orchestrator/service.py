@@ -19,7 +19,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from grimoire.context.cache import ContextBuilderCache, make_cache_key
 from grimoire.event_bus import Event, EventBus
@@ -29,6 +29,8 @@ from grimoire.orchestrator.config import OrchestratorConfig
 from grimoire.orchestrator.errors import (
     NoTurnsToUndoError,
     OrchestratorError,
+    TurnCancelledError,
+    TurnTimeoutError,
     UnknownCampaignError,
     UnknownPCError,
 )
@@ -66,6 +68,23 @@ class _ActiveTurn:
     scene_id: SceneId
     started_at: datetime
     stage: str = "starting"
+    cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    last_chunk_at: datetime | None = None
+    player_post_id: PostId | None = None
+    scene_break_choice: asyncio.Future | None = None
+
+
+class _StreamFailure(Exception):
+    """Raised by ``_stream_main_response`` when the gateway errors mid-stream.
+
+    Carries any text accumulated before the failure so the caller can decide
+    whether to surface a partial response to the user.
+    """
+
+    def __init__(self, partial_text: str, cause: BaseException) -> None:
+        super().__init__(str(cause))
+        self.partial_text = partial_text
+        self.cause = cause
 
 
 @dataclass
@@ -175,14 +194,21 @@ class OrchestratorService:
             author_pc_ref=pc_ref,
         )
         await self._scenes.append_post(scene.id, post)
-        # Stamp last_played_at on the PC row so the rich PC switcher can
-        # show "last played 12m ago" without joining the post stream.
-        # Best-effort: the store is async-safe and a missing row is a
-        # no-op when the PC was just removed.
         try:
             await self._store.mark_pc_played(campaign_id=campaign_id, character_ref=pc_ref)
-        except Exception:  # pragma: no cover - never blocks a turn
+        except Exception:
             logger.warning("mark_pc_played failed", exc_info=True)
+        await self._bus.emit(
+            Event(
+                type="pc_post_appended",
+                payload={
+                    "campaign_id": campaign_id,
+                    "scene_id": scene.id,
+                    "post_id": post.id,
+                    "pc_ref": pc_ref,
+                },
+            )
+        )
 
         decision = await self._scenes.on_post_submitted(scene.id, post)
         if not decision.auto_respond:
@@ -198,6 +224,7 @@ class OrchestratorService:
             scene_id=scene.id,
             player_input=text,
             triggering_pc=pc_ref,
+            player_post_id=post.id,
         )
         return SubmitResult(
             accepted=True,
@@ -209,6 +236,19 @@ class OrchestratorService:
     async def advance(self, campaign_id: CampaignId, scene_id: SceneId) -> AdvanceResult:
         await self._require_campaign(campaign_id)
         adv = await self._scenes.on_advance_requested(scene_id)
+        # §10: scene manager emits ADVANCE_REQUESTED on its own (scene) bus
+        # which is a different bus type; the orchestrator owns surfacing it
+        # on the shared event bus.
+        await self._bus.emit(
+            Event(
+                type="advance_requested",
+                payload={
+                    "campaign_id": campaign_id,
+                    "scene_id": scene_id,
+                    "pending_post_count": len(adv.pending_posts),
+                },
+            )
+        )
         # Build a "combined" player input from the pending PC posts so the
         # Context Builder can pack both as the prompt; the response addresses
         # both.
@@ -220,6 +260,7 @@ class OrchestratorService:
             scene_id=scene_id,
             player_input=combined_input,
             triggering_pc=None,
+            player_post_id=None,
         )
         return AdvanceResult(
             scene=_pydantic_scene(adv.scene),
@@ -260,6 +301,7 @@ class OrchestratorService:
             player_input=player_input or "",
             triggering_pc=pc_ref,
             reuse_prompt_cache=True,
+            player_post_id=None,
         )
         return RegenerateResult(turn_id=turn_id, accepted=True, reason="regenerated")
 
@@ -304,6 +346,24 @@ class OrchestratorService:
         # Find the post & scene
         scene_file, post = await self._scenes._find_post(post_id)  # type: ignore[attr-defined]
         original = post.body
+        # Capture target_ids the retconned turn touched BEFORE reversal so we
+        # can walk forward and flag downstream turns that touch any of them.
+        downstream_targets: set[str] = set()
+        if post.turn_id:
+            try:
+                pre_log = await self._store.get_delta_log(
+                    campaign_id=scene_file.campaign_id,
+                    turn_id=post.turn_id,
+                    include_reversed=False,
+                )
+                for record in pre_log:
+                    delta = getattr(record, "delta", None)
+                    target = getattr(delta, "target_id", None)
+                    if target:
+                        downstream_targets.add(str(target))
+            except Exception:
+                logger.debug("retcon: could not compute downstream targets", exc_info=True)
+
         # Reverse deltas sourced from this post's turn (if any).
         reversed_ids: list[str] = []
         if post.turn_id:
@@ -348,13 +408,37 @@ class OrchestratorService:
         except Exception as exc:
             logger.warning("retcon: extractor failure on post %s: %s", post_id, exc)
 
+        flagged: list[TurnId] = []
+        if downstream_targets and post.turn_id:
+            try:
+                full_log = await self._store.get_delta_log(
+                    campaign_id=scene_file.campaign_id,
+                    include_reversed=True,
+                )
+                seen: set[TurnId] = set()
+                # Walk in application order; flag the first occurrence of any
+                # turn whose deltas touch a target the retconned turn produced.
+                # Skip the retconned turn itself and the just-applied retcon
+                # deltas (which carry the same turn_id).
+                for record in full_log:
+                    tid = getattr(record, "turn_id", None)
+                    if not tid or tid == post.turn_id or tid in seen:
+                        continue
+                    delta = getattr(record, "delta", None)
+                    target = getattr(delta, "target_id", None)
+                    if target and str(target) in downstream_targets:
+                        flagged.append(tid)
+                        seen.add(tid)
+            except Exception:
+                logger.debug("retcon: downstream flagging walk failed", exc_info=True)
+
         return RetconResult(
             post_id=post_id,
             original_text=original,
             new_text=new_text,
             reversed_delta_ids=reversed_ids,
             new_delta_ids=new_delta_ids,
-            downstream_flagged_turns=[],
+            downstream_flagged_turns=flagged,
         )
 
     async def fork(
@@ -396,6 +480,7 @@ class OrchestratorService:
         player_input: str,
         triggering_pc: CharacterRef | None,
         reuse_prompt_cache: bool = False,
+        player_post_id: PostId | None = None,
     ) -> TurnId:
         state = self._state_for(campaign_id)
         state.queued += 1
@@ -416,130 +501,288 @@ class OrchestratorService:
             scene_id=scene_id,
             started_at=self._clock(),
             stage="starting",
+            player_post_id=player_post_id,
         )
         state.active = active
 
+        heartbeat_task: asyncio.Task | None = None
         try:
-            await self._emit_turn_event("turn_started", turn_id, campaign_id, scene_id)
-            scene_id = await self._maybe_break_scene(
-                campaign_id=campaign_id,
-                scene_id=scene_id,
-                player_input=player_input,
-                triggering_pc=triggering_pc,
-                turn_id=turn_id,
-            )
-
-            active.stage = "mechanics_pre_roll"
-            mechanics_results = await self._do_pre_roll(
-                campaign_id=campaign_id, scene_id=scene_id, player_input=player_input
-            )
-
-            active.stage = "context_build"
-            cache_key: str | None = None
-            scene_obj_for_cache = await self._scenes.get_scene(scene_id)
-            branch_id_for_cache = getattr(scene_obj_for_cache, "branch_id", None)
-            composition_hash = await self._composition_hash(campaign_id)
-            cache_key = make_cache_key(
-                campaign_id=campaign_id,
-                player_input=player_input,
-                composition_hash=composition_hash,
-                scene_id=scene_id,
-                branch_id=branch_id_for_cache,
-                pc_ref=triggering_pc,
-            )
-            cached = self._context_cache.get(cache_key) if reuse_prompt_cache else None
-            if cached is not None:
-                prompt = cached
-            else:
-                prompt = await self._context.build(
-                    player_input,
+            if self._config.heartbeat.enabled and self._ws_push is not None:
+                heartbeat_task = asyncio.create_task(self._heartbeat_loop(active))
+            try:
+                await asyncio.wait_for(
+                    self._run_turn_body(
+                        active=active,
+                        campaign_id=campaign_id,
+                        scene_id=scene_id,
+                        player_input=player_input,
+                        triggering_pc=triggering_pc,
+                        turn_id=turn_id,
+                        reuse_prompt_cache=reuse_prompt_cache,
+                    ),
+                    timeout=self._config.turn_timeout_seconds,
+                )
+                state.last_turn_id = turn_id
+            except TimeoutError:
+                active.cancel_event.set()
+                await self._emit_turn_event(
+                    "turn_timed_out",
+                    turn_id,
                     campaign_id,
-                    mechanics_results=mechanics_results,
-                    pc_ref=triggering_pc,
-                    turn_id=turn_id,
+                    active.scene_id,
                 )
-                self._context_cache.put(cache_key, prompt)
-            await self._emit_turn_event(
-                "context_built",
-                turn_id,
-                campaign_id,
-                scene_id,
-                budget_used={str(k): v for k, v in prompt.budget_used.items()},
-            )
-
-            active.stage = "streaming"
-            response_text = await self._stream_main_response(
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                prompt=prompt,
-            )
-            await self._emit_turn_event(
-                "model_response_received",
-                turn_id,
-                campaign_id,
-                scene_id,
-                length=len(response_text),
-            )
-
-            active.stage = "extracting"
-            scene_obj = await self._scenes.get_scene(scene_id)
-            extraction = await self._do_extract(
-                response_text=response_text,
-                scene=scene_obj,
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-            )
-            await self._emit_turn_event(
-                "deltas_extracted",
-                turn_id,
-                campaign_id,
-                scene_id,
-                count=len(extraction.deltas) if extraction else 0,
-            )
-
-            # Pull the time-advance durations off the extraction before
-            # routing applies them. The Time Engine subscriber drives the
-            # real advance from these — applying TIME_ADVANCE deltas
-            # directly to the calendar would race the engine's own
-            # pipeline.
-            time_advance_durations: list[dict[str, Any]] = []
-            if extraction is not None:
-                from grimoire.time_engine import extract_time_advances_from_deltas
-
-                for d in extract_time_advances_from_deltas(list(extraction.deltas)):
-                    time_advance_durations.append(d.model_dump(mode="json"))
-
-            active.stage = "applying"
-            if extraction is not None:
-                await self._apply_routing(
-                    campaign_id=campaign_id,
-                    branch_id=scene_obj.branch_id,
-                    turn_id=turn_id,
-                    extraction=extraction,
+                await self._rollback_player_post(active)
+                raise TurnTimeoutError(
+                    f"turn {turn_id} exceeded {self._config.turn_timeout_seconds}s"
+                ) from None
+            except TurnCancelledError:
+                await self._emit_turn_event(
+                    "turn_cancelled",
+                    turn_id,
+                    campaign_id,
+                    active.scene_id,
                 )
-
-            # Append the response post to the scene.
-            response_post = self._new_post(
-                author_kind=SceneAuthorKind.NARRATOR,
-                body=response_text,
-                is_player=False,
-                turn_id=turn_id,
-            )
-            await self._scenes.append_post(scene_id, response_post)
-
-            await self._emit_turn_event(
-                "turn_complete",
-                turn_id,
-                campaign_id,
-                scene_id,
-                branch_id=scene_obj.branch_id,
-                time_advances=time_advance_durations,
-            )
-            state.last_turn_id = turn_id
+                await self._rollback_player_post(active)
+            except _StreamFailure as exc:
+                await self._emit_turn_event(
+                    "turn_failed",
+                    turn_id,
+                    campaign_id,
+                    active.scene_id,
+                    reason="llm_gateway",
+                    partial_response=exc.partial_text,
+                )
+                if self._config.errors.surface_partial_response_on_llm_error and exc.partial_text:
+                    try:
+                        partial_post = self._new_post(
+                            author_kind=SceneAuthorKind.NARRATOR,
+                            body=exc.partial_text,
+                            is_player=False,
+                            turn_id=turn_id,
+                        )
+                        await self._scenes.append_post(active.scene_id, partial_post)
+                    except Exception:
+                        logger.debug("appending partial response post failed", exc_info=True)
+                await self._rollback_player_post(active)
+                raise OrchestratorError(
+                    f"llm gateway failed for turn {turn_id}: {exc.cause}"
+                ) from exc.cause
+            except Exception as exc:
+                await self._emit_turn_event(
+                    "turn_failed",
+                    turn_id,
+                    campaign_id,
+                    active.scene_id,
+                    reason="orchestrator",
+                    partial_response="",
+                )
+                await self._rollback_player_post(active)
+                if isinstance(exc, OrchestratorError):
+                    raise
+                raise OrchestratorError(f"turn {turn_id} failed: {exc}") from exc
         finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with contextlib.suppress(BaseException):
+                    await heartbeat_task
             state.active = None
             state.lock.release()
         return turn_id
+
+    async def _run_turn_body(
+        self,
+        *,
+        active: _ActiveTurn,
+        campaign_id: CampaignId,
+        scene_id: SceneId,
+        player_input: str,
+        triggering_pc: CharacterRef | None,
+        turn_id: TurnId,
+        reuse_prompt_cache: bool = False,
+    ) -> None:
+        await self._emit_turn_event("turn_started", turn_id, campaign_id, scene_id)
+        self._check_cancelled(active)
+
+        scene_id = await self._maybe_break_scene(
+            campaign_id=campaign_id,
+            scene_id=scene_id,
+            player_input=player_input,
+            triggering_pc=triggering_pc,
+            turn_id=turn_id,
+            active=active,
+        )
+        active.scene_id = scene_id
+        self._check_cancelled(active)
+
+        active.stage = "mechanics_pre_roll"
+        mechanics_results = await self._do_pre_roll(
+            campaign_id=campaign_id, scene_id=scene_id, player_input=player_input
+        )
+        self._check_cancelled(active)
+
+        active.stage = "context_build"
+        scene_obj_for_cache = await self._scenes.get_scene(scene_id)
+        branch_id_for_cache = getattr(scene_obj_for_cache, "branch_id", None)
+        composition_hash = await self._composition_hash(campaign_id)
+        cache_key = make_cache_key(
+            campaign_id=campaign_id,
+            player_input=player_input,
+            composition_hash=composition_hash,
+            scene_id=scene_id,
+            branch_id=branch_id_for_cache,
+            pc_ref=triggering_pc,
+        )
+        cached = self._context_cache.get(cache_key) if reuse_prompt_cache else None
+        if cached is not None:
+            prompt = cached
+        else:
+            prompt = await self._context.build(
+                player_input,
+                campaign_id,
+                mechanics_results=mechanics_results,
+                pc_ref=triggering_pc,
+                turn_id=turn_id,
+            )
+            self._context_cache.put(cache_key, prompt)
+        await self._emit_turn_event(
+            "context_built",
+            turn_id,
+            campaign_id,
+            scene_id,
+            budget_used={str(k): v for k, v in prompt.budget_used.items()},
+        )
+        self._check_cancelled(active)
+
+        active.stage = "streaming"
+        response_text = await self._stream_main_response(
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            prompt=prompt,
+            active=active,
+        )
+        if active.cancel_event.is_set():
+            raise TurnCancelledError()
+        await self._emit_turn_event(
+            "model_response_received",
+            turn_id,
+            campaign_id,
+            scene_id,
+            length=len(response_text),
+        )
+
+        active.stage = "extracting"
+        scene_obj = await self._scenes.get_scene(scene_id)
+        extraction = await self._do_extract(
+            response_text=response_text,
+            scene=scene_obj,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+        )
+        await self._emit_turn_event(
+            "deltas_extracted",
+            turn_id,
+            campaign_id,
+            scene_id,
+            count=len(extraction.deltas) if extraction else 0,
+        )
+        self._check_cancelled(active)
+
+        # Time Engine subscriber drives the calendar advance from these
+        # durations — applying TIME_ADVANCE deltas directly would race the
+        # engine's own pipeline.
+        time_advance_durations: list[dict[str, Any]] = []
+        if extraction is not None:
+            from grimoire.time_engine import extract_time_advances_from_deltas
+
+            for d in extract_time_advances_from_deltas(list(extraction.deltas)):
+                time_advance_durations.append(d.model_dump(mode="json"))
+
+        active.stage = "applying"
+        if extraction is not None:
+            await self._apply_routing(
+                campaign_id=campaign_id,
+                branch_id=scene_obj.branch_id,
+                turn_id=turn_id,
+                extraction=extraction,
+            )
+
+        response_post = self._new_post(
+            author_kind=SceneAuthorKind.NARRATOR,
+            body=response_text,
+            is_player=False,
+            turn_id=turn_id,
+        )
+        await self._scenes.append_post(scene_id, response_post)
+
+        await self._emit_turn_event(
+            "turn_complete",
+            turn_id,
+            campaign_id,
+            scene_id,
+            branch_id=scene_obj.branch_id,
+            time_advances=time_advance_durations,
+        )
+
+    def _check_cancelled(self, active: _ActiveTurn) -> None:
+        if active.cancel_event.is_set():
+            raise TurnCancelledError()
+
+    async def _rollback_player_post(self, active: _ActiveTurn) -> None:
+        if active.player_post_id is None:
+            return
+        try:
+            await self._scenes.delete_post(active.player_post_id, source="rollback")
+        except Exception:
+            logger.debug("rollback delete_post for %s failed", active.player_post_id, exc_info=True)
+        active.player_post_id = None
+
+    async def _heartbeat_loop(self, active: _ActiveTurn) -> None:
+        interval = max(0.001, self._config.heartbeat.interval_seconds)
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                await self._push_to_ws(
+                    active.campaign_id,
+                    {"type": "heartbeat", "turn_id": active.turn_id},
+                )
+        except asyncio.CancelledError:
+            return
+
+    async def cancel_turn(self, campaign_id: CampaignId, turn_id: TurnId) -> bool:
+        """Signal cooperative cancellation of an in-flight turn.
+
+        Returns True if the turn was active and the cancel flag was set;
+        False if no turn matched.
+        """
+        state = self._campaigns.get(campaign_id)
+        if state is None or state.active is None:
+            return False
+        if state.active.turn_id != turn_id:
+            return False
+        state.active.cancel_event.set()
+        # Wake any scene-break prompt that's still pending.
+        choice = state.active.scene_break_choice
+        if choice is not None and not choice.done():
+            choice.set_result("continue")
+        return True
+
+    async def resolve_scene_break(
+        self,
+        campaign_id: CampaignId,
+        turn_id: TurnId,
+        choice: Literal["continue", "new_scene"],
+    ) -> bool:
+        """Resolve a pending medium-confidence scene-break prompt."""
+        state = self._campaigns.get(campaign_id)
+        if state is None or state.active is None:
+            return False
+        if state.active.turn_id != turn_id:
+            return False
+        fut = state.active.scene_break_choice
+        if fut is None or fut.done():
+            return False
+        fut.set_result(choice)
+        return True
 
     async def _maybe_break_scene(
         self,
@@ -549,6 +792,7 @@ class OrchestratorService:
         player_input: str,
         triggering_pc: CharacterRef | None,
         turn_id: TurnId,
+        active: _ActiveTurn | None = None,
     ) -> SceneId:
         if not player_input or triggering_pc is None:
             return scene_id
@@ -558,20 +802,41 @@ class OrchestratorService:
             return scene_id
         if not decision.is_break:
             return scene_id
-        if decision.confidence < self._config.scene_break.auto_threshold:
-            # Below threshold: surface to caller via event but keep current scene.
+
+        sb_cfg = self._config.scene_break
+        if decision.confidence < sb_cfg.prompt_threshold:
+            return scene_id
+
+        if decision.confidence < sb_cfg.auto_threshold:
             await self._bus.emit(
                 Event(
                     type="scene_break_suggested",
                     payload={
                         "campaign_id": campaign_id,
                         "scene_id": scene_id,
+                        "turn_id": turn_id,
                         "confidence": decision.confidence,
                         "reason": decision.reason,
                     },
                 )
             )
-            return scene_id
+            if active is None:
+                return scene_id
+            loop = asyncio.get_running_loop()
+            fut: asyncio.Future = loop.create_future()
+            active.scene_break_choice = fut
+            try:
+                choice = await asyncio.wait_for(fut, timeout=sb_cfg.prompt_resume_timeout_seconds)
+            except TimeoutError:
+                logger.warning(
+                    "scene-break prompt timed out for turn %s; continuing in scene", turn_id
+                )
+                choice = "continue"
+            finally:
+                active.scene_break_choice = None
+            if choice != "new_scene":
+                return scene_id
+            # Fall through to the new-scene path below.
 
         # Close the current and open a new one.
         try:
@@ -654,6 +919,7 @@ class OrchestratorService:
         campaign_id: CampaignId,
         turn_id: TurnId,
         prompt: Any,
+        active: _ActiveTurn | None = None,
     ) -> str:
         request = CompletionRequest(
             model="",  # routing resolves the actual model
@@ -662,25 +928,34 @@ class OrchestratorService:
             temperature=getattr(prompt.params, "temperature", 1.0),
         )
         accumulated: list[str] = []
-        stream = self._gateway.stream(
-            self._config.main_llm_task,
-            request,
-            campaign_id=campaign_id,
-            turn_id=turn_id,
-        )
-        async for chunk in stream:
-            if chunk.delta:
-                accumulated.append(chunk.delta)
-                await self._push_to_ws(
-                    campaign_id,
-                    {
-                        "type": "token",
-                        "turn_id": turn_id,
-                        "delta": chunk.delta,
-                    },
-                )
-            if chunk.is_final:
-                break
+        try:
+            stream = self._gateway.stream(
+                self._config.main_llm_task,
+                request,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+            )
+            async for chunk in stream:
+                if active is not None and active.cancel_event.is_set():
+                    break
+                if chunk.delta:
+                    accumulated.append(chunk.delta)
+                    if active is not None:
+                        active.last_chunk_at = self._clock()
+                    await self._push_to_ws(
+                        campaign_id,
+                        {
+                            "type": "token",
+                            "turn_id": turn_id,
+                            "delta": chunk.delta,
+                        },
+                    )
+                if chunk.is_final:
+                    break
+        except (TurnCancelledError, asyncio.CancelledError):
+            raise
+        except Exception as exc:
+            raise _StreamFailure("".join(accumulated), exc) from exc
         return "".join(accumulated)
 
     async def _do_extract(
@@ -697,17 +972,32 @@ class OrchestratorService:
             scene_id=scene.id,
         )
         pyd_scene = _pydantic_scene(scene)
-        try:
-            return await self._extractor.extract(
-                response_text,
-                pyd_scene,
-                campaign_id,
-                snapshot,
-                turn_id=turn_id,
-            )
-        except Exception as exc:
-            logger.warning("extractor failed for turn %s: %s", turn_id, exc)
-            return None
+        retries = max(0, int(self._config.errors.retry_extractor_on_parse_failure))
+        attempts = retries + 1
+        parse_failure_codes = {
+            "llm_json_unparseable",
+            "structured_llm_failed",
+            "llm_call_failed",
+        }
+        last_result: ExtractionResult | None = None
+        for attempt in range(attempts):
+            try:
+                result = await self._extractor.extract(
+                    response_text,
+                    pyd_scene,
+                    campaign_id,
+                    snapshot,
+                    turn_id=turn_id,
+                )
+            except Exception as exc:
+                logger.warning("extractor failed for turn %s: %s", turn_id, exc)
+                return None
+            last_result = result
+            flags = getattr(result, "flags", []) or []
+            has_parse_failure = any(getattr(f, "code", None) in parse_failure_codes for f in flags)
+            if not has_parse_failure or attempt == attempts - 1:
+                return result
+        return last_result
 
     async def _apply_routing(
         self,
@@ -718,50 +1008,78 @@ class OrchestratorService:
         extraction: ExtractionResult,
     ) -> None:
         routing = route_deltas(list(extraction.deltas), config=self._extractor_config)
-        for delta, decision in routing.decisions():
-            if decision is Decision.DROP:
-                continue
+        auto_deltas = [d for d, dec in routing.decisions() if dec is Decision.AUTO_APPLY]
+        review_deltas = [d for d, dec in routing.decisions() if dec is Decision.REVIEW]
+
+        applied_ids: list[str] = []
+        try:
+            for delta in auto_deltas:
+                # §5 Domain-specific dispatch: weather override deltas go
+                # through WorldService.override_weather so the row gets
+                # tagged source="override" (which the read path looks for).
+                if (
+                    self._world is not None
+                    and delta.kind == DeltaKind.OVERRIDE_WRITE
+                    and delta.target_table == "location_state"
+                ):
+                    try:
+                        await self._world.apply_weather_override_delta(delta)
+                        continue
+                    except Exception:
+                        logger.exception("world weather-override apply failed; falling through")
+                did = await self._store.apply_delta(
+                    delta=delta,
+                    source=delta.source or "extractor",
+                    turn_id=turn_id,
+                    branch_id=branch_id,
+                    campaign_id=campaign_id,
+                )
+                applied_ids.append(did)
+        except Exception:
+            for did in reversed(applied_ids):
+                try:
+                    await self._store.reverse_delta(did)
+                except Exception:
+                    logger.warning(
+                        "rollback of delta %s failed during apply-batch unwind",
+                        did,
+                        exc_info=True,
+                    )
+            raise
+
+        if applied_ids:
+            await self._bus.emit(
+                Event(
+                    type="deltas_applied",
+                    payload={
+                        "turn_id": turn_id,
+                        "campaign_id": campaign_id,
+                        "count": len(applied_ids),
+                        "ids": list(applied_ids),
+                    },
+                )
+            )
+
+        for delta in review_deltas:
             try:
-                if decision is Decision.AUTO_APPLY:
-                    # §5 Domain-specific dispatch: weather override deltas go
-                    # through WorldService.override_weather so the row gets
-                    # tagged source="override" (which the read path looks for).
-                    if (
-                        self._world is not None
-                        and delta.kind == DeltaKind.OVERRIDE_WRITE
-                        and delta.target_table == "location_state"
-                    ):
-                        try:
-                            await self._world.apply_weather_override_delta(delta)
-                            continue
-                        except Exception:
-                            logger.exception("world weather-override apply failed; falling through")
-                    await self._store.apply_delta(
-                        delta=delta,
-                        source=delta.source or "extractor",
-                        turn_id=turn_id,
-                        branch_id=branch_id,
-                        campaign_id=campaign_id,
+                review_id = await self._store.queue_for_review(
+                    delta=delta,
+                    source=delta.source or "extractor",
+                    campaign_id=campaign_id,
+                )
+                await self._bus.emit(
+                    Event(
+                        type="review_item_added",
+                        payload={
+                            "campaign_id": campaign_id,
+                            "review_id": review_id,
+                            "turn_id": turn_id,
+                        },
                     )
-                else:
-                    review_id = await self._store.queue_for_review(
-                        delta=delta,
-                        source=delta.source or "extractor",
-                        campaign_id=campaign_id,
-                    )
-                    await self._bus.emit(
-                        Event(
-                            type="review_item_added",
-                            payload={
-                                "campaign_id": campaign_id,
-                                "review_id": review_id,
-                                "turn_id": turn_id,
-                            },
-                        )
-                    )
+                )
             except Exception as exc:
                 logger.warning(
-                    "applying delta failed (kind=%s turn=%s): %s",
+                    "queue_for_review failed (kind=%s turn=%s): %s",
                     delta.kind,
                     turn_id,
                     exc,

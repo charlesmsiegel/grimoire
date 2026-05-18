@@ -12,6 +12,8 @@ from grimoire.orchestrator.errors import (
     NoTurnsToUndoError,
     OrchestratorError,
     TurnAlreadyInProgressError,
+    TurnCancelledError,
+    TurnTimeoutError,
     UnknownCampaignError,
     UnknownPCError,
 )
@@ -23,6 +25,8 @@ __all__ = [
     "OrchestratorError",
     "OrchestratorService",
     "TurnAlreadyInProgressError",
+    "TurnCancelledError",
+    "TurnTimeoutError",
     "UnknownCampaignError",
     "UnknownPCError",
     "WSPushFn",
