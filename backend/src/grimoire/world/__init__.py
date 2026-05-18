@@ -7,6 +7,12 @@ calendar/season/holiday, faction state).
 """
 
 from grimoire.world.calendar import holiday_at, parse_calendar, season_for
+from grimoire.world.config import (
+    CompositionPolicyConfig,
+    LoreConfig,
+    WeatherConfig,
+    WorldConfig,
+)
 from grimoire.world.errors import (
     CompositionError,
     WorldError,
@@ -17,6 +23,10 @@ from grimoire.world.weather import generate_weather
 
 __all__ = [
     "CompositionError",
+    "CompositionPolicyConfig",
+    "LoreConfig",
+    "WeatherConfig",
+    "WorldConfig",
     "WorldError",
     "WorldNotFoundError",
     "WorldService",
