@@ -25,7 +25,7 @@ from grimoire.event_bus import EventBus
 from grimoire.export.service import ExportService
 from grimoire.export.sources import DataSources
 from grimoire.extractor.service import ExtractorService
-from grimoire.imagegen import BackendRegistry, ImageGenService
+from grimoire.imagegen import BackendRegistry, ImageGenConfig, ImageGenService
 from grimoire.library import LibraryService
 from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.mechanics import MechanicsConfig, MechanicsService
@@ -148,11 +148,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # will raise NoBackendAvailableError until a backend plugin is
             # installed and registered with the registry. Routes that need a
             # backend should catch that and 503 with a clear message.
+            imagegen_cfg = ImageGenConfig.from_yaml(
+                data_root / "config" / "imagegen.yaml"
+            )
             container.imagegen = ImageGenService(
                 store=container.state_store,
                 registry=BackendRegistry(),
                 default_backend_id=None,
                 event_bus=container.event_bus,
+                config=imagegen_cfg,
             )
 
         # LLM-adjacent services: gateway + extractor + context builder are
