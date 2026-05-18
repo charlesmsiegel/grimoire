@@ -14,7 +14,7 @@ All actionable items implemented on `claude/implement-time-engine-spec-Q1vHK`:
 - §3 — `subscribe_calendar` thin wrapper around `event_bus.subscribe("time_advance", …)`.
 - §4 — Household-based significance via `Character.household_id`.
 - §5 — Faction tick depth: resource decay, library-side leader actions, inter-faction conflict pass; surfaced via `FactionConflict` and the existing `FactionTickSummary` fields.
-- §6 — `scheduled_event_pre_notice` emits `scheduled_event_imminent`; `pre_notice_emitted_at` column on `scheduled_events` (migration `020_time_engine_extensions.sql`) keeps it once-per-event.
+- §6 — `scheduled_event_pre_notice` emits `scheduled_event_imminent`; `pre_notice_emitted_at` column on `scheduled_events` (migration `021_time_engine_extensions.sql`) keeps it once-per-event.
 - §7 — `advance(..., activity_ref=...)` threads through to `mechanics.time_tick` via `TickContext.extras["activity_ref"]`.
 - §8 — `propose_advance` issues a `CheckpointSuggestion` + token, emits `time_advance_checkpoint_suggested` over the configured threshold; `advance(..., checkpoint_token=...)` consumes the token.
 - §9 — Optional drift check callable; warnings on `TimeAdvanceResult.drift_warnings`; `npc_drift_detected` event per warning.
