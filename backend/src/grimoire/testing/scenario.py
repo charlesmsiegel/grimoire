@@ -75,10 +75,12 @@ class ScenarioApp:
         # LLM fixtures live alongside the rest of the testing fixtures by
         # default. Tests that want to record fresh responses point this
         # at a writable directory and set ``replay_mode=RECORD``.
+        # RecordReplayLLM appends "llm/by_hash/" internally, so we hand
+        # it the parent `tests/fixtures/` directory.
         self._llm_fixture_dir = (
             Path(llm_fixture_dir)
             if llm_fixture_dir is not None
-            else Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "llm"
+            else Path(__file__).resolve().parents[3] / "tests" / "fixtures"
         )
         self._replay_mode = replay_mode
 
