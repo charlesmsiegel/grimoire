@@ -1007,6 +1007,17 @@ class ImageGen(Protocol):
 
     async def reroll(self, image_id: str) -> str: ...
     async def variation(self, image_id: str, strength: float) -> str: ...
+    async def edit_and_regenerate(
+        self,
+        image_id: str,
+        *,
+        prompt: str | None = None,
+        negative_prompt: str | None = None,
+        params: dict | None = None,
+        keep_seed: bool = False,
+    ) -> str: ...
+    async def set_tags(self, image_id: str, tags: list[str]) -> None: ...
+    async def prewarm(self, backend_id: str) -> None: ...
 
     async def list_images(
         self,

@@ -33,4 +33,13 @@ async def backend_health(backend_id: str, imagegen: ImageGenDep) -> Any:
         raise map_lookup_errors(exc) from exc
 
 
+@router.post("/backends/{backend_id}/prewarm")
+async def prewarm_backend(backend_id: str, imagegen: ImageGenDep) -> Any:
+    try:
+        await imagegen.prewarm(backend_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {"ok": True}
+
+
 __all__ = ["router"]

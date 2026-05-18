@@ -509,6 +509,41 @@ class ImageGenService:
             request=request,
         )
 
+    async def edit_and_regenerate(
+        self,
+        image_id: str,
+        *,
+        prompt: str | None = None,
+        negative_prompt: str | None = None,
+        params: dict | None = None,
+        keep_seed: bool = False,
+    ) -> str:
+        """§5 Manual prompt editing + "save as new".
+
+        Loads ``image_id``'s metadata, merges the edits into a fresh
+        :class:`GenerationRequest`, and queues a new job. The old image
+        and its metadata are untouched — "save as new" is automatic
+        because each completed job lands in a new ``images`` row.
+        """
+        meta = await self.get_image(image_id)
+        base = self._request_from_metadata(meta, new_seed=not keep_seed)
+        updates: dict[str, Any] = {}
+        if prompt is not None:
+            updates["prompt"] = prompt
+        if negative_prompt is not None:
+            updates["negative_prompt"] = negative_prompt
+        if params:
+            for key in ("width", "height", "steps", "cfg_scale", "sampler"):
+                if key in params:
+                    updates[key] = params[key]
+        new_request = base.model_copy(update=updates) if updates else base
+        return await self.queue_generation(
+            campaign_id=meta.campaign_id,
+            scene_id=meta.scene_id,
+            post_id=meta.post_id,
+            request=new_request,
+        )
+
     async def variation(self, image_id: str, strength: float) -> str:
         meta = await self.get_image(image_id)
         source_path = Path(meta.file_path)
@@ -561,6 +596,26 @@ class ImageGenService:
             (1 if starred else 0, image_id),
         )
 
+    async def set_tags(self, image_id: str, tags: list[str]) -> None:
+        """§10 Replace the tag list on an image (SQL + YAML sidecar)."""
+        meta = await self.get_image(image_id)
+        tags_clean = [str(t).strip() for t in tags if str(t).strip()]
+        await self.store.db.execute(
+            "UPDATE images SET tags = ? WHERE id = ?",
+            (json.dumps(tags_clean), image_id),
+        )
+        sidecar = image_metadata_path(self.data_root, meta.campaign_id, image_id)
+        if sidecar.exists():
+            try:
+                import yaml
+
+                doc = yaml.safe_load(sidecar.read_text(encoding="utf-8")) or {}
+                if isinstance(doc, dict):
+                    doc["tags"] = tags_clean
+                    write_yaml(sidecar, doc)
+            except Exception:
+                logger.warning("set_tags: failed to update sidecar", exc_info=True)
+
     async def delete_image(self, image_id: str) -> None:
         meta = await self.get_image(image_id)
         await self.store.db.execute("DELETE FROM images WHERE id = ?", (image_id,))
@@ -589,6 +644,24 @@ class ImageGenService:
     # ------------------------------------------------------------------ #
     # Health
     # ------------------------------------------------------------------ #
+
+    async def prewarm(self, backend_id: str) -> None:
+        """§12 Trigger lazy pipeline load for backends that support it.
+
+        Backends with a ``_ensure_pipeline`` (or ``prewarm``) coroutine
+        get awaited; backends that don't simply no-op.
+        """
+        backend = self.registry.get(backend_id)
+        if backend is None:
+            raise KeyError(f"no backend registered with id {backend_id!r}")
+        for name in ("prewarm", "_ensure_pipeline"):
+            hook = getattr(backend, name, None)
+            if hook is None or not callable(hook):
+                continue
+            result = hook()
+            if hasattr(result, "__await__"):
+                await result
+            return
 
     async def health_check(self, backend_id: str) -> HealthStatus:
         backend = self.registry.get(backend_id)
@@ -694,6 +767,7 @@ class ImageGenService:
         prompt = composed.prompt if composed else ""
         negative = composed.negative_prompt if composed else None
         params = composed.params if composed else {}
+        seed_override = params.get("seed")
         return GenerationRequest(
             prompt=prompt or "a scene",
             negative_prompt=negative,
@@ -702,6 +776,7 @@ class ImageGenService:
             steps=int(params.get("steps", 28)),
             cfg_scale=float(params.get("cfg_scale", 6.5)),
             sampler=str(params.get("sampler", "DPM++ 2M Karras")),
+            seed=int(seed_override) if seed_override is not None else None,
         )
 
     async def _fetch_post_body(self, post_id: str) -> str | None:

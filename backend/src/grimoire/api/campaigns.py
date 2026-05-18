@@ -1131,6 +1131,53 @@ async def variation_image(
     return {"job_id": job_id}
 
 
+class EditAndRegeneratePayload(BaseModel):
+    prompt: str | None = None
+    negative_prompt: str | None = None
+    params: dict[str, Any] | None = None
+    keep_seed: bool = False
+
+
+@router.post("/{campaign_id}/images/{image_id}/edit", status_code=202)
+async def edit_and_regenerate_image(
+    campaign_id: str,
+    image_id: str,
+    payload: EditAndRegeneratePayload,
+    imagegen: ImageGenDep,
+) -> Any:
+    del campaign_id  # kept in URL for symmetry / future ownership check
+    try:
+        job_id = await imagegen.edit_and_regenerate(
+            image_id,
+            prompt=payload.prompt,
+            negative_prompt=payload.negative_prompt,
+            params=payload.params,
+            keep_seed=payload.keep_seed,
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {"job_id": job_id}
+
+
+class SetTagsPayload(BaseModel):
+    tags: list[str] = Field(default_factory=list)
+
+
+@router.put("/{campaign_id}/images/{image_id}/tags")
+async def set_image_tags(
+    campaign_id: str,
+    image_id: str,
+    payload: SetTagsPayload,
+    imagegen: ImageGenDep,
+) -> Any:
+    del campaign_id
+    try:
+        await imagegen.set_tags(image_id, payload.tags)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {"ok": True}
+
+
 # --------------------------------------------------------------------------- #
 # Export
 # --------------------------------------------------------------------------- #
