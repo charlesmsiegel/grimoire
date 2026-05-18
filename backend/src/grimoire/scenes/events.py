@@ -49,7 +49,7 @@ WILDCARD = "*"
 class _Subscription:
     """Handle returned by :meth:`InMemoryEventBus.subscribe`."""
 
-    def __init__(self, bus: "InMemoryEventBus", event_type: str, handler: Handler) -> None:
+    def __init__(self, bus: InMemoryEventBus, event_type: str, handler: Handler) -> None:
         self._bus = bus
         self._event_type = event_type
         self._handler = handler
@@ -92,10 +92,10 @@ class InMemoryEventBus:
         return _Subscription(self, event_type, handler)
 
     def _remove(self, event_type: str, handler: Handler) -> None:
+        import contextlib
+
         bucket = self._by_type.get(event_type)
         if not bucket:
             return
-        try:
+        with contextlib.suppress(ValueError):
             bucket.remove(handler)
-        except ValueError:
-            pass

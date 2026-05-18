@@ -71,9 +71,8 @@ __all__ = [
     "InMemoryEventBus",
     "MultiPCConfig",
     "NothingToAdvance",
-    "RunningSummaryConfig",
-    "ThreadDetectionConfig",
     "Post",
+    "RunningSummaryConfig",
     "Scene",
     "SceneBreakDecision",
     "SceneCloseReport",
@@ -83,6 +82,7 @@ __all__ = [
     "SceneManagerConfig",
     "SceneThreads",
     "Thread",
+    "ThreadDetectionConfig",
     "detect_scene_break",
     "new_post",
 ]
