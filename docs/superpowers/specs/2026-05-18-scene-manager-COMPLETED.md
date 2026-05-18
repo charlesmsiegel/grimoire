@@ -1,9 +1,51 @@
-# Scene Manager — Remaining Work
+# Scene Manager — Remaining Work (COMPLETED 2026-05-18)
 
-> Everything from the original `specs/10-scene-manager.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-scene-manager-design.md`). Use this as the input to a writing-plans pass when picking up the work.
+> Everything from the original `specs/10-scene-manager.md` that did **not** land in the shipped design (`2026-05-12-scene-manager-design.md`). All sections below were implemented on branch `claude/implement-scene-manager-ks6hV`.
 
 **Companion (already shipped):** `2026-05-12-scene-manager-design.md`
 **Module:** `backend/src/grimoire/scenes/`
+
+## Implementation summary
+
+| § | Topic | Status | Notes |
+|---|---|---|---|
+| 1 | SQLite indexing of scenes/posts | ✅ | New `scenes/indexer.py` (`SceneIndexer`) subscribes to scene events + has `backfill()` walking disk; wired in `main.py` |
+| 2 | Durable per-post identity | ✅ | `_PostRecord` persisted in YAML sidecar `posts:` block; `hydrate_post_records` reloads on startup (option **a/b** combined — sidecar holds it, indexer mirrors to SQLite) |
+| 3 | Watcher integration for direct edits | ✅ | `FileWatcher(scene_manager=...)` routes `scene_body`/`scene_sidecar` events through `reindex_from_disk`; hash-based `conflict=True` flag on `scene_file_changed` |
+| 4 | Running summary as a background job | ✅ | `append_post` now emits `running_summary_due`; new `scenes/summary_jobs.py` `RunningSummaryWorker` drains per-scene FIFO with coalescing |
+| 5 | Final scene summary via LLM | ✅ | `scenes/default_summarizers.py` builds `make_default_running_summarizer` + `make_default_final_summarizer` against the LLM Gateway's `scene_summary` task; wired in `main.py` |
+| 6 | LLM-assisted thread detection | ✅ | `ThreadDetector` seam + `SceneManager.detect_threads`; gated on `config.thread_detection.enabled`. Extractor delta routing left for follow-up |
+| 7 | LLM-assisted scene-break refinement | ✅ | Optional `scene_break_classifier` param refines borderline-confidence (`prompt_threshold-0.1 .. auto_threshold`) heuristic decisions |
+| 8 | Multi-PC PC-leave flush | ✅ | `remove_present_character` snaps `last_advance_at_post = post_count` when crossing back to ≤1 PCs; emits `advance_enabled` with `flushed_to_post` |
+| 9 | Configuration knobs | ✅ | `RunningSummaryConfig`, `ThreadDetectionConfig`, `FilesConfig` (scene_naming_pattern + post_heading_pattern), `MultiPCConfig.show_pending_count_in_ui` plumbed through `SceneManagerConfig` |
+| 10 | Thread provenance persistence | ✅ | Sidecar schema bump: `threads_introduced` / `threads_paid_off` now serialize as `[{text, introduced_at_post, paid_off_at_post}]`; legacy string-list shape still parses |
+| 11 | `closed_at_turn` discipline | ✅ | `close_scene` requires `closed_at_turn` (kw-only); API `end_scene` passes `"manual"` since no orchestrator turn is in scope at that endpoint |
+| 12 | Open questions | — | Left as documented v2 deferrals; nothing implemented |
+
+## Files added
+
+- `backend/src/grimoire/scenes/indexer.py`
+- `backend/src/grimoire/scenes/summary_jobs.py`
+- `backend/src/grimoire/scenes/default_summarizers.py`
+- `backend/tests/scenes/test_indexer.py`
+- `backend/tests/scenes/test_default_summarizers.py`
+- `backend/tests/watcher/test_scene_integration.py`
+
+## Files modified
+
+- `backend/src/grimoire/scenes/manager.py` (configs, post records, scene-break classifier, multi-PC flush, thread provenance, close_scene signature, conflict detection, file-pattern plumbing)
+- `backend/src/grimoire/scenes/storage.py` (sidecar schema bump, `read_sidecar_post_records`, file-pattern parameters)
+- `backend/src/grimoire/scenes/types.py` (`list[Thread]` for thread fields; `SceneCloseReport.threads_*: list[Thread]`)
+- `backend/src/grimoire/scenes/events.py` (`RUNNING_SUMMARY_DUE`, typed subscribe with handle)
+- `backend/src/grimoire/scenes/__init__.py` (re-exports for new configs + events)
+- `backend/src/grimoire/watcher/watcher.py` (`scene_manager=` parameter, `_resolve_scene_id`, scene-file forward)
+- `backend/src/grimoire/main.py` (indexer + summary worker + watcher hook wiring + default summarizers)
+- `backend/src/grimoire/types/protocols.py` (`close_scene` signature)
+- `backend/src/grimoire/api/campaigns.py` (`end_scene` passes `"manual"` turn id)
+- `backend/bundled_plugins/export-json/plugin.py` (export the thread `.text` since the field is now `list[Thread]`)
+
+## Original sections (for reference)
+
 
 ## 1. SQLite indexing of scenes and posts
 
