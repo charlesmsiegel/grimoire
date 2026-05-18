@@ -924,7 +924,9 @@ async def test_cache_respects_max_size(
     store: StateStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    chars = CharactersService(library, mechanics, config=CharactersConfig(cache=CacheConfig(max_size=2)))
+    chars = CharactersService(
+        library, mechanics, config=CharactersConfig(cache=CacheConfig(max_size=2))
+    )
     await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
     await characters_create_many(chars)
