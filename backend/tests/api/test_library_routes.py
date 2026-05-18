@@ -151,6 +151,9 @@ class FakePlugins:
     def get_embedding_provider(self, plugin_id: str) -> Any:
         return self.embedding_providers.get(plugin_id)
 
+    def discovery_errors(self) -> list[Any]:
+        return getattr(self, "_discovery_errors", [])
+
 
 def test_list_worlds(client, container) -> None:
     container.library = FakeLibrary()
@@ -253,6 +256,42 @@ def test_plugins_rescan(client, container) -> None:
     container.plugins = FakePlugins()
     response = client.post("/api/plugins/rescan")
     assert response.status_code == 200
+
+
+def test_plugins_discovery_errors_returns_recent_failures(client, container) -> None:
+    """The endpoint exposes parse errors from the last discovery pass so the
+    UI can render an actionable message instead of a bare ``failed`` entry."""
+    from pathlib import Path
+
+    from grimoire.plugins.discovery import DiscoveryError
+
+    plugins = FakePlugins()
+    plugins._discovery_errors = [
+        DiscoveryError(
+            plugin_dir=Path("/data/plugins/oops"),
+            message="manifest.yaml is empty",
+        )
+    ]
+    container.plugins = plugins
+    response = client.get("/api/plugins/discovery-errors")
+    assert response.status_code == 200
+    body = response.json()
+    assert body == [
+        {"plugin_dir": "/data/plugins/oops", "message": "manifest.yaml is empty"}
+    ]
+
+
+def test_plugins_discovery_errors_empty_when_unsupported(client, container) -> None:
+    """Plugins backends without ``discovery_errors`` return an empty list rather
+    than 500."""
+
+    class _NoErrors:
+        pass
+
+    container.plugins = _NoErrors()
+    response = client.get("/api/plugins/discovery-errors")
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 def _fake_manifest(plugin_id: str, schema: dict[str, Any]) -> Any:

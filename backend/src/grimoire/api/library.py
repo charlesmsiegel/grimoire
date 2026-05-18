@@ -375,6 +375,24 @@ async def rescan_plugins(plugins: PluginsDep) -> Any:
         raise map_lookup_errors(exc) from exc
 
 
+@router.get("/plugins/discovery-errors")
+async def plugin_discovery_errors(plugins: PluginsDep) -> Any:
+    """Return per-directory errors from the most recent discovery pass.
+
+    A malformed ``manifest.yaml`` would otherwise vanish into a generic
+    ``failed`` entry on the rescan report keyed by directory name. This
+    endpoint exposes the underlying parse error so the Installed Plugins
+    view can render an actionable message.
+    """
+    getter = getattr(plugins, "discovery_errors", None)
+    if not callable(getter):
+        return []
+    return [
+        {"plugin_dir": str(err.plugin_dir), "message": err.message}
+        for err in getter()
+    ]
+
+
 @router.get("/plugins/{plugin_id}/config")
 async def get_plugin_config(plugin_id: str, plugins: PluginsDep) -> Any:
     """Return the saved config for a plugin, with secret fields redacted.
