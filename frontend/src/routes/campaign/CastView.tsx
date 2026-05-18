@@ -6,13 +6,16 @@
  * mechanical sheet rendered through the widget library.
  */
 
-import { useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 
+import { ApiError } from "../../api/client";
 import { viewsApi } from "../../api/views";
-import type { ResolvedCharacter } from "../../api/types";
+import type { ResolvedCharacter, WorldMeta } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { Markdown } from "../../components/Markdown";
+import { SheetRenderer } from "../../sheets";
+import type { SheetSchema, SheetValue } from "../../sheets/types";
 import { ChainBadge, Loading } from "./common";
 
 type SourceFilter = "all" | "library" | "emergent" | "override";
@@ -20,6 +23,8 @@ type SourceFilter = "all" | "library" | "emergent" | "override";
 export function CastView() {
   const { campaignId = "" } = useParams();
   const state = useApi(() => viewsApi.listCharacters(campaignId), [campaignId]);
+  const composition = useApi(() => viewsApi.getComposition(campaignId), [campaignId]);
+  const moduleId = composition.status === "ok" ? composition.data.mechanics : null;
 
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [roleFilter, setRoleFilter] = useState<string>("all");
@@ -78,7 +83,12 @@ export function CastView() {
               </aside>
               <article className="cast-detail" aria-live="polite">
                 {selected ? (
-                  <CharacterDetail character={selected} />
+                  <CharacterDetail
+                    campaignId={campaignId}
+                    moduleId={moduleId}
+                    character={selected}
+                    onReload={() => state.reload()}
+                  />
                 ) : (
                   <p className="muted">Select a character to see details.</p>
                 )}
@@ -132,7 +142,15 @@ function Filters({ source, onSource, role, roles, onRole, tag, onTag }: FiltersP
   );
 }
 
-function CharacterDetail({ character: row }: { character: ResolvedCharacter }) {
+interface CharacterDetailProps {
+  campaignId: string;
+  moduleId: string | null;
+  character: ResolvedCharacter;
+  onReload: () => void;
+}
+
+function CharacterDetail({ campaignId, moduleId, character: row, onReload }: CharacterDetailProps) {
+  const navigate = useNavigate();
   const { character, source_chain, overrides_applied, capabilities } = row;
   const samples = character.voice.samples;
   const [sampleIdx, setSampleIdx] = useState(0);
@@ -140,6 +158,19 @@ function CharacterDetail({ character: row }: { character: ResolvedCharacter }) {
     if (samples.length === 0) return null;
     return samples[sampleIdx % samples.length];
   }, [samples, sampleIdx]);
+
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const [promoteOpen, setPromoteOpen] = useState(false);
+
+  const isEmergent = source_chain[0]?.layer === "emergent";
+
+  const handleEditLibrary = () => {
+    const worldId = character.world_id;
+    if (!worldId) return;
+    navigate(
+      `/library/worlds/${encodeURIComponent(worldId)}/characters/${encodeURIComponent(character.id)}`,
+    );
+  };
 
   return (
     <div className="character-detail">
@@ -212,22 +243,285 @@ function CharacterDetail({ character: row }: { character: ResolvedCharacter }) {
         </section>
       )}
 
+      {moduleId && (
+        <CastMechanicalSheet
+          campaignId={campaignId}
+          moduleId={moduleId}
+          characterId={character.id}
+        />
+      )}
+
       <section>
         <h4>Actions</h4>
         <div className="button-row">
-          <button type="button" disabled title="Wired in a follow-up task.">
+          <button
+            type="button"
+            onClick={() => setOverrideOpen(true)}
+            disabled={!character.world_id}
+            title={
+              character.world_id ? undefined : "Overrides only apply to library-backed characters."
+            }
+          >
             Edit override
           </button>
-          <button type="button" disabled title="Wired in a follow-up task.">
+          <button
+            type="button"
+            onClick={handleEditLibrary}
+            disabled={!character.world_id}
+            title={
+              character.world_id ? undefined : "Emergent characters live in the campaign, not the library."
+            }
+          >
             Edit library
           </button>
-          {!character.world_id && (
-            <button type="button" disabled title="Wired in a follow-up task.">
+          {isEmergent && (
+            <button type="button" onClick={() => setPromoteOpen(true)}>
               Promote to library
             </button>
           )}
         </div>
       </section>
+
+      {overrideOpen && character.world_id && (
+        <EditOverrideDialog
+          campaignId={campaignId}
+          characterId={character.id}
+          worldId={character.world_id}
+          onClose={() => setOverrideOpen(false)}
+          onSaved={() => {
+            setOverrideOpen(false);
+            onReload();
+          }}
+        />
+      )}
+      {promoteOpen && isEmergent && (
+        <PromoteToLibraryDialog
+          campaignId={campaignId}
+          characterId={character.id}
+          onClose={() => setPromoteOpen(false)}
+          onPromoted={() => {
+            setPromoteOpen(false);
+            onReload();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+interface CastMechanicalSheetProps {
+  campaignId: string;
+  moduleId: string;
+  characterId: string;
+}
+
+function CastMechanicalSheet({ campaignId, moduleId, characterId }: CastMechanicalSheetProps) {
+  const sheet = useApi<Record<string, unknown> | null>(
+    () =>
+      viewsApi.getSheet(campaignId, "character", characterId).catch((err: unknown) => {
+        if (err instanceof ApiError && err.status === 404) return null;
+        throw err;
+      }),
+    [campaignId, characterId],
+  );
+  const schema = useApi(() => viewsApi.getSheetSchema(moduleId, "character"), [moduleId]);
+  const theme = useApi(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]);
+
+  if (sheet.status === "ok" && sheet.data === null) return null;
+  if (sheet.status === "error") return null;
+  return (
+    <section>
+      <h4>Mechanical sheet</h4>
+      {sheet.status === "loading" || schema.status === "loading" ? (
+        <p className="muted">Loading sheet…</p>
+      ) : sheet.status === "ok" && schema.status === "ok" ? (
+        <SheetRenderer
+          moduleId={moduleId}
+          schema={schema.data as unknown as SheetSchema}
+          value={(sheet.data ?? {}) as SheetValue}
+          themeCss={theme.status === "ok" ? theme.data || undefined : undefined}
+          onChange={() => {
+            /* read-only */
+          }}
+          readOnly
+        />
+      ) : (
+        <p className="muted">Sheet schema unavailable.</p>
+      )}
+    </section>
+  );
+}
+
+interface EditOverrideDialogProps {
+  campaignId: string;
+  characterId: string;
+  worldId: string;
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+function EditOverrideDialog({
+  campaignId,
+  characterId,
+  worldId,
+  onClose,
+  onSaved,
+}: EditOverrideDialogProps) {
+  const [text, setText] = useState("{}");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const save = useCallback(async () => {
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err) {
+      setError(`Invalid JSON: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      setError("Override must be a JSON object.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await viewsApi.patchCharacterOverride(campaignId, characterId, {
+        override: parsed,
+        world_id: worldId,
+      });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [campaignId, characterId, worldId, text, onSaved]);
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="edit-override">
+      <div className="modal">
+        <h4 id="edit-override">Edit override</h4>
+        <p className="muted">
+          Patch frontmatter for <code>{characterId}</code> in world <code>{worldId}</code>. Submitted
+          as a JSON object; existing override is overwritten.
+        </p>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={12}
+          spellCheck={false}
+          aria-label="Override JSON"
+        />
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="modal-actions">
+          <button type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button type="button" onClick={() => void save()} disabled={busy}>
+            {busy ? "Saving…" : "Save override"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface PromoteToLibraryDialogProps {
+  campaignId: string;
+  characterId: string;
+  onClose: () => void;
+  onPromoted: () => void;
+}
+
+function PromoteToLibraryDialog({
+  campaignId,
+  characterId,
+  onClose,
+  onPromoted,
+}: PromoteToLibraryDialogProps) {
+  const [worlds, setWorlds] = useState<WorldMeta[] | null>(null);
+  const [target, setTarget] = useState<string>("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    viewsApi
+      .listWorlds()
+      .then((rows) => {
+        if (cancelled) return;
+        setWorlds(rows);
+        setTarget(rows[0]?.id ?? "");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const promote = useCallback(async () => {
+    if (!target) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await viewsApi.promoteCharacterToLibrary(campaignId, characterId, {
+        target_world_id: target,
+        confirm: true,
+      });
+      onPromoted();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [campaignId, characterId, target, onPromoted]);
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="promote-char">
+      <div className="modal">
+        <h4 id="promote-char">Promote {characterId} to library</h4>
+        {worlds === null ? (
+          <p className="muted">Loading worlds…</p>
+        ) : worlds.length === 0 ? (
+          <p className="error">No worlds available. Create a world first.</p>
+        ) : (
+          <label className="field">
+            <span>Target world</span>
+            <select value={target} onChange={(e) => setTarget(e.target.value)}>
+              {worlds.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name || w.id}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="modal-actions">
+          <button type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => void promote()}
+            disabled={busy || !target || worlds === null || worlds.length === 0}
+          >
+            {busy ? "Promoting…" : "Promote"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
