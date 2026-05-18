@@ -35,7 +35,8 @@ from typing import Any
 
 from grimoire.event_bus import Event, EventBus
 from grimoire.files import write_yaml
-from grimoire.imagegen.backend import cache_key_for_request
+from grimoire.imagegen.backend import cache_key_for_request, make_thumbnail
+from grimoire.imagegen.config import ImageGenConfig
 from grimoire.imagegen.prompt import ComposedPrompt, PromptComposer
 from grimoire.state_store import StateStore
 from grimoire.state_store.paths import campaigns_root, image_metadata_path
@@ -238,11 +239,15 @@ class ImageGenService:
         composer: PromptComposer | None = None,
         plugin_backend_ids: Iterable[str] | None = None,
         thumbnail_subdir: str = "thumbnails",
+        config: ImageGenConfig | None = None,
     ) -> None:
         self.store = store
         self.data_root = store.data_root
         self.registry = registry
-        self.default_backend_id = default_backend_id
+        # Resolve default_backend_id: explicit arg wins; otherwise fall back
+        # to ImageGenConfig.default_backend.
+        self.config = config or ImageGenConfig()
+        self.default_backend_id = default_backend_id or self.config.default_backend
         self.event_bus = event_bus
         self.composer = composer
         self._plugin_ids = set(plugin_backend_ids or ())
@@ -629,6 +634,8 @@ class ImageGenService:
         *,
         backend: Any,
     ) -> GenerationResult | None:
+        if not self.config.caching_enabled:
+            return None
         if request.seed is None:
             return None
         key = self._cache_key(campaign_id, request, backend=backend)
@@ -646,6 +653,8 @@ class ImageGenService:
         result: GenerationResult,
         image_id: str | None = None,
     ) -> None:
+        if not self.config.caching_enabled:
+            return
         if request.seed is None:
             return
         key = self._cache_key(campaign_id, request, backend=backend)
@@ -780,7 +789,13 @@ class ImageGenService:
         thumb_dir = campaign_dir / self._thumbnail_subdir
         thumb_dir.mkdir(parents=True, exist_ok=True)
         thumb_path = thumb_dir / f"{image_id}.jpg"
-        thumb_path.write_bytes(result.thumbnail_bytes or result.image_bytes)
+        thumb_bytes = make_thumbnail(
+            result.image_bytes,
+            size=self.config.thumbnails_size,
+            format=self.config.thumbnails_format,
+            quality=self.config.thumbnails_quality,
+        )
+        thumb_path.write_bytes(thumb_bytes)
 
         now_iso = _now().isoformat()
         metadata_payload = {

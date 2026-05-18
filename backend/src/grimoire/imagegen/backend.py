@@ -111,12 +111,17 @@ def synthesize_png(width: int, height: int, seed: int, prompt: str = "") -> byte
     )
 
 
-def make_thumbnail(image_bytes: bytes, size: tuple[int, int] = (256, 256)) -> bytes:
-    """Build a thumbnail JPEG (or PNG fallback) for ``image_bytes``.
+def make_thumbnail(
+    image_bytes: bytes,
+    size: tuple[int, int] = (256, 256),
+    *,
+    format: str = "JPEG",
+    quality: int = 85,
+) -> bytes:
+    """Build a thumbnail for ``image_bytes`` honoring config.
 
     Uses Pillow if installed; otherwise returns the source bytes unchanged
-    so callers always have *something* to store. Spec defaults to 256x256
-    JPG quality 85.
+    so callers always have *something* to store. Defaults match spec 12.
     """
     try:  # pragma: no cover - optional dependency
         from PIL import Image  # type: ignore
@@ -127,7 +132,11 @@ def make_thumbnail(image_bytes: bytes, size: tuple[int, int] = (256, 256)) -> by
             im = im.convert("RGB")
             im.thumbnail(size)
             buf = io.BytesIO()
-            im.save(buf, format="JPEG", quality=85, optimize=True)
+            fmt = format.upper()
+            if fmt == "JPEG":
+                im.save(buf, format=fmt, quality=int(quality), optimize=True)
+            else:
+                im.save(buf, format=fmt)
             return buf.getvalue()
     except Exception:  # pragma: no cover - defensive
         return image_bytes
