@@ -210,9 +210,7 @@ async def test_campaign_directory_rename_emits_campaign_event(
     bus: EventBus,
 ) -> None:
     # Seed an emergent file under campaign c1.
-    target = (
-        store.data_root / "campaigns" / "c1" / "emergent" / "characters" / "stranger.md"
-    )
+    target = store.data_root / "campaigns" / "c1" / "emergent" / "characters" / "stranger.md"
     _write_markdown(target, "name: The Stranger", "Mystery.")
     await watcher.scan_now()
 
@@ -234,8 +232,7 @@ async def test_campaign_directory_rename_emits_campaign_event(
     assert payload["scope"] == "campaign"
     assert payload["library_ids"] == []
     assert any(
-        cid.endswith("/emergent/characters/stranger")
-        for cid in payload["content_index_ids"]
+        cid.endswith("/emergent/characters/stranger") for cid in payload["content_index_ids"]
     )
 
 
@@ -261,9 +258,7 @@ async def test_single_file_rename_flows_through_per_file_logic(
         "library_rename_detected",
     )
     src = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "winifred.md"
-    dest = (
-        store.data_root / "library" / "worlds" / "wod-london" / "characters" / "winifred-d.md"
-    )
+    dest = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "winifred-d.md"
     src.rename(dest)
 
     # No directory move was emitted (rename was of a file, not a directory):
@@ -274,13 +269,8 @@ async def test_single_file_rename_flows_through_per_file_logic(
     # No rename-detected event was emitted.
     assert collector.of_type("library_rename_detected") == []
     # Old row is gone, new row is present.
-    assert (
-        await store.get_library_entity("worlds/wod-london/characters/winifred") is None
-    )
-    assert (
-        await store.get_library_entity("worlds/wod-london/characters/winifred-d")
-        is not None
-    )
+    assert await store.get_library_entity("worlds/wod-london/characters/winifred") is None
+    assert await store.get_library_entity("worlds/wod-london/characters/winifred-d") is not None
     # Both a "deleted" and a "created" event flowed through.
     types = {e.payload["change_type"] for e in collector.of_type("library_file_changed")}
     assert {"deleted", "created"}.issubset(types)

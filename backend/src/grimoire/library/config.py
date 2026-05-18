@@ -97,9 +97,7 @@ class LibraryConfig:
                     str(idx["embedding_provider"]) if idx.get("embedding_provider") else None
                 ),
                 summarize_on_index=bool(idx.get("summarize_on_index", True)),
-                summarize_min_body_length=int(
-                    idx.get("summarize_min_body_length", 500)
-                ),
+                summarize_min_body_length=int(idx.get("summarize_min_body_length", 500)),
             ),
             version_pinning=LibraryVersionPinningConfig(
                 default=default,
