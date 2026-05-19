@@ -1075,14 +1075,11 @@ async def bulk_create_missing_sheets(
     created: list[dict[str, str]] = []
     skipped: list[dict[str, str]] = []
     for kind, entity_ids in inventory.items():
+        existing = await state_store.list_sheet_entity_ids(
+            campaign_id=campaign_id, kind=kind, mechanics_id=module_id,
+        )
         for entity_id in entity_ids:
-            existing = await state_store.get_sheet(
-                campaign_id=campaign_id,
-                kind=kind,
-                entity_id=entity_id,
-                mechanics_id=module_id,
-            )
-            if existing is not None:
+            if entity_id in existing:
                 skipped.append({"kind": kind, "entity_id": entity_id})
                 continue
             initial = module.initialize_sheet(kind, entity_id)

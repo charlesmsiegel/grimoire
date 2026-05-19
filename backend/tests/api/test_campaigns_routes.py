@@ -457,6 +457,15 @@ class FakeStateStoreForBulk:
             return {"_existing": True}
         return None
 
+    async def list_sheet_entity_ids(
+        self,
+        *,
+        campaign_id: str,
+        kind: str,
+        mechanics_id: str,
+    ) -> set[str]:
+        return {entity_id for (k, entity_id) in self.existing if k == kind}
+
     async def write_sheet(
         self,
         *,

@@ -27,6 +27,7 @@ from grimoire.types.extraction import EntityCandidate, ExtractionFlag, FlagLevel
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
 from grimoire.types.scene import Scene
 from grimoire.types.state import DeltaKind, StateDelta, StateSnapshot
+from grimoire.util import slugify_id
 
 logger = logging.getLogger(__name__)
 
@@ -328,14 +329,11 @@ def _make_commitment_resolution_delta(
     )
 
 
-def _slugify_id(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return slug or "unknown"
-
-
 def _make_entity_candidate(item: dict, *, kind: EntityKind) -> EntityCandidate:
     name = str(item.get("proposed_name", "")).strip()
-    proposed_id = str(item.get("proposed_id", "")).strip() or _slugify_id(name)
+    proposed_id = str(item.get("proposed_id", "")).strip() or slugify_id(
+        name, fallback="unknown"
+    )
     confidence = float(item.get("confidence", 0.0))
     return EntityCandidate(
         kind=kind,

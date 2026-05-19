@@ -10,7 +10,6 @@ from __future__ import annotations
 import dataclasses
 import logging
 import re
-import uuid
 from collections.abc import Iterable
 
 from grimoire.continuity.config import ContinuityConfig
@@ -48,6 +47,7 @@ from grimoire.continuity.types import (
 )
 from grimoire.event_bus import Event, EventBus
 from grimoire.types.common import TurnId
+from grimoire.util import new_id
 
 logger = logging.getLogger(__name__)
 
@@ -68,10 +68,6 @@ class ContradictionReportNotFoundError(KeyError):
 
 class ConfidenceFloorError(ValueError):
     """Raised when a fact is rejected because its confidence is too low."""
-
-
-def _new_id(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
 def _patch_dataclass(obj, patch: dict):
@@ -158,7 +154,7 @@ class ContinuityService(Continuity):
                 f"{self._config.fact_confidence_floor}"
             )
         if not fact.id:
-            fact = dataclasses.replace(fact, id=_new_id("fact"))
+            fact = dataclasses.replace(fact, id=new_id("fact"))
         # Tag attribution into `tags` if not already present.
         if source:
             src_tag = f"src:{source}"
@@ -362,7 +358,7 @@ class ContinuityService(Continuity):
                     conflicts.append(verdict)
         # Keep only real conflicts (UNCERTAIN with 0 confidence is filtered above).
         report = ContradictionReport(
-            id=_new_id("contra"),
+            id=new_id("contra"),
             candidate_fact=candidate,
             conflicts=[c for c in conflicts if c.verdict == ContradictionVerdict.CONFLICT],
         )
@@ -420,19 +416,19 @@ class ContinuityService(Continuity):
             await self.retire_fact(target_existing.id, in_post, RetirementReason.REFUTED.value)
             new_fact = dataclasses.replace(
                 candidate,
-                id=candidate.id or _new_id("fact"),
+                id=candidate.id or new_id("fact"),
                 contradicts=[*candidate.contradicts, target_existing.id],
             )
             await self._store.put_fact(new_fact)
         elif action == ContradictionResolutionAction.BOTH_TRUE:
             new_fact = (
-                candidate if candidate.id else dataclasses.replace(candidate, id=_new_id("fact"))
+                candidate if candidate.id else dataclasses.replace(candidate, id=new_id("fact"))
             )
             await self._store.put_fact(new_fact)
         elif action == ContradictionResolutionAction.EDIT_NEW:
             patch = resolution.get("patch", {})
             edited = _patch_dataclass(candidate, patch)
-            edited = edited if edited.id else dataclasses.replace(edited, id=_new_id("fact"))
+            edited = edited if edited.id else dataclasses.replace(edited, id=new_id("fact"))
             await self._store.put_fact(edited)
         elif action == ContradictionResolutionAction.EDIT_EXISTING:
             if target_existing is None:
@@ -454,7 +450,7 @@ class ContinuityService(Continuity):
 
     async def add_commitment(self, c: Commitment, source: str) -> CommitmentId:
         if not c.id:
-            c = dataclasses.replace(c, id=_new_id("com"))
+            c = dataclasses.replace(c, id=new_id("com"))
         if source:
             src_tag = f"src:{source}"
             if src_tag not in c.tags:

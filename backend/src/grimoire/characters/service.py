@@ -12,11 +12,9 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-import uuid
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from grimoire.library import LibraryService
@@ -46,6 +44,7 @@ from grimoire.types.characters import (
     VoiceAnchor,
 )
 from grimoire.types.common import CampaignId, CharacterRef, PostId, Scope
+from grimoire.util import new_id, now_iso, slugify_id
 from grimoire.types.composition import LibraryEntity, ResolutionLayer, ResolutionSource
 from grimoire.types.mechanics import Capability
 from grimoire.types.scene import Post, Scene
@@ -98,27 +97,8 @@ Receives the resolved character and the recent posts that mention them
 """
 
 
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def _new_id(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:12]}"
-
-
 def _branch_for(campaign_id: str, branch_id: str | None) -> str:
     return branch_id or f"{campaign_id}:main"
-
-
-def _slugify_id(raw: str) -> str:
-    """Lower-case + collapse non-alphanumeric runs into ``-``.
-
-    Used by :meth:`CharactersService.cross_world_lookup` when
-    ``cross_world_lookup.case_sensitive`` is False (the default) so callers
-    can pass ``Alistair-Hyde-Smythe`` and find ``alistair-hyde-smythe``.
-    """
-    slug = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
-    return slug or raw.lower()
 
 
 class CharactersService:
@@ -417,7 +397,7 @@ class CharactersService:
     ) -> list[Character]:
         lookup_id = character_id
         if not self._config.cross_world_lookup.case_sensitive:
-            lookup_id = _slugify_id(character_id)
+            lookup_id = slugify_id(character_id, fallback=character_id.lower())
         rows = await self.library.variants_of(lookup_id, "character")
         if exclude_world:
             rows = [r for r in rows if r.world_id != exclude_world]
@@ -554,12 +534,16 @@ class CharactersService:
 
         present = set(scene.present_character_refs)
 
-        # Inactivity demotion needs the full set of campaign characters so we
-        # can find ones with stale `last_screen_time_turn`. Skip the lookup if
-        # there are no posts to measure recency against.
+        # Inactivity demotion + mention upgrade both need the full set of
+        # campaign characters. Skip the lookup if there are no posts to
+        # measure recency or matches against; otherwise fetch once and
+        # iterate twice.
         if recent_posts:
             recent_turn_ids = [p.turn_id for p in recent_posts]
-            for resolved in await self.list_for_campaign(target_campaign):
+            joined_body = "\n".join(p.body for p in recent_posts)
+            resolved_list = await self.list_for_campaign(target_campaign)
+
+            for resolved in resolved_list:
                 ref = _ref_from_resolved(resolved)
                 if ref in present:
                     continue
@@ -572,13 +556,10 @@ class CharactersService:
                 elif turns_off_screen >= self._config.tiers.demote_to_background_after_turns:
                     out[ref] = ContextTier.BACKGROUND
 
-        # Mentioned in recent posts → at least BACKGROUND. We match against
-        # the resolved character's name + aliases. Already-demoted-to-archive
-        # entries are upgraded back to BACKGROUND because being talked about
-        # is a stronger signal than time-since-screen.
-        if recent_posts:
-            joined_body = "\n".join(p.body for p in recent_posts)
-            for resolved in await self.list_for_campaign(target_campaign):
+            # Mentioned in recent posts → at least BACKGROUND. Already-demoted
+            # entries are upgraded back to BACKGROUND because being talked
+            # about is a stronger signal than time-since-screen.
+            for resolved in resolved_list:
                 ref = _ref_from_resolved(resolved)
                 if ref in present:
                     continue
@@ -600,11 +581,16 @@ class CharactersService:
         for ref in scene.present_character_refs:
             out[ref] = ContextTier.SPOTLIGHT
 
-        # User pins win over heuristics.
+        # User pins win over heuristics. Batch-fetch all pins for the
+        # campaign in one query (instead of one query per character).
+        pins = await self.store.list_tier_pins(
+            campaign_id=target_campaign,
+            branch_id=_branch_for(target_campaign, None),
+        )
         for ref in list(out.keys()):
-            pin = await self._get_tier_pin(ref, target_campaign)
-            if pin is not None:
-                out[ref] = pin
+            pin_value = pins.get(ref)
+            if pin_value:
+                out[ref] = ContextTier(pin_value)
         return out
 
     async def pin_tier(self, ref: CharacterRef, campaign_id: CampaignId, tier: ContextTier) -> None:
@@ -1041,7 +1027,7 @@ class CharactersService:
         if existing is None:
             state = RelationshipState()
             existing_types = types or []
-            row_id = _new_id("rel")
+            row_id = new_id("rel")
             history = []
         else:
             state = _relationship_state_from_json(existing["state"])
@@ -1068,7 +1054,7 @@ class CharactersService:
                 in_post=in_post,
                 summary=summary,
                 delta=dict(delta),
-                at=_now_iso(),
+                at=now_iso(),
             )
             history.append(event.model_dump())
 
@@ -1093,7 +1079,7 @@ class CharactersService:
                 to_ref,
                 json.dumps(existing_types),
                 json.dumps(merged_state, default=str),
-                turn_id or _now_iso(),
+                turn_id or now_iso(),
                 json.dumps(history, default=str),
             ),
         )
@@ -1580,7 +1566,7 @@ class CharactersService:
             "drift_score": float(state.drift_score),
             "tier_pin": state.tier_pin.value if state.tier_pin else None,
             "current_scene_id": state.current_scene_id,
-            "updated_at_turn": turn_id or state.updated_at_turn or _now_iso(),
+            "updated_at_turn": turn_id or state.updated_at_turn or now_iso(),
             "appearances_since_last_drift_check": int(state.appearances_since_last_drift_check),
         }
 

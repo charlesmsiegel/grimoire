@@ -16,7 +16,6 @@ import contextlib
 import dataclasses
 import json
 from collections.abc import Iterable
-from datetime import UTC, datetime
 
 from grimoire.continuity.protocols import ContinuityStore
 from grimoire.continuity.types import (
@@ -37,10 +36,7 @@ from grimoire.continuity.types import (
     RetirementReason,
 )
 from grimoire.storage import Database
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+from grimoire.util import now_iso
 
 
 def _dumps(value: object) -> str | None:
@@ -517,8 +513,8 @@ class SqliteContinuityStore(ContinuityStore):
                     _dumps(conflicts_payload),
                     1 if report.resolved else 0,
                     _dumps(report.resolution),
-                    _now_iso(),
-                    _now_iso() if report.resolved else None,
+                    now_iso(),
+                    now_iso() if report.resolved else None,
                 ),
             )
         else:
@@ -537,7 +533,7 @@ class SqliteContinuityStore(ContinuityStore):
                     _dumps(conflicts_payload),
                     1 if report.resolved else 0,
                     _dumps(report.resolution),
-                    _now_iso() if report.resolved else None,
+                    now_iso() if report.resolved else None,
                     report.id,
                 ),
             )

@@ -14,8 +14,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from grimoire.files.frontmatter import parse_frontmatter
 from grimoire.files.yaml_io import load_yaml
 from grimoire.scenes.storage import _safe_branch_segment, read_posts, read_sidecar
@@ -186,7 +184,7 @@ def _load_overrides(data_root: Path, campaign_id: str, kind: str) -> list[Entity
             continue
         for path in sorted(kind_dir.glob("*.yaml")):
             try:
-                raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+                raw = load_yaml(path)
             except Exception:
                 continue
             if not isinstance(raw, dict):
@@ -220,7 +218,7 @@ def _load_images(data_root: Path, campaign_id: str) -> list[ImageRecord]:
     records: list[ImageRecord] = []
     for yaml_path in sorted(directory.glob("*.yaml")):
         try:
-            raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+            raw = load_yaml(yaml_path)
         except Exception:
             continue
         if not isinstance(raw, dict):

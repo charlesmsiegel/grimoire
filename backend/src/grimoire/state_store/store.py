@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import uuid
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +49,9 @@ from grimoire.state_store.indexers import (
     upsert_library_index,
 )
 from grimoire.state_store.paths import (
+    KIND_TO_DIR,
     campaign_id_for_path,
+    campaigns_root,
     content_path,
     emergent_path,
     image_metadata_path,
@@ -73,10 +74,7 @@ from grimoire.state_store.snapshots import (
     write_snapshots_for_world,
 )
 from grimoire.storage import Database
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+from grimoire.util import new_id, now_iso
 
 
 def _json_dumps(value: Any) -> str | None:
@@ -93,10 +91,6 @@ def _json_loads(value: Any) -> Any:
     if isinstance(value, (dict, list)):
         return value
     return json.loads(value)
-
-
-def _new_id(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
 
 @dataclass(frozen=True)
@@ -743,6 +737,25 @@ class StateStore:
             return None
         return load_yaml(target) or {}
 
+    async def list_sheet_entity_ids(
+        self,
+        campaign_id: str,
+        kind: str,
+        mechanics_id: str,
+    ) -> set[str]:
+        """Return the entity_ids that already have a sheet on disk.
+
+        Single directory scan, intended for bulk existence checks (e.g. the
+        ``bulk_create_missing_sheets`` API) where calling :meth:`get_sheet`
+        per entity would do N individual ``stat`` calls.
+        """
+        dir_name = KIND_TO_DIR.get(kind, kind)
+        sheets_dir = campaigns_root(self.data_root) / campaign_id / "sheets" / dir_name
+        if not sheets_dir.is_dir():
+            return set()
+        suffix = f".{mechanics_id}.yaml"
+        return {p.name[: -len(suffix)] for p in sheets_dir.iterdir() if p.name.endswith(suffix)}
+
     async def list_scenes(self, campaign_id: str, branch_id: str | None = None) -> list[dict]:
         if branch_id is None:
             rows = await self.db.fetchall(
@@ -926,7 +939,7 @@ class StateStore:
                 content_boundaries,
                 greeting_id,
                 tags_json,
-                _now_iso(),
+                now_iso(),
                 _json_dumps(config) if config is not None else None,
             ),
         )
@@ -937,7 +950,7 @@ class StateStore:
               forked_from_turn_id, label, rng_seed, created_at)
             VALUES (?, ?, NULL, NULL, 'main', ?, ?)
             """,
-            (f"{campaign_id}:main", campaign_id, _seed_for("main"), _now_iso()),
+            (f"{campaign_id}:main", campaign_id, _seed_for("main"), now_iso()),
         )
 
     async def record_mechanics_switch(
@@ -960,7 +973,7 @@ class StateStore:
               (campaign_id, mechanics_module, switched_at, switched_from, source)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (campaign_id, current, _now_iso(), previous, source),
+            (campaign_id, current, now_iso(), previous, source),
         )
 
     async def previous_mechanics_modules(self, campaign_id: str) -> list[str]:
@@ -1017,7 +1030,7 @@ class StateStore:
                     json.dumps(list(include), sort_keys=True) if include is not None else None,
                     bound_at_version,
                     1 if track_latest else 0,
-                    _now_iso(),
+                    now_iso(),
                 ),
             )
             if not track_latest and snapshot_on_bind:
@@ -1074,7 +1087,7 @@ class StateStore:
                 SET bound_at_version = ?, bound_at = ?
                 WHERE campaign_id = ? AND world_id = ?
                 """,
-                (new_max, _now_iso(), campaign_id, world_id),
+                (new_max, now_iso(), campaign_id, world_id),
             )
         return UpgradeReport(world_id=world_id, diff=diff)
 
@@ -1104,7 +1117,7 @@ class StateStore:
               display_name = excluded.display_name,
               owner = excluded.owner
             """,
-            (campaign_id, character_ref, display_name, owner, active_default, _now_iso()),
+            (campaign_id, character_ref, display_name, owner, active_default, now_iso()),
         )
 
     async def remove_pc(self, *, campaign_id: str, character_ref: str) -> None:
@@ -1142,7 +1155,7 @@ class StateStore:
         await self.db.execute(
             "UPDATE campaign_pcs SET last_played_at = ? "
             "WHERE campaign_id = ? AND character_ref = ?",
-            (_now_iso(), campaign_id, character_ref),
+            (now_iso(), campaign_id, character_ref),
         )
 
     async def list_world_refs(self, campaign_id: str) -> list[dict]:
@@ -1204,7 +1217,7 @@ class StateStore:
                     at_turn_id,
                     new_label,
                     _seed_for(new_label),
-                    _now_iso(),
+                    now_iso(),
                 ),
             )
         return new_id
@@ -1241,6 +1254,34 @@ class StateStore:
             if row is not None:
                 return _character_state_row_to_dict(row)
         return None
+
+    async def list_tier_pins(
+        self,
+        *,
+        campaign_id: str,
+        branch_id: str,
+    ) -> dict[str, str]:
+        """Return ``{character_ref: tier_pin}`` across the branch chain.
+
+        CoW semantics: the topmost branch's value wins. Only characters with
+        a non-null ``tier_pin`` appear in the result. Intended for callers
+        that need pins for many characters at once (e.g. the Characters
+        service's tier computation) so they avoid one query per character.
+        """
+        seen: dict[str, str] = {}
+        for bid in await self.branch_chain(branch_id):
+            rows = await self.db.fetchall(
+                """
+                SELECT character_ref, tier_pin FROM character_state
+                WHERE campaign_id = ? AND branch_id = ? AND tier_pin IS NOT NULL
+                """,
+                (campaign_id, bid),
+            )
+            for row in rows:
+                ref = row["character_ref"]
+                if ref not in seen:
+                    seen[ref] = row["tier_pin"]
+        return seen
 
     # ------------------------------------------------------------------
     # Delta log
@@ -1426,7 +1467,7 @@ class StateStore:
                 SET status = 'approved', reviewed_at = ?
                 WHERE id = ?
                 """,
-                (_now_iso(), review_id),
+                (now_iso(), review_id),
             )
         return delta.id
 
@@ -1446,7 +1487,7 @@ class StateStore:
                 SET status = 'rejected', reviewed_at = ?, reviewer_notes = ?
                 WHERE id = ?
                 """,
-                (_now_iso(), notes, review_id),
+                (now_iso(), notes, review_id),
             )
             # Mark the unapplied delta as reversed so it doesn't appear in
             # active-deltas queries.
@@ -1487,7 +1528,7 @@ class StateStore:
         model: str,
         campaign_id: str | None = None,
     ) -> str:
-        embedding_id = _new_id("emb")
+        embedding_id = new_id("emb", length=16)
         async with self.db.acquire() as conn:
             await insert_embedding(
                 conn,
@@ -1498,7 +1539,7 @@ class StateStore:
                 text=text,
                 vector=vector,
                 model=model,
-                embedded_at=_now_iso(),
+                embedded_at=now_iso(),
                 campaign_id=campaign_id,
             )
         return embedding_id

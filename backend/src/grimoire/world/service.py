@@ -25,7 +25,7 @@ import json
 import logging
 import shutil
 from collections import deque
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +62,8 @@ from .atmosphere import generate_atmosphere
 from .calendar import holiday_at, parse_calendar, season_for
 from .config import WorldConfig
 from .errors import CompositionError, WorldError, WorldNotFoundError
+from grimoire.util import now_iso
+
 from .location_generator import generate_location_frontmatter
 from .weather import generate_weather
 
@@ -1174,7 +1176,7 @@ class WorldService:
             "campaign_id": campaign_id,
             "branch_id": branch,
             "state": json.dumps(payload, sort_keys=True, default=str),
-            "updated_at_turn": turn_id or _now_iso(),
+            "updated_at_turn": turn_id or now_iso(),
         }
         delta = StateDelta(
             kind=DeltaKind.FACTION_STATE_UPDATE,
@@ -1391,5 +1393,3 @@ def _parse_dt(value: Any) -> datetime | None:
         return None
 
 
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
