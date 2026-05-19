@@ -873,19 +873,30 @@ class OrchestratorService:
             self._retcon_replay = RetconReplaySession(self, event_bus=self._bus)
         return self._retcon_replay
 
-    async def accept_replay(self, campaign_id: CampaignId) -> ReplayBatchStateView:
+    async def accept_replay(
+        self, campaign_id: CampaignId, *, batch_id: str | None = None
+    ) -> ReplayBatchStateView:
+        """``batch_id`` is the path parameter the client thought it was
+        acting on. When supplied, the session validates the open batch's
+        id matches — closing a TOCTOU race where cancel + start between
+        the GET (which validated the id) and the POST could silently
+        operate on a different batch."""
         await self._require_campaign(campaign_id)
-        state = await self.retcon_replay.accept(campaign_id)
+        state = await self.retcon_replay.accept(campaign_id, expected_batch_id=batch_id)
         return state.to_view()
 
-    async def try_again_replay(self, campaign_id: CampaignId) -> ReplayBatchStateView:
+    async def try_again_replay(
+        self, campaign_id: CampaignId, *, batch_id: str | None = None
+    ) -> ReplayBatchStateView:
         await self._require_campaign(campaign_id)
-        state = await self.retcon_replay.try_again(campaign_id)
+        state = await self.retcon_replay.try_again(campaign_id, expected_batch_id=batch_id)
         return state.to_view()
 
-    async def cancel_replay(self, campaign_id: CampaignId) -> ReplayBatchStateView:
+    async def cancel_replay(
+        self, campaign_id: CampaignId, *, batch_id: str | None = None
+    ) -> ReplayBatchStateView:
         await self._require_campaign(campaign_id)
-        state = await self.retcon_replay.cancel(campaign_id)
+        state = await self.retcon_replay.cancel(campaign_id, expected_batch_id=batch_id)
         return state.to_view()
 
     async def get_replay_state(

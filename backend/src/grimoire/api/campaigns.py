@@ -751,9 +751,8 @@ async def accept_retcon_replay(
     batch_id: str,
     orchestrator: OrchestratorDep,
 ) -> Any:
-    await _ensure_open_batch(orchestrator, campaign_id, batch_id)
     try:
-        result = await orchestrator.accept_replay(campaign_id)
+        result = await orchestrator.accept_replay(campaign_id, batch_id=batch_id)
     except Exception as exc:
         raise _map_retcon_error(exc) from exc
     return to_payload(result)
@@ -765,9 +764,8 @@ async def try_again_retcon_replay(
     batch_id: str,
     orchestrator: OrchestratorDep,
 ) -> Any:
-    await _ensure_open_batch(orchestrator, campaign_id, batch_id)
     try:
-        result = await orchestrator.try_again_replay(campaign_id)
+        result = await orchestrator.try_again_replay(campaign_id, batch_id=batch_id)
     except Exception as exc:
         raise _map_retcon_error(exc) from exc
     return to_payload(result)
@@ -779,22 +777,11 @@ async def cancel_retcon_replay(
     batch_id: str,
     orchestrator: OrchestratorDep,
 ) -> Any:
-    await _ensure_open_batch(orchestrator, campaign_id, batch_id)
     try:
-        result = await orchestrator.cancel_replay(campaign_id)
+        result = await orchestrator.cancel_replay(campaign_id, batch_id=batch_id)
     except Exception as exc:
         raise _map_retcon_error(exc) from exc
     return to_payload(result)
-
-
-async def _ensure_open_batch(orchestrator: Any, campaign_id: str, batch_id: str) -> None:
-    """Verify the batch_id matches the campaign's currently-open batch."""
-    try:
-        view = await orchestrator.get_replay_state(campaign_id, batch_id)
-    except Exception as exc:
-        raise _map_retcon_error(exc) from exc
-    if view.completed:
-        raise HTTPException(status_code=409, detail=f"batch {batch_id!r} already closed")
 
 
 @router.post("/{campaign_id}/forks", status_code=201)

@@ -368,3 +368,124 @@ async def test_get_replay_state_unknown_batch_raises(
     orch = _make_orch(scenes, real_store)
     with pytest.raises(RetconBatchNotFoundError):
         await orch.get_replay_state(campaign_id, "rb_nope")
+
+
+async def test_action_with_stale_batch_id_raises_not_found(
+    tmp_path: Path, real_store: StateStore
+) -> None:
+    """Closing the TOCTOU race: if the batch_id passed by the client doesn't
+    match the currently-open batch (because someone else cancelled it and
+    started a new one between the GET and the POST), the session refuses
+    rather than silently acting on the new batch."""
+    scenes_root = tmp_path / "scenes_root"
+    scenes_root.mkdir()
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    campaign_id, _branch_id, _scene_id, post_ids = await _seed_three_model_posts(scenes, real_store)
+    orch = _make_orch(scenes, real_store)
+
+    await orch.retcon_post(post_ids[0], "edit", replay_subsequent=True)
+    with pytest.raises(RetconBatchNotFoundError):
+        await orch.accept_replay(campaign_id, batch_id="rb_stale")
+
+
+async def test_closed_batches_evicted_when_new_batch_starts(
+    tmp_path: Path, real_store: StateStore
+) -> None:
+    """``_closed`` is keyed by batch_id, so without explicit eviction it
+    grows unboundedly across long-lived processes. Starting a new batch
+    on the same campaign must prune the old terminal entries."""
+    scenes_root = tmp_path / "scenes_root"
+    scenes_root.mkdir()
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    _campaign_id, _branch_id, _scene_id, post_ids = await _seed_three_model_posts(
+        scenes, real_store
+    )
+    orch = _make_orch(scenes, real_store)
+
+    # First batch: retcon the LAST post → no subsequents → immediately closes.
+    first = await orch.retcon_post(post_ids[-1], "edit", replay_subsequent=True)
+    first_batch_id = first.replay_batch_id
+    assert first_batch_id is not None
+    # The closed batch is reachable until a new one opens for this campaign.
+    closed = orch.retcon_replay.get(first_batch_id)
+    assert closed.completed is True
+
+    # Second batch on the same campaign → first batch's entry is pruned.
+    second = await orch.retcon_post(post_ids[0], "edit-again", replay_subsequent=True)
+    assert second.replay_batch_id is not None
+    with pytest.raises(RetconBatchNotFoundError):
+        orch.retcon_replay.get(first_batch_id)
+
+
+async def test_cancel_restores_original_primary_delta_set(
+    tmp_path: Path, real_store: StateStore
+) -> None:
+    """Cancel-mid-replay leaves neither the original nor the in-flight delta
+    set applied unless we explicitly re-activate the original. Verify the
+    state store's current pointer for the cancel-point post is back at
+    the original primary's delta set after cancel."""
+    scenes_root = tmp_path / "scenes_root"
+    scenes_root.mkdir()
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    campaign_id, _branch_id, _scene_id, post_ids = await _seed_three_model_posts(scenes, real_store)
+    orch = _make_orch(scenes, real_store)
+
+    # Start replay. Generation rewinds post_ids[1]'s original primary (ds_p1)
+    # and applies the new alternate's set. Cancel → both should rewind, then
+    # original should be re-activated.
+    await orch.retcon_post(post_ids[0], "edit", replay_subsequent=True)
+    view = await orch.cancel_replay(campaign_id)
+    assert view.completed is True
+    assert view.cancelled_at_post_id == post_ids[1]
+    # The original primary's delta set is active again on the second post.
+    row = await real_store.db.fetchone(
+        "SELECT reversed_at FROM deltas WHERE delta_set_id=?",
+        ("ds_p1",),
+    )
+    assert row is not None
+    # `re_activate_delta_set` clears reversed_at so the row is live again.
+    assert row["reversed_at"] is None
+
+
+async def test_concurrent_accepts_serialized_by_lock(
+    tmp_path: Path, real_store: StateStore
+) -> None:
+    """Two coroutines firing accept() concurrently must not both pass the
+    open-batch check and double-advance. The per-campaign lock serialises
+    them; the second observes the index advance from the first."""
+    import asyncio
+
+    scenes_root = tmp_path / "scenes_root"
+    scenes_root.mkdir()
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    campaign_id, _branch_id, _scene_id, post_ids = await _seed_three_model_posts(scenes, real_store)
+    orch = _make_orch(scenes, real_store)
+
+    await orch.retcon_post(post_ids[0], "edit", replay_subsequent=True)
+    # Fire two accepts. Without the lock, both would observe current_index=0
+    # and append two entries; with the lock, the second waits and either
+    # completes against the next post (post 3) or raises if no more.
+    results = await asyncio.gather(
+        orch.accept_replay(campaign_id),
+        orch.accept_replay(campaign_id),
+        return_exceptions=True,
+    )
+    # The first accept advanced to post 3; the second either accepts post 3
+    # (completing the batch) or — if both somehow raced — leaves invalid
+    # state. We assert no duplicates and a consistent terminal state.
+    state = (
+        orch.retcon_replay.get(orch.retcon_replay._open[campaign_id].batch_id)
+        if orch.retcon_replay.is_active(campaign_id)
+        else None
+    )
+    if state is None:
+        # Batch completed — exactly two distinct accepted posts.
+        # Pull the closed batch by scanning _closed.
+        closed = next(iter(orch.retcon_replay._closed.values()))
+        assert closed.accepted_post_ids == post_ids[1:]
+    else:
+        assert len(state.accepted_post_ids) == len({*state.accepted_post_ids})
+    # Neither call should have raised an unrelated error.
+    for r in results:
+        if isinstance(r, BaseException) and not isinstance(r, RetconBatchClosedError):
+            raise r

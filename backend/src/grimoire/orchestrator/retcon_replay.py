@@ -15,13 +15,16 @@ the Orchestrator enters a sequential review mode driven by this module:
 One open batch per campaign; concurrent retcons raise
 :class:`RetconInFlightError`. Cancel finalizes the batch at whichever post
 is in flight (its in-flight alternate is dropped via
-:meth:`OrchestratorService.delete_alternate`); subsequent posts keep their
-original primaries, matching the "leave-as-is from cancel point onward"
-guarantee from the design.
+:meth:`OrchestratorService.delete_alternate` and the original primary's
+delta set is re-activated so the world state matches the unchanged
+primary pointer); subsequent posts keep their original primaries,
+matching the "leave-as-is from cancel point onward" guarantee from the
+design.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -85,17 +88,24 @@ class RetconReplaySession:
     through to it. Each state transition emits a ``retcon_*`` event on the
     in-process event bus, which the WebSocket bridge forwards to the
     replay UI.
+
+    Mutations are serialised per-campaign via :pyattr:`_locks` — two
+    concurrent ``accept`` calls would otherwise both pass the open-batch
+    check, both advance ``current_index``, and silently skip a post. The
+    lock pattern mirrors :class:`_CampaignTurnState` in ``service.py``.
     """
 
     def __init__(self, orchestrator: OrchestratorService, *, event_bus: EventBus) -> None:
         self._orch = orchestrator
         self._bus = event_bus
-        # campaign_id -> currently-open batch. We also keep recently-closed
-        # batches around so the frontend can poll their final state after the
-        # `retcon_complete` / `retcon_cancelled` event arrives. Closed batches
-        # for a campaign are evicted when a new one starts.
+        # campaign_id -> currently-open batch. Closed batches (finalised by
+        # accept-to-end or cancel) move into ``_closed`` so the frontend can
+        # still poll their terminal state until a new batch on the same
+        # campaign evicts them.
         self._open: dict[CampaignId, ReplayBatchState] = {}
         self._closed: dict[str, ReplayBatchState] = {}
+        # Per-campaign mutation lock. Created lazily on first touch.
+        self._locks: dict[CampaignId, asyncio.Lock] = {}
 
     # ------------------------------------------------------------------ #
     # Status queries
@@ -114,6 +124,13 @@ class RetconReplaySession:
             raise RetconBatchNotFoundError(batch_id)
         return state
 
+    def _lock_for(self, campaign_id: CampaignId) -> asyncio.Lock:
+        lock = self._locks.get(campaign_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[campaign_id] = lock
+        return lock
+
     # ------------------------------------------------------------------ #
     # State transitions
     # ------------------------------------------------------------------ #
@@ -124,116 +141,208 @@ class RetconReplaySession:
         campaign_id: CampaignId,
         edited_post_id: PostId,
     ) -> ReplayBatchState:
-        if self.is_active(campaign_id):
-            raise RetconInFlightError(campaign_id)
-        # Evict any prior closed batch for this campaign so callers don't
-        # accumulate stale state in memory.
-        self._open.pop(campaign_id, None)
-        batch_id = f"rb_{uuid.uuid4().hex[:16]}"
-        subsequent = await self._collect_subsequent_post_ids(campaign_id, edited_post_id)
-        state = ReplayBatchState(
-            batch_id=batch_id,
-            campaign_id=campaign_id,
-            edited_post_id=edited_post_id,
-            subsequent_post_ids=subsequent,
-        )
-        self._open[campaign_id] = state
-        await self._emit(
-            campaign_id,
-            EventType.RETCON_STARTED,
-            {
-                "post_id": edited_post_id,
-                "replay_subsequent": True,
-                "batch_id": batch_id,
-                "subsequent_post_ids": list(subsequent),
-            },
-        )
-        if not subsequent:
-            await self._finalize(state, complete=True)
-            return state
-        await self._generate_alternate_for_current(state)
-        return state
-
-    async def accept(self, campaign_id: CampaignId) -> ReplayBatchState:
-        state = self._require_open(campaign_id)
-        post_id = state.current_post_id
-        alt_id = state.current_alternate_id
-        if post_id is None or alt_id is None:
-            raise RetconBatchClosedError(state.batch_id)
-        scene, post = await self._orch._find_scene_and_post(post_id)
-        await self._orch._switch_primary_alternate_core(
-            scene=scene, post=post, campaign_id=campaign_id, alternate_id=alt_id
-        )
-        await self._collect_contradictions(state, post_id)
-        state.accepted_post_ids.append(post_id)
-        await self._emit(
-            campaign_id,
-            EventType.RETCON_POST_ACCEPTED,
-            {
-                "post_id": post_id,
-                "alternate_id": alt_id,
-                "batch_id": state.batch_id,
-            },
-        )
-        state.current_index += 1
-        state.current_alternate_id = None
-        if state.current_index >= len(state.subsequent_post_ids):
-            await self._finalize(state, complete=True)
-        else:
+        async with self._lock_for(campaign_id):
+            if self.is_active(campaign_id):
+                raise RetconInFlightError(campaign_id)
+            # Evict any prior closed-batch entries for this campaign so
+            # ``_closed`` doesn't grow without bound across long-lived
+            # processes. New batches on this campaign start clean; the
+            # tradeoff is that clients can't go back to a prior batch's
+            # terminal state once a new one opens (acceptable — the
+            # frontend caches the final state in the modal it just
+            # closed).
+            self._closed = {
+                bid: s for bid, s in self._closed.items() if s.campaign_id != campaign_id
+            }
+            batch_id = f"rb_{uuid.uuid4().hex[:16]}"
+            subsequent = await self._collect_subsequent_post_ids(campaign_id, edited_post_id)
+            state = ReplayBatchState(
+                batch_id=batch_id,
+                campaign_id=campaign_id,
+                edited_post_id=edited_post_id,
+                subsequent_post_ids=subsequent,
+            )
+            self._open[campaign_id] = state
+            await self._emit(
+                campaign_id,
+                EventType.RETCON_STARTED,
+                {
+                    "post_id": edited_post_id,
+                    "replay_subsequent": True,
+                    "batch_id": batch_id,
+                    "subsequent_post_ids": list(subsequent),
+                },
+            )
+            if not subsequent:
+                await self._finalize(state, complete=True)
+                return state
             await self._generate_alternate_for_current(state)
-        return state
+            return state
 
-    async def try_again(self, campaign_id: CampaignId) -> ReplayBatchState:
-        state = self._require_open(campaign_id)
-        post_id = state.current_post_id
-        if post_id is None:
-            raise RetconBatchClosedError(state.batch_id)
-        # Drop the current in-flight alternate; regenerate.
-        if state.current_alternate_id:
-            try:
-                await self._orch.delete_alternate(
-                    post_id=post_id, alternate_id=state.current_alternate_id
-                )
-            except Exception:  # pragma: no cover - best effort
-                logger.warning(
-                    "retcon-replay: try_again could not delete in-flight alternate %s",
-                    state.current_alternate_id,
-                    exc_info=True,
-                )
+    async def accept(
+        self,
+        campaign_id: CampaignId,
+        *,
+        expected_batch_id: str | None = None,
+    ) -> ReplayBatchState:
+        async with self._lock_for(campaign_id):
+            state = self._require_open(campaign_id, expected_batch_id=expected_batch_id)
+            post_id = state.current_post_id
+            alt_id = state.current_alternate_id
+            if post_id is None or alt_id is None:
+                raise RetconBatchClosedError(state.batch_id)
+            scene, post = await self._orch._find_scene_and_post(post_id)
+            await self._orch._switch_primary_alternate_core(
+                scene=scene, post=post, campaign_id=campaign_id, alternate_id=alt_id
+            )
+            await self._collect_contradictions(state, post_id)
+            state.accepted_post_ids.append(post_id)
+            await self._emit(
+                campaign_id,
+                EventType.RETCON_POST_ACCEPTED,
+                {
+                    "post_id": post_id,
+                    "alternate_id": alt_id,
+                    "batch_id": state.batch_id,
+                },
+            )
+            state.current_index += 1
             state.current_alternate_id = None
-        await self._generate_alternate_for_current(state)
-        return state
+            if state.current_index >= len(state.subsequent_post_ids):
+                await self._finalize(state, complete=True)
+            else:
+                await self._generate_alternate_for_current(state)
+            return state
 
-    async def cancel(self, campaign_id: CampaignId) -> ReplayBatchState:
-        state = self._require_open(campaign_id)
-        post_id_at_cancel = state.current_post_id
-        if state.current_alternate_id and post_id_at_cancel is not None:
-            try:
-                await self._orch.delete_alternate(
-                    post_id=post_id_at_cancel, alternate_id=state.current_alternate_id
+    async def try_again(
+        self,
+        campaign_id: CampaignId,
+        *,
+        expected_batch_id: str | None = None,
+    ) -> ReplayBatchState:
+        async with self._lock_for(campaign_id):
+            state = self._require_open(campaign_id, expected_batch_id=expected_batch_id)
+            post_id = state.current_post_id
+            if post_id is None:
+                raise RetconBatchClosedError(state.batch_id)
+            # Drop the in-flight alternate and restore the original primary's
+            # contribution so the world state matches the unchanged pointer
+            # before we generate again. Without the re-activate step, both
+            # delta sets end up rewound and the world is in a phantom state.
+            if state.current_alternate_id:
+                await self._discard_in_flight_alternate(state, post_id, state.current_alternate_id)
+                state.current_alternate_id = None
+            await self._generate_alternate_for_current(state)
+            return state
+
+    async def cancel(
+        self,
+        campaign_id: CampaignId,
+        *,
+        expected_batch_id: str | None = None,
+    ) -> ReplayBatchState:
+        async with self._lock_for(campaign_id):
+            state = self._require_open(campaign_id, expected_batch_id=expected_batch_id)
+            post_id_at_cancel = state.current_post_id
+            if state.current_alternate_id and post_id_at_cancel is not None:
+                await self._discard_in_flight_alternate(
+                    state, post_id_at_cancel, state.current_alternate_id
                 )
-            except Exception:  # pragma: no cover - best effort
-                logger.warning(
-                    "retcon-replay: cancel could not delete in-flight alternate %s",
-                    state.current_alternate_id,
-                    exc_info=True,
-                )
-        state.cancelled_at_post_id = post_id_at_cancel
-        state.current_alternate_id = None
-        await self._finalize(state, complete=False)
-        return state
+            state.cancelled_at_post_id = post_id_at_cancel
+            state.current_alternate_id = None
+            await self._finalize(state, complete=False)
+            return state
 
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
 
-    def _require_open(self, campaign_id: CampaignId) -> ReplayBatchState:
+    def _require_open(
+        self,
+        campaign_id: CampaignId,
+        *,
+        expected_batch_id: str | None = None,
+    ) -> ReplayBatchState:
+        """Return the open batch for ``campaign_id`` or raise.
+
+        When ``expected_batch_id`` is supplied (route-level path
+        parameter), the open batch's id must match. Without this check a
+        TOCTOU race could cancel batch B1 and open B2 between the
+        ``GET /retcon/replay/{B1}`` validation and the ``POST .../accept``
+        action — so the accept would silently operate on B2 instead.
+        """
         state = self._open.get(campaign_id)
         if state is None or state.completed:
             raise RetconBatchClosedError(
                 state.batch_id if state else f"<no-active-batch:{campaign_id}>"
             )
+        if expected_batch_id is not None and state.batch_id != expected_batch_id:
+            # The batch the client thought it was acting on is gone; whatever
+            # is open now is a different one. Treat as a "not found" rather
+            # than blindly mutating the new batch.
+            raise RetconBatchNotFoundError(expected_batch_id)
         return state
+
+    async def _discard_in_flight_alternate(
+        self,
+        state: ReplayBatchState,
+        post_id: PostId,
+        alternate_id: str,
+    ) -> None:
+        """Drop an in-flight alternate and put the world back where it was.
+
+        ``_regenerate_post_core`` rewound the original primary's delta set
+        and applied the new alternate's. ``delete_alternate`` rewinds the
+        new alternate's set — so without re-activating the original we'd
+        leave neither set applied. Best-effort: log + continue on either
+        failure rather than corrupting batch state.
+        """
+        original_primary_ds: str | None = None
+        branch_id = "main"
+        try:
+            scene, post = await self._orch._find_scene_and_post(post_id)
+            branch_id = scene.branch_id or "main"
+            original_primary_ds = next(
+                (
+                    a.delta_set_id
+                    for a in post.alternates
+                    if a.id == post.primary_alternate_id and a.delta_set_id
+                ),
+                None,
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.warning(
+                "retcon-replay: could not resolve original primary for %s",
+                post_id,
+                exc_info=True,
+            )
+
+        try:
+            await self._orch.delete_alternate(post_id=post_id, alternate_id=alternate_id)
+        except Exception:  # pragma: no cover - best effort
+            logger.warning(
+                "retcon-replay: failed to delete in-flight alternate %s on %s",
+                alternate_id,
+                post_id,
+                exc_info=True,
+            )
+            return
+
+        if original_primary_ds is None:
+            return
+        try:
+            await self._orch._store.re_activate_delta_set(
+                delta_set_id=original_primary_ds,
+                campaign_id=state.campaign_id,
+                branch_id=branch_id,
+            )
+        except Exception:  # pragma: no cover - best effort
+            logger.warning(
+                "retcon-replay: failed to re-activate original primary set %s on %s",
+                original_primary_ds,
+                post_id,
+                exc_info=True,
+            )
 
     async def _generate_alternate_for_current(self, state: ReplayBatchState) -> None:
         post_id = state.current_post_id
