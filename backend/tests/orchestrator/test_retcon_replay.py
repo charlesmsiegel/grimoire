@@ -159,9 +159,7 @@ async def test_replay_starts_batch_and_creates_first_alternate(
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    _campaign_id, _branch_id, scene_id, post_ids = await _seed_three_model_posts(
-        scenes, real_store
-    )
+    _campaign_id, _branch_id, scene_id, post_ids = await _seed_three_model_posts(scenes, real_store)
     orch = _make_orch(scenes, real_store)
 
     # Retcon the first model post; expect replay to pick up posts 2 and 3.
@@ -189,9 +187,7 @@ async def test_replay_accept_advances_and_completes(tmp_path: Path, real_store: 
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, _branch_id, scene_id, post_ids = await _seed_three_model_posts(
-        scenes, real_store
-    )
+    campaign_id, _branch_id, scene_id, post_ids = await _seed_three_model_posts(scenes, real_store)
     orch = _make_orch(scenes, real_store)
 
     result = await orch.retcon_post(post_ids[0], "edit", replay_subsequent=True)
@@ -226,9 +222,7 @@ async def test_replay_try_again_replaces_in_flight_alternate(
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, _branch_id, scene_id, post_ids = await _seed_three_model_posts(
-        scenes, real_store
-    )
+    campaign_id, _branch_id, scene_id, post_ids = await _seed_three_model_posts(scenes, real_store)
     orch = _make_orch(scenes, real_store)
 
     result = await orch.retcon_post(post_ids[0], "edit", replay_subsequent=True)
@@ -257,9 +251,7 @@ async def test_replay_cancel_finalizes_at_current_post(
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, _branch_id, scene_id, post_ids = await _seed_three_model_posts(
-        scenes, real_store
-    )
+    campaign_id, _branch_id, scene_id, post_ids = await _seed_three_model_posts(scenes, real_store)
     orch = _make_orch(scenes, real_store)
 
     result = await orch.retcon_post(post_ids[0], "edit", replay_subsequent=True)
@@ -321,9 +313,7 @@ async def test_replay_emits_event_sequence(tmp_path: Path, real_store: StateStor
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, _branch_id, _scene_id, post_ids = await _seed_three_model_posts(
-        scenes, real_store
-    )
+    campaign_id, _branch_id, _scene_id, post_ids = await _seed_three_model_posts(scenes, real_store)
 
     bus = EventBus()
     seen: list[str] = []
