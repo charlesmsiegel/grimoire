@@ -272,6 +272,17 @@ from .time import (
     TimeAdvanceResult,
     WeatherChange,
 )
+from .transient import (
+    DecayHint,
+    ObserverKind,
+    Provenance,
+    TransientConflict,
+    TransientUpdateProposal,
+    TransientValue,
+)
+from .transient import (
+    EntityKind as TransientEntityKind,
+)
 from .world import (
     Coords,
     Faction,
@@ -525,4 +536,12 @@ __all__ = [  # noqa: RUF022 — grouped by topic for readability
     "StateStoreProtocol",
     "TimeEngineProtocol",
     "TurnReplayerProtocol",
+    # transient state
+    "DecayHint",
+    "ObserverKind",
+    "Provenance",
+    "TransientConflict",
+    "TransientEntityKind",
+    "TransientUpdateProposal",
+    "TransientValue",
 ]
