@@ -119,9 +119,7 @@ async def test_brainstorm_omits_pc_card_and_scene_header():
 
 async def test_impersonate_pc_includes_active_pc_full_card_and_scene_header():
     builder = _builder(
-        characters=_AuxCharacters(
-            cards={"pc_a": _Card(full="ACTIVE_PC_CARD_FULL")}, active="pc_a"
-        ),
+        characters=_AuxCharacters(cards={"pc_a": _Card(full="ACTIVE_PC_CARD_FULL")}, active="pc_a"),
     )
     task = AuxiliaryTask(kind=TaskKind.IMPERSONATE_PC, steering_hint="be bolder")
     prompt = await builder.build("ignored", "camp", auxiliary_task=task)

@@ -21,9 +21,7 @@ from grimoire.auxiliary.types import (
 
 async def test_brainstorm_produces_text_no_state_change(orchestrator, seeded_state):
     task = AuxiliaryTask(kind=TaskKind.BRAINSTORM, snippet="ideas for next scene")
-    result = await orchestrator.run_auxiliary_task(
-        campaign_id=seeded_state.campaign_id, task=task
-    )
+    result = await orchestrator.run_auxiliary_task(campaign_id=seeded_state.campaign_id, task=task)
     assert isinstance(result, AuxiliaryResult)
     assert result.text != ""
     assert result.pending_commit_action == CommitAction.COPY
@@ -37,9 +35,7 @@ async def test_brainstorm_produces_text_no_state_change(orchestrator, seeded_sta
 
 async def test_impersonate_pc_returns_pending_submit_action(orchestrator, seeded_state):
     task = AuxiliaryTask(kind=TaskKind.IMPERSONATE_PC)
-    result = await orchestrator.run_auxiliary_task(
-        campaign_id=seeded_state.campaign_id, task=task
-    )
+    result = await orchestrator.run_auxiliary_task(campaign_id=seeded_state.campaign_id, task=task)
     assert result.pending_commit_action == CommitAction.SUBMIT_POST
 
 
@@ -51,9 +47,7 @@ async def test_concurrent_aux_tasks_demuxed_by_result_id(orchestrator, seeded_st
     ]
     results = await asyncio.gather(
         *[
-            orchestrator.run_auxiliary_task(
-                campaign_id=seeded_state.campaign_id, task=t
-            )
+            orchestrator.run_auxiliary_task(campaign_id=seeded_state.campaign_id, task=t)
             for t in tasks
         ]
     )
@@ -65,9 +59,7 @@ async def test_concurrent_aux_tasks_demuxed_by_result_id(orchestrator, seeded_st
 
 async def test_discard_clears_inflight(orchestrator, seeded_state):
     task = AuxiliaryTask(kind=TaskKind.BRAINSTORM, snippet="x")
-    result = await orchestrator.run_auxiliary_task(
-        campaign_id=seeded_state.campaign_id, task=task
-    )
+    result = await orchestrator.run_auxiliary_task(campaign_id=seeded_state.campaign_id, task=task)
     assert result.id in orchestrator._inflight_aux
     discarded = await orchestrator.discard_auxiliary(result.id)
     assert discarded is True
@@ -78,9 +70,7 @@ async def test_discard_clears_inflight(orchestrator, seeded_state):
 
 async def test_aux_emits_ws_token_and_complete_events(orchestrator, seeded_state, ws):
     task = AuxiliaryTask(kind=TaskKind.BRAINSTORM, snippet="x")
-    result = await orchestrator.run_auxiliary_task(
-        campaign_id=seeded_state.campaign_id, task=task
-    )
+    result = await orchestrator.run_auxiliary_task(campaign_id=seeded_state.campaign_id, task=task)
     types = [m[1]["type"] for m in ws.messages]
     assert "aux_token" in types
     assert "aux_complete" in types
@@ -88,15 +78,11 @@ async def test_aux_emits_ws_token_and_complete_events(orchestrator, seeded_state
     assert completes[-1]["result_id"] == result.id
 
 
-async def test_aux_falls_back_when_per_task_route_missing(
-    orchestrator, seeded_state, fake_gateway
-):
+async def test_aux_falls_back_when_per_task_route_missing(orchestrator, seeded_state, fake_gateway):
     # Strip the per-task route; expect fallback to `main` with warning.
     fake_gateway._router._routes.pop("auxiliary.brainstorm")
     task = AuxiliaryTask(kind=TaskKind.BRAINSTORM, snippet="x")
-    result = await orchestrator.run_auxiliary_task(
-        campaign_id=seeded_state.campaign_id, task=task
-    )
+    result = await orchestrator.run_auxiliary_task(campaign_id=seeded_state.campaign_id, task=task)
     assert "fallback_to_canonical_model" in result.warnings
     assert fake_gateway.seen_tasks[-1] == "main"
 
@@ -105,8 +91,6 @@ async def test_aux_failure_emits_error_event(orchestrator, seeded_state, fake_ga
     fake_gateway.fail_after = 0
     task = AuxiliaryTask(kind=TaskKind.BRAINSTORM, snippet="x")
     with pytest.raises(RuntimeError):
-        await orchestrator.run_auxiliary_task(
-            campaign_id=seeded_state.campaign_id, task=task
-        )
+        await orchestrator.run_auxiliary_task(campaign_id=seeded_state.campaign_id, task=task)
     types = [m[1]["type"] for m in ws.messages]
     assert "aux_error" in types

@@ -16,7 +16,6 @@ import pytest
 from grimoire.auxiliary.types import (
     AuxiliaryResult,
     AuxiliaryTask,
-    CommitAction,
     TaskKind,
 )
 from grimoire.orchestrator.errors import AuxiliaryNotFoundError
@@ -67,9 +66,7 @@ async def test_accept_impersonate_pc_submits_canonical_turn(
     assert aux.id not in orchestrator._inflight_aux
 
 
-async def test_accept_continue_as_appends_npc_post(
-    orchestrator, scene_manager, seeded_state
-):
+async def test_accept_continue_as_appends_npc_post(orchestrator, scene_manager, seeded_state):
     aux = _aux(
         TaskKind.CONTINUE_AS,
         text="And he turned to the fire, troubled.",
@@ -124,9 +121,7 @@ async def test_double_accept_raises_not_found(orchestrator, seeded_state):
         await orchestrator.accept_auxiliary(seeded_state.campaign_id, aux.id)
 
 
-async def test_accept_rewrite_post_swaps_primary(
-    orchestrator, scene_manager, seeded_state
-):
+async def test_accept_rewrite_post_swaps_primary(orchestrator, scene_manager, seeded_state):
     """rewrite_post → new alternate created on the target post; primary switched."""
     # Seed: convert the existing model post into an alternate-bearing post.
     # The accept path calls scene_manager.append_alternate which will synthesize
@@ -148,7 +143,7 @@ async def test_accept_rewrite_post_swaps_primary(
     assert out["post_id"] == target.id
     new_alt_id = out["alternate_id"]
 
-    scene, post = await scene_manager._find_post(target.id)
+    _, post = await scene_manager._find_post(target.id)
     alt = next(a for a in post.alternates if a.id == new_alt_id)
     assert alt.text == "The crow stooped, eyes black with hunger."
     assert post.primary_alternate_id == new_alt_id
@@ -169,7 +164,7 @@ async def test_accept_rewrite_post_on_failed_extraction_keeps_aux_parked(
         task_kwargs={"target_post_id": "p_nonexistent"},
     )
     orchestrator._inflight_aux[aux.id] = aux
-    with pytest.raises(Exception):
+    with pytest.raises(KeyError):
         await orchestrator.accept_auxiliary(seeded_state.campaign_id, aux.id)
     # Re-parked.
     assert aux.id in orchestrator._inflight_aux

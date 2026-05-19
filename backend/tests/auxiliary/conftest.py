@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -16,7 +15,6 @@ from grimoire.orchestrator.config import OrchestratorConfig
 from grimoire.orchestrator.service import OrchestratorService
 from grimoire.scenes.manager import SceneManager, SceneManagerConfig
 from grimoire.scenes.types import (
-    Alternate,
     AuthorKind,
     Post,
     Scene,
@@ -212,9 +210,7 @@ class FakeExtractor:
         turn_id: str | None = None,
         **_: Any,
     ) -> ExtractionResult:
-        self.calls.append(
-            {"text": response_text, "campaign_id": campaign_id, "turn_id": turn_id}
-        )
+        self.calls.append({"text": response_text, "campaign_id": campaign_id, "turn_id": turn_id})
         return ExtractionResult(deltas=list(self.deltas), flags=[])
 
 

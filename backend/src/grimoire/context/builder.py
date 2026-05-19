@@ -1938,9 +1938,7 @@ class ContextBuilderService:
         recent_posts_text = ""
         if budget.recent_posts_count > 0 and scene is not None:
             try:
-                recent = await self._scenes.recent_posts(
-                    scene.id, n=budget.recent_posts_count
-                )
+                recent = await self._scenes.recent_posts(scene.id, n=budget.recent_posts_count)
             except Exception:
                 recent = []
             recent_posts_text = self._render_recent_posts(list(recent or []))
@@ -1957,16 +1955,20 @@ class ContextBuilderService:
                     original_text = (getattr(post, "body", "") or "").strip()
                     break
 
-        system_text = load_template(kind).render(
-            pc_name=pc_name,
-            character_name=target_name,
-            scene_summary=scene_header,
-            steering_hint=task.steering_hint or "",
-            original_text=original_text,
-            edit_instruction=task.edit_instruction or "",
-            snippet=task.snippet or "",
-            target_language=task.target_language or "",
-        ).strip()
+        system_text = (
+            load_template(kind)
+            .render(
+                pc_name=pc_name,
+                character_name=target_name,
+                scene_summary=scene_header,
+                steering_hint=task.steering_hint or "",
+                original_text=original_text,
+                edit_instruction=task.edit_instruction or "",
+                snippet=task.snippet or "",
+                target_language=task.target_language or "",
+            )
+            .strip()
+        )
 
         messages: list[Message] = []
         if system_text:
@@ -1974,9 +1976,7 @@ class ContextBuilderService:
         if active_pc_card:
             messages.append(Message(role=MessageRole.SYSTEM, content=active_pc_card))
         if voice_lines:
-            messages.append(
-                Message(role=MessageRole.SYSTEM, content="\n\n".join(voice_lines))
-            )
+            messages.append(Message(role=MessageRole.SYSTEM, content="\n\n".join(voice_lines)))
         if recent_posts_text:
             messages.append(Message(role=MessageRole.SYSTEM, content=recent_posts_text))
 
