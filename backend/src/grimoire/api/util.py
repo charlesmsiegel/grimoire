@@ -44,6 +44,25 @@ def map_lookup_errors(exc: Exception) -> HTTPException:
         return exc
     name = type(exc).__name__.lower()
     detail = str(exc) or name
+
+    # Walk the cause chain first: the orchestrator wraps gateway errors in
+    # OrchestratorError "from exc.cause", and without this the name-based
+    # match below forces 409 even when the real cause is "no LLM provider
+    # configured" (a 503 service-not-ready signal).
+    cause: BaseException | None = exc.__cause__ or exc.__context__
+    seen: set[int] = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        cname = type(cause).__name__.lower()
+        if "routenotfound" in cname or "providernotfound" in cname:
+            return HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
+        cause = cause.__cause__ or cause.__context__
+
+    # RouteNotFoundError / ProviderNotFoundError are gateway "no provider
+    # configured" signals — must be checked before the generic "notfound"
+    # → 404 branch below, since their class names also contain "notfound".
+    if "routenotfound" in name or "providernotfound" in name:
+        return HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
     if isinstance(exc, KeyError) or "notfound" in name or "unknown" in name:
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
     if isinstance(exc, FileNotFoundError):

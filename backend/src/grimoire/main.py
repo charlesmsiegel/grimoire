@@ -315,6 +315,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 health_monitor=obs.health_monitor,
             )
             await container.extras["llm_gateway"].register_with_health_monitor()
+            # Wizard-configured plugins ship with an `active_model` but nothing
+            # else wires them into the gateway's per-task routing — bridge the
+            # gap so wizard-only installs can post turns / embed text / etc.
+            # without the user also setting env vars or a campaign YAML.
+            try:
+                await container.extras["llm_gateway"].register_provider_defaults()
+            except Exception:
+                log.exception("register_provider_defaults failed at startup")
         llm_gateway = container.extras["llm_gateway"]
         if obs.replayer is None:
             obs.replayer = TurnReplayerService(
