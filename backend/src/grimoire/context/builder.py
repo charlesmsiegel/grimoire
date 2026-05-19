@@ -43,6 +43,7 @@ from grimoire.types.context import (
     ToolDeclarationSpec,
 )
 from grimoire.types.extraction_modes import ExtractionMode
+from grimoire.types.inclusion_reasons import InclusionReason
 from grimoire.types.llm import Message, MessageRole, ModelParams
 from grimoire.types.mechanics import MechanicsResult
 from grimoire.types.state import ContextTier
@@ -391,6 +392,8 @@ class ContextBuilderService:
             owner_id=campaign_id,
             tier=ContextTier.LOCK_IN,
             summary=f"Active PC: {pc_ref}",
+            source_id=_make_source_id("pc_card", pc_ref),
+            inclusion_reasons=[InclusionReason.PC_CARD],
         )
         return card, source
 
@@ -409,6 +412,24 @@ class ContextBuilderService:
         present_refs: list[str] = []
         if scene is not None:
             present_refs = list(getattr(scene, "present_character_refs", []) or [])
+
+        # Reasons accumulator: each ref accumulates the set of reasons that
+        # contributed to its inclusion. Composed when a character is, e.g.,
+        # both present and has an open commitment to a PC.
+        reasons_by_ref: dict[str, set[InclusionReason]] = {}
+
+        def _add_reason(ref: str, reason: InclusionReason) -> None:
+            reasons_by_ref.setdefault(ref, set()).add(reason)
+
+        for ref in present_refs:
+            _add_reason(ref, InclusionReason.PRESENT_IN_SCENE)
+
+        mentioned_refs = self._mentions_in_posts(recent_posts)
+        for ref in mentioned_refs:
+            _add_reason(ref, InclusionReason.MENTIONED_IN_RECENT_POSTS)
+
+        for ref in commitments_targeting_pcs or set():
+            _add_reason(ref, InclusionReason.COMMITMENT_OPEN_TO_PC)
 
         # Ask Characters for its tier recommendation. This bakes in: presence
         # → spotlight, mentioned in recent posts → background, open commitment
@@ -445,6 +466,7 @@ class ContextBuilderService:
             card = await self._try_full_card(ref, campaign_id)
             if not card:
                 continue
+            ref_reasons = sorted(reasons_by_ref.get(ref, set()), key=lambda r: r.value)
             # §8: prepend a world-id-aware header so duplicate names in two
             # worlds render distinctly. Library refs only — campaign-local
             # entities don't have a world prefix to surface.
@@ -454,7 +476,9 @@ class ContextBuilderService:
                     section="cast",
                     text=_with_cast_header(ref, card),
                     priority=10,
-                    source=self._character_source(ref, ContextTier.SPOTLIGHT, campaign_id),
+                    source=self._character_source(
+                        ref, ContextTier.SPOTLIGHT, campaign_id, reasons=ref_reasons
+                    ),
                 )
             )
             # §9 — Voice anchor: emit a separate spotlight item carrying just
@@ -474,6 +498,8 @@ class ContextBuilderService:
                                 owner_id=ref if ref.startswith("library:") else campaign_id,
                                 tier=ContextTier.SPOTLIGHT,
                                 summary=f"voice:{ref}",
+                                source_id=_make_source_id("voice", ref),
+                                inclusion_reasons=list(ref_reasons),
                             ),
                         )
                     )
@@ -502,6 +528,8 @@ class ContextBuilderService:
                             owner_id=campaign_id,
                             tier=ContextTier.SPOTLIGHT,
                             summary=f"dialogue:{ref}",
+                            source_id=_make_source_id("dialogue", ref),
+                            inclusion_reasons=list(ref_reasons),
                         ),
                     )
                 )
@@ -526,13 +554,16 @@ class ContextBuilderService:
             text = await self._try_compressed_card(ref, campaign_id)
             if not text:
                 continue
+            ref_reasons = sorted(reasons_by_ref.get(ref, set()), key=lambda r: r.value)
             background_items.append(
                 _TierItem(
                     tier=ContextTier.BACKGROUND,
                     section="cast",
                     text=_with_cast_header(ref, text),
                     priority=5,
-                    source=self._character_source(ref, ContextTier.BACKGROUND, campaign_id),
+                    source=self._character_source(
+                        ref, ContextTier.BACKGROUND, campaign_id, reasons=ref_reasons
+                    ),
                 )
             )
 
@@ -698,7 +729,12 @@ class ContextBuilderService:
             return ""
 
     def _character_source(
-        self, ref: str, tier: ContextTier, campaign_id: CampaignId
+        self,
+        ref: str,
+        tier: ContextTier,
+        campaign_id: CampaignId,
+        *,
+        reasons: list[InclusionReason] | None = None,
     ) -> ContextSource:
         # Library-prefixed refs are library-sourced; otherwise campaign-local.
         if ref.startswith("library:"):
@@ -713,6 +749,8 @@ class ContextBuilderService:
             owner_id=owner,
             tier=tier,
             summary=ref,
+            source_id=_make_source_id("character", ref),
+            inclusion_reasons=list(reasons or []),
         )
 
     # -- world -------------------------------------------------------- #
@@ -742,6 +780,7 @@ class ContextBuilderService:
                 location = None
             if location is not None:
                 desc = _render_location(location)
+                location_owner = f"library:worlds/{world_id}/locations/{location_id}"
                 spotlight.append(
                     _TierItem(
                         tier=ContextTier.SPOTLIGHT,
@@ -751,9 +790,11 @@ class ContextBuilderService:
                         source=ContextSource(
                             kind="location",
                             scope="library",
-                            owner_id=f"library:worlds/{world_id}/locations/{location_id}",
+                            owner_id=location_owner,
                             tier=ContextTier.SPOTLIGHT,
                             summary=location.name,
+                            source_id=_make_source_id("location", location_owner),
+                            inclusion_reasons=[InclusionReason.SCENE_ANCHOR],
                         ),
                     )
                 )
@@ -782,6 +823,10 @@ class ContextBuilderService:
                                 owner_id=campaign_id,
                                 tier=ContextTier.SPOTLIGHT,
                                 summary=str(weather.kind),
+                                source_id=_make_source_id(
+                                    "weather", f"{campaign_id}:{world_id}:{location_id}"
+                                ),
+                                inclusion_reasons=[InclusionReason.SCENE_ANCHOR],
                             ),
                         )
                     )
@@ -809,6 +854,10 @@ class ContextBuilderService:
                                     owner_id=f"library:worlds/{world_id}",
                                     tier=ContextTier.BACKGROUND,
                                     summary="adjacency",
+                                    source_id=_make_source_id(
+                                        "adjacency", f"library:worlds/{world_id}"
+                                    ),
+                                    inclusion_reasons=[InclusionReason.SCENE_ANCHOR],
                                 ),
                             )
                         )
@@ -828,6 +877,8 @@ class ContextBuilderService:
                         owner_id=campaign_id,
                         tier=ContextTier.SPOTLIGHT,
                         summary="running summary",
+                        source_id=_make_source_id("scene_summary", campaign_id),
+                        inclusion_reasons=[InclusionReason.SCENE_ANCHOR],
                     ),
                 )
             )
@@ -883,6 +934,8 @@ class ContextBuilderService:
                         owner_id=ref if ref.startswith("library:") else campaign_id,
                         tier=ContextTier.BACKGROUND,
                         summary=ref,
+                        source_id=_make_source_id("faction", ref),
+                        inclusion_reasons=[InclusionReason.COMPOSITION_DEFAULT],
                     ),
                 )
             )
@@ -998,6 +1051,8 @@ class ContextBuilderService:
                     owner_id=campaign_id,
                     tier=ContextTier.BACKGROUND,
                     summary="world-time",
+                    source_id=_make_source_id("calendar", campaign_id),
+                    inclusion_reasons=[InclusionReason.COMPOSITION_DEFAULT],
                 ),
             )
         ]
@@ -1082,6 +1137,8 @@ class ContextBuilderService:
             owner_id=campaign_id,
             tier=ContextTier.LOCK_IN,
             summary=f"{len(commitments)} open",
+            source_id=_make_source_id("commitments", campaign_id),
+            inclusion_reasons=[InclusionReason.COMMITMENT_OPEN_TO_PC],
         )
         return block, source
 
@@ -1157,6 +1214,8 @@ class ContextBuilderService:
                     owner_id=campaign_id,
                     tier=ContextTier.BACKGROUND,
                     summary=f"{len(lines)} facts",
+                    source_id=_make_source_id("facts", campaign_id),
+                    inclusion_reasons=[InclusionReason.KEYWORD_TRIGGERED],
                 ),
             )
         ]
@@ -1227,6 +1286,8 @@ class ContextBuilderService:
                     owner_id=campaign_id,
                     tier=ContextTier.BACKGROUND,
                     summary=f"{len(lines)} deltas",
+                    source_id=_make_source_id("relationship_deltas", campaign_id),
+                    inclusion_reasons=[InclusionReason.RELATIONSHIP_TO_PRESENT],
                 ),
             )
         ]
@@ -1268,6 +1329,10 @@ class ContextBuilderService:
                         owner_id=hit.ref,
                         tier=ContextTier.ARCHIVE,
                         summary=f"score={hit.score:.3f}",
+                        source_id=_make_source_id(
+                            "retrieved", f"{hit.source_kind}:{hit.ref}"
+                        ),
+                        inclusion_reasons=[InclusionReason.KEYWORD_TRIGGERED],
                     ),
                 )
             )
@@ -1293,6 +1358,10 @@ class ContextBuilderService:
                         owner_id=hit.ref,
                         tier=ContextTier.ARCHIVE,
                         summary=f"score={hit.score:.3f}",
+                        source_id=_make_source_id(
+                            "keyword", f"{hit.source_kind}:{hit.ref}"
+                        ),
+                        inclusion_reasons=[InclusionReason.KEYWORD_TRIGGERED],
                     ),
                 )
             )
@@ -1369,6 +1438,8 @@ class ContextBuilderService:
                         owner_id=f"power:{cap_id}",
                         tier=ContextTier.ARCHIVE,
                         summary=name,
+                        source_id=_make_source_id("power", cap_id),
+                        inclusion_reasons=[InclusionReason.MECHANICS_RELEVANT],
                     ),
                 )
             )
@@ -1388,6 +1459,7 @@ class ContextBuilderService:
             text = f"[lore: {title}] {body[:400]}".strip()
             world_id = getattr(lore, "world_id", "")
             lore_id = getattr(lore, "id", "")
+            lore_owner = f"library:worlds/{world_id}/lore/{lore_id}"
             items.append(
                 _TierItem(
                     tier=ContextTier.ARCHIVE,
@@ -1397,9 +1469,14 @@ class ContextBuilderService:
                     source=ContextSource(
                         kind="lore",
                         scope="library",
-                        owner_id=f"library:worlds/{world_id}/lore/{lore_id}",
+                        owner_id=lore_owner,
                         tier=ContextTier.ARCHIVE,
                         summary=title,
+                        source_id=_make_source_id("lore", lore_owner),
+                        inclusion_reasons=[
+                            InclusionReason.LORE_ARCHIVE,
+                            InclusionReason.KEYWORD_TRIGGERED,
+                        ],
                     ),
                 )
             )
@@ -1529,6 +1606,8 @@ class ContextBuilderService:
                         owner_id=campaign_id,
                         tier=ContextTier.ARCHIVE,
                         summary=f"scene:{scene_id}",
+                        source_id=_make_source_id("scene_ref", scene_id),
+                        inclusion_reasons=[InclusionReason.SCENE_ANCHOR],
                     ),
                 )
             )
@@ -1985,6 +2064,19 @@ def _proper_noun_terms(recent_posts: Iterable[Any]) -> list[str]:
                 seen.add(match)
                 out.append(match)
     return out
+
+
+def _make_source_id(kind: str, owner: str | None) -> str:
+    """Stable id for a ``ContextSource``.
+
+    Deterministic across builds with identical inputs so the inspector's
+    diff can pair up the same logical chunk between two previews. The hash
+    is short (12 hex chars) — enough to keep collisions negligible for the
+    ~hundreds of sources per turn we expect.
+    """
+    raw = f"{kind}:{owner or ''}"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+    return f"src_{digest}"
 
 
 def _hash_messages(messages: list[Message]) -> str:
