@@ -54,6 +54,7 @@ from grimoire.scenes.storage import (
 from grimoire.scenes.types import (
     AdvanceDecision,
     AdvanceResult,
+    Alternate,
     AuthorKind,
     Post,
     Scene,
@@ -117,6 +118,8 @@ class _PostRecord:
     turn_id: str
     created_at: datetime
     is_player: bool
+    alternates: list[Alternate] = field(default_factory=list)
+    primary_alternate_id: str | None = None
 
 
 class SceneManager:
@@ -552,6 +555,8 @@ class SceneManager:
                     is_player=record.is_player if record else False,
                     created_at=record.created_at if record else datetime.fromtimestamp(0),
                     turn_id=record.turn_id if record else "",
+                    alternates=list(record.alternates) if record else [],
+                    primary_alternate_id=record.primary_alternate_id if record else None,
                 )
             )
         if range is not None:
@@ -873,6 +878,150 @@ class SceneManager:
                 if post.id == post_id:
                     return scene, post
         raise KeyError(f"post not found: {post_id}")
+
+    # -- Alternates (swipes) --------------------------------------------
+
+    async def append_alternate(self, post_id: str, alternate: Alternate) -> None:
+        """Add an alternate to a post's sidecar record and persist.
+
+        Does not change the primary pointer. If the post has no alternates yet
+        (legacy state), an implicit alternate representing the existing body is
+        synthesized as the primary so the new alternate is non-primary.
+        """
+        scene, post = await self._find_post(post_id)
+        async with self._lock_for(scene.id):
+            records = self._hydrate_records(scene)
+            record = records.get(str(post.order_in_scene))
+            if record is None:
+                raise KeyError(f"no post record for {post_id}")
+            if not record.alternates:
+                implicit = Alternate(
+                    id=f"a_{uuid.uuid4().hex[:16]}",
+                    post_id=post_id,
+                    text=post.body,
+                    delta_set_id="",
+                    author_kind=post.author_kind,
+                    created_at=record.created_at,
+                    is_primary=True,
+                )
+                record.alternates.append(implicit)
+                record.primary_alternate_id = implicit.id
+            record.alternates.append(alternate)
+            self._write_sidecar(scene)
+
+    async def set_primary_alternate(self, post_id: str, alternate_id: str) -> None:
+        """Switch which alternate is primary. Does not rebuild the .md — call
+        :meth:`rebuild_md_from_primaries` after.
+        """
+        scene, post = await self._find_post(post_id)
+        async with self._lock_for(scene.id):
+            records = self._hydrate_records(scene)
+            record = records.get(str(post.order_in_scene))
+            if record is None:
+                raise KeyError(f"no post record for {post_id}")
+            if not any(a.id == alternate_id for a in record.alternates):
+                raise KeyError(f"alternate {alternate_id} not found on post {post_id}")
+            for a in record.alternates:
+                a.is_primary = a.id == alternate_id
+            record.primary_alternate_id = alternate_id
+            self._write_sidecar(scene)
+
+    async def update_alternate(
+        self, post_id: str, alternate_id: str, **changes: object
+    ) -> None:
+        """Patch fields on an alternate (e.g. ``pinned=True``)."""
+        scene, post = await self._find_post(post_id)
+        async with self._lock_for(scene.id):
+            records = self._hydrate_records(scene)
+            record = records.get(str(post.order_in_scene))
+            if record is None:
+                raise KeyError(f"no post record for {post_id}")
+            for alt in record.alternates:
+                if alt.id == alternate_id:
+                    for k, v in changes.items():
+                        if hasattr(alt, k):
+                            setattr(alt, k, v)
+                    break
+            else:
+                raise KeyError(f"alternate {alternate_id} not found on post {post_id}")
+            self._write_sidecar(scene)
+
+    async def remove_alternate(self, post_id: str, alternate_id: str) -> Alternate:
+        """Drop an alternate from a post. Rejects removing the primary."""
+        scene, post = await self._find_post(post_id)
+        async with self._lock_for(scene.id):
+            records = self._hydrate_records(scene)
+            record = records.get(str(post.order_in_scene))
+            if record is None:
+                raise KeyError(f"no post record for {post_id}")
+            if record.primary_alternate_id == alternate_id:
+                raise ValueError(
+                    f"cannot remove primary alternate {alternate_id}; switch first"
+                )
+            removed: Alternate | None = None
+            kept: list[Alternate] = []
+            for a in record.alternates:
+                if a.id == alternate_id:
+                    removed = a
+                else:
+                    kept.append(a)
+            if removed is None:
+                raise KeyError(f"alternate {alternate_id} not found on post {post_id}")
+            record.alternates = kept
+            self._write_sidecar(scene)
+            return removed
+
+    async def rebuild_md_from_primaries(self, scene_id: str) -> None:
+        """Rewrite the scene's ``.md`` file using each post's primary alternate.
+
+        Posts without alternates render their existing body (legacy + user
+        posts). Posts with alternates render the primary's ``text``; if the
+        primary is missing for any reason, fall back to the first alternate.
+        """
+        scene = await self.get_scene(scene_id)
+        async with self._lock_for(scene.id):
+            records = self._hydrate_records(scene)
+            md_path, _ = self._scene_file_paths(scene)
+            existing_posts = await self.get_posts(scene_id)
+            rebuilt: list[Post] = []
+            for post in existing_posts:
+                record = records.get(str(post.order_in_scene))
+                body = post.body
+                if record and record.alternates:
+                    primary = next(
+                        (a for a in record.alternates if a.id == record.primary_alternate_id),
+                        None,
+                    )
+                    if primary is None:
+                        primary = next(
+                            (a for a in record.alternates if a.is_primary),
+                            record.alternates[0],
+                        )
+                    body = primary.text
+                rebuilt.append(
+                    Post(
+                        id=post.id,
+                        scene_id=post.scene_id,
+                        order_in_scene=post.order_in_scene,
+                        author_kind=post.author_kind,
+                        author_pc_ref=post.author_pc_ref,
+                        author_npc_ref=post.author_npc_ref,
+                        body=body,
+                        is_player=post.is_player,
+                        created_at=post.created_at,
+                        turn_id=post.turn_id,
+                        alternates=post.alternates,
+                        primary_alternate_id=post.primary_alternate_id,
+                    )
+                )
+            write_body(
+                md_path,
+                rebuilt,
+                heading_pattern=self.config.files.post_heading_pattern,
+            )
+            self._known_body_hashes[scene.id] = content_hash(
+                md_path.read_text(encoding="utf-8")
+            )
 
     # -- Fork (copy-on-write) -------------------------------------------
 
