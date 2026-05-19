@@ -38,6 +38,7 @@ from grimoire.orchestrator.errors import (
     UnknownPCError,
 )
 from grimoire.scenes.manager import SceneManager
+from grimoire.scenes.types import Alternate as SceneAlternate
 from grimoire.scenes.types import AuthorKind as SceneAuthorKind
 from grimoire.scenes.types import Post as SceneFilePost
 from grimoire.scenes.types import Scene as SceneFileScene
@@ -54,6 +55,7 @@ from grimoire.types.mechanics import (
 )
 from grimoire.types.orchestrator import (
     ForkResult,
+    RegeneratePostResult,
     RegenerateResult,
     RetconResult,
     SubmitResult,
@@ -357,6 +359,170 @@ class OrchestratorService:
                 last_model = p
         if last_model is None or last_model.id != post.id:
             raise LatestPostOnlyError(post.id)
+
+    async def regenerate_post(
+        self,
+        *,
+        campaign_id: CampaignId,
+        post_id: PostId,
+        steering_hint: str | None = None,
+        model_override: str | None = None,
+    ) -> RegeneratePostResult:
+        """Re-sample the model for an existing post, producing a new alternate.
+
+        Per the swipes-alternates design (branch C): finds the player input
+        that drove the post, re-runs the canonical generation, atomically
+        rewinds the current primary's delta set and applies the new deltas
+        under a fresh ``delta_set_id``, then appends a non-primary
+        :class:`Alternate` to the post's sidecar.
+
+        The new alternate is **not** auto-promoted to primary; the user
+        reviews via the swipes UI and accepts with
+        :meth:`switch_primary_alternate`. Latest-model-post-only.
+        """
+        await self._require_campaign(campaign_id)
+        scene, post = await self._find_scene_and_post(post_id)
+        await self._ensure_latest_model_post(scene, post)
+
+        # Walk back from this post to find the triggering player input.
+        posts = await self._scenes.get_posts(scene.id)
+        player_input = ""
+        pc_ref: CharacterRef | None = None
+        for prior in reversed([p for p in posts if p.order_in_scene < post.order_in_scene]):
+            if prior.is_player:
+                player_input = prior.body
+                pc_ref = prior.author_pc_ref
+                break
+
+        branch_id = scene.branch_id or "main"
+        new_alt_id = f"a_{uuid.uuid4().hex[:16]}"
+        new_ds_id = f"ds_{uuid.uuid4().hex[:16]}"
+        applied = False
+
+        try:
+            prompt = await self._context.build(
+                player_input,
+                campaign_id,
+                mechanics_results=[],
+                pc_ref=pc_ref,
+                turn_id=post.turn_id,
+                extra=steering_hint,
+            )
+            response_text = await self._stream_main_response(
+                campaign_id=campaign_id,
+                turn_id=post.turn_id,
+                prompt=prompt,
+            )
+            scene_obj = await self._scenes.get_scene(scene.id)
+            extraction = await self._do_extract(
+                response_text=response_text,
+                scene=scene_obj,
+                campaign_id=campaign_id,
+                turn_id=post.turn_id,
+            )
+            deltas = list(extraction.deltas) if extraction is not None else []
+
+            # Atomic swap: rewind current primary's set + apply new deltas
+            # under the fresh set. Falls back to plain apply when the
+            # current primary has no associated delta set (legacy posts).
+            current_primary = next(
+                (a for a in post.alternates if a.id == post.primary_alternate_id),
+                None,
+            )
+            rewind_ds = (
+                current_primary.delta_set_id
+                if current_primary and current_primary.delta_set_id
+                else None
+            )
+            if rewind_ds:
+                await self._store.swap_delta_set(
+                    rewind_set_id=rewind_ds,
+                    apply_deltas=deltas,
+                    apply_set_id=new_ds_id,
+                    campaign_id=campaign_id,
+                    branch_id=branch_id,
+                    turn_id=post.turn_id,
+                    source="orchestrator:regenerate",
+                )
+            else:
+                await self._store.apply_delta_set(
+                    deltas=deltas,
+                    delta_set_id=new_ds_id,
+                    campaign_id=campaign_id,
+                    branch_id=branch_id,
+                    turn_id=post.turn_id,
+                    source="orchestrator:regenerate",
+                )
+            applied = True
+
+            alt = SceneAlternate(
+                id=new_alt_id,
+                post_id=post_id,
+                text=response_text,
+                delta_set_id=new_ds_id,
+                author_kind=post.author_kind,
+                model=model_override,
+                steering_hint=steering_hint,
+                created_at=self._clock(),
+                is_primary=False,
+            )
+            await self._scenes.append_alternate(post_id, alt)
+
+            # Track that the new set is currently active for this post.
+            # The primary pointer on the post still references the old
+            # alternate; switch_primary_alternate will reconcile.
+            await self._store.set_current_alternate_delta_set(
+                campaign_id=campaign_id,
+                branch_id=branch_id,
+                post_id=post_id,
+                delta_set_id=new_ds_id,
+            )
+
+            await self._bus.emit(
+                Event(
+                    type="alternate_added",
+                    payload={
+                        "campaign_id": campaign_id,
+                        "post_id": post_id,
+                        "alternate_id": new_alt_id,
+                        "delta_set_id": new_ds_id,
+                    },
+                )
+            )
+            return RegeneratePostResult(
+                post_id=post_id,
+                new_alternate_id=new_alt_id,
+                delta_set_id=new_ds_id,
+            )
+        except Exception:
+            if applied:
+                # Best-effort restore: rewind the new set, then re-activate
+                # the prior primary's set so the world state matches the
+                # unchanged primary pointer.
+                try:
+                    await self._store.rewind_delta_set(
+                        new_ds_id, campaign_id=campaign_id, branch_id=branch_id
+                    )
+                except Exception:
+                    logger.warning(
+                        "rollback of new delta set %s during regenerate_post failed",
+                        new_ds_id,
+                        exc_info=True,
+                    )
+                if rewind_ds:
+                    try:
+                        await self._store.re_activate_delta_set(
+                            delta_set_id=rewind_ds,
+                            campaign_id=campaign_id,
+                            branch_id=branch_id,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "re-activate of prior set %s during regenerate_post rollback failed",
+                            rewind_ds,
+                            exc_info=True,
+                        )
+            raise
 
     async def switch_primary_alternate(
         self,

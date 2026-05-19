@@ -1,8 +1,7 @@
-"""Orchestrator alternate-mutation surface: switch / pin / delete.
+"""Orchestrator alternate-mutation surface: regenerate / switch / pin / delete.
 
 These tests wire a real :class:`StateStore` to the orchestrator (rather than
-the fake) so the underlying swap_delta_set behavior is exercised end-to-end.
-``regenerate_post`` itself is out of scope for this slice — see plan branch C.
+the fake) so the underlying delta-set behavior is exercised end-to-end.
 """
 
 from __future__ import annotations
@@ -16,11 +15,13 @@ from grimoire.orchestrator import OrchestratorService
 from grimoire.orchestrator.errors import (
     AlternateNotFoundError,
     CannotDeletePrimaryError,
+    LatestPostOnlyError,
 )
 from grimoire.scenes.manager import SceneManager, SceneManagerConfig
 from grimoire.scenes.types import Alternate, AuthorKind, SceneInit
 from grimoire.state_store import StateStore
 from grimoire.storage import Database, apply_migrations
+from grimoire.types.state import DeltaKind, StateDelta
 
 from .conftest import (
     FakeContextBuilder,
@@ -272,3 +273,180 @@ async def test_delete_non_primary_rewinds_its_delta_set(tmp_path: Path, real_sto
     await orch.delete_alternate(post_id=post_id, alternate_id=alt_b)
     posts = await scenes.get_posts(scene_id)
     assert all(a.id != alt_b for a in posts[0].alternates)
+
+
+# ----- regenerate_post -------------------------------------------------------
+
+
+async def _seed_scene_with_one_model_post(
+    scenes: SceneManager, store: StateStore
+) -> tuple[str, str, str, str]:
+    """Player post + model post (with primary alternate + delta set).
+
+    Returns (campaign_id, branch_id, scene_id, model_post_id).
+    """
+    campaign_id = "c1"
+    branch_id = "main"
+    await store.upsert_campaign(campaign_id=campaign_id, name="Test")
+    scene = await scenes.start_scene(SceneInit(campaign_id=campaign_id, title="Opening"))
+    from grimoire.scenes.manager import new_post
+
+    player = new_post(author_kind=AuthorKind.PC, body="I knock.", is_player=True)
+    await scenes.append_post(scene.id, player)
+    model = new_post(author_kind=AuthorKind.NARRATOR, body="A door creaks.", is_player=False)
+    await scenes.append_post(scene.id, model)
+    # Seed the primary alternate with a tracked delta set so regenerate's
+    # swap path is exercised (rather than the legacy plain-apply branch).
+    ds_primary = "ds_primary"
+    await store.apply_delta_set(
+        deltas=[_char_delta("calm", campaign_id=campaign_id, branch_id=branch_id)],
+        delta_set_id=ds_primary,
+        campaign_id=campaign_id,
+        branch_id=branch_id,
+        turn_id=model.turn_id,
+        source="test",
+    )
+    primary = Alternate(
+        id="a_primary",
+        post_id=model.id,
+        text=model.body,
+        delta_set_id=ds_primary,
+        author_kind=AuthorKind.NARRATOR,
+        is_primary=True,
+    )
+    await scenes.append_alternate(model.id, primary)
+    # append_alternate synthesizes an implicit primary on first call and
+    # appends the new alt as non-primary; promote ours.
+    await scenes.set_primary_alternate(model.id, primary.id)
+    await store.set_current_alternate_delta_set(
+        campaign_id=campaign_id,
+        branch_id=branch_id,
+        post_id=model.id,
+        delta_set_id=ds_primary,
+    )
+    return campaign_id, branch_id, scene.id, model.id
+
+
+def _new_delta(target: str, mood: str) -> StateDelta:
+    return StateDelta(
+        kind=DeltaKind.CHARACTER_STATE_UPDATE,
+        target_scope="campaign-sqlite",
+        target_table="character_state",
+        target_id=target,
+        after={
+            "character_ref": target,
+            "campaign_id": "c1",
+            "branch_id": "main",
+            "emotional_state": mood,
+        },
+    )
+
+
+async def test_regenerate_post_creates_non_primary_alternate(
+    tmp_path: Path, real_store: StateStore
+):
+    scenes_root = tmp_path / "scenes_root"
+    scenes_root.mkdir()
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    campaign_id, branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
+        scenes, real_store
+    )
+    gateway = FakeGateway(chunks=["A ", "new ", "rendering."])
+    extractor = FakeExtractor(deltas=[_new_delta("lib:winifred", "anxious")])
+    orch = OrchestratorService(
+        event_bus=EventBus(),
+        scene_manager=scenes,
+        llm_gateway=gateway,
+        context_builder=FakeContextBuilder(),
+        extractor=extractor,
+        state_store=real_store,
+        ws_push=WSCollector(),
+    )
+
+    result = await orch.regenerate_post(campaign_id=campaign_id, post_id=post_id)
+
+    posts = await scenes.get_posts(scene_id)
+    target = posts[-1]
+    new_alt = next(a for a in target.alternates if a.id == result.new_alternate_id)
+    assert new_alt.is_primary is False
+    assert new_alt.text == "A new rendering."
+    assert new_alt.delta_set_id == result.delta_set_id
+    # Primary pointer unchanged: user must accept via switch_primary.
+    assert target.primary_alternate_id == "a_primary"
+    # New set is the materialized current for this post.
+    current = await real_store.current_delta_set_for(
+        post_id=post_id, campaign_id=campaign_id, branch_id=branch_id
+    )
+    assert current == result.delta_set_id
+
+
+async def test_regenerate_post_rejects_non_latest_post(tmp_path: Path, real_store: StateStore):
+    scenes_root = tmp_path / "scenes_root"
+    scenes_root.mkdir()
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    campaign_id, _branch_id, scene_id, first_model_id = await _seed_scene_with_one_model_post(
+        scenes, real_store
+    )
+    # Append a second model post; the first one is no longer the latest.
+    from grimoire.scenes.manager import new_post
+
+    follow_up = new_post(author_kind=AuthorKind.NARRATOR, body="The door swings.", is_player=False)
+    await scenes.append_post(scene_id, follow_up)
+    orch = OrchestratorService(
+        event_bus=EventBus(),
+        scene_manager=scenes,
+        llm_gateway=FakeGateway(),
+        context_builder=FakeContextBuilder(),
+        extractor=FakeExtractor(),
+        state_store=real_store,
+        ws_push=WSCollector(),
+    )
+    with pytest.raises(LatestPostOnlyError):
+        await orch.regenerate_post(campaign_id=campaign_id, post_id=first_model_id)
+
+
+async def test_regenerate_post_rollback_on_extractor_failure(
+    tmp_path: Path, real_store: StateStore
+):
+    scenes_root = tmp_path / "scenes_root"
+    scenes_root.mkdir()
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    campaign_id, branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
+        scenes, real_store
+    )
+    # FakeExtractor swallows raise_on_extract into a returned None — that
+    # path leaves the new delta set empty rather than triggering rollback.
+    # Instead, force the swap itself to fail by mocking store.swap_delta_set.
+    gateway = FakeGateway(chunks=["chunk"])
+    extractor = FakeExtractor(deltas=[_new_delta("lib:winifred", "anxious")])
+    orch = OrchestratorService(
+        event_bus=EventBus(),
+        scene_manager=scenes,
+        llm_gateway=gateway,
+        context_builder=FakeContextBuilder(),
+        extractor=extractor,
+        state_store=real_store,
+        ws_push=WSCollector(),
+    )
+    # Simulate sidecar append failure after deltas were applied: the
+    # rollback path should rewind the new set and re-activate the old one.
+    original_append = scenes.append_alternate
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("sidecar write boom")
+
+    scenes.append_alternate = boom  # type: ignore[assignment]
+    try:
+        with pytest.raises(RuntimeError, match="sidecar write boom"):
+            await orch.regenerate_post(campaign_id=campaign_id, post_id=post_id)
+    finally:
+        scenes.append_alternate = original_append  # type: ignore[assignment]
+
+    # The pre-existing primary's deltas are active again; no orphan alternate.
+    posts = await scenes.get_posts(scene_id)
+    target = posts[-1]
+    assert target.primary_alternate_id == "a_primary"
+    current = await real_store.current_delta_set_for(
+        post_id=post_id, campaign_id=campaign_id, branch_id=branch_id
+    )
+    assert current == "ds_primary"
