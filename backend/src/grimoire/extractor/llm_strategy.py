@@ -331,9 +331,7 @@ def _make_commitment_resolution_delta(
 
 def _make_entity_candidate(item: dict, *, kind: EntityKind) -> EntityCandidate:
     name = str(item.get("proposed_name", "")).strip()
-    proposed_id = str(item.get("proposed_id", "")).strip() or slugify_id(
-        name, fallback="unknown"
-    )
+    proposed_id = str(item.get("proposed_id", "")).strip() or slugify_id(name, fallback="unknown")
     confidence = float(item.get("confidence", 0.0))
     return EntityCandidate(
         kind=kind,

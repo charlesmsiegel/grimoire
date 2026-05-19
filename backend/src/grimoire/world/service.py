@@ -1390,5 +1390,3 @@ def _parse_dt(value: Any) -> datetime | None:
         return datetime.fromisoformat(str(value))
     except ValueError:
         return None
-
-
