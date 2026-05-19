@@ -926,9 +926,7 @@ class SceneManager:
             record.primary_alternate_id = alternate_id
             self._write_sidecar(scene)
 
-    async def update_alternate(
-        self, post_id: str, alternate_id: str, **changes: object
-    ) -> None:
+    async def update_alternate(self, post_id: str, alternate_id: str, **changes: object) -> None:
         """Patch fields on an alternate (e.g. ``pinned=True``)."""
         scene, post = await self._find_post(post_id)
         async with self._lock_for(scene.id):
@@ -955,9 +953,7 @@ class SceneManager:
             if record is None:
                 raise KeyError(f"no post record for {post_id}")
             if record.primary_alternate_id == alternate_id:
-                raise ValueError(
-                    f"cannot remove primary alternate {alternate_id}; switch first"
-                )
+                raise ValueError(f"cannot remove primary alternate {alternate_id}; switch first")
             removed: Alternate | None = None
             kept: list[Alternate] = []
             for a in record.alternates:
@@ -1019,9 +1015,7 @@ class SceneManager:
                 rebuilt,
                 heading_pattern=self.config.files.post_heading_pattern,
             )
-            self._known_body_hashes[scene.id] = content_hash(
-                md_path.read_text(encoding="utf-8")
-            )
+            self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
 
     # -- Fork (copy-on-write) -------------------------------------------
 
