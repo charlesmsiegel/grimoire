@@ -23,9 +23,9 @@ import yaml
 from grimoire.files import load_yaml
 from grimoire.files import slugify as _base_slugify
 
-# ``content_hash`` is re-exported (canonical impl lives in
-# :mod:`grimoire.files.hashing` and normalizes line endings before hashing).
-from grimoire.files.hashing import content_hash as content_hash
+# Canonical impl lives in :mod:`grimoire.files.hashing` and normalizes line
+# endings before hashing; re-exported here for the scenes module's callers.
+from grimoire.files.hashing import content_hash  # noqa: F401  (re-exported)
 from grimoire.scenes.types import AuthorKind, Post, Scene
 
 POST_HEADING_RE = re.compile(r"^##\s+Post\s+(\d+)\s+[—-]\s+(.+?)\s*$", re.MULTILINE)
@@ -43,6 +43,12 @@ def slugify(text: str) -> str:
     """Scene-specific slug: delegates to :func:`grimoire.files.slugify` but
     falls back to ``"scene"`` (not ``"untitled"``) so empty titles produce
     ``0001-scene.md`` rather than ``0001-untitled.md``.
+
+    Slugs are truncated to 60 characters (the canonical helper's default
+    ``max_len``), so scene filenames stay below typical filesystem limits
+    even when titles are long. A title that produces a >60-char slug will
+    be silently shortened — pass an explicit ``init.slug`` to
+    :meth:`SceneManager.start_scene` if the full form is needed.
     """
     return _base_slugify(text, fallback="scene")
 
