@@ -54,9 +54,7 @@ class AlternateNotFoundError(OrchestratorError):
     """Raised when the requested alternate id is not on the given post."""
 
     def __init__(self, post_id: str, alternate_id: str) -> None:
-        super().__init__(
-            f"alternate {alternate_id!r} not found on post {post_id!r}"
-        )
+        super().__init__(f"alternate {alternate_id!r} not found on post {post_id!r}")
         self.post_id = post_id
         self.alternate_id = alternate_id
 

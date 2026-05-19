@@ -344,14 +344,10 @@ class OrchestratorService:
     # Swipes / alternates
     # ------------------------------------------------------------------ #
 
-    async def _find_scene_and_post(
-        self, post_id: PostId
-    ) -> tuple[SceneFileScene, SceneFilePost]:
+    async def _find_scene_and_post(self, post_id: PostId) -> tuple[SceneFileScene, SceneFilePost]:
         return await self._scenes._find_post(post_id)
 
-    async def _ensure_latest_model_post(
-        self, scene: SceneFileScene, post: SceneFilePost
-    ) -> None:
+    async def _ensure_latest_model_post(self, scene: SceneFileScene, post: SceneFilePost) -> None:
         """Enforce the latest-post-only rule for alternate mutations."""
         posts = await self._scenes.get_posts(scene.id)
         # Find the last model post (non-PC, non-player).

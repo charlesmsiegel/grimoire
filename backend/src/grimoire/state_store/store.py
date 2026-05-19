@@ -1365,9 +1365,7 @@ class StateStore:
         elif target_scope in ("library", "campaign-file"):
             pass
         else:
-            raise StateStoreError(
-                f"unknown target_scope {target_scope!r}; use file APIs for files"
-            )
+            raise StateStoreError(f"unknown target_scope {target_scope!r}; use file APIs for files")
 
         before_for_log = provided_before if provided_before is not None else captured_before
         delta_id = await insert_delta(
@@ -1651,9 +1649,7 @@ class StateStore:
                     if rec.target_scope == "campaign-sqlite" and rec.target_table:
                         after = rec.after or {}
                         if after:
-                            await upsert_row(
-                                conn, table=rec.target_table, values=after
-                            )
+                            await upsert_row(conn, table=rec.target_table, values=after)
                     await conn.execute(
                         "UPDATE deltas SET reversed_at = NULL WHERE id = ?",
                         (rec.id,),

@@ -58,9 +58,7 @@ async def test_rewind_delta_set_lifo(store: StateStore) -> None:
         turn_id="t_1",
         source="test",
     )
-    state = await store.resolve_character_state(
-        character_ref="lib:winifred", branch_id=BRANCH_ID
-    )
+    state = await store.resolve_character_state(character_ref="lib:winifred", branch_id=BRANCH_ID)
     assert state["emotional_state"] == "b"
 
     reversed_records = await store.rewind_delta_set(
@@ -73,9 +71,7 @@ async def test_rewind_delta_set_lifo(store: StateStore) -> None:
     # All reversed
     assert all(r.reversed_at is not None for r in reversed_records)
     # Underlying state reverted entirely
-    after = await store.resolve_character_state(
-        character_ref="lib:winifred", branch_id=BRANCH_ID
-    )
+    after = await store.resolve_character_state(character_ref="lib:winifred", branch_id=BRANCH_ID)
     assert after is None or after.get("emotional_state") not in {"a", "b"}
 
 
@@ -101,9 +97,7 @@ async def test_swap_delta_set_fresh_apply_atomic(store: StateStore) -> None:
     assert len(result.rewound) == 1
     assert len(result.applied) == 1
     assert result.applied[0].delta_set_id == "ds_new"
-    state = await store.resolve_character_state(
-        character_ref="lib:winifred", branch_id=BRANCH_ID
-    )
+    state = await store.resolve_character_state(character_ref="lib:winifred", branch_id=BRANCH_ID)
     assert state["emotional_state"] == "furious"
 
 
@@ -139,9 +133,7 @@ async def test_swap_delta_set_reactivate_existing(store: StateStore) -> None:
         source="orchestrator:switch-primary",
     )
     assert len(result.applied) == 1
-    state = await store.resolve_character_state(
-        character_ref="lib:winifred", branch_id=BRANCH_ID
-    )
+    state = await store.resolve_character_state(character_ref="lib:winifred", branch_id=BRANCH_ID)
     assert state["emotional_state"] == "anxious"
 
 
@@ -173,9 +165,7 @@ async def test_swap_atomic_rollback_on_apply_failure(store: StateStore) -> None:
             source="test",
         )
     # Original still in effect — rewind rolled back too.
-    state = await store.resolve_character_state(
-        character_ref="lib:winifred", branch_id=BRANCH_ID
-    )
+    state = await store.resolve_character_state(character_ref="lib:winifred", branch_id=BRANCH_ID)
     assert state["emotional_state"] == "calm"
 
 

@@ -147,9 +147,7 @@ async def test_switch_primary_alternate_swaps_delta_set_and_rewrites_md(
 ):
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
-    scenes = SceneManager(
-        scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0)
-    )
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
     campaign_id, branch_id, scene_id, post_id, alt_b = await _seed_scene_with_alternates(
         tmp_path, scenes, real_store
     )
@@ -178,9 +176,7 @@ async def test_switch_primary_alternate_swaps_delta_set_and_rewrites_md(
     assert current == "ds_b"
 
 
-async def test_switch_primary_same_alternate_is_noop(
-    tmp_path: Path, real_store: StateStore
-):
+async def test_switch_primary_same_alternate_is_noop(tmp_path: Path, real_store: StateStore):
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
@@ -196,9 +192,7 @@ async def test_switch_primary_same_alternate_is_noop(
     assert result["unchanged"] is True
 
 
-async def test_switch_primary_unknown_alternate_raises(
-    tmp_path: Path, real_store: StateStore
-):
+async def test_switch_primary_unknown_alternate_raises(tmp_path: Path, real_store: StateStore):
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
@@ -226,9 +220,7 @@ async def test_pin_alternate(tmp_path: Path, real_store: StateStore):
     assert target.pinned is True
 
 
-async def test_delete_primary_rejected(
-    tmp_path: Path, real_store: StateStore
-):
+async def test_delete_primary_rejected(tmp_path: Path, real_store: StateStore):
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
@@ -242,9 +234,7 @@ async def test_delete_primary_rejected(
         await orch.delete_alternate(post_id=post_id, alternate_id=primary)
 
 
-async def test_delete_non_primary_rewinds_its_delta_set(
-    tmp_path: Path, real_store: StateStore
-):
+async def test_delete_non_primary_rewinds_its_delta_set(tmp_path: Path, real_store: StateStore):
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
