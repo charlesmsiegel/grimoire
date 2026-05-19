@@ -159,6 +159,100 @@ class LLMGatewayService:
         if campaign_id is not None and self._data_root is not None:
             self._persist_campaign_route(campaign_id, task, route)
 
+    # Well-known tasks that should "just work" once a single LLM / embedding
+    # plugin is configured. Anything not listed here can still be set via
+    # campaign YAML or env-var defaults — these are the ones the startup
+    # wizard implicitly promises.
+    _DEFAULT_LLM_TASKS: tuple[str, ...] = ("main", "library.summarize", "extractor")
+    _DEFAULT_EMBEDDING_TASKS: tuple[str, ...] = ("library.embed",)
+
+    async def register_provider_defaults(self) -> None:
+        """Populate ``default_routes`` from configured plugins.
+
+        The startup wizard saves a plugin's API key + ``active_model`` but
+        never wires the plugin into the gateway's per-task routing table,
+        so a wizard-configured install still raises ``RouteNotFoundError``
+        on the first turn. This bridges the gap: for each kind, the first
+        plugin whose saved config passes its own schema is registered as
+        the default for the well-known tasks. Idempotent — a task that
+        already has a default (env var, campaign YAML, prior call) is
+        never overwritten.
+
+        Routes are keyed by *plugin id* (e.g. ``llm-openrouter``), not the
+        provider instance's ``.id`` field, because that is what
+        :meth:`Plugins.get_llm_provider` (and the resolver's lookup) keys
+        on. The two often differ — a plugin's manifest id is the unique
+        install handle while the instance id is a short brand name.
+        """
+        existing_defaults = self._router.routes_for(None)
+
+        try:
+            manifests = await self._plugins.list_installed()
+        except Exception:
+            logger.exception("register_provider_defaults: list_installed failed")
+            return
+
+        async def _first_configured_for_kind(kind: str) -> tuple[str, str] | None:
+            """Return (plugin_id, active_model) for the first configured plugin
+            whose manifest declares ``kind`` in ``implements``."""
+            for manifest in manifests:
+                if kind not in [str(k) for k in getattr(manifest, "implements", [])]:
+                    continue
+                plugin_id = str(getattr(manifest, "id", "") or "")
+                if not plugin_id:
+                    continue
+                try:
+                    cfg = await self._plugins.get_config(plugin_id)
+                except Exception:
+                    continue
+                if not isinstance(cfg, dict):
+                    continue
+                active_model = cfg.get("active_model")
+                if not isinstance(active_model, str) or not active_model:
+                    continue
+                try:
+                    validation = await self._plugins.validate_config(plugin_id, cfg)
+                except Exception:
+                    continue
+                if not getattr(validation, "ok", False):
+                    continue
+                return plugin_id, active_model
+            return None
+
+        llm_pick = await _first_configured_for_kind("llm_provider")
+        if llm_pick is not None:
+            plugin_id, model = llm_pick
+            route = f"{plugin_id}.{model}"
+            for task in self._DEFAULT_LLM_TASKS:
+                if existing_defaults.get(task) is None:
+                    try:
+                        self._router.set_route(task, route)
+                    except ValueError:
+                        logger.warning(
+                            "llm_gateway: refusing to register default for task=%r "
+                            "from plugin=%r model=%r — invalid route",
+                            task,
+                            plugin_id,
+                            model,
+                        )
+
+        embed_pick = await _first_configured_for_kind("embedding_provider")
+        if embed_pick is not None:
+            plugin_id, model = embed_pick
+            route = f"{plugin_id}.{model}"
+            for task in self._DEFAULT_EMBEDDING_TASKS:
+                if existing_defaults.get(task) is None:
+                    try:
+                        self._router.set_route(task, route)
+                    except ValueError:
+                        logger.warning(
+                            "llm_gateway: refusing to register default for embedding "
+                            "task=%r from plugin=%r model=%r — invalid route",
+                            task,
+                            plugin_id,
+                            model,
+                        )
+
     # ------------------------------------------------------------------ #
     # Per-call override resolvers
     # ------------------------------------------------------------------ #
