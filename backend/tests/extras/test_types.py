@@ -8,10 +8,10 @@ import pytest
 
 from grimoire.types.characters import Character, CharacterRole
 from grimoire.types.extras import (
-    ExtraScope,
-    ExtraValue,
     ExtrasCapError,
+    ExtraScope,
     ExtrasKeyError,
+    ExtraValue,
     validate_extras_dict,
     validate_extras_key,
     validate_extras_value,
@@ -92,7 +92,8 @@ def test_extras_roundtrip_through_model_dump():
 
 def test_reserved_prefix_rejected_on_character_construction():
     extra = _make_extra("x")
-    with pytest.raises(Exception):
+    # Pydantic wraps the ExtrasKeyError in ValidationError; either is acceptable.
+    with pytest.raises((ExtrasKeyError, ValueError)):
         Character(
             id="x",
             name="X",

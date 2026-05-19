@@ -391,9 +391,7 @@ def run_heuristics(
     flags.extend(detect_missing_mechanics(text, pre_roll_resolved=pre_roll_resolved))
     flags.extend(detect_missing_context_names(text, scene=scene, snapshot=snapshot))
     extras_proposals = find_extras_proposals(text, known_names=known)
-    return HeuristicOutput(
-        candidates=candidates, flags=flags, extras_proposals=extras_proposals
-    )
+    return HeuristicOutput(candidates=candidates, flags=flags, extras_proposals=extras_proposals)
 
 
 __all__ = [

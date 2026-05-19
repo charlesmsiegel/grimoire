@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from grimoire.extractor.config import ExtractorConfig
 from grimoire.extractor.heuristics import find_extras_proposals, run_heuristics
 from grimoire.extractor.service import ExtractorService
-from grimoire.extractor.config import ExtractorConfig
 from grimoire.types.common import EntityKind
 from grimoire.types.extras import ExtraScope
 

@@ -2395,9 +2395,7 @@ def _render_extras_value(value: Any) -> str | None:
     if isinstance(value, (int, float, str)):
         return str(value)
     if isinstance(value, list):
-        rendered = [
-            _render_extras_value(v) for v in value if _render_extras_value(v) is not None
-        ]
+        rendered = [_render_extras_value(v) for v in value if _render_extras_value(v) is not None]
         return "; ".join(r for r in rendered if r) or None
     if isinstance(value, dict):
         rendered = [

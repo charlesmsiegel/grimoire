@@ -584,9 +584,7 @@ class ExtractorService:
     def _filter_extras_proposals(self, proposals: list) -> list:
         """Apply review-threshold + per-entity cap to heuristic proposals."""
         threshold = float(getattr(self._config, "extras_review_threshold", 0.70))
-        max_per_entity = int(
-            getattr(self._config, "extras_max_proposals_per_turn_per_entity", 1)
-        )
+        max_per_entity = int(getattr(self._config, "extras_max_proposals_per_turn_per_entity", 1))
         out: list = []
         per_entity: dict[str, int] = {}
         for proposal in proposals:

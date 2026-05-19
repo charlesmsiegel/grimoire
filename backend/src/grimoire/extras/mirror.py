@@ -113,8 +113,7 @@ class ExtrasMirror:
         """Remove every mirrored row for an entity. Used during reconcile
         when frontmatter has been edited out-of-band."""
         sql = (
-            "DELETE FROM entity_extras "
-            "WHERE campaign_id = ? AND entity_kind = ? AND entity_id = ?"
+            "DELETE FROM entity_extras WHERE campaign_id = ? AND entity_kind = ? AND entity_id = ?"
         )
         params: tuple = (campaign_id, entity_kind, entity_id)
         if scope is not None:
