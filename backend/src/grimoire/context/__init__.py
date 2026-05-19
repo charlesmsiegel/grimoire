@@ -18,13 +18,27 @@ from grimoire.context.config import (
     TierBudget,
 )
 from grimoire.context.errors import ContextBuilderError, LockInOverflowError
+from grimoire.context.inspector import (
+    ContextDiff,
+    ContextInspector,
+    ContextSourceExplanation,
+    HandleNotFound,
+    PinTarget,
+    PreviewSummary,
+)
 
 __all__ = [
     "ContextBuilderCache",
     "ContextBuilderConfig",
     "ContextBuilderError",
     "ContextBuilderService",
+    "ContextDiff",
+    "ContextInspector",
+    "ContextSourceExplanation",
+    "HandleNotFound",
     "LockInOverflowError",
+    "PinTarget",
+    "PreviewSummary",
     "RetrievalConfig",
     "TierBudget",
     "make_cache_key",
