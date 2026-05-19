@@ -159,6 +159,16 @@ MECHANICS_MANIFEST_SCHEMA: dict = {
             "uniqueItems": True,
             "items": {"type": "string", "minLength": 1},
         },
+        "expression_vocabulary_extensions": {
+            "type": "array",
+            "uniqueItems": True,
+            "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "pattern": r"^[a-z][a-z0-9_]*$",
+            },
+        },
         "ui": {
             "type": "object",
             "properties": {
@@ -357,12 +367,37 @@ def _cross_check_hud_widgets(manifest: dict) -> list[ValidationError]:
     return errors
 
 
+def _cross_check_mechanics(manifest: dict) -> list[ValidationError]:
+    """Cross-field checks for mechanics manifests."""
+    from grimoire.types.expressions import CORE_EXPRESSION_VALUES
+
+    errors: list[ValidationError] = []
+    extensions = manifest.get("expression_vocabulary_extensions")
+    if isinstance(extensions, list):
+        for idx, label in enumerate(extensions):
+            if not isinstance(label, str):
+                continue
+            if label in CORE_EXPRESSION_VALUES:
+                errors.append(
+                    ValidationError(
+                        message=(
+                            f"`expression_vocabulary_extensions[{idx}]` "
+                            f"declares {label!r} which collides with a core expression"
+                        ),
+                        path=("expression_vocabulary_extensions", idx),
+                        validator="no_core_collision",
+                    )
+                )
+    return errors
+
+
 def validate_mechanics_manifest(manifest: Any) -> ValidationResult:
     """Validate a parsed mechanics `manifest.yaml`."""
     result = validate(manifest, MECHANICS_MANIFEST_SCHEMA)
     extras: list[ValidationError] = []
     if isinstance(manifest, dict):
         extras.extend(_cross_check_hud_widgets(manifest))
+        extras.extend(_cross_check_mechanics(manifest))
     if not result.ok or extras:
         return ValidationResult.failure([*result.errors, *extras])
     return ValidationResult.success()

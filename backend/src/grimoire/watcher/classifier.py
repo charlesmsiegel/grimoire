@@ -145,6 +145,21 @@ def _classify_library(abs_path: Path, rel: Path) -> WatchedFile | None:
                 asset_id=asset_id,
                 library_id=f"worlds/{world_id}/{dir_name}/{asset_id}",
             )
+        # Directory-form character card: worlds/<w>/characters/<id>/card.md
+        # Sibling avatar.png + sprites/*.png under the same directory are
+        # data assets, not entities — they're ignored here.
+        if len(parts) == 5 and parts[2] == "characters" and parts[4] == "card.md":
+            world_id = parts[1]
+            asset_id = parts[3]
+            return WatchedFile(
+                scope="library",
+                kind="library_entity",
+                path=abs_path,
+                world_id=world_id,
+                entity_kind="character",
+                asset_id=asset_id,
+                library_id=f"worlds/{world_id}/characters/{asset_id}",
+            )
         return None
 
     if head == "style-guides":

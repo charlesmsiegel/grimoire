@@ -151,6 +151,65 @@ def campaigns_root(data_root: Path) -> Path:
     return data_root / "campaigns"
 
 
+@dataclass(frozen=True)
+class CharacterLayout:
+    """Resolved on-disk layout for a character card.
+
+    Characters may live as flat ``characters/<id>.md`` files (no sprites)
+    or as a directory ``characters/<id>/`` containing ``card.md`` plus
+    optional ``avatar.png`` / ``sprites/`` siblings. Both shapes are
+    indexed identically; the layout drives sprite resolution.
+    """
+
+    asset_id: str
+    form: str  # "flat" | "directory" | "missing"
+    card_md: Path
+    avatar: Path | None
+    sprites_dir: Path | None
+
+
+def character_dir_layout(world_id: str, asset_id: str, *, data_root: Path) -> CharacterLayout:
+    """Return the on-disk layout for a character.
+
+    ``data_root`` is the data root (``settings.data_root``) — the directory
+    that contains ``library/`` and ``campaigns/``. Existence of the flat-form
+    file or the directory determines the layout; if neither exists, the
+    result returns ``form="missing"`` with paths pointing at where the
+    directory form would live.
+    """
+    validate_path_component(world_id, name="world_id")
+    validate_path_component(asset_id, name="asset_id")
+    base = library_root(data_root) / "worlds" / world_id / "characters"
+    flat = base / f"{asset_id}.md"
+    directory = base / asset_id
+    if flat.exists():
+        return CharacterLayout(
+            asset_id=asset_id,
+            form="flat",
+            card_md=flat,
+            avatar=None,
+            sprites_dir=None,
+        )
+    card = directory / "card.md"
+    avatar = directory / "avatar.png"
+    sprites = directory / "sprites"
+    if card.exists():
+        return CharacterLayout(
+            asset_id=asset_id,
+            form="directory",
+            card_md=card,
+            avatar=avatar if avatar.exists() else None,
+            sprites_dir=sprites if sprites.is_dir() else None,
+        )
+    return CharacterLayout(
+        asset_id=asset_id,
+        form="missing",
+        card_md=card,
+        avatar=None,
+        sprites_dir=None,
+    )
+
+
 def library_path(data_root: Path, library_id: str) -> Path:
     """Return the on-disk path for a library entity.
 
@@ -171,6 +230,13 @@ def library_path(data_root: Path, library_id: str) -> Path:
     dir_name = KIND_TO_DIR.get(ref.kind)
     if dir_name is None:
         raise InvalidRefError(f"unknown library kind {ref.kind!r}")
+    # Characters may live in directory form (characters/<id>/card.md);
+    # prefer that shape when present so the resolver picks up the
+    # sprite-bearing card. Other kinds remain flat-only.
+    if ref.kind == "character":
+        directory = root / "worlds" / ref.world_id / dir_name / ref.asset_id / "card.md"
+        if directory.exists():
+            return directory
     return root / "worlds" / ref.world_id / dir_name / f"{ref.asset_id}.md"
 
 

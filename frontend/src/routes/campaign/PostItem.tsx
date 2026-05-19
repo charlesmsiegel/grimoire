@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 
+import { CharacterSprite } from "../../components/CharacterSprite";
 import { Markdown } from "../../components/Markdown";
 import { campaignApi, type ApiAlternate, type ApiPost, type PCEntry } from "../../api/campaign";
 import { RetconLauncher } from "./RetconLauncher";
@@ -14,7 +15,8 @@ interface Props {
    * swipes-alternates design; otherwise the buttons are disabled and a tooltip
    * directs the user to Retcon / Fork. */
   isLatestModelPost?: boolean;
-  /** Campaign id; required for alternate mutations. Omit to render read-only. */
+  /** Campaign id; required for alternate mutations and sprite resolution. Omit
+   * to render read-only without sprites. */
   campaignId?: string;
   /** Number of model-authored posts that follow this one in the current scene.
    * Threaded through to the retcon launcher so it can show the fork nudge
@@ -68,6 +70,8 @@ export function PostItem({
   const canMutate = isLatestModelPost && !!campaignId;
   // Retcon is available on any model post (NOT gated to latest like swipes are).
   const canRetcon = !!campaignId && post.author_kind !== "pc" && !post.is_player;
+  const speakerRef = post.author_pc_ref ?? post.author_npc_ref ?? null;
+  const showSprite = !!campaignId && !!speakerRef && post.author_kind !== "system";
 
   async function call(action: () => Promise<unknown>) {
     if (busy) return;
@@ -108,6 +112,15 @@ export function PostItem({
   return (
     <article className={`post post-${post.author_kind}`} aria-label={`Post by ${name}`}>
       <header className="post-header">
+        {showSprite && speakerRef && campaignId && (
+          <CharacterSprite
+            campaignId={campaignId}
+            characterId={speakerRef}
+            characterName={name}
+            asOfTurn={post.turn_id}
+            size="sm"
+          />
+        )}
         <span className="post-author">{name}</span>
         <span className="post-author-kind">{AUTHOR_LABELS[post.author_kind]}</span>
         <time className="post-time" dateTime={post.created_at}>
