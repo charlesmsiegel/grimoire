@@ -126,9 +126,9 @@ def test_campaign_override_cascade(client: TestClient):
         json={"value": "whisky"},
     )
     assert r.status_code == 200, r.text
-    resolved = client.get(
-        "/api/campaigns/camp/character/winifred/extras?world_id=wod"
-    ).json()["extras"]
+    resolved = client.get("/api/campaigns/camp/character/winifred/extras?world_id=wod").json()[
+        "extras"
+    ]
     assert resolved["drink"]["value"] == "whisky"
 
 
@@ -173,9 +173,7 @@ def test_unknown_kind_returns_404(client: TestClient):
 
 
 def test_promote_without_world_id_returns_422(client: TestClient):
-    r = client.post(
-        "/api/campaigns/camp/character/winifred/extras/foo/promote-to-library"
-    )
+    r = client.post("/api/campaigns/camp/character/winifred/extras/foo/promote-to-library")
     assert r.status_code == 422
 
 

@@ -210,9 +210,7 @@ class ExtrasService:
             )
         elif scope == ExtraScope.OVERRIDE:
             if campaign_id is None or world_id is None:
-                raise ExtrasNotFoundError(
-                    "campaign_id and world_id required for override writes"
-                )
+                raise ExtrasNotFoundError("campaign_id and world_id required for override writes")
             await self._write_override_extras(
                 campaign_id=campaign_id,
                 world_id=world_id,
@@ -252,9 +250,7 @@ class ExtrasService:
 
         if scope == ExtraScope.OVERRIDE:
             if campaign_id is None or world_id is None:
-                raise ExtrasNotFoundError(
-                    "campaign_id and world_id required for override delete"
-                )
+                raise ExtrasNotFoundError("campaign_id and world_id required for override delete")
             # Override-null clears the cascade-resolved key.
             await self._write_override_extras(
                 campaign_id=campaign_id,
@@ -342,9 +338,7 @@ class ExtrasService:
         if old_key not in existing:
             raise ExtrasNotFoundError(f"cannot rename missing key: {old_key!r}")
         if new_key in existing:
-            raise ExtrasPromotionError(
-                f"rename target collides with existing key: {new_key!r}"
-            )
+            raise ExtrasPromotionError(f"rename target collides with existing key: {new_key!r}")
         existing_value = existing[old_key]
         value = existing_value.get("value") if isinstance(existing_value, dict) else None
         await self.delete(

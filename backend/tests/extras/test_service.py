@@ -198,9 +198,7 @@ async def test_get_raw_single_scope(
 # ---------------------------------------------------------------------- #
 
 
-async def test_hard_cap_rejected(
-    extras: ExtrasService, library, store, seed_world, seed_character
-):
+async def test_hard_cap_rejected(extras: ExtrasService, library, store, seed_world, seed_character):
     await _setup(library, store, seed_world, seed_character)
     # Populate up to the hard cap, then try one more.
     for i in range(HARD_CAP_PER_ENTITY):

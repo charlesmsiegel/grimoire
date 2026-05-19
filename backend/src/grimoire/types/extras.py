@@ -82,9 +82,7 @@ def validate_extras_value(value: Any) -> None:
     if isinstance(value, list):
         for item in value:
             if not isinstance(item, (str, int, float, bool)) and item is not None:
-                raise TypeError(
-                    f"extras list items must be scalar, got {type(item).__name__}"
-                )
+                raise TypeError(f"extras list items must be scalar, got {type(item).__name__}")
             if isinstance(item, str) and len(item) > HARD_CAP_CHARS_PER_STRING:
                 raise ExtrasCapError(
                     f"extras list string exceeds hard cap of {HARD_CAP_CHARS_PER_STRING} chars"
