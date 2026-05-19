@@ -65,12 +65,17 @@ async def client(tmp_path: Path):
     app.include_router(extras_router, prefix="/api")
     app.state.container = container
 
+    # Manual close order: yield → close httpx (drains in-flight requests) →
+    # close db. Reversing this leaves aiosqlite futures bound to the loop
+    # while httpx is still tearing down its anyio backend, which CI
+    # surfaces as "Event loop is closed" on Python 3.12 + aiosqlite 0.22.
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        try:
-            yield ac
-        finally:
-            await db.close()
+    ac = httpx.AsyncClient(transport=transport, base_url="http://test")
+    try:
+        yield ac
+    finally:
+        await ac.aclose()
+        await db.close()
 
 
 async def test_put_then_get_library_extra(client: httpx.AsyncClient):
