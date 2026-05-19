@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 
 from grimoire.hud.widgets import CORE_WIDGETS
+from grimoire.state_store.paths import validate_path_component
 
 log = logging.getLogger(__name__)
 
@@ -185,6 +186,10 @@ class HudConfigService:
         self._data_root = Path(data_root)
 
     def _path(self, campaign_id: str) -> Path:
+        # Reject ids that would let an attacker write hud.yaml outside the
+        # campaigns root via ``..`` or absolute segments — the same guard
+        # state_store / world / imagegen apply at every fs boundary.
+        validate_path_component(campaign_id, name="campaign_id")
         return self._data_root / campaign_id / HUD_YAML_FILENAME
 
     def load(self, campaign_id: str) -> HudConfig:

@@ -103,3 +103,11 @@ def test_lifespan_auto_wires_hud(client: TestClient, container: ServiceContainer
     r = client.get("/api/campaigns/c_1/hud")
     assert r.status_code == 200
     assert all(w["status"] == "error" for w in r.json()["widgets"])
+
+
+@pytest.mark.parametrize("bad_id", ["..", "..%2Fescape", ".hidden", "a%2Fb"])
+def test_unsafe_campaign_id_returns_400_on_config(hud_client: TestClient, bad_id: str) -> None:
+    # Config routes hit the filesystem; an unsafe id must be rejected before
+    # the path is built. map_lookup_errors translates InvalidRefError to 400.
+    r = hud_client.get(f"/api/campaigns/{bad_id}/hud/config")
+    assert r.status_code == 400

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from grimoire.api.container import ServiceContainer
 from grimoire.api.deps import get_container
+from grimoire.api.util import map_lookup_errors
 from grimoire.hud.config import (
     HudConfig,
     OrderedWidget,
@@ -96,7 +97,10 @@ def _to_config(p: HudConfigPayload) -> HudConfig:
 
 @router.get("/{campaign_id}/hud", response_model=AggregateResult)
 async def get_hud_aggregate(campaign_id: str, hud: HudDep) -> AggregateResult:
-    return await hud.aggregate(campaign_id)
+    try:
+        return await hud.aggregate(campaign_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
 
 
 @router.get(
@@ -104,7 +108,10 @@ async def get_hud_aggregate(campaign_id: str, hud: HudDep) -> AggregateResult:
     response_model=list[HudWidget],
 )
 async def get_available_widgets(campaign_id: str, hud: HudDep) -> list[HudWidget]:
-    return await hud.available_widgets(campaign_id)
+    try:
+        return await hud.available_widgets(campaign_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
 
 
 @router.get(
@@ -112,12 +119,18 @@ async def get_available_widgets(campaign_id: str, hud: HudDep) -> list[HudWidget
     response_model=WidgetSnapshot,
 )
 async def get_hud_widget(campaign_id: str, widget_id: str, hud: HudDep) -> WidgetSnapshot:
-    return await hud.fetch_one(campaign_id, widget_id)
+    try:
+        return await hud.fetch_one(campaign_id, widget_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
 
 
 @router.get("/{campaign_id}/hud/config", response_model=HudConfigPayload)
 async def get_hud_config_route(campaign_id: str, cfg: HudConfigDep) -> HudConfigPayload:
-    loaded = cfg.load(campaign_id)
+    try:
+        loaded = cfg.load(campaign_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
     return HudConfigPayload(**serialize_config(loaded))
 
 
@@ -126,13 +139,19 @@ async def put_hud_config(
     campaign_id: str, payload: HudConfigPayload, cfg: HudConfigDep
 ) -> HudConfigPayload:
     new_cfg = _to_config(payload)
-    cfg.save(campaign_id, new_cfg)
+    try:
+        cfg.save(campaign_id, new_cfg)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
     return HudConfigPayload(**serialize_config(new_cfg))
 
 
 @router.post("/{campaign_id}/hud/config/reset", response_model=HudConfigPayload)
 async def reset_hud_config(campaign_id: str, cfg: HudConfigDep) -> HudConfigPayload:
-    reset = cfg.reset(campaign_id)
+    try:
+        reset = cfg.reset(campaign_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
     return HudConfigPayload(**serialize_config(reset))
 
 

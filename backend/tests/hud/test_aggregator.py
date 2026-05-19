@@ -183,6 +183,52 @@ async def test_no_fetcher_reports_error(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_one_respects_visible_when_false(tmp_path: Path) -> None:
+    """`core.temperature` ships with visible_when=false — fetch_one must not
+    invoke the fetcher; aggregate already skips it, and the two paths
+    should agree."""
+    svc = _make_service(tmp_path)
+    calls: list[str] = []
+
+    async def fetch(widget, *_):
+        calls.append(widget.id)
+        return "ok"
+
+    from grimoire.hud.widgets import CORE_WIDGETS
+
+    for w in CORE_WIDGETS:
+        svc.register_fetcher(w.id, fetch)
+
+    snap = await svc.fetch_one("c_1", "core.temperature")
+    assert snap.status == WidgetStatus.HIDDEN
+    assert "core.temperature" not in calls
+
+
+@pytest.mark.asyncio
+async def test_fetch_one_respects_config_visibility(tmp_path: Path) -> None:
+    """A widget toggled invisible in hud.yaml must not be fetched even via
+    the single-widget refresh route."""
+    from grimoire.hud.config import HudConfig, OrderedWidget
+
+    svc = _make_service(tmp_path)
+    svc.config_service.save(
+        "c_1",
+        HudConfig(ordered_widgets=[OrderedWidget(id="core.in-game-date", visible=False)]),
+    )
+    called = False
+
+    async def fetch(_w, *_):
+        nonlocal called
+        called = True
+        return "ok"
+
+    svc.register_fetcher("core.in-game-date", fetch)
+    snap = await svc.fetch_one("c_1", "core.in-game-date")
+    assert snap.status == WidgetStatus.HIDDEN
+    assert not called
+
+
+@pytest.mark.asyncio
 async def test_unknown_render_hint_falls_back_to_block(tmp_path: Path) -> None:
     svc = _make_service(tmp_path)
 

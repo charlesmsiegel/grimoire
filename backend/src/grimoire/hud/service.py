@@ -128,7 +128,12 @@ class HudService:
         *,
         observer: Any = None,
     ) -> WidgetSnapshot:
-        """Refresh exactly one widget; honors the per-widget timeout."""
+        """Refresh exactly one widget; honors the per-widget timeout.
+
+        Applies the same visibility filters as :meth:`aggregate` so a
+        hidden widget never reaches its fetcher — both the config's
+        ``visible`` toggle and the widget's ``visible_when`` expression.
+        """
         scene = await self._scene(campaign_id)
         widget = next(
             (w for w in await self._collect_widgets(campaign_id) if w.id == widget_id),
@@ -141,6 +146,22 @@ class HudService:
                 error="unknown widget",
             )
         config = self.config_service.load(campaign_id)
+        if not config.widget_visible(widget.id):
+            return WidgetSnapshot(
+                id=widget.id,
+                status=WidgetStatus.HIDDEN,
+                title=widget.title,
+                render_hint=_normalize_render_hint(widget.render_hint),
+            )
+        if widget.visible_when:
+            ctx = await self._context(campaign_id, scene)
+            if not evaluate(widget.visible_when, ctx):
+                return WidgetSnapshot(
+                    id=widget.id,
+                    status=WidgetStatus.HIDDEN,
+                    title=widget.title,
+                    render_hint=_normalize_render_hint(widget.render_hint),
+                )
         return await self._fetch(widget, campaign_id, scene, observer, config)
 
     async def _fetch(
