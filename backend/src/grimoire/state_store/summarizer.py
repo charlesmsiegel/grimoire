@@ -107,9 +107,29 @@ class BodySummarizer:
             return 0
 
         processed = 0
-        for job in jobs:
+        gateway_unavailable: Exception | None = None
+        for i, job in enumerate(jobs):
+            if gateway_unavailable is not None:
+                # First gateway failure in this batch already logged. Skip
+                # the rest silently — they would fail with the same error
+                # (drop semantics are intentional, see the dropped-jobs
+                # test). Outer loop sleeps before the next drain.
+                continue
             try:
                 summary = await summarize_text(self._gateway, job.text)
+            except Exception as exc:
+                # Most common cause: no LLM provider/route configured yet.
+                # Stay quiet (main.py promises summarizer "quietly backs off"
+                # when no provider is registered): one warning per batch,
+                # not one per job, and no stack trace.
+                gateway_unavailable = exc
+                logger.warning(
+                    "body_summarizer: summarize failed (%s); dropping %d job(s)",
+                    exc,
+                    len(jobs) - i,
+                )
+                continue
+            try:
                 wrote = await self._store.set_body_compressed(
                     job.library_id,
                     summary,
@@ -119,7 +139,7 @@ class BodySummarizer:
                     processed += 1
             except Exception:
                 logger.exception(
-                    "body_summarizer: failed to summarize library_id=%s; dropping job",
+                    "body_summarizer: failed to persist summary for library_id=%s",
                     job.library_id,
                 )
 
