@@ -27,6 +27,9 @@ from grimoire.extractor.config import ExtractorConfig
 from grimoire.extractor.routing import Decision, route_deltas
 from grimoire.orchestrator.config import OrchestratorConfig
 from grimoire.orchestrator.errors import (
+    AlternateNotFoundError,
+    CannotDeletePrimaryError,
+    LatestPostOnlyError,
     NoTurnsToUndoError,
     OrchestratorError,
     TurnCancelledError,
@@ -336,6 +339,169 @@ class OrchestratorService:
             player_post_id=None,
         )
         return RegenerateResult(turn_id=turn_id, accepted=True, reason="regenerated")
+
+    # ------------------------------------------------------------------ #
+    # Swipes / alternates
+    # ------------------------------------------------------------------ #
+
+    async def _find_scene_and_post(
+        self, post_id: PostId
+    ) -> tuple[SceneFileScene, SceneFilePost]:
+        return await self._scenes._find_post(post_id)
+
+    async def _ensure_latest_model_post(
+        self, scene: SceneFileScene, post: SceneFilePost
+    ) -> None:
+        """Enforce the latest-post-only rule for alternate mutations."""
+        posts = await self._scenes.get_posts(scene.id)
+        # Find the last model post (non-PC, non-player).
+        last_model: SceneFilePost | None = None
+        for p in posts:
+            if p.author_kind != SceneAuthorKind.PC and not p.is_player:
+                last_model = p
+        if last_model is None or last_model.id != post.id:
+            raise LatestPostOnlyError(post.id)
+
+    async def switch_primary_alternate(
+        self,
+        *,
+        campaign_id: CampaignId,
+        post_id: PostId,
+        alternate_id: str,
+    ) -> dict[str, Any]:
+        """Atomically swap which alternate is primary for ``post_id``.
+
+        Rewinds the current primary's delta set, re-activates the target's,
+        rewrites the scene .md from primaries, updates the materialized view,
+        and emits a ``primary_switched`` event.
+        """
+        await self._require_campaign(campaign_id)
+        scene, post = await self._find_scene_and_post(post_id)
+        await self._ensure_latest_model_post(scene, post)
+
+        target = next((a for a in post.alternates if a.id == alternate_id), None)
+        if target is None:
+            raise AlternateNotFoundError(post_id, alternate_id)
+
+        if post.primary_alternate_id == alternate_id:
+            return {"unchanged": True, "post_id": post_id, "alternate_id": alternate_id}
+
+        current = next(
+            (a for a in post.alternates if a.id == post.primary_alternate_id),
+            None,
+        )
+        if current is None or not current.delta_set_id or not target.delta_set_id:
+            # Legacy alternates without delta_set_id can still have their
+            # primary pointer switched + .md rebuilt; just skip the delta swap.
+            await self._scenes.set_primary_alternate(post_id, alternate_id)
+            await self._scenes.rebuild_md_from_primaries(scene.id)
+            return {
+                "unchanged": False,
+                "post_id": post_id,
+                "from": current.id if current else None,
+                "to": alternate_id,
+                "delta_swap": False,
+            }
+
+        branch_id = scene.branch_id or "main"
+        await self._store.swap_delta_set(
+            rewind_set_id=current.delta_set_id,
+            apply_deltas=None,
+            apply_set_id=target.delta_set_id,
+            campaign_id=campaign_id,
+            branch_id=branch_id,
+            turn_id=post.turn_id,
+            source="orchestrator:switch-primary",
+        )
+        await self._scenes.set_primary_alternate(post_id, alternate_id)
+        await self._scenes.rebuild_md_from_primaries(scene.id)
+        await self._store.set_current_alternate_delta_set(
+            campaign_id=campaign_id,
+            branch_id=branch_id,
+            post_id=post_id,
+            delta_set_id=target.delta_set_id,
+        )
+        await self._bus.emit(
+            Event(
+                type="primary_switched",
+                payload={
+                    "campaign_id": campaign_id,
+                    "post_id": post_id,
+                    "from": current.id,
+                    "to": alternate_id,
+                },
+            )
+        )
+        return {
+            "unchanged": False,
+            "post_id": post_id,
+            "from": current.id,
+            "to": alternate_id,
+            "delta_swap": True,
+        }
+
+    async def pin_alternate(
+        self,
+        *,
+        post_id: PostId,
+        alternate_id: str,
+        pinned: bool,
+    ) -> None:
+        scene, post = await self._find_scene_and_post(post_id)
+        if not any(a.id == alternate_id for a in post.alternates):
+            raise AlternateNotFoundError(post_id, alternate_id)
+        await self._scenes.update_alternate(post_id, alternate_id, pinned=pinned)
+        await self._bus.emit(
+            Event(
+                type="alternate_pinned",
+                payload={
+                    "campaign_id": scene.campaign_id,
+                    "post_id": post_id,
+                    "alternate_id": alternate_id,
+                    "pinned": bool(pinned),
+                },
+            )
+        )
+
+    async def delete_alternate(
+        self,
+        *,
+        post_id: PostId,
+        alternate_id: str,
+    ) -> None:
+        """Remove a non-primary alternate. Rewinds its delta set first."""
+        scene, post = await self._find_scene_and_post(post_id)
+        if post.primary_alternate_id == alternate_id:
+            raise CannotDeletePrimaryError(post_id, alternate_id)
+        target = next((a for a in post.alternates if a.id == alternate_id), None)
+        if target is None:
+            raise AlternateNotFoundError(post_id, alternate_id)
+        branch_id = scene.branch_id or "main"
+        if target.delta_set_id:
+            # Rewind only if not already reversed (idempotent at the row level).
+            try:
+                await self._store.rewind_delta_set(
+                    target.delta_set_id,
+                    campaign_id=scene.campaign_id,
+                    branch_id=branch_id,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "failed to rewind delta set %s on delete_alternate: %s",
+                    target.delta_set_id,
+                    exc,
+                )
+        await self._scenes.remove_alternate(post_id, alternate_id)
+        await self._bus.emit(
+            Event(
+                type="alternate_deleted",
+                payload={
+                    "campaign_id": scene.campaign_id,
+                    "post_id": post_id,
+                    "alternate_id": alternate_id,
+                },
+            )
+        )
 
     async def undo_turn(self, campaign_id: CampaignId, count: int = 1) -> UndoResult:
         await self._require_campaign(campaign_id)

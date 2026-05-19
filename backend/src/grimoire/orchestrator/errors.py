@@ -40,7 +40,43 @@ class TurnTimeoutError(OrchestratorError):
     """Raised when a turn exceeds ``turn_timeout_seconds``."""
 
 
+class LatestPostOnlyError(OrchestratorError):
+    """Raised when an alternate operation targets a non-latest model post."""
+
+    def __init__(self, post_id: str) -> None:
+        super().__init__(
+            f"alternate operations are only allowed on the latest model post: {post_id!r}"
+        )
+        self.post_id = post_id
+
+
+class AlternateNotFoundError(OrchestratorError):
+    """Raised when the requested alternate id is not on the given post."""
+
+    def __init__(self, post_id: str, alternate_id: str) -> None:
+        super().__init__(
+            f"alternate {alternate_id!r} not found on post {post_id!r}"
+        )
+        self.post_id = post_id
+        self.alternate_id = alternate_id
+
+
+class CannotDeletePrimaryError(OrchestratorError):
+    """Raised when an alternate-delete targets the current primary."""
+
+    def __init__(self, post_id: str, alternate_id: str) -> None:
+        super().__init__(
+            f"cannot delete primary alternate {alternate_id!r} on post {post_id!r}; "
+            "switch primary first"
+        )
+        self.post_id = post_id
+        self.alternate_id = alternate_id
+
+
 __all__ = [
+    "AlternateNotFoundError",
+    "CannotDeletePrimaryError",
+    "LatestPostOnlyError",
     "NoTurnsToUndoError",
     "OrchestratorError",
     "TurnAlreadyInProgressError",
