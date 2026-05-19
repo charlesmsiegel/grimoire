@@ -11,6 +11,7 @@ resolved frontmatter dict on ``ResolvedEntity``; the mirror is for query.
 
 from __future__ import annotations
 
+import contextlib
 import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -18,8 +19,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from grimoire.library.service import LibraryService
-from grimoire.state_store.store import StateStore
 from grimoire.state_store.indexers import make_library_id
+from grimoire.state_store.store import StateStore
 from grimoire.types.common import EntityKind
 from grimoire.types.extras import (
     HARD_CAP_CHARS_PER_STRING,
@@ -431,7 +432,8 @@ class ExtrasService:
             evidence=extra.source_evidence,
         )
         # Clear the override so the cascade reads from library going forward.
-        try:
+        # Suppression: campaign-local emergent has no override to clear.
+        with contextlib.suppress(ExtrasNotFoundError):
             await self.delete(
                 entity_kind=entity_kind,
                 entity_id=entity_id,
@@ -441,9 +443,6 @@ class ExtrasService:
                 world_id=world_id,
                 actor=actor,
             )
-        except ExtrasNotFoundError:
-            # Was campaign-local emergent; nothing to clear.
-            pass
         return result
 
     # ------------------------------------------------------------------ #

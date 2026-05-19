@@ -16,7 +16,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 
 
 class ExtraScope(StrEnum):
@@ -104,7 +104,8 @@ def validate_extras_value(value: Any) -> None:
                 )
         return
     raise TypeError(
-        f"extras value must be scalar | list[scalar] | dict[str, scalar], got {type(value).__name__}"
+        "extras value must be scalar | list[scalar] | dict[str, scalar], "
+        f"got {type(value).__name__}"
     )
 
 

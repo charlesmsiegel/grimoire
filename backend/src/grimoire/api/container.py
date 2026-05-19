@@ -45,6 +45,8 @@ class ServiceContainer:
     hud: Any = None
     hud_config: Any = None
     transient_state: Any = None
+    extras_service: Any = None
+    """``grimoire.extras.ExtrasService`` -- narrative extras CRUD + search."""
 
     extras: dict[str, Any] = field(default_factory=dict)
 
