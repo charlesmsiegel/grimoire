@@ -44,11 +44,11 @@ from grimoire.types.characters import (
     VoiceAnchor,
 )
 from grimoire.types.common import CampaignId, CharacterRef, PostId, Scope
-from grimoire.util import new_id, now_iso, slugify_id
 from grimoire.types.composition import LibraryEntity, ResolutionLayer, ResolutionSource
 from grimoire.types.mechanics import Capability
 from grimoire.types.scene import Post, Scene
 from grimoire.types.state import CharacterState, ContextTier, DeltaKind, StateDelta
+from grimoire.util import new_id, now_iso, slugify_id
 
 from .config import CharactersConfig
 from .drift import (
