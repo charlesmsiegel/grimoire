@@ -177,6 +177,13 @@ class ContextBuilderService:
         extractor_mode: ExtractionMode = ExtractionMode.SEPARATE,
         auxiliary_task: object | None = None,
     ) -> AssembledPrompt:
+        if auxiliary_task is not None:
+            return await self._build_auxiliary(
+                campaign_id=campaign_id,
+                task=auxiliary_task,
+                branch_id=branch_id,
+                pc_ref=pc_ref,
+            )
         pins = await self._load_pins(campaign_id, branch_id, turn_id)
         ctx = await self._build_context(
             player_input=player_input,
@@ -1881,6 +1888,122 @@ class ContextBuilderService:
             composition_snapshot=composition_snapshot,
             messages_hash=_hash_messages(messages),
         )
+
+    async def _build_auxiliary(
+        self,
+        *,
+        campaign_id: CampaignId,
+        task: Any,
+        branch_id: str | None,
+        pc_ref: str | None,
+    ) -> AssembledPrompt:
+        """Assemble an auxiliary-task prompt directly from a budget plan.
+
+        Bypasses the canonical tier-pack pipeline: no tracker block, no
+        tool declarations, no mechanics, no drift correction, no archive
+        retrieval. Only the slabs the per-task budget asks for.
+        """
+        from grimoire.auxiliary.budgets import budget_for, resolve_voice_targets
+        from grimoire.auxiliary.prompts import load_template
+        from grimoire.auxiliary.types import TaskKind
+
+        kind: TaskKind = task.kind
+        budget = budget_for(kind)
+
+        scene = await self._safe_call(
+            self._scenes.active_scene_for_campaign, campaign_id, branch_id or "main"
+        )
+
+        active_pc_ref = pc_ref
+        if active_pc_ref is None:
+            active_pc_ref = await self._safe_call(self._characters.active_pc, campaign_id)
+        if active_pc_ref and not (task.extra_params or {}).get("active_pc_ref"):
+            task.extra_params = {**(task.extra_params or {}), "active_pc_ref": active_pc_ref}
+
+        scene_header = self._render_scene_header(scene) if budget.include_scene_header else ""
+
+        active_pc_card = ""
+        if budget.include_active_pc_card:
+            active_pc_card, _ = await self._active_pc_card(active_pc_ref, campaign_id)
+
+        voice_refs = resolve_voice_targets(task, scene)
+        voice_lines: list[str] = []
+        for ref in voice_refs:
+            if not ref:
+                continue
+            anchor = await self._voice_anchor(ref, campaign_id)
+            if anchor:
+                voice_lines.append(f"# Voice anchor — {ref}\n{anchor}")
+
+        recent_posts_text = ""
+        if budget.recent_posts_count > 0 and scene is not None:
+            try:
+                recent = await self._scenes.recent_posts(
+                    scene.id, n=budget.recent_posts_count
+                )
+            except Exception:
+                recent = []
+            recent_posts_text = self._render_recent_posts(list(recent or []))
+
+        pc_name = self._character_display_name(active_pc_ref) or (active_pc_ref or "")
+        target_name = self._character_display_name(task.target_character_ref) or (
+            task.target_character_ref or ""
+        )
+
+        original_text = ""
+        if task.target_post_id and scene is not None:
+            for post in getattr(scene, "posts", None) or []:
+                if getattr(post, "id", None) == task.target_post_id:
+                    original_text = (getattr(post, "body", "") or "").strip()
+                    break
+
+        system_text = load_template(kind).render(
+            pc_name=pc_name,
+            character_name=target_name,
+            scene_summary=scene_header,
+            steering_hint=task.steering_hint or "",
+            original_text=original_text,
+            edit_instruction=task.edit_instruction or "",
+            snippet=task.snippet or "",
+            target_language=task.target_language or "",
+        ).strip()
+
+        messages: list[Message] = []
+        if system_text:
+            messages.append(Message(role=MessageRole.SYSTEM, content=system_text))
+        if active_pc_card:
+            messages.append(Message(role=MessageRole.SYSTEM, content=active_pc_card))
+        if voice_lines:
+            messages.append(
+                Message(role=MessageRole.SYSTEM, content="\n\n".join(voice_lines))
+            )
+        if recent_posts_text:
+            messages.append(Message(role=MessageRole.SYSTEM, content=recent_posts_text))
+
+        params = ModelParams(
+            temperature=self._config.default_temperature,
+            max_tokens=self._config.default_max_tokens,
+        )
+        return AssembledPrompt(
+            messages=messages,
+            params=params,
+            budget_used={},
+            sources=[],
+            summary=f"auxiliary:{kind.value}",
+            composition_snapshot={},
+            messages_hash=_hash_messages(messages),
+        )
+
+    def _character_display_name(self, ref: str | None) -> str:
+        if not ref:
+            return ""
+        getter = getattr(self._characters, "display_name", None)
+        if getter is None:
+            return ref
+        try:
+            return getter(ref) or ref
+        except Exception:
+            return ref
 
     def _apply_extractor_mode(
         self,
