@@ -55,6 +55,12 @@ _FORWARDED_EVENTS: tuple[str, ...] = (
     "fact_recorded",
     "commitment_created",
     "commitment_paid_off",
+    "weather_changed",
+    "deltas_extracted",
+    "turn_complete",
+    "mechanics_event",
+    "thread_opened",
+    "thread_closed",
 )
 
 

@@ -170,6 +170,47 @@ MECHANICS_MANIFEST_SCHEMA: dict = {
             },
             "additionalProperties": True,
         },
+        "hud_widgets": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["id", "title", "read"],
+                "properties": {
+                    "id": {"type": "string", "minLength": 1},
+                    "title": {"type": "string", "minLength": 1},
+                    "scope": {
+                        "type": "string",
+                        "enum": ["campaign", "scene", "pc", "present_npc"],
+                    },
+                    "visible_when": {"type": ["string", "null"]},
+                    "render_hint": {"type": "string"},
+                    "read": {
+                        "type": "object",
+                        "required": ["endpoint"],
+                        "properties": {
+                            "endpoint": {"type": "string", "minLength": 1},
+                            "poll_interval_s": {"type": ["integer", "null"]},
+                        },
+                        "additionalProperties": True,
+                    },
+                    "edit": {
+                        "type": ["object", "null"],
+                        "properties": {
+                            "kind": {"type": "string"},
+                            "endpoint": {"type": "string"},
+                            "schema_ref": {"type": ["string", "null"]},
+                        },
+                        "additionalProperties": True,
+                    },
+                    "refresh_on": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "stale_threshold_s": {"type": ["integer", "null"]},
+                },
+                "additionalProperties": True,
+            },
+        },
     },
     "additionalProperties": True,
 }
@@ -250,9 +291,81 @@ def validate_plugin_manifest(manifest: Any) -> ValidationResult:
     return ValidationResult.success()
 
 
+def _cross_check_hud_widgets(manifest: dict) -> list[ValidationError]:
+    """Per-spec rules for ``hud_widgets`` that JSON Schema can't express.
+
+    - Each id must be prefixed ``"{module_id}."``.
+    - ``core.*`` is reserved for built-in widgets.
+    - Ids must be unique within the module.
+    - ``visible_when`` must parse against the HUD expression grammar.
+    """
+    errors: list[ValidationError] = []
+    module_id = manifest.get("id")
+    widgets = manifest.get("hud_widgets")
+    if not isinstance(widgets, list) or not isinstance(module_id, str):
+        return errors
+    seen: set[str] = set()
+    for idx, w in enumerate(widgets):
+        if not isinstance(w, dict):
+            continue
+        wid = w.get("id")
+        if not isinstance(wid, str):
+            continue
+        path = ("hud_widgets", idx, "id")
+        if wid.startswith("core."):
+            errors.append(
+                ValidationError(
+                    message=f"hud widget id {wid!r}: core.* is reserved",
+                    path=path,
+                    validator="reserved",
+                )
+            )
+        elif not wid.startswith(f"{module_id}."):
+            errors.append(
+                ValidationError(
+                    message=(
+                        f"hud widget id {wid!r} must be prefixed with "
+                        f"{module_id!r} (got module-local id from a different namespace)"
+                    ),
+                    path=path,
+                    validator="prefix",
+                )
+            )
+        if wid in seen:
+            errors.append(
+                ValidationError(
+                    message=f"duplicate hud widget id {wid!r}",
+                    path=path,
+                    validator="unique",
+                )
+            )
+        seen.add(wid)
+        expr = w.get("visible_when")
+        if isinstance(expr, str) and expr:
+            from grimoire.hud.expression import ParseError, parse_expression
+
+            try:
+                parse_expression(expr)
+            except ParseError as e:
+                errors.append(
+                    ValidationError(
+                        message=f"invalid visible_when expression: {e}",
+                        path=("hud_widgets", idx, "visible_when"),
+                        validator="expression",
+                    )
+                )
+    return errors
+
+
 def validate_mechanics_manifest(manifest: Any) -> ValidationResult:
     """Validate a parsed mechanics `manifest.yaml`."""
-    return validate(manifest, MECHANICS_MANIFEST_SCHEMA)
+    result = validate(manifest, MECHANICS_MANIFEST_SCHEMA)
+    extras: list[ValidationError] = []
+    if isinstance(manifest, dict):
+        extras.extend(_cross_check_hud_widgets(manifest))
+    if not result.ok or extras:
+        return ValidationResult.failure([*result.errors, *extras])
+    return ValidationResult.success()
 
 
 __all__ = [
