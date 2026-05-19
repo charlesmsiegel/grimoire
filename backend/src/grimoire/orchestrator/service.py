@@ -32,6 +32,7 @@ from grimoire.orchestrator.errors import (
     LatestPostOnlyError,
     NoTurnsToUndoError,
     OrchestratorError,
+    RetconInFlightError,
     TurnCancelledError,
     TurnTimeoutError,
     UnknownCampaignError,
@@ -848,12 +849,21 @@ class OrchestratorService:
         via the replay control routes; the returned ``RetconResult`` carries
         the ``replay_batch_id`` so the client can poll batch state.
         """
+        # When the caller asked for a replay, check the in-flight guard
+        # BEFORE doing any mutation — otherwise a 409 would leave the
+        # leave-as-is edit (delta rewind + new body + new extraction)
+        # already applied while pretending the call was a no-op.
+        if replay_subsequent:
+            if campaign_id is None:
+                scene_file, _ = await self._scenes._find_post(post_id)  # type: ignore[attr-defined]
+                campaign_id = scene_file.campaign_id
+            if self.retcon_replay.is_active(campaign_id):
+                raise RetconInFlightError(campaign_id)
+
         base = await self._retcon_leave_as_is(post_id, new_text)
         if not replay_subsequent:
             return base
-        if campaign_id is None:
-            scene_file, _ = await self._scenes._find_post(post_id)  # type: ignore[attr-defined]
-            campaign_id = scene_file.campaign_id
+        assert campaign_id is not None  # guarded above
         state = await self.retcon_replay.start(campaign_id=campaign_id, edited_post_id=post_id)
         return base.model_copy(update={"replay_batch_id": state.batch_id})
 
