@@ -74,6 +74,33 @@ export interface SwitchPrimaryResult {
   alternate_id?: string;
 }
 
+export interface RetconResultPayload {
+  post_id: string;
+  original_text: string;
+  new_text: string;
+  reversed_delta_ids: string[];
+  new_delta_ids: string[];
+  downstream_flagged_turns: string[];
+  replay_batch_id: string | null;
+  replayed_post_ids: string[];
+  cancelled_at_post_id: string | null;
+  contradictions_detected: string[];
+}
+
+export interface ReplayBatchView {
+  batch_id: string;
+  campaign_id: string;
+  edited_post_id: string;
+  subsequent_post_ids: string[];
+  current_index: number;
+  current_post_id: string | null;
+  current_alternate_id: string | null;
+  accepted_post_ids: string[];
+  contradictions: string[];
+  completed: boolean;
+  cancelled_at_post_id: string | null;
+}
+
 export interface ApiScene {
   id: string;
   campaign_id: string;
@@ -326,6 +353,44 @@ export const campaignApi = {
   ) =>
     api.delete<void>(
       `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}/alternates/${enc(alternateId)}`,
+    ),
+
+  // ----- Retcon (leave-as-is + replay) ----------------------------------
+
+  retconPost: (
+    campaignId: string,
+    turnId: string,
+    payload: { post_id: string; new_text: string; replay_subsequent?: boolean },
+  ) =>
+    api.post<RetconResultPayload>(
+      `/api/campaigns/${enc(campaignId)}/turns/${enc(turnId)}/retcon`,
+      payload,
+    ),
+
+  getRetconReplay: (campaignId: string, batchId: string) =>
+    api.get<ReplayBatchView>(
+      `/api/campaigns/${enc(campaignId)}/retcon/replay/${enc(batchId)}`,
+    ),
+
+  acceptRetconReplay: (campaignId: string, batchId: string) =>
+    api.post<ReplayBatchView>(
+      `/api/campaigns/${enc(campaignId)}/retcon/replay/${enc(batchId)}/accept`,
+    ),
+
+  tryAgainRetconReplay: (campaignId: string, batchId: string) =>
+    api.post<ReplayBatchView>(
+      `/api/campaigns/${enc(campaignId)}/retcon/replay/${enc(batchId)}/try-again`,
+    ),
+
+  cancelRetconReplay: (campaignId: string, batchId: string) =>
+    api.post<ReplayBatchView>(
+      `/api/campaigns/${enc(campaignId)}/retcon/replay/${enc(batchId)}/cancel`,
+    ),
+
+  forkCampaign: (campaignId: string, fromTurnId: string, label: string) =>
+    api.post<{ new_branch_id: string; from_turn_id: string; label: string; created_at: string }>(
+      `/api/campaigns/${enc(campaignId)}/forks`,
+      { from_turn_id: fromTurnId, label },
     ),
 
   undo: (id: string, count = 1) =>

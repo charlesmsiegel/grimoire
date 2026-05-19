@@ -83,6 +83,13 @@ class EventType(StrEnum):
     THREAD_INTRODUCED = "thread_introduced"
     THREAD_PAID_OFF = "thread_paid_off"
 
+    # Retcon replay
+    RETCON_STARTED = "retcon_started"
+    RETCON_POST_REPLAYED = "retcon_post_replayed"
+    RETCON_POST_ACCEPTED = "retcon_post_accepted"
+    RETCON_CANCELLED = "retcon_cancelled"
+    RETCON_COMPLETE = "retcon_complete"
+
 
 class Event(BaseModel):
     type: EventType
@@ -149,6 +156,30 @@ class RetconResult(BaseModel):
     reversed_delta_ids: list[str] = Field(default_factory=list)
     new_delta_ids: list[str] = Field(default_factory=list)
     downstream_flagged_turns: list[TurnId] = Field(default_factory=list)
+    # Populated only on the replay path (per 2026-05-19-retcon-design):
+    # ``replay_batch_id`` is non-None when the user opted to replay subsequent
+    # posts; the rest fill in as the batch advances. The leave-as-is path
+    # leaves them all at their defaults.
+    replay_batch_id: str | None = None
+    replayed_post_ids: list[str] = Field(default_factory=list)
+    cancelled_at_post_id: str | None = None
+    contradictions_detected: list[str] = Field(default_factory=list)
+
+
+class ReplayBatchStateView(BaseModel):
+    """Client-facing view of a retcon replay batch's current state."""
+
+    batch_id: str
+    campaign_id: CampaignId
+    edited_post_id: str
+    subsequent_post_ids: list[str] = Field(default_factory=list)
+    current_index: int = 0
+    current_post_id: str | None = None
+    current_alternate_id: str | None = None
+    accepted_post_ids: list[str] = Field(default_factory=list)
+    contradictions: list[str] = Field(default_factory=list)
+    completed: bool = False
+    cancelled_at_post_id: str | None = None
 
 
 class ForkResult(BaseModel):

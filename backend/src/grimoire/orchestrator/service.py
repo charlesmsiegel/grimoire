@@ -37,6 +37,7 @@ from grimoire.orchestrator.errors import (
     UnknownCampaignError,
     UnknownPCError,
 )
+from grimoire.orchestrator.retcon_replay import RetconReplaySession
 from grimoire.scenes.manager import SceneManager
 from grimoire.scenes.types import Alternate as SceneAlternate
 from grimoire.scenes.types import AuthorKind as SceneAuthorKind
@@ -57,6 +58,7 @@ from grimoire.types.orchestrator import (
     ForkResult,
     RegeneratePostResult,
     RegenerateResult,
+    ReplayBatchStateView,
     RetconResult,
     SubmitResult,
     TurnStatus,
@@ -180,6 +182,8 @@ class OrchestratorService:
         self._clock = clock
         self._rng = rng or random.Random()
         self._campaigns: dict[CampaignId, _CampaignTurnState] = {}
+        # Lazy-initialised on first access — see :pyattr:`retcon_replay`.
+        self._retcon_replay: RetconReplaySession | None = None
         # § Spec context-builder-remaining §11. The cache lives at the
         # orchestrator boundary so invalidation sits next to the regenerate
         # logic. Defaults to a fresh in-memory store when not provided.
@@ -383,6 +387,32 @@ class OrchestratorService:
         await self._require_campaign(campaign_id)
         scene, post = await self._find_scene_and_post(post_id)
         await self._ensure_latest_model_post(scene, post)
+        return await self._regenerate_post_core(
+            scene=scene,
+            post=post,
+            campaign_id=campaign_id,
+            steering_hint=steering_hint,
+            model_override=model_override,
+        )
+
+    async def _regenerate_post_core(
+        self,
+        *,
+        scene: SceneFileScene,
+        post: SceneFilePost,
+        campaign_id: CampaignId,
+        steering_hint: str | None = None,
+        model_override: str | None = None,
+        replay_batch_id: str | None = None,
+    ) -> RegeneratePostResult:
+        """Body of :meth:`regenerate_post`, minus the latest-post check.
+
+        The retcon replay path (``orchestrator/retcon_replay.py``) calls this
+        directly to re-sample model posts that are deliberately *not* the
+        latest one in their scene. ``replay_batch_id`` is stamped on the new
+        alternate so the replay UI can group it with its batch.
+        """
+        post_id = post.id
 
         # Walk back from this post to find the triggering player input.
         posts = await self._scenes.get_posts(scene.id)
@@ -465,6 +495,7 @@ class OrchestratorService:
                 steering_hint=steering_hint,
                 created_at=self._clock(),
                 is_primary=False,
+                replay_batch_id=replay_batch_id,
             )
             await self._scenes.append_alternate(post_id, alt)
 
@@ -553,7 +584,25 @@ class OrchestratorService:
         await self._require_campaign(campaign_id)
         scene, post = await self._find_scene_and_post(post_id)
         await self._ensure_latest_model_post(scene, post)
+        return await self._switch_primary_alternate_core(
+            scene=scene,
+            post=post,
+            campaign_id=campaign_id,
+            alternate_id=alternate_id,
+        )
 
+    async def _switch_primary_alternate_core(
+        self,
+        *,
+        scene: SceneFileScene,
+        post: SceneFilePost,
+        campaign_id: CampaignId,
+        alternate_id: str,
+    ) -> dict[str, Any]:
+        """Body of :meth:`switch_primary_alternate`, minus the latest-post
+        check. Used by the retcon replay path, which deliberately switches
+        primaries on earlier posts as the user accepts each replayed turn."""
+        post_id = post.id
         target = next((a for a in post.alternates if a.id == alternate_id), None)
         if target is None:
             raise AlternateNotFoundError(post_id, alternate_id)
@@ -781,8 +830,69 @@ class OrchestratorService:
         state.last_turn_id = all_ids[0] if all_ids else None
         return UndoResult(turns_undone=undone, reversed_delta_ids=reversed_ids, warnings=warnings)
 
-    async def retcon_post(self, post_id: PostId, new_text: str) -> RetconResult:
-        """Replace a past post, reverse its deltas, re-run extraction."""
+    async def retcon_post(
+        self,
+        post_id: PostId,
+        new_text: str,
+        *,
+        campaign_id: CampaignId | None = None,
+        replay_subsequent: bool = False,
+    ) -> RetconResult:
+        """Edit a past post and either leave subsequent turns alone or replay them.
+
+        The leave-as-is path (default) is the existing behavior: rewind the
+        edited post's deltas, re-extract from ``new_text``, flag downstream
+        turns whose deltas touch the same targets. When ``replay_subsequent``
+        is ``True`` a :class:`RetconReplaySession` opens (one batch per
+        campaign at a time) and the user reviews each subsequent model post
+        via the replay control routes; the returned ``RetconResult`` carries
+        the ``replay_batch_id`` so the client can poll batch state.
+        """
+        base = await self._retcon_leave_as_is(post_id, new_text)
+        if not replay_subsequent:
+            return base
+        if campaign_id is None:
+            scene_file, _ = await self._scenes._find_post(post_id)  # type: ignore[attr-defined]
+            campaign_id = scene_file.campaign_id
+        state = await self.retcon_replay.start(campaign_id=campaign_id, edited_post_id=post_id)
+        return base.model_copy(update={"replay_batch_id": state.batch_id})
+
+    @property
+    def retcon_replay(self) -> RetconReplaySession:
+        if self._retcon_replay is None:
+            self._retcon_replay = RetconReplaySession(self, event_bus=self._bus)
+        return self._retcon_replay
+
+    async def accept_replay(self, campaign_id: CampaignId) -> ReplayBatchStateView:
+        await self._require_campaign(campaign_id)
+        state = await self.retcon_replay.accept(campaign_id)
+        return state.to_view()
+
+    async def try_again_replay(self, campaign_id: CampaignId) -> ReplayBatchStateView:
+        await self._require_campaign(campaign_id)
+        state = await self.retcon_replay.try_again(campaign_id)
+        return state.to_view()
+
+    async def cancel_replay(self, campaign_id: CampaignId) -> ReplayBatchStateView:
+        await self._require_campaign(campaign_id)
+        state = await self.retcon_replay.cancel(campaign_id)
+        return state.to_view()
+
+    async def get_replay_state(
+        self, campaign_id: CampaignId, batch_id: str
+    ) -> ReplayBatchStateView:
+        await self._require_campaign(campaign_id)
+        state = self.retcon_replay.get(batch_id)
+        if state.campaign_id != campaign_id:
+            from grimoire.orchestrator.errors import RetconBatchNotFoundError
+
+            raise RetconBatchNotFoundError(batch_id)
+        return state.to_view()
+
+    async def _retcon_leave_as_is(self, post_id: PostId, new_text: str) -> RetconResult:
+        """Edit a past post, reverse its deltas, re-run extraction (the
+        leave-as-is variant). The replay variant wraps this and then opens
+        a :class:`RetconReplaySession`."""
         # Find the post & scene
         scene_file, post = await self._scenes._find_post(post_id)  # type: ignore[attr-defined]
         original = post.body

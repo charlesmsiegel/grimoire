@@ -38,6 +38,19 @@ export function ScenePane({ posts, pcs, streaming, images, campaignId }: Props) 
       latestModelPostId = p.id;
     }
   }
+  // Per-post: count of model posts that follow it in this scene. Drives the
+  // retcon fork-nudge threshold (≥ 5).
+  const subsequentByPost: Record<string, number> = {};
+  let modelTotal = 0;
+  for (const p of posts) {
+    if (p.author_kind !== "pc" && !p.is_player) modelTotal += 1;
+  }
+  let modelSeen = 0;
+  for (const p of posts) {
+    const isModel = p.author_kind !== "pc" && !p.is_player;
+    subsequentByPost[p.id] = isModel ? modelTotal - modelSeen - 1 : modelTotal - modelSeen;
+    if (isModel) modelSeen += 1;
+  }
 
   return (
     <section className="scene-pane" aria-label="Scene posts" aria-live="polite">
@@ -52,6 +65,7 @@ export function ScenePane({ posts, pcs, streaming, images, campaignId }: Props) 
           images={byPost[post.id] ?? []}
           isLatestModelPost={post.id === latestModelPostId}
           campaignId={campaignId}
+          subsequentModelPostCount={subsequentByPost[post.id] ?? 0}
         />
       ))}
       {streaming && (

@@ -65,6 +65,11 @@ _FORWARDED_EVENTS: tuple[str, ...] = (
     "primary_switched",
     "alternate_pinned",
     "alternate_deleted",
+    "retcon_started",
+    "retcon_post_replayed",
+    "retcon_post_accepted",
+    "retcon_cancelled",
+    "retcon_complete",
 )
 
 
