@@ -122,6 +122,20 @@ class RegenerateResult(BaseModel):
     reason: str = ""
 
 
+class RegeneratePostResult(BaseModel):
+    """Outcome of :meth:`OrchestratorService.regenerate_post`.
+
+    Per the swipes-alternates design: the new sample is materialized as a
+    non-primary :class:`Alternate` on the post, its deltas are applied
+    under a fresh ``delta_set_id`` (rewinding the previous primary's set),
+    and the user reviews via the swipes UI.
+    """
+
+    post_id: str
+    new_alternate_id: str
+    delta_set_id: str
+
+
 class UndoResult(BaseModel):
     turns_undone: list[TurnId] = Field(default_factory=list)
     reversed_delta_ids: list[str] = Field(default_factory=list)
