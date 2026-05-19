@@ -77,6 +77,15 @@ class ContextBuilderConfig:
     # § Explicit scene refs (§7): cap how many scenes can be force-injected
     # from a single player input.
     scene_ref_limit: int = 5
+    # § Narrative extras (narrative-extras-design §Context Builder integration):
+    # tier item priority for the extras stanza, and the per-character token
+    # threshold above which the stanza demotes to a keys-only breadcrumb in
+    # BACKGROUND.
+    extras_spotlight_priority: int = 8
+    extras_demote_to_breadcrumb_threshold_tokens: int = 200
+    # Toggle: emit the extras stanza at all. Disabled in tests that don't
+    # wire the library.
+    enable_extras_stanza: bool = True
 
 
 __all__ = ["ContextBuilderConfig", "RetrievalConfig", "TierBudget"]

@@ -49,6 +49,12 @@ class ExtractorConfig:
     retry_on_parse_failure: int = 1
     # Strategy base confidences.
     rule_based_base_confidence: float = 0.95
+    # Narrative-extras proposals (extras-design §Extractor):
+    # ``review_threshold`` is the floor below which proposals are dropped;
+    # ``max_proposals_per_turn_per_entity`` caps per-character proposals
+    # (1 in v1) so reviewers aren't flooded by a chatty heuristic.
+    extras_review_threshold: float = 0.70
+    extras_max_proposals_per_turn_per_entity: int = 1
     # Tags applied to deltas by source attribution.
     strategy_tags: dict[str, str] = field(
         default_factory=lambda: {

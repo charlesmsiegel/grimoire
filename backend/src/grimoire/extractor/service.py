@@ -304,9 +304,15 @@ class ExtractorService:
             sum(d.confidence for d in merged_deltas) / len(merged_deltas) if merged_deltas else 0.0
         )
 
+        # Extras proposals from the heuristic strategy. Per design
+        # §Extractor, drop any with confidence below the review threshold
+        # and cap to ``max_proposals_per_turn_per_entity`` (1 in v1).
+        extras_proposals = self._filter_extras_proposals(heur.extras_proposals)
+
         return ExtractionResult(
             deltas=merged_deltas,
             candidates=candidates,
+            extras_proposals=extras_proposals,
             flags=flags,
             confidence_overall=confidence_overall,
             extraction_strategies_run=ran,
@@ -476,6 +482,7 @@ class ExtractorService:
         rule_deltas: list[StateDelta] = []
         heur_flags: list[ExtractionFlag] = []
         heur_candidates: list[EntityCandidate] = []
+        heur_extras: list = []
         strategies: list[str] = []
         try:
             rule_deltas = await self._run_rule_based(text, campaign_id, scene)
@@ -493,6 +500,7 @@ class ExtractorService:
             )
             heur_flags = list(heur.flags)
             heur_candidates = list(heur.candidates)
+            heur_extras = list(heur.extras_proposals)
             strategies.append("heuristic_flags")
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("heuristic sanity layer failed: %s", exc)
@@ -500,6 +508,7 @@ class ExtractorService:
             deltas=rule_deltas,
             flags=heur_flags,
             candidates=heur_candidates,
+            extras_proposals=heur_extras,
             strategies_run=strategies,
         )
 
@@ -551,9 +560,11 @@ class ExtractorService:
         confidence_overall = (
             sum(d.confidence for d in merged_deltas) / len(merged_deltas) if merged_deltas else 0.0
         )
+        extras_proposals = self._filter_extras_proposals(sanity.extras_proposals)
         return ExtractionResult(
             deltas=merged_deltas,
             candidates=candidates,
+            extras_proposals=extras_proposals,
             flags=flags,
             confidence_overall=confidence_overall,
             extraction_strategies_run=strategies_run,
@@ -569,6 +580,24 @@ class ExtractorService:
             )
         except Exception as exc:  # pragma: no cover - observability only
             logger.debug("auto_disable.record_call failed: %s", exc)
+
+    def _filter_extras_proposals(self, proposals: list) -> list:
+        """Apply review-threshold + per-entity cap to heuristic proposals."""
+        threshold = float(getattr(self._config, "extras_review_threshold", 0.70))
+        max_per_entity = int(
+            getattr(self._config, "extras_max_proposals_per_turn_per_entity", 1)
+        )
+        out: list = []
+        per_entity: dict[str, int] = {}
+        for proposal in proposals:
+            if proposal.confidence < threshold:
+                continue
+            count = per_entity.get(proposal.entity_id, 0)
+            if count >= max_per_entity:
+                continue
+            per_entity[proposal.entity_id] = count + 1
+            out.append(proposal)
+        return out
 
     async def _run_rule_based(
         self,
@@ -1067,6 +1096,7 @@ class _SanityOutput:
     deltas: list[StateDelta] = field(default_factory=list)
     flags: list[ExtractionFlag] = field(default_factory=list)
     candidates: list[EntityCandidate] = field(default_factory=list)
+    extras_proposals: list = field(default_factory=list)
     strategies_run: list[str] = field(default_factory=list)
 
 

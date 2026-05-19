@@ -17,7 +17,13 @@ import re
 from dataclasses import dataclass, field
 
 from grimoire.types.common import CampaignId, EntityKind
-from grimoire.types.extraction import EntityCandidate, ExtractionFlag, FlagLevel
+from grimoire.types.extraction import (
+    EntityCandidate,
+    ExtractionFlag,
+    ExtrasProposal,
+    FlagLevel,
+)
+from grimoire.types.extras import ExtraScope, validate_extras_key
 from grimoire.types.scene import Scene
 from grimoire.types.state import StateSnapshot
 
@@ -109,6 +115,32 @@ _ROLL_HINT = re.compile(
 class HeuristicOutput:
     candidates: list[EntityCandidate] = field(default_factory=list)
     flags: list[ExtractionFlag] = field(default_factory=list)
+    extras_proposals: list[ExtrasProposal] = field(default_factory=list)
+
+
+# Stable-attribute patterns: ``<Name> <linking> <object>`` with a habitual
+# qualifier. ``always | never | usually | only | occasionally`` are the
+# qualifiers we treat as a "stable" cue; otherwise repetition across posts
+# carries the signal instead.
+_HABITUAL = re.compile(
+    r"\b(?P<name>[A-Z][a-zA-Z'\-]+)\s+(?:always|never|usually|only|"
+    r"occasionally|prefers?|favors?|favours?)\s+(?P<rest>[^.,;]{3,120})",
+    re.IGNORECASE,
+)
+_SMOKES = re.compile(
+    r"\b(?P<name>[A-Z][a-zA-Z'\-]+)\s+(?:smokes|smoked|lit\s+a)\s+(?P<rest>[^.,;]{2,60})",
+    re.IGNORECASE,
+)
+_DRINKS = re.compile(
+    r"\b(?P<name>[A-Z][a-zA-Z'\-]+)\s+(?:drinks|drank|orders?|ordered)\s+(?P<rest>[^.,;]{2,60})",
+    re.IGNORECASE,
+)
+
+_PROPOSAL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (_SMOKES, "smokes"),
+    (_DRINKS, "favorite_drink"),
+    (_HABITUAL, "habits"),
+)
 
 
 def _known_names(scene: Scene | None, snapshot: StateSnapshot | None) -> set[str]:
@@ -259,6 +291,89 @@ def detect_missing_context_names(
     return flags
 
 
+def find_extras_proposals(
+    text: str,
+    *,
+    known_names: set[str],
+    min_repeats: int = 2,
+    confidence: float = 0.72,
+    max_proposals: int = 4,
+) -> list[ExtrasProposal]:
+    """Surface repeated stable-attribute patterns as ExtrasProposal candidates.
+
+    Looks for patterns like ``<Name> always <object>``, ``<Name> smokes
+    <object>``, ``<Name> drinks <object>`` and records one proposal per
+    (name, key) pair when the pattern repeats at least ``min_repeats``
+    times across the input (multiple posts concatenated by the caller).
+
+    Per design §Extractor: confidence floor is ``review_threshold`` (0.7);
+    proposals carry the matched sentence as evidence so reviewers see what
+    triggered the suggestion.
+    """
+    if not known_names:
+        return []
+    counts: dict[tuple[str, str], int] = {}
+    evidence: dict[tuple[str, str], str] = {}
+    values: dict[tuple[str, str], str] = {}
+    for pattern, key in _PROPOSAL_PATTERNS:
+        for match in pattern.finditer(text):
+            name = match.group("name").strip()
+            rest = match.group("rest").strip()
+            if not name or not rest:
+                continue
+            ref = _match_known_name(name, known_names)
+            if ref is None:
+                continue
+            pair = (ref, key)
+            counts[pair] = counts.get(pair, 0) + 1
+            # Capture the surrounding sentence so reviewers see context.
+            start = max(0, match.start() - 0)
+            sentence_start = text.rfind(".", 0, start) + 1
+            sentence_end = text.find(".", match.end())
+            if sentence_end == -1:
+                sentence_end = min(len(text), match.end() + 80)
+            evidence[pair] = text[sentence_start:sentence_end].strip()
+            values.setdefault(pair, rest)
+    out: list[ExtrasProposal] = []
+    for (entity_id, key), count in counts.items():
+        if count < min_repeats:
+            continue
+        try:
+            validate_extras_key(key)
+        except Exception:
+            continue
+        out.append(
+            ExtrasProposal(
+                entity_kind=EntityKind.CHARACTER,
+                entity_id=entity_id,
+                key=key,
+                value=values[(entity_id, key)],
+                confidence=confidence,
+                evidence=evidence[(entity_id, key)],
+                scope_hint=ExtraScope.CAMPAIGN_LOCAL,
+            )
+        )
+        if len(out) >= max_proposals:
+            break
+    return out
+
+
+def _match_known_name(candidate: str, known_names: set[str]) -> str | None:
+    """Map a regex-captured name to the known-name set with a couple of
+    tolerant comparisons (case-insensitive, slug-trail, last-segment of
+    ref)."""
+    if candidate in known_names:
+        return candidate
+    lowered = candidate.lower()
+    for name in known_names:
+        if name.lower() == lowered:
+            return name
+        tail = name.split("/")[-1].split(":")[-1].replace("-", " ")
+        if tail.lower() == lowered or tail.lower().startswith(lowered):
+            return name
+    return None
+
+
 def run_heuristics(
     text: str,
     *,
@@ -275,13 +390,17 @@ def run_heuristics(
     flags: list[ExtractionFlag] = []
     flags.extend(detect_missing_mechanics(text, pre_roll_resolved=pre_roll_resolved))
     flags.extend(detect_missing_context_names(text, scene=scene, snapshot=snapshot))
-    return HeuristicOutput(candidates=candidates, flags=flags)
+    extras_proposals = find_extras_proposals(text, known_names=known)
+    return HeuristicOutput(
+        candidates=candidates, flags=flags, extras_proposals=extras_proposals
+    )
 
 
 __all__ = [
     "HeuristicOutput",
     "detect_missing_context_names",
     "detect_missing_mechanics",
+    "find_extras_proposals",
     "find_proper_noun_candidates",
     "run_heuristics",
 ]
