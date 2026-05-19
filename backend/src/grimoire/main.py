@@ -205,7 +205,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         library_cfg = LibraryConfig.from_yaml(data_root / "config" / "library.yaml")
         if container.library is None:
             container.library = LibraryService(container.state_store, config=library_cfg)
-        if container.extras_service is None:
+        # ExtrasService needs both library + a real state_store (for the
+        # SQLite mirror). API tests that hand-wire a fake library without
+        # a store leave state_store as None; skip construction there and
+        # let the routes return 503 via the standard ExtrasServiceDep.
+        if container.extras_service is None and container.state_store is not None:
             from grimoire.extras import ExtrasService
 
             container.extras_service = ExtrasService(
