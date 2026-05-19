@@ -41,7 +41,11 @@ class StubPinStore:
         branch_id: str,
         current_turn_id: str | None = None,
     ) -> list[dict]:
-        return [p for p in self.pins if p["campaign_id"] == campaign_id]
+        return [
+            p
+            for p in self.pins
+            if p["campaign_id"] == campaign_id and p.get("cleared_at") is None
+        ]
 
     async def write_context_pin(self, **kwargs: Any) -> str:
         pin_id = f"ctx_pin_{len(self.pins) + 1:03d}"
