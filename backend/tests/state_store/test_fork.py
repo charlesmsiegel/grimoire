@@ -142,6 +142,40 @@ async def test_fingerprint_deterministic_and_ignores_campaign_id(store: StateSto
     assert fp_fork == fp1
 
 
+async def test_embeddings_ref_library_paths_not_prefixed(store: StateStore) -> None:
+    """A library/path-shaped ``embeddings.ref`` should survive a fork
+    intact; a fork-scoped fact-id-shaped ref gets prefixed so it still
+    resolves inside the fork."""
+    await store.upsert_campaign(campaign_id="c1", name="With embeddings")
+    await store.db.execute(
+        "INSERT INTO embeddings (id, scope, ref, campaign_id) "
+        "VALUES ('e1', 'library', 'library/world/horror_v1/locations/L1', 'c1')"
+    )
+    await store.db.execute(
+        "INSERT INTO embeddings (id, scope, ref, campaign_id) "
+        "VALUES ('e2', 'fact', 'fact_abcd1234', 'c1')"
+    )
+    await store.db.execute(
+        "INSERT INTO embeddings (id, scope, ref, campaign_id) "
+        "VALUES ('e3', 'scene', 'manual', 'c1')"
+    )
+
+    await _clone_campaign_row(store, "c1", "c1-fork")
+    await bulk_copy(store.db, original="c1", new="c1-fork", cutoff_iso=None)
+
+    rows = await store.db.fetchall(
+        "SELECT id, ref FROM embeddings WHERE campaign_id = ? ORDER BY id",
+        ("c1-fork",),
+    )
+    refs = {r["id"]: r["ref"] for r in rows}
+    # Library path: contains '/', left untouched.
+    assert refs["c1-fork::e1"] == "library/world/horror_v1/locations/L1"
+    # Fact id: rewritten so it points at the fork's fact row.
+    assert refs["c1-fork::e2"] == "c1-fork::fact_abcd1234"
+    # Plain sentinel like "manual" (no id-shape) is left alone too.
+    assert refs["c1-fork::e3"] == "manual"
+
+
 async def test_replay_to_turn_returns_delta_count(store: StateStore) -> None:
     await _seed_minimal(store, "c1")
     await store.db.execute(

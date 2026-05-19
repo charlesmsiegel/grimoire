@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import logging
 import random
+import sqlite3
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -1147,7 +1148,7 @@ class OrchestratorService:
             if cutoff_iso is None:
                 await bulk_copy(db, original=campaign_id, new=new_campaign_id, cutoff_iso=None)
             else:
-                fp_origin = await fingerprint(db, campaign_id)
+                fp_origin = await fingerprint(db, campaign_id, cutoff_iso=cutoff_iso)
                 deltas_replayed = await replay_to_turn(
                     db,
                     original=campaign_id,
@@ -1158,6 +1159,42 @@ class OrchestratorService:
                 if fp_origin != fp_new:
                     fingerprint_match = False
                     degraded = True
+
+            # 3. Copy narrative files (scene markdown + sidecars + sheets etc.).
+            try:
+                self._copy_campaign_files(src_dir, new_dir)
+            except Exception as exc:
+                logger.warning("fork file copy failed: %s", exc, exc_info=True)
+
+            # 4. Images.
+            new_dir.mkdir(parents=True, exist_ok=True)
+            img_result = await fork_image_files(src_dir, new_dir)
+            await db.execute(
+                "UPDATE campaigns SET forked_image_handling = ? WHERE id = ?",
+                (img_result.handling, new_campaign_id),
+            )
+
+            if make_active:
+                await db.execute(
+                    "UPDATE campaigns SET last_played_at = ? WHERE id = ?",
+                    (datetime.now(UTC).isoformat(), new_campaign_id),
+                )
+        except sqlite3.IntegrityError as exc:
+            # Lost a race against a concurrent fork that committed the
+            # same ``new_campaign_id`` first. Do NOT wipe — that would
+            # delete the winner's rows. Re-raise as CampaignIdExists so
+            # the REST layer maps to 409.
+            await self._bus.emit(
+                Event(
+                    type="campaign_fork_failed",
+                    payload={
+                        "source": campaign_id,
+                        "new": new_campaign_id,
+                        "error": "collision (concurrent fork won)",
+                    },
+                )
+            )
+            raise CampaignIdExists(new_campaign_id) from exc
         except Exception as exc:
             await self._wipe_failed_fork(new_campaign_id, new_dir)
             await self._bus.emit(
@@ -1171,26 +1208,6 @@ class OrchestratorService:
                 )
             )
             raise
-
-        # 3. Copy narrative files (scene markdown + sidecars + sheets etc.).
-        try:
-            self._copy_campaign_files(src_dir, new_dir)
-        except Exception as exc:
-            logger.warning("fork file copy failed: %s", exc, exc_info=True)
-
-        # 4. Images.
-        new_dir.mkdir(parents=True, exist_ok=True)
-        img_result = await fork_image_files(src_dir, new_dir)
-        await db.execute(
-            "UPDATE campaigns SET forked_image_handling = ? WHERE id = ?",
-            (img_result.handling, new_campaign_id),
-        )
-
-        if make_active:
-            await db.execute(
-                "UPDATE campaigns SET last_played_at = ? WHERE id = ?",
-                (datetime.now(UTC).isoformat(), new_campaign_id),
-            )
 
         await self._bus.emit(
             Event(
@@ -1349,6 +1366,7 @@ class OrchestratorService:
                   FROM pending_forks
                  WHERE source_campaign_id = ?
                    AND completed_at IS NULL
+                   AND started_at IS NULL
                  ORDER BY enqueued_at
                  LIMIT 1
                 """,
@@ -1357,10 +1375,21 @@ class OrchestratorService:
             if row is None:
                 break
             pending_id = row["id"]
-            await self._store.db.execute(
-                "UPDATE pending_forks SET started_at = ? WHERE id = ?",
-                (datetime.now(UTC).isoformat(), pending_id),
-            )
+            # Atomically claim the row. ``AND started_at IS NULL`` makes
+            # the UPDATE a no-op if another drain already started it; we
+            # check the affected row count and skip to the next row when
+            # we lose the race.
+            async with self._store.db.acquire() as conn:
+                cur = await conn.execute(
+                    "UPDATE pending_forks SET started_at = ? WHERE id = ? AND started_at IS NULL",
+                    (datetime.now(UTC).isoformat(), pending_id),
+                )
+                claimed = cur.rowcount
+                await cur.close()
+            if claimed == 0:
+                # Another worker grabbed it; loop to look for the next
+                # unclaimed row.
+                continue
             try:
                 result = await self._execute_fork(
                     campaign_id=campaign_id,
