@@ -304,9 +304,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if container.hud_config is None:
             from grimoire.hud.config import HudConfigService
 
-            container.hud_config = HudConfigService(
-                data_root=data_root / "campaigns"
-            )
+            container.hud_config = HudConfigService(data_root=data_root / "campaigns")
         if container.hud is None:
             from grimoire.hud.service import HudService
 

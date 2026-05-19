@@ -68,13 +68,9 @@ class HudService:
     settings: HudServiceConfig = field(default_factory=HudServiceConfig)
     # Optional hook for mechanics-contributed widgets — returns the
     # current campaign's mechanics module manifest widget list.
-    mechanics_widgets: (
-        Callable[[str], Awaitable[list[HudWidget]]] | None
-    ) = None
+    mechanics_widgets: Callable[[str], Awaitable[list[HudWidget]]] | None = None
     # Optional hook for building the visible_when evaluation context.
-    eval_context_builder: (
-        Callable[[str, Any], Awaitable[EvaluationContext]] | None
-    ) = None
+    eval_context_builder: Callable[[str, Any], Awaitable[EvaluationContext]] | None = None
     # Optional hook for the current scene given a campaign id.
     current_scene: Callable[[str], Awaitable[Any]] | None = None
 

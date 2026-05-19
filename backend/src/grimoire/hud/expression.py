@@ -201,9 +201,7 @@ class _Parser:
                     self._consume("EQ")
                     v = self._consume()
                     if v.kind not in ("STRING", "INT", "BOOL"):
-                        raise ParseError(
-                            f"call args must be literal, got {v.kind} at {v.pos}"
-                        )
+                        raise ParseError(f"call args must be literal, got {v.kind} at {v.pos}")
                     args[key] = v.value
                     if (nxt := self._peek()) and nxt.kind == "COMMA":
                         self._consume("COMMA")

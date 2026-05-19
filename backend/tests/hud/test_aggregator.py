@@ -178,8 +178,7 @@ async def test_no_fetcher_reports_error(tmp_path: Path) -> None:
     # Don't register anything — every visible core widget should report an error.
     result = await svc.aggregate("c_1")
     assert all(
-        w.status == WidgetStatus.ERROR and "no fetcher" in (w.error or "")
-        for w in result.widgets
+        w.status == WidgetStatus.ERROR and "no fetcher" in (w.error or "") for w in result.widgets
     )
 
 
