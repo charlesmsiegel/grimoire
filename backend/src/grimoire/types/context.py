@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from .common import Json, Scope
+from .inclusion_reasons import InclusionReason
 from .llm import Message, ModelParams
 from .state import ContextTier
 
@@ -20,6 +21,8 @@ class ContextSource(BaseModel):
     override_applied: bool = False
     tokens: int = 0
     summary: str = ""
+    source_id: str = ""
+    inclusion_reasons: list[InclusionReason] = Field(default_factory=list)
 
 
 class BudgetEstimate(BaseModel):
