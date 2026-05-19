@@ -103,8 +103,26 @@ class CampaignIdExists(OrchestratorError):
         self.campaign_id = campaign_id
 
 
+class AuxiliaryNotFoundError(OrchestratorError):
+    """Raised when an accept/discard targets an unknown auxiliary result id."""
+
+    def __init__(self, result_id: str) -> None:
+        super().__init__(f"auxiliary result not found: {result_id!r}")
+        self.result_id = result_id
+
+
+class AuxiliaryAlreadyCommittedError(OrchestratorError):
+    """Raised when a second accept arrives for an already-committed auxiliary."""
+
+    def __init__(self, result_id: str) -> None:
+        super().__init__(f"auxiliary result already committed: {result_id!r}")
+        self.result_id = result_id
+
+
 __all__ = [
     "AlternateNotFoundError",
+    "AuxiliaryAlreadyCommittedError",
+    "AuxiliaryNotFoundError",
     "CampaignIdExists",
     "CannotDeletePrimaryError",
     "LatestPostOnlyError",
