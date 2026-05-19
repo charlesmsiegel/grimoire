@@ -426,9 +426,9 @@ export const campaignApi = {
       `/api/campaigns/${enc(campaignId)}/retcon/replay/${enc(batchId)}/cancel`,
     ),
 
-  forkCampaign: (campaignId: string, fromTurnId: string, label: string) =>
+  forkBranch: (campaignId: string, fromTurnId: string, label: string) =>
     api.post<{ new_branch_id: string; from_turn_id: string; label: string; created_at: string }>(
-      `/api/campaigns/${enc(campaignId)}/forks`,
+      `/api/campaigns/${enc(campaignId)}/branches`,
       { from_turn_id: fromTurnId, label },
     ),
 

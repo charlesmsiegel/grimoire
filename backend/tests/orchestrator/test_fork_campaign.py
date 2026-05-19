@@ -126,6 +126,34 @@ async def test_fork_id_collision_409(orch: OrchestratorService, real_store: Stat
         await orch.fork_campaign(campaign_id="c1", new_campaign_id="c1", new_name="dup")
 
 
+async def test_fork_id_collision_via_integrity_error_preserves_existing(
+    orch: OrchestratorService, real_store: StateStore
+) -> None:
+    """The second-line defense — when the pre-check ``_campaign_exists``
+    is bypassed (simulating two concurrent forks racing past it) the
+    INSERT in ``_clone_campaign_row`` raises ``IntegrityError``. The
+    error handler must surface ``CampaignIdExists`` *without* running
+    ``_wipe_failed_fork`` — otherwise the loser would delete the
+    winner's rows."""
+    await _seed_campaign(real_store, "c1")
+    await orch.fork_campaign(campaign_id="c1", new_campaign_id="c1-twin", new_name="Twin original")
+
+    # Bypass the pre-check by monkeypatching ``_campaign_exists`` so the
+    # second fork attempts the INSERT and trips the integrity constraint.
+    orch._campaign_exists = lambda _cid: _async_false()  # type: ignore[assignment,method-assign]
+    with pytest.raises(CampaignIdExists):
+        await orch.fork_campaign(campaign_id="c1", new_campaign_id="c1-twin", new_name="Loser")
+
+    # Winner's row is intact.
+    row = await real_store.db.fetchone("SELECT name FROM campaigns WHERE id = ?", ("c1-twin",))
+    assert row is not None
+    assert row["name"] == "Twin original"
+
+
+async def _async_false():
+    return False
+
+
 async def test_fork_from_earlier_post_id(orch: OrchestratorService, real_store: StateStore) -> None:
     await _seed_campaign(real_store, "c1")
     # Add posts with distinct created_at so cutoff filtering bites.
@@ -167,6 +195,12 @@ async def test_fork_from_earlier_post_id(orch: OrchestratorService, real_store: 
         ("c1-earlier",),
     )
     assert [r["id"] for r in rows] == ["c1-earlier::p1", "c1-earlier::p2"]
+
+    # The safety-net fingerprint compares source-at-cutoff against
+    # fork-after-replay; they must match so the fork is not flagged
+    # degraded for the typical fork-from-earlier case.
+    assert result.fingerprint_match is True
+    assert result.degraded is False
 
 
 async def test_lineage_tree(orch: OrchestratorService, real_store: StateStore) -> None:

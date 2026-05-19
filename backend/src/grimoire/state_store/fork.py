@@ -285,6 +285,34 @@ def _rewrite_id(value: object, prefix: str) -> object:
     return prefix + value
 
 
+def _rewrite_ref(value: object, prefix: str) -> object:
+    """Rewrite a TEXT column that may hold a fork-scoped id *or* an opaque
+    external reference (e.g. a library path, a sentinel like ``"manual"``).
+
+    Only prefix values that look like a fork-scoped id: a short token of
+    the form ``<prefix>_<hex>`` (e.g. ``t_abcd``, ``fact_1234``). Library
+    paths contain ``/``; the existing prefix marker contains ``::`` —
+    both are left untouched so the embedding's pointer / sentinel value
+    survives the copy intact.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    if value.startswith(prefix):
+        return value
+    if "/" in value or ":" in value:
+        return value
+    # Heuristic: short prefix + underscore + alphanumeric body. Anything
+    # else (e.g. the ``"manual"`` sentinel on ``closed_at_turn``, or a
+    # human-readable label) we leave alone.
+    underscore = value.find("_")
+    if underscore <= 0 or underscore >= len(value) - 1:
+        return value
+    head, tail = value[:underscore], value[underscore + 1 :]
+    if not head.isalpha() or not tail.replace("-", "").isalnum():
+        return value
+    return prefix + value
+
+
 def _rewrite_branch(value: object, original: str, new: str) -> object:
     if not isinstance(value, str) or not value:
         return value
@@ -372,8 +400,10 @@ async def bulk_copy(
                             v = new
                         elif kind == "branch":
                             v = _rewrite_branch(v, original, new)
-                        elif kind in ("id", "ref"):
+                        elif kind == "id":
                             v = _rewrite_id(v, prefix)
+                        elif kind == "ref":
+                            v = _rewrite_ref(v, prefix)
                         values.append(v)
                     await conn.execute(insert_sql, tuple(values))
                     count += 1
@@ -389,8 +419,11 @@ async def bulk_copy(
 # Fingerprint
 # ---------------------------------------------------------------------------
 
+# The ``campaigns`` row itself is not in the fingerprint set: it holds
+# metadata (created_at, last_played_at, fork provenance) that diverges
+# between a source and its fork by design. The actual game state lives
+# in the per-campaign tables below.
 FINGERPRINT_TABLES: tuple[str, ...] = (
-    "campaigns",
     "campaign_world_refs",
     "campaign_pcs",
     "branches",
@@ -444,20 +477,39 @@ def _row_canonical(row: aiosqlite.Row, exclude: Iterable[str] = ()) -> str:
     return json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False)
 
 
-async def fingerprint(db: Database, campaign_id: str) -> str:
+# Per-table cutoff column for fingerprints. When ``cutoff_iso`` is
+# provided, rows in tables with a cutoff column are only hashed when
+# ``cutoff_col <= cutoff_iso``. Mirrors :data:`CAMPAIGN_SCOPED_TABLES`
+# so the source's fingerprint at a cutoff matches the fork's
+# fingerprint after replay.
+_FINGERPRINT_CUTOFF_COLS: dict[str, str] = {
+    "posts": "created_at",
+    "images": "created_at",
+    "scheduled_events": "created_at",
+}
+
+
+async def fingerprint(db: Database, campaign_id: str, *, cutoff_iso: str | None = None) -> str:
     """SHA-256 fingerprint of the campaign's game state.
 
-    Independent of identifier values that are rewritten on fork — that
-    way the fork's fingerprint matches the source's whenever the actual
-    state is equivalent.
+    Independent of identifier values that are rewritten on fork — the
+    fork's fingerprint matches the source's whenever the actual state
+    is equivalent. When ``cutoff_iso`` is provided, time-ordered tables
+    (posts, images, scheduled events) are filtered to ``<= cutoff_iso``
+    so the source-at-cutoff and the fork-after-replay compare equal.
     """
     h = hashlib.sha256()
     async with db.acquire() as conn:
         for table in FINGERPRINT_TABLES:
             if not await _table_exists(conn, table):
                 continue
-            if table == "campaigns":
-                cur = await conn.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
+            cutoff_col = _FINGERPRINT_CUTOFF_COLS.get(table)
+            if cutoff_iso is not None and cutoff_col:
+                cur = await conn.execute(
+                    f"SELECT * FROM {table} WHERE campaign_id = ? "
+                    f"AND {cutoff_col} <= ? ORDER BY rowid",
+                    (campaign_id, cutoff_iso),
+                )
             else:
                 cur = await conn.execute(
                     f"SELECT * FROM {table} WHERE campaign_id = ? ORDER BY rowid",
