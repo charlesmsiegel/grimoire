@@ -26,7 +26,7 @@ from grimoire.files import slugify as _base_slugify
 # Canonical impl lives in :mod:`grimoire.files.hashing` and normalizes line
 # endings before hashing; re-exported here for the scenes module's callers.
 from grimoire.files.hashing import content_hash  # noqa: F401  (re-exported)
-from grimoire.scenes.types import AuthorKind, Post, Scene
+from grimoire.scenes.types import Alternate, AuthorKind, Post, Scene
 
 POST_HEADING_RE = re.compile(r"^##\s+Post\s+(\d+)\s+[—-]\s+(.+?)\s*$", re.MULTILINE)
 
@@ -166,19 +166,77 @@ def _yaml_to_threads(value: object) -> list:
     return out
 
 
+def _alternate_to_yaml(alt: Alternate) -> dict:
+    return {
+        "id": alt.id,
+        "post_id": alt.post_id,
+        "delta_set_id": alt.delta_set_id,
+        "text": alt.text,
+        "author_kind": alt.author_kind.value
+        if hasattr(alt.author_kind, "value")
+        else str(alt.author_kind),
+        "model": alt.model,
+        "prompt_hash": alt.prompt_hash,
+        "steering_hint": alt.steering_hint,
+        "tokens": alt.tokens,
+        "pinned": bool(alt.pinned),
+        "is_primary": bool(alt.is_primary),
+        "created_at": alt.created_at.isoformat() if alt.created_at else None,
+    }
+
+
+def _yaml_to_alternate(data: dict) -> Alternate:
+    def parse_dt(value: object) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        try:
+            return datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+
+    raw_kind = data.get("author_kind") or "narrator"
+    try:
+        kind = AuthorKind(raw_kind)
+    except ValueError:
+        kind = AuthorKind.NARRATOR
+    return Alternate(
+        id=str(data.get("id") or ""),
+        post_id=str(data.get("post_id") or ""),
+        text=str(data.get("text") or ""),
+        delta_set_id=str(data.get("delta_set_id") or ""),
+        author_kind=kind,
+        model=data.get("model"),
+        prompt_hash=data.get("prompt_hash"),
+        steering_hint=data.get("steering_hint"),
+        tokens=data.get("tokens"),
+        pinned=bool(data.get("pinned", False)),
+        is_primary=bool(data.get("is_primary", False)),
+        created_at=parse_dt(data.get("created_at")),
+    )
+
+
 def _post_records_to_yaml(records: dict) -> list[dict]:
-    """Serialize the in-memory ``_PostRecord`` cache to the sidecar."""
+    """Serialize the in-memory ``_PostRecord`` cache to the sidecar.
+
+    Includes ``alternates`` and ``primary_alternate_id`` when present; emits a
+    minimal legacy-compatible row when alternates are empty.
+    """
     rows = []
     for order_str, rec in sorted(records.items(), key=lambda kv: int(kv[0])):
-        rows.append(
-            {
-                "order": int(order_str),
-                "id": rec.id,
-                "turn_id": rec.turn_id,
-                "created_at": rec.created_at.isoformat() if rec.created_at else None,
-                "is_player": bool(rec.is_player),
-            }
-        )
+        row: dict = {
+            "order": int(order_str),
+            "id": rec.id,
+            "turn_id": rec.turn_id,
+            "created_at": rec.created_at.isoformat() if rec.created_at else None,
+            "is_player": bool(rec.is_player),
+        }
+        alternates = getattr(rec, "alternates", None) or []
+        if alternates:
+            row["primary_alternate_id"] = getattr(rec, "primary_alternate_id", None)
+            row["alternates"] = [_alternate_to_yaml(a) for a in alternates]
+        rows.append(row)
     return rows
 
 
@@ -278,11 +336,15 @@ def read_sidecar_post_records(path: Path) -> dict:
                 created_at = datetime.fromtimestamp(0)
         elif not isinstance(created_at, datetime):
             created_at = datetime.fromtimestamp(0)
+        raw_alts = row.get("alternates") or []
+        alts = [_yaml_to_alternate(a) for a in raw_alts if isinstance(a, dict)]
         out[str(int(order))] = _PostRecord(
             id=str(row.get("id") or ""),
             turn_id=str(row.get("turn_id") or ""),
             created_at=created_at,
             is_player=bool(row.get("is_player", False)),
+            alternates=alts,
+            primary_alternate_id=row.get("primary_alternate_id"),
         )
     return out
 

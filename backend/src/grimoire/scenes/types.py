@@ -13,6 +13,30 @@ class AuthorKind(StrEnum):
 
 
 @dataclass
+class Alternate:
+    """One sampled version of a post — text plus the delta set it produced.
+
+    See ``docs/superpowers/specs/2026-05-19-swipes-alternates-design.md``.
+    Each model-authored post has one or more alternates; exactly one is the
+    primary (its ``text`` is what appears in the scene ``.md``). User posts
+    carry a single implicit alternate so the schema stays uniform.
+    """
+
+    id: str
+    post_id: str
+    text: str
+    delta_set_id: str
+    author_kind: AuthorKind
+    model: str | None = None
+    prompt_hash: str | None = None
+    steering_hint: str | None = None
+    created_at: datetime | None = None
+    tokens: int | None = None
+    pinned: bool = False
+    is_primary: bool = False
+
+
+@dataclass
 class Post:
     id: str
     scene_id: str
@@ -24,6 +48,8 @@ class Post:
     turn_id: str
     author_pc_ref: str | None = None
     author_npc_ref: str | None = None
+    alternates: list[Alternate] = field(default_factory=list)
+    primary_alternate_id: str | None = None
 
     @property
     def author_label(self) -> str:
