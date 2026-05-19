@@ -178,12 +178,8 @@ def heuristic_classify(
         confidence = max(_TERMINAL_FLOOR, base_conf)
         # Bump confidence when an exclamation aligns with an anger-typed
         # terminal emotion, or when keywords repeat (signals intent).
-        anger_bump = (
-            terminal_emotion == "angry" and _PUNCT_BUMP_ANGER.search(paragraph)
-        )
-        surprise_bump = (
-            terminal_emotion == "surprised" and _PUNCT_BUMP_QUESTION.search(paragraph)
-        )
+        anger_bump = terminal_emotion == "angry" and _PUNCT_BUMP_ANGER.search(paragraph)
+        surprise_bump = terminal_emotion == "surprised" and _PUNCT_BUMP_QUESTION.search(paragraph)
         if anger_bump or surprise_bump:
             confidence = min(1.0, confidence + _PUNCT_BUMP)
         # Repeated cues for the same emotion in the same paragraph also

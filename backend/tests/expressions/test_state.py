@@ -68,9 +68,7 @@ async def test_as_of_turn_returns_historical(service: ExpressionStateService) ->
         emotion="angry",
         provenance="extractor:auto",
     )
-    current_at_t1 = await service.current_for(
-        "cmp_1", "char_florence", as_of_turn="t_1"
-    )
+    current_at_t1 = await service.current_for("cmp_1", "char_florence", as_of_turn="t_1")
     assert current_at_t1 is not None
     assert current_at_t1.emotion == "happy"
 

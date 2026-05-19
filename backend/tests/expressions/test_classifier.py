@@ -47,10 +47,13 @@ def test_terminal_emotion_wins_in_multi_emotion_paragraph() -> None:
 
 
 def test_no_present_characters_returns_empty() -> None:
-    assert heuristic_classify(
-        scene_post_text="A dog barked in the distance.",
-        present_characters=[],
-    ) == []
+    assert (
+        heuristic_classify(
+            scene_post_text="A dog barked in the distance.",
+            present_characters=[],
+        )
+        == []
+    )
 
 
 def test_paragraph_without_named_character_skipped() -> None:
@@ -64,10 +67,7 @@ def test_paragraph_without_named_character_skipped() -> None:
 
 def test_multiple_characters_separately_classified() -> None:
     changes = heuristic_classify(
-        scene_post_text=(
-            "winifred laughed at the joke.\n\n"
-            "julian glared at the floorboards."
-        ),
+        scene_post_text=("winifred laughed at the joke.\n\nAsher glared at the floorboards."),
         present_characters=[("char_florence", "winifred"), ("char_asher", "julian")],
     )
     by_id = {c.character_id: c for c in changes}

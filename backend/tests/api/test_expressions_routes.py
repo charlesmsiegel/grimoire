@@ -48,9 +48,7 @@ def _seed_character_files(
     card = char_dir / "card.md"
     fm = frontmatter or {"id": asset_id, "name": asset_id.title()}
     card.write_text(
-        "---\n"
-        + "\n".join(f"{k}: {json.dumps(v)}" for k, v in fm.items())
-        + "\n---\n\nbody\n",
+        "---\n" + "\n".join(f"{k}: {json.dumps(v)}" for k, v in fm.items()) + "\n---\n\nbody\n",
         encoding="utf-8",
     )
     if sprites:
@@ -92,9 +90,7 @@ def test_returns_neutral_when_no_state(tmp_path: Path, container: ServiceContain
         assert body["fallback_used"] is False
 
 
-def test_returns_requested_sprite_when_present(
-    tmp_path: Path, container: ServiceContainer
-) -> None:
+def test_returns_requested_sprite_when_present(tmp_path: Path, container: ServiceContainer) -> None:
     _seed_character_files(
         data_root=tmp_path,
         world_id="w",
@@ -168,9 +164,7 @@ def test_falls_back_to_neutral_when_sprite_missing(
         assert body["fallback_used"] is True
 
 
-def test_falls_back_to_avatar_when_no_neutral(
-    tmp_path: Path, container: ServiceContainer
-) -> None:
+def test_falls_back_to_avatar_when_no_neutral(tmp_path: Path, container: ServiceContainer) -> None:
     _seed_character_files(
         data_root=tmp_path,
         world_id="w",
@@ -223,15 +217,11 @@ def test_path_traversal_rejected(tmp_path: Path, container: ServiceContainer) ->
     app = create_app()
     app.state.container = container
     with TestClient(app) as client:
-        r = client.get(
-            "/api/campaigns/cmp_1/characters/..%2F..%2Fetc%2Fpasswd/expression"
-        )
+        r = client.get("/api/campaigns/cmp_1/characters/..%2F..%2Fetc%2Fpasswd/expression")
         assert r.status_code in {400, 404}
 
 
-def test_as_of_turn_returns_historical(
-    tmp_path: Path, container: ServiceContainer
-) -> None:
+def test_as_of_turn_returns_historical(tmp_path: Path, container: ServiceContainer) -> None:
     _seed_character_files(
         data_root=tmp_path,
         world_id="w",
@@ -268,16 +258,12 @@ def test_as_of_turn_returns_historical(
             )
 
         asyncio.run(_seed())
-        r = client.get(
-            "/api/campaigns/cmp_1/characters/beatrice/expression?as_of_turn=t_1"
-        )
+        r = client.get("/api/campaigns/cmp_1/characters/beatrice/expression?as_of_turn=t_1")
         body = r.json()
         assert body["emotion"] == "happy"
 
 
-def test_patch_pc_expression_writes_state(
-    tmp_path: Path, container: ServiceContainer
-) -> None:
+def test_patch_pc_expression_writes_state(tmp_path: Path, container: ServiceContainer) -> None:
     _seed_character_files(
         data_root=tmp_path,
         world_id="w",
@@ -300,9 +286,7 @@ def test_patch_pc_expression_writes_state(
         assert body["fallback_used"] is True
 
 
-def test_patch_rejects_unknown_emotion(
-    tmp_path: Path, container: ServiceContainer
-) -> None:
+def test_patch_rejects_unknown_emotion(tmp_path: Path, container: ServiceContainer) -> None:
     _seed_character_files(
         data_root=tmp_path,
         world_id="w",
