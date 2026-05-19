@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import { Markdown } from "../../components/Markdown";
 import { campaignApi, type ApiAlternate, type ApiPost, type PCEntry } from "../../api/campaign";
+import { RetconLauncher } from "./RetconLauncher";
 import type { SceneImage } from "./usePlayState";
 
 interface Props {
@@ -15,6 +16,10 @@ interface Props {
   isLatestModelPost?: boolean;
   /** Campaign id; required for alternate mutations. Omit to render read-only. */
   campaignId?: string;
+  /** Number of model-authored posts that follow this one in the current scene.
+   * Threaded through to the retcon launcher so it can show the fork nudge
+   * when ≥ 5 (per 2026-05-19-retcon-design). */
+  subsequentModelPostCount?: number;
 }
 
 const AUTHOR_LABELS: Record<ApiPost["author_kind"], string> = {
@@ -39,7 +44,14 @@ function primaryCursor(alternates: ApiAlternate[], primaryId: string | null | un
   return i < 0 ? 0 : i;
 }
 
-export function PostItem({ post, pcs, images, isLatestModelPost = false, campaignId }: Props) {
+export function PostItem({
+  post,
+  pcs,
+  images,
+  isLatestModelPost = false,
+  campaignId,
+  subsequentModelPostCount = 0,
+}: Props) {
   const name = authorName(post, pcs);
   const alternates = useMemo(() => post.alternates ?? [], [post.alternates]);
   const initialCursor = useMemo(
@@ -49,10 +61,13 @@ export function PostItem({ post, pcs, images, isLatestModelPost = false, campaig
   const [cursor, setCursor] = useState(initialCursor);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retconOpen, setRetconOpen] = useState(false);
 
   const showStrip = alternates.length > 1;
   const current = alternates[cursor];
   const canMutate = isLatestModelPost && !!campaignId;
+  // Retcon is available on any model post (NOT gated to latest like swipes are).
+  const canRetcon = !!campaignId && post.author_kind !== "pc" && !post.is_player;
 
   async function call(action: () => Promise<unknown>) {
     if (busy) return;
@@ -108,6 +123,28 @@ export function PostItem({ post, pcs, images, isLatestModelPost = false, campaig
             </li>
           ))}
         </ul>
+      )}
+      {canRetcon && (
+        <div className="post-actions">
+          <button
+            type="button"
+            className="post-retcon"
+            aria-label="Retcon this post"
+            onClick={() => setRetconOpen(true)}
+          >
+            Retcon...
+          </button>
+        </div>
+      )}
+      {retconOpen && campaignId && (
+        <RetconLauncher
+          campaignId={campaignId}
+          postId={post.id}
+          turnId={post.turn_id}
+          originalText={post.body}
+          subsequentModelPostCount={subsequentModelPostCount}
+          onClose={() => setRetconOpen(false)}
+        />
       )}
       {showStrip && (
         <div className="chevron-strip" role="group" aria-label="Alternates">

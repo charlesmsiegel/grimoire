@@ -71,12 +71,39 @@ class CannotDeletePrimaryError(OrchestratorError):
         self.alternate_id = alternate_id
 
 
+class RetconInFlightError(OrchestratorError):
+    """Raised when a second retcon replay is started while one is already open."""
+
+    def __init__(self, campaign_id: str) -> None:
+        super().__init__(f"a retcon replay batch is already in flight for campaign {campaign_id!r}")
+        self.campaign_id = campaign_id
+
+
+class RetconBatchNotFoundError(OrchestratorError):
+    """Raised when a batch_id doesn't match any open or recent retcon session."""
+
+    def __init__(self, batch_id: str) -> None:
+        super().__init__(f"retcon replay batch {batch_id!r} not found")
+        self.batch_id = batch_id
+
+
+class RetconBatchClosedError(OrchestratorError):
+    """Raised when an accept/try-again/cancel is issued on a completed batch."""
+
+    def __init__(self, batch_id: str) -> None:
+        super().__init__(f"retcon replay batch {batch_id!r} is already closed")
+        self.batch_id = batch_id
+
+
 __all__ = [
     "AlternateNotFoundError",
     "CannotDeletePrimaryError",
     "LatestPostOnlyError",
     "NoTurnsToUndoError",
     "OrchestratorError",
+    "RetconBatchClosedError",
+    "RetconBatchNotFoundError",
+    "RetconInFlightError",
     "TurnAlreadyInProgressError",
     "TurnCancelledError",
     "TurnTimeoutError",

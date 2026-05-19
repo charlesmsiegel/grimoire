@@ -182,6 +182,7 @@ def _alternate_to_yaml(alt: Alternate) -> dict:
         "pinned": bool(alt.pinned),
         "is_primary": bool(alt.is_primary),
         "created_at": alt.created_at.isoformat() if alt.created_at else None,
+        "replay_batch_id": alt.replay_batch_id,
     }
 
 
@@ -214,6 +215,7 @@ def _yaml_to_alternate(data: dict) -> Alternate:
         pinned=bool(data.get("pinned", False)),
         is_primary=bool(data.get("is_primary", False)),
         created_at=parse_dt(data.get("created_at")),
+        replay_batch_id=(data.get("replay_batch_id") or None),
     )
 
 

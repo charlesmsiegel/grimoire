@@ -100,6 +100,10 @@ class AdvanceTurnPayload(BaseModel):
 class RetconPayload(BaseModel):
     post_id: str
     new_text: str
+    # When True, the server opens a RetconReplaySession and re-samples each
+    # subsequent model post one at a time via the /retcon/replay/{batch_id}
+    # accept/try-again/cancel routes (per 2026-05-19-retcon-design).
+    replay_subsequent: bool = False
 
 
 class UndoPayload(BaseModel):
@@ -700,10 +704,97 @@ async def retcon_post(
     orchestrator: OrchestratorDep,
 ) -> Any:
     try:
-        result = await orchestrator.retcon_post(payload.post_id, payload.new_text)
+        result = await orchestrator.retcon_post(
+            payload.post_id,
+            payload.new_text,
+            campaign_id=campaign_id,
+            replay_subsequent=payload.replay_subsequent,
+        )
     except Exception as exc:
-        raise map_lookup_errors(exc) from exc
+        raise _map_retcon_error(exc) from exc
     return to_payload(result)
+
+
+def _map_retcon_error(exc: Exception) -> HTTPException:
+    """Translate retcon-specific errors before falling back to the generic map."""
+    from grimoire.orchestrator.errors import (
+        RetconBatchClosedError,
+        RetconBatchNotFoundError,
+        RetconInFlightError,
+    )
+
+    if isinstance(exc, RetconInFlightError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, RetconBatchNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, RetconBatchClosedError):
+        return HTTPException(status_code=409, detail=str(exc))
+    return map_lookup_errors(exc)
+
+
+@router.get("/{campaign_id}/retcon/replay/{batch_id}")
+async def get_retcon_replay_state(
+    campaign_id: str,
+    batch_id: str,
+    orchestrator: OrchestratorDep,
+) -> Any:
+    try:
+        result = await orchestrator.get_replay_state(campaign_id, batch_id)
+    except Exception as exc:
+        raise _map_retcon_error(exc) from exc
+    return to_payload(result)
+
+
+@router.post("/{campaign_id}/retcon/replay/{batch_id}/accept")
+async def accept_retcon_replay(
+    campaign_id: str,
+    batch_id: str,
+    orchestrator: OrchestratorDep,
+) -> Any:
+    await _ensure_open_batch(orchestrator, campaign_id, batch_id)
+    try:
+        result = await orchestrator.accept_replay(campaign_id)
+    except Exception as exc:
+        raise _map_retcon_error(exc) from exc
+    return to_payload(result)
+
+
+@router.post("/{campaign_id}/retcon/replay/{batch_id}/try-again")
+async def try_again_retcon_replay(
+    campaign_id: str,
+    batch_id: str,
+    orchestrator: OrchestratorDep,
+) -> Any:
+    await _ensure_open_batch(orchestrator, campaign_id, batch_id)
+    try:
+        result = await orchestrator.try_again_replay(campaign_id)
+    except Exception as exc:
+        raise _map_retcon_error(exc) from exc
+    return to_payload(result)
+
+
+@router.post("/{campaign_id}/retcon/replay/{batch_id}/cancel")
+async def cancel_retcon_replay(
+    campaign_id: str,
+    batch_id: str,
+    orchestrator: OrchestratorDep,
+) -> Any:
+    await _ensure_open_batch(orchestrator, campaign_id, batch_id)
+    try:
+        result = await orchestrator.cancel_replay(campaign_id)
+    except Exception as exc:
+        raise _map_retcon_error(exc) from exc
+    return to_payload(result)
+
+
+async def _ensure_open_batch(orchestrator: Any, campaign_id: str, batch_id: str) -> None:
+    """Verify the batch_id matches the campaign's currently-open batch."""
+    try:
+        view = await orchestrator.get_replay_state(campaign_id, batch_id)
+    except Exception as exc:
+        raise _map_retcon_error(exc) from exc
+    if view.completed:
+        raise HTTPException(status_code=409, detail=f"batch {batch_id!r} already closed")
 
 
 @router.post("/{campaign_id}/forks", status_code=201)

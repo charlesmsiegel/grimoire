@@ -34,6 +34,10 @@ class Alternate:
     tokens: int | None = None
     pinned: bool = False
     is_primary: bool = False
+    # Set when this alternate was produced inside a retcon replay batch
+    # (see 2026-05-19-retcon-design). Lets the replay UI group alternates by
+    # batch and lets cancel-by-batch find the in-flight one.
+    replay_batch_id: str | None = None
 
 
 @dataclass
