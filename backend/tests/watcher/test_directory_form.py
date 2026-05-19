@@ -38,9 +38,7 @@ def test_sibling_avatar_png_not_classified(tmp_path: Path) -> None:
 
 def test_sprites_png_not_classified(tmp_path: Path) -> None:
     root = _root(tmp_path)
-    target = (
-        root / "library" / "worlds" / "w" / "characters" / "beatrice" / "sprites" / "happy.png"
-    )
+    target = root / "library" / "worlds" / "w" / "characters" / "beatrice" / "sprites" / "happy.png"
     target.parent.mkdir(parents=True)
     target.touch()
     assert classify_path(root, target) is None

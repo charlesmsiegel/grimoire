@@ -76,9 +76,7 @@ async def llm_classify(
         for mod_id, labels in module_extensions.items():
             vocab.extend(f"{mod_id}.{label}" for label in labels)
 
-    prompt = build_prompt(
-        text=scene_post_text, present_characters=present_list, vocabulary=vocab
-    )
+    prompt = build_prompt(text=scene_post_text, present_characters=present_list, vocabulary=vocab)
     try:
         response = await llm_call(prompt)
     except Exception as exc:

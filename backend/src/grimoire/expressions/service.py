@@ -143,9 +143,7 @@ class ExpressionStateService:
             module_extensions=module_extensions,
         )
         if result is None:
-            raise VocabularyError(
-                f"{emotion!r} is not part of the current expression vocabulary"
-            )
+            raise VocabularyError(f"{emotion!r} is not part of the current expression vocabulary")
         return result
 
     async def current_for(
