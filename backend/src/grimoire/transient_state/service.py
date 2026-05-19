@@ -337,9 +337,7 @@ class TransientStateService:
         is deferred (see plan B2).
         """
         branch = branch_id or self._default_branch(campaign_id)
-        window = (
-            within_posts if within_posts is not None else self.config.conflict_window_posts
-        )
+        window = within_posts if within_posts is not None else self.config.conflict_window_posts
         conflicts: list[TransientConflict] = []
         for table in _TABLE.values():
             sql = (
