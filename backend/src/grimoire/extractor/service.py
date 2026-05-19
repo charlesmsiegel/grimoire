@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass, field
 
 from grimoire.extractor.config import ExtractorConfig
 from grimoire.extractor.heuristics import HeuristicOutput, run_heuristics
@@ -28,6 +29,14 @@ from grimoire.extractor.protocols import (
     MechanicsValidator,
 )
 from grimoire.extractor.rule_based import extract_rule_based
+from grimoire.extractor.together import (
+    TrackerMalformedError,
+    extract_tracker_block,
+    parse_tracker_text,
+    project_tracker_to_candidates,
+    project_tracker_to_deltas,
+)
+from grimoire.extractor.tool_use import ToolCall, project_tool_calls
 from grimoire.types.common import CampaignId, EntityKind, Json, Scope, TurnId
 from grimoire.types.extraction import (
     EntityCandidate,
@@ -35,6 +44,7 @@ from grimoire.types.extraction import (
     ExtractionResult,
     FlagLevel,
 )
+from grimoire.types.extraction_modes import ExtractionMode
 from grimoire.types.mechanics import NarratedEvent
 from grimoire.types.scene import Scene, SceneContext
 from grimoire.types.state import DeltaKind, StateDelta, StateSnapshot
@@ -60,6 +70,9 @@ class ExtractorService:
         resolver: EntityResolver | None = None,
         config: ExtractorConfig | None = None,
         source: str = "extractor",
+        auto_disable: object | None = None,
+        provider_id: str = "",
+        model: str = "",
     ) -> None:
         self._gateway = gateway
         self._mechanics = mechanics
@@ -67,6 +80,9 @@ class ExtractorService:
         self._resolver = resolver
         self._config = config or ExtractorConfig()
         self._source = source
+        self._auto_disable = auto_disable
+        self._provider_id = provider_id
+        self._model = model
 
     # ------------------------------------------------------------------ #
     # Public surface
@@ -81,8 +97,45 @@ class ExtractorService:
         *,
         pre_roll_resolved: bool = False,
         turn_id: TurnId | None = None,
+        mode: ExtractionMode = ExtractionMode.SEPARATE,
+        together_tracker_text: str | None = None,
+        tool_calls: list[ToolCall] | None = None,
     ) -> ExtractionResult:
-        """Extract state changes from a model-authored response."""
+        """Extract state changes from a model-authored response.
+
+        `mode` controls which strategy runs:
+
+        * `SEPARATE` — the original three-strategy pipeline (default).
+        * `TOGETHER` — parse `together_tracker_text` as the JSON tracker
+          block emitted alongside prose; falls back to `SEPARATE` if the
+          payload is malformed.
+        * `TOOL_USE` — project `tool_calls` accumulated during streaming;
+          falls back to `SEPARATE` when the list is empty.
+        * `NONE`     — short-circuit (auxiliary tasks); returns an empty
+          result without invoking any strategy.
+        """
+        if mode == ExtractionMode.NONE:
+            return ExtractionResult()
+        if mode == ExtractionMode.TOGETHER:
+            return await self._run_together(
+                response_text=response_text,
+                tracker_text=together_tracker_text,
+                scene=scene,
+                campaign_id=campaign_id,
+                snapshot=prior_state_snapshot,
+                pre_roll_resolved=pre_roll_resolved,
+                turn_id=turn_id,
+            )
+        if mode == ExtractionMode.TOOL_USE:
+            return await self._run_tool_use(
+                response_text=response_text,
+                tool_calls=tool_calls or [],
+                scene=scene,
+                campaign_id=campaign_id,
+                snapshot=prior_state_snapshot,
+                pre_roll_resolved=pre_roll_resolved,
+                turn_id=turn_id,
+            )
         return await self._run(
             text=response_text,
             scene=scene,
@@ -259,6 +312,264 @@ class ExtractorService:
             extraction_strategies_run=ran,
             duration_ms=int((time.monotonic() - started) * 1000),
         )
+
+    async def _run_together(
+        self,
+        *,
+        response_text: str,
+        tracker_text: str | None,
+        scene: Scene,
+        campaign_id: CampaignId,
+        snapshot: StateSnapshot,
+        pre_roll_resolved: bool,
+        turn_id: TurnId | None,
+    ) -> ExtractionResult:
+        """Together-mode dispatch.
+
+        If `tracker_text` is `None` we attempt to pull the block out of
+        `response_text` ourselves (useful for tests / non-streaming
+        providers where the frontend hasn't stripped it).
+        """
+        if tracker_text is None:
+            tracker_text = extract_tracker_block(response_text)
+        if not tracker_text:
+            await self._record_mode_call("together", success=False)
+            result = await self._run(
+                text=response_text,
+                scene=scene,
+                campaign_id=campaign_id,
+                snapshot=snapshot,
+                from_player=False,
+                player_pc_ref=None,
+                pre_roll_resolved=pre_roll_resolved,
+                turn_id=turn_id,
+            )
+            result.flags.append(
+                ExtractionFlag(
+                    level=FlagLevel.WARNING,
+                    code="together_no_tracker",
+                    message=(
+                        "together mode requested but no tracker block found "
+                        "— fell back to SEPARATE"
+                    ),
+                )
+            )
+            return result
+        try:
+            parsed = parse_tracker_text(tracker_text)
+        except TrackerMalformedError as exc:
+            await self._record_mode_call("together", success=False)
+            result = await self._run(
+                text=response_text,
+                scene=scene,
+                campaign_id=campaign_id,
+                snapshot=snapshot,
+                from_player=False,
+                player_pc_ref=None,
+                pre_roll_resolved=pre_roll_resolved,
+                turn_id=turn_id,
+            )
+            result.flags.append(
+                ExtractionFlag(
+                    level=FlagLevel.WARNING,
+                    code="together_malformed",
+                    message=f"tracker malformed: {exc} — fell back to SEPARATE",
+                    evidence=tracker_text[:200],
+                )
+            )
+            return result
+
+        await self._record_mode_call("together", success=True)
+        tracker_deltas = project_tracker_to_deltas(
+            parsed,
+            campaign_id=campaign_id,
+            scene_branch_id=getattr(scene, "branch_id", None),
+            source=self._source + ":together",
+        )
+        tracker_candidates = project_tracker_to_candidates(parsed)
+        sanity = await self._run_sanity_layer(
+            text=response_text,
+            scene=scene,
+            campaign_id=campaign_id,
+            snapshot=snapshot,
+            pre_roll_resolved=pre_roll_resolved,
+        )
+        return await self._merge_with_sanity(
+            primary_deltas=tracker_deltas,
+            primary_candidates=tracker_candidates,
+            sanity=sanity,
+            scene=scene,
+            campaign_id=campaign_id,
+            snapshot=snapshot,
+            turn_id=turn_id,
+            strategies_run=["together", *sanity.strategies_run],
+        )
+
+    async def _run_tool_use(
+        self,
+        *,
+        response_text: str,
+        tool_calls: list[ToolCall],
+        scene: Scene,
+        campaign_id: CampaignId,
+        snapshot: StateSnapshot,
+        pre_roll_resolved: bool,
+        turn_id: TurnId | None,
+    ) -> ExtractionResult:
+        if not tool_calls:
+            await self._record_mode_call("tool_use", success=False)
+            result = await self._run(
+                text=response_text,
+                scene=scene,
+                campaign_id=campaign_id,
+                snapshot=snapshot,
+                from_player=False,
+                player_pc_ref=None,
+                pre_roll_resolved=pre_roll_resolved,
+                turn_id=turn_id,
+            )
+            result.flags.append(
+                ExtractionFlag(
+                    level=FlagLevel.WARNING,
+                    code="tool_use_no_calls",
+                    message="tool_use mode produced no tool calls — fell back to SEPARATE",
+                )
+            )
+            return result
+
+        await self._record_mode_call("tool_use", success=True)
+        tool_deltas, tool_candidates = project_tool_calls(
+            tool_calls,
+            campaign_id=campaign_id,
+            scene_branch_id=getattr(scene, "branch_id", None),
+        )
+        sanity = await self._run_sanity_layer(
+            text=response_text,
+            scene=scene,
+            campaign_id=campaign_id,
+            snapshot=snapshot,
+            pre_roll_resolved=pre_roll_resolved,
+        )
+        return await self._merge_with_sanity(
+            primary_deltas=tool_deltas,
+            primary_candidates=tool_candidates,
+            sanity=sanity,
+            scene=scene,
+            campaign_id=campaign_id,
+            snapshot=snapshot,
+            turn_id=turn_id,
+            strategies_run=["tool_use", *sanity.strategies_run],
+        )
+
+    async def _run_sanity_layer(
+        self,
+        *,
+        text: str,
+        scene: Scene,
+        campaign_id: CampaignId,
+        snapshot: StateSnapshot,
+        pre_roll_resolved: bool,
+    ) -> _SanityOutput:
+        """Cheap deterministic strategies (rule-based + heuristics) used
+        as a sanity layer alongside Together / Tool-use. No structured-LLM
+        call — that's the whole point of avoiding `SEPARATE`.
+        """
+        rule_deltas: list[StateDelta] = []
+        heur_flags: list[ExtractionFlag] = []
+        heur_candidates: list[EntityCandidate] = []
+        strategies: list[str] = []
+        try:
+            rule_deltas = await self._run_rule_based(text, campaign_id, scene)
+            strategies.append("rule_based")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("rule_based sanity layer failed: %s", exc)
+        try:
+            heur = await _run_heuristics_async(
+                text,
+                scene=scene,
+                snapshot=snapshot,
+                pre_roll_resolved=pre_roll_resolved,
+                max_candidates=self._config.max_new_entities_per_turn,
+                campaign_id=campaign_id,
+            )
+            heur_flags = list(heur.flags)
+            heur_candidates = list(heur.candidates)
+            strategies.append("heuristic_flags")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("heuristic sanity layer failed: %s", exc)
+        return _SanityOutput(
+            deltas=rule_deltas,
+            flags=heur_flags,
+            candidates=heur_candidates,
+            strategies_run=strategies,
+        )
+
+    async def _merge_with_sanity(
+        self,
+        *,
+        primary_deltas: list[StateDelta],
+        primary_candidates: list[EntityCandidate],
+        sanity: _SanityOutput,
+        scene: Scene,
+        campaign_id: CampaignId,
+        snapshot: StateSnapshot,
+        turn_id: TurnId | None,
+        strategies_run: list[str],
+    ) -> ExtractionResult:
+        """Combine tracker/tool deltas with the sanity layer + downstream
+        validation (mechanics, contradictions, library drift).
+        """
+        started = time.monotonic()
+        merged_deltas = merge_deltas(sanity.deltas, primary_deltas)
+        merged_deltas = [self._apply_speaker_authority(d) for d in merged_deltas]
+
+        flags: list[ExtractionFlag] = list(sanity.flags)
+        if snapshot is not None:
+            merged_deltas, commitment_flags = self._resolve_commitment_ids(
+                merged_deltas, snapshot=snapshot
+            )
+            flags.extend(commitment_flags)
+        if self._mechanics is not None:
+            merged_deltas, mech_flags = await self._validate_mechanical_events(
+                merged_deltas, scene=scene, campaign_id=campaign_id
+            )
+            flags.extend(mech_flags)
+        if self._contradictions is not None:
+            merged_deltas, contra_flags = await self._check_contradictions(
+                merged_deltas, campaign_id=campaign_id, turn_id=turn_id
+            )
+            flags.extend(contra_flags)
+        if self._resolver is not None:
+            merged_deltas, drift_flags = await self._detect_library_drift(
+                merged_deltas, campaign_id=campaign_id
+            )
+            flags.extend(drift_flags)
+
+        candidates = merge_candidates(primary_candidates, sanity.candidates)
+        if len(candidates) > self._config.max_new_entities_per_turn:
+            candidates = candidates[: self._config.max_new_entities_per_turn]
+
+        confidence_overall = (
+            sum(d.confidence for d in merged_deltas) / len(merged_deltas) if merged_deltas else 0.0
+        )
+        return ExtractionResult(
+            deltas=merged_deltas,
+            candidates=candidates,
+            flags=flags,
+            confidence_overall=confidence_overall,
+            extraction_strategies_run=strategies_run,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    async def _record_mode_call(self, mode: str, *, success: bool) -> None:
+        if self._auto_disable is None or not self._provider_id or not self._model:
+            return
+        try:
+            await self._auto_disable.record_call(
+                self._provider_id, self._model, mode, success=success
+            )
+        except Exception as exc:  # pragma: no cover - observability only
+            logger.debug("auto_disable.record_call failed: %s", exc)
 
     async def _run_rule_based(
         self,
@@ -748,6 +1059,16 @@ async def _run_heuristics_async(
         max_candidates=max_candidates,
         campaign_id=campaign_id,
     )
+
+
+@dataclass
+class _SanityOutput:
+    """Output of the deterministic sanity layer used by Together / Tool-use modes."""
+
+    deltas: list[StateDelta] = field(default_factory=list)
+    flags: list[ExtractionFlag] = field(default_factory=list)
+    candidates: list[EntityCandidate] = field(default_factory=list)
+    strategies_run: list[str] = field(default_factory=list)
 
 
 # Re-export EntityCandidate for callers that need to type-hint candidate handling.

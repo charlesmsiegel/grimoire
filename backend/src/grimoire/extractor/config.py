@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from grimoire.types.extraction_modes import ExtractionMode
+
 
 @dataclass(frozen=True)
 class ExtractorConfig:
@@ -15,6 +17,10 @@ class ExtractorConfig:
     """
 
     task_name: str = "extractor"
+    # Extraction mode preference. `AUTO` lets `select_mode` pick the best
+    # supported, non-auto-disabled mode each turn; explicit modes are
+    # honoured unless the provider can't support them.
+    mode: ExtractionMode = ExtractionMode.SEPARATE
     parallel_strategies: tuple[str, ...] = (
         "rule_based",
         "structured_llm",
