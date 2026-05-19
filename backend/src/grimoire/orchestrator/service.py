@@ -194,6 +194,9 @@ class OrchestratorService:
         # orchestrator boundary so invalidation sits next to the regenerate
         # logic. Defaults to a fresh in-memory store when not provided.
         self._context_cache = context_cache or ContextBuilderCache()
+        # In-memory parking lot for auxiliary tasks awaiting accept/discard.
+        # Transient: cleared on restart per spec.
+        self._inflight_aux: dict[str, Any] = {}
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -799,6 +802,256 @@ class OrchestratorService:
                             exc_info=True,
                         )
         return deleted
+
+    # ------------------------------------------------------------------ #
+    # Auxiliary tasks (drafts, rewrites, brainstorms — non-canonical)
+    # ------------------------------------------------------------------ #
+
+    async def run_auxiliary_task(
+        self,
+        *,
+        campaign_id: CampaignId,
+        task: Any,
+        on_token: Callable[[str], Awaitable[None]] | None = None,
+        branch_id: str | None = None,
+    ) -> Any:
+        """Run one auxiliary task; park the result in `_inflight_aux`.
+
+        No canonical state is mutated — see
+        ``docs/superpowers/specs/2026-05-19-auxiliary-tasks-design.md``.
+        """
+        from grimoire.orchestrator.auxiliary_runner import run_auxiliary_task as _run
+
+        await self._require_campaign(campaign_id)
+        return await _run(
+            self,
+            campaign_id=campaign_id,
+            task=task,
+            on_token=on_token,
+            branch_id=branch_id,
+        )
+
+    async def discard_auxiliary(self, result_id: str) -> bool:
+        return self._inflight_aux.pop(result_id, None) is not None
+
+    def list_inflight_auxiliary(self, campaign_id: CampaignId | None = None) -> list[Any]:
+        results = list(self._inflight_aux.values())
+        if campaign_id is None:
+            return results
+        # Best-effort filter: aux tasks aren't tagged with campaign on the
+        # result itself, so callers either get all or pass the campaign id
+        # and we filter by it via a side dict (set by run_auxiliary_task).
+        tagged = getattr(self, "_inflight_aux_campaign", {})
+        return [r for r in results if tagged.get(r.id) == campaign_id]
+
+    async def accept_auxiliary(
+        self,
+        campaign_id: CampaignId,
+        result_id: str,
+        *,
+        edited_text: str | None = None,
+    ) -> dict[str, Any]:
+        """Commit an auxiliary result via the canonical path for its kind.
+
+        Dispatch matrix:
+          * `SUBMIT_POST`  → canonical `submit_post` as the active PC.
+          * `REPLACE_POST` → build a new alternate, swap primary.
+          * `APPEND_POST`  → append an NPC-authored post.
+          * `COPY` / `REPLACE_DRAFT` → return the text; no server mutation.
+        """
+        from grimoire.auxiliary.types import CommitAction
+        from grimoire.orchestrator.errors import (
+            AuxiliaryAlreadyCommittedError,
+            AuxiliaryNotFoundError,
+        )
+
+        await self._require_campaign(campaign_id)
+        aux = self._inflight_aux.pop(result_id, None)
+        if aux is None:
+            # Distinguish unknown id from already-committed: if the id
+            # looks like an `ar_` id but isn't present, treat as not-found.
+            raise AuxiliaryNotFoundError(result_id)
+
+        text = edited_text if edited_text is not None else aux.text
+        action = aux.pending_commit_action
+
+        if action == CommitAction.SUBMIT_POST:
+            pc_ref = (aux.task.extra_params or {}).get("active_pc_ref")
+            if not pc_ref:
+                pc_ref = await self._characters_active_pc(campaign_id)
+            submit = await self.submit_post(campaign_id, pc_ref, text)
+            logger.info(
+                "[aux-accept] task=%s campaign=%s result=%s submitted",
+                aux.task.kind.value,
+                campaign_id,
+                result_id,
+            )
+            return {
+                "committed": True,
+                "action": "submit_post",
+                "result_id": result_id,
+                "turn_id": getattr(submit, "turn_id", None),
+            }
+
+        if action == CommitAction.REPLACE_POST:
+            try:
+                return await self._accept_rewrite_post(campaign_id, aux, text)
+            except Exception:
+                # Re-park so the user can retry.
+                self._inflight_aux[result_id] = aux
+                raise
+
+        if action == CommitAction.APPEND_POST:
+            scene = await self._scenes.active_scene_for_campaign(campaign_id, "main")
+            if scene is None:
+                raise OrchestratorError(
+                    f"no active scene for aux append in campaign {campaign_id!r}"
+                )
+            post = self._new_post(
+                author_kind=SceneAuthorKind.NPC,
+                body=text,
+                is_player=False,
+                author_npc_ref=aux.task.target_character_ref,
+            )
+            await self._scenes.append_post(scene.id, post)
+            logger.info(
+                "[aux-accept] task=%s campaign=%s result=%s appended=%s",
+                aux.task.kind.value,
+                campaign_id,
+                result_id,
+                post.id,
+            )
+            return {
+                "committed": True,
+                "action": "append_post",
+                "result_id": result_id,
+                "post_id": post.id,
+            }
+
+        # COPY / REPLACE_DRAFT — no server-side change.
+        logger.info(
+            "[aux-accept] task=%s campaign=%s result=%s action=%s no-op",
+            aux.task.kind.value,
+            campaign_id,
+            result_id,
+            action.value,
+        )
+        return {
+            "committed": True,
+            "action": action.value,
+            "result_id": result_id,
+            "text": text,
+        }
+        # `AuxiliaryAlreadyCommittedError` is reserved for a future double-
+        # accept race; the pop-on-entry above already makes the common case
+        # idempotent (second call sees an unknown id → AuxiliaryNotFoundError).
+        _ = AuxiliaryAlreadyCommittedError  # keep import live for re-export
+
+    async def _characters_active_pc(self, campaign_id: CampaignId) -> CharacterRef:
+        getter = getattr(self._context, "_characters", None)
+        if getter is not None and hasattr(getter, "active_pc"):
+            ref = await getter.active_pc(campaign_id)
+            if ref:
+                return ref
+        # Fallback: read from campaign_pcs.
+        row = await self._store.db.fetchone(
+            "SELECT character_ref FROM campaign_pcs WHERE campaign_id = ? LIMIT 1",
+            (campaign_id,),
+        )
+        if row is None:
+            raise OrchestratorError(f"no active PC for campaign {campaign_id!r}")
+        return row["character_ref"] if hasattr(row, "__getitem__") else row[0]
+
+    async def _accept_rewrite_post(
+        self,
+        campaign_id: CampaignId,
+        aux: Any,
+        text: str,
+    ) -> dict[str, Any]:
+        """Build a new alternate from the auxiliary's text and switch primary.
+
+        Run extraction against the rewritten text so the new alternate
+        carries its own delta set, then call `switch_primary_alternate`
+        to atomically rewind the old set and apply the new one.
+        """
+        from grimoire.auxiliary.types import TaskKind
+        from grimoire.scenes.types import Alternate
+
+        post_id = aux.task.target_post_id
+        if not post_id:
+            raise OrchestratorError("rewrite_post auxiliary missing target_post_id")
+        scene, post = await self._find_scene_and_post(post_id)
+        branch_id = scene.branch_id or "main"
+        new_alt_id = f"a_{uuid.uuid4().hex[:16]}"
+        new_ds_id = f"ds_{uuid.uuid4().hex[:16]}"
+
+        # Extract deltas from the new text against the scene snapshot.
+        deltas: list[Any] = []
+        try:
+            pyd_scene = _pydantic_scene(scene)
+            snapshot = StateSnapshot(
+                campaign_id=campaign_id, branch_id=branch_id, scene_id=scene.id
+            )
+            extraction = await self._extractor.extract(
+                text, pyd_scene, campaign_id, snapshot, turn_id=post.turn_id
+            )
+            deltas = list(getattr(extraction, "deltas", []) or [])
+        except Exception as exc:
+            logger.warning("aux rewrite_post extraction failed: %s", exc)
+            deltas = []
+
+        # Persist a non-primary alternate first.
+        alt = Alternate(
+            id=new_alt_id,
+            post_id=post_id,
+            text=text,
+            delta_set_id=new_ds_id,
+            author_kind=post.author_kind,
+            model=getattr(aux, "model_used", None) or "",
+            prompt_hash=None,
+            steering_hint=aux.task.edit_instruction,
+            created_at=datetime.now(UTC),
+            tokens=getattr(aux, "tokens", None),
+            pinned=False,
+            is_primary=False,
+        )
+        await self._scenes.append_alternate(post_id, alt)
+
+        # Apply the new delta set under its own id without flipping the
+        # current pointer yet; switch_primary_alternate will rewind the
+        # currently-active set and re-activate this one atomically.
+        if deltas and hasattr(self._store, "apply_delta_set"):
+            try:
+                await self._store.apply_delta_set(
+                    deltas=deltas,
+                    delta_set_id=new_ds_id,
+                    campaign_id=campaign_id,
+                    branch_id=branch_id,
+                    turn_id=post.turn_id,
+                    source="orchestrator:aux-rewrite",
+                )
+            except Exception as exc:
+                logger.warning("aux rewrite_post apply_delta_set failed: %s", exc)
+
+        switch = await self.switch_primary_alternate(
+            campaign_id=campaign_id, post_id=post_id, alternate_id=new_alt_id
+        )
+        logger.info(
+            "[aux-accept] task=%s campaign=%s result=%s cascaded_replace=%s alt=%s",
+            TaskKind.REWRITE_POST.value,
+            campaign_id,
+            aux.id,
+            bool(switch.get("delta_swap")),
+            new_alt_id,
+        )
+        return {
+            "committed": True,
+            "action": "replace_post",
+            "result_id": aux.id,
+            "post_id": post_id,
+            "alternate_id": new_alt_id,
+            "cascaded_replace": bool(switch.get("delta_swap")),
+        }
 
     async def undo_turn(self, campaign_id: CampaignId, count: int = 1) -> UndoResult:
         await self._require_campaign(campaign_id)
