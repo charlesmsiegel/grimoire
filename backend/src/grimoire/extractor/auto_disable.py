@@ -1,6 +1,6 @@
 """`AutoDisableState`: per-(provider, model, mode) health tracking.
 
-Reads/writes the ``extractor_mode_health`` table populated by the 024
+Reads/writes the ``extractor_mode_health`` table populated by the 025
 migration. The mode selector consults `together_disabled` /
 `tool_use_disabled` before honouring a configured Together/Tool-use
 preference; the extractor calls `record_call` on every attempt so the
