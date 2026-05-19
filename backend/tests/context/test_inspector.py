@@ -42,9 +42,7 @@ class StubPinStore:
         current_turn_id: str | None = None,
     ) -> list[dict]:
         return [
-            p
-            for p in self.pins
-            if p["campaign_id"] == campaign_id and p.get("cleared_at") is None
+            p for p in self.pins if p["campaign_id"] == campaign_id and p.get("cleared_at") is None
         ]
 
     async def write_context_pin(self, **kwargs: Any) -> str:
@@ -55,9 +53,7 @@ class StubPinStore:
                 "campaign_id": kwargs["campaign_id"],
                 "branch_id": kwargs["branch_id"],
                 "kind": kwargs["kind"],
-                "target_kind": (
-                    "source" if kwargs.get("target_source_id") else "entity"
-                ),
+                "target_kind": ("source" if kwargs.get("target_source_id") else "entity"),
                 "target_source_id": kwargs.get("target_source_id"),
                 "target_entity_kind": kwargs.get("target_entity_kind"),
                 "target_entity_id": kwargs.get("target_entity_id"),
@@ -114,9 +110,7 @@ async def test_preview_returns_handle_and_summary() -> None:
 async def test_get_returns_assembled_prompt() -> None:
     builder = _builder()
     insp = ContextInspector(builder=builder)
-    handle, _ = await insp.preview(
-        campaign_id="camp", player_input="hi", session_id="s1"
-    )
+    handle, _ = await insp.preview(campaign_id="camp", player_input="hi", session_id="s1")
     prompt = await insp.get(session_id="s1", handle=handle)
     assert isinstance(prompt, AssembledPrompt)
 
@@ -128,9 +122,7 @@ async def test_explain_returns_per_source_reasons() -> None:
     )
     builder = _builder(characters=chars)
     insp = ContextInspector(builder=builder)
-    handle, _ = await insp.preview(
-        campaign_id="camp", player_input="hi", session_id="s1"
-    )
+    handle, _ = await insp.preview(campaign_id="camp", player_input="hi", session_id="s1")
     explanations = await insp.explain(session_id="s1", handle=handle)
     pc = next(e for e in explanations if InclusionReason.PC_CARD in e.inclusion_reasons)
     assert pc.source_id.startswith("src_")
@@ -139,9 +131,7 @@ async def test_explain_returns_per_source_reasons() -> None:
 async def test_session_isolation() -> None:
     builder = _builder()
     insp = ContextInspector(builder=builder)
-    handle, _ = await insp.preview(
-        campaign_id="camp", player_input="hi", session_id="s_a"
-    )
+    handle, _ = await insp.preview(campaign_id="camp", player_input="hi", session_id="s_a")
     with pytest.raises(HandleNotFound):
         await insp.get(session_id="s_b", handle=handle)
 
@@ -154,9 +144,7 @@ async def test_handle_lru_evicts_oldest() -> None:
     )
     handles: list[str] = []
     for i in range(4):
-        h, _ = await insp.preview(
-            campaign_id="camp", player_input=f"in-{i}", session_id="s1"
-        )
+        h, _ = await insp.preview(campaign_id="camp", player_input=f"in-{i}", session_id="s1")
         handles.append(h)
     # First handle has been evicted by LRU.
     with pytest.raises(HandleNotFound):
@@ -172,9 +160,7 @@ async def test_diff_two_handles_added_removed() -> None:
     scenes1 = StubScenes(scene=_Scene(present_character_refs=[]))
     builder1 = _builder(characters=chars1, scenes=scenes1)
     insp = ContextInspector(builder=builder1)
-    handle_a, _ = await insp.preview(
-        campaign_id="camp", player_input="quiet", session_id="s1"
-    )
+    handle_a, _ = await insp.preview(campaign_id="camp", player_input="quiet", session_id="s1")
     # Swap to a builder where winifred is present.
     chars2 = StubCharacters(cards={npc: _Card(full="# winifred")})
     scenes2 = StubScenes(scene=_Scene(present_character_refs=[npc]))
@@ -190,12 +176,8 @@ async def test_diff_two_handles_added_removed() -> None:
 async def test_diff_budget_shifts_per_tier() -> None:
     builder = _builder()
     insp = ContextInspector(builder=builder)
-    ha, _ = await insp.preview(
-        campaign_id="camp", player_input="a", session_id="s1"
-    )
-    hb, _ = await insp.preview(
-        campaign_id="camp", player_input="b", session_id="s1"
-    )
+    ha, _ = await insp.preview(campaign_id="camp", player_input="a", session_id="s1")
+    hb, _ = await insp.preview(campaign_id="camp", player_input="b", session_id="s1")
     diff = await insp.diff(a=ha, b=hb, session_id="s1")
     assert set(diff.budget_shifts.keys()) == set(ContextTier)
 
@@ -203,19 +185,20 @@ async def test_diff_budget_shifts_per_tier() -> None:
 async def test_diff_against_turn_uses_observability_audit() -> None:
     # Stub a tiny observability with one audit.
     class _Audit:
-        assembled_messages = [Message(role=MessageRole.SYSTEM, content="hello")]
-        context_sources = [
-            ContextSource(
-                kind="character",
-                scope="library",
-                owner_id="library:x/y",
-                tier=ContextTier.SPOTLIGHT,
-                source_id="src_abc",
-            )
-        ]
-        context_budget_used: dict = {ContextTier.SPOTLIGHT: 100}
-        context_messages_hash = "hash"
-        model_params = ModelParams()
+        def __init__(self) -> None:
+            self.assembled_messages = [Message(role=MessageRole.SYSTEM, content="hello")]
+            self.context_sources = [
+                ContextSource(
+                    kind="character",
+                    scope="library",
+                    owner_id="library:x/y",
+                    tier=ContextTier.SPOTLIGHT,
+                    source_id="src_abc",
+                )
+            ]
+            self.context_budget_used: dict = {ContextTier.SPOTLIGHT: 100}
+            self.context_messages_hash = "hash"
+            self.model_params = ModelParams()
 
     class _Obs:
         async def get_turn_audit(self, turn_id: str) -> Any:
@@ -268,9 +251,7 @@ async def test_clear_pin_marks_cleared() -> None:
     builder = _builder()
     store = StubPinStore()
     insp = ContextInspector(builder=builder, store=store)
-    pin_id = await insp.pin(
-        campaign_id="camp", target=PinTarget(entity_kind="x", entity_id="y")
-    )
+    pin_id = await insp.pin(campaign_id="camp", target=PinTarget(entity_kind="x", entity_id="y"))
     await insp.clear_pin(pin_id=pin_id)
     assert store.pins[0]["cleared_at"] == "now"
 
@@ -279,9 +260,7 @@ async def test_pin_without_store_raises() -> None:
     builder = _builder()
     insp = ContextInspector(builder=builder, store=None)
     with pytest.raises(RuntimeError):
-        await insp.pin(
-            campaign_id="camp", target=PinTarget(entity_kind="x", entity_id="y")
-        )
+        await insp.pin(campaign_id="camp", target=PinTarget(entity_kind="x", entity_id="y"))
 
 
 async def test_preview_is_byte_identical_to_canonical_build() -> None:

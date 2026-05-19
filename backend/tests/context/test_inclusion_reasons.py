@@ -130,9 +130,7 @@ async def test_compose_multi_reason_for_present_with_commitment() -> None:
     continuity = StubContinuity(commitments=[commit])
     builder = _builder(characters=chars, scenes=scenes, continuity=continuity)
     prompt = await builder.build("hello", "camp")
-    winifred = next(
-        s for s in prompt.sources if s.kind == "character" and s.owner_id == npc_ref
-    )
+    winifred = next(s for s in prompt.sources if s.kind == "character" and s.owner_id == npc_ref)
     assert InclusionReason.PRESENT_IN_SCENE in winifred.inclusion_reasons
     assert InclusionReason.COMMITMENT_OPEN_TO_PC in winifred.inclusion_reasons
 
