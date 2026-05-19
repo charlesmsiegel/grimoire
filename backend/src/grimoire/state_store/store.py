@@ -1267,6 +1267,19 @@ class StateStore:
         a non-null ``tier_pin`` appear in the result. Intended for callers
         that need pins for many characters at once (e.g. the Characters
         service's tier computation) so they avoid one query per character.
+
+        .. warning::
+
+           The ``WHERE tier_pin IS NOT NULL`` filter assumes no caller ever
+           writes an explicit ``NULL`` ``tier_pin`` on a child branch while
+           an ancestor branch has one set. Today this holds because there
+           is no "unpin" API and ``_load_state`` always carries the parent
+           value forward when CoW'ing a row. If an unpin path is ever
+           added, this batch reader will silently disagree with the
+           single-row :meth:`resolve_character_state` reader, which honors
+           the topmost row regardless of NULL. Adjust the query (e.g. fetch
+           all rows and let ``NULL`` evict an ancestor's value) before
+           introducing such an API.
         """
         seen: dict[str, str] = {}
         for bid in await self.branch_chain(branch_id):
