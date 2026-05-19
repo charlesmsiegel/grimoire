@@ -10,9 +10,10 @@ interface Props {
   pcs: PCEntry[];
   streaming: PendingTurn | null;
   images: Record<string, SceneImage>;
+  campaignId?: string;
 }
 
-export function ScenePane({ posts, pcs, streaming, images }: Props) {
+export function ScenePane({ posts, pcs, streaming, images, campaignId }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -29,13 +30,29 @@ export function ScenePane({ posts, pcs, streaming, images }: Props) {
     }
   }
 
+  // The latest model-authored post in scene order; alternates can only be
+  // mutated on this post per the swipes-alternates design.
+  let latestModelPostId: string | null = null;
+  for (const p of posts) {
+    if (p.author_kind !== "pc" && !p.is_player) {
+      latestModelPostId = p.id;
+    }
+  }
+
   return (
     <section className="scene-pane" aria-label="Scene posts" aria-live="polite">
       {posts.length === 0 && !streaming && (
         <p className="scene-empty">No posts yet. Begin with a post below.</p>
       )}
       {posts.map((post) => (
-        <PostItem key={post.id} post={post} pcs={pcs} images={byPost[post.id] ?? []} />
+        <PostItem
+          key={post.id}
+          post={post}
+          pcs={pcs}
+          images={byPost[post.id] ?? []}
+          isLatestModelPost={post.id === latestModelPostId}
+          campaignId={campaignId}
+        />
       ))}
       {streaming && (
         <article className="post post-streaming" aria-label="Narrator response, streaming">

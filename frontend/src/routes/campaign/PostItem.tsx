@@ -1,11 +1,20 @@
+import { useMemo, useState } from "react";
+
 import { Markdown } from "../../components/Markdown";
-import type { ApiPost, PCEntry } from "../../api/campaign";
+import { campaignApi, type ApiAlternate, type ApiPost, type PCEntry } from "../../api/campaign";
 import type { SceneImage } from "./usePlayState";
 
 interface Props {
   post: ApiPost;
   pcs: PCEntry[];
   images: SceneImage[];
+  /** True when this post is the latest model-authored post in its scene.
+   * Swipes (chevron prev/next, regenerate, pin) are only allowed there per the
+   * swipes-alternates design; otherwise the buttons are disabled and a tooltip
+   * directs the user to Retcon / Fork. */
+  isLatestModelPost?: boolean;
+  /** Campaign id; required for alternate mutations. Omit to render read-only. */
+  campaignId?: string;
 }
 
 const AUTHOR_LABELS: Record<ApiPost["author_kind"], string> = {
@@ -24,8 +33,63 @@ function authorName(post: ApiPost, pcs: PCEntry[]): string {
   return AUTHOR_LABELS[post.author_kind];
 }
 
-export function PostItem({ post, pcs, images }: Props) {
+function primaryCursor(alternates: ApiAlternate[], primaryId: string | null | undefined): number {
+  if (!primaryId) return 0;
+  const i = alternates.findIndex((a) => a.id === primaryId);
+  return i < 0 ? 0 : i;
+}
+
+export function PostItem({ post, pcs, images, isLatestModelPost = false, campaignId }: Props) {
   const name = authorName(post, pcs);
+  const alternates = useMemo(() => post.alternates ?? [], [post.alternates]);
+  const initialCursor = useMemo(
+    () => primaryCursor(alternates, post.primary_alternate_id),
+    [alternates, post.primary_alternate_id],
+  );
+  const [cursor, setCursor] = useState(initialCursor);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const showStrip = alternates.length > 1;
+  const current = alternates[cursor];
+  const canMutate = isLatestModelPost && !!campaignId;
+
+  async function call(action: () => Promise<unknown>) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "request failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function gotoIndex(next: number) {
+    if (!canMutate || next === cursor || next < 0 || next >= alternates.length) return;
+    const target = alternates[next];
+    if (!target) return;
+    await call(async () => {
+      await campaignApi.switchPrimaryAlternate(campaignId!, post.scene_id, post.id, target.id);
+      setCursor(next);
+    });
+  }
+
+  async function togglePin() {
+    if (!canMutate || !current) return;
+    const target = current;
+    await call(() =>
+      campaignApi.pinAlternate(campaignId!, post.scene_id, post.id, target.id, !target.pinned),
+    );
+  }
+
+  async function regenerate() {
+    if (!canMutate) return;
+    await call(() => campaignApi.regeneratePost(campaignId!, post.scene_id, post.id));
+  }
+
   return (
     <article className={`post post-${post.author_kind}`} aria-label={`Post by ${name}`}>
       <header className="post-header">
@@ -44,6 +108,61 @@ export function PostItem({ post, pcs, images }: Props) {
             </li>
           ))}
         </ul>
+      )}
+      {showStrip && (
+        <div className="chevron-strip" role="group" aria-label="Alternates">
+          <button
+            type="button"
+            className="chevron-prev"
+            aria-label="Previous alternate"
+            disabled={!canMutate || cursor === 0 || busy}
+            onClick={() => gotoIndex(cursor - 1)}
+          >
+            ◀
+          </button>
+          <span className="chevron-count" aria-live="polite">
+            {cursor + 1} of {alternates.length}
+          </span>
+          <button
+            type="button"
+            className="chevron-next"
+            aria-label="Next alternate"
+            disabled={!canMutate || cursor === alternates.length - 1 || busy}
+            onClick={() => gotoIndex(cursor + 1)}
+          >
+            ▶
+          </button>
+          <button
+            type="button"
+            className="chevron-pin"
+            aria-label={current?.pinned ? "Unpin alternate" : "Pin alternate"}
+            aria-pressed={current?.pinned ? true : false}
+            disabled={!canMutate || busy}
+            onClick={togglePin}
+          >
+            {current?.pinned ? "📌" : "📍"}
+          </button>
+          <button
+            type="button"
+            className="chevron-regenerate"
+            aria-label="Regenerate post"
+            disabled={!canMutate || busy}
+            onClick={regenerate}
+          >
+            🔄
+          </button>
+          {!isLatestModelPost && (
+            <span className="chevron-hint" role="note">
+              Switching alternates is only available on the latest post. Use Retcon to revise
+              earlier posts or Fork for a new timeline.
+            </span>
+          )}
+          {error && (
+            <span className="chevron-error" role="alert">
+              {error}
+            </span>
+          )}
+        </div>
       )}
     </article>
   );

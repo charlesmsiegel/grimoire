@@ -90,3 +90,32 @@ def test_websocket_receives_event_bus_messages(client, container: ServiceContain
         msg = ws.receive_json()
         assert msg["type"] == "drift_detected"
         assert msg["character_ref"] == "alistair"
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    ["alternate_added", "primary_switched", "alternate_pinned", "alternate_deleted"],
+)
+@pytest.mark.asyncio
+async def test_alternate_events_are_forwarded(event_type: str) -> None:
+    bus = EventBus()
+    stream = StreamManager(event_bus=bus)
+    received: list[dict] = []
+
+    class _FakeWS:
+        async def accept(self) -> None: ...
+        async def send_json(self, message: dict) -> None:
+            received.append(message)
+
+        async def close(self) -> None: ...
+
+    await stream.connect("c1", _FakeWS())  # type: ignore[arg-type]
+    await bus.emit(
+        Event(
+            type=event_type,
+            payload={"campaign_id": "c1", "post_id": "p1", "alternate_id": "a1"},
+        )
+    )
+    assert received and received[0]["type"] == event_type
+    assert received[0]["post_id"] == "p1"
+    await stream.aclose()

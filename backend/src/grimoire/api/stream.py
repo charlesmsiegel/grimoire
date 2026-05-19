@@ -61,6 +61,10 @@ _FORWARDED_EVENTS: tuple[str, ...] = (
     "mechanics_event",
     "thread_opened",
     "thread_closed",
+    "alternate_added",
+    "primary_switched",
+    "alternate_pinned",
+    "alternate_deleted",
 )
 
 
