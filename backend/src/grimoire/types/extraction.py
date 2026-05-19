@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
-
-from typing import Any
 
 from .common import EntityKind, Json
 from .expressions import ExpressionChange

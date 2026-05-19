@@ -95,6 +95,10 @@ def get_transient_state(request: Request) -> Any:
     return _require(get_container(request), "transient_state")
 
 
+def get_extras_service(request: Request) -> Any:
+    return _require(get_container(request), "extras_service")
+
+
 ContainerDep = Annotated[ServiceContainer, Depends(get_container)]
 LibraryDep = Annotated[Any, Depends(get_library)]
 WorldDep = Annotated[Any, Depends(get_world)]
@@ -111,6 +115,7 @@ OrchestratorDep = Annotated[Any, Depends(get_orchestrator)]
 ObservabilityDep = Annotated[Any, Depends(get_observability)]
 StreamDep = Annotated[Any, Depends(get_stream)]
 TransientStateDep = Annotated[Any, Depends(get_transient_state)]
+ExtrasServiceDep = Annotated[Any, Depends(get_extras_service)]
 
 
 __all__ = [
@@ -118,6 +123,7 @@ __all__ = [
     "ContainerDep",
     "ContinuityDep",
     "ExportDep",
+    "ExtrasServiceDep",
     "ImageGenDep",
     "LibraryDep",
     "MechanicsDep",
@@ -134,6 +140,7 @@ __all__ = [
     "get_container",
     "get_continuity",
     "get_export",
+    "get_extras_service",
     "get_imagegen",
     "get_library",
     "get_mechanics",

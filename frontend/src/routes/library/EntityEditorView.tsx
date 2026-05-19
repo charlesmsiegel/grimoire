@@ -13,6 +13,7 @@ import { useResource } from "../../api/useResource";
 import { Markdown } from "../../components/Markdown";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { CharacterExtras } from "./CharacterExtras";
+import { ExtrasTable } from "./ExtrasTable";
 import { FrontmatterEditor } from "./FrontmatterEditor";
 import { ensureFrontmatter, type Frontmatter } from "./frontmatter";
 import { greetingFormToPayload, type GreetingFormValue } from "./greeting-form";
@@ -20,7 +21,9 @@ import { GreetingFormFields } from "./GreetingFormFields";
 import { VariantsBreadcrumb } from "./VariantsBreadcrumb";
 import { VariantsPanel } from "./VariantsPanel";
 
-const CHARACTER_HIDDEN_KEYS = ["voice", "image", "name", "id"];
+const CHARACTER_HIDDEN_KEYS = ["voice", "image", "name", "id", "extras"];
+const ENTITY_HIDDEN_KEYS = ["extras"];
+const EXTRAS_SUPPORTED_KINDS = new Set(["characters", "locations", "items", "factions"]);
 
 export function EntityEditorView() {
   const { worldId = "", kind = "characters", entityId = "" } = useParams();
@@ -193,16 +196,25 @@ function EntityEditorBody({
         <Route
           index
           element={
-            <EditorPanel
-              frontmatter={frontmatter}
-              onFrontmatterChange={patchFrontmatter}
-              body={body}
-              onBodyChange={(b) => {
-                setBody(b);
-                setDirty(true);
-              }}
-              isCharacter={isCharacter}
-            />
+            <>
+              <EditorPanel
+                frontmatter={frontmatter}
+                onFrontmatterChange={patchFrontmatter}
+                body={body}
+                onBodyChange={(b) => {
+                  setBody(b);
+                  setDirty(true);
+                }}
+                isCharacter={isCharacter}
+              />
+              {EXTRAS_SUPPORTED_KINDS.has(kindPlural) ? (
+                <ExtrasTable
+                  worldId={worldId}
+                  kind={ENTITY_KIND_SINGULAR[kindPlural] ?? kindPlural}
+                  entityId={entityId}
+                />
+              ) : null}
+            </>
           }
         />
         {isCharacter && (
@@ -261,7 +273,7 @@ function EditorPanel({
         <FrontmatterEditor
           value={frontmatter}
           onChange={onFrontmatterChange}
-          hiddenKeys={isCharacter ? CHARACTER_HIDDEN_KEYS : []}
+          hiddenKeys={isCharacter ? CHARACTER_HIDDEN_KEYS : ENTITY_HIDDEN_KEYS}
         />
       </section>
       <section className="entity-editor-panel" aria-labelledby="body-heading">

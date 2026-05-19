@@ -17,6 +17,7 @@ from grimoire.api.config import router as config_router
 from grimoire.api.container import ServiceContainer
 from grimoire.api.context import router as context_router
 from grimoire.api.expressions import router as expressions_router
+from grimoire.api.extras import router as extras_router
 from grimoire.api.health import router as health_router
 from grimoire.api.hud import router as hud_router
 from grimoire.api.imagegen import router as imagegen_router
@@ -204,6 +205,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         library_cfg = LibraryConfig.from_yaml(data_root / "config" / "library.yaml")
         if container.library is None:
             container.library = LibraryService(container.state_store, config=library_cfg)
+        if container.extras_service is None:
+            from grimoire.extras import ExtrasService
+
+            container.extras_service = ExtrasService(
+                library=container.library,
+                store=container.state_store,
+            )
         if container.world is None:
             world_cfg = WorldConfig.from_yaml(data_root / "config" / "world.yaml")
             container.world = WorldService(container.library, config=world_cfg)
@@ -737,6 +745,7 @@ def create_app() -> FastAPI:
     app.include_router(observability_router, prefix="/api")
     app.include_router(transient_state_router, prefix="/api")
     app.include_router(context_router, prefix="/api")
+    app.include_router(extras_router, prefix="/api")
     # WebSocket routes mount under /ws so the Vite dev server's `ws: true`
     # proxy block forwards upgrade requests correctly. The HTTP health probe
     # in the same router lands at /ws/health.
