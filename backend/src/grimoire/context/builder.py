@@ -51,6 +51,12 @@ from grimoire.types.state import ContextTier
 logger = logging.getLogger(__name__)
 
 
+# Default branch suffix for callers that omit ``branch_id``. The Inspector
+# panel exposes this same default via :class:`_InspectorConfig` so writes
+# from the UI line up with reads from the builder.
+DEFAULT_BRANCH_SUFFIX = "main"
+
+
 # --------------------------------------------------------------------------- #
 # Internal data shapes
 # --------------------------------------------------------------------------- #
@@ -65,6 +71,37 @@ class _TierItem:
     text: str
     source: ContextSource
     priority: int = 0  # higher = packed first
+    pinned: bool = False  # exempt from budget-driven eviction
+
+
+@dataclass
+class _PinSet:
+    """Active context pins / excludes for a single build.
+
+    ``pinned_source_ids`` and ``excluded_source_ids`` reference
+    ``ContextSource.source_id`` values directly. ``pinned_entities`` and
+    ``excluded_entities`` are ``(kind, ref)`` tuples that match a source
+    via ``(source.kind, source.owner_id)``.
+    """
+
+    pinned_source_ids: set[str] = field(default_factory=set)
+    excluded_source_ids: set[str] = field(default_factory=set)
+    pinned_entities: set[tuple[str, str]] = field(default_factory=set)
+    excluded_entities: set[tuple[str, str]] = field(default_factory=set)
+
+    def is_excluded(self, source: ContextSource) -> bool:
+        if source.source_id and source.source_id in self.excluded_source_ids:
+            return True
+        if (source.kind, source.owner_id or "") in self.excluded_entities:
+            return True
+        return False
+
+    def is_pinned(self, source: ContextSource) -> bool:
+        if source.source_id and source.source_id in self.pinned_source_ids:
+            return True
+        if (source.kind, source.owner_id or "") in self.pinned_entities:
+            return True
+        return False
 
 
 @dataclass
@@ -144,6 +181,7 @@ class ContextBuilderService:
         extractor_mode: ExtractionMode = ExtractionMode.SEPARATE,
         auxiliary_task: object | None = None,
     ) -> AssembledPrompt:
+        pins = await self._load_pins(campaign_id, branch_id, turn_id)
         ctx = await self._build_context(
             player_input=player_input,
             campaign_id=campaign_id,
@@ -152,6 +190,7 @@ class ContextBuilderService:
             branch_id=branch_id,
             pc_ref=pc_ref,
             turn_id=turn_id,
+            pins=pins,
         )
         prompt = await self._assemble(ctx, player_input)
         return self._apply_extractor_mode(
@@ -168,6 +207,7 @@ class ContextBuilderService:
         turn_id: TurnId | None = None,
     ) -> BudgetEstimate:
         """Dry-run the pipeline and report what each tier would consume."""
+        pins = await self._load_pins(campaign_id, branch_id, turn_id)
         ctx = await self._build_context(
             player_input=player_input,
             campaign_id=campaign_id,
@@ -176,6 +216,7 @@ class ContextBuilderService:
             branch_id=branch_id,
             pc_ref=pc_ref,
             turn_id=turn_id,
+            pins=pins,
         )
         assembled = await self._assemble(ctx, player_input)
         return BudgetEstimate(
@@ -189,6 +230,60 @@ class ContextBuilderService:
     # Internals — context gathering
     # ------------------------------------------------------------------ #
 
+    async def _load_pins(
+        self,
+        campaign_id: CampaignId,
+        branch_id: str | None,
+        turn_id: TurnId | None,
+    ) -> _PinSet:
+        pins = _PinSet()
+        if self._store is None:
+            return pins
+        lister = getattr(self._store, "list_active_context_pins", None)
+        if lister is None:
+            return pins
+        bid = branch_id or f"{campaign_id}:{DEFAULT_BRANCH_SUFFIX}"
+        try:
+            rows = await lister(
+                campaign_id=campaign_id,
+                branch_id=bid,
+                current_turn_id=turn_id,
+            )
+        except Exception as exc:
+            # Fail loud on pin-load failure: silently returning an empty
+            # ``_PinSet`` would leak user-excluded content into the next
+            # prompt. Surface the error to operators and bubble up so the
+            # turn can be retried (or the cause investigated) instead of
+            # quietly sending suppressed entities to the LLM.
+            logger.error(
+                "context-builder: list_active_context_pins failed for campaign=%s branch=%s: %s",
+                campaign_id,
+                bid,
+                exc,
+            )
+            raise
+        for row in rows or []:
+            kind = row.get("kind")
+            target_kind = row.get("target_kind")
+            if target_kind == "source":
+                sid = row.get("target_source_id") or ""
+                if not sid:
+                    continue
+                if kind == "exclude":
+                    pins.excluded_source_ids.add(sid)
+                else:
+                    pins.pinned_source_ids.add(sid)
+            elif target_kind == "entity":
+                ek = row.get("target_entity_kind") or ""
+                eid = row.get("target_entity_id") or ""
+                if not (ek and eid):
+                    continue
+                if kind == "exclude":
+                    pins.excluded_entities.add((ek, eid))
+                else:
+                    pins.pinned_entities.add((ek, eid))
+        return pins
+
     async def _build_context(
         self,
         *,
@@ -199,7 +294,9 @@ class ContextBuilderService:
         branch_id: str | None,
         pc_ref: str | None,
         turn_id: TurnId | None = None,
+        pins: _PinSet | None = None,
     ) -> _BuiltContext:
+        pins = pins or _PinSet()
         # Step 0 — composition
         composition = await self._safe_call(self._library.get_composition, campaign_id)
         style_text = await self._resolve_style_guide(composition)
@@ -297,12 +394,39 @@ class ContextBuilderService:
         # Mechanics block (lock-in)
         mechanics_block = self._render_mechanics(mechanics_results)
 
+        # Apply exclude pins and mark pinned items before assembly.
+        def _filter_items(items: list[_TierItem]) -> list[_TierItem]:
+            kept: list[_TierItem] = []
+            for it in items:
+                if pins.is_excluded(it.source):
+                    continue
+                if pins.is_pinned(it.source):
+                    it.pinned = True
+                    if InclusionReason.PINNED_BY_USER not in it.source.inclusion_reasons:
+                        it.source.inclusion_reasons.append(InclusionReason.PINNED_BY_USER)
+                kept.append(it)
+            return kept
+
+        spotlight_items = _filter_items(spotlight_items)
+        background_items = _filter_items(background_items)
+        archive_items = _filter_items(archive_items)
+
         # Build full sources list (active PC card + commitments + tier items)
         sources: list[ContextSource] = []
         if active_pc_source is not None:
-            sources.append(active_pc_source)
+            if not pins.is_excluded(active_pc_source):
+                if pins.is_pinned(active_pc_source) and (
+                    InclusionReason.PINNED_BY_USER not in active_pc_source.inclusion_reasons
+                ):
+                    active_pc_source.inclusion_reasons.append(InclusionReason.PINNED_BY_USER)
+                sources.append(active_pc_source)
         if commitments_source is not None:
-            sources.append(commitments_source)
+            if not pins.is_excluded(commitments_source):
+                if pins.is_pinned(commitments_source) and (
+                    InclusionReason.PINNED_BY_USER not in commitments_source.inclusion_reasons
+                ):
+                    commitments_source.inclusion_reasons.append(InclusionReason.PINNED_BY_USER)
+                sources.append(commitments_source)
         for item in spotlight_items + background_items + archive_items:
             sources.append(item.source)
 
@@ -1863,11 +1987,22 @@ class ContextBuilderService:
         budget = self._config.tiers[tier].max_tokens
         if not items or budget <= 0:
             return 0
-        # Sort high-priority first; drop low-priority when budget is exhausted.
-        sorted_items = sorted(items, key=lambda it: -it.priority)
+        # Pinned items pack first and are exempt from budget truncation —
+        # they survive when ``used`` is over budget. Non-pinned items
+        # then pack high-priority first; drop the rest when over budget.
+        pinned_items = [it for it in items if it.pinned]
+        normal_items = sorted(
+            (it for it in items if not it.pinned),
+            key=lambda it: -it.priority,
+        )
         used = 0
         packed: list[str] = []
-        for item in sorted_items:
+        for item in pinned_items:
+            cost = await self._tokens(item.text)
+            packed.append(item.text)
+            item.source.tokens = cost
+            used += cost
+        for item in normal_items:
             cost = await self._tokens(item.text)
             if used + cost > budget:
                 continue
