@@ -53,31 +53,32 @@ class ExtrasMirror:
         set_by: str,
     ) -> None:
         value_json = _serialize_value(value)
-        async with self.db.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO entity_extras
-                    (campaign_id, entity_kind, entity_id, scope, key,
-                     value_json, set_at, set_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(campaign_id, entity_kind, entity_id, scope, key)
-                DO UPDATE SET
-                    value_json = excluded.value_json,
-                    set_at     = excluded.set_at,
-                    set_by     = excluded.set_by
-                """,
-                (
-                    campaign_id,
-                    entity_kind,
-                    entity_id,
-                    scope,
-                    key,
-                    value_json,
-                    set_at.isoformat(),
-                    set_by,
-                ),
-            )
-            await conn.commit()
+        # Database connections are opened with ``isolation_level=None``
+        # (autocommit). Each statement persists on its own; no explicit
+        # commit() needed.
+        await self.db.execute(
+            """
+            INSERT INTO entity_extras
+                (campaign_id, entity_kind, entity_id, scope, key,
+                 value_json, set_at, set_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(campaign_id, entity_kind, entity_id, scope, key)
+            DO UPDATE SET
+                value_json = excluded.value_json,
+                set_at     = excluded.set_at,
+                set_by     = excluded.set_by
+            """,
+            (
+                campaign_id,
+                entity_kind,
+                entity_id,
+                scope,
+                key,
+                value_json,
+                set_at.isoformat(),
+                set_by,
+            ),
+        )
 
     async def delete(
         self,
@@ -88,19 +89,17 @@ class ExtrasMirror:
         scope: str,
         key: str,
     ) -> None:
-        async with self.db.acquire() as conn:
-            await conn.execute(
-                """
-                DELETE FROM entity_extras
-                WHERE campaign_id = ?
-                  AND entity_kind = ?
-                  AND entity_id = ?
-                  AND scope = ?
-                  AND key = ?
-                """,
-                (campaign_id, entity_kind, entity_id, scope, key),
-            )
-            await conn.commit()
+        await self.db.execute(
+            """
+            DELETE FROM entity_extras
+            WHERE campaign_id = ?
+              AND entity_kind = ?
+              AND entity_id = ?
+              AND scope = ?
+              AND key = ?
+            """,
+            (campaign_id, entity_kind, entity_id, scope, key),
+        )
 
     async def delete_all_for_entity(
         self,
@@ -119,9 +118,7 @@ class ExtrasMirror:
         if scope is not None:
             sql += " AND scope = ?"
             params = (*params, scope)
-        async with self.db.acquire() as conn:
-            await conn.execute(sql, params)
-            await conn.commit()
+        await self.db.execute(sql, params)
 
     async def search(
         self,
