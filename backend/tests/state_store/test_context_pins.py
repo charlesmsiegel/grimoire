@@ -153,7 +153,5 @@ async def test_branch_isolation(store) -> None:
         target_entity_kind="character",
         target_entity_id="char_x",
     )
-    other = await store.list_active_context_pins(
-        campaign_id="camp", branch_id="camp:experiment"
-    )
+    other = await store.list_active_context_pins(campaign_id="camp", branch_id="camp:experiment")
     assert other == []

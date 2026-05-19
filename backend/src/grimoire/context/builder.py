@@ -92,16 +92,12 @@ class _PinSet:
     def is_excluded(self, source: ContextSource) -> bool:
         if source.source_id and source.source_id in self.excluded_source_ids:
             return True
-        if (source.kind, source.owner_id or "") in self.excluded_entities:
-            return True
-        return False
+        return (source.kind, source.owner_id or "") in self.excluded_entities
 
     def is_pinned(self, source: ContextSource) -> bool:
         if source.source_id and source.source_id in self.pinned_source_ids:
             return True
-        if (source.kind, source.owner_id or "") in self.pinned_entities:
-            return True
-        return False
+        return (source.kind, source.owner_id or "") in self.pinned_entities
 
 
 @dataclass
@@ -413,20 +409,18 @@ class ContextBuilderService:
 
         # Build full sources list (active PC card + commitments + tier items)
         sources: list[ContextSource] = []
-        if active_pc_source is not None:
-            if not pins.is_excluded(active_pc_source):
-                if pins.is_pinned(active_pc_source) and (
-                    InclusionReason.PINNED_BY_USER not in active_pc_source.inclusion_reasons
-                ):
-                    active_pc_source.inclusion_reasons.append(InclusionReason.PINNED_BY_USER)
-                sources.append(active_pc_source)
-        if commitments_source is not None:
-            if not pins.is_excluded(commitments_source):
-                if pins.is_pinned(commitments_source) and (
-                    InclusionReason.PINNED_BY_USER not in commitments_source.inclusion_reasons
-                ):
-                    commitments_source.inclusion_reasons.append(InclusionReason.PINNED_BY_USER)
-                sources.append(commitments_source)
+        if active_pc_source is not None and not pins.is_excluded(active_pc_source):
+            if pins.is_pinned(active_pc_source) and (
+                InclusionReason.PINNED_BY_USER not in active_pc_source.inclusion_reasons
+            ):
+                active_pc_source.inclusion_reasons.append(InclusionReason.PINNED_BY_USER)
+            sources.append(active_pc_source)
+        if commitments_source is not None and not pins.is_excluded(commitments_source):
+            if pins.is_pinned(commitments_source) and (
+                InclusionReason.PINNED_BY_USER not in commitments_source.inclusion_reasons
+            ):
+                commitments_source.inclusion_reasons.append(InclusionReason.PINNED_BY_USER)
+            sources.append(commitments_source)
         for item in spotlight_items + background_items + archive_items:
             sources.append(item.source)
 
@@ -1453,9 +1447,7 @@ class ContextBuilderService:
                         owner_id=hit.ref,
                         tier=ContextTier.ARCHIVE,
                         summary=f"score={hit.score:.3f}",
-                        source_id=_make_source_id(
-                            "retrieved", f"{hit.source_kind}:{hit.ref}"
-                        ),
+                        source_id=_make_source_id("retrieved", f"{hit.source_kind}:{hit.ref}"),
                         inclusion_reasons=[InclusionReason.KEYWORD_TRIGGERED],
                     ),
                 )
@@ -1482,9 +1474,7 @@ class ContextBuilderService:
                         owner_id=hit.ref,
                         tier=ContextTier.ARCHIVE,
                         summary=f"score={hit.score:.3f}",
-                        source_id=_make_source_id(
-                            "keyword", f"{hit.source_kind}:{hit.ref}"
-                        ),
+                        source_id=_make_source_id("keyword", f"{hit.source_kind}:{hit.ref}"),
                         inclusion_reasons=[InclusionReason.KEYWORD_TRIGGERED],
                     ),
                 )

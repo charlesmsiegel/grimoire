@@ -142,9 +142,7 @@ async def test_pinned_entity_survives_budget_truncation() -> None:
         }
     )
     store_no_pin = StubPinStore(pins=[])
-    b_unpinned = _builder(
-        characters=chars, scenes=scenes, state_store=store_no_pin, config=config
-    )
+    b_unpinned = _builder(characters=chars, scenes=scenes, state_store=store_no_pin, config=config)
     p_unpinned = await b_unpinned.build("hello", "camp")
     background_msgs = [m for m in p_unpinned.messages if m.content.startswith("# Background")]
     # Without pinning the long Henry card is dropped from the tight tier.
@@ -167,13 +165,9 @@ async def test_pinned_entity_survives_budget_truncation() -> None:
             }
         ],
     )
-    b_pinned = _builder(
-        characters=chars, scenes=scenes, state_store=store_with_pin, config=config
-    )
+    b_pinned = _builder(characters=chars, scenes=scenes, state_store=store_with_pin, config=config)
     p_pinned = await b_pinned.build("hello", "camp")
-    background_msgs_pinned = [
-        m for m in p_pinned.messages if m.content.startswith("# Background")
-    ]
+    background_msgs_pinned = [m for m in p_pinned.messages if m.content.startswith("# Background")]
     assert any("Henry" in m.content for m in background_msgs_pinned)
 
 
@@ -205,9 +199,7 @@ async def test_pin_does_not_reorder_tier() -> None:
     )
     builder = _builder(characters=chars, scenes=scenes, state_store=store)
     prompt = await builder.build("hello", "camp")
-    henry = next(
-        s for s in prompt.sources if s.owner_id == "library:worlds/wod/characters/henry"
-    )
+    henry = next(s for s in prompt.sources if s.owner_id == "library:worlds/wod/characters/henry")
     assert henry.tier == ContextTier.BACKGROUND
 
 
