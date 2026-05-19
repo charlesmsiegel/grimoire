@@ -14,6 +14,7 @@ from grimoire.api.campaigns import router as campaigns_router
 from grimoire.api.config import router as config_router
 from grimoire.api.container import ServiceContainer
 from grimoire.api.health import router as health_router
+from grimoire.api.hud import router as hud_router
 from grimoire.api.imagegen import router as imagegen_router
 from grimoire.api.library import router as library_router
 from grimoire.api.observability import router as observability_router
@@ -296,6 +297,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             container.observability = obs
         else:
             obs = container.observability
+
+        # Scene HUD aggregator + config persistence. The fetcher registry
+        # is populated lazily by the wiring callers; the bare service is
+        # enough to expose config CRUD and ``/widgets/available``.
+        if container.hud_config is None:
+            from grimoire.hud.config import HudConfigService
+
+            container.hud_config = HudConfigService(
+                data_root=data_root / "campaigns"
+            )
+        if container.hud is None:
+            from grimoire.hud.service import HudService
+
+            container.hud = HudService(config_service=container.hud_config)
         # §11: register imagegen backends with the observability health
         # monitor. The LLM gateway registers itself via
         # ``register_with_health_monitor`` below; embedding providers are
@@ -702,6 +717,7 @@ def create_app() -> FastAPI:
     app.include_router(templates_router, prefix="/api")
     app.include_router(campaigns_router, prefix="/api")
     app.include_router(imagegen_router, prefix="/api")
+    app.include_router(hud_router, prefix="/api")
     app.include_router(observability_router, prefix="/api")
     # WebSocket routes mount under /ws so the Vite dev server's `ws: true`
     # proxy block forwards upgrade requests correctly. The HTTP health probe

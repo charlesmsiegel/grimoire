@@ -42,6 +42,8 @@ class ServiceContainer:
     state_store: Any = None
     orchestrator: Any = None
     observability: Any = None
+    hud: Any = None
+    hud_config: Any = None
 
     extras: dict[str, Any] = field(default_factory=dict)
 

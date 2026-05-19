@@ -282,3 +282,77 @@ def test_validate_mechanics_manifest_allows_minimal_manifest() -> None:
         "api_version": "1",
     }
     assert validate_mechanics_manifest(minimal).ok
+
+
+# ---------------------------------------------------------------------------
+# Mechanics manifests — hud_widgets
+# ---------------------------------------------------------------------------
+
+
+def _manifest_with_widget(**widget_overrides) -> dict:
+    base_widget: dict = {
+        "id": "wod-mechanics.blood-pool",
+        "title": "Blood Pool",
+        "scope": "pc",
+        "visible_when": "pc.has_sheet",
+        "render_hint": "row",
+        "read": {"endpoint": "/mechanics/wod-mechanics/blood-pool"},
+        "edit": {
+            "kind": "composite",
+            "endpoint": "/mechanics/wod-mechanics/blood-pool",
+            "schema_ref": "schemas/blood-pool.json",
+        },
+        "refresh_on": ["turn_complete", "mechanics_event"],
+    }
+    base_widget.update(widget_overrides)
+    return {**VALID_MECHANICS_MANIFEST, "hud_widgets": [base_widget]}
+
+
+def test_hud_widgets_valid_manifest_accepts() -> None:
+    assert validate_mechanics_manifest(_manifest_with_widget()).ok
+
+
+def test_hud_widgets_id_must_be_prefixed_with_module_id() -> None:
+    manifest = _manifest_with_widget(id="elsewhere.widget")
+    result = validate_mechanics_manifest(manifest)
+    assert not result.ok
+    assert any("must be prefixed" in e.message for e in result.errors)
+
+
+def test_hud_widgets_core_prefix_is_reserved() -> None:
+    manifest = _manifest_with_widget(id="core.fake")
+    result = validate_mechanics_manifest(manifest)
+    assert not result.ok
+    assert any("core.*" in e.message or "reserved" in e.message for e in result.errors)
+
+
+def test_hud_widgets_duplicate_id_rejected() -> None:
+    widget = {
+        "id": "wod-mechanics.dup",
+        "title": "dup",
+        "read": {"endpoint": "/x"},
+    }
+    manifest = {
+        **VALID_MECHANICS_MANIFEST,
+        "hud_widgets": [widget, widget],
+    }
+    result = validate_mechanics_manifest(manifest)
+    assert not result.ok
+    assert any("duplicate" in e.message for e in result.errors)
+
+
+def test_hud_widgets_invalid_visible_when_rejected() -> None:
+    manifest = _manifest_with_widget(visible_when="scene.combat_active &&&")
+    result = validate_mechanics_manifest(manifest)
+    assert not result.ok
+    assert any("visible_when" in e.message or "invalid" in e.message.lower() for e in result.errors)
+
+
+def test_hud_widgets_missing_read_endpoint_rejected() -> None:
+    manifest = {
+        **VALID_MECHANICS_MANIFEST,
+        "hud_widgets": [
+            {"id": "wod-mechanics.x", "title": "x"}  # no `read`
+        ],
+    }
+    assert not validate_mechanics_manifest(manifest).ok

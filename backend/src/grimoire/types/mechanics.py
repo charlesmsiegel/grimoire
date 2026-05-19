@@ -7,6 +7,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from .common import CharacterRef, Duration, Json, JsonSchema, MechanicsModuleId
+from .hud import HudWidget
 
 
 class ResourceCost(BaseModel):
@@ -142,6 +143,7 @@ class ModuleManifest(BaseModel):
     content_kinds: list[str] = Field(default_factory=list)
     capabilities: list[str] = Field(default_factory=list)
     ui: Json = Field(default_factory=dict)
+    hud_widgets: list[HudWidget] = Field(default_factory=list)
 
 
 class MissingSheet(BaseModel):
