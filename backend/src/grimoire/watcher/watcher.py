@@ -576,7 +576,10 @@ class FileWatcher:
         body: str,
     ) -> None:
         async with self.store.db.acquire() as conn:
-            await conn.execute("BEGIN")
+            # IMMEDIATE: take the writer lock now so busy_timeout applies.
+            # Deferred BEGIN + SELECT + UPDATE races background writers and
+            # returns SQLITE_BUSY immediately on snapshot upgrade.
+            await conn.execute("BEGIN IMMEDIATE")
             try:
                 if watched.scope == "library" and watched.library_id is not None:
                     await upsert_library_index(
@@ -608,7 +611,7 @@ class FileWatcher:
 
     async def _apply_delete(self, watched: WatchedFile) -> None:
         async with self.store.db.acquire() as conn:
-            await conn.execute("BEGIN")
+            await conn.execute("BEGIN IMMEDIATE")
             try:
                 if watched.scope == "library" and watched.library_id is not None:
                     await delete_library_index_row(conn, watched.library_id)
@@ -754,7 +757,7 @@ class FileWatcher:
 
     async def _delete_index_rows(self, pending: _PendingRename) -> None:
         async with self.store.db.acquire() as conn:
-            await conn.execute("BEGIN")
+            await conn.execute("BEGIN IMMEDIATE")
             try:
                 for library_id in pending.library_ids:
                     await delete_library_index_row(conn, library_id)

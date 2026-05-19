@@ -138,9 +138,15 @@ class StateStore:
 
     @asynccontextmanager
     async def _txn(self) -> AsyncIterator[aiosqlite.Connection]:
-        """Run a block as a single SQLite transaction on a pooled connection."""
+        """Run a block as a single SQLite transaction on a pooled connection.
+
+        Uses ``BEGIN IMMEDIATE`` so the writer lock is taken at BEGIN time.
+        Deferred BEGIN + read + write upgrades return SQLITE_BUSY immediately
+        in WAL mode (the busy handler is not invoked for snapshot upgrades),
+        so deferred transactions race against background writers.
+        """
         async with self.db.acquire() as conn:
-            await conn.execute("BEGIN")
+            await conn.execute("BEGIN IMMEDIATE")
             try:
                 yield conn
             except Exception:
