@@ -123,14 +123,10 @@ async def test_fork_from_current_full_state(
 async def test_fork_id_collision_409(orch: OrchestratorService, real_store: StateStore) -> None:
     await _seed_campaign(real_store, "c1")
     with pytest.raises(CampaignIdExists):
-        await orch.fork_campaign(
-            campaign_id="c1", new_campaign_id="c1", new_name="dup"
-        )
+        await orch.fork_campaign(campaign_id="c1", new_campaign_id="c1", new_name="dup")
 
 
-async def test_fork_from_earlier_post_id(
-    orch: OrchestratorService, real_store: StateStore
-) -> None:
+async def test_fork_from_earlier_post_id(orch: OrchestratorService, real_store: StateStore) -> None:
     await _seed_campaign(real_store, "c1")
     # Add posts with distinct created_at so cutoff filtering bites.
     await real_store.db.execute(
@@ -175,15 +171,9 @@ async def test_fork_from_earlier_post_id(
 
 async def test_lineage_tree(orch: OrchestratorService, real_store: StateStore) -> None:
     await _seed_campaign(real_store, "c1")
-    await orch.fork_campaign(
-        campaign_id="c1", new_campaign_id="c1-a", new_name="A"
-    )
-    await orch.fork_campaign(
-        campaign_id="c1", new_campaign_id="c1-b", new_name="B"
-    )
-    await orch.fork_campaign(
-        campaign_id="c1-a", new_campaign_id="c1-a-1", new_name="A1"
-    )
+    await orch.fork_campaign(campaign_id="c1", new_campaign_id="c1-a", new_name="A")
+    await orch.fork_campaign(campaign_id="c1", new_campaign_id="c1-b", new_name="B")
+    await orch.fork_campaign(campaign_id="c1-a", new_campaign_id="c1-a-1", new_name="A1")
 
     tree = await orch.get_lineage("c1")
     depths = {d["id"]: d["depth"] for d in tree["descendants"]}

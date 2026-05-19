@@ -72,9 +72,7 @@ async def test_bulk_copy_duplicates_state(store: StateStore) -> None:
     assert [r["character_ref"] for r in rows] == ["lib:julian", "lib:winifred"]
 
     # branches rewritten and source branches preserved
-    src_branches = await store.db.fetchall(
-        "SELECT id FROM branches WHERE campaign_id = ?", ("c1",)
-    )
+    src_branches = await store.db.fetchall("SELECT id FROM branches WHERE campaign_id = ?", ("c1",))
     new_branches = await store.db.fetchall(
         "SELECT id FROM branches WHERE campaign_id = ?", ("c1-fork",)
     )

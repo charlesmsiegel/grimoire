@@ -292,7 +292,7 @@ def _rewrite_branch(value: object, original: str, new: str) -> object:
     if value == original:
         return new
     if value.startswith(sep):
-        return new + value[len(original):]
+        return new + value[len(original) :]
     return value
 
 
@@ -349,9 +349,7 @@ async def bulk_copy(
                     where += f" AND {cutoff_col} <= ?"
                     params = (original, cutoff_iso)
 
-                cur = await conn.execute(
-                    f"SELECT * FROM {table} WHERE {where}", params
-                )
+                cur = await conn.execute(f"SELECT * FROM {table} WHERE {where}", params)
                 source_rows = await cur.fetchall()
                 await cur.close()
                 if not source_rows:
@@ -360,9 +358,7 @@ async def bulk_copy(
 
                 placeholders = ", ".join("?" for _ in columns)
                 col_list = ", ".join(columns)
-                insert_sql = (
-                    f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})"
-                )
+                insert_sql = f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})"
 
                 rewrites: dict[str, str] = spec.get("rewrites", {})
 
@@ -461,9 +457,7 @@ async def fingerprint(db: Database, campaign_id: str) -> str:
             if not await _table_exists(conn, table):
                 continue
             if table == "campaigns":
-                cur = await conn.execute(
-                    "SELECT * FROM campaigns WHERE id = ?", (campaign_id,)
-                )
+                cur = await conn.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
             else:
                 cur = await conn.execute(
                     f"SELECT * FROM {table} WHERE campaign_id = ? ORDER BY rowid",
@@ -474,9 +468,7 @@ async def fingerprint(db: Database, campaign_id: str) -> str:
             h.update(table.encode())
             h.update(b":")
             for row in rows:
-                h.update(
-                    _row_canonical(row, exclude=_FINGERPRINT_EXCLUDED_COLS).encode()
-                )
+                h.update(_row_canonical(row, exclude=_FINGERPRINT_EXCLUDED_COLS).encode())
                 h.update(b"|")
             h.update(b";")
     return h.hexdigest()

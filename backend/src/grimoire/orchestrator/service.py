@@ -1145,9 +1145,7 @@ class OrchestratorService:
 
             # 2. Bulk-copy / replay state into the new campaign id.
             if cutoff_iso is None:
-                await bulk_copy(
-                    db, original=campaign_id, new=new_campaign_id, cutoff_iso=None
-                )
+                await bulk_copy(db, original=campaign_id, new=new_campaign_id, cutoff_iso=None)
             else:
                 fp_origin = await fingerprint(db, campaign_id)
                 deltas_replayed = await replay_to_turn(
@@ -1266,9 +1264,7 @@ class OrchestratorService:
         )
 
     async def _campaign_exists(self, campaign_id: str) -> bool:
-        row = await self._store.db.fetchone(
-            "SELECT 1 FROM campaigns WHERE id = ?", (campaign_id,)
-        )
+        row = await self._store.db.fetchone("SELECT 1 FROM campaigns WHERE id = ?", (campaign_id,))
         return row is not None
 
     def _is_streaming(self, campaign_id: str) -> bool:

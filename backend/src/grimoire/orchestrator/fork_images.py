@@ -25,9 +25,7 @@ class ImageHandlingResult:
 _SENTINEL_NAME = ".sentinel-fork-probe"
 
 
-async def fork_image_files(
-    original_dir: Path, new_dir: Path
-) -> ImageHandlingResult:
+async def fork_image_files(original_dir: Path, new_dir: Path) -> ImageHandlingResult:
     """Mirror ``original_dir / "images"`` to ``new_dir / "images"``.
 
     ``original_dir`` and ``new_dir`` are the campaign-root directories
