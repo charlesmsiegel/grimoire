@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .common import CharacterRef, Json
+from .extras import ExtraValue, validate_extras_dict
 from .state import CharacterState
 
 
@@ -125,6 +127,13 @@ class Character(BaseModel):
     Free-form; characters sharing the same value tick together when at least
     one member is a PC."""
     privacy: CharacterPrivacy = Field(default_factory=CharacterPrivacy)
+    extras: dict[str, ExtraValue] = Field(default_factory=dict)
+    """Narrative-extras tier: snake_case keys → ExtraValue. See ``types.extras``."""
+
+    @field_validator("extras", mode="before")
+    @classmethod
+    def _validate_extras(cls, v: Any) -> Any:
+        return validate_extras_dict(v)
 
 
 class CharacterData(BaseModel):
@@ -144,6 +153,12 @@ class CharacterData(BaseModel):
     body: str = ""
     household_id: str | None = None
     privacy: CharacterPrivacy = Field(default_factory=CharacterPrivacy)
+    extras: dict[str, ExtraValue] = Field(default_factory=dict)
+
+    @field_validator("extras", mode="before")
+    @classmethod
+    def _validate_extras(cls, v: Any) -> Any:
+        return validate_extras_dict(v)
 
 
 class ResolvedCharacter(BaseModel):
