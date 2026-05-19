@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from .common import EntityKind, Json
 from .state import StateDelta
+from .transient import TransientUpdateProposal
 
 
 class FlagLevel(StrEnum):
@@ -46,6 +47,7 @@ class ExtractionResult(BaseModel):
     deltas: list[StateDelta] = Field(default_factory=list)
     candidates: list[EntityCandidate] = Field(default_factory=list)
     flags: list[ExtractionFlag] = Field(default_factory=list)
+    transient_updates: list[TransientUpdateProposal] = Field(default_factory=list)
     confidence_overall: float = 0.0
     extraction_strategies_run: list[str] = Field(default_factory=list)
     duration_ms: int = 0

@@ -22,6 +22,7 @@ from grimoire.api.observability import router as observability_router
 from grimoire.api.setup import router as setup_router
 from grimoire.api.stream import StreamManager
 from grimoire.api.templates import router as templates_router
+from grimoire.api.transient_state import router as transient_state_router
 from grimoire.api.ws import router as ws_router
 from grimoire.characters import CharactersService
 from grimoire.characters.integration import CharactersIntegration
@@ -188,6 +189,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         if container.state_store is None:
             container.state_store = StateStore(db=db, data_root=data_root)
+        if container.transient_state is None:
+            from grimoire.transient_state import TransientStateService
+            from grimoire.transient_state.config import TransientStateConfig
+            from grimoire.transient_state.triggers import attach_triggers
+
+            ts_cfg = TransientStateConfig.from_yaml(data_root / "config" / "transient.yaml")
+            container.transient_state = TransientStateService(container.state_store, config=ts_cfg)
+            if container.event_bus is not None:
+                attach_triggers(container.transient_state, container.event_bus)
         library_cfg = LibraryConfig.from_yaml(data_root / "config" / "library.yaml")
         if container.library is None:
             container.library = LibraryService(container.state_store, config=library_cfg)
@@ -402,6 +412,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 mechanics=container.mechanics,
                 gateway=llm_gateway,
                 state_store=container.state_store,
+                transient_state=container.transient_state,
             )
         context_builder = container.extras["context_builder"]
 
@@ -719,6 +730,7 @@ def create_app() -> FastAPI:
     app.include_router(imagegen_router, prefix="/api")
     app.include_router(hud_router, prefix="/api")
     app.include_router(observability_router, prefix="/api")
+    app.include_router(transient_state_router, prefix="/api")
     # WebSocket routes mount under /ws so the Vite dev server's `ws: true`
     # proxy block forwards upgrade requests correctly. The HTTP health probe
     # in the same router lands at /ws/health.

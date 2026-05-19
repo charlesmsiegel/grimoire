@@ -394,28 +394,39 @@ class TransientStateService:
     ) -> tuple[str, int]:
         """Promote a transient row into a canonical Continuity fact.
 
-        Returns ``(fact_id, transient_id)``. The transient row is superseded
-        by inserting a marker row (provenance ``user:edit``, value unchanged)
-        with ``expires_at`` set, then the linkage is recorded on the original.
+        Returns ``(fact_id, transient_id)``. The transient row is then
+        expired (cleared) so subsequent reads pick up the Continuity fact
+        as the source of truth.
         """
         current = await self.get(campaign_id, entity_kind, entity_id, field, branch_id=branch_id)
         if current is None:
             raise ValueError(
                 f"no current transient value for {entity_kind.value}/{entity_id}/{field}"
             )
+        if not isinstance(current, TransientValue):
+            raise TypeError("promote_to_fact requires a single-field get")
         fact_id = ""
         if continuity is not None:
-            from grimoire.types.continuity import Fact, FactScope, FactSubject
+            from grimoire.types.continuity import Fact, FactScope, FactSource, FactSubject
 
+            subject_kwargs: dict[str, Any] = {}
+            if entity_kind == EntityKind.CHARACTER:
+                subject_kwargs["character_ids"] = [entity_id]
+            elif entity_kind == EntityKind.LOCATION:
+                subject_kwargs["location_ids"] = [entity_id]
+            elif entity_kind == EntityKind.FACTION:
+                subject_kwargs["faction_ids"] = [entity_id]
             fact = Fact(
                 id=f"f_{entity_id}_{field}_{turn_id}",
                 campaign_id=campaign_id,
-                scope=FactScope.CAMPAIGN,
-                subject=FactSubject(kind=entity_kind.value, ref=entity_id),
-                statement=f"{field}: {current.value}",
+                branch_id=branch_id or self._default_branch(campaign_id),
+                text=f"{entity_id} has {field}: {current.value}",
+                established_in_post=current.source_post_id,
+                established_at_in_game=None,
                 confidence=current.confidence,
-                evidence=evidence,
-                source="transient_state:promote",
+                source=FactSource.INFERRED,
+                about=FactSubject(scope=FactScope.PUBLIC, **subject_kwargs),
+                tags=[evidence] if evidence else [],
             )
             fact_id = await continuity.add_fact(fact, source="transient_state:promote")
         await self.clear(

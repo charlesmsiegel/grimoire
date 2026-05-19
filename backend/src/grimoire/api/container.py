@@ -44,6 +44,7 @@ class ServiceContainer:
     observability: Any = None
     hud: Any = None
     hud_config: Any = None
+    transient_state: Any = None
 
     extras: dict[str, Any] = field(default_factory=dict)
 

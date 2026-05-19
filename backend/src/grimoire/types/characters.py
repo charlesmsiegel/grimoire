@@ -80,6 +80,27 @@ class StructuralRelationship(BaseModel):
     note: str = ""
 
 
+class InternalThoughtsPrivacy(BaseModel):
+    """Per-character internal-thought visibility (default all true).
+
+    See docs/superpowers/specs/2026-05-19-transient-state-design.md §Privacy.
+    """
+
+    surface_in_hud: bool = True
+    surface_inline: bool = True
+    surface_in_context: bool = True
+
+
+class CharacterPrivacy(BaseModel):
+    """Privacy frontmatter owned by the transient-state subsystem.
+
+    HUD / inline / context-builder all read through
+    ``grimoire.transient_state.privacy.resolve`` to enforce visibility.
+    """
+
+    internal_thoughts: InternalThoughtsPrivacy = Field(default_factory=InternalThoughtsPrivacy)
+
+
 class Character(BaseModel):
     """Library character read from a markdown file."""
 
@@ -103,6 +124,7 @@ class Character(BaseModel):
     """Optional household membership key (Time Engine §4 significance).
     Free-form; characters sharing the same value tick together when at least
     one member is a PC."""
+    privacy: CharacterPrivacy = Field(default_factory=CharacterPrivacy)
 
 
 class CharacterData(BaseModel):
@@ -121,6 +143,7 @@ class CharacterData(BaseModel):
     description: str = ""
     body: str = ""
     household_id: str | None = None
+    privacy: CharacterPrivacy = Field(default_factory=CharacterPrivacy)
 
 
 class ResolvedCharacter(BaseModel):
