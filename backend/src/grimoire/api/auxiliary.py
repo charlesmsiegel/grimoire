@@ -84,9 +84,7 @@ async def _run(
     task: AuxiliaryTask,
 ) -> dict[str, Any]:
     try:
-        result = await orchestrator.run_auxiliary_task(
-            campaign_id=campaign_id, task=task
-        )
+        result = await orchestrator.run_auxiliary_task(campaign_id=campaign_id, task=task)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return _result_payload(result)
@@ -218,9 +216,7 @@ async def accept_auxiliary(
 ) -> Any:
     edited_text = payload.edited_text if payload else None
     try:
-        out = await orchestrator.accept_auxiliary(
-            campaign_id, result_id, edited_text=edited_text
-        )
+        out = await orchestrator.accept_auxiliary(campaign_id, result_id, edited_text=edited_text)
     except AuxiliaryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AuxiliaryAlreadyCommittedError as exc:
