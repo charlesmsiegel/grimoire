@@ -638,6 +638,14 @@ class ContextBuilderService:
             if stanza_item is not None:
                 spotlight_items.append(stanza_item)
 
+            # § Narrative extras stanza. Fits between voice anchor
+            # (priority 9) and recent dialogue (7). Demotes to a
+            # keys-only breadcrumb in BACKGROUND on overflow.
+            if self._config.enable_extras_stanza:
+                spot, bg = await self._extras_tier_items(ref, campaign_id)
+                spotlight_items.extend(spot)
+                background_items.extend(bg)
+
             # §10 — recent direct dialogue per spotlighted speaker.
             dialogue = self._recent_dialogue_for(ref, recent_posts)
             if dialogue:
@@ -838,6 +846,74 @@ class ContextBuilderService:
         if not lines:
             return ""
         return "\n".join(reversed(lines))
+
+    async def _extras_tier_items(
+        self, ref: str, campaign_id: CampaignId
+    ) -> tuple[list[_TierItem], list[_TierItem]]:
+        """Render the narrative-extras stanza for one character.
+
+        Returns ``(spotlight_items, background_items)``. The spotlight item
+        carries the full ``key: value`` listing; on overflow (token estimate
+        exceeds ``extras_demote_to_breadcrumb_threshold_tokens``) the
+        stanza becomes a keys-only breadcrumb in BACKGROUND, with the
+        spotlight item dropped.
+        """
+        try:
+            resolved = await self._library.resolve(ref, campaign_id)
+        except Exception as exc:
+            logger.debug("library.resolve(%s) for extras failed: %s", ref, exc)
+            return ([], [])
+        fm = getattr(resolved, "frontmatter", None) or {}
+        raw = fm.get("extras") or {}
+        if not isinstance(raw, dict) or not raw:
+            return ([], [])
+
+        name = getattr(resolved, "name", None) or ref
+        rendered = _format_extras_stanza(name, raw)
+        if not rendered:
+            return ([], [])
+
+        token_estimate = await estimate_tokens(rendered, self._estimator)
+        source = self._character_source(ref, ContextTier.SPOTLIGHT, campaign_id)
+        if token_estimate <= self._config.extras_demote_to_breadcrumb_threshold_tokens:
+            return (
+                [
+                    _TierItem(
+                        tier=ContextTier.SPOTLIGHT,
+                        section="extras",
+                        text=rendered,
+                        priority=self._config.extras_spotlight_priority,
+                        source=ContextSource(
+                            kind="character",
+                            scope=source.scope,
+                            owner_id=source.owner_id,
+                            tier=ContextTier.SPOTLIGHT,
+                            summary=f"extras:{ref}",
+                        ),
+                    )
+                ],
+                [],
+            )
+
+        breadcrumb = _format_extras_breadcrumb(name, raw)
+        return (
+            [],
+            [
+                _TierItem(
+                    tier=ContextTier.BACKGROUND,
+                    section="extras",
+                    text=breadcrumb,
+                    priority=3,
+                    source=ContextSource(
+                        kind="character",
+                        scope=source.scope,
+                        owner_id=source.owner_id,
+                        tier=ContextTier.BACKGROUND,
+                        summary=f"extras-breadcrumb:{ref}",
+                    ),
+                )
+            ],
+        )
 
     async def _try_full_card(self, ref: str, campaign_id: CampaignId) -> str:
         try:
@@ -2270,6 +2346,67 @@ def _with_cast_header(ref: str, card: str) -> str:
         world_id = parts[1]
         return f"[world:{world_id}]\n{card}"
     return card
+
+
+def _format_extras_stanza(name: str, extras: dict) -> str:
+    """Render the per-character extras stanza for the spotlight tier.
+
+    Empty/None values are omitted. Lists are joined with ``; ``. Dicts are
+    rendered ``key=value`` comma-separated. ExtraValue dicts (carrying
+    metadata) project to their ``value`` field.
+    """
+    lines: list[str] = []
+    for key, raw in extras.items():
+        value = _project_extras_value(raw)
+        rendered = _render_extras_value(value)
+        if rendered is None or rendered == "":
+            continue
+        lines.append(f"  {key}: {rendered}")
+    if not lines:
+        return ""
+    header = f"{name} — extras:"
+    return "\n".join([header, *lines])
+
+
+def _format_extras_breadcrumb(name: str, extras: dict) -> str:
+    """Keys-only breadcrumb for the background tier on overflow."""
+    keys = [
+        key
+        for key, raw in extras.items()
+        if _render_extras_value(_project_extras_value(raw)) not in (None, "")
+    ]
+    if not keys:
+        return ""
+    return f"{name} — extras: {', '.join(keys)}"
+
+
+def _project_extras_value(raw: Any) -> Any:
+    """ExtraValue dicts on disk look like ``{value: ..., set_at: ..., ...}``."""
+    if isinstance(raw, dict) and "value" in raw and "set_at" in raw:
+        return raw.get("value")
+    return raw
+
+
+def _render_extras_value(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (int, float, str)):
+        return str(value)
+    if isinstance(value, list):
+        rendered = [
+            _render_extras_value(v) for v in value if _render_extras_value(v) is not None
+        ]
+        return "; ".join(r for r in rendered if r) or None
+    if isinstance(value, dict):
+        rendered = [
+            f"{k}={_render_extras_value(v)}"
+            for k, v in value.items()
+            if _render_extras_value(v) is not None
+        ]
+        return ", ".join(rendered) or None
+    return str(value)
 
 
 def _render_scene_reference(scene_id: str, scene: Any | None) -> str:
