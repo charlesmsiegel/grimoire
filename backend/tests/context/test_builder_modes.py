@@ -68,12 +68,14 @@ async def test_none_omits_tracker_and_tools():
 
 async def test_auxiliary_task_overrides_mode_and_suppresses_everything():
     # Even though mode is TOOL_USE, an aux task forces no tools / no tracker.
+    from grimoire.auxiliary.types import AuxiliaryTask, TaskKind
+
     builder = _builder()
     prompt = await builder.build(
         "hello",
         "camp",
         extractor_mode=ExtractionMode.TOOL_USE,
-        auxiliary_task=object(),
+        auxiliary_task=AuxiliaryTask(kind=TaskKind.BRAINSTORM, snippet="ideas"),
     )
     assert prompt.tools == []
     body = "\n".join(m.content for m in prompt.messages)
