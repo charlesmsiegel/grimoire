@@ -63,9 +63,15 @@ class DeltaRecord:
     applied_at: str | None
     reversed_at: str | None
     notes: str | None
+    delta_set_id: str | None = None
 
     @classmethod
     def from_row(cls, row: aiosqlite.Row) -> DeltaRecord:
+        # delta_set_id is only present after migration 024; tolerate older rows.
+        try:
+            delta_set_id = row["delta_set_id"]
+        except (KeyError, IndexError):
+            delta_set_id = None
         return cls(
             id=row["id"],
             campaign_id=row["campaign_id"],
@@ -83,6 +89,7 @@ class DeltaRecord:
             applied_at=row["applied_at"],
             reversed_at=row["reversed_at"],
             notes=row["notes"],
+            delta_set_id=delta_set_id,
         )
 
 
@@ -102,6 +109,7 @@ async def insert_delta(
     after: Any,
     confidence: float | None = None,
     notes: str | None = None,
+    delta_set_id: str | None = None,
 ) -> str:
     delta_id = new_id("d", length=16)
     await conn.execute(
@@ -109,9 +117,10 @@ async def insert_delta(
         INSERT INTO deltas (
           id, campaign_id, branch_id, turn_id, source, kind,
           target_scope, target_table, target_path, target_id,
-          before, after, confidence, applied_at, reversed_at, notes
+          before, after, confidence, applied_at, reversed_at, notes,
+          delta_set_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
         """,
         (
             delta_id,
@@ -129,6 +138,7 @@ async def insert_delta(
             confidence,
             now_iso(),
             notes,
+            delta_set_id,
         ),
     )
     return delta_id

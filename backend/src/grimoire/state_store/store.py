@@ -104,6 +104,14 @@ class UpgradeReport:
 
 
 @dataclass(frozen=True)
+class SwapResult:
+    """Outcome of :meth:`StateStore.swap_delta_set`."""
+
+    rewound: list[DeltaRecord]
+    applied: list[DeltaRecord]
+
+
+@dataclass(frozen=True)
 class FileWriteResult:
     """What :meth:`StateStore.write_library_file` returns to callers."""
 
@@ -1308,6 +1316,7 @@ class StateStore:
         turn_id: str | None = None,
         branch_id: str | None = None,
         campaign_id: str | None = None,
+        delta_set_id: str | None = None,
     ) -> str:
         """Apply a delta to the SQLite layer and record it in ``deltas``.
 
@@ -1317,6 +1326,29 @@ class StateStore:
         ``before`` (or auto-captures it from the current row) so reversal can
         restore the previous state.
         """
+        async with self._txn() as conn:
+            return await self._apply_delta_on_conn(
+                conn,
+                delta=delta,
+                source=source,
+                turn_id=turn_id,
+                branch_id=branch_id,
+                campaign_id=campaign_id,
+                delta_set_id=delta_set_id,
+            )
+
+    async def _apply_delta_on_conn(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        delta: dict | Any,
+        source: str | None = None,
+        turn_id: str | None = None,
+        branch_id: str | None = None,
+        campaign_id: str | None = None,
+        delta_set_id: str | None = None,
+    ) -> str:
+        """Apply one delta inside an already-open transaction. Returns delta id."""
         payload = _delta_to_dict(delta)
         target_scope = payload.get("target_scope")
         target_table = payload.get("target_table")
@@ -1324,53 +1356,58 @@ class StateStore:
         after = payload.get("after") or {}
         provided_before = payload.get("before")
 
-        async with self._txn() as conn:
-            captured_before: Any | None = None
-            if target_scope == "campaign-sqlite":
-                if not target_table:
-                    raise StateStoreError("campaign-sqlite delta missing target_table")
-                captured_before = await _capture_current_row(conn, target_table, after)
-                # Apply the delta.
-                await upsert_row(conn, table=target_table, values=after)
-            elif target_scope in ("library", "campaign-file"):
-                # Caller should have used a file write API; we just log.
-                pass
-            else:
-                raise StateStoreError(
-                    f"unknown target_scope {target_scope!r}; use file APIs for files"
-                )
-
-            before_for_log = provided_before if provided_before is not None else captured_before
-            delta_id = await insert_delta(
-                conn,
-                campaign_id=campaign_id or payload.get("campaign_id"),
-                branch_id=branch_id or payload.get("branch_id"),
-                turn_id=turn_id or payload.get("turn_id"),
-                source=source or payload.get("source") or "unknown",
-                kind=kind,
-                target_scope=target_scope,
-                target_table=target_table,
-                target_path=payload.get("target_path"),
-                target_id=payload.get("target_id"),
-                before=before_for_log,
-                after=after,
-                confidence=payload.get("confidence"),
-                notes=payload.get("notes"),
+        captured_before: Any | None = None
+        if target_scope == "campaign-sqlite":
+            if not target_table:
+                raise StateStoreError("campaign-sqlite delta missing target_table")
+            captured_before = await _capture_current_row(conn, target_table, after)
+            await upsert_row(conn, table=target_table, values=after)
+        elif target_scope in ("library", "campaign-file"):
+            pass
+        else:
+            raise StateStoreError(
+                f"unknown target_scope {target_scope!r}; use file APIs for files"
             )
+
+        before_for_log = provided_before if provided_before is not None else captured_before
+        delta_id = await insert_delta(
+            conn,
+            campaign_id=campaign_id or payload.get("campaign_id"),
+            branch_id=branch_id or payload.get("branch_id"),
+            turn_id=turn_id or payload.get("turn_id"),
+            source=source or payload.get("source") or "unknown",
+            kind=kind,
+            target_scope=target_scope,
+            target_table=target_table,
+            target_path=payload.get("target_path"),
+            target_id=payload.get("target_id"),
+            before=before_for_log,
+            after=after,
+            confidence=payload.get("confidence"),
+            notes=payload.get("notes"),
+            delta_set_id=delta_set_id or payload.get("delta_set_id"),
+        )
         return delta_id
 
     async def reverse_delta(self, delta_id: str) -> None:
         async with self._txn() as conn:
-            delta = await get_delta(conn, delta_id)
-            if delta.reversed_at is not None:
-                raise StateStoreError(f"delta {delta_id} already reversed at {delta.reversed_at}")
-            if delta.target_scope == "campaign-sqlite":
-                await reverse_sqlite_delta(conn, delta)
-            elif delta.target_scope in ("library", "campaign-file"):
-                await self._reverse_file_delta(conn, delta)
-            else:
-                raise StateStoreError(f"cannot reverse delta with scope {delta.target_scope!r}")
-            await mark_reversed(conn, delta_id)
+            await self._reverse_delta_on_conn(conn, delta_id)
+
+    async def _reverse_delta_on_conn(
+        self,
+        conn: aiosqlite.Connection,
+        delta_id: str,
+    ) -> None:
+        delta = await get_delta(conn, delta_id)
+        if delta.reversed_at is not None:
+            raise StateStoreError(f"delta {delta_id} already reversed at {delta.reversed_at}")
+        if delta.target_scope == "campaign-sqlite":
+            await reverse_sqlite_delta(conn, delta)
+        elif delta.target_scope in ("library", "campaign-file"):
+            await self._reverse_file_delta(conn, delta)
+        else:
+            raise StateStoreError(f"cannot reverse delta with scope {delta.target_scope!r}")
+        await mark_reversed(conn, delta_id)
 
     async def _reverse_file_delta(
         self,
@@ -1426,6 +1463,275 @@ class StateStore:
                 frontmatter=fm,
                 body=body,
             )
+
+    # ------------------------------------------------------------------
+    # Delta sets (swipes / alternates)
+    # ------------------------------------------------------------------
+
+    async def apply_delta_set(
+        self,
+        *,
+        deltas: list[Any],
+        delta_set_id: str,
+        campaign_id: str | None,
+        branch_id: str | None,
+        turn_id: str | None,
+        source: str,
+    ) -> list[DeltaRecord]:
+        """Apply every delta atomically, tagging each with ``delta_set_id``.
+
+        On any failure, the entire batch rolls back. Returns the materialized
+        :class:`DeltaRecord`s in insertion order.
+        """
+        records: list[DeltaRecord] = []
+        async with self._txn() as conn:
+            for d in deltas:
+                delta_id = await self._apply_delta_on_conn(
+                    conn,
+                    delta=d,
+                    source=source,
+                    turn_id=turn_id,
+                    branch_id=branch_id,
+                    campaign_id=campaign_id,
+                    delta_set_id=delta_set_id,
+                )
+                rec = await get_delta(conn, delta_id)
+                records.append(rec)
+        return records
+
+    async def rewind_delta_set(
+        self,
+        delta_set_id: str,
+        *,
+        campaign_id: str,
+        branch_id: str,
+    ) -> list[DeltaRecord]:
+        """LIFO-reverse every non-reversed delta tagged with ``delta_set_id``.
+
+        Atomic — if any reversal fails, the whole batch rolls back.
+        """
+        reversed_records: list[DeltaRecord] = []
+        async with self._txn() as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM deltas
+                WHERE campaign_id = ? AND branch_id = ?
+                  AND delta_set_id = ? AND reversed_at IS NULL
+                ORDER BY applied_at DESC, rowid DESC
+                """,
+                (campaign_id, branch_id, delta_set_id),
+            )
+            rows = await cur.fetchall()
+            await cur.close()
+            for row in rows:
+                delta_id = row["id"]
+                await self._reverse_delta_on_conn(conn, delta_id)
+                reversed_records.append(await get_delta(conn, delta_id))
+        return reversed_records
+
+    async def re_activate_delta_set(
+        self,
+        *,
+        delta_set_id: str,
+        campaign_id: str,
+        branch_id: str,
+    ) -> int:
+        """Re-apply every previously-reversed delta in a set (oldest first).
+
+        Walks the rows where ``reversed_at IS NOT NULL`` for the set and
+        re-upserts the ``after`` payload into the target table, then clears
+        ``reversed_at``. Used by :meth:`swap_delta_set` when the apply side is
+        a delta set already present in the DB (just rewound).
+
+        Returns the number of rows reactivated.
+        """
+        count = 0
+        async with self._txn() as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM deltas
+                WHERE campaign_id = ? AND branch_id = ?
+                  AND delta_set_id = ? AND reversed_at IS NOT NULL
+                ORDER BY applied_at ASC, rowid ASC
+                """,
+                (campaign_id, branch_id, delta_set_id),
+            )
+            rows = await cur.fetchall()
+            await cur.close()
+            for row in rows:
+                rec = DeltaRecord.from_row(row)
+                if rec.target_scope == "campaign-sqlite" and rec.target_table:
+                    after = rec.after or {}
+                    if after:
+                        await upsert_row(conn, table=rec.target_table, values=after)
+                # file deltas: their target file should already reflect the
+                # after-state if it was never overwritten in the interim; we
+                # only flip the reversed_at flag for now.
+                await conn.execute(
+                    "UPDATE deltas SET reversed_at = NULL WHERE id = ?",
+                    (rec.id,),
+                )
+                count += 1
+        return count
+
+    async def swap_delta_set(
+        self,
+        *,
+        rewind_set_id: str,
+        apply_deltas: list[Any] | None,
+        apply_set_id: str,
+        campaign_id: str,
+        branch_id: str,
+        turn_id: str | None,
+        source: str,
+    ) -> SwapResult:
+        """Atomic rewind of one set followed by application of another.
+
+        Two modes:
+
+        * **Fresh apply:** ``apply_deltas`` is a non-empty list — every delta
+          is inserted with ``apply_set_id``. This is what ``regenerate_post``
+          uses (the apply set is new).
+        * **Re-activate:** ``apply_deltas`` is ``None`` or empty — the apply
+          set is assumed to already exist in the ``deltas`` table in a
+          reversed state, and reversal flags are cleared. This is what
+          ``switch_primary_alternate`` uses for swap-between-existing.
+
+        Both phases happen in a single transaction. On apply failure the
+        rewind is rolled back too, so the prior primary remains intact.
+        """
+        rewound: list[DeltaRecord] = []
+        applied: list[DeltaRecord] = []
+        async with self._txn() as conn:
+            # Phase 1: rewind the current set (LIFO).
+            cur = await conn.execute(
+                """
+                SELECT id FROM deltas
+                WHERE campaign_id = ? AND branch_id = ?
+                  AND delta_set_id = ? AND reversed_at IS NULL
+                ORDER BY applied_at DESC, rowid DESC
+                """,
+                (campaign_id, branch_id, rewind_set_id),
+            )
+            rewind_rows = await cur.fetchall()
+            await cur.close()
+            for row in rewind_rows:
+                await self._reverse_delta_on_conn(conn, row["id"])
+                rewound.append(await get_delta(conn, row["id"]))
+
+            # Phase 2: apply.
+            if apply_deltas:
+                for d in apply_deltas:
+                    delta_id = await self._apply_delta_on_conn(
+                        conn,
+                        delta=d,
+                        source=source,
+                        turn_id=turn_id,
+                        branch_id=branch_id,
+                        campaign_id=campaign_id,
+                        delta_set_id=apply_set_id,
+                    )
+                    applied.append(await get_delta(conn, delta_id))
+            else:
+                # Re-activate an existing set: re-upsert after-payloads and
+                # clear reversed_at.
+                cur = await conn.execute(
+                    """
+                    SELECT * FROM deltas
+                    WHERE campaign_id = ? AND branch_id = ?
+                      AND delta_set_id = ? AND reversed_at IS NOT NULL
+                    ORDER BY applied_at ASC, rowid ASC
+                    """,
+                    (campaign_id, branch_id, apply_set_id),
+                )
+                rows = await cur.fetchall()
+                await cur.close()
+                for row in rows:
+                    rec = DeltaRecord.from_row(row)
+                    if rec.target_scope == "campaign-sqlite" and rec.target_table:
+                        after = rec.after or {}
+                        if after:
+                            await upsert_row(
+                                conn, table=rec.target_table, values=after
+                            )
+                    await conn.execute(
+                        "UPDATE deltas SET reversed_at = NULL WHERE id = ?",
+                        (rec.id,),
+                    )
+                    applied.append(await get_delta(conn, rec.id))
+        return SwapResult(rewound=rewound, applied=applied)
+
+    async def set_current_alternate_delta_set(
+        self,
+        *,
+        campaign_id: str,
+        branch_id: str,
+        post_id: str,
+        delta_set_id: str,
+    ) -> None:
+        """Record which delta set is the current primary for ``post_id``."""
+        async with self._txn() as conn:
+            await conn.execute(
+                """
+                INSERT OR REPLACE INTO current_alternate_delta_sets
+                  (campaign_id, branch_id, post_id, delta_set_id, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (campaign_id, branch_id, post_id, delta_set_id, now_iso()),
+            )
+
+    async def clear_current_alternate_delta_set(
+        self,
+        *,
+        campaign_id: str,
+        branch_id: str,
+        post_id: str,
+    ) -> None:
+        async with self._txn() as conn:
+            await conn.execute(
+                """
+                DELETE FROM current_alternate_delta_sets
+                WHERE campaign_id = ? AND branch_id = ? AND post_id = ?
+                """,
+                (campaign_id, branch_id, post_id),
+            )
+
+    async def current_delta_set_for(
+        self,
+        *,
+        post_id: str | None,
+        campaign_id: str,
+        branch_id: str,
+        set_id: str | None = None,
+    ) -> str | None:
+        """Look up the primary delta set for ``post_id`` (or echo back
+        ``set_id`` if it's the recorded primary for any post on the branch).
+        """
+        async with self.db.acquire() as conn:
+            if post_id is not None:
+                cur = await conn.execute(
+                    """
+                    SELECT delta_set_id FROM current_alternate_delta_sets
+                    WHERE campaign_id = ? AND branch_id = ? AND post_id = ?
+                    """,
+                    (campaign_id, branch_id, post_id),
+                )
+                row = await cur.fetchone()
+                await cur.close()
+                return row["delta_set_id"] if row else None
+            if set_id is None:
+                return None
+            cur = await conn.execute(
+                """
+                SELECT delta_set_id FROM current_alternate_delta_sets
+                WHERE campaign_id = ? AND branch_id = ? AND delta_set_id = ?
+                LIMIT 1
+                """,
+                (campaign_id, branch_id, set_id),
+            )
+            row = await cur.fetchone()
+            await cur.close()
+            return row["delta_set_id"] if row else None
 
     async def queue_for_review(
         self,
