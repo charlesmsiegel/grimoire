@@ -36,7 +36,13 @@ from grimoire.continuity.registry import resolve_continuity
 from grimoire.templates import render as render_template
 from grimoire.types.common import CampaignId, TurnId
 from grimoire.types.composition import Composition
-from grimoire.types.context import AssembledPrompt, BudgetEstimate, ContextSource
+from grimoire.types.context import (
+    AssembledPrompt,
+    BudgetEstimate,
+    ContextSource,
+    ToolDeclarationSpec,
+)
+from grimoire.types.extraction_modes import ExtractionMode
 from grimoire.types.llm import Message, MessageRole, ModelParams
 from grimoire.types.mechanics import MechanicsResult
 from grimoire.types.state import ContextTier
@@ -132,6 +138,8 @@ class ContextBuilderService:
         branch_id: str | None = None,
         pc_ref: str | None = None,
         turn_id: TurnId | None = None,
+        extractor_mode: ExtractionMode = ExtractionMode.SEPARATE,
+        auxiliary_task: object | None = None,
     ) -> AssembledPrompt:
         ctx = await self._build_context(
             player_input=player_input,
@@ -142,7 +150,10 @@ class ContextBuilderService:
             pc_ref=pc_ref,
             turn_id=turn_id,
         )
-        return await self._assemble(ctx, player_input)
+        prompt = await self._assemble(ctx, player_input)
+        return self._apply_extractor_mode(
+            prompt, extractor_mode=extractor_mode, auxiliary_task=auxiliary_task
+        )
 
     async def estimate(
         self,
@@ -1603,6 +1614,52 @@ class ContextBuilderService:
             summary=summary,
             composition_snapshot=composition_snapshot,
             messages_hash=_hash_messages(messages),
+        )
+
+    def _apply_extractor_mode(
+        self,
+        prompt: AssembledPrompt,
+        *,
+        extractor_mode: ExtractionMode,
+        auxiliary_task: object | None,
+    ) -> AssembledPrompt:
+        """Append tracker instructions or attach tool declarations per mode.
+
+        Auxiliary tasks (`auxiliary_task` non-None, or `NONE` mode) get
+        neither the tracker nor the tool declarations — they don't
+        produce state and the extractor is skipped entirely upstream.
+        """
+        if auxiliary_task is not None or extractor_mode == ExtractionMode.NONE:
+            return prompt
+        if extractor_mode == ExtractionMode.TOGETHER:
+            instruction = self._tracker_instruction_text()
+            new_messages = list(prompt.messages)
+            new_messages.append(Message(role=MessageRole.SYSTEM, content=instruction))
+            return prompt.model_copy(update={"messages": new_messages})
+        if extractor_mode == ExtractionMode.TOOL_USE:
+            from grimoire.extractor.tool_use import ALL_TOOLS
+
+            tools = [
+                ToolDeclarationSpec(
+                    name=t.name, description=t.description, parameters=dict(t.schema)
+                )
+                for t in ALL_TOOLS
+            ]
+            return prompt.model_copy(update={"tools": tools})
+        return prompt
+
+    def _tracker_instruction_text(self) -> str:
+        from grimoire.extractor.together import DELIMITER_CLOSE, DELIMITER_OPEN
+
+        return (
+            "After your prose, emit a JSON tracker block delimited by "
+            f"{DELIMITER_OPEN} and {DELIMITER_CLOSE}. The JSON object must "
+            "have the keys: facts (list of {text, confidence?, about?, tags?}), "
+            "character_updates (list of {character_id, field, after, before?, "
+            "confidence?}). Optional keys: location_updates, faction_updates, "
+            "commitments_added, commitments_resolved, new_entities, advance_time, "
+            "change_location. Position the tracker after the prose; do not "
+            "interleave it with narrative text."
         )
 
     async def _system_block(self, ctx: _BuiltContext) -> str:

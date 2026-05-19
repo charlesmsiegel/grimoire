@@ -88,6 +88,16 @@ class LLMGatewayService:
             self._config.retry.retry_on
         )
 
+    def capabilities_for(self, provider_id: str):
+        """Return the static `ProviderCapabilities` for ``provider_id``.
+
+        The Extractor's mode selector consults this to decide whether
+        tool-use mode is available for the route picked this turn.
+        """
+        from grimoire.llm_gateway.capabilities import capabilities_for as _lookup
+
+        return _lookup(provider_id)
+
     # ------------------------------------------------------------------ #
     # Event helpers
     # ------------------------------------------------------------------ #

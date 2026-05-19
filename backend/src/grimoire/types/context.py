@@ -29,6 +29,20 @@ class BudgetEstimate(BaseModel):
     sources_preview: list[ContextSource] = Field(default_factory=list)
 
 
+class ToolDeclarationSpec(BaseModel):
+    """Provider-agnostic tool declaration carried on the AssembledPrompt.
+
+    The LLM gateway translates this into the wire format for the routed
+    provider. Used by the Extractor's TOOL_USE mode (one tool per delta
+    kind). ``parameters`` is the JSONSchema for the tool's arguments —
+    named to match the OpenAI/Anthropic function-calling wire shape.
+    """
+
+    name: str
+    description: str = ""
+    parameters: Json = Field(default_factory=dict)
+
+
 class AssembledPrompt(BaseModel):
     """Output of Context Builder; ready to hand to the LLM Gateway."""
 
@@ -39,3 +53,4 @@ class AssembledPrompt(BaseModel):
     summary: str = ""
     composition_snapshot: Json = Field(default_factory=dict)
     messages_hash: str = ""
+    tools: list[ToolDeclarationSpec] = Field(default_factory=list)
