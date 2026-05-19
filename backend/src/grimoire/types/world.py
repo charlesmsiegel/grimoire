@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .common import (
     BranchId,
@@ -22,6 +23,11 @@ from .common import (
     Json,
     LocationRef,
 )
+from .extras import ExtraValue, validate_extras_dict
+
+
+def _validate_extras_before(v: Any) -> Any:
+    return validate_extras_dict(v)
 
 
 class LocationKind(StrEnum):
@@ -63,6 +69,9 @@ class Location(BaseModel):
     typical_occupants: list[str] = Field(default_factory=list)
     description: str = ""
     body: str = ""
+    extras: dict[str, ExtraValue] = Field(default_factory=dict)
+
+    _check_extras = field_validator("extras", mode="before")(_validate_extras_before)
 
 
 class Item(BaseModel):
@@ -75,6 +84,9 @@ class Item(BaseModel):
     current_holder: str | None = None
     description: str = ""
     body: str = ""
+    extras: dict[str, ExtraValue] = Field(default_factory=dict)
+
+    _check_extras = field_validator("extras", mode="before")(_validate_extras_before)
 
 
 class Faction(BaseModel):
@@ -90,6 +102,9 @@ class Faction(BaseModel):
     tags: list[str] = Field(default_factory=list)
     description: str = ""
     body: str = ""
+    extras: dict[str, ExtraValue] = Field(default_factory=dict)
+
+    _check_extras = field_validator("extras", mode="before")(_validate_extras_before)
 
 
 class SecrecyLevel(StrEnum):

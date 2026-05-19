@@ -6,8 +6,11 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from typing import Any
+
 from .common import EntityKind, Json
 from .expressions import ExpressionChange
+from .extras import ExtraScope
 from .state import StateDelta
 from .transient import TransientUpdateProposal
 
@@ -44,9 +47,27 @@ class EntityCandidate(BaseModel):
     suggested_card: Json = Field(default_factory=dict)
 
 
+class ExtrasProposal(BaseModel):
+    """Extractor-proposed extras key/value with evidence.
+
+    Routed by the extractor service into the review queue when
+    ``confidence >= extras.extractor.review_threshold``. Approving a
+    proposal calls ``ExtrasService.set(actor="extractor:reviewed", ...)``.
+    """
+
+    entity_kind: EntityKind
+    entity_id: str
+    key: str
+    value: Any = None
+    confidence: float = 0.0
+    evidence: str = ""
+    scope_hint: ExtraScope = ExtraScope.CAMPAIGN_LOCAL
+
+
 class ExtractionResult(BaseModel):
     deltas: list[StateDelta] = Field(default_factory=list)
     candidates: list[EntityCandidate] = Field(default_factory=list)
+    extras_proposals: list[ExtrasProposal] = Field(default_factory=list)
     flags: list[ExtractionFlag] = Field(default_factory=list)
     transient_updates: list[TransientUpdateProposal] = Field(default_factory=list)
     expression_changes: list[ExpressionChange] = Field(default_factory=list)
