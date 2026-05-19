@@ -50,23 +50,29 @@ class FakeOrchestrator:
             return _default_view(campaign_id, batch_id)
         return self.view
 
-    async def accept_replay(self, campaign_id: str) -> ReplayBatchStateView:
-        self.calls.append(("accept", campaign_id))
+    async def accept_replay(
+        self, campaign_id: str, *, batch_id: str | None = None
+    ) -> ReplayBatchStateView:
+        self.calls.append(("accept", campaign_id, batch_id))
         if self.raise_on_action is not None:
             raise self.raise_on_action
-        return _default_view(campaign_id, "rb_x", current_index=1)
+        return _default_view(campaign_id, batch_id or "rb_x", current_index=1)
 
-    async def try_again_replay(self, campaign_id: str) -> ReplayBatchStateView:
-        self.calls.append(("try_again", campaign_id))
+    async def try_again_replay(
+        self, campaign_id: str, *, batch_id: str | None = None
+    ) -> ReplayBatchStateView:
+        self.calls.append(("try_again", campaign_id, batch_id))
         if self.raise_on_action is not None:
             raise self.raise_on_action
-        return _default_view(campaign_id, "rb_x")
+        return _default_view(campaign_id, batch_id or "rb_x")
 
-    async def cancel_replay(self, campaign_id: str) -> ReplayBatchStateView:
-        self.calls.append(("cancel", campaign_id))
+    async def cancel_replay(
+        self, campaign_id: str, *, batch_id: str | None = None
+    ) -> ReplayBatchStateView:
+        self.calls.append(("cancel", campaign_id, batch_id))
         if self.raise_on_action is not None:
             raise self.raise_on_action
-        return _default_view(campaign_id, "rb_x", completed=True)
+        return _default_view(campaign_id, batch_id or "rb_x", completed=True)
 
 
 def _default_view(campaign_id: str, batch_id: str, **overrides: Any) -> ReplayBatchStateView:
@@ -135,43 +141,39 @@ def test_get_replay_state_unknown_batch_is_404(wire, client) -> None:
     assert response.status_code == 404
 
 
-def test_accept_route(wire, client) -> None:
+def test_accept_route_forwards_batch_id(wire, client) -> None:
     response = client.post("/api/campaigns/c1/retcon/replay/rb_x/accept")
     assert response.status_code == 200
     body = response.json()
     assert body["current_index"] == 1
-    assert ("accept", "c1") in wire.orchestrator.calls
+    assert ("accept", "c1", "rb_x") in wire.orchestrator.calls
 
 
-def test_try_again_route(wire, client) -> None:
+def test_try_again_route_forwards_batch_id(wire, client) -> None:
     response = client.post("/api/campaigns/c1/retcon/replay/rb_x/try-again")
     assert response.status_code == 200
-    assert ("try_again", "c1") in wire.orchestrator.calls
+    assert ("try_again", "c1", "rb_x") in wire.orchestrator.calls
 
 
-def test_cancel_route(wire, client) -> None:
+def test_cancel_route_forwards_batch_id(wire, client) -> None:
     response = client.post("/api/campaigns/c1/retcon/replay/rb_x/cancel")
     assert response.status_code == 200
     body = response.json()
     assert body["completed"] is True
-    assert ("cancel", "c1") in wire.orchestrator.calls
+    assert ("cancel", "c1", "rb_x") in wire.orchestrator.calls
 
 
-def test_action_on_closed_batch_is_409(wire, client) -> None:
-    wire.orchestrator.view = _default_view("c1", "rb_x", completed=True)
-    response = client.post("/api/campaigns/c1/retcon/replay/rb_x/accept")
-    assert response.status_code == 409
-
-
-def test_action_on_unknown_batch_is_404(wire, client) -> None:
-    wire.orchestrator.raise_on_get = RetconBatchNotFoundError("rb_x")
-    response = client.post("/api/campaigns/c1/retcon/replay/rb_x/accept")
-    assert response.status_code == 404
-
-
-def test_accept_propagates_orchestrator_closed_error(wire, client) -> None:
-    # get_replay_state returns an open batch, but the action itself raises
-    # because the session-level state is closed.
+def test_accept_on_closed_batch_is_409(wire, client) -> None:
+    # Session-level "batch is closed" comes back from accept_replay itself
+    # now; no separate GET probe.
     wire.orchestrator.raise_on_action = RetconBatchClosedError("rb_x")
     response = client.post("/api/campaigns/c1/retcon/replay/rb_x/accept")
     assert response.status_code == 409
+
+
+def test_accept_on_unknown_batch_id_is_404(wire, client) -> None:
+    # batch_id in the URL no longer matches the currently-open batch (TOCTOU
+    # race: a different batch is now open). The session raises BatchNotFound.
+    wire.orchestrator.raise_on_action = RetconBatchNotFoundError("rb_x")
+    response = client.post("/api/campaigns/c1/retcon/replay/rb_x/accept")
+    assert response.status_code == 404
