@@ -142,6 +142,7 @@ class ModuleManifest(BaseModel):
     sheet_kinds: list[str] = Field(default_factory=list)
     content_kinds: list[str] = Field(default_factory=list)
     capabilities: list[str] = Field(default_factory=list)
+    expression_vocabulary_extensions: list[str] = Field(default_factory=list)
     ui: Json = Field(default_factory=dict)
     hud_widgets: list[HudWidget] = Field(default_factory=list)
 

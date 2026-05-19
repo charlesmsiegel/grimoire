@@ -15,6 +15,7 @@ from grimoire.api.campaigns import router as campaigns_router
 from grimoire.api.config import router as config_router
 from grimoire.api.container import ServiceContainer
 from grimoire.api.context import router as context_router
+from grimoire.api.expressions import router as expressions_router
 from grimoire.api.health import router as health_router
 from grimoire.api.hud import router as hud_router
 from grimoire.api.imagegen import router as imagegen_router
@@ -730,6 +731,7 @@ def create_app() -> FastAPI:
     app.include_router(alternates_router, prefix="/api")
     app.include_router(imagegen_router, prefix="/api")
     app.include_router(hud_router, prefix="/api")
+    app.include_router(expressions_router, prefix="/api")
     app.include_router(observability_router, prefix="/api")
     app.include_router(transient_state_router, prefix="/api")
     app.include_router(context_router, prefix="/api")

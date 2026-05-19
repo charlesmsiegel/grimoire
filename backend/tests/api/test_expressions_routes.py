@@ -1,0 +1,334 @@
+"""REST tests for the sprite-resolve and PC PATCH routes."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+
+from grimoire.api.container import ServiceContainer
+from grimoire.expressions.service import ExpressionStateService
+
+
+@pytest.fixture(autouse=True)
+def _refresh_main_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Force ``grimoire.main.settings`` to point at this test's tmp data root.
+
+    ``grimoire.main`` binds ``settings`` via ``from grimoire.config import
+    settings`` at import time, so the base ``container`` fixture's
+    ``config_module.settings = Settings()`` replacement doesn't reach
+    inside main. Patch it directly so the lifespan creates its DB +
+    library scan under ``tmp_path``.
+    """
+    monkeypatch.setenv("GRIMOIRE_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("GRIMOIRE_DATABASE_PATH", str(tmp_path / "test.sqlite"))
+    from grimoire import config as config_module
+    from grimoire import main as main_module
+
+    fresh = config_module.Settings()
+    monkeypatch.setattr(config_module, "settings", fresh)
+    monkeypatch.setattr(main_module, "settings", fresh)
+
+
+def _seed_character_files(
+    *,
+    data_root: Path,
+    world_id: str,
+    asset_id: str,
+    frontmatter: dict | None = None,
+    sprites: tuple[str, ...] = (),
+    with_avatar: bool = False,
+) -> Path:
+    """Lay down a directory-form character on disk before lifespan scans."""
+    char_dir = data_root / "library" / "worlds" / world_id / "characters" / asset_id
+    char_dir.mkdir(parents=True, exist_ok=True)
+    card = char_dir / "card.md"
+    fm = frontmatter or {"id": asset_id, "name": asset_id.title()}
+    card.write_text(
+        "---\n"
+        + "\n".join(f"{k}: {json.dumps(v)}" for k, v in fm.items())
+        + "\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    if sprites:
+        sprite_dir = char_dir / "sprites"
+        sprite_dir.mkdir(exist_ok=True)
+        for emotion in sprites:
+            (sprite_dir / f"{emotion}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    if with_avatar:
+        (char_dir / "avatar.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    return card
+
+
+async def _set_expression(container: ServiceContainer, **kwargs) -> None:
+    svc = container.extras.get("expressions")
+    if svc is None:
+        svc = ExpressionStateService(container.db)
+        container.extras["expressions"] = svc
+    await svc.set(**kwargs)
+
+
+def test_returns_neutral_when_no_state(tmp_path: Path, container: ServiceContainer) -> None:
+    _seed_character_files(
+        data_root=tmp_path,
+        world_id="w",
+        asset_id="beatrice",
+        sprites=("neutral", "happy"),
+        with_avatar=True,
+    )
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        r = client.get("/api/campaigns/cmp_1/characters/beatrice/expression")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["emotion"] == "neutral"
+        assert body["sprite_url"].endswith("/sprites/neutral.png")
+        assert body["fallback_used"] is False
+
+
+def test_returns_requested_sprite_when_present(
+    tmp_path: Path, container: ServiceContainer
+) -> None:
+    _seed_character_files(
+        data_root=tmp_path,
+        world_id="w",
+        asset_id="beatrice",
+        sprites=("neutral", "happy"),
+        with_avatar=True,
+    )
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        # Seed the state row before issuing the GET. We use the live
+        # container.db that the lifespan opened so the test row lands in
+        # the same database the route reads from.
+        import asyncio
+
+        asyncio.run(
+            _set_expression(
+                container,
+                campaign_id="cmp_1",
+                scene_id="s_1",
+                character_id="beatrice",
+                turn_id="t_1",
+                post_id="p_1",
+                emotion="happy",
+                provenance="extractor:auto",
+            )
+        )
+        r = client.get("/api/campaigns/cmp_1/characters/beatrice/expression")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["emotion"] == "happy"
+        assert body["sprite_url"].endswith("/sprites/happy.png")
+        assert body["fallback_used"] is False
+
+
+def test_falls_back_to_neutral_when_sprite_missing(
+    tmp_path: Path, container: ServiceContainer
+) -> None:
+    _seed_character_files(
+        data_root=tmp_path,
+        world_id="w",
+        asset_id="beatrice",
+        sprites=("neutral",),
+        with_avatar=True,
+    )
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        import asyncio
+
+        asyncio.run(
+            _set_expression(
+                container,
+                campaign_id="cmp_1",
+                scene_id="s_1",
+                character_id="beatrice",
+                turn_id="t_1",
+                post_id="p_1",
+                emotion="smug",
+                provenance="extractor:auto",
+            )
+        )
+        r = client.get("/api/campaigns/cmp_1/characters/beatrice/expression")
+        body = r.json()
+        assert body["emotion"] == "neutral"
+        assert body["sprite_url"].endswith("/sprites/neutral.png")
+        assert body["fallback_used"] is True
+
+
+def test_falls_back_to_avatar_when_no_neutral(
+    tmp_path: Path, container: ServiceContainer
+) -> None:
+    _seed_character_files(
+        data_root=tmp_path,
+        world_id="w",
+        asset_id="ralph",
+        sprites=(),
+        with_avatar=True,
+    )
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        r = client.get("/api/campaigns/cmp_1/characters/ralph/expression")
+        body = r.json()
+        assert body["sprite_url"] is not None
+        assert body["sprite_url"].endswith("/avatar.png")
+        assert body["fallback_used"] is True
+
+
+def test_returns_null_sprite_when_nothing_available(
+    tmp_path: Path, container: ServiceContainer
+) -> None:
+    _seed_character_files(
+        data_root=tmp_path,
+        world_id="w",
+        asset_id="naked",
+        sprites=(),
+        with_avatar=False,
+    )
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        r = client.get("/api/campaigns/cmp_1/characters/naked/expression")
+        body = r.json()
+        assert body["sprite_url"] is None
+        assert body["fallback_used"] is True
+
+
+def test_path_traversal_rejected(tmp_path: Path, container: ServiceContainer) -> None:
+    _seed_character_files(
+        data_root=tmp_path,
+        world_id="w",
+        asset_id="beatrice",
+        sprites=("neutral",),
+    )
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        r = client.get(
+            "/api/campaigns/cmp_1/characters/..%2F..%2Fetc%2Fpasswd/expression"
+        )
+        assert r.status_code in {400, 404}
+
+
+def test_as_of_turn_returns_historical(
+    tmp_path: Path, container: ServiceContainer
+) -> None:
+    _seed_character_files(
+        data_root=tmp_path,
+        world_id="w",
+        asset_id="beatrice",
+        sprites=("neutral", "happy"),
+    )
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        import asyncio
+
+        async def _seed() -> None:
+            await _set_expression(
+                container,
+                campaign_id="cmp_1",
+                scene_id="s_1",
+                character_id="beatrice",
+                turn_id="t_1",
+                post_id="p_1",
+                emotion="happy",
+                provenance="extractor:auto",
+            )
+            await _set_expression(
+                container,
+                campaign_id="cmp_1",
+                scene_id="s_1",
+                character_id="beatrice",
+                turn_id="t_5",
+                post_id="p_5",
+                emotion="neutral",
+                provenance="extractor:auto",
+            )
+
+        asyncio.run(_seed())
+        r = client.get(
+            "/api/campaigns/cmp_1/characters/beatrice/expression?as_of_turn=t_1"
+        )
+        body = r.json()
+        assert body["emotion"] == "happy"
+
+
+def test_patch_pc_expression_writes_state(
+    tmp_path: Path, container: ServiceContainer
+) -> None:
+    _seed_character_files(
+        data_root=tmp_path,
+        world_id="w",
+        asset_id="beatrice",
+        sprites=("neutral",),
+    )
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        r = client.patch(
+            "/api/campaigns/cmp_1/characters/beatrice/expression",
+            json={"emotion": "determined", "post_id": "p_42", "turn_id": "t_42"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # No determined.png sprite → fallback to neutral.
+        assert body["emotion"] == "neutral"
+        assert body["fallback_used"] is True
+
+
+def test_patch_rejects_unknown_emotion(
+    tmp_path: Path, container: ServiceContainer
+) -> None:
+    _seed_character_files(
+        data_root=tmp_path,
+        world_id="w",
+        asset_id="beatrice",
+        sprites=("neutral",),
+    )
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        r = client.patch(
+            "/api/campaigns/cmp_1/characters/beatrice/expression",
+            json={"emotion": "ecstatic", "post_id": "p_1"},
+        )
+        assert r.status_code == 400
+
+
+def test_vocabulary_route(tmp_path: Path, container: ServiceContainer) -> None:
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        r = client.get("/api/expressions/vocabulary")
+        body: dict[str, Any] = r.json()
+        assert "happy" in body["core"]
+        assert "neutral" in body["core"]
+        assert isinstance(body["extensions"], dict)
