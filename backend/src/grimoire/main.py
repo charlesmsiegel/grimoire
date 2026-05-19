@@ -14,6 +14,7 @@ from grimoire.api.alternates import router as alternates_router
 from grimoire.api.campaigns import router as campaigns_router
 from grimoire.api.config import router as config_router
 from grimoire.api.container import ServiceContainer
+from grimoire.api.context import router as context_router
 from grimoire.api.health import router as health_router
 from grimoire.api.hud import router as hud_router
 from grimoire.api.imagegen import router as imagegen_router
@@ -731,6 +732,7 @@ def create_app() -> FastAPI:
     app.include_router(hud_router, prefix="/api")
     app.include_router(observability_router, prefix="/api")
     app.include_router(transient_state_router, prefix="/api")
+    app.include_router(context_router, prefix="/api")
     # WebSocket routes mount under /ws so the Vite dev server's `ws: true`
     # proxy block forwards upgrade requests correctly. The HTTP health probe
     # in the same router lands at /ws/health.
