@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from grimoire import __version__
 from grimoire.api.alternates import router as alternates_router
+from grimoire.api.auxiliary import router as auxiliary_router
 from grimoire.api.campaigns import router as campaigns_router
 from grimoire.api.config import router as config_router
 from grimoire.api.container import ServiceContainer
@@ -729,6 +730,7 @@ def create_app() -> FastAPI:
     app.include_router(templates_router, prefix="/api")
     app.include_router(campaigns_router, prefix="/api")
     app.include_router(alternates_router, prefix="/api")
+    app.include_router(auxiliary_router, prefix="/api")
     app.include_router(imagegen_router, prefix="/api")
     app.include_router(hud_router, prefix="/api")
     app.include_router(expressions_router, prefix="/api")
