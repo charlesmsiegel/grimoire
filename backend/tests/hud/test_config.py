@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from grimoire.hud.config import (
     HudConfig,
     HudConfigService,
@@ -14,6 +16,7 @@ from grimoire.hud.config import (
     deserialize,
     serialize,
 )
+from grimoire.state_store.errors import InvalidRefError
 
 
 def test_defaults_when_file_absent(tmp_path: Path) -> None:
@@ -101,3 +104,19 @@ def test_serialize_round_trips_default() -> None:
     again = deserialize(data)
     assert [e.id for e in again.ordered_widgets] == [e.id for e in cfg.ordered_widgets]
     assert [g.title for g in again.groups] == [g.title for g in cfg.groups]
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["..", "../escape", "/abs", "a/b", ".hidden", "with\x00null"],
+)
+def test_unsafe_campaign_id_rejected(tmp_path: Path, bad_id: str) -> None:
+    svc = HudConfigService(tmp_path)
+    with pytest.raises(InvalidRefError):
+        svc.load(bad_id)
+    with pytest.raises(InvalidRefError):
+        svc.save(bad_id, HudConfig())
+    with pytest.raises(InvalidRefError):
+        svc.reset(bad_id)
+    # Nothing should have escaped the data root.
+    assert list(tmp_path.iterdir()) == []
