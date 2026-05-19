@@ -10,7 +10,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from grimoire.api.container import ServiceContainer
-from grimoire.expressions.service import ExpressionStateService
 
 
 @pytest.fixture(autouse=True)
@@ -61,12 +60,30 @@ def _seed_character_files(
     return card
 
 
-async def _set_expression(container: ServiceContainer, **kwargs) -> None:
-    svc = container.extras.get("expressions")
-    if svc is None:
-        svc = ExpressionStateService(container.db)
-        container.extras["expressions"] = svc
-    await svc.set(**kwargs)
+def _set_via_patch(
+    client: TestClient,
+    *,
+    campaign_id: str,
+    character_id: str,
+    emotion: str,
+    post_id: str,
+    turn_id: str | None = None,
+) -> None:
+    """Seed an expression_state row by calling the PATCH endpoint.
+
+    Avoids ``asyncio.run`` inside ``with TestClient(app)``, which is
+    fragile across anyio backend variants on different runners.
+    Provenance is ``user:pc`` here; the routing-specific behaviour for
+    extractor provenance is exercised by ``tests/expressions/``.
+    """
+    body: dict[str, str] = {"emotion": emotion, "post_id": post_id}
+    if turn_id is not None:
+        body["turn_id"] = turn_id
+    r = client.patch(
+        f"/api/campaigns/{campaign_id}/characters/{character_id}/expression",
+        json=body,
+    )
+    assert r.status_code == 200, r.text
 
 
 def test_returns_neutral_when_no_state(tmp_path: Path, container: ServiceContainer) -> None:
@@ -103,22 +120,13 @@ def test_returns_requested_sprite_when_present(tmp_path: Path, container: Servic
     app = create_app()
     app.state.container = container
     with TestClient(app) as client:
-        # Seed the state row before issuing the GET. We use the live
-        # container.db that the lifespan opened so the test row lands in
-        # the same database the route reads from.
-        import asyncio
-
-        asyncio.run(
-            _set_expression(
-                container,
-                campaign_id="cmp_1",
-                scene_id="s_1",
-                character_id="beatrice",
-                turn_id="t_1",
-                post_id="p_1",
-                emotion="happy",
-                provenance="extractor:auto",
-            )
+        _set_via_patch(
+            client,
+            campaign_id="cmp_1",
+            character_id="beatrice",
+            emotion="happy",
+            post_id="p_1",
+            turn_id="t_1",
         )
         r = client.get("/api/campaigns/cmp_1/characters/beatrice/expression")
         assert r.status_code == 200, r.text
@@ -143,19 +151,13 @@ def test_falls_back_to_neutral_when_sprite_missing(
     app = create_app()
     app.state.container = container
     with TestClient(app) as client:
-        import asyncio
-
-        asyncio.run(
-            _set_expression(
-                container,
-                campaign_id="cmp_1",
-                scene_id="s_1",
-                character_id="beatrice",
-                turn_id="t_1",
-                post_id="p_1",
-                emotion="smug",
-                provenance="extractor:auto",
-            )
+        _set_via_patch(
+            client,
+            campaign_id="cmp_1",
+            character_id="beatrice",
+            emotion="smug",
+            post_id="p_1",
+            turn_id="t_1",
         )
         r = client.get("/api/campaigns/cmp_1/characters/beatrice/expression")
         body = r.json()
@@ -233,31 +235,22 @@ def test_as_of_turn_returns_historical(tmp_path: Path, container: ServiceContain
     app = create_app()
     app.state.container = container
     with TestClient(app) as client:
-        import asyncio
-
-        async def _seed() -> None:
-            await _set_expression(
-                container,
-                campaign_id="cmp_1",
-                scene_id="s_1",
-                character_id="beatrice",
-                turn_id="t_1",
-                post_id="p_1",
-                emotion="happy",
-                provenance="extractor:auto",
-            )
-            await _set_expression(
-                container,
-                campaign_id="cmp_1",
-                scene_id="s_1",
-                character_id="beatrice",
-                turn_id="t_5",
-                post_id="p_5",
-                emotion="neutral",
-                provenance="extractor:auto",
-            )
-
-        asyncio.run(_seed())
+        _set_via_patch(
+            client,
+            campaign_id="cmp_1",
+            character_id="beatrice",
+            emotion="happy",
+            post_id="p_1",
+            turn_id="t_1",
+        )
+        _set_via_patch(
+            client,
+            campaign_id="cmp_1",
+            character_id="beatrice",
+            emotion="neutral",
+            post_id="p_5",
+            turn_id="t_5",
+        )
         r = client.get("/api/campaigns/cmp_1/characters/beatrice/expression?as_of_turn=t_1")
         body = r.json()
         assert body["emotion"] == "happy"
