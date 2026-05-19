@@ -110,6 +110,7 @@ class ContextBuilderService:
         gateway: Any | None = None,
         state_store: Any | None = None,
         time_engine: Any | None = None,
+        transient_state: Any | None = None,
         config: ContextBuilderConfig | None = None,
     ) -> None:
         self._library = library
@@ -121,6 +122,7 @@ class ContextBuilderService:
         self._gateway = gateway
         self._store = state_store
         self._time_engine = time_engine
+        self._transient_state = transient_state
         self._config = config or ContextBuilderConfig()
         self._estimator: TokenEstimator = self._make_estimator()
 
@@ -475,6 +477,16 @@ class ContextBuilderService:
                             ),
                         )
                     )
+            # Transient stanza: spotlight-tier compact "current state" block
+            # (mood / intent / action / thinking). Privacy-filtered upstream.
+            stanza_item = await self._maybe_transient_stanza_item(
+                ref=ref,
+                campaign_id=campaign_id,
+                active_pc_ref=active_pc_ref,
+            )
+            if stanza_item is not None:
+                spotlight_items.append(stanza_item)
+
             # §10 — recent direct dialogue per spotlighted speaker.
             dialogue = self._recent_dialogue_for(ref, recent_posts)
             if dialogue:
@@ -584,6 +596,67 @@ class ContextBuilderService:
         except Exception as exc:
             logger.debug("get_voice_only(%s) failed: %s", ref, exc)
             return ""
+
+    async def _maybe_transient_stanza_item(
+        self,
+        *,
+        ref: str,
+        campaign_id: CampaignId,
+        active_pc_ref: str | None,
+    ) -> _TierItem | None:
+        """Render the optional spotlight-tier transient-state stanza.
+
+        Returns ``None`` when no transient service is wired or no
+        stanza-eligible fields are present. The active PC's owner sees
+        their own thoughts unconditionally; everyone else reads through
+        the privacy filter.
+        """
+        if self._transient_state is None:
+            return None
+        from grimoire.transient_state.stanza import render_transient_stanza
+        from grimoire.types.transient import EntityKind, ObserverKind
+
+        observer = ObserverKind.PC_OWNER if ref == active_pc_ref else ObserverKind.OTHER_PC
+        try:
+            bundle = await self._transient_state.get(
+                campaign_id,
+                EntityKind.CHARACTER,
+                ref,
+                for_observer=observer,
+            )
+        except Exception as exc:
+            logger.debug("transient_state.get(%s) failed: %s", ref, exc)
+            return None
+        if not bundle:
+            return None
+        if not isinstance(bundle, dict):
+            return None
+        name = await self._character_display_name(ref, campaign_id)
+        text = render_transient_stanza(name or ref, bundle)
+        if not text:
+            return None
+        return _TierItem(
+            tier=ContextTier.SPOTLIGHT,
+            section="transient",
+            text=text,
+            priority=8,
+            source=ContextSource(
+                kind="character",
+                scope="campaign-local",
+                owner_id=campaign_id,
+                tier=ContextTier.SPOTLIGHT,
+                summary=f"transient:{ref}",
+            ),
+        )
+
+    async def _character_display_name(self, ref: str, campaign_id: CampaignId) -> str:
+        getter = getattr(self._characters, "get_display_name", None)
+        if getter is None:
+            return ref
+        try:
+            return (await getter(ref, campaign_id)) or ref
+        except Exception:
+            return ref
 
     def _recent_dialogue_for(self, ref: str, posts: list[Any]) -> str:
         """Pull the last ``recent_dialogue_per_speaker`` posts authored by ref.

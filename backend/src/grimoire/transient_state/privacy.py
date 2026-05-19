@@ -59,17 +59,19 @@ class PrivacyResolver:
     wired to either the Characters service, a raw library lookup, or a
     test stub. Resolution order:
 
-    1. POV-audience guard: ``observer == AUDIENCE`` strips internal_thought
-       from non-PC characters regardless of frontmatter.
-    2. PC owner: always all-open for the active PC's own data.
-    3. Campaign preset (loaded from ``data/campaigns/<id>/privacy.yaml``).
+    1. AUTHOR: always all-open.
+    2. PC owner viewing own character: always all-open.
+    3. POV mode + AUDIENCE + non-PC: strip (all-closed). Plain AUDIENCE
+       without ``pov_mode`` falls through to per-character frontmatter.
     4. Per-character frontmatter ``privacy.internal_thoughts``.
-    5. Default: all-open.
+    5. Campaign preset (loaded from ``data/campaigns/<id>/privacy.yaml``).
+    6. Default: all-open.
     """
 
     character_loader: CharacterLoader | None = None
     campaign_preset_loader: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None
     pov_pc_ref: str | None = None
+    pov_mode: bool = False
 
     async def resolve(
         self,
@@ -92,7 +94,7 @@ class PrivacyResolver:
             str(getattr(character, "role", "")).lower() == "pc"
         )
 
-        if observer == ObserverKind.AUDIENCE and not is_pc:
+        if self.pov_mode and observer == ObserverKind.AUDIENCE and not is_pc:
             return PrivacyView.all_closed()
 
         per_char = self._extract_internal_thoughts(character)
@@ -188,3 +190,36 @@ async def resolve(
         campaign_preset_loader=_preset,
         pov_pc_ref=pov_pc_ref,
     ).resolve(campaign_id, getattr(character, "id", ""), observer)
+
+
+def resolve_privacy(
+    character: Any,
+    *,
+    observer: ObserverKind,
+    is_self: bool = False,
+    is_pc: bool = False,
+    pov_mode: bool = False,
+) -> PrivacyView:
+    """Synchronous resolution against a Character object.
+
+    Decision rules (spec §Privacy):
+        1. AUTHOR: always all-open.
+        2. PC_OWNER + is_self: always all-open.
+        3. POV mode + not PC: all-closed (strip NPC internal thought).
+        4. Otherwise: per-character frontmatter.
+    """
+    if observer == ObserverKind.AUTHOR:
+        return PrivacyView.all_open()
+    if observer == ObserverKind.PC_OWNER and is_self:
+        return PrivacyView.all_open()
+    if pov_mode and not is_pc:
+        return PrivacyView.all_closed()
+    privacy = getattr(character, "privacy", None)
+    thoughts = getattr(privacy, "internal_thoughts", None) if privacy is not None else None
+    if thoughts is None:
+        return PrivacyView.all_open()
+    return PrivacyView(
+        hud=bool(getattr(thoughts, "surface_in_hud", True)),
+        inline=bool(getattr(thoughts, "surface_inline", True)),
+        context=bool(getattr(thoughts, "surface_in_context", True)),
+    )

@@ -17,6 +17,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from pydantic import BaseModel
+
 
 class EntityKind(StrEnum):
     CHARACTER = "character"
@@ -97,24 +99,34 @@ class TransientValue:
     decayed: bool
 
 
-@dataclass(frozen=True, slots=True)
-class DecayHint:
+class DecayHint(BaseModel):
     posts: int | None = None
     in_game_seconds: int | None = None
     scene_scope: bool = False
     reinforce_extends: bool = False
     promote_to_fact: bool = False
 
+    model_config = {"frozen": True}
 
-@dataclass(frozen=True, slots=True)
-class TransientUpdateProposal:
+
+class TransientUpdateProposal(BaseModel):
+    """An extractor candidate for a transient-state write.
+
+    Routing (per spec §Extractor integration):
+        confidence >= auto_apply_threshold → set(extractor:auto)
+        confidence >= review_threshold     → enqueue for human review
+        otherwise                          → discarded
+    """
+
     entity_kind: EntityKind
     entity_id: str
     field: str
     value: Any
     confidence: float
-    evidence: str
+    evidence: str = ""
     proposed_decay_override: DecayHint | None = None
+
+    model_config = {"frozen": True}
 
 
 @dataclass(frozen=True, slots=True)

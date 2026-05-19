@@ -91,6 +91,10 @@ def get_stream(request: Request) -> Any:
     return _require(get_container(request), "stream")
 
 
+def get_transient_state(request: Request) -> Any:
+    return _require(get_container(request), "transient_state")
+
+
 ContainerDep = Annotated[ServiceContainer, Depends(get_container)]
 LibraryDep = Annotated[Any, Depends(get_library)]
 WorldDep = Annotated[Any, Depends(get_world)]
@@ -106,6 +110,7 @@ StateStoreDep = Annotated[Any, Depends(get_state_store)]
 OrchestratorDep = Annotated[Any, Depends(get_orchestrator)]
 ObservabilityDep = Annotated[Any, Depends(get_observability)]
 StreamDep = Annotated[Any, Depends(get_stream)]
+TransientStateDep = Annotated[Any, Depends(get_transient_state)]
 
 
 __all__ = [
@@ -123,6 +128,7 @@ __all__ = [
     "StateStoreDep",
     "StreamDep",
     "TimeEngineDep",
+    "TransientStateDep",
     "WorldDep",
     "get_characters",
     "get_container",
@@ -138,5 +144,6 @@ __all__ = [
     "get_state_store",
     "get_stream",
     "get_time_engine",
+    "get_transient_state",
     "get_world",
 ]
