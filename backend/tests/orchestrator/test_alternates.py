@@ -405,8 +405,10 @@ async def test_regenerate_post_rejects_non_latest_post(tmp_path: Path, real_stor
         await orch.regenerate_post(campaign_id=campaign_id, post_id=first_model_id)
 
 
-async def test_regenerate_post_rollback_on_extractor_failure(
-    tmp_path: Path, real_store: StateStore
+async def test_regenerate_post_rollback_on_sidecar_failure(
+    tmp_path: Path,
+    real_store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
@@ -414,9 +416,6 @@ async def test_regenerate_post_rollback_on_extractor_failure(
     campaign_id, branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
         scenes, real_store
     )
-    # FakeExtractor swallows raise_on_extract into a returned None — that
-    # path leaves the new delta set empty rather than triggering rollback.
-    # Instead, force the swap itself to fail by mocking store.swap_delta_set.
     gateway = FakeGateway(chunks=["chunk"])
     extractor = FakeExtractor(deltas=[_new_delta("lib:winifred", "anxious")])
     orch = OrchestratorService(
@@ -428,19 +427,14 @@ async def test_regenerate_post_rollback_on_extractor_failure(
         state_store=real_store,
         ws_push=WSCollector(),
     )
-    # Simulate sidecar append failure after deltas were applied: the
-    # rollback path should rewind the new set and re-activate the old one.
-    original_append = scenes.append_alternate
 
     async def boom(*_args, **_kwargs):
         raise RuntimeError("sidecar write boom")
 
-    scenes.append_alternate = boom  # type: ignore[assignment]
-    try:
-        with pytest.raises(RuntimeError, match="sidecar write boom"):
-            await orch.regenerate_post(campaign_id=campaign_id, post_id=post_id)
-    finally:
-        scenes.append_alternate = original_append  # type: ignore[assignment]
+    monkeypatch.setattr(scenes, "append_alternate", boom)
+
+    with pytest.raises(RuntimeError, match="sidecar write boom"):
+        await orch.regenerate_post(campaign_id=campaign_id, post_id=post_id)
 
     # The pre-existing primary's deltas are active again; no orphan alternate.
     posts = await scenes.get_posts(scene_id)
