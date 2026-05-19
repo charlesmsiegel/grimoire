@@ -279,14 +279,21 @@ async def test_concurrent_replay_rejected_with_in_flight(
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    _campaign_id, _branch_id, _scene_id, post_ids = await _seed_three_model_posts(
-        scenes, real_store
-    )
+    _campaign_id, _branch_id, scene_id, post_ids = await _seed_three_model_posts(scenes, real_store)
     orch = _make_orch(scenes, real_store)
 
     await orch.retcon_post(post_ids[0], "edit", replay_subsequent=True)
+    # Snapshot the second post's body BEFORE the rejected retcon attempt;
+    # the in-flight guard must fire before any mutation happens.
+    posts_before = await scenes.get_posts(scene_id)
+    body_before = next(p.body for p in posts_before if p.id == post_ids[1])
+
     with pytest.raises(RetconInFlightError):
         await orch.retcon_post(post_ids[1], "edit2", replay_subsequent=True)
+
+    posts_after = await scenes.get_posts(scene_id)
+    body_after = next(p.body for p in posts_after if p.id == post_ids[1])
+    assert body_after == body_before, "rejected retcon must not mutate the post"
 
 
 async def test_replay_with_no_subsequent_posts_completes_immediately(
