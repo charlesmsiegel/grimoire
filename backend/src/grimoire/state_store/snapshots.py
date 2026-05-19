@@ -11,13 +11,9 @@ the read layer falls back from child branch → parent branch → main.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import aiosqlite
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+from grimoire.util import now_iso
 
 
 async def write_snapshots_for_world(
@@ -52,7 +48,7 @@ async def write_snapshots_for_world(
             )
         ).fetchall()
 
-    now = _now_iso()
+    now = now_iso()
     written = 0
     for row in rows:
         await conn.execute(

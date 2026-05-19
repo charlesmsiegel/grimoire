@@ -21,10 +21,7 @@ from grimoire.state_store.paths import (
     parse_library_id,
     relative_to_root,
 )
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+from grimoire.util import now_iso
 
 
 def _file_mtime_iso(path: Path) -> str:
@@ -79,7 +76,7 @@ async def upsert_library_index(
             SET path = ?, file_mtime = ?, indexed_at = ?
             WHERE id = ?
             """,
-            (relative_to_root(data_root, path), _file_mtime_iso(path), _now_iso(), library_id),
+            (relative_to_root(data_root, path), _file_mtime_iso(path), now_iso(), library_id),
         )
         return int(row["version"])
 
@@ -123,7 +120,7 @@ async def upsert_library_index(
             _json_or_none(keywords),
             _file_mtime_iso(path),
             chash,
-            _now_iso(),
+            now_iso(),
             new_version,
         ),
     )
@@ -183,7 +180,7 @@ async def upsert_campaign_content_index(
             body,
             _file_mtime_iso(path),
             chash,
-            _now_iso(),
+            now_iso(),
         ),
     )
 

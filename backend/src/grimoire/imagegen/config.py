@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
+from grimoire.files import load_yaml
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +31,7 @@ class ImageGenConfig:
         """Load top-level config; return defaults if the file is missing."""
         if not path.exists():
             return cls()
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = load_yaml(path) or {}
         if not isinstance(raw, dict):
             return cls()
         return cls._from_mapping(raw)

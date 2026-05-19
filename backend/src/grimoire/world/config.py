@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
+from grimoire.files import load_yaml
 
 _CALENDAR_POLICIES: frozenset[str] = frozenset({"pick", "merge_warn", "error"})
 
@@ -47,7 +47,7 @@ class WorldConfig:
     def from_yaml(cls, path: Path) -> WorldConfig:
         if not path.exists():
             return cls()
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = load_yaml(path) or {}
         if not isinstance(raw, dict):
             return cls()
         return cls._from_mapping(raw)

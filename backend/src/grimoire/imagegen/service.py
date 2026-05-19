@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from grimoire.event_bus import Event, EventBus
-from grimoire.files import write_yaml
+from grimoire.files import load_yaml, write_yaml
 from grimoire.imagegen.backend import cache_key_for_request, make_thumbnail
 from grimoire.imagegen.config import ImageGenConfig
 from grimoire.imagegen.prompt import ComposedPrompt, PromptComposer
@@ -728,9 +728,7 @@ class ImageGenService:
         sidecar = image_metadata_path(self.data_root, meta.campaign_id, image_id)
         if sidecar.exists():
             try:
-                import yaml
-
-                doc = yaml.safe_load(sidecar.read_text(encoding="utf-8")) or {}
+                doc = load_yaml(sidecar) or {}
                 if isinstance(doc, dict):
                     doc["tags"] = tags_clean
                     write_yaml(sidecar, doc)

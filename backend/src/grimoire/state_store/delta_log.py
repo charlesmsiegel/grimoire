@@ -20,18 +20,13 @@ its own) raise ``StateStoreError`` so callers handle them explicitly.
 from __future__ import annotations
 
 import json
-import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 import aiosqlite
 
 from grimoire.state_store.errors import NotFoundError, StateStoreError
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+from grimoire.util import new_id, now_iso
 
 
 def _json_dumps(value: Any) -> str | None:
@@ -108,7 +103,7 @@ async def insert_delta(
     confidence: float | None = None,
     notes: str | None = None,
 ) -> str:
-    delta_id = f"d_{uuid.uuid4().hex[:16]}"
+    delta_id = new_id("d", length=16)
     await conn.execute(
         """
         INSERT INTO deltas (
@@ -132,7 +127,7 @@ async def insert_delta(
             _json_dumps(before),
             _json_dumps(after),
             confidence,
-            _now_iso(),
+            now_iso(),
             notes,
         ),
     )
@@ -142,7 +137,7 @@ async def insert_delta(
 async def mark_reversed(conn: aiosqlite.Connection, delta_id: str) -> None:
     await conn.execute(
         "UPDATE deltas SET reversed_at = ? WHERE id = ?",
-        (_now_iso(), delta_id),
+        (now_iso(), delta_id),
     )
 
 
@@ -195,7 +190,7 @@ async def queue_for_review(
     delta_id: str,
     campaign_id: str | None,
 ) -> str:
-    review_id = f"r_{uuid.uuid4().hex[:16]}"
+    review_id = new_id("r", length=16)
     await conn.execute(
         """
         INSERT INTO review_queue (id, delta_id, campaign_id, status, reviewed_at, reviewer_notes)

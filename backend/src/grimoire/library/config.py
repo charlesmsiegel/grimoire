@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
+from grimoire.files import load_yaml
 
 _PINNING_DEFAULTS: frozenset[str] = frozenset({"pinned", "track_latest"})
 
@@ -66,7 +66,7 @@ class LibraryConfig:
     def from_yaml(cls, path: Path) -> LibraryConfig:
         if not path.exists():
             return cls()
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = load_yaml(path) or {}
         if not isinstance(raw, dict):
             return cls()
         # Accept either a top-level mapping or a {"library": {...}} envelope.

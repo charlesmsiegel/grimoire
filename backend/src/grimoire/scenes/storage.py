@@ -13,15 +13,19 @@ reindex them. Helpers here are pure I/O — they don't update SQLite indexes.
 
 from __future__ import annotations
 
-import hashlib
 import re
-import unicodedata
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
 import yaml
 
+from grimoire.files import load_yaml
+from grimoire.files import slugify as _base_slugify
+
+# ``content_hash`` is re-exported (canonical impl lives in
+# :mod:`grimoire.files.hashing` and normalizes line endings before hashing).
+from grimoire.files.hashing import content_hash as content_hash
 from grimoire.scenes.types import AuthorKind, Post, Scene
 
 POST_HEADING_RE = re.compile(r"^##\s+Post\s+(\d+)\s+[—-]\s+(.+?)\s*$", re.MULTILINE)
@@ -36,16 +40,11 @@ DEFAULT_POST_HEADING_PATTERN = "## Post {order} — {author}"
 
 
 def slugify(text: str) -> str:
-    """Convert a title into a stable, filesystem-safe slug."""
-    text = unicodedata.normalize("NFKD", text)
-    text = text.encode("ascii", "ignore").decode("ascii")
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
-    return text or "scene"
-
-
-def content_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    """Scene-specific slug: delegates to :func:`grimoire.files.slugify` but
+    falls back to ``"scene"`` (not ``"untitled"``) so empty titles produce
+    ``0001-scene.md`` rather than ``0001-untitled.md``.
+    """
+    return _base_slugify(text, fallback="scene")
 
 
 def _safe_branch_segment(branch_id: str) -> str:
@@ -256,7 +255,7 @@ def read_sidecar_post_records(path: Path) -> dict:
         return {}
     from grimoire.scenes.manager import _PostRecord  # local import: avoid cycle
 
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data = load_yaml(path) or {}
     rows = data.get("posts") or []
     out: dict = {}
     for row in rows:
@@ -298,7 +297,7 @@ def write_sidecar(path: Path, scene: Scene, *, post_records: dict | None = None)
 
 
 def read_sidecar(path: Path) -> Scene:
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data = load_yaml(path) or {}
     return _yaml_to_scene(data)
 
 

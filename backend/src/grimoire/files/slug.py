@@ -16,7 +16,12 @@ _DEFAULT_MAX_SLUG_LEN = 60
 _FILENAME_RE = re.compile(r"\A(?P<ordinal>\d+)-(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)\Z")
 
 
-def slugify(text: str, *, max_len: int = _DEFAULT_MAX_SLUG_LEN) -> str:
+def slugify(
+    text: str,
+    *,
+    max_len: int = _DEFAULT_MAX_SLUG_LEN,
+    fallback: str = "untitled",
+) -> str:
     """Convert ``text`` into a URL-safe slug.
 
     - Unicode is NFKD-normalized; combining marks are dropped (``café`` →
@@ -25,7 +30,7 @@ def slugify(text: str, *, max_len: int = _DEFAULT_MAX_SLUG_LEN) -> str:
     - Result is lowercased and trimmed to ``max_len`` without splitting a
       trailing hyphen.
 
-    Returns ``"untitled"`` if nothing usable remains.
+    Returns ``fallback`` (default ``"untitled"``) if nothing usable remains.
     """
     if max_len <= 0:
         raise ValueError("max_len must be positive")
@@ -36,12 +41,12 @@ def slugify(text: str, *, max_len: int = _DEFAULT_MAX_SLUG_LEN) -> str:
     hyphenated = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
 
     if not hyphenated:
-        return "untitled"
+        return fallback
 
     if len(hyphenated) > max_len:
         hyphenated = hyphenated[:max_len].rstrip("-")
         if not hyphenated:
-            return "untitled"
+            return fallback
 
     return hyphenated
 

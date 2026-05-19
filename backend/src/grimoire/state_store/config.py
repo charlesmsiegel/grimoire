@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-import yaml
+from grimoire.files import parse_yaml
 
 _DEFAULT_INCLUDES: tuple[str, ...] = ("library", "campaigns", "sqlite")
 _VALID_INCLUDES: frozenset[str] = frozenset(_DEFAULT_INCLUDES)
@@ -165,7 +165,7 @@ class StateStoreConfig:
         if not path.exists():
             return base
         raw_text = path.read_text(encoding="utf-8")
-        raw = yaml.safe_load(raw_text) if raw_text.strip() else None
+        raw = parse_yaml(raw_text) if raw_text.strip() else None
         if not isinstance(raw, dict):
             return base
         block = raw.get("state_store") if isinstance(raw.get("state_store"), dict) else raw

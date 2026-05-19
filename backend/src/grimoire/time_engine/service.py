@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -52,6 +51,7 @@ from grimoire.types.time import (
     WeatherChange,
 )
 from grimoire.types.world import WorldCalendar
+from grimoire.util import new_id, now_iso
 from grimoire.world import WorldService
 
 from .config import TimeEngineConfig, TimePrecision
@@ -122,14 +122,6 @@ async def _default_faction_leader_actions(_payload: dict[str, Any]) -> list[str]
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def _new_id(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
 def _branch_for(campaign_id: str, branch_id: str | None) -> str:
@@ -367,7 +359,7 @@ class TimeEngineService:
         self, event: ScheduledEvent, *, branch_id: str | None = None
     ) -> EventId:
         """Persist a scheduled event. Returns the (possibly generated) id."""
-        eid = event.id or _new_id("evt")
+        eid = event.id or new_id("evt")
         await self._store.db.execute(
             """
             INSERT INTO scheduled_events (
@@ -391,7 +383,7 @@ class TimeEngineService:
                 event.label,
                 json.dumps(event.payload or {}, default=str),
                 1 if event.triggered else 0,
-                _now_iso(),
+                now_iso(),
             ),
         )
         return eid
@@ -621,7 +613,7 @@ class TimeEngineService:
         )
         effective_duration = _duration_from_timedelta(to.moment - start_q.moment)
         exceeded = effective_duration.delta > self._config.checkpoint_threshold
-        token = _new_id("ckpt")
+        token = new_id("ckpt")
         self._checkpoints.tokens[token] = _CheckpointTokenData(
             campaign_id=campaign_id,
             branch_id=branch,
@@ -927,12 +919,12 @@ class TimeEngineService:
             (campaign_id, branch_id, lo.isoformat(), hi.isoformat()),
         )
         triggered: list[ScheduledEvent] = []
-        now_iso = _now_iso()
+        ts = now_iso()
         for row in rows:
             triggered.append(_scheduled_event_from_row(row, triggered=True))
             await self._store.db.execute(
                 "UPDATE scheduled_events SET triggered = 1, triggered_at = ? WHERE id = ?",
-                (now_iso, row["id"]),
+                (ts, row["id"]),
             )
         return triggered
 
@@ -1387,7 +1379,7 @@ class TimeEngineService:
             elif isinstance(at_raw, datetime):
                 at_dt = at_raw
             at = InGameTime(moment=at_dt) if at_dt is not None else to_time
-            event_id = str(item.get("id") or _new_id("se"))
+            event_id = str(item.get("id") or new_id("se"))
             out.append(
                 SharedEvent(
                     id=event_id,
@@ -1426,12 +1418,12 @@ class TimeEngineService:
             (campaign_id, branch_id, lo, hi),
         )
         warned: list[ScheduledEvent] = []
-        now_iso = _now_iso()
+        ts = now_iso()
         for row in rows:
             event = _scheduled_event_from_row(row)
             await self._store.db.execute(
                 "UPDATE scheduled_events SET pre_notice_emitted_at = ? WHERE id = ?",
-                (now_iso, row["id"]),
+                (ts, row["id"]),
             )
             await self._emit(
                 "scheduled_event_imminent",
