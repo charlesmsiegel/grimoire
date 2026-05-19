@@ -137,6 +137,7 @@ export function PlayView({ campaignId }: Props) {
             pcs={play.state.pcs}
             streaming={play.state.streaming}
             images={play.state.images}
+            campaignId={campaignId}
           />
           <InputArea
             scene={play.state.scene}

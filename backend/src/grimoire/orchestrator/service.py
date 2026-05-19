@@ -18,7 +18,7 @@ import random
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from grimoire.context.cache import ContextBuilderCache, make_cache_key
@@ -489,6 +489,19 @@ class OrchestratorService:
                     },
                 )
             )
+
+            # Eviction: if the post now exceeds the per-post cap of
+            # non-primary, non-pinned alternates, drop the oldest one. The
+            # just-added alternate is the newest by created_at, so it is
+            # never the eviction target.
+            try:
+                await self._evict_overflow_alternate(post_id)
+            except Exception:  # pragma: no cover - eviction is best-effort
+                logger.warning(
+                    "alternate eviction after regenerate_post failed for %s",
+                    post_id,
+                    exc_info=True,
+                )
             return RegeneratePostResult(
                 post_id=post_id,
                 new_alternate_id=new_alt_id,
@@ -664,6 +677,73 @@ class OrchestratorService:
                 },
             )
         )
+
+    async def _evict_overflow_alternate(self, post_id: PostId) -> None:
+        """Drop the oldest non-primary, non-pinned alternate if over the cap."""
+        cap = self._config.swipes.max_alternates_per_post
+        if cap <= 0:
+            return
+        _scene, post = await self._find_scene_and_post(post_id)
+        eligible = [
+            a
+            for a in post.alternates
+            if not a.pinned and a.id != post.primary_alternate_id and a.created_at is not None
+        ]
+        if len(eligible) <= cap:
+            return
+        oldest = min(eligible, key=lambda a: a.created_at)  # type: ignore[arg-type, return-value]
+        await self.delete_alternate(post_id=post_id, alternate_id=oldest.id)
+
+    async def purge_stale_alternates(
+        self,
+        campaign_id: CampaignId,
+        *,
+        older_than_days: int | None = None,
+        now: datetime | None = None,
+    ) -> list[str]:
+        """Vacuum alternates older than the retention threshold.
+
+        Walks every scene in the campaign and deletes any alternate that is
+        not the primary, not pinned, and whose ``created_at`` is older than
+        the configured threshold. Returns the list of deleted alternate ids
+        for observability. Safe to invoke repeatedly; no-op when no scenes
+        contain stale alternates.
+        """
+        threshold_days = (
+            older_than_days
+            if older_than_days is not None
+            else self._config.swipes.auto_purge_older_than_days
+        )
+        if threshold_days <= 0:
+            return []
+        await self._require_campaign(campaign_id)
+        reference = now or datetime.now(UTC)
+        cutoff = reference - timedelta(days=threshold_days)
+        deleted: list[str] = []
+        scenes = await self._scenes.list_scenes(campaign_id)
+        for scene in scenes:
+            posts = await self._scenes.get_posts(scene.id)
+            for post in posts:
+                stale = [
+                    a
+                    for a in list(post.alternates)
+                    if not a.pinned
+                    and a.id != post.primary_alternate_id
+                    and a.created_at is not None
+                    and a.created_at < cutoff
+                ]
+                for alt in stale:
+                    try:
+                        await self.delete_alternate(post_id=post.id, alternate_id=alt.id)
+                        deleted.append(alt.id)
+                    except Exception:  # pragma: no cover - sweep is best-effort
+                        logger.warning(
+                            "purge_stale_alternates: failed to delete %s on %s",
+                            alt.id,
+                            post.id,
+                            exc_info=True,
+                        )
+        return deleted
 
     async def undo_turn(self, campaign_id: CampaignId, count: int = 1) -> UndoResult:
         await self._require_campaign(campaign_id)

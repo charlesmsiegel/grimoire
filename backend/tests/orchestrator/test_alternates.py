@@ -444,3 +444,198 @@ async def test_regenerate_post_rollback_on_sidecar_failure(
         post_id=post_id, campaign_id=campaign_id, branch_id=branch_id
     )
     assert current == "ds_primary"
+
+
+# ----- eviction + vacuum -----------------------------------------------------
+
+
+async def test_regenerate_post_evicts_oldest_when_over_cap(tmp_path: Path, real_store: StateStore):
+    """When regenerate_post would exceed max_alternates_per_post, the oldest
+    non-primary, non-pinned alternate is purged. The just-added alternate is
+    the newest and is never the eviction target."""
+    from datetime import UTC, datetime, timedelta
+
+    from grimoire.orchestrator.config import OrchestratorConfig, SwipesConfig
+
+    scenes_root = tmp_path / "scenes_root"
+    scenes_root.mkdir()
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    campaign_id, branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
+        scenes, real_store
+    )
+    # Pre-seed two old non-primary alternates with backdated created_at so we
+    # can predict eviction order.
+    base = datetime.now(UTC) - timedelta(days=10)
+    for i, ds in enumerate(["ds_old1", "ds_old2"]):
+        await real_store.apply_delta_set(
+            deltas=[_char_delta(f"x{i}", campaign_id=campaign_id, branch_id=branch_id)],
+            delta_set_id=ds,
+            campaign_id=campaign_id,
+            branch_id=branch_id,
+            turn_id="t_seed",
+            source="test",
+        )
+        # Rewind so the world state matches the primary at this point.
+        await real_store.rewind_delta_set(ds, campaign_id=campaign_id, branch_id=branch_id)
+        await scenes.append_alternate(
+            post_id,
+            Alternate(
+                id=f"a_old_{i}",
+                post_id=post_id,
+                text=f"old {i}",
+                delta_set_id=ds,
+                author_kind=AuthorKind.NARRATOR,
+                created_at=base + timedelta(seconds=i),
+            ),
+        )
+
+    cfg = OrchestratorConfig(swipes=SwipesConfig(max_alternates_per_post=2))
+    orch = OrchestratorService(
+        event_bus=EventBus(),
+        scene_manager=scenes,
+        llm_gateway=FakeGateway(chunks=["fresh"]),
+        context_builder=FakeContextBuilder(),
+        extractor=FakeExtractor(deltas=[_new_delta("lib:winifred", "anxious")]),
+        state_store=real_store,
+        ws_push=WSCollector(),
+        config=cfg,
+    )
+
+    result = await orch.regenerate_post(campaign_id=campaign_id, post_id=post_id)
+
+    posts = await scenes.get_posts(scene_id)
+    target = posts[-1]
+    alt_ids = {a.id for a in target.alternates}
+    # The oldest non-primary, non-pinned alternate (a_old_0) is gone.
+    assert "a_old_0" not in alt_ids
+    # Newer ones are kept, including the just-generated alternate.
+    assert "a_old_1" in alt_ids
+    assert result.new_alternate_id in alt_ids
+    # Primary pointer untouched.
+    assert target.primary_alternate_id == "a_primary"
+
+
+async def test_regenerate_post_does_not_evict_pinned(tmp_path: Path, real_store: StateStore):
+    """Pinned non-primary alternates survive eviction even if they're the oldest."""
+    from datetime import UTC, datetime, timedelta
+
+    from grimoire.orchestrator.config import OrchestratorConfig, SwipesConfig
+
+    scenes_root = tmp_path / "scenes_root"
+    scenes_root.mkdir()
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    campaign_id, branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
+        scenes, real_store
+    )
+    base = datetime.now(UTC) - timedelta(days=10)
+    await real_store.apply_delta_set(
+        deltas=[_char_delta("xp", campaign_id=campaign_id, branch_id=branch_id)],
+        delta_set_id="ds_pinned",
+        campaign_id=campaign_id,
+        branch_id=branch_id,
+        turn_id="t_seed",
+        source="test",
+    )
+    await real_store.rewind_delta_set("ds_pinned", campaign_id=campaign_id, branch_id=branch_id)
+    await scenes.append_alternate(
+        post_id,
+        Alternate(
+            id="a_pinned",
+            post_id=post_id,
+            text="pin me",
+            delta_set_id="ds_pinned",
+            author_kind=AuthorKind.NARRATOR,
+            created_at=base,
+            pinned=True,
+        ),
+    )
+
+    cfg = OrchestratorConfig(swipes=SwipesConfig(max_alternates_per_post=1))
+    orch = OrchestratorService(
+        event_bus=EventBus(),
+        scene_manager=scenes,
+        llm_gateway=FakeGateway(chunks=["fresh"]),
+        context_builder=FakeContextBuilder(),
+        extractor=FakeExtractor(deltas=[_new_delta("lib:winifred", "anxious")]),
+        state_store=real_store,
+        ws_push=WSCollector(),
+        config=cfg,
+    )
+
+    await orch.regenerate_post(campaign_id=campaign_id, post_id=post_id)
+    posts = await scenes.get_posts(scene_id)
+    alt_ids = {a.id for a in posts[-1].alternates}
+    assert "a_pinned" in alt_ids  # pinned survived
+
+
+async def test_purge_stale_alternates_deletes_only_old_unpinned_non_primary(
+    tmp_path: Path, real_store: StateStore
+):
+    from datetime import UTC, datetime, timedelta
+
+    scenes_root = tmp_path / "scenes_root"
+    scenes_root.mkdir()
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    campaign_id, branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
+        scenes, real_store
+    )
+    now = datetime.now(UTC)
+    old = now - timedelta(days=45)
+    fresh = now - timedelta(days=2)
+    for alt_id, ts, pinned, ds in [
+        ("a_stale", old, False, "ds_stale"),
+        ("a_old_but_pinned", old, True, "ds_pin"),
+        ("a_fresh", fresh, False, "ds_fresh"),
+    ]:
+        await real_store.apply_delta_set(
+            deltas=[_char_delta(alt_id, campaign_id=campaign_id, branch_id=branch_id)],
+            delta_set_id=ds,
+            campaign_id=campaign_id,
+            branch_id=branch_id,
+            turn_id="t_seed",
+            source="test",
+        )
+        await real_store.rewind_delta_set(ds, campaign_id=campaign_id, branch_id=branch_id)
+        await scenes.append_alternate(
+            post_id,
+            Alternate(
+                id=alt_id,
+                post_id=post_id,
+                text=alt_id,
+                delta_set_id=ds,
+                author_kind=AuthorKind.NARRATOR,
+                created_at=ts,
+                pinned=pinned,
+            ),
+        )
+
+    orch = _make_orch(scenes, real_store)
+    deleted = await orch.purge_stale_alternates(campaign_id, older_than_days=30, now=now)
+    assert deleted == ["a_stale"]
+    posts = await scenes.get_posts(scene_id)
+    alt_ids = {a.id for a in posts[-1].alternates}
+    assert "a_stale" not in alt_ids
+    assert {"a_old_but_pinned", "a_fresh", "a_primary"}.issubset(alt_ids)
+
+
+async def test_purge_stale_alternates_skips_primary(tmp_path: Path, real_store: StateStore):
+    """Even a 'stale' alternate is preserved if it's the current primary."""
+    from datetime import UTC, datetime, timedelta
+
+    scenes_root = tmp_path / "scenes_root"
+    scenes_root.mkdir()
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    campaign_id, _branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
+        scenes, real_store
+    )
+    # The seeded primary "a_primary" has created_at = now-ish from append_alternate;
+    # force its created_at into the past via update_alternate.
+    old = datetime.now(UTC) - timedelta(days=60)
+    await scenes.update_alternate(post_id, "a_primary", created_at=old)
+
+    orch = _make_orch(scenes, real_store)
+    deleted = await orch.purge_stale_alternates(campaign_id, older_than_days=30)
+    assert deleted == []
+    posts = await scenes.get_posts(scene_id)
+    alt_ids = {a.id for a in posts[-1].alternates}
+    assert "a_primary" in alt_ids

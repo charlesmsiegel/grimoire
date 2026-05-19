@@ -23,6 +23,21 @@ export interface PCEntry {
   last_played_at?: string | null;
 }
 
+export interface ApiAlternate {
+  id: string;
+  post_id: string;
+  text: string;
+  delta_set_id: string;
+  author_kind: "pc" | "narrator" | "npc" | "system";
+  model?: string | null;
+  prompt_hash?: string | null;
+  steering_hint?: string | null;
+  tokens?: number | null;
+  pinned: boolean;
+  is_primary: boolean;
+  created_at?: string | null;
+}
+
 export interface ApiPost {
   id: string;
   scene_id: string;
@@ -34,6 +49,29 @@ export interface ApiPost {
   turn_id: string;
   author_pc_ref?: string | null;
   author_npc_ref?: string | null;
+  alternates?: ApiAlternate[];
+  primary_alternate_id?: string | null;
+}
+
+export interface AlternateListResponse {
+  post_id: string;
+  primary_alternate_id: string | null;
+  alternates: ApiAlternate[];
+}
+
+export interface RegeneratePostResult {
+  post_id: string;
+  new_alternate_id: string;
+  delta_set_id: string;
+}
+
+export interface SwitchPrimaryResult {
+  unchanged: boolean;
+  post_id: string;
+  from?: string | null;
+  to?: string | null;
+  delta_swap?: boolean;
+  alternate_id?: string;
 }
 
 export interface ApiScene {
@@ -239,6 +277,56 @@ export const campaignApi = {
     api.post<AdvanceTurnResult>(`/api/campaigns/${enc(id)}/turns/advance`, { scene_id: sceneId }),
 
   regenerate: (id: string) => api.post<unknown>(`/api/campaigns/${enc(id)}/turns/regenerate`),
+
+  // ----- Alternates (swipes) --------------------------------------------
+
+  regeneratePost: (
+    campaignId: string,
+    sceneId: string,
+    postId: string,
+    options?: { steering_hint?: string; model_override?: string },
+  ) =>
+    api.post<RegeneratePostResult>(
+      `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}/regenerate`,
+      options ?? {},
+    ),
+
+  listAlternates: (campaignId: string, sceneId: string, postId: string) =>
+    api.get<AlternateListResponse>(
+      `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}/alternates`,
+    ),
+
+  switchPrimaryAlternate: (
+    campaignId: string,
+    sceneId: string,
+    postId: string,
+    alternateId: string,
+  ) =>
+    api.post<SwitchPrimaryResult>(
+      `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}/alternates/${enc(alternateId)}/primary`,
+    ),
+
+  pinAlternate: (
+    campaignId: string,
+    sceneId: string,
+    postId: string,
+    alternateId: string,
+    pinned: boolean,
+  ) =>
+    api.post<{ post_id: string; alternate_id: string; pinned: boolean }>(
+      `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}/alternates/${enc(alternateId)}/pin`,
+      { pinned },
+    ),
+
+  deleteAlternate: (
+    campaignId: string,
+    sceneId: string,
+    postId: string,
+    alternateId: string,
+  ) =>
+    api.delete<void>(
+      `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}/alternates/${enc(alternateId)}`,
+    ),
 
   undo: (id: string, count = 1) =>
     api.post<{ turns_undone: string[] }>(`/api/campaigns/${enc(id)}/turns/undo`, { count }),
