@@ -328,7 +328,18 @@ class TransientStateService:
         branch_id: str | None = None,
         within_posts: int | None = None,
     ) -> list[TransientConflict]:
+        """List unresolved conflicts (extractor write lost to a user write).
+
+        ``within_posts`` caps how many distinct source_post_ids back to look,
+        defaulting to ``config.conflict_window_posts``. Posts-back is
+        approximated by ranking distinct ``source_post_id`` values from the
+        losing rows in descending insert order — full post-counter integration
+        is deferred (see plan B2).
+        """
         branch = branch_id or self._default_branch(campaign_id)
+        window = (
+            within_posts if within_posts is not None else self.config.conflict_window_posts
+        )
         conflicts: list[TransientConflict] = []
         for table in _TABLE.values():
             sql = (
@@ -350,7 +361,14 @@ class TransientStateService:
                 "ORDER BY loser.id DESC"
             )
             rows = await self.store.db.fetchall(sql, (campaign_id, branch))
+            seen_post_ids: list[str] = []
             for r in rows:
+                if window is not None and window >= 0:
+                    src = r["l_src"]
+                    if src is not None and src not in seen_post_ids:
+                        if len(seen_post_ids) >= window:
+                            continue
+                        seen_post_ids.append(src)
                 losing = TransientValue(
                     id=r["l_id"],
                     entity_id=r["l_entity"],
