@@ -54,9 +54,7 @@ async def test_threshold_not_crossed_stays_enabled(db: Database):
 
 
 async def test_tool_use_uses_stricter_threshold(db: Database):
-    state = AutoDisableState(
-        db, min_samples=10, together_threshold=0.15, tool_use_threshold=0.10
-    )
+    state = AutoDisableState(db, min_samples=10, together_threshold=0.15, tool_use_threshold=0.10)
     # 9 successes + 2 failures: ~18% — disables tool_use (>10%) but
     # would not disable together (<15%? actually 18% > 15% too). Use a
     # clearer asymmetric case.
