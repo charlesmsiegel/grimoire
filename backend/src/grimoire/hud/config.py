@@ -196,9 +196,7 @@ class HudConfigService:
             return deserialize(data)
         except Exception as e:
             log.warning("hud.yaml at %s corrupt, falling back to defaults: %s", path, e)
-            backup = path.with_suffix(
-                f".broken-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-            )
+            backup = path.with_suffix(f".broken-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}")
             with contextlib.suppress(OSError):
                 path.replace(backup)
             return default_config()
@@ -206,18 +204,14 @@ class HudConfigService:
     def save(self, campaign_id: str, cfg: HudConfig) -> None:
         path = self._path(campaign_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            yaml.safe_dump(serialize(cfg), sort_keys=False), encoding="utf-8"
-        )
+        path.write_text(yaml.safe_dump(serialize(cfg), sort_keys=False), encoding="utf-8")
 
     def reset(self, campaign_id: str) -> HudConfig:
         cfg = default_config()
         self.save(campaign_id, cfg)
         return cfg
 
-    def set_pinned_extras(
-        self, campaign_id: str, character_id: str, keys: list[str]
-    ) -> HudConfig:
+    def set_pinned_extras(self, campaign_id: str, character_id: str, keys: list[str]) -> HudConfig:
         cfg = self.load(campaign_id)
         cfg.pinned_extras.by_character[character_id] = list(keys)
         self.save(campaign_id, cfg)

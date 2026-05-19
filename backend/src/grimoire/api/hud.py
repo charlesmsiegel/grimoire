@@ -90,9 +90,7 @@ def _to_config(p: HudConfigPayload) -> HudConfig:
             for e in p.ordered_widgets
         ],
         groups=[WidgetGroup(title=g.title, widgets=list(g.widgets)) for g in p.groups],
-        pinned_extras=PinnedExtras(
-            by_character={k: list(v) for k, v in p.pinned_extras.items()}
-        ),
+        pinned_extras=PinnedExtras(by_character={k: list(v) for k, v in p.pinned_extras.items()}),
     )
 
 
@@ -113,16 +111,12 @@ async def get_available_widgets(campaign_id: str, hud: HudDep) -> list[HudWidget
     "/{campaign_id}/hud/widgets/{widget_id:path}",
     response_model=WidgetSnapshot,
 )
-async def get_hud_widget(
-    campaign_id: str, widget_id: str, hud: HudDep
-) -> WidgetSnapshot:
+async def get_hud_widget(campaign_id: str, widget_id: str, hud: HudDep) -> WidgetSnapshot:
     return await hud.fetch_one(campaign_id, widget_id)
 
 
 @router.get("/{campaign_id}/hud/config", response_model=HudConfigPayload)
-async def get_hud_config_route(
-    campaign_id: str, cfg: HudConfigDep
-) -> HudConfigPayload:
+async def get_hud_config_route(campaign_id: str, cfg: HudConfigDep) -> HudConfigPayload:
     loaded = cfg.load(campaign_id)
     return HudConfigPayload(**serialize_config(loaded))
 
@@ -136,9 +130,7 @@ async def put_hud_config(
     return HudConfigPayload(**serialize_config(new_cfg))
 
 
-@router.post(
-    "/{campaign_id}/hud/config/reset", response_model=HudConfigPayload
-)
+@router.post("/{campaign_id}/hud/config/reset", response_model=HudConfigPayload)
 async def reset_hud_config(campaign_id: str, cfg: HudConfigDep) -> HudConfigPayload:
     reset = cfg.reset(campaign_id)
     return HudConfigPayload(**serialize_config(reset))

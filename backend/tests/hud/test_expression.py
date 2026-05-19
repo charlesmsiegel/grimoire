@@ -49,24 +49,12 @@ def test_parentheses_override_precedence() -> None:
         pc={"has_sheet": False, "in_scene": True},
         scene={"combat_active": True},
     )
-    assert (
-        evaluate(
-            "pc.has_sheet and (pc.in_scene or scene.combat_active)", ctx
-        )
-        is False
-    )
-    assert (
-        evaluate(
-            "(pc.has_sheet or pc.in_scene) and scene.combat_active", ctx
-        )
-        is True
-    )
+    assert evaluate("pc.has_sheet and (pc.in_scene or scene.combat_active)", ctx) is False
+    assert evaluate("(pc.has_sheet or pc.in_scene) and scene.combat_active", ctx) is True
 
 
 def test_call_with_keyword_arg() -> None:
-    ctx = EvaluationContext(
-        mechanics={"has_event": lambda kind: kind == "ongoing"}
-    )
+    ctx = EvaluationContext(mechanics={"has_event": lambda kind: kind == "ongoing"})
     assert evaluate('mechanics.has_event(kind="ongoing")', ctx) is True
     assert evaluate('mechanics.has_event(kind="other")', ctx) is False
 

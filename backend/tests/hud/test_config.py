@@ -99,7 +99,5 @@ def test_serialize_round_trips_default() -> None:
     cfg = default_config()
     data = serialize(cfg)
     again = deserialize(data)
-    assert [e.id for e in again.ordered_widgets] == [
-        e.id for e in cfg.ordered_widgets
-    ]
+    assert [e.id for e in again.ordered_widgets] == [e.id for e in cfg.ordered_widgets]
     assert [g.title for g in again.groups] == [g.title for g in cfg.groups]
