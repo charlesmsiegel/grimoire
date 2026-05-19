@@ -1,14 +1,116 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { ApiError } from "../api/client";
 import { fetchCampaigns, type CampaignSummaryPayload } from "../api/wizard";
 import { useStore } from "../state/useStore";
+import type { CampaignSummary } from "../state/storeContext";
+import { ForkDialog } from "./campaign/ForkDialog";
+
+interface CampaignNode {
+  campaign: CampaignSummary;
+  forkedAtPostId: string | null;
+  children: CampaignNode[];
+}
+
+function buildForest(rows: CampaignSummary[]): CampaignNode[] {
+  const byId = new Map<string, CampaignNode>();
+  for (const c of rows) {
+    byId.set(c.id, {
+      campaign: c,
+      forkedAtPostId: c.forked_at_post_id ?? null,
+      children: [],
+    });
+  }
+  const roots: CampaignNode[] = [];
+  for (const node of byId.values()) {
+    const parentId = node.campaign.forked_from_campaign_id ?? null;
+    if (parentId && byId.has(parentId)) {
+      byId.get(parentId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  const sort = (a: CampaignNode, b: CampaignNode) =>
+    a.campaign.name.localeCompare(b.campaign.name);
+  const visit = (n: CampaignNode) => {
+    n.children.sort(sort);
+    n.children.forEach(visit);
+  };
+  roots.sort(sort);
+  roots.forEach(visit);
+  return roots;
+}
+
+interface CampaignNodeRowProps {
+  node: CampaignNode;
+  depth: number;
+  onFork: (campaign: CampaignSummary) => void;
+}
+
+function CampaignNodeRow({ node, depth, onFork }: CampaignNodeRowProps) {
+  return (
+    <>
+      <li
+        className="campaign-list-row"
+        style={{ paddingLeft: `${depth * 1.25}rem` }}
+      >
+        <Link to={`/campaigns/${node.campaign.id}`}>{node.campaign.name}</Link>
+        {node.forkedAtPostId && (
+          <span className="campaign-list-fork-meta">
+            (forked at {node.forkedAtPostId})
+          </span>
+        )}
+        <button
+          type="button"
+          className="campaign-list-fork-btn"
+          onClick={() => onFork(node.campaign)}
+        >
+          Fork
+        </button>
+        <Link
+          to={`/campaigns/${node.campaign.id}/settings`}
+          className="campaign-list-settings"
+        >
+          Settings
+        </Link>
+      </li>
+      {node.children.map((child) => (
+        <CampaignNodeRow
+          key={child.campaign.id}
+          node={child}
+          depth={depth + 1}
+          onFork={onFork}
+        />
+      ))}
+    </>
+  );
+}
 
 export function CampaignsView() {
   const { state, dispatch } = useStore();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [forkSource, setForkSource] = useState<CampaignSummary | null>(null);
+
+  async function reload() {
+    try {
+      const rows = await fetchCampaigns();
+      dispatch({
+        type: "set-campaigns",
+        campaigns: rows.map((r: CampaignSummaryPayload) => ({
+          id: r.id,
+          name: r.name,
+          forked_from_campaign_id: r.forked_from_campaign_id ?? null,
+          forked_at_post_id: r.forked_at_post_id ?? null,
+        })),
+      });
+      setLoading(false);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -18,7 +120,12 @@ export function CampaignsView() {
         if (!cancelled) {
           dispatch({
             type: "set-campaigns",
-            campaigns: rows.map((r: CampaignSummaryPayload) => ({ id: r.id, name: r.name })),
+            campaigns: rows.map((r: CampaignSummaryPayload) => ({
+              id: r.id,
+              name: r.name,
+              forked_from_campaign_id: r.forked_from_campaign_id ?? null,
+              forked_at_post_id: r.forked_at_post_id ?? null,
+            })),
           });
           setLoading(false);
         }
@@ -33,6 +140,8 @@ export function CampaignsView() {
       cancelled = true;
     };
   }, [dispatch]);
+
+  const forest = useMemo(() => buildForest(state.campaigns), [state.campaigns]);
 
   return (
     <section className="route campaigns-view" aria-labelledby="campaigns-heading">
@@ -51,17 +160,29 @@ export function CampaignsView() {
       {!loading && state.campaigns.length === 0 && !error && (
         <p>No campaigns yet. Click "New campaign" to start the creation wizard.</p>
       )}
-      {state.campaigns.length > 0 && (
+      {forest.length > 0 && (
         <ul className="campaign-list">
-          {state.campaigns.map((c) => (
-            <li key={c.id}>
-              <Link to={`/campaigns/${c.id}`}>{c.name}</Link>
-              <Link to={`/campaigns/${c.id}/settings`} className="campaign-list-settings">
-                Settings
-              </Link>
-            </li>
+          {forest.map((node) => (
+            <CampaignNodeRow
+              key={node.campaign.id}
+              node={node}
+              depth={0}
+              onFork={(c) => setForkSource(c)}
+            />
           ))}
         </ul>
+      )}
+      {forkSource && (
+        <ForkDialog
+          open
+          sourceCampaignId={forkSource.id}
+          sourceCampaignName={forkSource.name}
+          onClose={() => setForkSource(null)}
+          onForked={() => {
+            setForkSource(null);
+            void reload();
+          }}
+        />
       )}
     </section>
   );

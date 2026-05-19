@@ -4,6 +4,8 @@ export interface CampaignSummary {
   id: string;
   name: string;
   active_pc?: string | null;
+  forked_from_campaign_id?: string | null;
+  forked_at_post_id?: string | null;
 }
 
 export interface DriftAlert {

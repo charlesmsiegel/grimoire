@@ -39,6 +39,52 @@ class FakeOrchestrator:
             created_at=datetime.now(UTC),
         )
 
+    async def fork_campaign(
+        self,
+        *,
+        campaign_id: str,
+        new_campaign_id: str,
+        new_name: str,
+        fork_at_post_id: str | None = None,
+        description: str | None = None,
+        make_active: bool = False,
+    ) -> Any:
+        from datetime import UTC, datetime
+
+        from grimoire.types.orchestrator import ForkCampaignResult
+
+        if new_campaign_id == campaign_id:
+            from grimoire.orchestrator.errors import CampaignIdExists
+
+            raise CampaignIdExists(new_campaign_id)
+
+        return ForkCampaignResult(
+            new_campaign_id=new_campaign_id,
+            new_name=new_name,
+            forked_from_campaign_id=campaign_id,
+            forked_at_post_id=fork_at_post_id,
+            image_handling="hardlink",
+            files_copied=0,
+            deltas_replayed=0,
+            fingerprint_match=True,
+            degraded=False,
+            queued=False,
+            created_at=datetime.now(UTC),
+        )
+
+    async def list_pending_forks(self, campaign_id: str) -> list[dict]:
+        return []
+
+    async def get_lineage(self, campaign_id: str) -> dict:
+        return {
+            "root": campaign_id,
+            "ancestors": [{"id": campaign_id, "forked_from_campaign_id": None}],
+            "descendants": [{"id": campaign_id, "depth": 0}],
+        }
+
+    async def get_lineage_ancestors(self, campaign_id: str) -> list[dict]:
+        return [{"id": campaign_id, "forked_from_campaign_id": None}]
+
 
 class FakeContinuity:
     async def facts_about(self, **kwargs: Any) -> list[Any]:
@@ -109,15 +155,52 @@ def test_undo(client, container) -> None:
     assert len(response.json()["turns_undone"]) == 3
 
 
-def test_fork(client, container) -> None:
+def test_fork_branch(client, container) -> None:
     container.orchestrator = FakeOrchestrator()
     response = client.post(
-        "/api/campaigns/c1/forks",
+        "/api/campaigns/c1/branches",
         json={"from_turn_id": "t_5", "label": "side-arc"},
     )
     assert response.status_code == 201
     body = response.json()
     assert body["new_branch_id"] == "c1:side-arc"
+
+
+def test_fork_campaign_route(client, container) -> None:
+    container.orchestrator = FakeOrchestrator()
+    response = client.post(
+        "/api/campaigns/c1/forks",
+        json={"new_campaign_id": "c1-divergent", "new_name": "Divergent"},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["new_campaign_id"] == "c1-divergent"
+    assert body["forked_from_campaign_id"] == "c1"
+    assert body["queued"] is False
+
+
+def test_fork_campaign_id_collision_returns_409(client, container) -> None:
+    container.orchestrator = FakeOrchestrator()
+    response = client.post(
+        "/api/campaigns/c1/forks",
+        json={"new_campaign_id": "c1", "new_name": "dup"},
+    )
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["error"] == "CAMPAIGN_ID_EXISTS"
+
+
+def test_lineage_routes(client, container) -> None:
+    container.orchestrator = FakeOrchestrator()
+    response = client.get("/api/campaigns/c1/lineage")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["root"] == "c1"
+    assert isinstance(body["descendants"], list)
+
+    response = client.get("/api/campaigns/c1/lineage/ancestors")
+    assert response.status_code == 200
+    assert response.json()[0]["id"] == "c1"
 
 
 def test_pcs_lifecycle(client, container) -> None:

@@ -277,6 +277,45 @@ export interface MechanicsSwitchResult {
   missing_sheets: MissingSheet[];
 }
 
+// Campaign-level fork (spec 2026-05-19-fork)
+export interface ForkCampaignRequest {
+  new_campaign_id: string;
+  new_name: string;
+  fork_at_post_id?: string | null;
+  description?: string | null;
+  make_active?: boolean;
+}
+
+export interface ForkCampaignResult {
+  new_campaign_id: string;
+  new_name: string;
+  forked_from_campaign_id: string;
+  forked_at_post_id: string | null;
+  image_handling: string;
+  files_copied: number;
+  deltas_replayed: number;
+  fingerprint_match: boolean;
+  degraded: boolean;
+  queued: boolean;
+  created_at: string;
+}
+
+export interface LineageNode {
+  id: string;
+  name?: string | null;
+  forked_from_campaign_id: string | null;
+  forked_at_post_id?: string | null;
+  forked_at_turn_id?: string | null;
+  created_at?: string | null;
+  depth?: number;
+}
+
+export interface LineageTree {
+  root: string;
+  ancestors: LineageNode[];
+  descendants: LineageNode[];
+}
+
 const enc = encodeURIComponent;
 
 export const campaignApi = {
@@ -487,4 +526,29 @@ export const campaignApi = {
     api.get<{ active: string | null; preserved: { mechanics_id: string; count: number }[] }>(
       `/api/campaigns/${enc(campaignId)}/mechanics/preserved-sheets`,
     ),
+
+  // ----- Campaign-level fork --------------------------------------------
+
+  forkCampaign: (campaignId: string, payload: ForkCampaignRequest) =>
+    api.post<ForkCampaignResult>(`/api/campaigns/${enc(campaignId)}/forks`, payload),
+
+  getLineage: (campaignId: string) =>
+    api.get<LineageTree>(`/api/campaigns/${enc(campaignId)}/lineage`),
+
+  getLineageAncestors: (campaignId: string) =>
+    api.get<LineageNode[]>(`/api/campaigns/${enc(campaignId)}/lineage/ancestors`),
+
+  listPendingForks: (campaignId: string) =>
+    api.get<
+      {
+        id: string;
+        new_campaign_id: string;
+        new_name: string;
+        fork_at_post_id: string | null;
+        enqueued_at: string;
+        started_at: string | null;
+        completed_at: string | null;
+        error: string | null;
+      }[]
+    >(`/api/campaigns/${enc(campaignId)}/forks/pending`),
 };

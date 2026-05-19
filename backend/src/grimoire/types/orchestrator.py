@@ -189,6 +189,20 @@ class ForkResult(BaseModel):
     created_at: datetime
 
 
+class ForkCampaignResult(BaseModel):
+    new_campaign_id: str
+    new_name: str
+    forked_from_campaign_id: CampaignId
+    forked_at_post_id: str | None = None
+    image_handling: str  # "hardlink" | "deep_copy" | "mixed"
+    files_copied: int = 0
+    deltas_replayed: int = 0
+    fingerprint_match: bool = True
+    degraded: bool = False
+    queued: bool = False
+    created_at: datetime
+
+
 class EventRecord(BaseModel):
     """Stored form of an event for replay / observability."""
 
