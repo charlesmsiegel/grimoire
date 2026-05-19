@@ -302,3 +302,43 @@ async def test_history_orders_newest_first(service: TransientStateService, seede
         )
     history = await service.history(seeded_campaign, EntityKind.CHARACTER, "x", "mood")
     assert [h.value for h in history] == ["v2", "v1", "v0"]
+
+
+async def test_list_conflicts_within_posts_caps_distinct_sources(
+    service: TransientStateService, seeded_campaign: str
+):
+    """within_posts caps how many distinct source posts back to surface."""
+    # User write first (becomes "current" for each field).
+    for field in ("mood", "intent", "posture"):
+        await service.set(
+            seeded_campaign,
+            EntityKind.CHARACTER,
+            "x",
+            field,
+            "user_value",
+            provenance=Provenance.USER_EDIT,
+        )
+    # Three losing extractor writes, each from a different post.
+    for i, field in enumerate(("mood", "intent", "posture")):
+        await service.set(
+            seeded_campaign,
+            EntityKind.CHARACTER,
+            "x",
+            field,
+            f"extractor_v{i}",
+            provenance=Provenance.EXTRACTOR_AUTO,
+            confidence=0.9,
+            source_post_id=f"p_{i}",
+        )
+
+    all_conflicts = await service.list_conflicts(seeded_campaign)
+    assert len(all_conflicts) == 3
+
+    capped = await service.list_conflicts(seeded_campaign, within_posts=1)
+    # ORDER BY loser.id DESC means the newest losing write (p_2) is the only
+    # distinct post id that fits within the window of 1.
+    assert len(capped) == 1
+    assert capped[0].losing.source_post_id == "p_2"
+
+    capped_two = await service.list_conflicts(seeded_campaign, within_posts=2)
+    assert {c.losing.source_post_id for c in capped_two} == {"p_1", "p_2"}
