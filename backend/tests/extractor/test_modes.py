@@ -43,9 +43,7 @@ async def test_separate_mode_runs_default_pipeline(scene: Scene, snapshot: State
 
 
 @pytest.mark.asyncio
-async def test_together_mode_with_explicit_tracker_text(
-    scene: Scene, snapshot: StateSnapshot
-):
+async def test_together_mode_with_explicit_tracker_text(scene: Scene, snapshot: StateSnapshot):
     tracker = json.dumps(
         {
             "facts": [],
@@ -59,9 +57,7 @@ async def test_together_mode_with_explicit_tracker_text(
             ],
         }
     )
-    service = ExtractorService(
-        config=ExtractorConfig(parallel_strategies=("rule_based",))
-    )
+    service = ExtractorService(config=ExtractorConfig(parallel_strategies=("rule_based",)))
     result = await service.extract(
         "winifred sighs by the window.",
         scene,
@@ -78,14 +74,10 @@ async def test_together_mode_with_explicit_tracker_text(
 
 
 @pytest.mark.asyncio
-async def test_together_mode_extracts_block_from_response(
-    scene: Scene, snapshot: StateSnapshot
-):
+async def test_together_mode_extracts_block_from_response(scene: Scene, snapshot: StateSnapshot):
     tracker = json.dumps({"facts": [{"text": "It rained."}], "character_updates": []})
     response = f"It rained heavily.\n{DELIMITER_OPEN}\n{tracker}\n{DELIMITER_CLOSE}"
-    service = ExtractorService(
-        config=ExtractorConfig(parallel_strategies=("rule_based",))
-    )
+    service = ExtractorService(config=ExtractorConfig(parallel_strategies=("rule_based",)))
     result = await service.extract(
         response,
         scene,
@@ -94,8 +86,7 @@ async def test_together_mode_extracts_block_from_response(
         mode=ExtractionMode.TOGETHER,
     )
     assert any(
-        d.kind == DeltaKind.FACT_ADD and d.after.get("text") == "It rained."
-        for d in result.deltas
+        d.kind == DeltaKind.FACT_ADD and d.after.get("text") == "It rained." for d in result.deltas
     )
 
 
@@ -103,9 +94,7 @@ async def test_together_mode_extracts_block_from_response(
 async def test_together_mode_malformed_falls_back_to_separate(
     scene: Scene, snapshot: StateSnapshot
 ):
-    service = ExtractorService(
-        config=ExtractorConfig(parallel_strategies=("rule_based",))
-    )
+    service = ExtractorService(config=ExtractorConfig(parallel_strategies=("rule_based",)))
     result = await service.extract(
         "Two hours passed.",
         scene,
@@ -120,9 +109,7 @@ async def test_together_mode_malformed_falls_back_to_separate(
 
 
 @pytest.mark.asyncio
-async def test_together_mode_records_failure_on_auto_disable(
-    scene: Scene, snapshot: StateSnapshot
-):
+async def test_together_mode_records_failure_on_auto_disable(scene: Scene, snapshot: StateSnapshot):
     class _Recorder:
         def __init__(self) -> None:
             self.calls: list[tuple[str, str, str, bool]] = []
@@ -150,9 +137,7 @@ async def test_together_mode_records_failure_on_auto_disable(
 
 @pytest.mark.asyncio
 async def test_tool_use_mode_projects_calls(scene: Scene, snapshot: StateSnapshot):
-    service = ExtractorService(
-        config=ExtractorConfig(parallel_strategies=("rule_based",))
-    )
+    service = ExtractorService(config=ExtractorConfig(parallel_strategies=("rule_based",)))
     result = await service.extract(
         "winifred walks out.",
         scene,
@@ -173,12 +158,8 @@ async def test_tool_use_mode_projects_calls(scene: Scene, snapshot: StateSnapsho
 
 
 @pytest.mark.asyncio
-async def test_tool_use_mode_no_calls_falls_back_to_separate(
-    scene: Scene, snapshot: StateSnapshot
-):
-    service = ExtractorService(
-        config=ExtractorConfig(parallel_strategies=("rule_based",))
-    )
+async def test_tool_use_mode_no_calls_falls_back_to_separate(scene: Scene, snapshot: StateSnapshot):
+    service = ExtractorService(config=ExtractorConfig(parallel_strategies=("rule_based",)))
     result = await service.extract(
         "Two hours passed.",
         scene,

@@ -66,7 +66,7 @@ def test_unknown_keys_are_ignored_for_forward_compat():
 
 
 def test_extract_tracker_block_returns_inner_text():
-    text = f"prose here {DELIMITER_OPEN}\n{{\"facts\":[]}}\n{DELIMITER_CLOSE} more prose"
+    text = f'prose here {DELIMITER_OPEN}\n{{"facts":[]}}\n{DELIMITER_CLOSE} more prose'
     assert extract_tracker_block(text) == '{"facts":[]}'
 
 
@@ -157,9 +157,7 @@ def test_change_location_projects_to_scene_change():
         }
     )
     parsed = parse_tracker_text(raw)
-    deltas = project_tracker_to_deltas(
-        parsed, campaign_id="camp-1", scene_branch_id="main"
-    )
+    deltas = project_tracker_to_deltas(parsed, campaign_id="camp-1", scene_branch_id="main")
     scene_changes = [d for d in deltas if d.kind == DeltaKind.SCENE_CHANGE]
     assert len(scene_changes) == 1
     assert scene_changes[0].after["to_location"] == "campaign:locations/the-docks"

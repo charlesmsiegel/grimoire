@@ -349,8 +349,7 @@ class ExtractorService:
                     level=FlagLevel.WARNING,
                     code="together_no_tracker",
                     message=(
-                        "together mode requested but no tracker block found "
-                        "— fell back to SEPARATE"
+                        "together mode requested but no tracker block found — fell back to SEPARATE"
                     ),
                 )
             )
