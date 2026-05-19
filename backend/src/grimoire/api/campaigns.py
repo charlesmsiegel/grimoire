@@ -111,6 +111,18 @@ class UndoPayload(BaseModel):
 
 
 class ForkPayload(BaseModel):
+    """Campaign-level fork (spec 2026-05-19-fork)."""
+
+    new_campaign_id: str
+    new_name: str
+    fork_at_post_id: str | None = None
+    description: str | None = None
+    make_active: bool = False
+
+
+class BranchForkPayload(BaseModel):
+    """Branch-level fork inside an existing campaign (legacy)."""
+
     from_turn_id: str
     label: str
 
@@ -186,7 +198,8 @@ class ResolveProposalsPayload(BaseModel):
 async def list_campaigns(state_store: StateStoreDep) -> Any:
     rows = await state_store.db.fetchall(
         "SELECT id, name, description, mechanics_module, style_guide_id, image_preset_id, "
-        "created_at, last_played_at FROM campaigns ORDER BY id"
+        "created_at, last_played_at, forked_from_campaign_id, forked_at_post_id, "
+        "forked_at_turn_id, forked_image_handling FROM campaigns ORDER BY id"
     )
     return [dict(row) for row in rows]
 
@@ -788,6 +801,69 @@ async def cancel_retcon_replay(
 async def fork_campaign(
     campaign_id: str,
     payload: ForkPayload,
+    orchestrator: OrchestratorDep,
+) -> Any:
+    from grimoire.orchestrator.errors import CampaignIdExists
+
+    try:
+        result = await orchestrator.fork_campaign(
+            campaign_id=campaign_id,
+            new_campaign_id=payload.new_campaign_id,
+            new_name=payload.new_name,
+            fork_at_post_id=payload.fork_at_post_id,
+            description=payload.description,
+            make_active=payload.make_active,
+        )
+    except CampaignIdExists as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "CAMPAIGN_ID_EXISTS",
+                "campaign_id": exc.campaign_id,
+            },
+        ) from exc
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return to_payload(result)
+
+
+@router.get("/{campaign_id}/forks/pending")
+async def list_pending_forks(
+    campaign_id: str,
+    orchestrator: OrchestratorDep,
+) -> Any:
+    try:
+        return await orchestrator.list_pending_forks(campaign_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.get("/{campaign_id}/lineage")
+async def get_lineage(
+    campaign_id: str,
+    orchestrator: OrchestratorDep,
+) -> Any:
+    try:
+        return await orchestrator.get_lineage(campaign_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.get("/{campaign_id}/lineage/ancestors")
+async def get_lineage_ancestors(
+    campaign_id: str,
+    orchestrator: OrchestratorDep,
+) -> Any:
+    try:
+        return await orchestrator.get_lineage_ancestors(campaign_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.post("/{campaign_id}/branches", status_code=201)
+async def fork_branch(
+    campaign_id: str,
+    payload: BranchForkPayload,
     orchestrator: OrchestratorDep,
 ) -> Any:
     try:

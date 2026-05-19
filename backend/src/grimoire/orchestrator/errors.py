@@ -95,8 +95,18 @@ class RetconBatchClosedError(OrchestratorError):
         self.batch_id = batch_id
 
 
+class CampaignIdExists(OrchestratorError):
+    """Raised when a fork target campaign id already exists."""
+
+    def __init__(self, campaign_id: str) -> None:
+        super().__init__(f"campaign already exists: {campaign_id!r}")
+        self.campaign_id = campaign_id
+
+
+
 __all__ = [
     "AlternateNotFoundError",
+    "CampaignIdExists",
     "CannotDeletePrimaryError",
     "LatestPostOnlyError",
     "NoTurnsToUndoError",

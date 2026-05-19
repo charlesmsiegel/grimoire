@@ -78,6 +78,10 @@ export interface CampaignSummaryPayload {
   mechanics_module?: string | null;
   style_guide_id?: string | null;
   image_preset_id?: string | null;
+  forked_from_campaign_id?: string | null;
+  forked_at_post_id?: string | null;
+  forked_at_turn_id?: string | null;
+  forked_image_handling?: string | null;
 }
 
 export interface WorldRefInput {
