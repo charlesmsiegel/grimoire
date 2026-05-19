@@ -37,6 +37,23 @@ async def test_connection_loads_sqlite_vec_and_enables_wal(db: Database) -> None
     assert int(fks[0]) == 1
 
 
+async def test_every_pooled_connection_has_busy_timeout(tmp_path: Path) -> None:
+    """Without busy_timeout, concurrent writers hit SQLITE_BUSY immediately —
+    which surfaces as "database is locked" when background workers race the
+    startup library scan. Every connection the pool hands out must have it set.
+    """
+    database = Database(tmp_path / "db.sqlite", pool_size=3, busy_timeout_ms=5000)
+    await database.connect()
+    try:
+        for _ in range(3):
+            async with database.acquire() as conn, conn.execute("PRAGMA busy_timeout") as cur:
+                row = await cur.fetchone()
+                assert row is not None
+                assert int(row[0]) == 5000
+    finally:
+        await database.close()
+
+
 async def test_fts5_is_available(db: Database) -> None:
     await db.execute("CREATE VIRTUAL TABLE search USING fts5(body)")
     await db.execute("INSERT INTO search(body) VALUES ('hello world')")

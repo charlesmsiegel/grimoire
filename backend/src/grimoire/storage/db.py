@@ -25,12 +25,16 @@ class Database:
         *,
         pool_size: int = 5,
         enable_wal: bool = True,
+        busy_timeout_ms: int = 5000,
     ) -> None:
         if pool_size < 1:
             raise ValueError("pool_size must be >= 1")
+        if busy_timeout_ms < 0:
+            raise ValueError("busy_timeout_ms must be >= 0")
         self.path = Path(path)
         self.pool_size = pool_size
         self.enable_wal = enable_wal
+        self.busy_timeout_ms = busy_timeout_ms
         self._pool: asyncio.Queue[aiosqlite.Connection] | None = None
         self._all: list[aiosqlite.Connection] = []
         self._open_lock = asyncio.Lock()
@@ -58,6 +62,14 @@ class Database:
         conn = await aiosqlite.connect(self.path, isolation_level=None)
         conn.row_factory = aiosqlite.Row
         await conn.execute("PRAGMA foreign_keys = ON")
+        # WAL allows concurrent readers but serializes writers. Without a
+        # busy_timeout, a writer that finds the slot taken returns SQLITE_BUSY
+        # immediately — surfacing as "database is locked" when background
+        # workers (health probes, retention sweeper, embedding worker) race
+        # the startup library scan. Five seconds is plenty for any single
+        # transaction the app issues; the timeout only ever matters under
+        # contention.
+        await conn.execute(f"PRAGMA busy_timeout = {int(self.busy_timeout_ms)}")
         if self.enable_wal:
             await conn.execute("PRAGMA journal_mode = WAL")
             await conn.execute("PRAGMA synchronous = NORMAL")
