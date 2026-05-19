@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -28,7 +29,11 @@ async def populated_container(container: ServiceContainer, tmp_path: Path) -> Se
     try:
         yield container
     finally:
-        await db.close()
+        # TestClient closes its lifespan loop before fixture finalizers run,
+        # so an aiosqlite close on a dead loop can spam "Event loop is closed".
+        # Swallow — tmp_path teardown reclaims the file either way.
+        with suppress(Exception):
+            await db.close()
 
 
 def test_get_field_404_when_absent(client: TestClient, populated_container):
