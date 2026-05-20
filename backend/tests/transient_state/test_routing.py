@@ -208,8 +208,6 @@ async def test_routing_summary_surfaces_conflict_when_user_outranks(
     c = summary.conflicts[0]
     assert c["field"] == "mood"
     assert c["entity_id"] == "char_x"
-    current = await service.get(
-        seeded_campaign, EntityKind.CHARACTER, "char_x", "mood"
-    )
+    current = await service.get(seeded_campaign, EntityKind.CHARACTER, "char_x", "mood")
     assert current is not None
     assert current.value == "calm"
