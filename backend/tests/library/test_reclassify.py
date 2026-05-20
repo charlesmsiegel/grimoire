@@ -241,3 +241,63 @@ async def test_preview_reclassification_returns_mapping_without_writing(
     assert "kept" in preview and "dropped" in preview and "into_notes" in preview
     assert preview["suggestion"]["kind"] in {"character", "lore"}
     assert (await library.get_entity("w", "lore", "beatrice")).asset_id == "beatrice"
+
+
+async def test_undo_reclassification_recreates_source_and_deletes_target(
+    library: LibraryService, store: StateStore,
+) -> None:
+    await _seed_world(store, "w")
+    await _seed_lore(store, "w", "beatrice", title="Beatrice", body="She lived.")
+    result = await library.reclassify_entity(
+        "w", "beatrice", target_kind=EntityKind.CHARACTER, overrides=None, actor="tester",
+    )
+    records = list(iter_audit(store.data_root, world_id="w"))
+    ts = records[0]["ts"]
+
+    undo_result = await library.undo_reclassification("w", ts, actor="tester")
+    assert undo_result["restored_source_id"] == "beatrice"
+    assert undo_result["deleted_target_id"] == result.target_id
+    restored = await library.get_entity("w", "lore", "beatrice")
+    assert restored.frontmatter.get("title") == "Beatrice"
+    with pytest.raises(LibraryNotFoundError):
+        await library.get_entity("w", "character", result.target_id)
+    records_after = list(iter_audit(store.data_root, world_id="w"))
+    assert len(records_after) == 2
+    assert records_after[1]["overrides"].get("_undo_of") == ts
+
+
+async def test_undo_with_collision_suffixes_restored_source(
+    library: LibraryService, store: StateStore,
+) -> None:
+    await _seed_world(store, "w")
+    await _seed_lore(store, "w", "beatrice", title="Beatrice", body="She lived.")
+    result = await library.reclassify_entity(
+        "w", "beatrice", target_kind=EntityKind.CHARACTER, overrides=None,
+    )
+    await _seed_lore(store, "w", "beatrice", title="Different Beatrice", body="x")
+
+    records = list(iter_audit(store.data_root, world_id="w"))
+    ts = records[0]["ts"]
+
+    undo_result = await library.undo_reclassification("w", ts)
+    assert undo_result["restored_source_id"] == "beatrice-2"
+
+
+async def test_undo_missing_timestamp_raises(library: LibraryService, store: StateStore) -> None:
+    await _seed_world(store, "w")
+    with pytest.raises(ReclassificationError, match="no audit"):
+        await library.undo_reclassification("w", "2026-05-19T00:00:00Z")
+
+
+async def test_list_reclassifications_returns_records_in_order(
+    library: LibraryService, store: StateStore,
+) -> None:
+    await _seed_world(store, "w")
+    await _seed_lore(store, "w", "a", title="Beatrice", body="She lived.")
+    await _seed_lore(store, "w", "b", title="Caine", body="He walked.")
+    await library.reclassify_entity("w", "a", target_kind=EntityKind.CHARACTER)
+    await library.reclassify_entity("w", "b", target_kind=EntityKind.CHARACTER)
+    records = await library.list_reclassifications("w")
+    assert len(records) == 2
+    assert records[0]["source_id"] == "a"
+    assert records[1]["source_id"] == "b"
