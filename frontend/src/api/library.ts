@@ -162,6 +162,52 @@ export interface Greeting {
   tags: string[];
 }
 
+export interface ReclassificationSuggestion {
+  kind: EntityKind | "lore";
+  confidence: number;
+  reason: string;
+}
+
+export interface ReclassificationPreview {
+  source_id: string;
+  target_kind: EntityKind;
+  frontmatter: Record<string, unknown>;
+  body: string;
+  kept: string[];
+  dropped: string[];
+  into_notes: string[];
+  warnings: string[];
+  required_overrides: string[];
+  suggestion: ReclassificationSuggestion;
+}
+
+export interface ReclassificationResult {
+  source_id: string;
+  target_id: string;
+  target_kind: EntityKind;
+  fields_kept: string[];
+  fields_dropped: string[];
+  fields_into_notes: string[];
+  warnings: string[];
+}
+
+export interface ReclassificationAuditRecord {
+  ts: string;
+  world_id: string;
+  source_id: string;
+  target_id: string;
+  target_kind: EntityKind;
+  actor: string;
+  overrides: Record<string, unknown>;
+}
+
+export interface ReclassificationUndoResult {
+  restored_source_id: string;
+  deleted_target_id: string;
+  undo_of: string;
+  warnings: string[];
+}
+
 export interface CampaignRef {
   id: string;
   name: string;
@@ -313,6 +359,32 @@ export const libraryApi = {
     request<CampaignRef[]>(
       "GET",
       `/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(entityId)}/dependents`,
+    ),
+
+  previewReclassify: (worldId: string, sourceId: string, targetKind: EntityKind) =>
+    request<ReclassificationPreview>(
+      "GET",
+      `/library/worlds/${encodeURIComponent(worldId)}/lore/${encodeURIComponent(sourceId)}/reclassify/preview?target_kind=${encodeURIComponent(targetKind)}`,
+    ),
+  commitReclassify: (
+    worldId: string,
+    sourceId: string,
+    body: { target_kind: EntityKind; overrides?: Record<string, unknown> },
+  ) =>
+    request<ReclassificationResult>(
+      "POST",
+      `/library/worlds/${encodeURIComponent(worldId)}/lore/${encodeURIComponent(sourceId)}/reclassify`,
+      body,
+    ),
+  listReclassifications: (worldId: string) =>
+    request<ReclassificationAuditRecord[]>(
+      "GET",
+      `/library/worlds/${encodeURIComponent(worldId)}/reclassifications`,
+    ),
+  undoReclassify: (worldId: string, ts: string) =>
+    request<ReclassificationUndoResult>(
+      "POST",
+      `/library/worlds/${encodeURIComponent(worldId)}/reclassifications/${encodeURIComponent(ts)}/undo`,
     ),
 
   variants: (kindPlural: string, assetId: string) =>
