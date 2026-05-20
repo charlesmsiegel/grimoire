@@ -29,9 +29,7 @@ def test_parse_llm_payload_extracts_transient_updates():
             },
         ],
     }
-    out = parse_llm_payload(
-        payload, campaign_id="c1", source="structured_llm", max_new_entities=10
-    )
+    out = parse_llm_payload(payload, campaign_id="c1", source="structured_llm", max_new_entities=10)
     assert len(out.transient_updates) == 2
     first = out.transient_updates[0]
     assert first.entity_kind == EntityKind.CHARACTER
@@ -59,9 +57,7 @@ def test_parse_llm_payload_skips_invalid_transient_updates():
             },
         ],
     }
-    out = parse_llm_payload(
-        payload, campaign_id="c1", source="structured_llm", max_new_entities=10
-    )
+    out = parse_llm_payload(payload, campaign_id="c1", source="structured_llm", max_new_entities=10)
     assert out.transient_updates == []
 
 
