@@ -1,11 +1,12 @@
 # TODO
 
-Last updated 2026-05-19. Updated after the first execution pass landed (a) a Windows path-format bug fix and (b) frontend wiring for orphaned components.
+Last updated 2026-05-19. Updated after the lore-reclassification ship (sections 1, 2, 3, 5, 6) — section 4 (import-dialog integration) intentionally deferred until card-imports lands.
 
 ---
 
 ## ✅ Completed this pass
 
+- **lore-reclassification** — Sections 1, 2, 3, 5, 6 of the design shipped on branch `2026-05-19-lore-reclassification`. Classifier (`library/classify.py`), pure-function transform + audit log (`library/reclassify.py`), service methods (`reclassify_entity`/`preview_reclassification`/`undo_reclassification`/`list_reclassifications`), 4 REST routes, ConvertModal + EntityListView wiring. Spec renamed to `-COMPLETED.md`. Section 4 (import-dialog integration) deferred — the shared `apply_mapping` + `suggest_kind` are designed to be imported by card-imports Task E2 when it ships.
 - **Windows path-format bug** — `relative_to_root` now uses forward slashes (commit `8c914f0`). 4 previously-failing tests now pass on Windows; no effect on Linux/CI.
 - **expression-sprites** — `ExpressionPicker` wired into composer; emotion plumbed through `usePlayState.submit` and PATCHed on next `pc_post_appended`. Spec renamed to `-COMPLETED.md`, plan deleted.
 - **transient-state** — Spec renamed to `-COMPLETED.md`, plan deleted (backend-only spec; no frontend was owed).
@@ -53,26 +54,13 @@ Reconciled this pass. Both plans verified branch-by-branch against shipped code;
 
 ## 3. Net-new work
 
-### lore-reclassification
-Design exists; **no plan**; zero matching code.
+### card-imports + lore-reclassification — section 4 follow-up
 
-- [ ] Write implementation plan at `docs/superpowers/plans/2026-05-19-lore-reclassification.md` covering the design's six areas (conversion service, field-mapping, heuristic classifier, import dialog integration, library UI, audit trail)
-- [ ] Implementation
-- [ ] Note hard dep: depends on card-imports Task E2 being extended for `lore_overrides`
+card-imports shipped on `2026-05-19-card-imports` and lore-reclassification shipped on `2026-05-19-lore-reclassification`. The one remaining piece is **lore-reclassification spec section 4** — wiring the per-row category dropdown into the existing card-imports `ImportDialog.tsx` so users can promote a `character_book` entry to a Character/Location/Faction/Item at import time instead of after the fact:
 
-### card-imports — **COMPLETED 2026-05-19**
-
-Shipped on branch `2026-05-19-card-imports`. See
-`docs/superpowers/specs/2026-05-19-card-imports-COMPLETED.md` for details.
-
-- [x] Branch A: macros
-- [x] Branch B: lore schema
-- [x] Branch C: lore algorithm
-- [x] Branch D: ingest pipeline
-- [x] Branch E: REST + frontend
-- [ ] **Follow-up:** lore-reclassification needs Branch E extended to
-  accept `lore_overrides` in the commit payload — out of scope for the
-  initial card-imports work, lands with the lore-reclassification PR.
+- [ ] **Backend:** extend the card-imports commit payload to accept `lore_overrides: [{source_index, kind, overrides}]`; in `_finalize_import`, when `kind != "lore"`, call `apply_mapping(lore, target_kind, overrides)` from `grimoire.library.reclassify` and write the target-kind entity via `LibraryService.create_entity` instead of as lore. The shared transform deliberately lives in `reclassify.py` (not on the service) so this path uses it without round-tripping a file.
+- [ ] **Frontend:** in the card-imports `ImportDialog.tsx`, add a per-row category dropdown defaulting to `suggest_kind(entry)` (call the existing `previewReclassify` API or a new lightweight `suggest` endpoint), seeded above the configured `suggestion_threshold` (default 0.6 from `LibraryConfig.reclassification.suggestion_threshold`). For non-default targets, collect required overrides inline (e.g. `Location.kind`).
+- [ ] When `LoreEntry` gains the matching-metadata fields (`priority`, `probability`, `position`, `at_depth`, `scan_depth`, `constant`, `enabled`, `case_sensitive`, `match_whole_words`, `selective_logic`) — already done by card-imports Branch B — sanity-check that the existing `_DROPPED_MATCHING_FIELDS` rollup warning in `reclassify.py` only fires when fields are set to non-defaults (sentinels already in `_DEFAULT_VALUES`).
 
 ---
 
@@ -81,4 +69,4 @@ Shipped on branch `2026-05-19-card-imports`. See
 1. **scene-hud Branch G** is the highest-impact unblock — building it unblocks narrative-extras (chips) and auxiliary-tasks (in-flight indicator). Worth doing before the other partial items.
 2. **auxiliary-tasks** residual UI (continue-as / what-would-x-say / edit-prose / translate) — 4 small surfaces; can be done in parallel with scene-hud once design is clear.
 3. **Section 2** reconciliation — likely just deletions of stale plans after confirming the work shipped.
-4. **Section 3**: card-imports first (has the dep), then lore-reclassification (write plan, then implement).
+4. **Section 3**: card-imports — when Task E2 lands, pick up the lore-reclassification section-4 import-dialog wiring as part of that branch (transform + classifier already exist).
