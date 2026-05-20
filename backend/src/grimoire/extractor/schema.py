@@ -145,6 +145,22 @@ def output_schema() -> JsonSchema:
         },
         "required": ["commitment_id", "outcome", "confidence"],
     }
+    transient_update = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "entity_kind": {
+                "type": "string",
+                "enum": ["character", "location", "faction", "scene"],
+            },
+            "entity_id": {"type": "string"},
+            "field": {"type": "string"},
+            "value": {},
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "evidence": {"type": "string"},
+        },
+        "required": ["entity_kind", "entity_id", "field", "value", "confidence"],
+    }
     return {
         "type": "object",
         "properties": {
@@ -161,6 +177,7 @@ def output_schema() -> JsonSchema:
             "mechanical_events": {"type": "array", "items": mechanical_event},
             "relationship_changes": {"type": "array", "items": relationship_change},
             "commitment_resolutions": {"type": "array", "items": commitment_resolution},
+            "transient_updates": {"type": "array", "items": transient_update},
         },
     }
 
@@ -181,6 +198,7 @@ def empty_payload() -> dict:
         "mechanical_events": [],
         "relationship_changes": [],
         "commitment_resolutions": [],
+        "transient_updates": [],
     }
 
 
