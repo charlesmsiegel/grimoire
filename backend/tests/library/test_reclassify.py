@@ -106,3 +106,138 @@ def test_reclassification_result_is_frozen() -> None:
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         r.target_id = "y"  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------- #
+# Service-level tests (round-trip through LibraryService)
+# --------------------------------------------------------------------------- #
+
+from grimoire.library import LibraryNotFoundError, LibraryService
+from grimoire.library.errors import ReclassificationError
+from grimoire.library.reclassify import iter_audit
+from grimoire.state_store import StateStore
+
+
+async def _seed_world(store: StateStore, world_id: str) -> None:
+    await store.write_library_file(
+        library_id=f"worlds/{world_id}/world",
+        frontmatter={"id": world_id, "name": world_id, "version": 1},
+        body="",
+        source="user",
+    )
+
+
+async def _seed_lore(
+    store: StateStore,
+    world_id: str,
+    entity_id: str,
+    *,
+    title: str,
+    body: str = "",
+    **extras,
+) -> None:
+    fm: dict = {"id": entity_id, "title": title}
+    fm.update(extras)
+    await store.write_library_file(
+        library_id=f"worlds/{world_id}/lore/{entity_id}",
+        frontmatter=fm,
+        body=body,
+        source="user",
+    )
+
+
+async def test_reclassify_to_character_writes_target_and_deletes_source(
+    library: LibraryService, store: StateStore,
+) -> None:
+    await _seed_world(store, "w")
+    await _seed_lore(
+        store, "w", "beatrice",
+        title="Beatrice", body="She studied alchemy.",
+        keywords=["tremere", "beatrice"], tags=["wod"],
+    )
+    result = await library.reclassify_entity(
+        "w", "beatrice",
+        target_kind=EntityKind.CHARACTER, overrides=None, actor="tester",
+    )
+    assert result.target_kind == EntityKind.CHARACTER
+    assert result.target_id
+    with pytest.raises(LibraryNotFoundError):
+        await library.get_entity("w", "lore", "beatrice")
+    target = await library.get_entity("w", "character", result.target_id)
+    assert target.name == "Beatrice"
+    assert target.frontmatter.get("aliases") == ["tremere", "beatrice"]
+
+
+async def test_reclassify_to_location_requires_kind_override(
+    library: LibraryService, store: StateStore,
+) -> None:
+    await _seed_world(store, "w")
+    await _seed_lore(store, "w", "chantry", title="The Chantry")
+    with pytest.raises(ReclassificationError, match="kind"):
+        await library.reclassify_entity(
+            "w", "chantry",
+            target_kind=EntityKind.LOCATION, overrides=None,
+        )
+
+
+async def test_reclassify_resolves_target_id_collisions_with_suffix(
+    library: LibraryService, store: StateStore,
+) -> None:
+    await _seed_world(store, "w")
+    await store.write_library_file(
+        library_id="worlds/w/characters/beatrice",
+        frontmatter={"id": "beatrice", "name": "Other Beatrice"},
+        body="",
+        source="user",
+    )
+    await _seed_lore(store, "w", "beatrice-lore", title="Beatrice", body="She lived.")
+    result = await library.reclassify_entity(
+        "w", "beatrice-lore",
+        target_kind=EntityKind.CHARACTER, overrides=None,
+    )
+    assert result.target_id == "beatrice-2"
+
+
+async def test_reclassify_appends_audit_record(
+    library: LibraryService, store: StateStore,
+) -> None:
+    await _seed_world(store, "w")
+    await _seed_lore(store, "w", "beatrice", title="Beatrice", body="She lived.")
+    await library.reclassify_entity(
+        "w", "beatrice", target_kind=EntityKind.CHARACTER, overrides=None, actor="tester",
+    )
+    records = list(iter_audit(store.data_root, world_id="w"))
+    assert len(records) == 1
+    assert records[0]["source_id"] == "beatrice"
+    assert records[0]["target_kind"] == "character"
+    assert records[0]["actor"] == "tester"
+    assert records[0]["source_snapshot"]["frontmatter"]["title"] == "Beatrice"
+
+
+async def test_reclassify_missing_source_raises_not_found(
+    library: LibraryService,
+) -> None:
+    with pytest.raises(LibraryNotFoundError):
+        await library.reclassify_entity(
+            "w", "missing",
+            target_kind=EntityKind.CHARACTER, overrides=None,
+        )
+
+
+async def test_preview_reclassification_returns_mapping_without_writing(
+    library: LibraryService, store: StateStore,
+) -> None:
+    await _seed_world(store, "w")
+    await _seed_lore(
+        store, "w", "beatrice",
+        title="Beatrice", body="She studied alchemy.", keywords=["b"], tags=["wod"],
+    )
+    preview = await library.preview_reclassification(
+        "w", "beatrice", target_kind=EntityKind.CHARACTER,
+    )
+    assert preview["target_kind"] == "character"
+    assert preview["frontmatter"]["name"] == "Beatrice"
+    assert preview["required_overrides"] == []
+    assert "kept" in preview and "dropped" in preview and "into_notes" in preview
+    assert preview["suggestion"]["kind"] in {"character", "lore"}
+    assert (await library.get_entity("w", "lore", "beatrice")).asset_id == "beatrice"

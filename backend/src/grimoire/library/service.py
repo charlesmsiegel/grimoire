@@ -14,17 +14,29 @@ from datetime import datetime
 from typing import Any
 
 from grimoire.event_bus import Event, EventBus
+import re as _re
+
+from grimoire.library.classify import suggest_kind
 from grimoire.library.config import LibraryConfig
 from grimoire.library.errors import (
     LibraryConflictError,
     LibraryError,
     LibraryNotFoundError,
     PromotionError,
+    ReclassificationError,
+)
+from grimoire.library.reclassify import (
+    ReclassificationResult,
+    append_audit,
+    apply_mapping,
+    iter_audit,
+    required_overrides_for,
 )
 from grimoire.state_store import StateStore
 from grimoire.state_store.indexers import make_library_id
 from grimoire.state_store.paths import parse_library_id
 from grimoire.types.common import EntityKind
+from grimoire.types.world import LoreEntry
 from grimoire.types.composition import (
     CampaignRef,
     Composition,
@@ -587,6 +599,177 @@ class LibraryService:
                 f"cannot delete missing entity {kind}/{entity_id} in {world_id!r}"
             )
         await self.store.delete_library_file(library_id=library_id, source=source)
+
+    # ------------------------------------------------------------------ #
+    # Reclassification (spec §§1, 2, 6)
+    # ------------------------------------------------------------------ #
+
+    async def preview_reclassification(
+        self,
+        world_id: str,
+        source_id: str,
+        *,
+        target_kind: EntityKind | str,
+    ) -> dict[str, Any]:
+        """Return the mapping result without writing — used by the Convert modal."""
+        target = self._coerce_reclassify_target(target_kind)
+        source_entity = await self.get_entity(world_id, "lore", source_id)
+        lore = _lore_from_entity(source_entity)
+        fm, body, kept, dropped, into_notes, warnings = apply_mapping(lore, target, None)
+        suggestion = suggest_kind(
+            lore, threshold=self.config.reclassification.suggestion_threshold
+        )
+        return {
+            "source_id": source_id,
+            "target_kind": target.value,
+            "frontmatter": fm,
+            "body": body,
+            "kept": kept,
+            "dropped": dropped,
+            "into_notes": into_notes,
+            "warnings": warnings,
+            "required_overrides": required_overrides_for(target),
+            "suggestion": {
+                "kind": suggestion.kind.value,
+                "confidence": suggestion.confidence,
+                "reason": suggestion.reason,
+            },
+        }
+
+    async def reclassify_entity(
+        self,
+        world_id: str,
+        source_id: str,
+        *,
+        target_kind: EntityKind | str,
+        overrides: dict[str, Any] | None = None,
+        actor: str = "user",
+    ) -> ReclassificationResult:
+        """Convert a lore entry into a new entity of ``target_kind``.
+
+        Order of operations: validate required overrides → read source →
+        resolve target id (collision suffix) → create target → delete
+        source → append audit → emit event. A failure at create surfaces
+        as :class:`ReclassificationError` with the source intact; a
+        failure at delete is a non-fatal warning on the result.
+        """
+        target = self._coerce_reclassify_target(target_kind)
+        overrides = dict(overrides or {})
+
+        missing = [
+            key for key in required_overrides_for(target)
+            if key not in overrides or overrides[key] in (None, "")
+        ]
+        if missing:
+            raise ReclassificationError(
+                f"missing required override(s) for {target.value}: {missing!r}"
+            )
+
+        source_entity = await self.get_entity(world_id, "lore", source_id)
+        lore = _lore_from_entity(source_entity)
+        fm, body, kept, dropped, into_notes, warnings = apply_mapping(lore, target, overrides)
+
+        derived = _slugify(fm.get("name") or source_id)
+        target_id = await self._collision_suffix(world_id, target, derived)
+        fm["id"] = target_id
+
+        try:
+            await self.create_entity(
+                world_id, target, target_id, fm, body,
+                source=f"{actor}:reclassify",
+            )
+        except Exception as exc:
+            raise ReclassificationError(
+                f"failed to create {target.value}/{target_id}: {exc}"
+            ) from exc
+
+        try:
+            await self.delete_entity(
+                world_id, "lore", source_id, source=f"{actor}:reclassify"
+            )
+        except Exception as exc:
+            warnings.append(f"source not deleted: {exc}")
+
+        # v1 always writes to <data_root>/library/imports/reclassifications.jsonl.
+        # The config.reclassification.audit_log knob is reserved for a future
+        # caller; not wired today.
+        try:
+            append_audit(
+                self.store.data_root,
+                world_id=world_id,
+                source_id=source_id,
+                source_snapshot={
+                    "frontmatter": dict(source_entity.frontmatter or {}),
+                    "body": source_entity.body or "",
+                },
+                target_id=target_id,
+                target_kind=target,
+                overrides=overrides,
+                actor=actor,
+            )
+        except Exception as exc:
+            warnings.append(f"audit log write failed: {exc}")
+
+        await self._emit(
+            "library.reclassify",
+            {
+                "world_id": world_id,
+                "source_id": source_id,
+                "target_id": target_id,
+                "target_kind": target.value,
+                "actor": actor,
+                "warnings": warnings,
+            },
+        )
+
+        return ReclassificationResult(
+            source_id=source_id,
+            target_id=target_id,
+            target_kind=target,
+            fields_kept=kept,
+            fields_dropped=dropped,
+            fields_into_notes=into_notes,
+            warnings=warnings,
+        )
+
+    async def _collision_suffix(
+        self,
+        world_id: str,
+        kind: EntityKind,
+        base_id: str,
+    ) -> str:
+        """Return ``base_id`` unless it collides; otherwise ``base_id-2``, ``-3``, …, ``-99``."""
+        candidate = base_id
+        for n in range(1, 100):
+            library_id = make_library_id(world_id, kind.value, candidate)
+            existing = await self.store.get_library_entity(library_id)
+            if existing is None:
+                return candidate
+            candidate = f"{base_id}-{n + 1}"
+        raise ReclassificationError(
+            f"too many id collisions for {kind.value}/{base_id} (>99); refusing to write"
+        )
+
+    def _coerce_reclassify_target(self, target_kind: EntityKind | str) -> EntityKind:
+        if isinstance(target_kind, EntityKind):
+            value = target_kind
+        else:
+            try:
+                value = EntityKind(_normalize_kind(target_kind))
+            except ValueError as exc:
+                raise ReclassificationError(
+                    f"unknown target_kind {target_kind!r}"
+                ) from exc
+        allowed = {
+            EntityKind.CHARACTER, EntityKind.LOCATION,
+            EntityKind.FACTION, EntityKind.ITEM,
+        }
+        if value not in allowed:
+            raise ReclassificationError(
+                f"reclassify target must be character/location/faction/item, "
+                f"got {value.value!r}"
+            )
+        return value
 
     # ------------------------------------------------------------------ #
     # Promotion
@@ -1478,6 +1661,27 @@ def _json_equal(left: Any, right: Any) -> bool:
     return json.dumps(left, sort_keys=True, default=str) == json.dumps(
         right, sort_keys=True, default=str
     )
+
+
+def _slugify(value: str) -> str:
+    """Crude ASCII slugifier: lowercase, non-alphanum -> hyphens, collapse + trim."""
+    value = value.strip().lower()
+    value = _re.sub(r"[^a-z0-9]+", "-", value).strip("-")
+    return value or "entity"
+
+
+def _lore_from_entity(entity: LibraryEntity) -> LoreEntry:
+    """Construct a `LoreEntry` from a freshly-read library entity row."""
+    fm = dict(entity.frontmatter or {})
+    fm.setdefault("world_id", entity.world_id or "")
+    fm.setdefault("id", entity.asset_id)
+    fm.setdefault("title", fm.get("name") or entity.asset_id)
+    fm["body"] = entity.body or fm.get("body", "")
+    # Drop keys LoreEntry doesn't know about (the file may carry extra
+    # frontmatter that survives at write time but isn't part of the model).
+    known = set(LoreEntry.model_fields.keys())
+    fm = {k: v for k, v in fm.items() if k in known}
+    return LoreEntry.model_validate(fm)
 
 
 def _frontmatter_diff(current: dict, baseline: dict) -> dict:
