@@ -314,6 +314,7 @@ class ExtractorService:
             candidates=candidates,
             extras_proposals=extras_proposals,
             flags=flags,
+            transient_updates=list(llm_out.transient_updates),
             confidence_overall=confidence_overall,
             extraction_strategies_run=ran,
             duration_ms=int((time.monotonic() - started) * 1000),
