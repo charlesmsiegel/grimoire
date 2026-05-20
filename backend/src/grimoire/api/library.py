@@ -190,6 +190,78 @@ async def fork_world(
 
 
 # --------------------------------------------------------------------------- #
+# Reclassification (lore -> character/location/faction/item)
+#
+# These routes are registered BEFORE the generic
+# ``/library/worlds/{world_id}/{kind}`` listing route below so the more
+# specific paths (``…/lore/{entity_id}/reclassify``, ``…/reclassifications``,
+# ``…/reclassifications/{timestamp}/undo``) win the FastAPI match order.
+# --------------------------------------------------------------------------- #
+
+
+class ReclassifyCommitPayload(BaseModel):
+    target_kind: str
+    overrides: dict[str, Any] | None = None
+    actor: str = "user"
+
+
+@router.get("/library/worlds/{world_id}/lore/{entity_id}/reclassify/preview")
+async def preview_reclassify(
+    world_id: str,
+    entity_id: str,
+    library: LibraryDep,
+    target_kind: str = Query(...),
+) -> Any:
+    """Render the mapping a reclassification would produce, without writing."""
+    try:
+        return await library.preview_reclassification(
+            world_id, entity_id, target_kind=target_kind,
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.post("/library/worlds/{world_id}/lore/{entity_id}/reclassify")
+async def commit_reclassify(
+    world_id: str,
+    entity_id: str,
+    payload: ReclassifyCommitPayload,
+    library: LibraryDep,
+) -> Any:
+    try:
+        result = await library.reclassify_entity(
+            world_id, entity_id,
+            target_kind=payload.target_kind,
+            overrides=payload.overrides,
+            actor=payload.actor,
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return to_payload(result)
+
+
+@router.get("/library/worlds/{world_id}/reclassifications")
+async def list_reclassifications_route(world_id: str, library: LibraryDep) -> Any:
+    try:
+        return await library.list_reclassifications(world_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.post("/library/worlds/{world_id}/reclassifications/{timestamp}/undo")
+async def undo_reclassify(
+    world_id: str,
+    timestamp: str,
+    library: LibraryDep,
+    actor: str = "user",
+) -> Any:
+    try:
+        return await library.undo_reclassification(world_id, timestamp, actor=actor)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+# --------------------------------------------------------------------------- #
 # World entities (characters / items / locations / lore / factions / greetings)
 # --------------------------------------------------------------------------- #
 
