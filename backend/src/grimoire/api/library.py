@@ -215,7 +215,9 @@ async def preview_reclassify(
     """Render the mapping a reclassification would produce, without writing."""
     try:
         return await library.preview_reclassification(
-            world_id, entity_id, target_kind=target_kind,
+            world_id,
+            entity_id,
+            target_kind=target_kind,
         )
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
@@ -230,7 +232,8 @@ async def commit_reclassify(
 ) -> Any:
     try:
         result = await library.reclassify_entity(
-            world_id, entity_id,
+            world_id,
+            entity_id,
             target_kind=payload.target_kind,
             overrides=payload.overrides,
             actor=payload.actor,

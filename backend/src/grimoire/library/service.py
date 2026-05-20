@@ -10,12 +10,11 @@ typed values (``LibraryEntity``, ``WorldMeta``, ``Greeting``,
 from __future__ import annotations
 
 import json
+import re as _re
 from datetime import datetime
 from typing import Any
 
 from grimoire.event_bus import Event, EventBus
-import re as _re
-
 from grimoire.library.classify import suggest_kind
 from grimoire.library.config import LibraryConfig
 from grimoire.library.errors import (
@@ -36,7 +35,6 @@ from grimoire.state_store import StateStore
 from grimoire.state_store.indexers import make_library_id
 from grimoire.state_store.paths import parse_library_id
 from grimoire.types.common import EntityKind
-from grimoire.types.world import LoreEntry
 from grimoire.types.composition import (
     CampaignRef,
     Composition,
@@ -51,6 +49,7 @@ from grimoire.types.composition import (
     WorldMeta,
     WorldRef,
 )
+from grimoire.types.world import LoreEntry
 
 # Entity kinds that live inside a world directory.
 _World_ENTITY_KINDS: frozenset[str] = frozenset(
@@ -616,9 +615,7 @@ class LibraryService:
         source_entity = await self.get_entity(world_id, "lore", source_id)
         lore = _lore_from_entity(source_entity)
         fm, body, kept, dropped, into_notes, warnings = apply_mapping(lore, target, None)
-        suggestion = suggest_kind(
-            lore, threshold=self.config.reclassification.suggestion_threshold
-        )
+        suggestion = suggest_kind(lore, threshold=self.config.reclassification.suggestion_threshold)
         return {
             "source_id": source_id,
             "target_kind": target.value,
@@ -657,7 +654,8 @@ class LibraryService:
         overrides = dict(overrides or {})
 
         missing = [
-            key for key in required_overrides_for(target)
+            key
+            for key in required_overrides_for(target)
             if key not in overrides or overrides[key] in (None, "")
         ]
         if missing:
@@ -675,7 +673,11 @@ class LibraryService:
 
         try:
             await self.create_entity(
-                world_id, target, target_id, fm, body,
+                world_id,
+                target,
+                target_id,
+                fm,
+                body,
                 source=f"{actor}:reclassify",
             )
         except Exception as exc:
@@ -684,9 +686,7 @@ class LibraryService:
             ) from exc
 
         try:
-            await self.delete_entity(
-                world_id, "lore", source_id, source=f"{actor}:reclassify"
-            )
+            await self.delete_entity(world_id, "lore", source_id, source=f"{actor}:reclassify")
         except Exception as exc:
             warnings.append(f"source not deleted: {exc}")
 
@@ -786,20 +786,24 @@ class LibraryService:
 
         warnings: list[str] = []
 
-        restored_id = await self._collision_suffix(
-            world_id, EntityKind.LORE, original_source_id
-        )
+        restored_id = await self._collision_suffix(world_id, EntityKind.LORE, original_source_id)
         snapshot_fm = dict(snapshot.get("frontmatter") or {})
         snapshot_fm["id"] = restored_id
         snapshot_body = snapshot.get("body") or ""
         await self.create_entity(
-            world_id, "lore", restored_id, snapshot_fm, snapshot_body,
+            world_id,
+            "lore",
+            restored_id,
+            snapshot_fm,
+            snapshot_body,
             source=f"{actor}:reclassify-undo",
         )
 
         try:
             await self.delete_entity(
-                world_id, target_kind.value, target_id,
+                world_id,
+                target_kind.value,
+                target_id,
                 source=f"{actor}:reclassify-undo",
             )
         except LibraryNotFoundError:
@@ -811,10 +815,9 @@ class LibraryService:
             deps = await self.dependents(world_id, target_kind.value, target_id)
             if deps:
                 warnings.append(
-                    f"target was referenced by {len(deps)} campaign(s); "
-                    "those refs are now dangling"
+                    f"target was referenced by {len(deps)} campaign(s); those refs are now dangling"
                 )
-        except Exception:  # noqa: BLE001 — best-effort dep lookup
+        except Exception:
             pass
 
         try:
@@ -856,17 +859,16 @@ class LibraryService:
             try:
                 value = EntityKind(_normalize_kind(target_kind))
             except ValueError as exc:
-                raise ReclassificationError(
-                    f"unknown target_kind {target_kind!r}"
-                ) from exc
+                raise ReclassificationError(f"unknown target_kind {target_kind!r}") from exc
         allowed = {
-            EntityKind.CHARACTER, EntityKind.LOCATION,
-            EntityKind.FACTION, EntityKind.ITEM,
+            EntityKind.CHARACTER,
+            EntityKind.LOCATION,
+            EntityKind.FACTION,
+            EntityKind.ITEM,
         }
         if value not in allowed:
             raise ReclassificationError(
-                f"reclassify target must be character/location/faction/item, "
-                f"got {value.value!r}"
+                f"reclassify target must be character/location/faction/item, got {value.value!r}"
             )
         return value
 

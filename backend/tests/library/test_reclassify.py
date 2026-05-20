@@ -6,11 +6,15 @@ import dataclasses
 
 import pytest
 
+from grimoire.library import LibraryNotFoundError, LibraryService
+from grimoire.library.errors import ReclassificationError
 from grimoire.library.reclassify import (
     ReclassificationResult,
     apply_mapping,
+    iter_audit,
     required_overrides_for,
 )
+from grimoire.state_store import StateStore
 from grimoire.types.common import EntityKind
 from grimoire.types.world import LoreEntry
 
@@ -32,8 +36,10 @@ def _lore(**kw) -> LoreEntry:
 
 def test_apply_mapping_to_character_keeps_core_fields() -> None:
     lore = _lore(title="Beatrice", body="She studied alchemy in the chantry.")
-    fm, body, kept, dropped, into_notes, warnings = apply_mapping(
-        lore, EntityKind.CHARACTER, overrides=None,
+    fm, body, kept, _dropped, _into_notes, _warnings = apply_mapping(
+        lore,
+        EntityKind.CHARACTER,
+        overrides=None,
     )
     assert fm["name"] == "Beatrice"
     assert fm["aliases"] == ["chantry", "tremere"]
@@ -48,8 +54,10 @@ def test_apply_mapping_to_character_keeps_core_fields() -> None:
 
 def test_apply_mapping_to_location_drops_related_factions_into_notes_section() -> None:
     lore = _lore(title="The Tremere Chantry")
-    fm, body, kept, dropped, into_notes, warnings = apply_mapping(
-        lore, EntityKind.LOCATION, overrides={"kind": "building"},
+    fm, body, _kept, _dropped, into_notes, _warnings = apply_mapping(
+        lore,
+        EntityKind.LOCATION,
+        overrides={"kind": "building"},
     )
     assert fm["name"] == "The Tremere Chantry"
     assert fm["kind"] == "building"
@@ -61,7 +69,9 @@ def test_apply_mapping_to_location_drops_related_factions_into_notes_section() -
 def test_apply_mapping_to_faction_maps_related_factions_to_allies() -> None:
     lore = _lore(title="House Tremere", related_factions=["camarilla"])
     fm, _body, kept, _dropped, _into_notes, _warnings = apply_mapping(
-        lore, EntityKind.FACTION, overrides=None,
+        lore,
+        EntityKind.FACTION,
+        overrides=None,
     )
     assert fm["allies"] == ["camarilla"]
     assert "allies" in kept
@@ -70,7 +80,9 @@ def test_apply_mapping_to_faction_maps_related_factions_to_allies() -> None:
 def test_apply_mapping_to_item_drops_secrecy_into_notes() -> None:
     lore = _lore(title="Sword of Caine", secrecy="secret")
     fm, body, _kept, _dropped, into_notes, _warnings = apply_mapping(
-        lore, EntityKind.ITEM, overrides=None,
+        lore,
+        EntityKind.ITEM,
+        overrides=None,
     )
     assert "secrecy" not in fm
     assert "secrecy" in into_notes
@@ -96,7 +108,9 @@ def test_related_locations_and_characters_routed_to_notes_not_silently_dropped(
     )
     overrides = {"kind": "building"} if target_kind == EntityKind.LOCATION else None
     fm, body, _kept, _dropped, into_notes, _warnings = apply_mapping(
-        lore, target_kind, overrides=overrides,
+        lore,
+        target_kind,
+        overrides=overrides,
     )
     assert "related_locations" in into_notes
     assert "related_characters" in into_notes
@@ -113,7 +127,8 @@ def test_related_locations_and_characters_routed_to_notes_not_silently_dropped(
 def test_apply_mapping_overrides_win_over_defaults() -> None:
     lore = _lore(title="Beatrice")
     fm, _body, _kept, _dropped, _into_notes, _warnings = apply_mapping(
-        lore, EntityKind.CHARACTER,
+        lore,
+        EntityKind.CHARACTER,
         overrides={"name": "Lady Beatrice", "role": "major_npc"},
     )
     assert fm["name"] == "Lady Beatrice"
@@ -135,7 +150,10 @@ def test_reclassification_result_is_frozen() -> None:
         source_id="lore/x",
         target_id="characters/x",
         target_kind=EntityKind.CHARACTER,
-        fields_kept=[], fields_dropped=[], fields_into_notes=[], warnings=[],
+        fields_kept=[],
+        fields_dropped=[],
+        fields_into_notes=[],
+        warnings=[],
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         r.target_id = "y"  # type: ignore[misc]
@@ -144,11 +162,6 @@ def test_reclassification_result_is_frozen() -> None:
 # --------------------------------------------------------------------------- #
 # Service-level tests (round-trip through LibraryService)
 # --------------------------------------------------------------------------- #
-
-from grimoire.library import LibraryNotFoundError, LibraryService
-from grimoire.library.errors import ReclassificationError
-from grimoire.library.reclassify import iter_audit
-from grimoire.state_store import StateStore
 
 
 async def _seed_world(store: StateStore, world_id: str) -> None:
@@ -180,17 +193,25 @@ async def _seed_lore(
 
 
 async def test_reclassify_to_character_writes_target_and_deletes_source(
-    library: LibraryService, store: StateStore,
+    library: LibraryService,
+    store: StateStore,
 ) -> None:
     await _seed_world(store, "w")
     await _seed_lore(
-        store, "w", "beatrice",
-        title="Beatrice", body="She studied alchemy.",
-        keywords=["tremere", "beatrice"], tags=["wod"],
+        store,
+        "w",
+        "beatrice",
+        title="Beatrice",
+        body="She studied alchemy.",
+        keywords=["tremere", "beatrice"],
+        tags=["wod"],
     )
     result = await library.reclassify_entity(
-        "w", "beatrice",
-        target_kind=EntityKind.CHARACTER, overrides=None, actor="tester",
+        "w",
+        "beatrice",
+        target_kind=EntityKind.CHARACTER,
+        overrides=None,
+        actor="tester",
     )
     assert result.target_kind == EntityKind.CHARACTER
     assert result.target_id
@@ -202,19 +223,23 @@ async def test_reclassify_to_character_writes_target_and_deletes_source(
 
 
 async def test_reclassify_to_location_requires_kind_override(
-    library: LibraryService, store: StateStore,
+    library: LibraryService,
+    store: StateStore,
 ) -> None:
     await _seed_world(store, "w")
     await _seed_lore(store, "w", "chantry", title="The Chantry")
     with pytest.raises(ReclassificationError, match="kind"):
         await library.reclassify_entity(
-            "w", "chantry",
-            target_kind=EntityKind.LOCATION, overrides=None,
+            "w",
+            "chantry",
+            target_kind=EntityKind.LOCATION,
+            overrides=None,
         )
 
 
 async def test_reclassify_resolves_target_id_collisions_with_suffix(
-    library: LibraryService, store: StateStore,
+    library: LibraryService,
+    store: StateStore,
 ) -> None:
     await _seed_world(store, "w")
     await store.write_library_file(
@@ -225,19 +250,26 @@ async def test_reclassify_resolves_target_id_collisions_with_suffix(
     )
     await _seed_lore(store, "w", "beatrice-lore", title="Beatrice", body="She lived.")
     result = await library.reclassify_entity(
-        "w", "beatrice-lore",
-        target_kind=EntityKind.CHARACTER, overrides=None,
+        "w",
+        "beatrice-lore",
+        target_kind=EntityKind.CHARACTER,
+        overrides=None,
     )
     assert result.target_id == "beatrice-2"
 
 
 async def test_reclassify_appends_audit_record(
-    library: LibraryService, store: StateStore,
+    library: LibraryService,
+    store: StateStore,
 ) -> None:
     await _seed_world(store, "w")
     await _seed_lore(store, "w", "beatrice", title="Beatrice", body="She lived.")
     await library.reclassify_entity(
-        "w", "beatrice", target_kind=EntityKind.CHARACTER, overrides=None, actor="tester",
+        "w",
+        "beatrice",
+        target_kind=EntityKind.CHARACTER,
+        overrides=None,
+        actor="tester",
     )
     records = list(iter_audit(store.data_root, world_id="w"))
     assert len(records) == 1
@@ -252,21 +284,31 @@ async def test_reclassify_missing_source_raises_not_found(
 ) -> None:
     with pytest.raises(LibraryNotFoundError):
         await library.reclassify_entity(
-            "w", "missing",
-            target_kind=EntityKind.CHARACTER, overrides=None,
+            "w",
+            "missing",
+            target_kind=EntityKind.CHARACTER,
+            overrides=None,
         )
 
 
 async def test_preview_reclassification_returns_mapping_without_writing(
-    library: LibraryService, store: StateStore,
+    library: LibraryService,
+    store: StateStore,
 ) -> None:
     await _seed_world(store, "w")
     await _seed_lore(
-        store, "w", "beatrice",
-        title="Beatrice", body="She studied alchemy.", keywords=["b"], tags=["wod"],
+        store,
+        "w",
+        "beatrice",
+        title="Beatrice",
+        body="She studied alchemy.",
+        keywords=["b"],
+        tags=["wod"],
     )
     preview = await library.preview_reclassification(
-        "w", "beatrice", target_kind=EntityKind.CHARACTER,
+        "w",
+        "beatrice",
+        target_kind=EntityKind.CHARACTER,
     )
     assert preview["target_kind"] == "character"
     assert preview["frontmatter"]["name"] == "Beatrice"
@@ -277,12 +319,17 @@ async def test_preview_reclassification_returns_mapping_without_writing(
 
 
 async def test_undo_reclassification_recreates_source_and_deletes_target(
-    library: LibraryService, store: StateStore,
+    library: LibraryService,
+    store: StateStore,
 ) -> None:
     await _seed_world(store, "w")
     await _seed_lore(store, "w", "beatrice", title="Beatrice", body="She lived.")
     result = await library.reclassify_entity(
-        "w", "beatrice", target_kind=EntityKind.CHARACTER, overrides=None, actor="tester",
+        "w",
+        "beatrice",
+        target_kind=EntityKind.CHARACTER,
+        overrides=None,
+        actor="tester",
     )
     records = list(iter_audit(store.data_root, world_id="w"))
     ts = records[0]["ts"]
@@ -300,12 +347,16 @@ async def test_undo_reclassification_recreates_source_and_deletes_target(
 
 
 async def test_undo_with_collision_suffixes_restored_source(
-    library: LibraryService, store: StateStore,
+    library: LibraryService,
+    store: StateStore,
 ) -> None:
     await _seed_world(store, "w")
     await _seed_lore(store, "w", "beatrice", title="Beatrice", body="She lived.")
-    result = await library.reclassify_entity(
-        "w", "beatrice", target_kind=EntityKind.CHARACTER, overrides=None,
+    await library.reclassify_entity(
+        "w",
+        "beatrice",
+        target_kind=EntityKind.CHARACTER,
+        overrides=None,
     )
     await _seed_lore(store, "w", "beatrice", title="Different Beatrice", body="x")
 
@@ -323,7 +374,8 @@ async def test_undo_missing_timestamp_raises(library: LibraryService, store: Sta
 
 
 async def test_list_reclassifications_returns_records_in_order(
-    library: LibraryService, store: StateStore,
+    library: LibraryService,
+    store: StateStore,
 ) -> None:
     await _seed_world(store, "w")
     await _seed_lore(store, "w", "a", title="Beatrice", body="She lived.")

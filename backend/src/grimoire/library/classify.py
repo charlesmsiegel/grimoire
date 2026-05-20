@@ -17,9 +17,25 @@ from grimoire.types.world import LoreEntry
 
 _LOCATION_NOUNS: frozenset[str] = frozenset(
     {
-        "Keep", "District", "Forest", "Cathedral", "Quarter", "Sept",
-        "Chantry", "Court", "Tower", "Hall", "Manor", "Crypt", "Chapel",
-        "Castle", "Bridge", "Square", "Market", "Harbor", "Garden",
+        "Keep",
+        "District",
+        "Forest",
+        "Cathedral",
+        "Quarter",
+        "Sept",
+        "Chantry",
+        "Court",
+        "Tower",
+        "Hall",
+        "Manor",
+        "Crypt",
+        "Chapel",
+        "Castle",
+        "Bridge",
+        "Square",
+        "Market",
+        "Harbor",
+        "Garden",
     }
 )
 _LOCATION_BODY_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -40,8 +56,21 @@ _FACTION_BODY_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 _ITEM_NOUNS: frozenset[str] = frozenset(
-    {"Sword", "Tome", "Amulet", "Grimoire", "Blade", "Ring", "Crown",
-     "Staff", "Wand", "Cup", "Chalice", "Mirror", "Key"}
+    {
+        "Sword",
+        "Tome",
+        "Amulet",
+        "Grimoire",
+        "Blade",
+        "Ring",
+        "Crown",
+        "Staff",
+        "Wand",
+        "Cup",
+        "Chalice",
+        "Mirror",
+        "Key",
+    }
 )
 _ITEM_BODY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bgrants\b", re.IGNORECASE),
@@ -64,10 +93,10 @@ _ROLE_INTRO_RE = re.compile(r"\bis\s+(?:a|an|the)\s+[a-z]", re.IGNORECASE)
 # low even if no other category fires, and the threshold filter can reject
 # weak single-signal hits.
 _MAX_WEIGHTS: dict[EntityKind, float] = {
-    EntityKind.CHARACTER: 3.5,   # proper-noun(1) + pronoun bonus up to 2 + role-intro(0.5)
-    EntityKind.LOCATION: 2.5,    # place noun(1.5) + "The"(0.5) + body match(0.5)
-    EntityKind.FACTION: 2.5,     # org noun(1.5) + body matches(1.0)
-    EntityKind.ITEM: 2.0,        # artifact noun(1.5) + body match(0.5)
+    EntityKind.CHARACTER: 3.5,  # proper-noun(1) + pronoun bonus up to 2 + role-intro(0.5)
+    EntityKind.LOCATION: 2.5,  # place noun(1.5) + "The"(0.5) + body match(0.5)
+    EntityKind.FACTION: 2.5,  # org noun(1.5) + body matches(1.0)
+    EntityKind.ITEM: 2.0,  # artifact noun(1.5) + body match(0.5)
 }
 
 
