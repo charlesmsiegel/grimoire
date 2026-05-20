@@ -51,17 +51,12 @@ Backend ✅. **Entire Branch G frontend missing** — no `SideHud/` directory ex
 
 ---
 
-## 2. Stale "remaining" plans (no matching design doc)
+## 2. Stale "remaining" plans
 
-Both plans reference design docs that don't exist in `specs/`. The originating designs are already `-COMPLETED.md`, and substantial code for the listed work is in the tree. These plans appear to be unreconciled leftovers.
+Reconciled this pass. Both plans verified branch-by-branch against shipped code; everything was already in the tree. Plans deleted.
 
-### imagegen-remaining
-- [ ] Walk plan §1–§13 against `backend/src/grimoire/imagegen/` (currently: config, service, backend, health_prober, integration, prompt) and identify any branches A–F items that truly didn't land
-- [ ] Either land the gap or fold it into a fresh design; otherwise delete `plans/2026-05-17-imagegen-remaining.md`
-
-### world-remaining
-- [ ] Walk plan branches A–H against `backend/src/grimoire/world/` (currently: config.py, weather.py, atmosphere.py, service.py, …) and identify any items that truly didn't land
-- [ ] Either land the gap or fold it into a fresh design; otherwise delete `plans/2026-05-17-world-remaining.md`
+- ✅ `plans/2026-05-17-imagegen-remaining.md` — all 6 branches shipped (migrations 018/019, full `imagegen/` module, 12+ REST routes, lifecycle hooks, persistent queue). Deleted.
+- ✅ `plans/2026-05-17-world-remaining.md` — all 8 branches shipped (`WorldConfig`, lore filtering + FTS, weather extractor, atmosphere generation, spatial composition entity refs, greeting handoff, emergent location, location state). Deleted.
 
 ---
 
