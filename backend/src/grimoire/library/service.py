@@ -750,6 +750,105 @@ class LibraryService:
             f"too many id collisions for {kind.value}/{base_id} (>99); refusing to write"
         )
 
+    async def list_reclassifications(self, world_id: str) -> list[dict[str, Any]]:
+        """Return audit records for ``world_id`` in append order."""
+        return list(iter_audit(self.store.data_root, world_id=world_id))
+
+    async def undo_reclassification(
+        self,
+        world_id: str,
+        timestamp: str,
+        *,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        """Reverse a reclassification by timestamp.
+
+        Reads ``source_snapshot``, recreates the source under its original
+        id (collision-suffixed if needed), deletes the target, and appends
+        an inverse audit record stamped with ``_undo_of: <original_ts>`` in
+        ``overrides``. Returns a summary dict with the restored and deleted
+        ids plus warnings.
+        """
+        target_record: dict[str, Any] | None = None
+        for record in iter_audit(self.store.data_root, world_id=world_id):
+            if record.get("ts") == timestamp:
+                target_record = record
+                break
+        if target_record is None:
+            raise ReclassificationError(
+                f"no audit record for world {world_id!r} at ts {timestamp!r}"
+            )
+
+        original_source_id = target_record["source_id"]
+        snapshot = target_record["source_snapshot"]
+        target_id = target_record["target_id"]
+        target_kind = EntityKind(target_record["target_kind"])
+
+        warnings: list[str] = []
+
+        restored_id = await self._collision_suffix(
+            world_id, EntityKind.LORE, original_source_id
+        )
+        snapshot_fm = dict(snapshot.get("frontmatter") or {})
+        snapshot_fm["id"] = restored_id
+        snapshot_body = snapshot.get("body") or ""
+        await self.create_entity(
+            world_id, "lore", restored_id, snapshot_fm, snapshot_body,
+            source=f"{actor}:reclassify-undo",
+        )
+
+        try:
+            await self.delete_entity(
+                world_id, target_kind.value, target_id,
+                source=f"{actor}:reclassify-undo",
+            )
+        except LibraryNotFoundError:
+            warnings.append(f"target {target_kind.value}/{target_id} already deleted")
+        except Exception as exc:
+            warnings.append(f"target not deleted: {exc}")
+
+        try:
+            deps = await self.dependents(world_id, target_kind.value, target_id)
+            if deps:
+                warnings.append(
+                    f"target was referenced by {len(deps)} campaign(s); "
+                    "those refs are now dangling"
+                )
+        except Exception:  # noqa: BLE001 — best-effort dep lookup
+            pass
+
+        try:
+            append_audit(
+                self.store.data_root,
+                world_id=world_id,
+                source_id=target_id,
+                source_snapshot={},
+                target_id=restored_id,
+                target_kind=EntityKind.LORE,
+                overrides={"_undo_of": timestamp},
+                actor=actor,
+            )
+        except Exception as exc:
+            warnings.append(f"audit log write failed: {exc}")
+
+        await self._emit(
+            "library.reclassify_undo",
+            {
+                "world_id": world_id,
+                "restored_source_id": restored_id,
+                "deleted_target_id": target_id,
+                "undo_of": timestamp,
+                "warnings": warnings,
+            },
+        )
+
+        return {
+            "restored_source_id": restored_id,
+            "deleted_target_id": target_id,
+            "undo_of": timestamp,
+            "warnings": warnings,
+        }
+
     def _coerce_reclassify_target(self, target_kind: EntityKind | str) -> EntityKind:
         if isinstance(target_kind, EntityKind):
             value = target_kind
