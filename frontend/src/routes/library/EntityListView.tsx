@@ -5,12 +5,14 @@ import {
   ApiError,
   ENTITY_KIND_PLURAL,
   ENTITY_KIND_SINGULAR,
+  type EntityKind,
   type Greeting,
   type LibraryEntity,
   libraryApi,
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { AsyncBoundary } from "./AsyncBoundary";
+import { ConvertModal } from "./ConvertModal";
 import { emptyGreetingForm, greetingFormToPayload, type GreetingFormValue } from "./greeting-form";
 import { GreetingFormFields } from "./GreetingFormFields";
 
@@ -41,6 +43,7 @@ export function EntityListView({ kindOverride }: Props) {
   const [greetingForm, setGreetingForm] = useState<GreetingFormValue>(emptyGreetingForm);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [convertingId, setConvertingId] = useState<string | null>(null);
 
   const isGreetingKind = kindPlural === "greetings";
 
@@ -141,11 +144,39 @@ export function EntityListView({ kindOverride }: Props) {
                     <p className="library-card-meta">{tags.join(" · ")}</p>
                   )}
                 </Link>
+                {kindPlural === "lore" && (
+                  <button
+                    type="button"
+                    className="library-card-action"
+                    onClick={(ev) => {
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      setConvertingId(id);
+                    }}
+                  >
+                    Convert
+                  </button>
+                )}
               </li>
             );
           })}
         </ul>
       </AsyncBoundary>
+
+      {convertingId && (
+        <ConvertModal
+          worldId={worldId}
+          sourceId={convertingId}
+          onClose={() => setConvertingId(null)}
+          onConverted={(kind: EntityKind, targetId: string) => {
+            setConvertingId(null);
+            reload();
+            navigate(
+              `/library/worlds/${encodeURIComponent(worldId)}/${ENTITY_KIND_PLURAL[kind]}/${encodeURIComponent(targetId)}`,
+            );
+          }}
+        />
+      )}
     </div>
   );
 }
