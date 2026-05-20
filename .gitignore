@@ -51,3 +51,4 @@ data/config/*
 data/cache/
 
 !**/.gitkeep
+docs/.obsidian/
