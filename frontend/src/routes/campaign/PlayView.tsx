@@ -9,8 +9,11 @@ import { PCSwitcher } from "./PCSwitcher";
 import { PreRollConfirmation } from "./PreRollConfirmation";
 import { SceneHeader } from "./SceneHeader";
 import { ScenePane } from "./ScenePane";
+import { SideHud } from "./SideHud/SideHud";
 import { SidePanel } from "./SidePanel";
 import { usePlayState } from "./usePlayState";
+
+type RightView = "side" | "inspector" | "hud";
 
 interface Props {
   campaignId: string;
@@ -23,7 +26,7 @@ export function PlayView({ campaignId }: Props) {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [rightView, setRightView] = useState<"side" | "inspector">("side");
+  const [rightView, setRightView] = useState<RightView>("hud");
 
   useEffect(() => {
     let cancelled = false;
@@ -121,6 +124,15 @@ export function PlayView({ campaignId }: Props) {
           <button
             type="button"
             role="tab"
+            aria-selected={rightView === "hud"}
+            className={rightView === "hud" ? "is-active" : ""}
+            onClick={() => setRightView("hud")}
+          >
+            HUD
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={rightView === "side"}
             className={rightView === "side" ? "is-active" : ""}
             onClick={() => setRightView("side")}
@@ -177,7 +189,9 @@ export function PlayView({ campaignId }: Props) {
             busy={busy}
           />
         </div>
-        {rightView === "side" ? (
+        {rightView === "hud" ? (
+          <SideHud campaignId={campaignId} />
+        ) : rightView === "side" ? (
           <SidePanel
             campaignId={campaignId}
             scene={play.state.scene}
