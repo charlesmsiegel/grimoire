@@ -24,9 +24,12 @@ async def _setup(library: LibraryService, store: StateStore, seed_world, seed_ch
     await seed_world(store, WORLD)
     await seed_character(store, WORLD, CHAR)
     await store.upsert_campaign(campaign_id=CAMPAIGN, name="Camp One")
+    # track_latest=True so library writes made by these tests cascade
+    # through the resolve path. Without it the snapshot pins library
+    # state at composition time and later extras writes don't surface.
     await library.set_composition(
         CAMPAIGN,
-        Composition(worlds=[WorldRef(world_id=WORLD, priority=1, include=None)]),
+        Composition(worlds=[WorldRef(world_id=WORLD, priority=1, include=None, track_latest=True)]),
     )
 
 
@@ -377,3 +380,104 @@ async def test_delete_missing_raises(
             campaign_id=None,
             world_id=WORLD,
         )
+
+
+# ---------------------------------------------------------------------- #
+# Cascade regressions (review bots, 2026-05-19)
+# ---------------------------------------------------------------------- #
+
+
+async def test_override_preserves_unrelated_library_extras(
+    extras: ExtrasService, library, store, seed_world, seed_character
+):
+    """Setting an override on one key must not drop unrelated library keys
+    from the cascade-resolved view. Regression for the shallow merge in
+    StateStore.resolve_entity that previously replaced the whole
+    ``extras`` dict wholesale."""
+    await _setup(library, store, seed_world, seed_character)
+    # Two library-scope extras.
+    await extras.set(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id=CHAR,
+        key="drink",
+        value="wine",
+        scope=ExtraScope.LIBRARY,
+        campaign_id=None,
+        world_id=WORLD,
+    )
+    await extras.set(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id=CHAR,
+        key="scars",
+        value="above brow",
+        scope=ExtraScope.LIBRARY,
+        campaign_id=None,
+        world_id=WORLD,
+    )
+    # Override only `drink` for this campaign.
+    await extras.set(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id=CHAR,
+        key="drink",
+        value="whisky",
+        scope=ExtraScope.OVERRIDE,
+        campaign_id=CAMPAIGN,
+        world_id=WORLD,
+    )
+    resolved = await extras.get(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id=CHAR,
+        campaign_id=CAMPAIGN,
+        world_id=WORLD,
+    )
+    assert resolved["drink"].value == "whisky"
+    # Unrelated library key survives.
+    assert resolved["scars"].value == "above brow"
+
+
+async def test_rename_override_does_not_leave_tombstone(
+    extras: ExtrasService, library, store, seed_world, seed_character
+):
+    """Renaming an override-scoped extra must not leave an
+    override-null tombstone behind at the old key, since that would
+    permanently mask any library value at old_key for this campaign."""
+    await _setup(library, store, seed_world, seed_character)
+    # Library value the override might otherwise mask.
+    await extras.set(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id=CHAR,
+        key="cologne",
+        value="cedar",
+        scope=ExtraScope.LIBRARY,
+        campaign_id=None,
+        world_id=WORLD,
+    )
+    # Override-scope value at the same key, then rename it.
+    await extras.set(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id=CHAR,
+        key="cologne",
+        value="bergamot",
+        scope=ExtraScope.OVERRIDE,
+        campaign_id=CAMPAIGN,
+        world_id=WORLD,
+    )
+    await extras.rename(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id=CHAR,
+        old_key="cologne",
+        new_key="signature_scent",
+        scope=ExtraScope.OVERRIDE,
+        campaign_id=CAMPAIGN,
+        world_id=WORLD,
+    )
+    resolved = await extras.get(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id=CHAR,
+        campaign_id=CAMPAIGN,
+        world_id=WORLD,
+    )
+    # New key carries the override value.
+    assert resolved["signature_scent"].value == "bergamot"
+    # Library "cologne" is visible again -- no tombstone at the old key.
+    assert resolved["cologne"].value == "cedar"

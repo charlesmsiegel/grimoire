@@ -341,7 +341,12 @@ class ExtrasService:
             raise ExtrasPromotionError(f"rename target collides with existing key: {new_key!r}")
         existing_value = existing[old_key]
         value = existing_value.get("value") if isinstance(existing_value, dict) else None
-        await self.delete(
+        # Hard-remove old_key from this scope's storage before writing
+        # new_key. delete() on OVERRIDE writes an override-null tombstone
+        # that would permanently mask the library value at old_key in this
+        # campaign; rename is supposed to move the value, not hide what's
+        # underneath -- so we strip the key from the scope file directly.
+        await self._remove_key_in_scope(
             entity_kind=entity_kind,
             entity_id=entity_id,
             key=old_key,
@@ -359,6 +364,102 @@ class ExtrasService:
             campaign_id=campaign_id,
             world_id=world_id,
             actor=actor,
+        )
+
+    async def _remove_key_in_scope(
+        self,
+        *,
+        entity_kind: EntityKind,
+        entity_id: str,
+        key: str,
+        scope: ExtraScope,
+        campaign_id: str | None,
+        world_id: str | None,
+        actor: str,
+    ) -> None:
+        """Remove ``key`` from a single scope's storage without writing an
+        override-null tombstone. Used by rename(); the regular delete()
+        path for OVERRIDE keeps the tombstone semantics intact for callers
+        that want to mask the underlying library value."""
+        kind = _kind_str(entity_kind)
+        existing = await self._raw_extras_for_scope(
+            entity_kind=entity_kind,
+            entity_id=entity_id,
+            scope=scope,
+            campaign_id=campaign_id,
+            world_id=world_id,
+        )
+        if key not in existing:
+            raise ExtrasNotFoundError(f"key not found in {scope.value} scope: {key!r}")
+        remaining = {k: v for k, v in existing.items() if k != key}
+        if scope == ExtraScope.LIBRARY:
+            if world_id is None:
+                raise ExtrasNotFoundError("world_id required for library rename")
+            await self._rewrite_library_extras_section(
+                world_id=world_id,
+                kind=kind,
+                entity_id=entity_id,
+                extras=remaining,
+                actor=actor,
+            )
+        elif scope == ExtraScope.CAMPAIGN_LOCAL:
+            if campaign_id is None:
+                raise ExtrasNotFoundError("campaign_id required for campaign-local rename")
+            await self._write_emergent_extras(
+                campaign_id=campaign_id,
+                kind=kind,
+                entity_id=entity_id,
+                patch=remaining,
+                actor=actor,
+                replace=True,
+            )
+        elif scope == ExtraScope.OVERRIDE:
+            if campaign_id is None or world_id is None:
+                raise ExtrasNotFoundError("campaign_id and world_id required for override rename")
+            await self._rewrite_override_extras_section(
+                campaign_id=campaign_id,
+                world_id=world_id,
+                kind=kind,
+                entity_id=entity_id,
+                extras=remaining,
+                actor=actor,
+            )
+        await self.mirror.delete(
+            campaign_id=(campaign_id or ""),
+            entity_kind=kind,
+            entity_id=entity_id,
+            scope=scope.value,
+            key=key,
+        )
+
+    async def _rewrite_override_extras_section(
+        self,
+        *,
+        campaign_id: str,
+        world_id: str,
+        kind: str,
+        entity_id: str,
+        extras: dict[str, Any],
+        actor: str,
+    ) -> None:
+        """Replace the ``extras`` section in an override file wholesale.
+
+        Unlike ``_write_override_extras``, which preserves None entries as
+        tombstones, this rewrites the section from scratch -- used by
+        rename to hard-remove a key without leaving a mask behind.
+        """
+        library_id = make_library_id(world_id, kind, entity_id)
+        existing = await self.store.get_override(campaign_id, library_id) or {}
+        merged = dict(existing)
+        if extras:
+            merged["extras"] = dict(extras)
+        else:
+            merged.pop("extras", None)
+        await self.store.write_override(
+            campaign_id=campaign_id,
+            library_id=library_id,
+            patch=merged,
+            source=actor,
         )
 
     # ------------------------------------------------------------------ #

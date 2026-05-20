@@ -824,7 +824,24 @@ class StateStore:
             )
             merged = dict(base or {})
             merged_fm = dict(merged.get("frontmatter") or {})
+            # Narrative extras (frontmatter['extras']) need a key-by-key
+            # merge so an override on one key doesn't drop unrelated
+            # library keys. None entries in the override are "override-
+            # null" tombstones that delete the cascaded library value.
+            base_extras = dict(merged_fm.get("extras") or {})
+            override_extras = override.get("extras")
             merged_fm.update(override)
+            if base_extras or isinstance(override_extras, dict):
+                merged_extras = dict(base_extras)
+                for key, value in (override_extras or {}).items():
+                    if value is None:
+                        merged_extras.pop(key, None)
+                    else:
+                        merged_extras[key] = value
+                if merged_extras:
+                    merged_fm["extras"] = merged_extras
+                else:
+                    merged_fm.pop("extras", None)
             merged["frontmatter"] = merged_fm
             merged["source"] = "campaign-override"
             merged["override"] = override
