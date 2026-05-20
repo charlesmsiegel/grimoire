@@ -56,13 +56,15 @@ _PRONOUN_RE = re.compile(
 )
 _DETERMINER_RE = re.compile(r"^(The|A|An)\s+", re.IGNORECASE)
 _PROPER_NOUN_TITLE_RE = re.compile(r"^([A-Z][a-z]+)(\s+[A-Z][a-z]+){0,2}$")
+# Spec §3 character signal: first sentence matches "is a <profession/role>".
+_ROLE_INTRO_RE = re.compile(r"\bis\s+(?:a|an|the)\s+[a-z]", re.IGNORECASE)
 
 # Maximum total weight reachable for each kind. Confidence is the ratio of
 # observed weight to this ceiling, so a kind with one weak signal scores
 # low even if no other category fires, and the threshold filter can reject
 # weak single-signal hits.
 _MAX_WEIGHTS: dict[EntityKind, float] = {
-    EntityKind.CHARACTER: 3.0,   # proper-noun(1) + pronoun bonus up to 2
+    EntityKind.CHARACTER: 3.5,   # proper-noun(1) + pronoun bonus up to 2 + role-intro(0.5)
     EntityKind.LOCATION: 2.5,    # place noun(1.5) + "The"(0.5) + body match(0.5)
     EntityKind.FACTION: 2.5,     # org noun(1.5) + body matches(1.0)
     EntityKind.ITEM: 2.0,        # artifact noun(1.5) + body match(0.5)
@@ -79,9 +81,10 @@ class Suggestion:
 def suggest_kind(entry: LoreEntry, *, threshold: float = 0.6) -> Suggestion:
     """Score a lore entry against the four target kinds; pick the top.
 
-    Confidence is ``top_weight / sum_weights`` clamped to ``[0, 1]``. If the
-    top weight is below ``threshold``, returns ``LORE`` with confidence
-    ``0.0`` — "no strong signal; leave it as lore."
+    Confidence is the top kind's accumulated weight divided by the maximum
+    weight reachable for that kind (see ``_MAX_WEIGHTS``), clamped to
+    ``[0, 1]``. If confidence is below ``threshold``, returns ``LORE`` with
+    confidence ``0.0`` — "no strong signal; leave it as lore."
     """
     title = (entry.title or "").strip()
     body = entry.body or ""
@@ -99,6 +102,10 @@ def suggest_kind(entry: LoreEntry, *, threshold: float = 0.6) -> Suggestion:
     if pronoun_hits >= 3:
         char_weight += 1.0 + min(pronoun_hits / 10.0, 1.0)
         char_reasons.append(f"body uses pronouns {pronoun_hits} times")
+    first_sentence = body.split(".", 1)[0] if body else ""
+    if _ROLE_INTRO_RE.search(first_sentence):
+        char_weight += 0.5
+        char_reasons.append('first sentence matches "is a <role>"')
     if char_weight > 0:
         weights[EntityKind.CHARACTER] = char_weight
         reasons[EntityKind.CHARACTER] = char_reasons
