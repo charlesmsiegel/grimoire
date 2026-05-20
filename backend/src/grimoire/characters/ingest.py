@@ -45,12 +45,15 @@ from grimoire.types.characters import (
     CharacterImageKind,
     ImagePromptTemplate,
     IngestedCharacterCard,
+    IngestedGreeting,
+    IngestedLoreEntry,
     IngestOptions,
     StructuralRelationship,
     VoiceAnchor,
 )
 
 from .errors import ImportError_
+from .macros import expand_macros
 
 # ----------------------------------------------------------------------- #
 # Public API
@@ -111,7 +114,11 @@ def ingest_character_card_v2(
         envelope, png_warnings = _extract_card_from_png(payload)
         warnings.extend(png_warnings)
         if opts.keep_embedded_avatar:
-            avatar_bytes = payload
+            # Strip non-essential metadata chunks (Software, iCCP, …) so we
+            # don't retain creator-tracking data on disk. Always applied
+            # regardless of ``keep_embedded_avatar`` value because the
+            # stripped bytes are only persisted when we keep the avatar.
+            avatar_bytes = strip_avatar_metadata(payload)
             avatar_mime = "image/png"
     elif payload[:2] == b"PK":
         envelope, avatar_bytes, avatar_mime, zip_warnings = _extract_card_from_charx(payload)
@@ -133,23 +140,54 @@ def ingest_character_card_v2(
     asset_id = _slugify(
         str(data.get("character_book_id") or data.get("char_id") or data.get("id") or name)
     )
-    description = str(data.get("description") or "").strip()
-    personality = str(data.get("personality") or "").strip()
-    scenario = str(data.get("scenario") or "").strip()
-    first_mes = str(data.get("first_mes") or "").strip()
-    mes_examples = str(data.get("mes_example") or "").strip()
-    system_prompt = str(data.get("system_prompt") or "").strip()
-    post_history = str(data.get("post_history_instructions") or "").strip()
+
+    def _expand(text: str, field: str) -> str:
+        if not opts.expand_macros or not text:
+            return text
+        out, macro_warnings = expand_macros(
+            text,
+            char_name=name,
+            card_asset_id=asset_id,
+            field_name=field,
+        )
+        warnings.extend(macro_warnings)
+        return out
+
+    description = _expand(str(data.get("description") or "").strip(), "description")
+    personality = _expand(str(data.get("personality") or "").strip(), "personality")
+    scenario = _expand(str(data.get("scenario") or "").strip(), "scenario")
+    first_mes = _expand(str(data.get("first_mes") or "").strip(), "first_mes")
+    mes_examples = _expand(str(data.get("mes_example") or "").strip(), "mes_example")
+    system_prompt = _expand(str(data.get("system_prompt") or "").strip(), "system_prompt")
+    post_history = _expand(
+        str(data.get("post_history_instructions") or "").strip(),
+        "post_history_instructions",
+    )
     creator = str(data.get("creator") or "").strip()
-    creator_notes = str(data.get("creator_notes") or "").strip()
+    creator_notes = _expand(str(data.get("creator_notes") or "").strip(), "creator_notes")
     character_version = str(data.get("character_version") or "").strip()
-    alt_greetings = [
+    alt_greetings_raw = [
         str(g) for g in (data.get("alternate_greetings") or []) if isinstance(g, (str, int))
+    ]
+    alt_greetings = [
+        _expand(g.strip(), f"alternate_greetings[{i}]") for i, g in enumerate(alt_greetings_raw)
     ]
     character_book = data.get("character_book") or {}
     extensions = data.get("extensions") or {}
     tags_raw = data.get("tags") or []
     tags = [str(t) for t in tags_raw if isinstance(t, (str, int))]
+
+    lore_entries = _parse_character_book(
+        character_book if isinstance(character_book, dict) else {},
+        char_name=name,
+        card_asset_id=asset_id,
+        expand=opts.expand_macros,
+        warnings=warnings,
+    )
+    greetings_parsed = _parse_greetings(
+        first_mes=first_mes,
+        alt_greetings=alt_greetings,
+    )
 
     samples = _extract_dialogue_samples(mes_examples, first_mes)
     if not samples:
@@ -230,6 +268,8 @@ def ingest_character_card_v2(
         avatar_bytes=avatar_bytes,
         avatar_mime=avatar_mime,
         warnings=warnings,
+        lore_entries=lore_entries,
+        greetings=greetings_parsed,
     )
 
 
@@ -520,6 +560,17 @@ def _compose_body(
     post_history: str,
     alt_greetings: list[str],
 ) -> str:
+    """Compose the character markdown body.
+
+    Spec ``2026-05-19-card-imports-design.md`` §5+§7: ``system_prompt``,
+    ``post_history_instructions``, and alternate greetings are no longer
+    written into the character body. Greetings become first-class library
+    entities; system_prompt is logged in the per-import report so the
+    user can route it deliberately. The two parameters remain in the
+    signature so callers don't have to change shape and stay available
+    to surface in the report.
+    """
+    del system_prompt, post_history, alt_greetings  # rendered elsewhere now
     parts: list[str] = []
     if description:
         parts.append("## Description\n\n" + description)
@@ -527,14 +578,6 @@ def _compose_body(
         parts.append("## Personality\n\n" + personality)
     if scenario:
         parts.append("## Scenario\n\n" + scenario)
-    if system_prompt:
-        parts.append("## System prompt\n\n" + system_prompt)
-    if post_history:
-        parts.append("## Post-history instructions\n\n" + post_history)
-    if alt_greetings:
-        greetings_md = "\n\n".join(f"- {g.strip()}" for g in alt_greetings if g.strip())
-        if greetings_md:
-            parts.append("## Alternate greetings\n\n" + greetings_md)
     if creator_notes:
         parts.append("## Creator notes\n\n" + creator_notes)
     return "\n\n".join(parts).strip()
@@ -602,6 +645,207 @@ def _derive_image_prompt(name: str, description: str, personality: str, tags: li
 
 
 # ----------------------------------------------------------------------- #
+# Character book + greetings projection
+# ----------------------------------------------------------------------- #
+
+
+_VALID_SELECTIVE_LOGIC = {"and_any", "and_all", "not_any", "not_all"}
+_POSITION_FROM_INT = {
+    # SillyTavern numeric positions: 0..3 map to before/after/at-depth/archive.
+    0: "before_cast",
+    1: "after_cast",
+    2: "at_depth",
+    3: "archive",
+}
+
+
+def _parse_character_book(
+    character_book: dict[str, Any],
+    *,
+    char_name: str,
+    card_asset_id: str,
+    expand: bool,
+    warnings: list[str],
+) -> list[IngestedLoreEntry]:
+    raw_entries = character_book.get("entries")
+    if not isinstance(raw_entries, list):
+        return []
+    out: list[IngestedLoreEntry] = []
+    for idx, raw in enumerate(raw_entries):
+        if not isinstance(raw, dict):
+            warnings.append(f"character_book.entries[{idx}] is not an object; skipped")
+            continue
+        body_raw = str(raw.get("content") or raw.get("body") or "").strip()
+        keys = [
+            str(k).strip()
+            for k in (raw.get("keys") or raw.get("key") or [])
+            if isinstance(k, (str, int)) and str(k).strip()
+        ]
+        secondary = [
+            str(k).strip()
+            for k in (raw.get("secondary_keys") or raw.get("keysecondary") or [])
+            if isinstance(k, (str, int)) and str(k).strip()
+        ]
+        comment_raw = str(raw.get("comment") or raw.get("name") or "").strip()
+        name = str(raw.get("name") or "").strip() or None
+
+        if expand:
+            field = f"character_book[{idx}]"
+            body, body_warns = expand_macros(
+                body_raw,
+                char_name=char_name,
+                card_asset_id=card_asset_id,
+                field_name=f"{field}.body",
+            )
+            warnings.extend(body_warns)
+            comment, comment_warns = expand_macros(
+                comment_raw,
+                char_name=char_name,
+                card_asset_id=card_asset_id,
+                field_name=f"{field}.comment",
+            )
+            warnings.extend(comment_warns)
+            keys = [
+                expand_macros(
+                    k,
+                    char_name=char_name,
+                    card_asset_id=card_asset_id,
+                    field_name=f"{field}.keys[{ki}]",
+                )[0]
+                for ki, k in enumerate(keys)
+            ]
+            secondary = [
+                expand_macros(
+                    k,
+                    char_name=char_name,
+                    card_asset_id=card_asset_id,
+                    field_name=f"{field}.secondary_keys[{ki}]",
+                )[0]
+                for ki, k in enumerate(secondary)
+            ]
+        else:
+            body = body_raw
+            comment = comment_raw
+
+        selective_logic = raw.get("selective_logic") or raw.get("selectiveLogic")
+        if isinstance(selective_logic, str) and selective_logic in _VALID_SELECTIVE_LOGIC:
+            sl = selective_logic
+        elif isinstance(selective_logic, int):
+            sl = {0: "and_any", 1: "and_all", 2: "not_any", 3: "not_all"}.get(
+                selective_logic, "and_any"
+            )
+        else:
+            sl = "and_any"
+
+        position_raw = raw.get("position")
+        if isinstance(position_raw, int):
+            position = _POSITION_FROM_INT.get(position_raw, "after_cast")
+        elif isinstance(position_raw, str):
+            position = (
+                position_raw
+                if position_raw
+                in {
+                    "before_cast",
+                    "after_cast",
+                    "at_depth",
+                    "archive",
+                }
+                else "after_cast"
+            )
+        else:
+            position = "after_cast"
+
+        out.append(
+            IngestedLoreEntry(
+                source_index=idx,
+                name=name,
+                keys=keys,
+                body=body,
+                secondary_keys=secondary,
+                selective_logic=sl,
+                constant=bool(raw.get("constant", False)),
+                enabled=bool(raw.get("enabled", True)),
+                case_sensitive=bool(raw.get("case_sensitive", False)),
+                match_whole_words=bool(raw.get("match_whole_words", False)),
+                priority=int(raw.get("priority") or raw.get("insertion_order") or 100),
+                probability=int(raw.get("probability") or 100),
+                position=position,
+                at_depth=_int_or_none(raw.get("at_depth") or raw.get("depth")),
+                scan_depth=_int_or_none(raw.get("scan_depth") or raw.get("scanDepth")),
+                comment=comment,
+            )
+        )
+    return out
+
+
+def _parse_greetings(*, first_mes: str, alt_greetings: list[str]) -> list[IngestedGreeting]:
+    greetings: list[IngestedGreeting] = []
+    if first_mes:
+        greetings.append(IngestedGreeting(source_index=0, body=first_mes, is_primary=True))
+    for i, body in enumerate(alt_greetings, start=1):
+        if body and body.strip():
+            greetings.append(IngestedGreeting(source_index=i, body=body, is_primary=False))
+    return greetings
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# ----------------------------------------------------------------------- #
+# PNG metadata stripping
+# ----------------------------------------------------------------------- #
+
+
+# Chunks worth preserving when shipping an embedded portrait: the actual
+# image data (IHDR/IDAT/IEND/PLTE/tRNS) plus the SillyTavern card payload.
+_ESSENTIAL_PNG_CHUNKS: frozenset[bytes] = frozenset({b"IHDR", b"PLTE", b"IDAT", b"IEND", b"tRNS"})
+_PRESERVE_TEXT_KEYS: frozenset[str] = frozenset({"chara", "ccv3"})
+
+
+def strip_avatar_metadata(payload: bytes) -> bytes:
+    """Return ``payload`` stripped of non-essential PNG chunks.
+
+    Preserves the actual image data and the SillyTavern ``chara``/``ccv3``
+    tEXt chunks so the card round-trips. Drops everything else (Software,
+    Creation Time, iCCP profiles, etc.) — these leak creator-tracking
+    metadata we don't want to retain. See
+    ``docs/superpowers/specs/2026-05-19-card-imports-design.md`` §7.
+    """
+    if payload[:8] != _PNG_SIG:
+        return payload
+    out = bytearray(_PNG_SIG)
+    pos = 8
+    end = len(payload)
+    while pos + 12 <= end:
+        (length,) = struct.unpack(">I", payload[pos : pos + 4])
+        chunk_type = payload[pos + 4 : pos + 8]
+        data_start = pos + 8
+        data_end = data_start + length
+        if data_end + 4 > end:
+            break
+        chunk = payload[pos : data_end + 4]
+        if chunk_type in _ESSENTIAL_PNG_CHUNKS:
+            out.extend(chunk)
+        elif chunk_type in (b"tEXt", b"iTXt"):
+            chunk_data = payload[data_start:data_end]
+            key, _, _ = chunk_data.partition(b"\x00")
+            if key.decode("ascii", errors="replace").lower() in _PRESERVE_TEXT_KEYS:
+                out.extend(chunk)
+            # else: drop
+        # else: drop unknown / decorative chunks
+        pos = data_end + 4
+        if chunk_type == b"IEND":
+            break
+    return bytes(out)
+
+
+# ----------------------------------------------------------------------- #
 # Utilities
 # ----------------------------------------------------------------------- #
 
@@ -636,4 +880,5 @@ __all__ = [
     "enrich_with_llm",
     "extract_relationships_deterministic",
     "ingest_character_card_v2",
+    "strip_avatar_metadata",
 ]

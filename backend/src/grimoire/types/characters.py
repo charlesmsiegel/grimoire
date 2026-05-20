@@ -298,6 +298,58 @@ class IngestOptions(BaseModel):
     avatar_dir: str | None = None
     """Optional override for where embedded avatars should be written."""
 
+    # New toggles for the card-imports work (spec 2026-05-19 §6).
+    expand_macros: bool = True
+    """Run the SillyTavern macro engine over every text field at ingest."""
+
+    import_character_book: bool = True
+    """Materialize ``character_book.entries[]`` as setting-scoped lore."""
+
+    import_alternate_greetings: bool = True
+    """Materialize ``alternate_greetings[i]`` as Greeting library entries."""
+
+    import_primary_greeting: bool = True
+    """Materialize ``first_mes`` as the default Greeting library entry."""
+
+
+class IngestedLoreEntry(BaseModel):
+    """One parsed character-book entry, ready to write as setting lore.
+
+    Fields mirror :class:`grimoire.types.world.LoreEntry` so the ingest
+    pipeline can hand the shape straight to ``LibraryService.create_entity``.
+    Macros are already expanded in ``body`` / ``keys`` / ``secondary_keys``
+    / ``comment`` when ``IngestOptions.expand_macros`` is on.
+    """
+
+    source_index: int
+    name: str | None = None
+    keys: list[str] = Field(default_factory=list)
+    body: str = ""
+    secondary_keys: list[str] = Field(default_factory=list)
+    selective_logic: str = "and_any"
+    constant: bool = False
+    enabled: bool = True
+    case_sensitive: bool = False
+    match_whole_words: bool = False
+    priority: int = 100
+    probability: int = 100
+    position: str = "after_cast"
+    at_depth: int | None = None
+    scan_depth: int | None = None
+    comment: str = ""
+
+
+class IngestedGreeting(BaseModel):
+    """One parsed greeting (``first_mes`` or an ``alternate_greetings`` entry).
+
+    ``source_index`` is ``0`` for ``first_mes``; ``1..`` for alternates so
+    on-disk filenames sort naturally.
+    """
+
+    source_index: int
+    body: str
+    is_primary: bool = False
+
 
 class IngestedCharacterCard(BaseModel):
     """Result of ingesting a Character Card V2/V3 payload.
@@ -322,5 +374,9 @@ class IngestedCharacterCard(BaseModel):
     avatar_bytes: bytes | None = None
     avatar_mime: str = ""
     warnings: list[str] = Field(default_factory=list)
+    # Parsed and macro-expanded shapes — populated by the v2 ingestor when
+    # ``IngestOptions.import_character_book`` / ``import_*_greetings`` are on.
+    lore_entries: list[IngestedLoreEntry] = Field(default_factory=list)
+    greetings: list[IngestedGreeting] = Field(default_factory=list)
 
     model_config = {"arbitrary_types_allowed": True}

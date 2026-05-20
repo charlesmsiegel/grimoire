@@ -57,6 +57,83 @@ logger = logging.getLogger(__name__)
 DEFAULT_BRANCH_SUFFIX = "main"
 
 
+def _route_lore_to_tier(lore: Any) -> _TierItem | None:
+    """Build a ``_TierItem`` for one triggered lore entry.
+
+    Routes by the entry's ``position`` field per spec
+    ``2026-05-19-card-imports-design.md`` §4:
+
+    * ``before_cast`` → SPOTLIGHT (priority 8, ``"lore-before"``)
+    * ``after_cast`` → BACKGROUND (priority 5, ``"lore-after"``)
+    * ``at_depth``  → BACKGROUND (priority 7, ``"lore-depth-N"``)
+    * ``archive`` (or unknown) → ARCHIVE (priority 2, ``"lore-archive"``)
+
+    Stubs without a ``position`` attribute fall through to the ARCHIVE
+    branch, preserving backwards compatibility with older world stubs in
+    test fixtures.
+    """
+    body = getattr(lore, "body", "") or ""
+    title = getattr(lore, "title", "") or ""
+    text = f"[lore: {title}] {body[:400]}".strip()
+    world_id = getattr(lore, "world_id", "") or ""
+    lore_id = getattr(lore, "id", "") or ""
+    lore_owner = f"library:worlds/{world_id}/lore/{lore_id}"
+    position = getattr(lore, "position", None)
+    position_value = getattr(position, "value", position) or "archive"
+
+    if position_value == "before_cast":
+        tier = ContextTier.SPOTLIGHT
+        section = "lore-before"
+        priority = 8
+        reasons = [InclusionReason.LORE_ARCHIVE, InclusionReason.KEYWORD_TRIGGERED]
+    elif position_value == "after_cast":
+        tier = ContextTier.BACKGROUND
+        section = "lore-after"
+        priority = 5
+        reasons = [InclusionReason.LORE_ARCHIVE, InclusionReason.KEYWORD_TRIGGERED]
+    elif position_value == "at_depth":
+        tier = ContextTier.BACKGROUND
+        depth = getattr(lore, "at_depth", None)
+        section = f"lore-depth-{depth}" if depth is not None else "lore-depth"
+        priority = 7
+        reasons = [InclusionReason.LORE_ARCHIVE, InclusionReason.KEYWORD_TRIGGERED]
+    else:
+        tier = ContextTier.ARCHIVE
+        section = "lore-archive" if position_value == "archive" else "lore"
+        priority = 2 if position_value == "archive" else 4
+        reasons = [InclusionReason.LORE_ARCHIVE, InclusionReason.KEYWORD_TRIGGERED]
+
+    return _TierItem(
+        tier=tier,
+        section=section,
+        text=text,
+        priority=priority,
+        source=ContextSource(
+            kind="lore",
+            scope="library",
+            owner_id=lore_owner,
+            tier=tier,
+            summary=title,
+            source_id=_make_source_id("lore", lore_owner),
+            inclusion_reasons=reasons,
+        ),
+    )
+
+
+def _resolve_runtime_macros(messages: list[Message], active_pc_name: str) -> list[Message]:
+    """Substitute ``{{user}}`` with the active PC's name (or ``"the player"``).
+
+    Applied at the end of :meth:`ContextBuilderService._assemble` so card
+    imports can preserve ``{{user}}`` literally at ingest and resolve it
+    here against the runtime PC. Pure string replace; idempotent.
+    """
+    pc_name = active_pc_name.strip() if active_pc_name else ""
+    pc_name = pc_name or "the player"
+    return [
+        m.model_copy(update={"content": m.content.replace("{{user}}", pc_name)}) for m in messages
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # Internal data shapes
 # --------------------------------------------------------------------------- #
@@ -108,6 +185,7 @@ class _BuiltContext:
     system_meta: str
     scene_header: str
     active_pc_card: str
+    active_pc_name: str
     mechanics_block: str
     commitments_block: str
     spotlight_items: list[_TierItem] = field(default_factory=list)
@@ -319,6 +397,7 @@ class ContextBuilderService:
         else:
             active_pc_ref = pc_ref
         active_pc_card, active_pc_source = await self._active_pc_card(active_pc_ref, campaign_id)
+        active_pc_name = await self._active_pc_name(active_pc_ref, campaign_id)
 
         # Open commitments are reused for both the lock-in commitments block
         # and the tier-recommendation hint (`commitments_targeting_pcs`).
@@ -376,8 +455,14 @@ class ContextBuilderService:
             composition=composition,
         )
 
-        # Step 5a — lore keyword triggers (campaign-scoped) — archive tier
-        archive_items.extend(await self._lore_triggers(player_input, campaign_id))
+        # Step 5a — lore keyword triggers (campaign-scoped); routed to the
+        # tier indicated by each entry's ``position`` field.
+        lore_spotlight, lore_background, lore_archive = await self._lore_triggers(
+            player_input, campaign_id, turn_id=turn_id
+        )
+        spotlight_items.extend(lore_spotlight)
+        background_items.extend(lore_background)
+        archive_items.extend(lore_archive)
 
         # Step 5b — explicit scene references from the player input. These
         # bypass the vector/keyword budget — the player asked for them.
@@ -441,6 +526,7 @@ class ContextBuilderService:
             system_meta=system_meta,
             scene_header=scene_header,
             active_pc_card=active_pc_card,
+            active_pc_name=active_pc_name,
             mechanics_block=mechanics_block,
             commitments_block=commitments_block,
             spotlight_items=spotlight_items,
@@ -521,6 +607,18 @@ class ContextBuilderService:
             inclusion_reasons=[InclusionReason.PC_CARD],
         )
         return card, source
+
+    async def _active_pc_name(self, pc_ref: str | None, campaign_id: CampaignId) -> str:
+        """Resolve the active PC's display name; ``""`` if not loadable."""
+        if not pc_ref:
+            return ""
+        try:
+            resolved = await self._characters.resolve(pc_ref, campaign_id)
+        except Exception:
+            return ""
+        character = getattr(resolved, "character", None)
+        name = getattr(character, "name", "") if character is not None else ""
+        return name or ""
 
     async def _resolve_cast(
         self,
@@ -1642,42 +1740,41 @@ class ContextBuilderService:
             )
         return items
 
-    async def _lore_triggers(self, player_input: str, campaign_id: CampaignId) -> list[_TierItem]:
+    async def _lore_triggers(
+        self,
+        player_input: str,
+        campaign_id: CampaignId,
+        *,
+        turn_id: TurnId | None = None,
+    ) -> tuple[list[_TierItem], list[_TierItem], list[_TierItem]]:
+        """Return (spotlight, background, archive) lore items by position."""
         if self._world is None or not player_input:
-            return []
+            return [], [], []
         try:
-            triggered = await self._world.lore_for_post(player_input, campaign_id)
+            triggered = await self._world.lore_for_post(player_input, campaign_id, turn_id=turn_id)
+        except TypeError:
+            # Older WorldService signatures that don't accept turn_id —
+            # fall back gracefully so this caller never breaks the build.
+            try:
+                triggered = await self._world.lore_for_post(player_input, campaign_id)
+            except Exception:
+                return [], [], []
         except Exception:
-            return []
-        items: list[_TierItem] = []
+            return [], [], []
+        spotlight: list[_TierItem] = []
+        background: list[_TierItem] = []
+        archive: list[_TierItem] = []
         for lore in triggered:
-            body = getattr(lore, "body", "") or ""
-            title = getattr(lore, "title", "") or ""
-            text = f"[lore: {title}] {body[:400]}".strip()
-            world_id = getattr(lore, "world_id", "")
-            lore_id = getattr(lore, "id", "")
-            lore_owner = f"library:worlds/{world_id}/lore/{lore_id}"
-            items.append(
-                _TierItem(
-                    tier=ContextTier.ARCHIVE,
-                    section="lore",
-                    text=text,
-                    priority=4,
-                    source=ContextSource(
-                        kind="lore",
-                        scope="library",
-                        owner_id=lore_owner,
-                        tier=ContextTier.ARCHIVE,
-                        summary=title,
-                        source_id=_make_source_id("lore", lore_owner),
-                        inclusion_reasons=[
-                            InclusionReason.LORE_ARCHIVE,
-                            InclusionReason.KEYWORD_TRIGGERED,
-                        ],
-                    ),
-                )
-            )
-        return items
+            item = _route_lore_to_tier(lore)
+            if item is None:
+                continue
+            if item.tier == ContextTier.SPOTLIGHT:
+                spotlight.append(item)
+            elif item.tier == ContextTier.BACKGROUND:
+                background.append(item)
+            else:
+                archive.append(item)
+        return spotlight, background, archive
 
     async def _vector_search(
         self,
@@ -1948,6 +2045,8 @@ class ContextBuilderService:
         if ctx.extra:
             messages.append(Message(role=MessageRole.USER, content=ctx.extra))
 
+        messages = _resolve_runtime_macros(messages, ctx.active_pc_name)
+
         params = ModelParams(
             temperature=self._config.default_temperature,
             max_tokens=self._config.default_max_tokens,
@@ -2055,6 +2154,8 @@ class ContextBuilderService:
             messages.append(Message(role=MessageRole.SYSTEM, content="\n\n".join(voice_lines)))
         if recent_posts_text:
             messages.append(Message(role=MessageRole.SYSTEM, content=recent_posts_text))
+
+        messages = _resolve_runtime_macros(messages, pc_name)
 
         params = ModelParams(
             temperature=self._config.default_temperature,

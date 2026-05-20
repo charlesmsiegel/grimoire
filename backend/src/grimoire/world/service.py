@@ -21,8 +21,10 @@ Character behaviors live in ``08-characters.md`` and layer on top.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 import shutil
 from collections import deque
 from datetime import datetime
@@ -54,6 +56,7 @@ from grimoire.types.world import (
     LocationStateData,
     LoreEntry,
     Season,
+    SelectiveLogic,
     Weather,
     WorldCalendar,
 )
@@ -653,26 +656,49 @@ class WorldService:
         min_length: int | None = None,
         max_results: int | None = None,
         audience: str = "model",
+        turn_id: str | None = None,
     ) -> list[LoreEntry]:
-        """Scan a post for lore-keyword triggers; used by the Context Builder."""
+        """Scan a post for lore triggers; used by the Context Builder.
+
+        Implements the SillyTavern-shaped scoring algorithm from
+        ``docs/superpowers/specs/2026-05-19-card-imports-design.md`` §4:
+        primary keyword + ``selective_logic`` over ``secondary_keys`` +
+        deterministic probability roll + priority sort. Each entry's
+        ``scan_depth`` narrows ``text`` to its last N lines before
+        matching. ``constant`` entries fire unconditionally.
+
+        ``turn_id`` seeds the probability roll deterministically; when
+        absent we fall back to the entry id alone (still stable for a
+        given pair of inputs).
+        """
         if audience not in _VALID_AUDIENCES:
             raise ValueError(f"audience must be one of {sorted(_VALID_AUDIENCES)!r}")
         effective_min = self.config.lore.keyword_min_length if min_length is None else min_length
         effective_max = self.config.lore.max_lore_in_archive if max_results is None else max_results
-        body = (text or "").lower()
-        if not body:
-            return []
+
+        text = text or ""
         entities = await self.library.list_for_composition(campaign_id, EntityKind.LORE)
-        triggered: list[LoreEntry] = []
+        scored: list[tuple[int, str, LoreEntry]] = []  # (-priority, id, entry)
         for ent in entities:
             lore = _lore_from_entity(ent)
-            for kw in lore.keywords:
-                kw_lower = kw.strip().lower()
-                if len(kw_lower) < effective_min:
-                    continue
-                if kw_lower in body:
-                    triggered.append(lore)
-                    break
+            if not lore.enabled:
+                continue
+            if lore.constant:
+                scored.append((-lore.priority, lore.id, lore))
+                continue
+            haystack = _build_haystack(text, scan_depth=lore.scan_depth)
+            if not haystack:
+                continue
+            if not _primary_keyword_match(lore, haystack, effective_min):
+                continue
+            if lore.secondary_keys and not _evaluate_selective_logic(lore, haystack):
+                continue
+            if not _probability_check(lore, turn_id):
+                continue
+            scored.append((-lore.priority, lore.id, lore))
+
+        scored.sort()
+        triggered = [entry for _, _, entry in scored]
         # Apply audience filter BEFORE truncation so the cap counts visible entries only.
         visible = _filter_by_audience(triggered, audience)
         return visible[:effective_max]
@@ -1335,9 +1361,98 @@ def _faction_from_entity(ent: LibraryEntity) -> Faction:
     )
 
 
+def _build_haystack(text: str, *, scan_depth: int | None) -> str:
+    """Return the slice of ``text`` an entry should scan.
+
+    ``scan_depth`` is interpreted in *lines* — useful when the caller
+    passes a multi-post haystack joined with newlines:
+
+    * ``None``: scan the whole text.
+    * ``0``: scan nothing — paired with ``constant=True`` for entries
+      that fire regardless of context.
+    * ``> 0``: scan only the last N lines.
+    """
+    if scan_depth is None:
+        return text
+    if scan_depth <= 0:
+        return ""
+    lines = text.splitlines()
+    if len(lines) <= scan_depth:
+        return text
+    return "\n".join(lines[-scan_depth:])
+
+
+def _primary_keyword_match(entry: LoreEntry, haystack: str, min_length: int) -> bool:
+    if not entry.keywords:
+        return False
+    text = haystack if entry.case_sensitive else haystack.lower()
+    for kw in entry.keywords:
+        needle = kw.strip()
+        if not entry.case_sensitive:
+            needle = needle.lower()
+        if len(needle) < min_length:
+            continue
+        if entry.match_whole_words:
+            pattern = rf"\b{re.escape(needle)}\b"
+            flags = 0 if entry.case_sensitive else re.IGNORECASE
+            if re.search(pattern, haystack, flags):
+                return True
+        else:
+            if needle in text:
+                return True
+    return False
+
+
+def _evaluate_selective_logic(entry: LoreEntry, haystack: str) -> bool:
+    """Evaluate ``selective_logic`` over ``secondary_keys``.
+
+    Empty ``secondary_keys`` is handled by the caller — when there are
+    no secondary keys the requirement is satisfied trivially regardless
+    of the logic.
+    """
+    text = haystack if entry.case_sensitive else haystack.lower()
+    matches: list[bool] = []
+    for key in entry.secondary_keys:
+        needle = key.strip()
+        if not entry.case_sensitive:
+            needle = needle.lower()
+        if not needle:
+            matches.append(False)
+            continue
+        if entry.match_whole_words:
+            flags = 0 if entry.case_sensitive else re.IGNORECASE
+            matches.append(bool(re.search(rf"\b{re.escape(needle)}\b", haystack, flags)))
+        else:
+            matches.append(needle in text)
+    if entry.selective_logic == SelectiveLogic.AND_ANY:
+        return any(matches)
+    if entry.selective_logic == SelectiveLogic.AND_ALL:
+        return all(matches)
+    if entry.selective_logic == SelectiveLogic.NOT_ANY:
+        return not any(matches)
+    if entry.selective_logic == SelectiveLogic.NOT_ALL:
+        return not all(matches)
+    return True
+
+
+def _probability_check(entry: LoreEntry, turn_id: str | None) -> bool:
+    """Deterministic dice roll seeded on ``(entry.id, turn_id)``.
+
+    Same pair → same roll, so a given entry consistently fires or skips
+    within a single turn regardless of how often the algorithm runs.
+    """
+    if entry.probability >= 100:
+        return True
+    if entry.probability <= 0:
+        return False
+    digest = hashlib.sha256(f"{entry.id}::{turn_id or ''}".encode()).digest()
+    roll = int.from_bytes(digest[:4], "big") % 100
+    return roll < entry.probability
+
+
 def _lore_from_entity(ent: LibraryEntity) -> LoreEntry:
     fm = ent.frontmatter or {}
-    return LoreEntry(
+    kwargs: dict[str, Any] = dict(
         world_id=ent.world_id or "",
         id=ent.asset_id,
         title=ent.name,
@@ -1349,6 +1464,27 @@ def _lore_from_entity(ent: LibraryEntity) -> LoreEntry:
         related_characters=[str(x) for x in (fm.get("related_characters") or [])],
         secrecy=str(fm.get("secrecy") or "public"),
     )
+    # Extended fields are forwarded when present so frontmatter Pydantic
+    # validation catches malformed enum values rather than silently using
+    # the default. Missing keys fall back to LoreEntry's defaults.
+    for key in (
+        "secondary_keys",
+        "selective_logic",
+        "constant",
+        "enabled",
+        "case_sensitive",
+        "match_whole_words",
+        "priority",
+        "probability",
+        "position",
+        "at_depth",
+        "scan_depth",
+        "comment",
+        "import_source",
+    ):
+        if key in fm and fm[key] is not None:
+            kwargs[key] = fm[key]
+    return LoreEntry(**kwargs)
 
 
 def _faction_state_from_row(row: Any) -> FactionStateData:

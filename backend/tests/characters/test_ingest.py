@@ -131,9 +131,19 @@ def test_ingest_json_envelope_extracts_full_v2_fields() -> None:
     assert data.voice.samples, "should pick up dialogue samples"
     assert data.image is not None
     assert data.image.base_prompt.startswith("vivienne")
-    # alternate greetings + creator notes appear in the body
-    assert "Alternate greetings" in data.body
+    # alternate greetings + system_prompt are now first-class library
+    # entities / log entries (spec 2026-05-19-card-imports §5+§7) and are
+    # no longer rendered into the character body.
+    assert "Alternate greetings" not in data.body
+    assert "System prompt" not in data.body
+    assert "Post-history instructions" not in data.body
     assert "Creator notes" in data.body
+    # The raw envelope still preserves them so the report can surface them.
+    assert card.alternate_greetings
+    assert card.system_prompt
+    # Greeting + character_book parsed into structured shapes.
+    assert any(g.is_primary for g in card.greetings)
+    assert any(not g.is_primary for g in card.greetings)
 
 
 def test_ingest_rejects_missing_name() -> None:
@@ -370,7 +380,11 @@ async def test_service_import_character_card_returns_full_ingest(
     await _seed_world(store, "wod-london")
     raw = json.dumps(_v2_card_json()).encode("utf-8")
     result, ingested = await characters.import_character_card(raw, "wod-london")
-    assert result.created == ["vivienne"]
+    assert "vivienne" in result.created
+    # Imports now materialize first-class greetings and an import report,
+    # so other entries land in ``created`` alongside the character itself.
+    assert any(ref.startswith("greeting:vivienne--") for ref in result.created)
+    assert any(ref.startswith("report:") for ref in result.created)
     assert ingested.spec == "chara_card_v2"
     assert ingested.creator_notes
     assert ingested.alternate_greetings
