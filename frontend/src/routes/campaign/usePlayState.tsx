@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { campaignApi, type ApiPost, type ApiScene, type PCEntry } from "../../api/campaign";
+import { setPcExpression } from "../../api/expressions";
 import { markEnd, markStart } from "../../state/perf";
 import { useCampaignEvent } from "../../state/useCampaignEvent";
 import type { WSMessage } from "../../ws/client";
@@ -22,6 +23,25 @@ import type { WSMessage } from "../../ws/client";
 export interface PendingTurn {
   turn_id: string;
   text: string;
+  /** Concatenated JSON content of any `<!-- TRACKER -->...<!-- /TRACKER -->`
+   * blocks stripped from the stream (extraction-modes `TOGETHER` mode). The
+   * backend route to receive this is not yet wired; the buffer exists so the
+   * markers don't leak into the narration display in the meantime. */
+  tracker_text?: string;
+}
+
+/** Strip complete `<!-- TRACKER -->...<!-- /TRACKER -->` blocks from a chunk
+ * of streamed text. Returns the stripped text plus the concatenated inner
+ * content of every block that was matched.
+ */
+function stripTrackerBlocks(text: string): { stripped: string; captured: string } {
+  const pattern = /<!-- TRACKER -->([\s\S]*?)<!-- \/TRACKER -->/g;
+  let captured = "";
+  const stripped = text.replace(pattern, (_, inner: string) => {
+    captured += inner;
+    return "";
+  });
+  return { stripped, captured };
 }
 
 export interface SceneImage {
@@ -112,12 +132,21 @@ function reducer(state: PlayState, action: Action): PlayState {
       return { ...state, posts: [...state.posts, action.post] };
     case "stream-start":
       return { ...state, streaming: { turn_id: action.turn_id, text: "" } };
-    case "stream-delta":
+    case "stream-delta": {
       if (!state.streaming || state.streaming.turn_id !== action.turn_id) return state;
+      const combined = state.streaming.text + action.delta;
+      const { stripped, captured } = stripTrackerBlocks(combined);
       return {
         ...state,
-        streaming: { ...state.streaming, text: state.streaming.text + action.delta },
+        streaming: {
+          ...state.streaming,
+          text: stripped,
+          tracker_text: captured
+            ? (state.streaming.tracker_text ?? "") + captured
+            : state.streaming.tracker_text,
+        },
       };
+    }
     case "stream-end": {
       const streaming = state.streaming;
       if (!streaming || streaming.turn_id !== action.turn_id) return { ...state, streaming: null };
@@ -178,7 +207,7 @@ const STREAM_EVENT_TYPES = [
 export interface PlayApi {
   state: PlayState;
   setActivePC: (ref: string) => Promise<void>;
-  submit: (text: string) => Promise<void>;
+  submit: (text: string, emotion?: string) => Promise<void>;
   advance: () => Promise<void>;
   regenerate: () => Promise<void>;
   undo: () => Promise<void>;
@@ -191,6 +220,11 @@ export function usePlayState(campaignId: string): PlayApi {
   const [state, dispatch] = useReducer(reducer, initial);
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  // Holds the PC-picker emotion until the next pc_post_appended for the
+  // matching PC, at which point we PATCH expression state with the post id
+  // the backend just minted.
+  const pendingExpressionRef = useRef<{ pcRef: string; emotion: string } | null>(null);
 
   // ``/campaigns/:id?scene=...`` lets TimelineView and other surfaces jump
   // the play view to a specific scene (spec frontend §9). We persist the
@@ -282,7 +316,26 @@ export function usePlayState(campaignId: string): PlayApi {
         case "pc_post_appended": {
           const raw = (message as { post?: unknown }).post;
           if (raw && typeof raw === "object") {
-            dispatch({ type: "append-post", post: raw as ApiPost });
+            const post = raw as ApiPost;
+            dispatch({ type: "append-post", post });
+            if (message.type === "pc_post_appended") {
+              const pending = pendingExpressionRef.current;
+              if (
+                pending &&
+                post.author_pc_ref === pending.pcRef &&
+                pending.emotion !== "neutral"
+              ) {
+                pendingExpressionRef.current = null;
+                void setPcExpression(campaignId, pending.pcRef, {
+                  emotion: pending.emotion,
+                  post_id: post.id,
+                  scene_id: post.scene_id,
+                  turn_id: post.turn_id,
+                }).catch(() => {
+                  // Non-fatal: sprite stays at last-known emotion.
+                });
+              }
+            }
             return;
           }
           void refresh();
@@ -319,7 +372,7 @@ export function usePlayState(campaignId: string): PlayApi {
         }
       }
     },
-    [refresh],
+    [refresh, campaignId],
   );
 
   useCampaignEvent(STREAM_EVENT_TYPES, onEvent);
@@ -340,10 +393,18 @@ export function usePlayState(campaignId: string): PlayApi {
   );
 
   const submit = useCallback(
-    async (text: string) => {
+    async (text: string, emotion?: string) => {
       const pcRef = stateRef.current.activePcRef;
       if (!pcRef || !text.trim()) return;
-      await campaignApi.submitTurn(campaignId, pcRef, text);
+      if (emotion && emotion !== "neutral") {
+        pendingExpressionRef.current = { pcRef, emotion };
+      }
+      try {
+        await campaignApi.submitTurn(campaignId, pcRef, text);
+      } catch (err) {
+        pendingExpressionRef.current = null;
+        throw err;
+      }
     },
     [campaignId],
   );

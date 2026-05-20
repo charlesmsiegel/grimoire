@@ -4,6 +4,7 @@ import { campaignApi, type CampaignSummary, type OpenCommitment } from "../../ap
 import { useCampaignEvent } from "../../state/useCampaignEvent";
 import { DriftBanner } from "./DriftBanner";
 import { InputArea } from "./InputArea";
+import { InspectorPanel } from "./Inspector/InspectorPanel";
 import { PCSwitcher } from "./PCSwitcher";
 import { PreRollConfirmation } from "./PreRollConfirmation";
 import { SceneHeader } from "./SceneHeader";
@@ -21,6 +22,8 @@ export function PlayView({ campaignId }: Props) {
   const [campaign, setCampaign] = useState<CampaignSummary | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [rightView, setRightView] = useState<"side" | "inspector">("side");
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +117,26 @@ export function PlayView({ campaignId }: Props) {
           activePcRef={play.state.activePcRef}
           onChange={(ref) => void play.setActivePC(ref)}
         />
+        <div className="play-right-toggle" role="tablist" aria-label="Right pane">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={rightView === "side"}
+            className={rightView === "side" ? "is-active" : ""}
+            onClick={() => setRightView("side")}
+          >
+            Side panel
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={rightView === "inspector"}
+            className={rightView === "inspector" ? "is-active" : ""}
+            onClick={() => setRightView("inspector")}
+          >
+            Inspector
+          </button>
+        </div>
       </div>
 
       <DriftBanner warnings={driftWarnings} onSuppress={play.suppressDrift} />
@@ -140,31 +163,43 @@ export function PlayView({ campaignId }: Props) {
             campaignId={campaignId}
           />
           <InputArea
+            campaignId={campaignId}
             scene={play.state.scene}
             pcs={play.state.pcs}
             activePcRef={play.state.activePcRef}
+            text={draft}
+            onTextChange={setDraft}
             onChangePC={(ref) => void play.setActivePC(ref)}
-            onSubmit={(text) => runAction(() => play.submit(text))}
+            onSubmit={(text, emotion) => runAction(() => play.submit(text, emotion))}
             onAdvance={() => runAction(() => play.advance())}
             advanceEnabled={play.state.advanceEnabled}
             advanceReason={play.state.advanceReason}
             busy={busy}
           />
         </div>
-        <SidePanel
-          campaignId={campaignId}
-          scene={play.state.scene}
-          pcs={play.state.pcs}
-          commitments={commitments}
-          actions={{
-            onRegenerate: () => void runAction(() => play.regenerate()),
-            onUndo: () => void runAction(() => play.undo()),
-            onEndScene: () => void runAction(() => play.endScene()),
-            onSkipTime: handleSkipTime,
-            onManualFact: handleManualFact,
-            busy,
-          }}
-        />
+        {rightView === "side" ? (
+          <SidePanel
+            campaignId={campaignId}
+            scene={play.state.scene}
+            pcs={play.state.pcs}
+            commitments={commitments}
+            actions={{
+              onRegenerate: () => void runAction(() => play.regenerate()),
+              onUndo: () => void runAction(() => play.undo()),
+              onEndScene: () => void runAction(() => play.endScene()),
+              onSkipTime: handleSkipTime,
+              onManualFact: handleManualFact,
+              busy,
+            }}
+          />
+        ) : (
+          <InspectorPanel
+            campaignId={campaignId}
+            playerInput={draft}
+            sessionId={campaignId}
+            pcRef={play.state.activePcRef}
+          />
+        )}
       </div>
     </section>
   );
