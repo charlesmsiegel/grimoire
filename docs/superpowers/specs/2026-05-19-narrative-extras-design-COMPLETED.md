@@ -1,6 +1,6 @@
 ## Narrative Extras — Design
 
-> **Status:** Design ready for implementation plan. Soft dep on `transient-state-design.md` (privacy model is consumed for `extras` rendered in HUD/context). Soft dep on `scene-hud-design.md` (pin chips on present-cast widget). Independent of `swipes-alternates`/`retcon`/`fork`.
+> **Status:** COMPLETED (2026-05-19). All six branches landed: schema + mirror, ExtrasService, context-builder stanza, extractor proposals, REST routes, frontend ExtrasTable + pinned-extras chips on the SideHud present-cast widget.
 
 **Source idea:** `specs/new/narrative-extras.md`
 **Module:** `backend/src/grimoire/extras/` (new), schema extensions in `backend/src/grimoire/types/`

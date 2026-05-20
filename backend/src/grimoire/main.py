@@ -329,6 +329,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             from grimoire.hud.service import HudService
 
             container.hud = HudService(config_service=container.hud_config)
+        try:
+            from grimoire.hud.fetchers import register_default_fetchers
+
+            register_default_fetchers(
+                container.hud,
+                hud_config=container.hud_config,
+                library=container.library,
+                extras=container.extras_service,
+                continuity=container.continuity,
+                scenes=container.scenes,
+            )
+        except Exception:
+            log.exception("hud: failed to register default fetchers")
         # §11: register imagegen backends with the observability health
         # monitor. The LLM gateway registers itself via
         # ``register_with_health_monitor`` below; embedding providers are
