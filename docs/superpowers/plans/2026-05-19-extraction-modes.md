@@ -1,5 +1,17 @@
 # Extraction Modes Implementation Plan
 
+> **Implementation status (as of 2026-05-19):**
+> - ✅ **Branch A** (types + caps + mig) — `types/extraction_modes.py` (`ExtractionMode` enum), `ProviderCapabilities`, mig 025 shipped.
+> - ✅ **Branch B** (select_mode) — `extractor/mode_select.py` shipped with auto-disable lookup.
+> - ✅ **Branch C** (extract signature) — `Extractor.extract()` accepts `mode` / `together_tracker_text` / `tool_calls` and routes; in `extractor/service.py`.
+> - ✅ **Branch D backend** (together parser) — `extractor/together.py` shipped.
+> - ✅ **Branch D frontend** (tracker strip) — `<!-- TRACKER -->...` blocks now stripped from streamed display in `usePlayState.tsx`; buffered into `PendingTurn.tracker_text`.
+> - ✅ **Branch E** (tool-use) — `extractor/tool_use.py` shipped.
+> - ✅ **Branch F** (context builder) — `extractor_mode` parameter + per-mode prompt appendix in `context/builder.py`.
+> - 🔴 **Orchestrator wiring** — `orchestrator/service.py` line ~995 and ~2486 still call `extractor.extract(text, pyd_scene, campaign_id, snapshot, turn_id=...)` with no `mode=` arg; default `SEPARATE` always wins. The TOGETHER / TOOL_USE / NONE paths are unreachable through the canonical turn flow.
+>
+> **Next pickup:** at both `extractor.extract()` callsites in `orchestrator/service.py`, call `select_mode(...)` to decide per-turn, and pass `together_tracker_text` (the full streamed response_text) when mode is TOGETHER. Then verify TOOL_USE plumbing through the gateway. Then rename + delete plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Land everything in `docs/superpowers/specs/2026-05-19-extraction-modes-design.md`. Foundation for `auxiliary-tasks` (`ExtractionMode.NONE` short-circuit).

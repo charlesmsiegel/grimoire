@@ -1,5 +1,10 @@
 # Character Card Imports Implementation Plan
 
+> **Implementation status (as of 2026-05-19): NOT STARTED**
+> - `grep -r card_import backend/src/grimoire` returns no matches.
+> - All 5 branches (A macros, B lore schema, C lore algorithm, D ingest pipeline, E REST + frontend) are net-new work.
+> - **Downstream dependency:** `lore-reclassification` needs Task E2 extended for `lore_overrides`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans.
 
 **Goal:** Land everything in `docs/superpowers/specs/2026-05-19-card-imports-design.md`. Macro expansion, character_book→lore, alternate_greetings→library greetings, richer LoreEntry, system_prompt routing, per-import markdown report.

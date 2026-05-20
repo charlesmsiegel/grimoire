@@ -1,5 +1,16 @@
 # Narrative Extras Implementation Plan
 
+> **Implementation status (as of 2026-05-19):**
+> - ✅ **Branch A** (schema + mirror) — mig 030, `entity_extras` + FTS5, `types/extras.py`, entity model fields shipped.
+> - ✅ **Branch B** (ExtrasService) — `backend/src/grimoire/extras/{service,mirror}.py` shipped with set/get/delete/search/pin/promote.
+> - ✅ **Branch C** (context stanza) — spotlight tier item + breadcrumb shipped in `context/builder.py`.
+> - ✅ **Branch D** (extractor proposals) — `ExtrasProposal` candidate + heuristic + review-queue routing shipped.
+> - ✅ **Branch E** (REST) — all 12 routes in `backend/src/grimoire/api/extras.py`.
+> - 🟡 **Branch F** (frontend) — **partial**. `ExtrasTable.tsx` exists and is wired into `routes/library/EntityEditorView.tsx`. Pin-chip rendering (`SideHud/PresentCastChip` modification) **blocked** on scene-hud Branch G (no `SideHud/` directory exists).
+> - 🔴 **Integration check end1–end3** — manual smoke ("see pinned chip on HUD") cannot pass until scene-hud Branch G ships.
+>
+> **Next pickup:** finish scene-hud Branch G first; then thread `pinned_extras` lookup into `PresentCastChip.tsx`; then run smoke + rename spec to `-COMPLETED.md` + delete this plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans.
 
 **Goal:** Land everything in `docs/superpowers/specs/2026-05-19-narrative-extras-design.md`. Adds `extras: dict[str, ExtraValue]` to library and campaign entities; SQLite mirror with FTS5 for search; cascade-resolved reads; HUD pinning; promotion paths; Extractor proposal flow.
