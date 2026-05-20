@@ -97,12 +97,14 @@ def test_config_reset(hud_client: TestClient) -> None:
 
 
 def test_lifespan_auto_wires_hud(client: TestClient, container: ServiceContainer) -> None:
-    # Without the ``hud_client`` fixture (which injects fakes), the lifespan
-    # should have auto-wired a HudService — the route still answers, but with
-    # ``no fetcher registered`` errors per widget since nobody registered any.
+    # The lifespan now auto-wires a HudService *and* registers default
+    # fetchers (see ``grimoire.hud.fetchers.register_default_fetchers``).
+    # Widgets whose owner services aren't wired in this bare fixture fall
+    # back to empty payloads rather than ``error`` status.
     r = client.get("/api/campaigns/c_1/hud")
     assert r.status_code == 200
-    assert all(w["status"] == "error" for w in r.json()["widgets"])
+    statuses = {w["status"] for w in r.json()["widgets"]}
+    assert statuses <= {"ok", "hidden"}
 
 
 @pytest.mark.parametrize("bad_id", [".hidden", ".."])

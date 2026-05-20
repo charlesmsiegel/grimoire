@@ -1,6 +1,6 @@
 ## Scene HUD — Design
 
-> **Status:** Design ready for implementation plan. Depends on `transient-state-design.md` for the present-cast widget data + privacy model, and on `narrative-extras-design.md` for pinned-extra chips. Per Theme D (per-spec manifest extension), this spec adds `hud_widgets` to `ModuleManifest`.
+> **Status:** COMPLETED (2026-05-19). Backend: manifest extension, expression parser, HudService aggregator with default owner-fetchers, hud.yaml config, REST routes, WS event forwarding. Frontend: SideHud column wired into PlayView with row/block/chip-list/banner/composite render hints, useHud aggregate hook, PresentCastChip with inline pinned-extra rendering.
 
 **Source idea:** `specs/new/scene-hud.md`
 **Module:** `backend/src/grimoire/hud/` (new), `frontend/src/routes/campaign/SideHud/` (new)
