@@ -219,6 +219,29 @@ async def test_context_builder_receives_player_input_and_pc(
     assert call["pc_ref"] == "alistair"
 
 
+async def test_extract_mode_threaded_to_context_builder_and_extractor(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    from grimoire.extractor.config import ExtractorConfig
+    from grimoire.types.extraction_modes import ExtractionMode
+
+    await _seed(scene_manager, fake_store)
+    # Campaign prefers TOGETHER; the orchestrator should pick that mode and
+    # thread it to both the context builder and the extractor.
+    orch = OrchestratorService(
+        event_bus=event_bus,
+        scene_manager=scene_manager,
+        llm_gateway=fake_gateway,
+        context_builder=fake_context_builder,
+        extractor=fake_extractor,
+        state_store=fake_store,
+        extractor_config=ExtractorConfig(mode=ExtractionMode.TOGETHER),
+    )
+    await orch.submit_post("c1", "alistair", "I draw my sword.")
+    assert fake_context_builder.calls[0]["extractor_mode"] == ExtractionMode.TOGETHER
+    assert fake_extractor.seen[0]["mode"] == ExtractionMode.TOGETHER
+
+
 # --------------------------------------------------------------------------- #
 # Multi-PC advance flow
 # --------------------------------------------------------------------------- #

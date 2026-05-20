@@ -25,7 +25,9 @@ from typing import Any, Literal
 from grimoire.context.cache import ContextBuilderCache, make_cache_key
 from grimoire.event_bus import Event, EventBus
 from grimoire.extractor.config import ExtractorConfig
+from grimoire.extractor.mode_select import select_mode
 from grimoire.extractor.routing import Decision, route_deltas
+from grimoire.llm_gateway.capabilities import ProviderCapabilities
 from grimoire.orchestrator.config import OrchestratorConfig
 from grimoire.orchestrator.errors import (
     AlternateNotFoundError,
@@ -51,6 +53,7 @@ from grimoire.scenes.types import SceneInit as SceneFileInit
 from grimoire.state_store.fork import bulk_copy, fingerprint, replay_to_turn
 from grimoire.types.common import CampaignId, CharacterRef, PostId, SceneId, TurnId
 from grimoire.types.extraction import ExtractionResult
+from grimoire.types.extraction_modes import ExtractionMode
 from grimoire.types.llm import CompletionRequest
 from grimoire.types.mechanics import (
     MechanicsResult,
@@ -125,6 +128,26 @@ class _PendingPreRoll:
     auto_resolved: list[MechanicsResult] = field(default_factory=list)
 
 
+class _NullAutoDisable:
+    """Permissive `select_mode` collaborator used until AutoDisableState lands.
+
+    The Orchestrator owns runtime failure tracking; until that's wired,
+    every mode is reported as enabled and `select_mode` picks based purely
+    on provider capabilities + campaign preference. Falls back per call are
+    still surfaced as `ExtractionFlag` warnings by the Extractor itself.
+    """
+
+    async def together_disabled(self, provider_id: str, model: str) -> bool:
+        return False
+
+    async def tool_use_disabled(self, provider_id: str, model: str) -> bool:
+        # Streaming tool_call surfacing isn't wired through the gateway yet,
+        # so TOOL_USE is reported as auto-disabled to keep AUTO from
+        # repeatedly choosing it and falling back. Flip to ``False`` once the
+        # gateway streams tool calls.
+        return True
+
+
 @dataclass
 class _CampaignTurnState:
     """Lightweight per-campaign coordination state.
@@ -167,6 +190,7 @@ class OrchestratorService:
         rng: random.Random | None = None,
         library: Any | None = None,
         context_cache: ContextBuilderCache | None = None,
+        auto_disable: Any | None = None,
     ) -> None:
         self._bus = event_bus
         self._scenes = scene_manager
@@ -197,6 +221,7 @@ class OrchestratorService:
         # In-memory parking lot for auxiliary tasks awaiting accept/discard.
         # Transient: cleared on restart per spec.
         self._inflight_aux: dict[str, Any] = {}
+        self._auto_disable = auto_disable or _NullAutoDisable()
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -439,6 +464,7 @@ class OrchestratorService:
         applied = False
 
         try:
+            extract_mode = await self._select_extract_mode(campaign_id=campaign_id)
             prompt = await self._context.build(
                 player_input,
                 campaign_id,
@@ -446,6 +472,7 @@ class OrchestratorService:
                 pc_ref=pc_ref,
                 turn_id=post.turn_id,
                 extra=steering_hint,
+                extractor_mode=extract_mode,
             )
             response_text = await self._stream_main_response(
                 campaign_id=campaign_id,
@@ -458,6 +485,7 @@ class OrchestratorService:
                 scene=scene_obj,
                 campaign_id=campaign_id,
                 turn_id=post.turn_id,
+                mode=extract_mode,
             )
             deltas = list(extraction.deltas) if extraction is not None else []
 
@@ -992,8 +1020,16 @@ class OrchestratorService:
             snapshot = StateSnapshot(
                 campaign_id=campaign_id, branch_id=branch_id, scene_id=scene.id
             )
+            # Rewrite prose comes from the auxiliary pipeline, which doesn't
+            # attach tracker instructions or tools, so always extract via the
+            # SEPARATE pipeline regardless of campaign mode preference.
             extraction = await self._extractor.extract(
-                text, pyd_scene, campaign_id, snapshot, turn_id=post.turn_id
+                text,
+                pyd_scene,
+                campaign_id,
+                snapshot,
+                turn_id=post.turn_id,
+                mode=ExtractionMode.SEPARATE,
             )
             deltas = list(getattr(extraction, "deltas", []) or [])
         except Exception as exc:
@@ -1999,6 +2035,10 @@ class OrchestratorService:
         scene_obj_for_cache = await self._scenes.get_scene(scene_id)
         branch_id_for_cache = getattr(scene_obj_for_cache, "branch_id", None)
         composition_hash = await self._composition_hash(campaign_id)
+        # Decide the extraction mode for this turn before assembling the
+        # prompt so the Context Builder can attach tracker instructions or
+        # tool declarations as appropriate.
+        extract_mode = await self._select_extract_mode(campaign_id=campaign_id)
         cache_key = make_cache_key(
             campaign_id=campaign_id,
             player_input=player_input,
@@ -2017,6 +2057,7 @@ class OrchestratorService:
                 mechanics_results=resolved_results,
                 pc_ref=triggering_pc,
                 turn_id=turn_id,
+                extractor_mode=extract_mode,
             )
             self._context_cache.put(cache_key, prompt)
         # ``context_summary`` / ``composition_snapshot`` are deliberately
@@ -2066,6 +2107,7 @@ class OrchestratorService:
             scene=scene_obj,
             campaign_id=campaign_id,
             turn_id=turn_id,
+            mode=extract_mode,
         )
         extract_duration_ms = int((self._clock() - extract_started).total_seconds() * 1000)
         await self._emit_turn_event(
@@ -2459,6 +2501,41 @@ class OrchestratorService:
             raise _StreamFailure("".join(accumulated), exc) from exc
         return "".join(accumulated)
 
+    async def _select_extract_mode(
+        self,
+        *,
+        campaign_id: CampaignId,
+        aux_task: Any | None = None,
+    ) -> ExtractionMode:
+        """Pick the extraction mode for one turn.
+
+        Resolves the route the gateway will pick for ``main_llm_task``,
+        consults `ProviderCapabilities`, and runs the shared `select_mode`
+        decision function. Falls back to the campaign config preference if
+        the gateway hasn't been wired with route resolution (tests with
+        fakes).
+        """
+        provider_id = "unknown"
+        model = "unknown"
+        resolve = getattr(self._gateway, "resolve_route", None)
+        if resolve is not None:
+            try:
+                route = resolve(self._config.main_llm_task, campaign_id)
+                provider_id = route.provider_id
+                model = route.model
+            except Exception:
+                pass
+        caps_for = getattr(self._gateway, "capabilities_for", None)
+        caps = caps_for(provider_id) if caps_for is not None else ProviderCapabilities()
+        return await select_mode(
+            campaign_config=self._extractor_config,
+            provider_caps=caps,
+            auto_disable=self._auto_disable,
+            aux_task=aux_task,
+            provider_id=provider_id,
+            model=model,
+        )
+
     async def _do_extract(
         self,
         *,
@@ -2466,6 +2543,7 @@ class OrchestratorService:
         scene: SceneFileScene,
         campaign_id: CampaignId,
         turn_id: TurnId,
+        mode: ExtractionMode = ExtractionMode.SEPARATE,
     ) -> ExtractionResult | None:
         snapshot = StateSnapshot(
             campaign_id=campaign_id,
@@ -2489,6 +2567,7 @@ class OrchestratorService:
                     campaign_id,
                     snapshot,
                     turn_id=turn_id,
+                    mode=mode,
                 )
             except Exception as exc:
                 logger.warning("extractor failed for turn %s: %s", turn_id, exc)

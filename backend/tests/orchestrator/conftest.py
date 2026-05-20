@@ -182,6 +182,8 @@ class FakeContextBuilder:
         extra: str | None = None,
         branch_id: str | None = None,
         turn_id: str | None = None,
+        extractor_mode: Any = None,
+        auxiliary_task: Any | None = None,
     ) -> AssembledPrompt:
         self.calls.append(
             {
@@ -189,6 +191,7 @@ class FakeContextBuilder:
                 "campaign_id": campaign_id,
                 "pc_ref": pc_ref,
                 "mechanics_results": list(mechanics_results or []),
+                "extractor_mode": extractor_mode,
             }
         )
         return AssembledPrompt(
@@ -254,12 +257,16 @@ class FakeExtractor:
         *,
         pre_roll_resolved: bool = False,
         turn_id: str | None = None,
+        mode: Any = None,
+        together_tracker_text: str | None = None,
+        tool_calls: Any | None = None,
     ) -> ExtractionResult:
         self.seen.append(
             {
                 "text": response_text,
                 "scene_id": getattr(scene, "id", None),
                 "campaign_id": campaign_id,
+                "mode": mode,
             }
         )
         if self.raise_on_extract is not None:

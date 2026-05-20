@@ -98,6 +98,15 @@ class LLMGatewayService:
 
         return _lookup(provider_id)
 
+    def resolve_route(self, task: str, campaign_id: CampaignId | None = None):
+        """Return the resolved `Route` (provider_id + model) for ``task``.
+
+        Exposes the underlying router so callers (notably the Orchestrator's
+        `select_mode` pass) can know which provider will be invoked before the
+        actual stream/complete call.
+        """
+        return self._router.resolve(task, campaign_id)
+
     # ------------------------------------------------------------------ #
     # Event helpers
     # ------------------------------------------------------------------ #

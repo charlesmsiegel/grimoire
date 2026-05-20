@@ -11,6 +11,7 @@ Last updated 2026-05-19. Updated after the first execution pass landed (a) a Win
 - **transient-state** — Spec renamed to `-COMPLETED.md`, plan deleted (backend-only spec; no frontend was owed).
 - **fork** — Lineage UI verified in `CampaignsView.tsx`. Spec renamed to `-COMPLETED.md`, plan deleted.
 - **context-inspector** — Toggle in `play-top-bar` switches `SidePanel` ↔ `InspectorPanel`; draft text lifted in PlayView. Spec renamed to `-COMPLETED.md`, plan deleted.
+- **extraction-modes** — Orchestrator now resolves the route, calls `select_mode(...)`, and threads `extractor_mode` to `context_builder.build` + `extractor.extract` at both canonical (`_continue_turn_after_pre_roll`) and regenerate (`_regenerate_post_core`) callsites; rewrite_post pins SEPARATE. Streaming tool_calls are still a gateway gap, gated via `_NullAutoDisable.tool_use_disabled=True`. Spec renamed to `-COMPLETED.md`, plan deleted.
 
 ---
 
@@ -29,13 +30,6 @@ Backend ✅. Wired this pass: **Brainstorm** (in SidePanel), **Rewrite** (per-po
 - [ ] **edit-prose** — needs a "Polish" button in InputArea that takes the current draft + edit_instruction
 - [ ] **translate** — needs target-language picker; mounts in PostItem ("Translate this") menu
 - [ ] **SideHud in-flight indicator** — blocked on scene-hud Branch G
-- [ ] Then rename + delete plan
-
-### extraction-modes
-Backend types + `select_mode` + together parser + tool-use code exist ✅. Frontend tracker strip-from-display added ✅. **Orchestrator never passes `mode=TOGETHER`** — it always calls `extractor.extract(text, pyd_scene, ...)` with default `SEPARATE`. The whole TOGETHER / TOOL_USE / NONE end-to-end path is unreachable through the canonical turn flow.
-- [ ] Wire `extractor_mode` resolution into `orchestrator.service` at the extractor.extract() callsites (line ~995 and ~2486). Use `select_mode(...)` to decide per-turn.
-- [ ] Pass `together_tracker_text` to the extractor when mode is TOGETHER (the orchestrator already has the full response text)
-- [ ] Verify TOOL_USE plumbing through the gateway
 - [ ] Then rename + delete plan
 
 ### scene-hud
@@ -85,6 +79,5 @@ Spec + plan exist; **zero matching code** (`grep -r card_import backend/src/grim
 
 1. **scene-hud Branch G** is the highest-impact unblock — building it unblocks narrative-extras (chips) and auxiliary-tasks (in-flight indicator). Worth doing before the other partial items.
 2. **auxiliary-tasks** residual UI (continue-as / what-would-x-say / edit-prose / translate) — 4 small surfaces; can be done in parallel with scene-hud once design is clear.
-3. **extraction-modes orchestrator wiring** — small backend change at `orchestrator/service.py` extractor callsites.
-4. **Section 2** reconciliation — likely just deletions of stale plans after confirming the work shipped.
-5. **Section 3**: card-imports first (has the dep), then lore-reclassification (write plan, then implement).
+3. **Section 2** reconciliation — likely just deletions of stale plans after confirming the work shipped.
+4. **Section 3**: card-imports first (has the dep), then lore-reclassification (write plan, then implement).
