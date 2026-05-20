@@ -128,6 +128,9 @@ class TurnAudit(BaseModel):
     applied_deltas: list[AppliedDelta] = Field(default_factory=list)
     queued_for_review: list[ReviewItem] = Field(default_factory=list)
 
+    transient_state_writes: list[Json] = Field(default_factory=list)
+    transient_state_conflicts: list[Json] = Field(default_factory=list)
+
     scene_appended: bool = False
     scene_closed: bool = False
 
