@@ -115,6 +115,35 @@ class SecrecyLevel(StrEnum):
     SECRET = "secret"
 
 
+class LorePosition(StrEnum):
+    """Where Context Builder injects a triggered lore entry.
+
+    See ``docs/superpowers/specs/2026-05-19-card-imports-design.md`` §4.
+    """
+
+    BEFORE_CAST = "before_cast"
+    AFTER_CAST = "after_cast"
+    AT_DEPTH = "at_depth"
+    ARCHIVE = "archive"
+
+
+class SelectiveLogic(StrEnum):
+    """How ``LoreEntry.secondary_keys`` combine with the primary match."""
+
+    AND_ANY = "and_any"
+    AND_ALL = "and_all"
+    NOT_ANY = "not_any"
+    NOT_ALL = "not_all"
+
+
+class ImportSource(BaseModel):
+    """Provenance for entries imported from external character cards."""
+
+    kind: str
+    card_asset_id: str
+    source_index: int
+
+
 class LoreEntry(BaseModel):
     world_id: str
     id: str
@@ -126,6 +155,22 @@ class LoreEntry(BaseModel):
     related_factions: list[str] = Field(default_factory=list)
     related_characters: list[str] = Field(default_factory=list)
     secrecy: str = SecrecyLevel.PUBLIC.value
+
+    # Extended fields (spec 2026-05-19-card-imports §3); all optional with
+    # backwards-compatible defaults so hand-written lore files parse unchanged.
+    secondary_keys: list[str] = Field(default_factory=list)
+    selective_logic: SelectiveLogic = SelectiveLogic.AND_ANY
+    constant: bool = False
+    enabled: bool = True
+    case_sensitive: bool = False
+    match_whole_words: bool = False
+    priority: int = 100
+    probability: int = 100
+    position: LorePosition = LorePosition.AFTER_CAST
+    at_depth: int | None = None
+    scan_depth: int | None = None
+    comment: str = ""
+    import_source: ImportSource | None = None
 
 
 class FactionGoal(BaseModel):

@@ -60,15 +60,19 @@ Design exists; **no plan**; zero matching code.
 - [ ] Implementation
 - [ ] Note hard dep: depends on card-imports Task E2 being extended for `lore_overrides`
 
-### card-imports
-Spec + plan exist; **zero matching code** (`grep -r card_import backend/src/grimoire` returns nothing).
+### card-imports — **COMPLETED 2026-05-19**
 
-- [ ] Branch A: macros
-- [ ] Branch B: lore schema
-- [ ] Branch C: lore algorithm
-- [ ] Branch D: ingest pipeline
-- [ ] Branch E: REST + frontend
-  - [ ] In Task E2, add the `lore_overrides` extension required by lore-reclassification
+Shipped on branch `2026-05-19-card-imports`. See
+`docs/superpowers/specs/2026-05-19-card-imports-COMPLETED.md` for details.
+
+- [x] Branch A: macros
+- [x] Branch B: lore schema
+- [x] Branch C: lore algorithm
+- [x] Branch D: ingest pipeline
+- [x] Branch E: REST + frontend
+- [ ] **Follow-up:** lore-reclassification needs Branch E extended to
+  accept `lore_overrides` in the commit payload — out of scope for the
+  initial card-imports work, lands with the lore-reclassification PR.
 
 ---
 

@@ -4,6 +4,7 @@ import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 import { ApiError, libraryApi } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { AsyncBoundary } from "./AsyncBoundary";
+import { ImportDialog } from "./ImportDialog";
 
 const ENTITY_TABS = [
   { to: "characters", label: "Characters" },
@@ -23,6 +24,7 @@ export function WorldDetailView() {
   const navigate = useNavigate();
   const [forkErr, setForkErr] = useState<string | null>(null);
   const [forking, setForking] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const { data, loading, error, reload } = useResource(
     () => libraryApi.getWorld(worldId),
     [worldId],
@@ -72,6 +74,13 @@ export function WorldDetailView() {
             >
               {forking ? "Forking…" : "Fork world"}
             </button>
+            <button
+              type="button"
+              className="world-import-button"
+              onClick={() => setImportOpen(true)}
+            >
+              Import character card
+            </button>
           </div>
           {forkErr && (
             <p className="library-error" role="alert">
@@ -97,6 +106,15 @@ export function WorldDetailView() {
           ))}
         </nav>
       </header>
+      {importOpen && (
+        <ImportDialog
+          worldId={worldId}
+          onClose={(committed) => {
+            setImportOpen(false);
+            if (committed) reload();
+          }}
+        />
+      )}
       <Outlet />
     </div>
   );

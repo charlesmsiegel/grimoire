@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from grimoire.library import LibraryService
@@ -34,6 +35,7 @@ from grimoire.types.characters import (
     ImagePromptTemplate,
     ImportResult,
     IngestedCharacterCard,
+    IngestedLoreEntry,
     IngestOptions,
     PCEntry,
     PromotionProposal,
@@ -1288,7 +1290,7 @@ class CharactersService:
         the parse is enriched before the character is written.
         """
         ingested = await self._ingest(card, options=options)
-        return await self._finalize_import(target_world_id, ingested)
+        return await self._finalize_import(target_world_id, ingested, options=options)
 
     async def import_charx(
         self,
@@ -1298,7 +1300,7 @@ class CharactersService:
         options: IngestOptions | None = None,
     ) -> ImportResult:
         ingested = await self._ingest(charx_bytes, options=options)
-        return await self._finalize_import(target_world_id, ingested)
+        return await self._finalize_import(target_world_id, ingested, options=options)
 
     async def import_plaintext(self, text: str, target_world_id: str) -> ImportResult:
         data, warnings = parse_plaintext(text)
@@ -1321,7 +1323,7 @@ class CharactersService:
         committing the character to disk.
         """
         ingested = await self._ingest(payload, options=options)
-        result = await self._finalize_import(target_world_id, ingested)
+        result = await self._finalize_import(target_world_id, ingested, options=options)
         return result, ingested
 
     async def _ingest(
@@ -1405,7 +1407,10 @@ class CharactersService:
         self,
         target_world_id: str,
         ingested: IngestedCharacterCard,
+        *,
+        options: IngestOptions | None = None,
     ) -> ImportResult:
+        opts = options or IngestOptions()
         data = ingested.data
         result = ImportResult(warnings=list(ingested.warnings))
         try:
@@ -1439,12 +1444,230 @@ class CharactersService:
                 images[avatar_index] = stored
                 data = data.model_copy(update={"images": images})
 
+        # Character write is atomic — if it fails, abort the whole import
+        # rather than leaving orphan greetings / lore behind.
         try:
             await self.create(target_world_id, data)
             result.created.append(data.id)
-        except Exception as exc:  # pragma: no cover - defensive
-            result.errors.append(str(exc))
+        except Exception as exc:
+            result.errors.append(f"character {data.id!r}: {exc}")
+            return result
+
+        # Greetings + lore are non-fatal: collect per-file errors but keep
+        # going so the user gets a useful partial import.
+        if opts.import_primary_greeting or opts.import_alternate_greetings:
+            await self._write_greetings(
+                target_world_id=target_world_id,
+                char_slug=data.id,
+                char_name=data.name,
+                ingested=ingested,
+                opts=opts,
+                result=result,
+            )
+        if opts.import_character_book and ingested.lore_entries:
+            await self._write_lore_entries(
+                target_world_id=target_world_id,
+                char_slug=data.id,
+                ingested=ingested,
+                result=result,
+            )
+
+        # Per-import markdown audit. Best-effort; failure to write the
+        # report should not fail the import — the user already has the
+        # data they asked for.
+        try:
+            await self._write_import_report(
+                target_world_id=target_world_id,
+                ingested=ingested,
+                result=result,
+                opts=opts,
+            )
+        except Exception as exc:
+            result.warnings.append(f"import report failed: {exc}")
         return result
+
+    # ------------------------------------------------------------------ #
+    # Helpers for greeting / lore / report writes
+    # ------------------------------------------------------------------ #
+
+    async def _write_greetings(
+        self,
+        *,
+        target_world_id: str,
+        char_slug: str,
+        char_name: str,
+        ingested: IngestedCharacterCard,
+        opts: IngestOptions,
+        result: ImportResult,
+    ) -> None:
+        for greeting in ingested.greetings:
+            if greeting.is_primary and not opts.import_primary_greeting:
+                continue
+            if not greeting.is_primary and not opts.import_alternate_greetings:
+                continue
+            if greeting.is_primary:
+                suffix = "default"
+                kind = "sillytavern_first_mes"
+                name = f"Default greeting from {char_name}"
+            else:
+                suffix = f"alt-{greeting.source_index:02d}"
+                kind = "sillytavern_alternate_greeting"
+                name = f"Alternate greeting {greeting.source_index} from {char_name}"
+            base_id = f"{char_slug}--{suffix}"
+            entity_id = await self._unique_id(target_world_id, "greeting", base_id, result)
+            tags = ["imported", "from-card", char_slug]
+            if not greeting.is_primary:
+                tags.append("alternate-greeting")
+            frontmatter = {
+                "id": entity_id,
+                "name": name,
+                "present_characters": [char_slug],
+                "tags": tags,
+                "import_source": {
+                    "kind": kind,
+                    "card_asset_id": char_slug,
+                    "source_index": greeting.source_index,
+                },
+            }
+            try:
+                await self.library.create_entity(
+                    target_world_id,
+                    "greeting",
+                    entity_id,
+                    frontmatter,
+                    body=greeting.body,
+                    source="characters:import",
+                )
+                result.created.append(f"greeting:{entity_id}")
+            except Exception as exc:
+                result.errors.append(f"greeting {entity_id!r}: {exc}")
+
+    async def _write_lore_entries(
+        self,
+        *,
+        target_world_id: str,
+        char_slug: str,
+        ingested: IngestedCharacterCard,
+        result: ImportResult,
+    ) -> None:
+        for entry in ingested.lore_entries:
+            entry_slug = _slug_for_lore_entry(entry, char_slug)
+            base_id = f"{char_slug}--{entry_slug}"
+            entity_id = await self._unique_id(target_world_id, "lore", base_id, result)
+            frontmatter: dict[str, Any] = {
+                "id": entity_id,
+                "name": entry.name or entity_id,
+                "title": entry.name or entity_id,
+                "keywords": entry.keys,
+                "secondary_keys": entry.secondary_keys,
+                "selective_logic": entry.selective_logic,
+                "constant": entry.constant,
+                "enabled": entry.enabled,
+                "case_sensitive": entry.case_sensitive,
+                "match_whole_words": entry.match_whole_words,
+                "priority": entry.priority,
+                "probability": entry.probability,
+                "position": entry.position,
+                "comment": entry.comment,
+                "tags": ["imported", "from-card", char_slug],
+                "import_source": {
+                    "kind": "sillytavern_character_book",
+                    "card_asset_id": char_slug,
+                    "source_index": entry.source_index,
+                },
+            }
+            if entry.at_depth is not None:
+                frontmatter["at_depth"] = entry.at_depth
+            if entry.scan_depth is not None:
+                frontmatter["scan_depth"] = entry.scan_depth
+            try:
+                await self.library.create_entity(
+                    target_world_id,
+                    "lore",
+                    entity_id,
+                    frontmatter,
+                    body=entry.body,
+                    source="characters:import",
+                )
+                result.created.append(f"lore:{entity_id}")
+            except Exception as exc:
+                result.errors.append(f"lore {entity_id!r}: {exc}")
+
+    async def _unique_id(
+        self,
+        world_id: str,
+        kind: str,
+        base_id: str,
+        result: ImportResult,
+    ) -> str:
+        """Suffix ``-2``, ``-3``, … up to 99 to avoid overwriting."""
+        candidate = base_id
+        for suffix in range(2, 100):
+            try:
+                existing = await self.library.get_entity(world_id, kind, candidate)
+            except Exception:
+                existing = None
+            if existing is None:
+                return candidate
+            candidate = f"{base_id}-{suffix}"
+            if suffix == 2:
+                result.warnings.append(f"{kind} {base_id!r} already exists; trying suffix")
+        result.warnings.append(f"{kind} {base_id!r} collided 99 times; using {candidate!r}")
+        return candidate
+
+    async def _write_import_report(
+        self,
+        *,
+        target_world_id: str,
+        ingested: IngestedCharacterCard,
+        result: ImportResult,
+        opts: IngestOptions,
+    ) -> None:
+        from grimoire.state_store.paths import library_root
+
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        char_slug = ingested.data.id
+        report_dir = library_root(self.store.data_root) / "imports"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / f"{timestamp}-{char_slug}.md"
+        lines: list[str] = [
+            f"# Import: {ingested.data.name} ({char_slug})",
+            "",
+            f"- World: `{target_world_id}`",
+            f"- Spec: `{ingested.spec or 'unknown'}`",
+            f"- Imported at: `{timestamp}`",
+            "",
+            "## Created",
+        ]
+        for ref in result.created:
+            lines.append(f"- `{ref}`")
+        if result.skipped:
+            lines += ["", "## Skipped"]
+            for ref in result.skipped:
+                lines.append(f"- `{ref}`")
+        if result.errors:
+            lines += ["", "## Errors"]
+            for err in result.errors:
+                lines.append(f"- {err}")
+        if result.warnings:
+            lines += ["", "## Warnings"]
+            for warn in result.warnings:
+                lines.append(f"- {warn}")
+        lines += ["", "## Discarded inputs"]
+        if ingested.system_prompt:
+            lines.append(
+                "- `system_prompt`: routed to campaign-scoped addendum "
+                "(not written into the character body)."
+            )
+        if ingested.post_history_instructions:
+            lines.append("- `post_history_instructions`: discarded (anti-pattern).")
+        ext = ingested.extensions or {}
+        for key in ("depth_prompt", "risuai", "chub", "regex_scripts"):
+            if key in ext:
+                lines.append(f"- `extensions.{key}`: discarded.")
+        lines.append("")
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+        result.created.append(f"report:{report_path.relative_to(self.store.data_root).as_posix()}")
 
     # ------------------------------------------------------------------ #
     # Search
@@ -1644,6 +1867,27 @@ class CharactersService:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+_LORE_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _slug_for_lore_entry(entry: IngestedLoreEntry, char_slug: str) -> str:
+    """Derive a stable lore filename slug for an imported character_book entry.
+
+    Prefers the entry's ``name``, then its first keyword, falling back to
+    ``entry-<source_index>`` so every entry yields *some* slug even when
+    the card author left ``name``/``keys`` blank.
+    """
+    candidates: list[str] = []
+    if entry.name:
+        candidates.append(entry.name)
+    candidates.extend(entry.keys[:1])
+    for candidate in candidates:
+        slug = _LORE_SLUG_RE.sub("-", candidate.strip().lower()).strip("-")
+        if slug:
+            return slug
+    return f"entry-{entry.source_index:02d}"
 
 
 def _character_from_entity(ent: LibraryEntity) -> Character:
