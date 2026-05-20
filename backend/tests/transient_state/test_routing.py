@@ -148,3 +148,68 @@ async def test_routing_handles_mixed_batch(service: TransientStateService, seede
     assert summary.auto_applied == 1
     assert summary.enqueued_for_review == 1
     assert summary.discarded == 1
+
+
+async def test_routing_summary_carries_write_record(
+    service: TransientStateService, seeded_campaign: str
+):
+    proposal = TransientUpdateProposal(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id="char_x",
+        field="mood",
+        value="guarded",
+        confidence=0.92,
+        evidence="...",
+    )
+    summary = await route_transient_updates(
+        campaign_id=seeded_campaign,
+        proposals=[proposal],
+        transient_state=service,
+        source_post_id="p_1",
+    )
+    assert len(summary.writes) == 1
+    w = summary.writes[0]
+    assert w["entity_kind"] == "character"
+    assert w["entity_id"] == "char_x"
+    assert w["field"] == "mood"
+    assert w["provenance"] == "extractor:auto"
+    assert w["confidence"] == 0.92
+    assert isinstance(w["new_value_id"], int)
+    assert summary.conflicts == []
+
+
+async def test_routing_summary_surfaces_conflict_when_user_outranks(
+    service: TransientStateService, seeded_campaign: str
+):
+    await service.set(
+        seeded_campaign,
+        EntityKind.CHARACTER,
+        "char_x",
+        "mood",
+        "calm",
+        provenance=Provenance.USER_EDIT,
+    )
+    proposal = TransientUpdateProposal(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id="char_x",
+        field="mood",
+        value="angry",
+        confidence=0.95,
+        evidence="...",
+    )
+    summary = await route_transient_updates(
+        campaign_id=seeded_campaign,
+        proposals=[proposal],
+        transient_state=service,
+        source_post_id="p_2",
+    )
+    assert summary.auto_applied == 1
+    assert len(summary.conflicts) == 1
+    c = summary.conflicts[0]
+    assert c["field"] == "mood"
+    assert c["entity_id"] == "char_x"
+    current = await service.get(
+        seeded_campaign, EntityKind.CHARACTER, "char_x", "mood"
+    )
+    assert current is not None
+    assert current.value == "calm"
