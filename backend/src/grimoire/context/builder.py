@@ -1943,8 +1943,8 @@ class ContextBuilderService:
                 recent = []
             recent_posts_text = self._render_recent_posts(list(recent or []))
 
-        pc_name = self._character_display_name(active_pc_ref) or (active_pc_ref or "")
-        target_name = self._character_display_name(task.target_character_ref) or (
+        pc_name = self._aux_display_name(active_pc_ref) or (active_pc_ref or "")
+        target_name = self._aux_display_name(task.target_character_ref) or (
             task.target_character_ref or ""
         )
 
@@ -1994,7 +1994,7 @@ class ContextBuilderService:
             messages_hash=_hash_messages(messages),
         )
 
-    def _character_display_name(self, ref: str | None) -> str:
+    def _aux_display_name(self, ref: str | None) -> str:
         if not ref:
             return ""
         getter = getattr(self._characters, "display_name", None)
