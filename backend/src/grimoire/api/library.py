@@ -655,7 +655,7 @@ async def plugin_discovery_errors(plugins: PluginsDep) -> Any:
     getter = getattr(plugins, "discovery_errors", None)
     if not callable(getter):
         return []
-    return [{"plugin_dir": str(err.plugin_dir), "message": err.message} for err in getter()]
+    return [{"plugin_dir": err.plugin_dir.as_posix(), "message": err.message} for err in getter()]
 
 
 @router.get("/plugins/{plugin_id}/config")
