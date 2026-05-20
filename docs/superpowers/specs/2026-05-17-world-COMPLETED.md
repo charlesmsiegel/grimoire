@@ -1,6 +1,11 @@
-# World — Remaining Work
+# World — Remaining Work (SHIPPED)
 
-> Everything from the original `specs/09-world.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-world-design.md`). Use this as the input to a writing-plans pass when picking up the work.
+> **Status:** SHIPPED. This file enumerated the gap between `specs/09-world.md`
+> and the original shipped design (`2026-05-12-world-design.md`). All
+> sections landed (config block, secrecy/audience filter, atmosphere
+> generator, weather overrides, etc.); verify against the current code
+> rather than treating this as an open backlog. Retained for historical
+> context.
 
 **Companion (already shipped):** `2026-05-12-world-design.md`
 **Module:** `backend/src/grimoire/world/`

@@ -4,7 +4,7 @@
 
 **Source idea:** `specs/new/transient-state.md`
 **Module:** `backend/src/grimoire/transient_state/` (new)
-**Migration:** `024_transient_state.sql`
+**Migration:** `026_transient_state.sql` (the design said 024, but 024/025 were claimed by other work before this landed)
 
 ## Purpose
 

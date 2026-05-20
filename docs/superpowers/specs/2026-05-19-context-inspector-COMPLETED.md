@@ -1,6 +1,6 @@
 ## Context Inspector — Design
 
-> **Status:** Design ready for implementation plan. Consumes the privacy helper from `transient-state-design.md` and the inclusion-reason vocabulary established here is consumed by `narrative-extras-design.md`. Otherwise independent.
+> **Status:** SHIPPED. `backend/src/grimoire/context/inspector.py` defines `ContextInspector` with `preview` / `explain` / `pin` / `exclude` / `diff`; `types/inclusion_reasons.py` carries the closed 18-reason enum; migration `027_context_pins.sql` adds the pin store; REST surface lives in `api/context.py` with `/context/preview`, `/preview/{handle}`, `/preview/{handle}/explain`, `/pins`, `/pins/{id}`, `/diff`.
 
 **Source idea:** `specs/new/context-inspector.md`
 **Module:** `backend/src/grimoire/context/inspector.py` (new), additions to `backend/src/grimoire/context/builder.py` and `backend/src/grimoire/observability/`

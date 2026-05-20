@@ -1,8 +1,9 @@
-# ImageGen — Remaining Work
+# ImageGen — Remaining Work (SHIPPED)
 
-> Everything from the original `specs/12-imagegen.md` (now superseded) that
-> did **not** land in the shipped design (`2026-05-12-imagegen-design.md`).
-> Use this as the input to a writing-plans pass when picking up the work.
+> **Status:** SHIPPED. This file enumerated the gap between `specs/12-imagegen.md`
+> and the original shipped design (`2026-05-12-imagegen-design.md`). All §1–§5
+> items below landed; verify against the current code rather than treating
+> this as an open backlog. Retained for historical context.
 
 **Companion (already shipped):** `2026-05-12-imagegen-design.md`
 **Module:** `backend/src/grimoire/imagegen/`

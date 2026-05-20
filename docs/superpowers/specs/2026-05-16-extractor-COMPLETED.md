@@ -1,6 +1,18 @@
-# Extractor — Remaining Work
+# Extractor — Remaining Work (SHIPPED)
 
-> Everything from the original `specs/04-extractor.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-extractor-design.md`). Use this as the input to a writing-plans pass when picking up the work.
+> **Status:** SHIPPED. Audit on 2026-05-20 found every actionable item below has landed since this file was written. Retained for historical context; treat as a completion record, not an open backlog.
+>
+> - §1 Library-targeted change detection — shipped: `EntityResolver` protocol (`extractor/service.py:28`), `_detect_library_drift` (`service.py:832`), `override_of_library` annotation + `library_drift` flag code.
+> - §2 Contradiction review workflow — shipped: `_check_contradictions` force-caps confidence to `auto_apply_threshold − 0.001` so contradicting facts never silently auto-apply (`service.py:816`), and structured conflict records ship via `c.model_dump()` (`:817`).
+> - §3 Speaker-authority confidence adjustment — shipped: `_apply_speaker_authority` (`service.py:647`), config knob `testimony_confidence_penalty` consumed (`config.py:46`).
+> - §4 Drop logging — shipped: `routing.py:62-65` emits one log line per dropped delta with kind/target_id/confidence/evidence.
+> - §5 Extractor retry on parse failure — shipped: `retry_on_parse_failure: int = 1` (`config.py:49`) + retry loop in `llm_strategy.py:473`.
+> - §6 Streaming-friendly start — RESOLVED per the doc's own §6 (option b).
+> - §7 Commitment-id resolution — shipped: `_resolve_commitment_ids` (`service.py:666`); unmatched ids get `CONTRADICTION` flag + confidence penalty.
+> - §8 New-entity proposals beyond characters — LLM side shipped (schema has `new_locations`/`new_factions`/`new_items`, `llm_strategy.py:355-357`); heuristic side still character-only by design (per §8's own "v1" guidance).
+> - §9–§12 — deferred/rejected as the doc states; not in scope.
+
+The remainder of this file is the original Remaining-Work text from 2026-05-16, preserved for context.
 
 **Companion (already shipped):** `2026-05-12-extractor-design.md`
 **Module:** `backend/src/grimoire/extractor/`

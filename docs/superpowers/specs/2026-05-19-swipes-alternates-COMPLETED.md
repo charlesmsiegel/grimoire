@@ -58,7 +58,7 @@ single orchestrator method.
 
 ### Branch F — REST surface
 
-Routes mounted under `/api/campaigns/{cid}/scenes/{sid}/posts/{pid}`:
+Routes live in `backend/src/grimoire/api/alternates.py` (a dedicated router, not `api/campaigns.py`) and mount under `/api/campaigns/{cid}/scenes/{sid}/posts/{pid}`:
 
 - `POST /regenerate` → `Orchestrator.regenerate_post`
 - `GET /alternates` → reads the post's sidecar alternates

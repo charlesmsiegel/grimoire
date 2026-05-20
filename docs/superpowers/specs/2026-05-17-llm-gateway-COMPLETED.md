@@ -1,6 +1,11 @@
-# LLM Gateway — Remaining Work
+# LLM Gateway — Remaining Work (SHIPPED)
 
-> Everything from the original `specs/05-llm-gateway.md` (now superseded) that did **not** land in the shipped design (`2026-05-12-llm-gateway-design.md`). Use this as the input to a writing-plans pass when picking up the work.
+> **Status:** SHIPPED. This file enumerated the gap between `specs/05-llm-gateway.md`
+> and the original shipped design (`2026-05-12-llm-gateway-design.md`). The
+> event-bus emissions, config loading, periodic health monitor, embedding
+> batching, and turn-id threading items all landed; verify against the
+> current code rather than treating this as an open backlog. Retained for
+> historical context.
 
 **Companion (already shipped):** `2026-05-12-llm-gateway-design.md`
 **Module:** `backend/src/grimoire/llm_gateway/`
