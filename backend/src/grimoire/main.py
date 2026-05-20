@@ -494,6 +494,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 mechanics=container.mechanics,
                 world=container.world,
                 continuity=container.continuity,
+                transient_state=container.transient_state,
                 ws_push=container.stream.push,
             )
 

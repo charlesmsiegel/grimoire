@@ -183,6 +183,7 @@ class OrchestratorService:
         mechanics: Any | None = None,
         world: Any | None = None,
         continuity: Any | None = None,
+        transient_state: Any | None = None,
         ws_push: WSPushFn | None = None,
         extractor_config: ExtractorConfig | None = None,
         config: OrchestratorConfig | None = None,
@@ -206,6 +207,7 @@ class OrchestratorService:
         # continuity store with a contradiction check first, rather than
         # being applied through the generic state-store path.
         self._continuity = continuity
+        self._transient_state = transient_state
         self._ws_push = ws_push
         self._extractor_config = extractor_config or ExtractorConfig()
         self._config = config or OrchestratorConfig()
@@ -2154,6 +2156,29 @@ class OrchestratorService:
                 applied_deltas=[{"id": did} for did in applied_ids],
                 queued_for_review=[{"id": qid} for qid in queued_ids],
             )
+
+        if (
+            extraction is not None
+            and self._transient_state is not None
+            and getattr(extraction, "transient_updates", None)
+        ):
+            from grimoire.transient_state.routing import route_transient_updates
+
+            ts_summary = await route_transient_updates(
+                campaign_id=campaign_id,
+                proposals=list(extraction.transient_updates),
+                transient_state=self._transient_state,
+                source_post_id=turn_id,
+                branch_id=scene_obj.branch_id,
+                continuity=self._continuity,
+            )
+            if ts_summary.writes or ts_summary.conflicts:
+                await self._emit_fragment(
+                    turn_id,
+                    campaign_id,
+                    transient_state_writes=ts_summary.writes,
+                    transient_state_conflicts=ts_summary.conflicts,
+                )
 
         response_post = self._new_post(
             author_kind=SceneAuthorKind.NARRATOR,
