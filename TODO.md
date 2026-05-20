@@ -24,12 +24,9 @@ Backend ✅. `ExtrasTable` wired into `EntityEditorView` ✅. **Pin chip renderi
 - [ ] Then rename + delete plan
 
 ### auxiliary-tasks
-Backend ✅. Wired this pass: **Brainstorm** (in SidePanel), **Rewrite** (per-post button in PostItem), **Suggest-a-post** (button in InputArea). Still missing UI surfaces for:
-- [ ] **continue-as** — needs character_ref picker + target_post_id selector; mounts under PostItem ("Continue from here") menu
-- [ ] **what-would-x-say** — needs character_ref picker + snippet input; mounts in SidePanel or per-post
-- [ ] **edit-prose** — needs a "Polish" button in InputArea that takes the current draft + edit_instruction
-- [ ] **translate** — needs target-language picker; mounts in PostItem ("Translate this") menu
+Backend ✅. All 7 task-kind UI surfaces shipped: **Brainstorm** (in SidePanel), **Rewrite**, **Continue as...**, **Translate...**, **What would they say...** (per-post in PostItem), **Suggest a post** (impersonate_pc) and **Polish** (edit_prose) in InputArea. Still missing:
 - [ ] **SideHud in-flight indicator** — blocked on scene-hud Branch G
+- [ ] Manual end-to-end smoke per `Integration check` (accept one of each TaskKind, verify state mutates only on accept)
 - [ ] Then rename + delete plan
 
 ### scene-hud

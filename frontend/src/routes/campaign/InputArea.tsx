@@ -41,6 +41,12 @@ export function InputArea({
   const [suggesting, setSuggesting] = useState(false);
   const [suggestion, setSuggestion] = useState<AuxiliaryResult | null>(null);
   const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [polishInstr, setPolishInstr] = useState<string | null>(null);
+  const [polishing, setPolishing] = useState(false);
+  const [polishResult, setPolishResult] = useState<AuxiliaryResult | null>(null);
+  const [polishError, setPolishError] = useState<string | null>(null);
+  const [lastPolishInstr, setLastPolishInstr] = useState<string>("");
+  const [lastPolishText, setLastPolishText] = useState<string>("");
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   const requestSuggestion = useCallback(async () => {
@@ -56,6 +62,26 @@ export function InputArea({
       setSuggesting(false);
     }
   }, [activePcRef, campaignId, suggesting, text]);
+
+  const runPolish = useCallback(
+    async (snippet: string, instruction: string) => {
+      if (polishing || !snippet.trim() || !instruction.trim()) return;
+      setPolishing(true);
+      setPolishError(null);
+      setLastPolishInstr(instruction);
+      setLastPolishText(snippet);
+      try {
+        const result = await auxiliaryApi.editProse(campaignId, snippet, instruction);
+        setPolishResult(result);
+        setPolishInstr(null);
+      } catch (e) {
+        setPolishError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setPolishing(false);
+      }
+    },
+    [campaignId, polishing],
+  );
 
   const isMultiPC = (scene?.present_pc_refs.length ?? 0) >= 2;
   const canSubmit = !!activePcRef && text.trim().length > 0 && !submitting && !busy;
@@ -153,10 +179,48 @@ export function InputArea({
         >
           {suggesting ? "Drafting…" : "Suggest a post"}
         </button>
+        <button
+          type="button"
+          onClick={() => setPolishInstr("")}
+          disabled={!text.trim() || polishing || busy}
+          className="input-polish"
+          title="Polish or rewrite the current draft"
+        >
+          {polishing ? "Polishing…" : "Polish"}
+        </button>
       </div>
+      {polishInstr !== null && (
+        <form
+          className="input-polish-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void runPolish(text, polishInstr);
+          }}
+        >
+          <input
+            type="text"
+            value={polishInstr}
+            onChange={(e) => setPolishInstr(e.target.value)}
+            placeholder="How should this be polished? (e.g. tighten prose, fix grammar)"
+            aria-label="Polish instruction"
+            autoFocus
+          />
+          <button type="submit" disabled={polishing || !polishInstr.trim() || !text.trim()}>
+            {polishing ? "Polishing…" : "Polish"}
+          </button>
+          <button type="button" onClick={() => setPolishInstr(null)} disabled={polishing}>
+            Cancel
+          </button>
+        </form>
+      )}
       {suggestError && (
         <p className="input-suggest-error" role="alert">
           {suggestError}
+        </p>
+      )}
+      {polishError && (
+        <p className="input-polish-error" role="alert">
+          {polishError}
         </p>
       )}
       {suggestion && (
@@ -171,6 +235,23 @@ export function InputArea({
           onTryAgain={() => {
             setSuggestion(null);
             void requestSuggestion();
+          }}
+        />
+      )}
+      {polishResult && (
+        <AuxPanel
+          campaignId={campaignId}
+          result={polishResult}
+          onAccepted={(response) => {
+            if (response.text !== undefined) onTextChange(response.text);
+            setPolishResult(null);
+          }}
+          onDiscarded={() => setPolishResult(null)}
+          onTryAgain={() => {
+            setPolishResult(null);
+            if (lastPolishText && lastPolishInstr) {
+              void runPolish(lastPolishText, lastPolishInstr);
+            }
           }}
         />
       )}

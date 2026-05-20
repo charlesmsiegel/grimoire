@@ -6,15 +6,11 @@
 > - ✅ **Branch C** (runner) — `orchestrator/auxiliary_runner.py` + `_inflight_aux` slot shipped.
 > - ✅ **Branch D** (accept dispatch) — per-task-kind accept in `orchestrator/service.py` shipped.
 > - ✅ **Branch E** (REST + WS) — all 10 routes in `api/auxiliary.py` + WS events forwarded.
-> - 🟡 **Branch F** (frontend) — **partial**. Wired in: `AuxBrainstormPanel` in `SidePanel`, **Rewrite** button + `AuxPanel` in `PostItem`, **Suggest-a-post** button + `AuxPanel` in `InputArea`. Still owed:
->   - 🔴 `continue-as` UI surface (character_ref picker + target_post_id selector; mounts under PostItem "Continue from here")
->   - 🔴 `what-would-x-say` UI surface (character_ref picker + snippet input)
->   - 🔴 `edit-prose` UI surface ("Polish" button in InputArea, takes current draft + edit_instruction)
->   - 🔴 `translate` UI surface (target-language picker; per-post "Translate this")
+> - 🟡 **Branch F** (frontend) — **all 7 task-kind UI surfaces shipped**. `SidePanel` mounts `AuxBrainstormPanel`. `PostItem` exposes **Rewrite**, **Continue as...**, **Translate...**, and **What would they say...** buttons, each with its own inline form and result rendered via `AuxPanel`. `InputArea` exposes **Suggest a post** (impersonate_pc) and **Polish** (edit_prose) buttons. Scene `present_character_refs` are threaded through `ScenePane` → `PostItem` to power the character pickers. Still owed:
 >   - 🔴 SideHud in-flight indicator — **blocked** on scene-hud Branch G
-> - 🔴 **Integration check end1–end3** — smoke ("accept one of each TaskKind") can't pass until the 4 remaining UI surfaces ship.
+> - 🟡 **Integration check end1–end3** — manual end-to-end smoke ("accept one of each TaskKind") is now unblocked at the frontend level; still owes a real-app pass.
 >
-> **Next pickup:** add the 4 missing aux UI surfaces (continue-as, what-would-x-say, edit-prose, translate). SideHud indicator is gated on scene-hud G. Then rename + delete.
+> **Next pickup:** SideHud indicator (gated on scene-hud G), then manual end-to-end smoke per `Integration check`. Then rename + delete.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans.
 
