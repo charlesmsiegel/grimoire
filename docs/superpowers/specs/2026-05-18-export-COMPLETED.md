@@ -91,7 +91,7 @@ Added `ExportSelection.audience: str | None` (values `"personal" | "share" | Non
 - `backend/src/grimoire/main.py` — wire EpubAdapter, cover generator, state-store-backed history
 - `backend/bundled_plugins/export-{markdown,single-markdown,json,html,transcript}/plugin.py` — declare `capabilities`
 - `backend/src/grimoire/api/campaigns.py` — three new export HTTP routes
-- `backend/src/grimoire/storage/migrations/020_export_records.sql` (new) — persisted history table
+- `backend/src/grimoire/storage/migrations/022_export_records.sql` (new) — persisted history table (design said 020, but 020/021 were claimed by other work before this landed)
 
 **Tests:**
 - `backend/tests/export/test_remaining_features.py` (new)

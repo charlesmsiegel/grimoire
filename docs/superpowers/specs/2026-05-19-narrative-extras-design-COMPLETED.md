@@ -81,7 +81,7 @@ Emergent entities live entirely in the campaign; their extras live in the emerge
 
 `StateStore.write_override` already handles arbitrary frontmatter patch dicts — no schema change needed for the override file format. The `Extras` service writes through `LibraryService.create_entity` / `update_entity` for library, and `StateStore.write_override` for campaign overrides.
 
-**SQLite mirror** (migration 025 — picked at plan time):
+**SQLite mirror** (shipped as migration `030_entity_extras.sql`; design said 025, but 025–029 were claimed by other work before this landed):
 
 ```sql
 CREATE TABLE entity_extras (

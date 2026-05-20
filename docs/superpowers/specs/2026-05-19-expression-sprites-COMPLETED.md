@@ -1,6 +1,6 @@
 ## Expression Sprites — Design
 
-> **Status:** Design ready for implementation plan. Soft dep on `transient-state-design.md` for the supersession + privacy pattern (expression-state behaves similarly to transient state, though it lives in its own table). Per Theme D (per-spec manifest extension), this spec adds `expression_vocabulary_extensions` to `ModuleManifest`.
+> **Status:** SHIPPED. `backend/src/grimoire/expressions/` (heuristic + LLM classifier + routing) plus migration `029_expression_state.sql`, `expression_vocabulary_extensions` on `ModuleManifest`, sprite-serving REST endpoint, and the closed 14-label `CoreExpression` enum all landed. Note: §1 says the extractor strategy "emits `expression_changed` deltas"; the actual code uses a typed `ExpressionChange` payload threaded through `ExtractionResult.expression_changes` rather than a delta-named event — same mechanism, different wire name.
 
 **Source idea:** `specs/new/expression-sprites.md`
 **Module:** `backend/src/grimoire/expressions/` (new), additions to `library/`, `extractor/`, `frontend/`
