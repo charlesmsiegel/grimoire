@@ -329,11 +329,15 @@ def image_metadata_path(data_root: Path, campaign_id: str, image_id: str) -> Pat
 
 
 def relative_to_root(data_root: Path, path: Path) -> str:
-    """Return ``path`` relative to ``data_root`` for storage in indexes."""
+    """Return ``path`` relative to ``data_root`` for storage in indexes.
+
+    Always uses forward slashes so stored paths are portable across OSes and
+    match SQL ``LIKE`` patterns that assume POSIX separators.
+    """
     try:
-        return str(path.resolve().relative_to(data_root.resolve()))
+        return path.resolve().relative_to(data_root.resolve()).as_posix()
     except ValueError:
-        return str(path)
+        return Path(path).as_posix()
 
 
 def campaign_id_for_path(data_root: Path, path: Path) -> str | None:
