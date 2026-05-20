@@ -280,3 +280,38 @@ async def test_stop_unsubscribes_handlers(db) -> None:
     assert bus.subscriber_count() > 0
     auditor.stop()
     assert bus.subscriber_count() == 0
+
+
+def test_turn_audit_carries_transient_state_writes_and_conflicts():
+    from grimoire.types.observability import TurnAudit
+
+    audit = TurnAudit.model_validate(
+        {
+            "turn_id": "t1",
+            "campaign_id": "c1",
+            "branch_id": "main",
+            "started_at": "2026-05-19T00:00:00Z",
+            "transient_state_writes": [
+                {
+                    "entity_kind": "character",
+                    "entity_id": "char_x",
+                    "field": "mood",
+                    "new_value_id": 42,
+                    "provenance": "extractor:auto",
+                    "confidence": 0.9,
+                }
+            ],
+            "transient_state_conflicts": [
+                {
+                    "entity_kind": "character",
+                    "entity_id": "char_x",
+                    "field": "mood",
+                    "current_id": 41,
+                    "losing_id": 40,
+                }
+            ],
+        }
+    )
+    assert len(audit.transient_state_writes) == 1
+    assert audit.transient_state_writes[0]["provenance"] == "extractor:auto"
+    assert audit.transient_state_conflicts[0]["losing_id"] == 40
