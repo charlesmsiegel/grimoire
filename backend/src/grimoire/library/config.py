@@ -47,6 +47,18 @@ class LibraryPromotionConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class LibraryReclassificationConfig:
+    # Override for the audit-log path. ``None`` means
+    # ``<data_root>/library/imports/reclassifications.jsonl``.
+    audit_log: Path | None = None
+    # Heuristic suggestions below this confidence default the dropdown to "lore".
+    suggestion_threshold: float = 0.6
+    # Records older than this can be pruned; the UI also greys out undo
+    # links past this window.
+    undo_window_days: int = 30
+
+
+@dataclass(frozen=True, slots=True)
 class LibraryConfig:
     # ``None`` means "use <data_root>/library"; an absolute path overrides.
     root: Path | None = None
@@ -57,6 +69,9 @@ class LibraryConfig:
         default_factory=LibraryVersionPinningConfig
     )
     promotion: LibraryPromotionConfig = field(default_factory=LibraryPromotionConfig)
+    reclassification: LibraryReclassificationConfig = field(
+        default_factory=LibraryReclassificationConfig
+    )
 
     @property
     def default_track_latest(self) -> bool:
@@ -79,6 +94,7 @@ class LibraryConfig:
         idx = raw.get("indexing") or {}
         pin = raw.get("version_pinning") or {}
         prom = raw.get("promotion") or {}
+        reclass = raw.get("reclassification") or {}
         default = str(pin.get("default") or "pinned")
         if default not in _PINNING_DEFAULTS:
             raise ValueError(
@@ -87,6 +103,8 @@ class LibraryConfig:
             )
         root_raw = raw.get("root")
         root = Path(root_raw).expanduser() if root_raw else None
+        audit_log_raw = reclass.get("audit_log")
+        audit_log = Path(audit_log_raw).expanduser() if audit_log_raw else None
         return cls(
             root=root,
             watch=bool(raw.get("watch", True)),
@@ -106,6 +124,11 @@ class LibraryConfig:
             promotion=LibraryPromotionConfig(
                 confirm_required=bool(prom.get("confirm_required", False)),
             ),
+            reclassification=LibraryReclassificationConfig(
+                audit_log=audit_log,
+                suggestion_threshold=float(reclass.get("suggestion_threshold", 0.6)),
+                undo_window_days=int(reclass.get("undo_window_days", 30)),
+            ),
         )
 
 
@@ -113,5 +136,6 @@ __all__ = [
     "LibraryConfig",
     "LibraryIndexingConfig",
     "LibraryPromotionConfig",
+    "LibraryReclassificationConfig",
     "LibraryVersionPinningConfig",
 ]

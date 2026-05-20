@@ -24,6 +24,30 @@ def test_default_config_matches_legacy_behavior() -> None:
     assert cfg.default_track_latest is False
 
 
+def test_reclassification_config_defaults() -> None:
+    cfg = LibraryConfig()
+    assert cfg.reclassification.suggestion_threshold == 0.6
+    assert cfg.reclassification.undo_window_days == 30
+    assert cfg.reclassification.audit_log is None
+
+
+def test_reclassification_config_from_yaml(tmp_path: Path) -> None:
+    target = tmp_path / "lib.yaml"
+    target.write_text(
+        "library:\n"
+        "  reclassification:\n"
+        "    audit_log: /tmp/reclass.jsonl\n"
+        "    suggestion_threshold: 0.8\n"
+        "    undo_window_days: 7\n",
+        encoding="utf-8",
+    )
+    cfg = LibraryConfig.from_yaml(target)
+    assert cfg.reclassification.suggestion_threshold == 0.8
+    assert cfg.reclassification.undo_window_days == 7
+    assert cfg.reclassification.audit_log is not None
+    assert str(cfg.reclassification.audit_log).endswith("reclass.jsonl")
+
+
 def test_from_yaml_full_block(tmp_path: Path) -> None:
     target = tmp_path / "library.yaml"
     target.write_text(

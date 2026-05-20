@@ -17,3 +17,7 @@ class LibraryConflictError(LibraryError):
 
 class PromotionError(LibraryError):
     """Raised when promote_to_library cannot proceed (missing source, etc.)."""
+
+
+class ReclassificationError(LibraryError):
+    """Raised when reclassify_entity / undo_reclassification cannot proceed."""
