@@ -1,6 +1,6 @@
-## Extraction Modes — Design
+## Extraction Modes — COMPLETED
 
-> **Status:** Design ready for implementation plan. Foundation feature: `auxiliary-tasks` needs `ExtractionMode.NONE` short-circuit and provider-capability awareness.
+> **Status:** Shipped 2026-05-19. Backend types + `select_mode` + together parser + tool-use projector + Context Builder mode tail all in tree; orchestrator resolves the route, calls `select_mode(...)`, and threads `extractor_mode` to `context_builder.build` + `extractor.extract` at both canonical (`_continue_turn_after_pre_roll`) and regenerate (`_regenerate_post_core`) callsites; rewrite_post pins SEPARATE. Streaming tool_call surfacing through the gateway is still pending — until then `_NullAutoDisable.tool_use_disabled=True` keeps `AUTO` from picking TOOL_USE.
 
 **Source idea:** `specs/new/extraction-modes.md`
 **Module:** `backend/src/grimoire/extractor/`, `backend/src/grimoire/context/`, `backend/src/grimoire/llm_gateway/`
