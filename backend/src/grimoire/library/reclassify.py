@@ -74,11 +74,27 @@ _DIRECT_MAP: dict[EntityKind, dict[str, str]] = {
 # Fields that go into the body's ``## Notes`` section instead of frontmatter
 # when converting to a given target kind. Order matters: rendered in this
 # order.
+#
+# ``related_locations`` and ``related_characters`` are always routed to notes
+# regardless of target kind: none of Character/Location/Faction/Item has a
+# matching ``list[str]`` schema field, so the only safe thing is to preserve
+# them as prose the user can reconcile later. Dropping silently would lose
+# data the user spent time entering.
 _INTO_NOTES: dict[EntityKind, tuple[str, ...]] = {
-    EntityKind.CHARACTER: ("secondary_keys", "comment"),
-    EntityKind.LOCATION: ("secondary_keys", "comment", "related_factions"),
-    EntityKind.FACTION: ("secondary_keys", "comment"),
-    EntityKind.ITEM: ("secondary_keys", "comment", "related_factions", "secrecy"),
+    EntityKind.CHARACTER: (
+        "secondary_keys", "comment", "related_locations", "related_characters",
+    ),
+    EntityKind.LOCATION: (
+        "secondary_keys", "comment", "related_factions",
+        "related_locations", "related_characters",
+    ),
+    EntityKind.FACTION: (
+        "secondary_keys", "comment", "related_locations", "related_characters",
+    ),
+    EntityKind.ITEM: (
+        "secondary_keys", "comment", "related_factions", "secrecy",
+        "related_locations", "related_characters",
+    ),
 }
 
 # Fields that are silently dropped (matching/scoring metadata only meaningful

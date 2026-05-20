@@ -77,6 +77,39 @@ def test_apply_mapping_to_item_drops_secrecy_into_notes() -> None:
     assert "secrecy" in body
 
 
+@pytest.mark.parametrize(
+    "target_kind",
+    [EntityKind.CHARACTER, EntityKind.LOCATION, EntityKind.FACTION, EntityKind.ITEM],
+)
+def test_related_locations_and_characters_routed_to_notes_not_silently_dropped(
+    target_kind: EntityKind,
+) -> None:
+    """Regression: `related_locations` and `related_characters` are LoreEntry
+    fields with no matching schema field on any of the four target kinds.
+    They must survive the conversion as prose in the ``## Notes`` body
+    section, not vanish silently. Required overrides are supplied so
+    Location is exercised under the same code path as the others.
+    """
+    lore = _lore(
+        related_locations=["chantry-rooftop", "wesley-residence"],
+        related_characters=["beatrice", "alistair"],
+    )
+    overrides = {"kind": "building"} if target_kind == EntityKind.LOCATION else None
+    fm, body, _kept, _dropped, into_notes, _warnings = apply_mapping(
+        lore, target_kind, overrides=overrides,
+    )
+    assert "related_locations" in into_notes
+    assert "related_characters" in into_notes
+    # None of the four target kinds expose either as a frontmatter field.
+    assert "related_locations" not in fm
+    assert "related_characters" not in fm
+    # Values survive in the body so the user can reconcile manually.
+    assert "chantry-rooftop" in body
+    assert "wesley-residence" in body
+    assert "beatrice" in body
+    assert "alistair" in body
+
+
 def test_apply_mapping_overrides_win_over_defaults() -> None:
     lore = _lore(title="Beatrice")
     fm, _body, _kept, _dropped, _into_notes, _warnings = apply_mapping(
