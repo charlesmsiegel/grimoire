@@ -2,6 +2,12 @@
 
 > **Status:** Follow-up to `2026-05-19-card-imports-design.md`. Independent — does not block card-imports landing.
 
+> **Implementation status (as of 2026-05-19): NOT STARTED — no plan, no code.**
+> - No implementation plan exists at `docs/superpowers/plans/`.
+> - `grep -r lore_reclassif backend/src/grimoire` returns no matches.
+> - **Downstream dependency:** card-imports Task E2 must be extended to write `lore_overrides` so reclassification can preserve the import's choices.
+> - **Next pickup:** write `docs/superpowers/plans/2026-05-19-lore-reclassification.md` covering the six scope areas below (conversion service, field-mapping, heuristic classifier, import dialog integration, library UI, audit trail).
+
 **Source idea:** discussion follow-up to card-imports — imported `character_book` entries often describe Characters, Locations, Factions, or Items, but the importer writes everything as `LoreEntry`. Users need a way to promote a lore entry into the right entity type without re-typing it.
 
 **Module:** `backend/src/grimoire/library/`, `backend/src/grimoire/characters/`, `frontend/src/routes/library/`

@@ -1,5 +1,21 @@
 # Auxiliary Tasks Implementation Plan
 
+> **Implementation status (as of 2026-05-19):**
+> - ✅ **Branch A** (types + prompts) — `auxiliary/types.py`, 7 Jinja templates in `auxiliary/prompts/` shipped.
+> - ✅ **Branch B** (context suppression) — `auxiliary/budgets.py`, builder branch shipped.
+> - ✅ **Branch C** (runner) — `orchestrator/auxiliary_runner.py` + `_inflight_aux` slot shipped.
+> - ✅ **Branch D** (accept dispatch) — per-task-kind accept in `orchestrator/service.py` shipped.
+> - ✅ **Branch E** (REST + WS) — all 10 routes in `api/auxiliary.py` + WS events forwarded.
+> - 🟡 **Branch F** (frontend) — **partial**. Wired in: `AuxBrainstormPanel` in `SidePanel`, **Rewrite** button + `AuxPanel` in `PostItem`, **Suggest-a-post** button + `AuxPanel` in `InputArea`. Still owed:
+>   - 🔴 `continue-as` UI surface (character_ref picker + target_post_id selector; mounts under PostItem "Continue from here")
+>   - 🔴 `what-would-x-say` UI surface (character_ref picker + snippet input)
+>   - 🔴 `edit-prose` UI surface ("Polish" button in InputArea, takes current draft + edit_instruction)
+>   - 🔴 `translate` UI surface (target-language picker; per-post "Translate this")
+>   - 🔴 SideHud in-flight indicator — **blocked** on scene-hud Branch G
+> - 🔴 **Integration check end1–end3** — smoke ("accept one of each TaskKind") can't pass until the 4 remaining UI surfaces ship.
+>
+> **Next pickup:** add the 4 missing aux UI surfaces (continue-as, what-would-x-say, edit-prose, translate). SideHud indicator is gated on scene-hud G. Then rename + delete.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans.
 
 **Goal:** Land everything in `docs/superpowers/specs/2026-05-19-auxiliary-tasks-design.md`. Hard deps on `extraction-modes` (NONE mode + select_mode hook for `aux_task is not None`) and `swipes-alternates` (`rewrite_post` accept → switch_primary).
