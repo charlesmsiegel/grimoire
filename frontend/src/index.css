@@ -5312,6 +5312,72 @@ button.primary:disabled {
   color: var(--fg-muted);
 }
 
+.aux-inflight-badge {
+  position: relative;
+  display: inline-flex;
+}
+
+.aux-inflight-badge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.aux-inflight-badge-pill:hover {
+  background: var(--accent-soft-hover);
+}
+
+.aux-inflight-badge-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.aux-inflight-badge-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 5;
+  min-width: 12rem;
+  margin: 0;
+  padding: var(--space-2);
+  list-style: none;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+}
+
+.aux-inflight-badge-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0.125rem 0;
+}
+
+.aux-inflight-badge-kind {
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+}
+
+.aux-inflight-badge-discard {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.aux-inflight-badge-discard:hover {
+  text-decoration: underline;
+}
+
 .hud-widget {
   background: var(--bg-elev);
   border: 1px solid var(--border-subtle);

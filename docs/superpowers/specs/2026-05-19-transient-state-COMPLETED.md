@@ -1,6 +1,6 @@
 ## Transient State — Design
 
-> **Status:** Design ready for implementation plan. Foundation feature: `scene-hud`, `narrative-extras`, and `context-inspector` all consume its read interface and (for HUD/extras) its privacy model.
+> **Status:** SHIPPED. Initial implementation landed on 2026-05-19; the gap-closure pass tracked by `../plans/2026-05-19-transient-state-finish.md` (audit fields on `TurnAudit`, `RoutingSummary` writes/conflicts/promoted_to_fact, reinforcement detection + continuity promotion, LLM extractor `transient_updates` schema + plumbing through `ExtractionResult`, orchestrator wiring via `route_transient_updates` + audit fragment) is also complete in code.
 
 **Source idea:** `specs/new/transient-state.md`
 **Module:** `backend/src/grimoire/transient_state/` (new)
