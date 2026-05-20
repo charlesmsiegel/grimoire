@@ -11,6 +11,7 @@
  */
 
 import type { WidgetSnapshot } from "../../../api/hud";
+import { AuxInflightBadge } from "./AuxInflightBadge";
 import { useHud } from "./useHud";
 import { BannerWidget } from "./widgets/BannerWidget";
 import { BlockWidget } from "./widgets/BlockWidget";
@@ -71,6 +72,7 @@ export function SideHud({ campaignId }: Props) {
     <aside className="side-hud" aria-label="Scene HUD">
       <header className="side-hud-header">
         <h2>Dashboard</h2>
+        <AuxInflightBadge campaignId={campaignId} />
         <button
           type="button"
           className="side-hud-refresh"
