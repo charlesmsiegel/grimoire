@@ -4,6 +4,7 @@ import type { ApiScene, OpenCommitment, PCEntry } from "../../api/campaign";
 import { ApiError } from "../../api/client";
 import type { ResolvedCharacter } from "../../api/types";
 import { viewsApi } from "../../api/views";
+import { AuxBrainstormPanel } from "./Auxiliary/AuxBrainstormPanel";
 import { SourceBadge } from "./SourceBadge";
 
 interface QuickActions {
@@ -91,6 +92,10 @@ export function SidePanel({ campaignId, scene, pcs, commitments, actions }: Prop
 
       <CapabilitiesSection campaignId={campaignId} pcs={pcs} />
       <MechanicsSummarySection campaignId={campaignId} pcs={pcs} />
+
+      <section className="side-section">
+        <AuxBrainstormPanel campaignId={campaignId} />
+      </section>
 
       <section className="side-section">
         <h3>Quick actions</h3>

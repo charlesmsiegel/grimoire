@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 
+import { auxiliaryApi, type AuxiliaryResult } from "../../api/auxiliary";
 import { CharacterSprite } from "../../components/CharacterSprite";
 import { Markdown } from "../../components/Markdown";
 import { campaignApi, type ApiAlternate, type ApiPost, type PCEntry } from "../../api/campaign";
+import { AuxPanel } from "./Auxiliary/AuxPanel";
 import { RetconLauncher } from "./RetconLauncher";
 import type { SceneImage } from "./usePlayState";
 
@@ -64,12 +66,34 @@ export function PostItem({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retconOpen, setRetconOpen] = useState(false);
+  const [rewriteInstr, setRewriteInstr] = useState<string | null>(null);
+  const [lastRewriteInstr, setLastRewriteInstr] = useState<string>("");
+  const [auxResult, setAuxResult] = useState<AuxiliaryResult | null>(null);
+  const [auxBusy, setAuxBusy] = useState(false);
+  const [auxError, setAuxError] = useState<string | null>(null);
 
   const showStrip = alternates.length > 1;
   const current = alternates[cursor];
   const canMutate = isLatestModelPost && !!campaignId;
   // Retcon is available on any model post (NOT gated to latest like swipes are).
   const canRetcon = !!campaignId && post.author_kind !== "pc" && !post.is_player;
+  const canRewrite = canRetcon;
+
+  async function runRewrite(instruction: string) {
+    if (!campaignId || !instruction.trim()) return;
+    setAuxBusy(true);
+    setAuxError(null);
+    setLastRewriteInstr(instruction);
+    try {
+      const result = await auxiliaryApi.rewritePost(campaignId, post.id, instruction);
+      setAuxResult(result);
+      setRewriteInstr(null);
+    } catch (e) {
+      setAuxError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAuxBusy(false);
+    }
+  }
   const speakerRef = post.author_pc_ref ?? post.author_npc_ref ?? null;
   const showSprite = !!campaignId && !!speakerRef && post.author_kind !== "system";
 
@@ -137,17 +161,71 @@ export function PostItem({
           ))}
         </ul>
       )}
-      {canRetcon && (
+      {(canRetcon || canRewrite) && (
         <div className="post-actions">
-          <button
-            type="button"
-            className="post-retcon"
-            aria-label="Retcon this post"
-            onClick={() => setRetconOpen(true)}
-          >
-            Retcon...
-          </button>
+          {canRetcon && (
+            <button
+              type="button"
+              className="post-retcon"
+              aria-label="Retcon this post"
+              onClick={() => setRetconOpen(true)}
+            >
+              Retcon...
+            </button>
+          )}
+          {canRewrite && (
+            <button
+              type="button"
+              className="post-rewrite"
+              aria-label="Rewrite this post"
+              onClick={() => setRewriteInstr("")}
+              disabled={auxBusy}
+            >
+              Rewrite...
+            </button>
+          )}
         </div>
+      )}
+      {rewriteInstr !== null && campaignId && (
+        <form
+          className="post-rewrite-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void runRewrite(rewriteInstr);
+          }}
+        >
+          <input
+            type="text"
+            value={rewriteInstr}
+            onChange={(e) => setRewriteInstr(e.target.value)}
+            placeholder="How should this be rewritten?"
+            aria-label="Rewrite instruction"
+            autoFocus
+          />
+          <button type="submit" disabled={auxBusy || !rewriteInstr.trim()}>
+            {auxBusy ? "Drafting…" : "Draft"}
+          </button>
+          <button type="button" onClick={() => setRewriteInstr(null)} disabled={auxBusy}>
+            Cancel
+          </button>
+        </form>
+      )}
+      {auxError && (
+        <p className="post-aux-error" role="alert">
+          {auxError}
+        </p>
+      )}
+      {auxResult && campaignId && (
+        <AuxPanel
+          campaignId={campaignId}
+          result={auxResult}
+          onAccepted={() => setAuxResult(null)}
+          onDiscarded={() => setAuxResult(null)}
+          onTryAgain={() => {
+            setAuxResult(null);
+            if (lastRewriteInstr) void runRewrite(lastRewriteInstr);
+          }}
+        />
       )}
       {retconOpen && campaignId && (
         <RetconLauncher
