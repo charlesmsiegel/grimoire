@@ -14,10 +14,11 @@ audit log shape is co-located with the conversion logic that produces it.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from grimoire.types.common import EntityKind
 from grimoire.types.world import LoreEntry
@@ -82,18 +83,31 @@ _DIRECT_MAP: dict[EntityKind, dict[str, str]] = {
 # data the user spent time entering.
 _INTO_NOTES: dict[EntityKind, tuple[str, ...]] = {
     EntityKind.CHARACTER: (
-        "secondary_keys", "comment", "related_locations", "related_characters",
+        "secondary_keys",
+        "comment",
+        "related_locations",
+        "related_characters",
     ),
     EntityKind.LOCATION: (
-        "secondary_keys", "comment", "related_factions",
-        "related_locations", "related_characters",
+        "secondary_keys",
+        "comment",
+        "related_factions",
+        "related_locations",
+        "related_characters",
     ),
     EntityKind.FACTION: (
-        "secondary_keys", "comment", "related_locations", "related_characters",
+        "secondary_keys",
+        "comment",
+        "related_locations",
+        "related_characters",
     ),
     EntityKind.ITEM: (
-        "secondary_keys", "comment", "related_factions", "secrecy",
-        "related_locations", "related_characters",
+        "secondary_keys",
+        "comment",
+        "related_factions",
+        "secrecy",
+        "related_locations",
+        "related_characters",
     ),
 }
 
@@ -108,8 +122,15 @@ _INTO_NOTES: dict[EntityKind, tuple[str, ...]] = {
 # the model. Do not delete this list; it is the v2 surface area.
 _DROPPED_MATCHING_FIELDS: frozenset[str] = frozenset(
     {
-        "priority", "probability", "position", "at_depth", "scan_depth",
-        "constant", "enabled", "case_sensitive", "match_whole_words",
+        "priority",
+        "probability",
+        "position",
+        "at_depth",
+        "scan_depth",
+        "constant",
+        "enabled",
+        "case_sensitive",
+        "match_whole_words",
         "selective_logic",
     }
 )
@@ -194,9 +215,7 @@ def apply_mapping(
     import_source = getattr(source, "import_source", None)
     if import_source is not None:
         fm["import_source"] = (
-            import_source.model_dump()
-            if hasattr(import_source, "model_dump")
-            else import_source
+            import_source.model_dump() if hasattr(import_source, "model_dump") else import_source
         )
         kept.append("import_source")
 
@@ -215,11 +234,7 @@ def apply_mapping(
     if notes_payload:
         lines = ["", "## Notes", ""]
         for name, value in notes_payload:
-            rendered = (
-                ", ".join(str(v) for v in value)
-                if isinstance(value, list)
-                else str(value)
-            )
+            rendered = ", ".join(str(v) for v in value) if isinstance(value, list) else str(value)
             lines.append(f"- **{name}**: {rendered}")
         if body:
             body = body.rstrip() + "\n" + "\n".join(lines) + "\n"
@@ -259,7 +274,7 @@ def append_audit(
 ) -> dict[str, Any]:
     """Append one JSONL record to the audit log; return the record."""
     record = {
-        "ts": (ts or datetime.now(timezone.utc)).isoformat().replace("+00:00", "Z"),
+        "ts": (ts or datetime.now(UTC)).isoformat().replace("+00:00", "Z"),
         "world_id": world_id,
         "source_id": source_id,
         "source_snapshot": source_snapshot,
@@ -296,8 +311,8 @@ def iter_audit(data_root: Path, *, world_id: str | None = None) -> Iterator[dict
 
 __all__ = [
     "ReclassificationResult",
-    "apply_mapping",
     "append_audit",
+    "apply_mapping",
     "audit_log_path",
     "iter_audit",
     "required_overrides_for",

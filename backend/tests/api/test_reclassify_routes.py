@@ -10,7 +10,11 @@ class FakeReclassifyLibrary:
         self.calls: list[tuple] = []
 
     async def preview_reclassification(
-        self, world_id: str, source_id: str, *, target_kind: str,
+        self,
+        world_id: str,
+        source_id: str,
+        *,
+        target_kind: str,
     ) -> dict[str, Any]:
         self.calls.append(("preview", world_id, source_id, target_kind))
         return {
@@ -27,11 +31,17 @@ class FakeReclassifyLibrary:
         }
 
     async def reclassify_entity(
-        self, world_id: str, source_id: str, *, target_kind: str,
-        overrides: dict | None = None, actor: str = "user",
+        self,
+        world_id: str,
+        source_id: str,
+        *,
+        target_kind: str,
+        overrides: dict | None = None,
+        actor: str = "user",
     ) -> Any:
         from grimoire.library.reclassify import ReclassificationResult
         from grimoire.types.common import EntityKind
+
         self.calls.append(("commit", world_id, source_id, target_kind, overrides, actor))
         return ReclassificationResult(
             source_id=source_id,
@@ -44,7 +54,11 @@ class FakeReclassifyLibrary:
         )
 
     async def undo_reclassification(
-        self, world_id: str, timestamp: str, *, actor: str = "user",
+        self,
+        world_id: str,
+        timestamp: str,
+        *,
+        actor: str = "user",
     ) -> dict[str, Any]:
         self.calls.append(("undo", world_id, timestamp, actor))
         return {
