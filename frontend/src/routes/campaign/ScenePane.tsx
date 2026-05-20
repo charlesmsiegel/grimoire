@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import { Markdown } from "../../components/Markdown";
-import type { ApiPost, PCEntry } from "../../api/campaign";
+import type { ApiPost, ApiScene, PCEntry } from "../../api/campaign";
 import { PostItem } from "./PostItem";
 import type { PendingTurn, SceneImage } from "./usePlayState";
 
@@ -11,9 +11,10 @@ interface Props {
   streaming: PendingTurn | null;
   images: Record<string, SceneImage>;
   campaignId?: string;
+  scene?: ApiScene | null;
 }
 
-export function ScenePane({ posts, pcs, streaming, images, campaignId }: Props) {
+export function ScenePane({ posts, pcs, streaming, images, campaignId, scene }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -66,6 +67,7 @@ export function ScenePane({ posts, pcs, streaming, images, campaignId }: Props) 
           isLatestModelPost={post.id === latestModelPostId}
           campaignId={campaignId}
           subsequentModelPostCount={subsequentByPost[post.id] ?? 0}
+          presentCharacterRefs={scene?.present_character_refs ?? []}
         />
       ))}
       {streaming && (

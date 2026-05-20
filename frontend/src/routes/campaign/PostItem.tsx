@@ -24,6 +24,8 @@ interface Props {
    * Threaded through to the retcon launcher so it can show the fork nudge
    * when ≥ 5 (per 2026-05-19-retcon-design). */
   subsequentModelPostCount?: number;
+  /** Scene's present character refs; powers the Continue-as character picker. */
+  presentCharacterRefs?: string[];
 }
 
 const AUTHOR_LABELS: Record<ApiPost["author_kind"], string> = {
@@ -55,6 +57,7 @@ export function PostItem({
   isLatestModelPost = false,
   campaignId,
   subsequentModelPostCount = 0,
+  presentCharacterRefs = [],
 }: Props) {
   const name = authorName(post, pcs);
   const alternates = useMemo(() => post.alternates ?? [], [post.alternates]);
@@ -71,6 +74,26 @@ export function PostItem({
   const [auxResult, setAuxResult] = useState<AuxiliaryResult | null>(null);
   const [auxBusy, setAuxBusy] = useState(false);
   const [auxError, setAuxError] = useState<string | null>(null);
+  type AuxForm =
+    | { kind: "continue_as"; characterRef: string; steeringHint: string }
+    | { kind: "translate"; targetLanguage: string }
+    | { kind: "what_would_x_say"; characterRef: string; snippet: string };
+  const [auxForm, setAuxForm] = useState<AuxForm | null>(null);
+  const [lastAuxAction, setLastAuxAction] = useState<(() => Promise<AuxiliaryResult>) | null>(
+    null,
+  );
+
+  const candidateRefs = useMemo(() => {
+    const initial = post.author_pc_ref ?? post.author_npc_ref ?? null;
+    const set = new Set<string>(presentCharacterRefs);
+    if (initial) set.add(initial);
+    return Array.from(set);
+  }, [presentCharacterRefs, post.author_npc_ref, post.author_pc_ref]);
+  const defaultCharacterRef = post.author_npc_ref ?? post.author_pc_ref ?? candidateRefs[0] ?? "";
+  function labelForRef(ref: string): string {
+    const pc = pcs.find((p) => p.character_ref === ref);
+    return pc?.name ?? ref;
+  }
 
   const showStrip = alternates.length > 1;
   const current = alternates[cursor];
@@ -93,6 +116,46 @@ export function PostItem({
     } finally {
       setAuxBusy(false);
     }
+  }
+
+  async function runAux(action: () => Promise<AuxiliaryResult>) {
+    if (!campaignId) return;
+    setAuxBusy(true);
+    setAuxError(null);
+    try {
+      const result = await action();
+      setAuxResult(result);
+      setAuxForm(null);
+    } catch (e) {
+      setAuxError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAuxBusy(false);
+    }
+  }
+
+  async function runContinueAs(characterRef: string, steeringHint: string) {
+    if (!campaignId || !characterRef) return;
+    const trimmedHint = steeringHint.trim() || undefined;
+    const action = () =>
+      auxiliaryApi.continueAs(campaignId, characterRef, post.id, trimmedHint);
+    setLastAuxAction(() => action);
+    await runAux(action);
+  }
+
+  async function runTranslate(targetLanguage: string) {
+    if (!campaignId || !targetLanguage.trim()) return;
+    const lang = targetLanguage.trim();
+    const action = () => auxiliaryApi.translate(campaignId, post.body, lang);
+    setLastAuxAction(() => action);
+    await runAux(action);
+  }
+
+  async function runWhatWouldXSay(characterRef: string, snippet: string) {
+    if (!campaignId || !characterRef || !snippet.trim()) return;
+    const trimmed = snippet.trim();
+    const action = () => auxiliaryApi.whatWouldXSay(campaignId, characterRef, trimmed);
+    setLastAuxAction(() => action);
+    await runAux(action);
   }
   const speakerRef = post.author_pc_ref ?? post.author_npc_ref ?? null;
   const showSprite = !!campaignId && !!speakerRef && post.author_kind !== "system";
@@ -161,7 +224,7 @@ export function PostItem({
           ))}
         </ul>
       )}
-      {(canRetcon || canRewrite) && (
+      {(canRetcon || canRewrite || campaignId) && (
         <div className="post-actions">
           {canRetcon && (
             <button
@@ -182,6 +245,51 @@ export function PostItem({
               disabled={auxBusy}
             >
               Rewrite...
+            </button>
+          )}
+          {campaignId && candidateRefs.length > 0 && (
+            <button
+              type="button"
+              className="post-continue-as"
+              aria-label="Continue as a character"
+              onClick={() =>
+                setAuxForm({
+                  kind: "continue_as",
+                  characterRef: defaultCharacterRef,
+                  steeringHint: "",
+                })
+              }
+              disabled={auxBusy}
+            >
+              Continue as...
+            </button>
+          )}
+          {campaignId && (
+            <button
+              type="button"
+              className="post-translate"
+              aria-label="Translate this post"
+              onClick={() => setAuxForm({ kind: "translate", targetLanguage: "" })}
+              disabled={auxBusy}
+            >
+              Translate...
+            </button>
+          )}
+          {campaignId && candidateRefs.length > 0 && (
+            <button
+              type="button"
+              className="post-what-would-x-say"
+              aria-label="Ask what a character would say"
+              onClick={() =>
+                setAuxForm({
+                  kind: "what_would_x_say",
+                  characterRef: defaultCharacterRef,
+                  snippet: "",
+                })
+              }
+              disabled={auxBusy}
+            >
+              What would they say...
             </button>
           )}
         </div>
@@ -210,6 +318,124 @@ export function PostItem({
           </button>
         </form>
       )}
+      {auxForm?.kind === "continue_as" && campaignId && (
+        <form
+          className="post-continue-as-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void runContinueAs(auxForm.characterRef, auxForm.steeringHint);
+          }}
+        >
+          <label>
+            Character
+            <select
+              value={auxForm.characterRef}
+              onChange={(e) =>
+                setAuxForm({ ...auxForm, characterRef: e.target.value })
+              }
+              aria-label="Character to continue as"
+            >
+              {candidateRefs.map((ref) => (
+                <option key={ref} value={ref}>
+                  {labelForRef(ref)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <input
+            type="text"
+            value={auxForm.steeringHint}
+            onChange={(e) =>
+              setAuxForm({ ...auxForm, steeringHint: e.target.value })
+            }
+            placeholder="Optional steering hint"
+            aria-label="Steering hint"
+          />
+          <button type="submit" disabled={auxBusy || !auxForm.characterRef}>
+            {auxBusy ? "Continuing…" : "Continue"}
+          </button>
+          <button type="button" onClick={() => setAuxForm(null)} disabled={auxBusy}>
+            Cancel
+          </button>
+        </form>
+      )}
+      {auxForm?.kind === "translate" && campaignId && (
+        <form
+          className="post-translate-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void runTranslate(auxForm.targetLanguage);
+          }}
+        >
+          <input
+            type="text"
+            value={auxForm.targetLanguage}
+            onChange={(e) =>
+              setAuxForm({ ...auxForm, targetLanguage: e.target.value })
+            }
+            placeholder="Target language (e.g. French)"
+            aria-label="Target language"
+            list={`translate-langs-${post.id}`}
+            autoFocus
+          />
+          <datalist id={`translate-langs-${post.id}`}>
+            <option value="French" />
+            <option value="Spanish" />
+            <option value="German" />
+            <option value="Japanese" />
+            <option value="Latin" />
+            <option value="Plain English" />
+          </datalist>
+          <button type="submit" disabled={auxBusy || !auxForm.targetLanguage.trim()}>
+            {auxBusy ? "Translating…" : "Translate"}
+          </button>
+          <button type="button" onClick={() => setAuxForm(null)} disabled={auxBusy}>
+            Cancel
+          </button>
+        </form>
+      )}
+      {auxForm?.kind === "what_would_x_say" && campaignId && (
+        <form
+          className="post-what-would-x-say-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void runWhatWouldXSay(auxForm.characterRef, auxForm.snippet);
+          }}
+        >
+          <label>
+            Character
+            <select
+              value={auxForm.characterRef}
+              onChange={(e) =>
+                setAuxForm({ ...auxForm, characterRef: e.target.value })
+              }
+              aria-label="Character to ask"
+            >
+              {candidateRefs.map((ref) => (
+                <option key={ref} value={ref}>
+                  {labelForRef(ref)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <textarea
+            value={auxForm.snippet}
+            onChange={(e) => setAuxForm({ ...auxForm, snippet: e.target.value })}
+            placeholder="What's the situation or prompt?"
+            aria-label="Situation snippet"
+            rows={2}
+          />
+          <button
+            type="submit"
+            disabled={auxBusy || !auxForm.characterRef || !auxForm.snippet.trim()}
+          >
+            {auxBusy ? "Asking…" : "Ask"}
+          </button>
+          <button type="button" onClick={() => setAuxForm(null)} disabled={auxBusy}>
+            Cancel
+          </button>
+        </form>
+      )}
       {auxError && (
         <p className="post-aux-error" role="alert">
           {auxError}
@@ -223,7 +449,11 @@ export function PostItem({
           onDiscarded={() => setAuxResult(null)}
           onTryAgain={() => {
             setAuxResult(null);
-            if (lastRewriteInstr) void runRewrite(lastRewriteInstr);
+            if (lastAuxAction) {
+              void runAux(lastAuxAction);
+            } else if (lastRewriteInstr) {
+              void runRewrite(lastRewriteInstr);
+            }
           }}
         />
       )}
