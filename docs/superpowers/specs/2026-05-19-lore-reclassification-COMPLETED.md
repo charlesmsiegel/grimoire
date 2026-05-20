@@ -1,12 +1,8 @@
 ## Lore Entry Reclassification — Design
 
-> **Status:** Follow-up to `2026-05-19-card-imports-design.md`. Independent — does not block card-imports landing.
-
-> **Implementation status (as of 2026-05-19): NOT STARTED — no plan, no code.**
-> - No implementation plan exists at `docs/superpowers/plans/`.
-> - `grep -r lore_reclassif backend/src/grimoire` returns no matches.
-> - **Downstream dependency:** card-imports Task E2 must be extended to write `lore_overrides` so reclassification can preserve the import's choices.
-> - **Next pickup:** write `docs/superpowers/plans/2026-05-19-lore-reclassification.md` covering the six scope areas below (conversion service, field-mapping, heuristic classifier, import dialog integration, library UI, audit trail).
+> **Status:** SHIPPED 2026-05-19. Sections 1, 2, 3, 5, 6 implemented in `feat(reclassify): …` commits on branch `2026-05-19-lore-reclassification`. Plan at `docs/superpowers/plans/2026-05-19-lore-reclassification.md`.
+>
+> **Section 4 (import-dialog integration) intentionally deferred.** The shared transform lives at `backend/src/grimoire/library/reclassify.py:apply_mapping` and the classifier at `classify.py:suggest_kind`, both ready for `card-imports` Task E2 to import. When card-imports lands and the LoreEntry model gains `priority`/`probability`/etc., the dropped-matching-metadata warning in `apply_mapping` will start firing automatically (the field-default sentinels are already in place).
 
 **Source idea:** discussion follow-up to card-imports — imported `character_book` entries often describe Characters, Locations, Factions, or Items, but the importer writes everything as `LoreEntry`. Users need a way to promote a lore entry into the right entity type without re-typing it.
 
