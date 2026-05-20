@@ -27,6 +27,8 @@ from grimoire.types.extraction import EntityCandidate, ExtractionFlag, FlagLevel
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
 from grimoire.types.scene import Scene
 from grimoire.types.state import DeltaKind, StateDelta, StateSnapshot
+from grimoire.types.transient import EntityKind as TransientEntityKind
+from grimoire.types.transient import TransientUpdateProposal
 from grimoire.util import slugify_id
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,7 @@ class LLMStrategyOutput:
     deltas: list[StateDelta] = field(default_factory=list)
     candidates: list[EntityCandidate] = field(default_factory=list)
     flags: list[ExtractionFlag] = field(default_factory=list)
+    transient_updates: list[TransientUpdateProposal] = field(default_factory=list)
     confidence_avg: float = 0.0
 
 
@@ -368,6 +371,30 @@ _BUILDER_MAP = {
 }
 
 
+def _make_transient_update(item: dict) -> TransientUpdateProposal | None:
+    try:
+        kind = TransientEntityKind(str(item.get("entity_kind", "")))
+    except ValueError:
+        return None
+    entity_id = str(item.get("entity_id", "")).strip()
+    field_name = str(item.get("field", "")).strip()
+    if not entity_id or not field_name:
+        return None
+    if "value" not in item or "confidence" not in item:
+        return None
+    try:
+        return TransientUpdateProposal(
+            entity_kind=kind,
+            entity_id=entity_id,
+            field=field_name,
+            value=item.get("value"),
+            confidence=float(item.get("confidence", 0.0)),
+            evidence=str(item.get("evidence", "")),
+        )
+    except Exception:
+        return None
+
+
 def parse_llm_payload(
     payload: dict,
     *,
@@ -406,6 +433,13 @@ def parse_llm_payload(
             delta = builder(item, campaign_id=campaign_id, source=source)
             out.deltas.append(delta)
             confidences.append(delta.confidence)
+    for raw in payload.get("transient_updates", []) or []:
+        if not isinstance(raw, dict):
+            continue
+        proposal = _make_transient_update(raw)
+        if proposal is not None:
+            out.transient_updates.append(proposal)
+            confidences.append(proposal.confidence)
     if confidences:
         out.confidence_avg = sum(confidences) / len(confidences)
     return out
