@@ -204,9 +204,7 @@ class SceneManager:
         }
         if type_ == SCENE_ENDED:
             merged.setdefault("location_ref", scene.location_ref)
-            merged.setdefault(
-                "present_character_refs", list(scene.present_character_refs)
-            )
+            merged.setdefault("present_character_refs", list(scene.present_character_refs))
         await self.event_bus.emit(
             SceneEvent(
                 type=type_,
