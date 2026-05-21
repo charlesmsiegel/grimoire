@@ -290,6 +290,31 @@ async def test_commit_rejects_missing_required_override(client) -> None:
     assert "required override" in commit.text.lower() or "kind" in commit.text
 
 
+async def test_commit_with_lore_override_promotes_entity(client) -> None:
+    ac, _ = client
+    png = _png_with_card(_card_with_two_lore())
+    preview = await ac.post(
+        "/api/library/worlds/w1/imports/sillytavern/preview",
+        files={"file": ("card.png", png, "image/png")},
+    )
+    preview_id = preview.json()["preview_id"]
+    commit = await ac.post(
+        "/api/library/worlds/w1/imports/sillytavern/commit",
+        json={
+            "preview_id": preview_id,
+            "options": {},
+            "lore_overrides": [
+                {"source_index": 0, "kind": "location", "overrides": {"kind": "building"}},
+                {"source_index": 1, "kind": "skip"},
+            ],
+        },
+    )
+    assert commit.status_code == 201, commit.text
+    created = commit.json()["result"]["created"]
+    assert any(c.startswith("location:beatrice--brackhollow-cathedral") for c in created)
+    assert not any(c.startswith("lore:") for c in created)
+
+
 async def test_list_and_get_reports(client) -> None:
     ac, _store = client
     card = {"spec": "chara_card_v2", "data": {"name": "Beatrice", "first_mes": "Hi."}}

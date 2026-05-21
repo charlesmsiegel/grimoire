@@ -145,6 +145,130 @@ async def test_character_book_toggle_off(
 
 
 # ---------------------------------------------------------------------------
+# Lore overrides at import time (reclassification flow)
+# ---------------------------------------------------------------------------
+
+
+async def test_lore_override_promotes_to_character(
+    characters: CharactersService, library: LibraryService, store: StateStore
+) -> None:
+    from grimoire.types.characters import LoreOverride
+
+    await _seed_world(store, "w1")
+    book = {
+        "entries": [
+            {"name": "Lyra Wynn", "keys": ["Lyra"], "content": "She rides at dusk."},
+            {"name": "Tremere", "keys": ["Tremere"], "content": "A vampire clan."},
+        ]
+    }
+    raw = json.dumps(_card(character_book=book)).encode("utf-8")
+    ingested = await characters._ingest(raw, options=None)
+    result = await characters._finalize_import(
+        "w1",
+        ingested,
+        lore_overrides=[LoreOverride(source_index=0, kind="character")],
+    )
+    assert any(ref.startswith("character:beatrice--lyra-wynn") for ref in result.created)
+    assert any(ref == "lore:beatrice--tremere" for ref in result.created)
+    promoted = await library.get_entity("w1", "character", "beatrice--lyra-wynn")
+    assert promoted.frontmatter["name"] == "Lyra Wynn"
+    assert promoted.frontmatter["import_source"]["kind"] == "sillytavern_character_book"
+    assert promoted.frontmatter["import_source"]["source_index"] == 0
+
+
+async def test_lore_override_promotes_to_location_with_required_kind(
+    characters: CharactersService, library: LibraryService, store: StateStore
+) -> None:
+    from grimoire.types.characters import LoreOverride
+
+    await _seed_world(store, "w1")
+    book = {"entries": [{"name": "Brackhollow Inn", "keys": ["inn"], "content": "Cosy."}]}
+    raw = json.dumps(_card(character_book=book)).encode("utf-8")
+    ingested = await characters._ingest(raw, options=None)
+    result = await characters._finalize_import(
+        "w1",
+        ingested,
+        lore_overrides=[
+            LoreOverride(source_index=0, kind="location", overrides={"kind": "building"}),
+        ],
+    )
+    assert any(ref.startswith("location:beatrice--brackhollow-inn") for ref in result.created)
+    loc = await library.get_entity("w1", "location", "beatrice--brackhollow-inn")
+    assert loc.frontmatter["name"] == "Brackhollow Inn"
+    assert loc.frontmatter["kind"] == "building"
+    assert loc.frontmatter["import_source"]["kind"] == "sillytavern_character_book"
+
+
+async def test_lore_override_skip_omits_entry_and_warns(
+    characters: CharactersService, library: LibraryService, store: StateStore
+) -> None:
+    from grimoire.types.characters import LoreOverride
+
+    await _seed_world(store, "w1")
+    book = {
+        "entries": [
+            {"name": "Tremere", "keys": ["Tremere"], "content": "A clan."},
+            {"name": "Camarilla", "keys": ["Camarilla"], "content": "A sect."},
+        ]
+    }
+    raw = json.dumps(_card(character_book=book)).encode("utf-8")
+    ingested = await characters._ingest(raw, options=None)
+    result = await characters._finalize_import(
+        "w1",
+        ingested,
+        lore_overrides=[LoreOverride(source_index=0, kind="skip")],
+    )
+    assert not any("tremere" in ref for ref in result.created)
+    assert any("camarilla" in ref for ref in result.created)
+    assert any("skipped" in w.lower() and "0" in w for w in result.warnings)
+
+
+async def test_lore_override_lore_kind_behaves_as_default(
+    characters: CharactersService, library: LibraryService, store: StateStore
+) -> None:
+    """Explicit kind='lore' must produce identical output to no override."""
+    from grimoire.types.characters import LoreOverride
+
+    await _seed_world(store, "w1")
+    book = {"entries": [{"name": "Tremere", "keys": ["Tremere"], "content": "A clan."}]}
+    raw = json.dumps(_card(character_book=book)).encode("utf-8")
+    ingested = await characters._ingest(raw, options=None)
+    result = await characters._finalize_import(
+        "w1",
+        ingested,
+        lore_overrides=[LoreOverride(source_index=0, kind="lore")],
+    )
+    assert any(ref == "lore:beatrice--tremere" for ref in result.created)
+
+
+async def test_lore_override_promotion_uses_unique_id_on_collision(
+    characters: CharactersService, library: LibraryService, store: StateStore
+) -> None:
+    from grimoire.types.characters import LoreOverride
+
+    await _seed_world(store, "w1")
+    # Pre-seed a character whose id collides with what the import will derive.
+    await library.create_entity(
+        "w1",
+        "character",
+        "beatrice--lyra-wynn",
+        {"id": "beatrice--lyra-wynn", "name": "Existing Lyra"},
+        body="placeholder",
+        source="test:seed",
+    )
+    book = {"entries": [{"name": "Lyra Wynn", "keys": ["lyra"], "content": "Rides at dusk."}]}
+    raw = json.dumps(_card(character_book=book)).encode("utf-8")
+    ingested = await characters._ingest(raw, options=None)
+    result = await characters._finalize_import(
+        "w1",
+        ingested,
+        lore_overrides=[LoreOverride(source_index=0, kind="character")],
+    )
+    # Should suffix-2 instead of overwriting the seeded character.
+    assert any(ref == "character:beatrice--lyra-wynn-2" for ref in result.created)
+
+
+# ---------------------------------------------------------------------------
 # Macro pass on character body fields
 # ---------------------------------------------------------------------------
 

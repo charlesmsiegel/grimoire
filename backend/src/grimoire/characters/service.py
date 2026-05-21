@@ -23,6 +23,7 @@ from grimoire.mechanics.service import MechanicsService
 from grimoire.state_store import StateStore
 from grimoire.state_store.indexers import make_library_id
 from grimoire.state_store.paths import library_path
+from grimoire.library.reclassify import _lore_entry_from_ingested, apply_mapping
 from grimoire.types.characters import (
     CapsuleDraft,
     Character,
@@ -37,6 +38,7 @@ from grimoire.types.characters import (
     IngestedCharacterCard,
     IngestedLoreEntry,
     IngestOptions,
+    LoreOverride,
     PCEntry,
     PromotionProposal,
     RelationshipEvent,
@@ -45,7 +47,7 @@ from grimoire.types.characters import (
     StructuralRelationship,
     VoiceAnchor,
 )
-from grimoire.types.common import CampaignId, CharacterRef, PostId, Scope
+from grimoire.types.common import CampaignId, CharacterRef, EntityKind, PostId, Scope
 from grimoire.types.composition import LibraryEntity, ResolutionLayer, ResolutionSource
 from grimoire.types.mechanics import Capability
 from grimoire.types.scene import Post, Scene
@@ -1409,6 +1411,7 @@ class CharactersService:
         ingested: IngestedCharacterCard,
         *,
         options: IngestOptions | None = None,
+        lore_overrides: list[LoreOverride] | None = None,
     ) -> ImportResult:
         opts = options or IngestOptions()
         data = ingested.data
@@ -1470,6 +1473,7 @@ class CharactersService:
                 char_slug=data.id,
                 ingested=ingested,
                 result=result,
+                lore_overrides=lore_overrides or [],
             )
 
         # Per-import markdown audit. Best-effort; failure to write the
@@ -1549,49 +1553,125 @@ class CharactersService:
         char_slug: str,
         ingested: IngestedCharacterCard,
         result: ImportResult,
+        lore_overrides: list[LoreOverride] = (),
     ) -> None:
+        overrides_by_index = {o.source_index: o for o in lore_overrides}
         for entry in ingested.lore_entries:
-            entry_slug = _slug_for_lore_entry(entry, char_slug)
-            base_id = f"{char_slug}--{entry_slug}"
-            entity_id = await self._unique_id(target_world_id, "lore", base_id, result)
-            frontmatter: dict[str, Any] = {
-                "id": entity_id,
-                "name": entry.name or entity_id,
-                "title": entry.name or entity_id,
-                "keywords": entry.keys,
-                "secondary_keys": entry.secondary_keys,
-                "selective_logic": entry.selective_logic,
-                "constant": entry.constant,
-                "enabled": entry.enabled,
-                "case_sensitive": entry.case_sensitive,
-                "match_whole_words": entry.match_whole_words,
-                "priority": entry.priority,
-                "probability": entry.probability,
-                "position": entry.position,
-                "comment": entry.comment,
-                "tags": ["imported", "from-card", char_slug],
-                "import_source": {
-                    "kind": "sillytavern_character_book",
-                    "card_asset_id": char_slug,
-                    "source_index": entry.source_index,
-                },
-            }
-            if entry.at_depth is not None:
-                frontmatter["at_depth"] = entry.at_depth
-            if entry.scan_depth is not None:
-                frontmatter["scan_depth"] = entry.scan_depth
-            try:
-                await self.library.create_entity(
-                    target_world_id,
-                    "lore",
-                    entity_id,
-                    frontmatter,
-                    body=entry.body,
-                    source="characters:import",
+            override = overrides_by_index.get(entry.source_index)
+            target_kind = override.kind if override else "lore"
+
+            if target_kind == "skip":
+                result.warnings.append(
+                    f"lore entry {entry.source_index} skipped by user override"
                 )
-                result.created.append(f"lore:{entity_id}")
-            except Exception as exc:
-                result.errors.append(f"lore {entity_id!r}: {exc}")
+                continue
+
+            if target_kind == "lore":
+                await self._write_one_lore_entry(
+                    target_world_id=target_world_id,
+                    char_slug=char_slug,
+                    entry=entry,
+                    result=result,
+                )
+                continue
+
+            await self._promote_lore_entry(
+                target_world_id=target_world_id,
+                char_slug=char_slug,
+                entry=entry,
+                target_kind=EntityKind(target_kind),
+                overrides=override.overrides if override else {},
+                result=result,
+            )
+
+    async def _write_one_lore_entry(
+        self,
+        *,
+        target_world_id: str,
+        char_slug: str,
+        entry: IngestedLoreEntry,
+        result: ImportResult,
+    ) -> None:
+        entry_slug = _slug_for_lore_entry(entry, char_slug)
+        base_id = f"{char_slug}--{entry_slug}"
+        entity_id = await self._unique_id(target_world_id, "lore", base_id, result)
+        frontmatter: dict[str, Any] = {
+            "id": entity_id,
+            "name": entry.name or entity_id,
+            "title": entry.name or entity_id,
+            "keywords": entry.keys,
+            "secondary_keys": entry.secondary_keys,
+            "selective_logic": entry.selective_logic,
+            "constant": entry.constant,
+            "enabled": entry.enabled,
+            "case_sensitive": entry.case_sensitive,
+            "match_whole_words": entry.match_whole_words,
+            "priority": entry.priority,
+            "probability": entry.probability,
+            "position": entry.position,
+            "comment": entry.comment,
+            "tags": ["imported", "from-card", char_slug],
+            "import_source": {
+                "kind": "sillytavern_character_book",
+                "card_asset_id": char_slug,
+                "source_index": entry.source_index,
+            },
+        }
+        if entry.at_depth is not None:
+            frontmatter["at_depth"] = entry.at_depth
+        if entry.scan_depth is not None:
+            frontmatter["scan_depth"] = entry.scan_depth
+        try:
+            await self.library.create_entity(
+                target_world_id,
+                "lore",
+                entity_id,
+                frontmatter,
+                body=entry.body,
+                source="characters:import",
+            )
+            result.created.append(f"lore:{entity_id}")
+        except Exception as exc:
+            result.errors.append(f"lore {entity_id!r}: {exc}")
+
+    async def _promote_lore_entry(
+        self,
+        *,
+        target_world_id: str,
+        char_slug: str,
+        entry: IngestedLoreEntry,
+        target_kind: EntityKind,
+        overrides: dict[str, Any],
+        result: ImportResult,
+    ) -> None:
+        proxy = _lore_entry_from_ingested(entry, world_id=target_world_id)
+        fm, body, _kept, _dropped, _into_notes, warnings = apply_mapping(
+            proxy, target_kind, overrides
+        )
+        entry_slug = _slug_for_lore_entry(entry, char_slug)
+        base_id = f"{char_slug}--{entry_slug}"
+        kind_str = target_kind.value
+        entity_id = await self._unique_id(target_world_id, kind_str, base_id, result)
+        fm["id"] = entity_id
+        fm["import_source"] = {
+            "kind": "sillytavern_character_book",
+            "card_asset_id": char_slug,
+            "source_index": entry.source_index,
+        }
+        try:
+            await self.library.create_entity(
+                target_world_id,
+                kind_str,
+                entity_id,
+                fm,
+                body=body,
+                source="characters:import",
+            )
+            result.created.append(f"{kind_str}:{entity_id}")
+            for w in warnings:
+                result.warnings.append(f"{kind_str} {entity_id}: {w}")
+        except Exception as exc:
+            result.errors.append(f"{kind_str} {entity_id!r}: {exc}")
 
     async def _unique_id(
         self,
