@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## LOW
 
-- **`_find_post` is O(scenes × posts)** — `backend/src/grimoire/scenes/manager.py:858-880` — Every `retcon_post` and `delete_post` walks every campaign dir reading every scene's posts. Quadratic on large campaigns.
 - **`CharactersService._active_pc` is an unbounded process-local cache** — `backend/src/grimoire/characters/service.py:154` — One entry per campaign ever seen, never evicted; no lock on the dict.
 - **`apply_delta`'s `_capture_current_row` interpolates `table` into f-string but is allowlist-gated** — `backend/src/grimoire/state_store/store.py:1380,2196-2214` — Not exploitable today because `primary_key_columns()` returns `None` for non-allowlisted tables. Still worth tightening to use bound params via a stable mapping; the audit nearly missed the allowlist.
 - **Wizard `update()` callback recreates `draft` identity every keystroke** — `frontend/src/routes/CampaignCreate/CampaignCreate.tsx:202-204` — Children aren't `React.memo`'d so today this is a non-issue, but `StepStartingScene`'s `useMemo(candidates, [draft.pcs, castByWorld])` re-runs on every keystroke anywhere in the wizard.
