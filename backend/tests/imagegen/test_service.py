@@ -66,6 +66,35 @@ async def test_set_active_backend_rejects_unknown(service) -> None:
         await svc.set_active_backend("camp-1", "nonexistent")
 
 
+async def test_service_wires_event_bus_into_backends(store) -> None:
+    """§9: backends that expose set_event_bus() should receive the bus."""
+
+    class _BusAwareBackend:
+        id = "bus-aware"
+        name = "Bus-aware"
+
+        def __init__(self) -> None:
+            self.received_bus = None
+
+        def set_event_bus(self, bus) -> None:
+            self.received_bus = bus
+
+        async def health_check(self):  # not exercised
+            raise NotImplementedError
+
+    backend = _BusAwareBackend()
+    registry = BackendRegistry()
+    registry.register(backend)
+    bus = EventBus()
+    svc = ImageGenService(
+        store=store, registry=registry, default_backend_id="bus-aware", event_bus=bus
+    )
+    try:
+        assert backend.received_bus is bus
+    finally:
+        await svc.aclose()
+
+
 # --------------------------------------------------------------------------- #
 # Trigger evaluation
 # --------------------------------------------------------------------------- #

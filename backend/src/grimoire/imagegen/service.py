@@ -328,6 +328,16 @@ class ImageGenService:
         backend = self.registry.get(backend_id)
         if backend is None:
             raise KeyError(f"no backend registered with id {backend_id!r}")
+        # §9: hand the event bus to backends that want to publish
+        # download-progress / health-transition events. Duck-typed so
+        # plugins that don't care opt out by simply not defining the hook.
+        if self.event_bus is not None:
+            setter = getattr(backend, "set_event_bus", None)
+            if callable(setter):
+                try:
+                    setter(self.event_bus)
+                except Exception:  # pragma: no cover - defensive
+                    logger.exception("imagegen: backend %r set_event_bus raised", backend_id)
         handle = _BackendHandle(backend)
         handle.task = asyncio.create_task(self._worker(backend_id), name=f"imagegen-{backend_id}")
         self._handles[backend_id] = handle
