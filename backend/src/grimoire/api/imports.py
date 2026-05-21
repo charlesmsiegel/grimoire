@@ -170,7 +170,12 @@ async def commit_sillytavern_import(
         options = IngestOptions.model_validate(payload.options or {})
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"bad options: {exc}") from exc
-    result = await characters._finalize_import(world_id, slot.ingested, options=options)
+    result = await characters._finalize_import(
+        world_id,
+        slot.ingested,
+        options=options,
+        lore_overrides=payload.lore_overrides,
+    )
     return {"result": to_payload(result)}
 
 
