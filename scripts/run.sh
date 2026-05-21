@@ -73,9 +73,16 @@ fi
 
 backend_pid=""
 frontend_pid=""
+opener_pid=""
 
 cleanup() {
     trap - INT TERM EXIT
+    if [ -n "$opener_pid" ] && kill -0 "$opener_pid" 2>/dev/null; then
+        # The wait_for_url loop polls every 0.5s for up to 30s; without
+        # killing it here a quick script failure left the curl loop
+        # running detached for the remainder of the timeout.
+        kill_pid "$opener_pid"
+    fi
     if [ -n "$frontend_pid" ] && kill -0 "$frontend_pid" 2>/dev/null; then
         kill_pid "$frontend_pid"
     fi
@@ -139,6 +146,7 @@ if [ "$OPEN_BROWSER" = "1" ]; then
             echo "warning: frontend did not respond at $FRONTEND_URL within 30s; not opening browser" >&2
         fi
     ) &
+    opener_pid=$!
 fi
 
 # Exit as soon as either process exits. `wait -n` is bash 4.3+; macOS still
