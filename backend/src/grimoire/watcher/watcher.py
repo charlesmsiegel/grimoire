@@ -680,18 +680,34 @@ class FileWatcher:
         await self.bus.emit(Event(type=watched.event_type, payload=payload))
 
     async def _drop_orphan_library_rows(self, seen: set[str]) -> None:
-        rows = await self.store.db.fetchall("SELECT id FROM library_index")
-        for row in rows:
-            if row["id"] not in seen:
-                await self.store.db.execute("DELETE FROM library_index WHERE id = ?", (row["id"],))
+        await self._drop_orphans("library_index", seen)
 
     async def _drop_orphan_content_rows(self, seen: set[str]) -> None:
-        rows = await self.store.db.fetchall("SELECT id FROM campaign_content_index")
-        for row in rows:
-            if row["id"] not in seen:
-                await self.store.db.execute(
-                    "DELETE FROM campaign_content_index WHERE id = ?", (row["id"],)
-                )
+        await self._drop_orphans("campaign_content_index", seen)
+
+    async def _drop_orphans(self, table: str, seen: set[str]) -> None:
+        """Delete every ``table`` row whose id isn't in ``seen``.
+
+        Batches into a single connection + executemany rather than one
+        ``self.store.db.execute(...)`` per orphan; on a large rescan with
+        thousands of orphans the old loop opened N pool connections and
+        ran outside any transaction, so a partial failure left SQLite
+        half-cleaned.
+        """
+        # Table name is a hard-coded literal from the caller (no user
+        # input), so format-interpolation is safe here.
+        rows = await self.store.db.fetchall(f"SELECT id FROM {table}")  # noqa: S608
+        orphans = [(row["id"],) for row in rows if row["id"] not in seen]
+        if not orphans:
+            return
+        async with self.store.db.acquire() as conn:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                await conn.executemany(f"DELETE FROM {table} WHERE id = ?", orphans)  # noqa: S608
+            except Exception:
+                await conn.execute("ROLLBACK")
+                raise
+            await conn.execute("COMMIT")
 
     # Hook for the watchdog bridge thread to enqueue work onto our loop.
     def _schedule_from_thread(self, path: Path) -> None:
