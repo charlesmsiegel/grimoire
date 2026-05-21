@@ -142,3 +142,8 @@ def dalle_module() -> object:
 @pytest.fixture
 def diffusers_module() -> object:
     return _import_plugin("imagegen-diffusers")
+
+
+@pytest.fixture
+def replicate_module() -> object:
+    return _import_plugin("imagegen-replicate")
