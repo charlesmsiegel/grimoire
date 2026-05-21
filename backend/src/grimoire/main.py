@@ -230,8 +230,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             try:
                 await container.mechanics.rescan()
-            except Exception:
+                container.extras["mechanics_rescan_error"] = None
+            except Exception as exc:
+                # An empty MechanicsService is still installed; without a
+                # surfaced signal beyond the log line, endpoints look like
+                # the user simply hasn't installed any modules. Stash the
+                # error so /health / debug endpoints can report it.
                 log.exception("mechanics rescan failed at startup")
+                container.extras["mechanics_rescan_error"] = f"{type(exc).__name__}: {exc}"
         if container.plugins is None:
             container.plugins = PluginsService(
                 PluginsConfig.for_data_root(data_root),
@@ -239,8 +245,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             try:
                 await container.plugins.rescan()
-            except Exception:
+                container.extras["plugins_rescan_error"] = None
+            except Exception as exc:
                 log.exception("plugins rescan failed at startup")
+                container.extras["plugins_rescan_error"] = f"{type(exc).__name__}: {exc}"
             # Kick off the periodic health loop so plugin_health_changed
             # events flow even when no UI request triggers a probe.
             try:

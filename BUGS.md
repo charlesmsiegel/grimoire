@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## MEDIUM
 
-- **`mechanics`/`plugins` rescan exceptions logged but services still wired with no modules** — `backend/src/grimoire/main.py:223-235` — If rescan throws, the empty service is still installed. Endpoints will return empty/null behavior with no surface signal beyond a log line.
 - **`useResource` flashes "Loading…" on every dep change** — `frontend/src/api/useResource.ts:25` — `loading` resets to `true` unconditionally; `AsyncBoundary` hides existing data. Paginated/filtered re-fetches flicker.
 - **`InputArea` autofocus steals focus from sidepanel buttons on every busy→idle** — `frontend/src/routes/campaign/InputArea.tsx:113-115` — Effect with `[busy]` deps focuses the textarea after Regenerate/Undo/Skip — yanks focus from the user's next click target.
 - **`ScenePane` smooth-scroll-per-token queues animations** — `frontend/src/routes/campaign/ScenePane.tsx:19-21` — Scrolls on every `streaming.text.length`. Long streamed responses queue dozens of animations and never settle.
