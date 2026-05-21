@@ -17,7 +17,7 @@ pipe are deferred for a follow-up frontend pass.
 | 2  | Producer event enrichment                            | ✅ Done |
 | 3  | Verbatim assembled prompt capture                    | ✅ Done |
 | 4  | Replay determinism: `seed` pass-through              | ✅ Done |
-| 5  | Debug view "What did the model see?" — HTTP route    | ✅ Backend done (frontend deferred) |
+| 5  | Debug view "What did the model see?" — HTTP route    | ✅ Done (backend + frontend, 2026-05-20) |
 | 6  | Debug view "What changed?" — HTTP route              | ✅ Backend done (frontend deferred) |
 | 7  | Debug view "Why this character?"                     | ⏸ Deferred — needs ContextBuilder source-attribution upgrade |
 | 8  | Debug view "Cost breakdown" — HTTP route             | ✅ Backend done |

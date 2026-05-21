@@ -94,7 +94,79 @@ async def test_get_turn_prompt(container_with_obs: ServiceContainer, client: Tes
     body = resp.json()
     assert body["messages_hash"] == "abc123"
     assert len(body["messages"]) == 1
-    assert body["messages"][0]["content"] == "hello"
+    msg = body["messages"][0]
+    assert msg["content"] == "hello"
+    # Per-message tokens always reported (estimated); tier is None for legacy
+    # audits whose messages lack the metadata tag.
+    assert "tokens" in msg
+    assert msg["tokens"] >= 1
+    assert "tier" in msg
+
+
+@pytest.mark.asyncio
+async def test_get_turn_prompt_tier_from_metadata(
+    container_with_obs: ServiceContainer, client: TestClient
+) -> None:
+    obs = container_with_obs.observability
+    audit = TurnAudit(
+        turn_id="t_tier",
+        campaign_id="c1",
+        branch_id="main",
+        started_at=datetime.now(UTC),
+        assembled_messages=[
+            {"role": "system", "content": "lock-in block", "metadata": {"tier": "lock-in"}},
+            {"role": "user", "content": "go north", "metadata": {"tier": "player-input"}},
+        ],
+    )
+    await obs.record_turn_audit(audit)
+    resp = client.get("/api/observability/turns/t_tier/prompt")
+    assert resp.status_code == 200
+    msgs = resp.json()["messages"]
+    assert [m["tier"] for m in msgs] == ["lock-in", "player-input"]
+
+
+@pytest.mark.asyncio
+async def test_get_turn_prompt_diff(
+    container_with_obs: ServiceContainer, client: TestClient
+) -> None:
+    obs = container_with_obs.observability
+    await obs.record_turn_audit(
+        TurnAudit(
+            turn_id="t_prev",
+            campaign_id="c1",
+            branch_id="main",
+            started_at=datetime.now(UTC),
+            assembled_messages=[
+                {"role": "system", "content": "old", "metadata": {"tier": "lock-in"}},
+            ],
+            context_messages_hash="h-prev",
+        )
+    )
+    await obs.record_turn_audit(
+        TurnAudit(
+            turn_id="t_curr",
+            campaign_id="c1",
+            branch_id="main",
+            started_at=datetime.now(UTC),
+            assembled_messages=[
+                {"role": "system", "content": "new", "metadata": {"tier": "lock-in"}},
+            ],
+            context_messages_hash="h-curr",
+        )
+    )
+    resp = client.get("/api/observability/turns/t_curr/prompt/diff?against=t_prev")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["messages_hash_changed"] is True
+    assert body["turn_id_a"] == "t_prev"
+    assert body["turn_id_b"] == "t_curr"
+    assert len(body["changed_messages"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_turn_prompt_diff_unknown_returns_404(client: TestClient) -> None:
+    resp = client.get("/api/observability/turns/missing/prompt/diff?against=also-missing")
+    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio

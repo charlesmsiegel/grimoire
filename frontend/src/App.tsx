@@ -15,6 +15,7 @@ import { CompositionView } from "./routes/campaign/CompositionView";
 import { ImagesView } from "./routes/campaign/ImagesView";
 import { LedgerRoute } from "./routes/campaign/LedgerView";
 import { MechanicsView } from "./routes/campaign/MechanicsView";
+import { PromptDebugView } from "./routes/campaign/PromptDebugView";
 import { TimelineView } from "./routes/campaign/TimelineView";
 import { WorldView } from "./routes/campaign/WorldView";
 import { AppShell } from "./shell/AppShell";
@@ -54,6 +55,8 @@ export function App() {
                 <Route path="mechanics" element={<MechanicsView />} />
                 <Route path="composition" element={<CompositionView />} />
                 <Route path="images" element={<ImagesView />} />
+                <Route path="debug/prompt" element={<PromptDebugView />} />
+                <Route path="debug/prompt/:turnId" element={<PromptDebugView />} />
               </Route>
               <Route path="observability/*" element={<ObservabilityRoutes />} />
               <Route path="settings" element={<AppSettings />} />

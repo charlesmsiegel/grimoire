@@ -346,6 +346,26 @@ class AuditStore:
             entry["review_status"] = review_status
         return entry
 
+    async def diff_prompts(
+        self, turn_id_a: TurnId, turn_id_b: TurnId
+    ) -> dict[str, Any]:
+        """Diff two turns' assembled prompts.
+
+        Returns a structured diff suitable for the "What did the model see?"
+        debug view: per-message added/removed/changed entries (keyed by tier
+        + role for stability), per-source added/removed entries, tier budget
+        shifts, and whether the messages_hash changed.
+
+        Raises ``KeyError`` if either turn id is unknown.
+        """
+        audit_a = await self.get(turn_id_a)
+        audit_b = await self.get(turn_id_b)
+        if audit_a is None:
+            raise KeyError(f"unknown turn {turn_id_a!r}")
+        if audit_b is None:
+            raise KeyError(f"unknown turn {turn_id_b!r}")
+        return _diff_audits(audit_a, audit_b)
+
     async def list(
         self,
         campaign_id: CampaignId,
@@ -424,6 +444,120 @@ class AuditStore:
                 "warnings": errors.get("warnings") or [],
             }
         )
+
+
+def _msg_view(msg: Any) -> dict[str, Any]:
+    """Normalize an ``assembled_messages`` entry to a comparable dict.
+
+    Audits store messages as JSON (dicts on the way out); newer audits carry a
+    ``metadata.tier`` annotation. Returns ``{role, tier, tokens, content}``
+    where tokens is the cheap len/4 estimate used elsewhere in the debug view.
+    """
+    if hasattr(msg, "model_dump"):
+        data = msg.model_dump(mode="json")
+    elif isinstance(msg, dict):
+        data = dict(msg)
+    else:
+        data = {"role": "system", "content": str(msg), "metadata": {}}
+    metadata = data.get("metadata") or {}
+    tier = metadata.get("tier") if isinstance(metadata, dict) else None
+    content = data.get("content") or ""
+    return {
+        "role": str(data.get("role") or "system"),
+        "tier": tier,
+        "tokens": max(1, len(content) // 4) if content else 0,
+        "content": content,
+    }
+
+
+def _source_key(src: Any) -> str:
+    """Stable identity for a ContextSource across two audits."""
+    if hasattr(src, "model_dump"):
+        d = src.model_dump(mode="json")
+    elif isinstance(src, dict):
+        d = src
+    else:
+        return repr(src)
+    sid = d.get("source_id") or ""
+    if sid:
+        return sid
+    return f"{d.get('kind', '')}::{d.get('owner_id') or ''}"
+
+
+def _source_view(src: Any) -> dict[str, Any]:
+    if hasattr(src, "model_dump"):
+        d = src.model_dump(mode="json")
+    elif isinstance(src, dict):
+        d = dict(src)
+    else:
+        d = {"kind": "", "owner_id": None, "tier": None, "tokens": 0, "scope": "", "summary": ""}
+    return {
+        "source_id": _source_key(src),
+        "kind": d.get("kind", ""),
+        "owner_id": d.get("owner_id"),
+        "scope": d.get("scope"),
+        "tier": d.get("tier"),
+        "tokens": int(d.get("tokens") or 0),
+        "override_applied": bool(d.get("override_applied") or False),
+        "summary": d.get("summary", ""),
+    }
+
+
+def _diff_audits(audit_a: TurnAudit, audit_b: TurnAudit) -> dict[str, Any]:
+    a_msgs = [_msg_view(m) for m in (audit_a.assembled_messages or [])]
+    b_msgs = [_msg_view(m) for m in (audit_b.assembled_messages or [])]
+    a_by_role_tier: dict[tuple[str, str | None], dict[str, Any]] = {}
+    for m in a_msgs:
+        a_by_role_tier.setdefault((m["role"], m["tier"]), m)
+    b_by_role_tier: dict[tuple[str, str | None], dict[str, Any]] = {}
+    for m in b_msgs:
+        b_by_role_tier.setdefault((m["role"], m["tier"]), m)
+
+    added_messages: list[dict[str, Any]] = []
+    removed_messages: list[dict[str, Any]] = []
+    changed_messages: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str | None]] = set()
+    for key, m_a in a_by_role_tier.items():
+        seen_keys.add(key)
+        m_b = b_by_role_tier.get(key)
+        if m_b is None:
+            removed_messages.append(m_a)
+            continue
+        if m_a["content"] != m_b["content"]:
+            changed_messages.append(
+                {
+                    "role": key[0],
+                    "tier": key[1],
+                    "before": m_a,
+                    "after": m_b,
+                }
+            )
+    for key, m_b in b_by_role_tier.items():
+        if key in seen_keys:
+            continue
+        added_messages.append(m_b)
+
+    a_sources = {_source_key(s): _source_view(s) for s in audit_a.context_sources}
+    b_sources = {_source_key(s): _source_view(s) for s in audit_b.context_sources}
+    added_sources = [v for k, v in b_sources.items() if k not in a_sources]
+    removed_sources = [v for k, v in a_sources.items() if k not in b_sources]
+
+    budget_a = {str(k): int(v) for k, v in (audit_a.context_budget_used or {}).items()}
+    budget_b = {str(k): int(v) for k, v in (audit_b.context_budget_used or {}).items()}
+    tiers = set(budget_a) | set(budget_b)
+    tier_budget_shifts = {t: budget_b.get(t, 0) - budget_a.get(t, 0) for t in sorted(tiers)}
+
+    return {
+        "turn_id_a": audit_a.turn_id,
+        "turn_id_b": audit_b.turn_id,
+        "messages_hash_changed": audit_a.context_messages_hash != audit_b.context_messages_hash,
+        "added_messages": added_messages,
+        "removed_messages": removed_messages,
+        "changed_messages": changed_messages,
+        "added_sources": added_sources,
+        "removed_sources": removed_sources,
+        "tier_budget_shifts": tier_budget_shifts,
+    }
 
 
 __all__ = ["AuditStore"]

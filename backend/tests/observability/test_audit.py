@@ -8,6 +8,7 @@ import pytest
 
 from grimoire.observability.audit import AuditStore
 from grimoire.types.common import Scope
+from grimoire.types.context import ContextSource
 from grimoire.types.observability import (
     CompositionSnapshot,
     ContextSummary,
@@ -296,3 +297,115 @@ async def test_list_orders_by_recency_and_filters_by_campaign(db) -> None:
 
     limited = await store.list("c_one", limit=2)
     assert [a.turn_id for a in limited] == ["t_2", "t_1"]
+
+
+def _audit_with_messages(
+    turn_id: str,
+    *,
+    messages: list[dict[str, object]],
+    sources: list[ContextSource] | None = None,
+    budget: dict[ContextTier, int] | None = None,
+    messages_hash: str = "",
+) -> TurnAudit:
+    return TurnAudit(
+        turn_id=turn_id,
+        campaign_id="c_diff",
+        branch_id="c_diff:main",
+        started_at=datetime(2024, 1, 1, tzinfo=UTC),
+        assembled_messages=messages,
+        context_sources=sources or [],
+        context_budget_used=budget or {},
+        context_messages_hash=messages_hash,
+    )
+
+
+async def test_diff_prompts_added_removed_changed(db) -> None:
+    store = AuditStore(db)
+    src_keep = ContextSource(
+        kind="character", scope=Scope.LIBRARY, owner_id="aragorn", tier=ContextTier.SPOTLIGHT,
+        source_id="src:char:aragorn", tokens=120, summary="Aragorn",
+    )
+    src_drop = ContextSource(
+        kind="lore", scope=Scope.LIBRARY, owner_id="rohan", tier=ContextTier.BACKGROUND,
+        source_id="src:lore:rohan", tokens=80, summary="Rohan lore",
+    )
+    src_add = ContextSource(
+        kind="character", scope=Scope.LIBRARY, owner_id="gandalf", tier=ContextTier.SPOTLIGHT,
+        source_id="src:char:gandalf", tokens=140, summary="Gandalf",
+    )
+    audit_a = _audit_with_messages(
+        "t_a",
+        messages=[
+            {"role": "system", "content": "you are a narrator", "metadata": {"tier": "system"}},
+            {"role": "system", "content": "scene header A", "metadata": {"tier": "lock-in"}},
+            {"role": "system", "content": "rohan lore present", "metadata": {"tier": "background"}},
+            {"role": "user", "content": "I look around.", "metadata": {"tier": "player-input"}},
+        ],
+        sources=[src_keep, src_drop],
+        budget={ContextTier.LOCK_IN: 200, ContextTier.BACKGROUND: 300},
+        messages_hash="hash-A",
+    )
+    audit_b = _audit_with_messages(
+        "t_b",
+        messages=[
+            {"role": "system", "content": "you are a narrator", "metadata": {"tier": "system"}},
+            {
+                "role": "system",
+                "content": "scene header B (changed)",
+                "metadata": {"tier": "lock-in"},
+            },
+            {"role": "system", "content": "gandalf has arrived", "metadata": {"tier": "spotlight"}},
+            {"role": "user", "content": "I draw my sword.", "metadata": {"tier": "player-input"}},
+        ],
+        sources=[src_keep, src_add],
+        budget={ContextTier.LOCK_IN: 240, ContextTier.SPOTLIGHT: 400},
+        messages_hash="hash-B",
+    )
+    await store.record(audit_a)
+    await store.record(audit_b)
+
+    diff = await store.diff_prompts("t_a", "t_b")
+    assert diff["turn_id_a"] == "t_a"
+    assert diff["turn_id_b"] == "t_b"
+    assert diff["messages_hash_changed"] is True
+
+    # lock-in message content changed
+    changed = diff["changed_messages"]
+    assert len(changed) == 2  # lock-in + player-input
+    lock_in_change = next(c for c in changed if c["tier"] == "lock-in")
+    assert "scene header A" in lock_in_change["before"]["content"]
+    assert "scene header B" in lock_in_change["after"]["content"]
+
+    # background removed, spotlight added
+    removed_tiers = {m["tier"] for m in diff["removed_messages"]}
+    added_tiers = {m["tier"] for m in diff["added_messages"]}
+    assert removed_tiers == {"background"}
+    assert added_tiers == {"spotlight"}
+
+    # source attribution: rohan dropped, gandalf added; aragorn stable
+    added_ids = {s["source_id"] for s in diff["added_sources"]}
+    removed_ids = {s["source_id"] for s in diff["removed_sources"]}
+    assert added_ids == {"src:char:gandalf"}
+    assert removed_ids == {"src:lore:rohan"}
+
+    # tier budget shifts: lock-in +40, spotlight +400, background -300
+    shifts = diff["tier_budget_shifts"]
+    assert shifts["lock-in"] == 40
+    assert shifts["spotlight"] == 400
+    assert shifts["background"] == -300
+
+
+async def test_diff_prompts_raises_keyerror_on_missing_turn(db) -> None:
+    store = AuditStore(db)
+    await store.record(
+        TurnAudit(
+            turn_id="t_only",
+            campaign_id="c",
+            branch_id="b",
+            started_at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+    )
+    with pytest.raises(KeyError):
+        await store.diff_prompts("nope", "t_only")
+    with pytest.raises(KeyError):
+        await store.diff_prompts("t_only", "nope")

@@ -2135,7 +2135,13 @@ class ContextBuilderService:
         # System block — never compressed, never dropped
         system_text = await self._system_block(ctx)
         if system_text:
-            messages.append(Message(role=MessageRole.SYSTEM, content=system_text))
+            messages.append(
+                Message(
+                    role=MessageRole.SYSTEM,
+                    content=system_text,
+                    metadata={"tier": "system"},
+                )
+            )
 
         # Lock-in: scene header + active PC + commitments + mechanics + last 2 posts verbatim
         lock_in_text = await self._lock_in_block(ctx)
@@ -2144,7 +2150,13 @@ class ContextBuilderService:
         if lock_in_tokens > lock_budget:
             raise LockInOverflowError(used=lock_in_tokens, budget=lock_budget)
         if lock_in_text:
-            messages.append(Message(role=MessageRole.SYSTEM, content=lock_in_text))
+            messages.append(
+                Message(
+                    role=MessageRole.SYSTEM,
+                    content=lock_in_text,
+                    metadata={"tier": ContextTier.LOCK_IN.value},
+                )
+            )
             budget_used[ContextTier.LOCK_IN] = lock_in_tokens
 
         # Spotlight + Background tiers
@@ -2176,14 +2188,28 @@ class ContextBuilderService:
             if older:
                 older_tokens = await self._tokens(older)
                 if older_tokens <= self._config.recent_posts_budget:
-                    messages.append(Message(role=MessageRole.SYSTEM, content=older))
+                    messages.append(
+                        Message(
+                            role=MessageRole.SYSTEM,
+                            content=older,
+                            metadata={"tier": "recent-posts"},
+                        )
+                    )
 
         # Player input
         if player_input:
-            messages.append(Message(role=MessageRole.USER, content=player_input))
+            messages.append(
+                Message(
+                    role=MessageRole.USER,
+                    content=player_input,
+                    metadata={"tier": "player-input"},
+                )
+            )
 
         if ctx.extra:
-            messages.append(Message(role=MessageRole.USER, content=ctx.extra))
+            messages.append(
+                Message(role=MessageRole.USER, content=ctx.extra, metadata={"tier": "extra"})
+            )
 
         messages = _resolve_runtime_macros(messages, ctx.active_pc_name)
 
@@ -2442,7 +2468,13 @@ class ContextBuilderService:
         if not packed:
             return 0
         content = render_template("context_tier_block", label=label, items=packed)
-        messages.append(Message(role=MessageRole.SYSTEM, content=content))
+        messages.append(
+            Message(
+                role=MessageRole.SYSTEM,
+                content=content,
+                metadata={"tier": tier.value},
+            )
+        )
         return used
 
     # -- helpers -------------------------------------------------------- #
