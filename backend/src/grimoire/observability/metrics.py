@@ -324,6 +324,24 @@ class MetricsRegistry:
         }
 
 
+    async def known_pairs(self) -> list[dict[str, Any]]:
+        """Return every ``(module, operation)`` with a row, plus its
+        latest ``recorded_at`` (so the frontend can sort by recency)."""
+        rows = await self._db.fetchall(
+            "SELECT module, metric, MAX(recorded_at) AS last_recorded_at "
+            "FROM metric_samples GROUP BY module, metric "
+            "ORDER BY MAX(recorded_at) DESC"
+        )
+        return [
+            {
+                "module": r["module"],
+                "operation": r["metric"],
+                "last_recorded_at": r["last_recorded_at"],
+            }
+            for r in rows
+        ]
+
+
 def _percentile(values: list[float], q: float) -> float:
     if not values:
         return 0.0
