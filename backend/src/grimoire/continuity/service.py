@@ -155,11 +155,13 @@ class ContinuityService(Continuity):
             )
         if not fact.id:
             fact = dataclasses.replace(fact, id=new_id("fact"))
-        # Tag attribution into `tags` if not already present.
+        # Tag attribution into `tags` if not already present. Build a new
+        # list so callers reusing the same Fact dataclass don't accumulate
+        # src: tags from prior writes.
         if source:
             src_tag = f"src:{source}"
             if src_tag not in fact.tags:
-                fact.tags.append(src_tag)
+                fact = dataclasses.replace(fact, tags=[*fact.tags, src_tag])
         await self._store.put_fact(fact)
         await self._emit(
             "fact_recorded",
@@ -454,7 +456,7 @@ class ContinuityService(Continuity):
         if source:
             src_tag = f"src:{source}"
             if src_tag not in c.tags:
-                c.tags.append(src_tag)
+                c = dataclasses.replace(c, tags=[*c.tags, src_tag])
         if c.last_activity_at is None:
             c = dataclasses.replace(c, last_activity_at=c.in_game_created_at)
         await self._store.put_commitment(c)
