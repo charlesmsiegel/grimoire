@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -310,6 +310,30 @@ class IngestOptions(BaseModel):
 
     import_primary_greeting: bool = True
     """Materialize ``first_mes`` as the default Greeting library entry."""
+
+
+LoreOverrideKind = Literal["lore", "character", "location", "faction", "item", "skip"]
+
+
+class LoreOverride(BaseModel):
+    """Per-row user choice in the import dialog (spec
+    2026-05-20-import-dialog-reclassify §2).
+
+    The frontend builds one of these per lore row whose kind diverged from
+    the default ``"lore"`` and sends them on the commit payload. The
+    backend dispatches in ``_write_lore_entries`` (kind=lore writes lore
+    as today, kind=skip skips and warns, target kinds run ``apply_mapping``
+    and write the target-kind entity).
+
+    ``overrides`` patches the target-kind frontmatter after the mapping
+    runs (see ``apply_mapping``). The only required override in v1 is
+    ``kind`` for target=Location; the backend re-checks via
+    ``required_overrides_for`` and rejects the commit if any are missing.
+    """
+
+    source_index: int
+    kind: LoreOverrideKind = "lore"
+    overrides: dict[str, Any] = Field(default_factory=dict)
 
 
 class IngestedLoreEntry(BaseModel):
