@@ -42,7 +42,7 @@ interface CharacterCard {
   reasons: InclusionReason[];
 }
 
-export function extractCharacterRef(source: ContextSourceFromAudit): string {
+function extractCharacterRef(source: ContextSourceFromAudit): string {
   const s = source.summary;
   if (s.startsWith("Active PC: ")) return s.slice("Active PC: ".length);
   if (s.startsWith("voice:")) return s.slice("voice:".length);
