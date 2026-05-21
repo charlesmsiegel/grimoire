@@ -135,6 +135,20 @@ def test_apply_mapping_overrides_win_over_defaults() -> None:
     assert fm["role"] == "major_npc"
 
 
+def test_apply_mapping_no_dropped_warning_for_lore_at_defaults() -> None:
+    """Regression: a LoreEntry left at every default should NOT trip the
+    'matching metadata discarded' warning. The position and selective_logic
+    sentinels in _DEFAULT_VALUES must match the model defaults
+    (LorePosition.AFTER_CAST, SelectiveLogic.AND_ANY), not None.
+    """
+    lore = _lore()  # all defaulted matching-metadata fields
+    _fm, _body, _kept, dropped, _into_notes, warnings = apply_mapping(
+        lore, EntityKind.CHARACTER, overrides=None,
+    )
+    assert dropped == []
+    assert not any("matching metadata" in w for w in warnings)
+
+
 def test_required_overrides_for_location_includes_kind() -> None:
     required = required_overrides_for(EntityKind.LOCATION)
     assert "kind" in required

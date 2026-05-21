@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from grimoire.types.common import EntityKind
-from grimoire.types.world import LoreEntry
+from grimoire.types.world import LoreEntry, LorePosition, SelectiveLogic
 
 # --------------------------------------------------------------------------- #
 # Result types
@@ -141,14 +141,14 @@ _DROPPED_MATCHING_FIELDS: frozenset[str] = frozenset(
 _DEFAULT_VALUES: dict[str, Any] = {
     "priority": 100,
     "probability": 100,
-    "position": None,
+    "position": LorePosition.AFTER_CAST,
     "at_depth": None,
     "scan_depth": None,
     "constant": False,
     "enabled": True,
     "case_sensitive": False,
     "match_whole_words": False,
-    "selective_logic": None,
+    "selective_logic": SelectiveLogic.AND_ANY,
 }
 
 # Required overrides per target kind (target schema fields lore can't supply).
