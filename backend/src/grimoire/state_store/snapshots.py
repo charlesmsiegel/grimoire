@@ -30,23 +30,21 @@ async def write_snapshots_for_world(
     world is snapshotted. Returns the number of rows written.
     """
     if include is None:
-        rows = await (
-            await conn.execute(
-                "SELECT id, kind, frontmatter, body, version FROM library_index WHERE world_id = ?",
-                (world_id,),
-            )
-        ).fetchall()
+        async with conn.execute(
+            "SELECT id, kind, frontmatter, body, version FROM library_index WHERE world_id = ?",
+            (world_id,),
+        ) as cur:
+            rows = await cur.fetchall()
     else:
-        placeholders = ",".join("?" * len(include))
         if not include:
             return 0
-        rows = await (
-            await conn.execute(
-                f"SELECT id, kind, frontmatter, body, version FROM library_index "
-                f"WHERE world_id = ? AND kind IN ({placeholders})",
-                (world_id, *include),
-            )
-        ).fetchall()
+        placeholders = ",".join("?" * len(include))
+        async with conn.execute(
+            f"SELECT id, kind, frontmatter, body, version FROM library_index "
+            f"WHERE world_id = ? AND kind IN ({placeholders})",
+            (world_id, *include),
+        ) as cur:
+            rows = await cur.fetchall()
 
     now = now_iso()
     written = 0
@@ -109,15 +107,14 @@ async def upgrade_snapshots(
     Returns a diff: ``{library_id: {"before": int, "after": int}}`` mapping
     library ids whose snapshot version changed.
     """
-    before_rows = await (
-        await conn.execute(
-            """
-            SELECT library_id, version FROM library_snapshots
-            WHERE campaign_id = ? AND branch_id = ?
-            """,
-            (campaign_id, branch_id),
-        )
-    ).fetchall()
+    async with conn.execute(
+        """
+        SELECT library_id, version FROM library_snapshots
+        WHERE campaign_id = ? AND branch_id = ?
+        """,
+        (campaign_id, branch_id),
+    ) as cur:
+        before_rows = await cur.fetchall()
     before = {row["library_id"]: int(row["version"]) for row in before_rows}
 
     await write_snapshots_for_world(
@@ -128,15 +125,14 @@ async def upgrade_snapshots(
         include=include,
     )
 
-    after_rows = await (
-        await conn.execute(
-            """
-            SELECT library_id, version FROM library_snapshots
-            WHERE campaign_id = ? AND branch_id = ?
-            """,
-            (campaign_id, branch_id),
-        )
-    ).fetchall()
+    async with conn.execute(
+        """
+        SELECT library_id, version FROM library_snapshots
+        WHERE campaign_id = ? AND branch_id = ?
+        """,
+        (campaign_id, branch_id),
+    ) as cur:
+        after_rows = await cur.fetchall()
     after = {row["library_id"]: int(row["version"]) for row in after_rows}
 
     diff: dict[str, dict] = {}

@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## MEDIUM
 
-- **Cursors leaked via double-await `await (await conn.execute(...)).fetchall()`** — `backend/src/grimoire/state_store/snapshots.py:33-49,112-139` — aiosqlite cursor finalizer is non-deterministic; on WAL these can hold reader locks briefly. Use `async with conn.execute(...) as cur:` consistently.
 - **Continuity `add_fact`/`add_commitment` mutate caller's input** — `backend/src/grimoire/continuity/service.py:162,457` — `fact.tags.append(...)`. Callers reusing the same dataclass accumulate `src:` tags.
 - **`delete_campaign` leaves the on-disk tree** — `backend/src/grimoire/api/campaigns.py:327-328` — Deletes the DB row only. Re-creating with the same id silently inherits stale scenes/images.
 - **`_drop_orphan_library_rows` opens N pool connections** — `backend/src/grimoire/watcher/watcher.py:672-684` — One `await self.store.db.execute(...)` per orphan, unwrapped from a transaction. Slow on large rescans; partial failure leaves SQLite half-cleaned.
