@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from grimoire.observability.costs import CostTrackerService
 from grimoire.types.llm import LLMCallRecord
+from grimoire.types.observability import CostTotal
 
 
 def _call(
@@ -96,3 +97,50 @@ async def test_by_day_returns_one_row_per_calendar_day(db) -> None:
     assert len(by_day) == 1
     assert by_day[0].total_usd == 0.05
     assert by_day[0].call_count == 2
+
+
+async def test_by_turn_returns_cost_totals_by_task(db) -> None:
+    tracker = CostTrackerService(db)
+    await tracker.record(_call(cost=0.01, task="primary", turn="t1"))
+    await tracker.record(_call(cost=0.02, task="primary", turn="t1"))
+    await tracker.record(_call(cost=0.005, task="extraction", turn="t1"))
+    await tracker.record(_call(cost=0.99, task="primary", turn="t2"))  # other turn
+
+    by_turn = await tracker.by_turn("t1")
+
+    assert set(by_turn.keys()) == {"primary", "extraction"}
+    assert isinstance(by_turn["primary"], CostTotal)
+    assert abs(by_turn["primary"].total_usd - 0.03) < 1e-9
+    assert by_turn["primary"].call_count == 2
+    assert by_turn["extraction"].total_usd == 0.005
+    assert by_turn["extraction"].call_count == 1
+    # No matching llm_requests rows — tokens default to 0.
+    assert by_turn["primary"].input_tokens == 0
+    assert by_turn["primary"].output_tokens == 0
+
+
+async def test_by_turn_pulls_tokens_from_llm_requests(db) -> None:
+    tracker = CostTrackerService(db)
+    await tracker.record(_call(cost=0.04, task="primary", model="m-1", turn="t9"))
+    await db.execute(
+        "INSERT INTO llm_requests ("
+        "id, campaign_id, turn_id, task, provider, model, "
+        "prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, "
+        "retries, fallback_used, request_hash, response_excerpt, error, created_at"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "r1", "c1", "t9", "primary", "p", "m-1",
+            250, 90, 340, 0.04, 100, 0, 0, None, None, None,
+            datetime.now(UTC).isoformat(),
+        ),
+    )
+
+    by_turn = await tracker.by_turn("t9")
+    assert by_turn["primary"].input_tokens == 250
+    assert by_turn["primary"].output_tokens == 90
+    assert by_turn["primary"].call_count == 1
+
+
+async def test_by_turn_unknown_returns_empty(db) -> None:
+    tracker = CostTrackerService(db)
+    assert await tracker.by_turn("never_seen") == {}

@@ -123,18 +123,39 @@ class CostTrackerService:
             )
         return out
 
-    async def by_turn(self, turn_id: str) -> dict[str, dict[str, Any]]:
+    async def by_turn(self, turn_id: str) -> dict[str, CostTotal]:
+        """Per-task cost breakdown for one turn.
+
+        Joins ``cost_records`` against ``llm_requests`` on
+        ``(turn_id, task, model)`` so each task's totals carry token counts
+        from the gateway's request log. Tasks with no matching
+        ``llm_requests`` row still get a cost total — tokens default to 0.
+        """
         rows = await self._db.fetchall(
-            "SELECT task, SUM(cost_usd) AS total, COUNT(id) AS calls "
-            "FROM cost_records WHERE turn_id = ? GROUP BY task",
+            """
+            SELECT cr.task AS task,
+                   COALESCE(SUM(cr.cost_usd), 0.0) AS total_usd,
+                   COALESCE(SUM(lr.prompt_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(lr.completion_tokens), 0) AS output_tokens,
+                   COUNT(cr.id) AS call_count
+            FROM cost_records cr
+            LEFT JOIN llm_requests lr
+                ON lr.turn_id = cr.turn_id
+                AND lr.task = cr.task
+                AND lr.model = cr.model
+            WHERE cr.turn_id = ?
+            GROUP BY cr.task
+            """,
             (turn_id,),
         )
         return {
-            (r["task"] or ""): {
-                "total_usd": float(r["total"] or 0.0),
-                "call_count": int(r["calls"] or 0),
-            }
-            for r in rows
+            (row["task"] or ""): CostTotal(
+                total_usd=float(row["total_usd"] or 0.0),
+                input_tokens=int(row["input_tokens"] or 0),
+                output_tokens=int(row["output_tokens"] or 0),
+                call_count=int(row["call_count"] or 0),
+            )
+            for row in rows
         }
 
     async def total_today(self, campaign_id: CampaignId) -> float:
