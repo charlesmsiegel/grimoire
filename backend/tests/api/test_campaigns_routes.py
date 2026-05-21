@@ -362,6 +362,55 @@ def test_list_contradictions_route_passes_resolved_filter(client, container) -> 
     assert service._store.kwargs == {"resolved": False, "limit": 5}
 
 
+class FakeOrchestratorWithSceneBreak:
+    """Records ``resolve_scene_break`` calls and replays a scripted result."""
+
+    def __init__(self, *, result: bool = True) -> None:
+        self.result = result
+        self.calls: list[tuple[str, str, str]] = []
+
+    async def resolve_scene_break(
+        self, campaign_id: str, turn_id: str, choice: str
+    ) -> bool:
+        self.calls.append((campaign_id, turn_id, choice))
+        return self.result
+
+
+def test_resolve_scene_break_dispatches_to_orchestrator(client, container) -> None:
+    fake = FakeOrchestratorWithSceneBreak(result=True)
+    container.orchestrator = fake
+    response = client.post(
+        "/api/campaigns/c1/turns/t_42/resolve-scene-break",
+        json={"choice": "new_scene"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {"resolved": True, "turn_id": "t_42", "choice": "new_scene"}
+    assert fake.calls == [("c1", "t_42", "new_scene")]
+
+
+def test_resolve_scene_break_404_when_not_pending(client, container) -> None:
+    container.orchestrator = FakeOrchestratorWithSceneBreak(result=False)
+    response = client.post(
+        "/api/campaigns/c1/turns/t_99/resolve-scene-break",
+        json={"choice": "continue"},
+    )
+    assert response.status_code == 404
+    assert "t_99" in response.json()["detail"]
+
+
+def test_resolve_scene_break_422_on_invalid_choice(client, container) -> None:
+    fake = FakeOrchestratorWithSceneBreak()
+    container.orchestrator = fake
+    response = client.post(
+        "/api/campaigns/c1/turns/t_42/resolve-scene-break",
+        json={"choice": "skip"},
+    )
+    assert response.status_code == 422
+    # Orchestrator must not be called when the choice is rejected at the edge.
+    assert fake.calls == []
+
+
 def test_orchestrator_503_when_missing(client, container) -> None:
     # Lifespan auto-wires an OrchestratorService; clear it so we can verify
     # the 503 branch in api/deps.py:_require for any service that goes missing.

@@ -191,6 +191,16 @@ class ResolveProposalsPayload(BaseModel):
     resolutions: list[ProposalResolutionPayload] = Field(default_factory=list)
 
 
+class ResolveSceneBreakPayload(BaseModel):
+    """Player's response to a ``scene_break_suggested`` prompt.
+
+    - ``continue``: keep the current scene; orchestrator resumes without a break.
+    - ``new_scene``: close the current scene and open the proposed new one.
+    """
+
+    choice: str
+
+
 # --------------------------------------------------------------------------- #
 # Campaign CRUD
 # --------------------------------------------------------------------------- #
@@ -1440,6 +1450,40 @@ async def resolve_pre_roll_proposals(
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return {"accepted": True, "turn_id": turn_id}
+
+
+# --------------------------------------------------------------------------- #
+# Scene-break medium-confidence prompt (spec 2026-05-18 §5)
+# --------------------------------------------------------------------------- #
+
+
+@router.post("/{campaign_id}/turns/{turn_id}/resolve-scene-break")
+async def resolve_scene_break(
+    campaign_id: str,
+    turn_id: str,
+    payload: ResolveSceneBreakPayload,
+    orchestrator: OrchestratorDep,
+) -> Any:
+    if payload.choice not in ("continue", "new_scene"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"choice must be 'continue' or 'new_scene', got {payload.choice!r}",
+        )
+    try:
+        resolved = await orchestrator.resolve_scene_break(
+            campaign_id, turn_id, payload.choice  # type: ignore[arg-type]
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    if not resolved:
+        # No pending prompt matched — the turn already moved on (timed out,
+        # cancelled, or never asked). Surface as 404 so the Frontend can
+        # tear the modal down rather than retry.
+        raise HTTPException(
+            status_code=404,
+            detail=f"no scene-break prompt pending for turn {turn_id!r}",
+        )
+    return {"resolved": True, "turn_id": turn_id, "choice": payload.choice}
 
 
 # --------------------------------------------------------------------------- #

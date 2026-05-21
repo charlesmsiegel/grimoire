@@ -33,6 +33,7 @@ _FORWARDED_EVENTS: tuple[str, ...] = (
     "npc_tick_complete",
     "scene_started",
     "scene_ended",
+    "scene_break_suggested",
     "library_file_changed",
     "campaign_file_changed",
     "scene_file_changed",
