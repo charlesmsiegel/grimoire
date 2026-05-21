@@ -112,3 +112,61 @@ async def test_prompt_composer_handles_missing_providers() -> None:
     assert out.negative_prompt == ""
     assert out.params == {}
     assert out.parts == []
+
+
+async def test_visual_extractor_overrides_heuristic_when_it_returns_elements() -> None:
+    body = "Alistair stood at the window, watching the rain. Her dress was crimson silk."
+    seen: list[str] = []
+
+    class LlmExtractor:
+        async def extract_visual_elements(self, text: str) -> list[str]:
+            seen.append(text)
+            return ["crimson silk gown", "rain-slick cobblestones"]
+
+    composer = PromptComposer(visual_extractor=LlmExtractor())
+    out = await composer.compose(campaign_id="camp-1", post_body=body)
+    # LLM hints replace the heuristic output entirely
+    assert "crimson silk gown" in out.parts
+    assert "rain-slick cobblestones" in out.parts
+    # Heuristic-flavored fragments do not leak through
+    assert not any("watching the rain" in p for p in out.parts)
+    assert seen == [body]
+
+
+async def test_visual_extractor_empty_result_falls_back_to_heuristic() -> None:
+    body = "Alistair stood at the window, watching the rain. He sighed."
+
+    class EmptyExtractor:
+        async def extract_visual_elements(self, text: str) -> list[str]:
+            return []
+
+    composer = PromptComposer(visual_extractor=EmptyExtractor())
+    out = await composer.compose(campaign_id="camp-1", post_body=body)
+    assert any("rain" in p for p in out.parts)
+
+
+async def test_visual_extractor_exception_falls_back_to_heuristic() -> None:
+    body = "Alistair stood at the window, watching the rain. He sighed."
+
+    class BrokenExtractor:
+        async def extract_visual_elements(self, text: str) -> list[str]:
+            raise RuntimeError("LLM endpoint down")
+
+    composer = PromptComposer(visual_extractor=BrokenExtractor())
+    out = await composer.compose(campaign_id="camp-1", post_body=body)
+    assert any("rain" in p for p in out.parts)
+
+
+async def test_visual_extractor_not_called_when_post_body_missing() -> None:
+    called = False
+
+    class TrackingExtractor:
+        async def extract_visual_elements(self, text: str) -> list[str]:
+            nonlocal called
+            called = True
+            return ["should not appear"]
+
+    composer = PromptComposer(visual_extractor=TrackingExtractor())
+    out = await composer.compose(campaign_id="camp-1")
+    assert called is False
+    assert "should not appear" not in out.parts
