@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { PostItem } from "../PostItem";
 import type { ApiAlternate, ApiPost, PCEntry } from "../../../api/campaign";
 import { campaignApi } from "../../../api/campaign";
+import { observabilityApi } from "../../../api/observability";
 
 function makePost(overrides: Partial<ApiPost> = {}): ApiPost {
   return {
@@ -105,5 +106,36 @@ describe("PostItem chevron strip", () => {
     render(<PostItem post={post} pcs={PCS} images={[]} isLatestModelPost campaignId="c1" />);
     fireEvent.click(screen.getByRole("button", { name: "Pin alternate" }));
     await waitFor(() => expect(spy).toHaveBeenCalledWith("c1", "s1", "p1", "a1", true));
+  });
+});
+
+describe("PostItem cost toggle", () => {
+  it("Cost button is absent for player posts", () => {
+    const post = makePost({ is_player: true, author_kind: "pc" });
+    render(<PostItem post={post} pcs={PCS} images={[]} campaignId="c1" />);
+    expect(screen.queryByRole("button", { name: "Toggle cost breakdown" })).toBeNull();
+  });
+
+  it("clicking Cost fetches and renders the per-task breakdown", async () => {
+    const spy = vi.spyOn(observabilityApi, "turnCosts").mockResolvedValue([
+      { task: "primary", total_usd: 0.012, input_tokens: 800, output_tokens: 350, call_count: 1 },
+      { task: "extraction", total_usd: 0.001, input_tokens: 400, output_tokens: 50, call_count: 1 },
+    ]);
+    const post = makePost();
+    render(<PostItem post={post} pcs={PCS} images={[]} campaignId="c1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle cost breakdown" }));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("t1"));
+    expect(await screen.findByText("primary")).toBeInTheDocument();
+  });
+
+  it("clicking Cost twice toggles the panel off", async () => {
+    vi.spyOn(observabilityApi, "turnCosts").mockResolvedValue([]);
+    const post = makePost();
+    render(<PostItem post={post} pcs={PCS} images={[]} campaignId="c1" />);
+    const btn = screen.getByRole("button", { name: "Toggle cost breakdown" });
+    fireEvent.click(btn);
+    expect(await screen.findByText(/no recorded cost/i)).toBeInTheDocument();
+    fireEvent.click(btn);
+    expect(screen.queryByText(/no recorded cost/i)).toBeNull();
   });
 });
