@@ -23,6 +23,7 @@ from grimoire.api.deps import (
     ContinuityDep,
     ExportDep,
     ImageGenDep,
+    LLMGatewayDep,
     LibraryDep,
     MechanicsDep,
     OrchestratorDep,
@@ -396,8 +397,17 @@ async def _write_campaign_config(state_store: Any, campaign_id: str, config: dic
 
 
 class RoutingPayload(BaseModel):
+    """Per-campaign routing: each value is a full ``"provider.model"`` route.
+
+    Empty string or ``None`` clears the entry. Three independent kinds:
+    ``llm`` and ``embedding`` flow into the gateway's resolver;
+    ``imagegen`` is consumed by ImageGenService at queue-time when a
+    matching task name is passed.
+    """
+
     llm: dict[str, str | None] = Field(default_factory=dict)
     embedding: dict[str, str | None] = Field(default_factory=dict)
+    imagegen: dict[str, str | None] = Field(default_factory=dict)
 
 
 class ImageGenSettingsPayload(BaseModel):
@@ -416,15 +426,44 @@ class AdvancedSettingsPayload(BaseModel):
     per_task_prompts: dict[str, str] = Field(default_factory=dict)
 
 
+def _read_routing_blocks(state_store: Any, campaign_id: str) -> dict[str, dict[str, str]]:
+    """Pull the three routing blocks straight from ``campaign.yaml``.
+
+    The LLM Gateway is the only writer to those blocks, so we read the
+    same file (rather than the gateway's in-memory resolver) to be sure
+    we surface what's actually persisted — including routes belonging
+    to a campaign the gateway hasn't loaded yet.
+    """
+    from grimoire.files.yaml_io import load_yaml
+
+    data_root = getattr(state_store, "data_root", None)
+    if data_root is None:
+        return {"llm": {}, "embedding": {}, "imagegen": {}}
+    yaml_path = data_root / "campaigns" / campaign_id / "campaign.yaml"
+    if not yaml_path.is_file():
+        return {"llm": {}, "embedding": {}, "imagegen": {}}
+    try:
+        raw = load_yaml(yaml_path)
+    except Exception:
+        return {"llm": {}, "embedding": {}, "imagegen": {}}
+    if not isinstance(raw, dict):
+        return {"llm": {}, "embedding": {}, "imagegen": {}}
+
+    def _block(key: str) -> dict[str, str]:
+        block = raw.get(key)
+        return {str(k): str(v) for k, v in block.items()} if isinstance(block, dict) else {}
+
+    return {
+        "llm": _block("model_routing"),
+        "embedding": _block("embedding_routing"),
+        "imagegen": _block("imagegen_routing"),
+    }
+
+
 @router.get("/{campaign_id}/routing")
 async def get_campaign_routing(campaign_id: str, state_store: StateStoreDep) -> Any:
-    row = await _require_campaign_row(state_store, campaign_id)
-    cfg = _load_campaign_config(row)
-    routing = cfg.get("routing") or {}
-    return {
-        "llm": dict(routing.get("llm") or {}),
-        "embedding": dict(routing.get("embedding") or {}),
-    }
+    await _require_campaign_row(state_store, campaign_id)
+    return _read_routing_blocks(state_store, campaign_id)
 
 
 @router.put("/{campaign_id}/routing")
@@ -432,15 +471,38 @@ async def set_campaign_routing(
     campaign_id: str,
     payload: RoutingPayload,
     state_store: StateStoreDep,
+    gateway: LLMGatewayDep,
 ) -> Any:
-    row = await _require_campaign_row(state_store, campaign_id)
-    cfg = _load_campaign_config(row)
-    cfg["routing"] = {
-        "llm": {k: v for k, v in payload.llm.items() if v is not None and v != ""},
-        "embedding": {k: v for k, v in payload.embedding.items() if v is not None and v != ""},
-    }
-    await _write_campaign_config(state_store, campaign_id, cfg)
-    return cfg["routing"]
+    """Replace the routing config for ``campaign_id``.
+
+    Each kind is treated independently: present-and-truthy values are
+    written via the gateway (which persists to ``campaign.yaml``);
+    present-and-empty values clear the route. Tasks omitted from the
+    payload are left alone — clients have to explicitly clear what they
+    want to remove.
+    """
+    await _require_campaign_row(state_store, campaign_id)
+
+    async def _apply(block: dict[str, str | None], kind: str) -> None:
+        for task, value in block.items():
+            if value is None or value == "":
+                try:
+                    await gateway.clear_route(task, campaign_id=campaign_id, kind=kind)
+                except ValueError:
+                    pass
+            else:
+                try:
+                    await gateway.set_route(task, value, campaign_id=campaign_id, kind=kind)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"invalid {kind} route for task {task!r}: {exc}",
+                    ) from exc
+
+    await _apply(payload.llm, "llm")
+    await _apply(payload.embedding, "embedding")
+    await _apply(payload.imagegen, "imagegen")
+    return _read_routing_blocks(state_store, campaign_id)
 
 
 @router.get("/{campaign_id}/imagegen")

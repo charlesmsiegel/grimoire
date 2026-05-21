@@ -77,11 +77,18 @@ class ImageGenIntegration:
         ):
             return
 
+        # Pick the most specific task that fired so the campaign's
+        # `imagegen_routing` can pin a backend/model per signal. The
+        # first match wins; orchestrator-emitted signals will let later
+        # priorities (new_character_appearance, new_location) take over
+        # once they're wired up.
+        task = "scene_open" if is_scene_open else "main"
         try:
             await self._svc.queue_generation(
                 campaign_id=str(campaign_id),
                 scene_id=str(scene_id) if scene_id else None,
                 post_id=payload.get("post_id"),
+                task=task,
             )
         except Exception:
             logger.warning("imagegen fan-out failed queuing job", exc_info=True)

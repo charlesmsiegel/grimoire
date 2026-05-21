@@ -404,10 +404,10 @@ class TestEmbeddingRoutingBlock:
 
 
 class TestImagegenRoutingBlock:
-    async def test_imagegen_routing_parses_and_warns(
-        self, db, plugins, tmp_path: Path, caplog
+    async def test_imagegen_routing_loaded_into_lookup(
+        self, db, plugins, tmp_path: Path
     ) -> None:
-        """``imagegen_routing`` is parsed, a warning fires per entry, no error."""
+        """``imagegen_routing`` entries are stored for ImageGenService lookup."""
         campaign_dir = tmp_path / "campaigns" / "camp-img"
         campaign_dir.mkdir(parents=True)
         (campaign_dir / "campaign.yaml").write_text(
@@ -416,14 +416,32 @@ class TestImagegenRoutingBlock:
         )
 
         gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
-        with caplog.at_level(logging.WARNING, logger="grimoire.llm_gateway.gateway"):
-            await gw._load_campaign_routing("camp-img")
+        await gw.ensure_campaign_loaded("camp-img")
 
-        # Warning names the task and notes the route is not yet acted on.
-        msgs = [r.getMessage() for r in caplog.records]
-        assert any("portrait" in m and "not yet" in m and "imagegen_routing" in m for m in msgs), (
-            f"expected per-task imagegen warning, got: {msgs!r}"
+        route = gw.imagegen_route("portrait", "camp-img")
+        assert route is not None
+        assert route.provider_id == "diffusers"
+        assert route.model == "sdxl-base"
+        # Bulk accessor sees the same entry.
+        assert gw.imagegen_routes_for("camp-img") == {"portrait": "diffusers.sdxl-base"}
+
+    async def test_imagegen_routing_does_not_pollute_llm_resolver(
+        self, db, plugins, tmp_path: Path
+    ) -> None:
+        """Imagegen routes must not be visible to ``list_routes`` / ``resolve``."""
+        campaign_dir = tmp_path / "campaigns" / "camp-img-iso"
+        campaign_dir.mkdir(parents=True)
+        (campaign_dir / "campaign.yaml").write_text(
+            "imagegen_routing:\n  scene_open: diffusers.sdxl\n",
+            encoding="utf-8",
         )
+
+        gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        await gw.ensure_campaign_loaded("camp-img-iso")
+
+        # The LLM resolver should not know about the imagegen task.
+        llm_routes = await gw.list_routes(campaign_id="camp-img-iso")
+        assert "scene_open" not in llm_routes
 
     async def test_imagegen_routing_bad_entry_skipped(
         self, db, plugins, tmp_path: Path, caplog
@@ -432,16 +450,80 @@ class TestImagegenRoutingBlock:
         campaign_dir = tmp_path / "campaigns" / "camp-img-bad"
         campaign_dir.mkdir(parents=True)
         (campaign_dir / "campaign.yaml").write_text(
-            "imagegen_routing:\n  portrait: NO_DOT\n",
+            "imagegen_routing:\n  portrait: NO_DOT\n  scene_open: diffusers.ok\n",
             encoding="utf-8",
         )
 
         gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
         with caplog.at_level(logging.WARNING, logger="grimoire.llm_gateway.gateway"):
-            await gw._load_campaign_routing("camp-img-bad")
+            await gw.ensure_campaign_loaded("camp-img-bad")
 
         msgs = [r.getMessage() for r in caplog.records]
         assert any("bad imagegen_routing" in m and "NO_DOT" in m for m in msgs), msgs
+        # Bad entry skipped; valid entry preserved.
+        assert gw.imagegen_route("portrait", "camp-img-bad") is None
+        assert gw.imagegen_route("scene_open", "camp-img-bad") is not None
+
+
+class TestSetRouteByKind:
+    async def test_set_route_embedding_writes_embedding_block(
+        self, db, plugins, tmp_path: Path
+    ) -> None:
+        gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        await gw.set_route("embed:context", "oai.text-embedding-3", campaign_id="c1", kind="embedding")
+
+        data = yaml.safe_load(
+            (tmp_path / "campaigns" / "c1" / "campaign.yaml").read_text(encoding="utf-8")
+        )
+        assert data["embedding_routing"]["embed:context"] == "oai.text-embedding-3"
+        assert "model_routing" not in data
+        # Round-trip: a fresh service reads it back.
+        gw2 = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        await gw2.ensure_campaign_loaded("c1")
+        route = gw2._router.resolve("embed:context", campaign_id="c1")
+        assert route.raw == "oai.text-embedding-3"
+
+    async def test_set_route_imagegen_writes_imagegen_block(
+        self, db, plugins, tmp_path: Path
+    ) -> None:
+        gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        await gw.set_route("portrait", "diffusers.sdxl", campaign_id="c2", kind="imagegen")
+
+        data = yaml.safe_load(
+            (tmp_path / "campaigns" / "c2" / "campaign.yaml").read_text(encoding="utf-8")
+        )
+        assert data["imagegen_routing"]["portrait"] == "diffusers.sdxl"
+        assert "model_routing" not in data
+        # The imagegen route is exposed via the lookup helper.
+        assert gw.imagegen_route("portrait", "c2") is not None
+        # A fresh service reads it back from the YAML.
+        gw2 = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        await gw2.ensure_campaign_loaded("c2")
+        route = gw2.imagegen_route("portrait", "c2")
+        assert route is not None and route.raw == "diffusers.sdxl"
+
+    async def test_set_route_default_kind_is_llm(self, db, plugins, tmp_path: Path) -> None:
+        """Omitting ``kind`` writes to ``model_routing`` for backwards compat."""
+        gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        await gw.set_route("main", "p.x", campaign_id="c3")
+        data = yaml.safe_load(
+            (tmp_path / "campaigns" / "c3" / "campaign.yaml").read_text(encoding="utf-8")
+        )
+        assert data["model_routing"]["main"] == "p.x"
+        assert "embedding_routing" not in data
+        assert "imagegen_routing" not in data
+
+    async def test_clear_route_removes_entry_and_block_when_empty(
+        self, db, plugins, tmp_path: Path
+    ) -> None:
+        gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+        await gw.set_route("portrait", "diffusers.a", campaign_id="c4", kind="imagegen")
+        await gw.clear_route("portrait", campaign_id="c4", kind="imagegen")
+        data = yaml.safe_load(
+            (tmp_path / "campaigns" / "c4" / "campaign.yaml").read_text(encoding="utf-8")
+        )
+        assert "imagegen_routing" not in data
+        assert gw.imagegen_route("portrait", "c4") is None
 
 
 class TestRoutingCrossCheckUnknownModel:

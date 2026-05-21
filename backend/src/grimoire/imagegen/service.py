@@ -52,6 +52,7 @@ from grimoire.types.imagegen import (
     ImageMetadata,
     JobStatus,
 )
+from grimoire.types.protocols import LLMGateway
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +259,7 @@ class ImageGenService:
         plugin_backend_ids: Iterable[str] | None = None,
         thumbnail_subdir: str = "thumbnails",
         config: ImageGenConfig | None = None,
+        gateway: LLMGateway | None = None,
         metrics: MetricsRegistryProtocol = NULL_METRICS,
     ) -> None:
         self.store = store
@@ -269,6 +271,12 @@ class ImageGenService:
         self.default_backend_id = default_backend_id or self.config.default_backend
         self.event_bus = event_bus
         self.composer = composer
+        # Gateway is the single source of truth for per-campaign routing
+        # (loaded from campaign.yaml). Optional so existing setups that
+        # don't use task-based routing keep working unchanged. Can also
+        # be set later via :meth:`set_gateway` because in main.py the
+        # gateway is built after ImageGenService.
+        self._gateway = gateway
         self._plugin_ids = set(plugin_backend_ids or ())
         self._thumbnail_subdir = thumbnail_subdir
         self._jobs: dict[str, GenerationJob] = {}
@@ -288,6 +296,10 @@ class ImageGenService:
 
         for backend in self.registry.all():
             self._ensure_handle(backend.id)
+
+    def set_gateway(self, gateway: LLMGateway) -> None:
+        """Late-bind the gateway used for per-task imagegen routing."""
+        self._gateway = gateway
 
     def register_with_health_monitor(self, monitor: Any) -> None:
         """§11: register all currently registered backends as health targets.
@@ -419,6 +431,8 @@ class ImageGenService:
         post_id: str | None,
         request: GenerationRequest | None = None,
         priority: int = 5,
+        *,
+        task: str | None = None,
     ) -> str:
         async with self._metrics.measure("imagegen", "generate"):
             return await self._queue_generation_inner(
@@ -438,7 +452,15 @@ class ImageGenService:
             request = await self._compose_request(
                 campaign_id=campaign_id, scene_id=scene_id, post_id=post_id
             )
-        backend_id = self._campaign_backend.get(campaign_id)
+        # Per-task campaign routing: when a task is provided and the
+        # campaign has an imagegen_routing entry for it, pick that
+        # backend+model. Falls through to active_backend otherwise.
+        routed_backend, routed_model = await self._resolve_task_route(campaign_id, task)
+        if routed_model is not None:
+            request = request.model_copy(update={"model": routed_model})
+        backend_id = routed_backend
+        if backend_id is None:
+            backend_id = self._campaign_backend.get(campaign_id)
         if backend_id is None:
             raw = await self._load_imagegen_config_row(campaign_id)
             backend_id = raw.get("active_backend") or self.default_backend_id
@@ -605,6 +627,8 @@ class ImageGenService:
         self,
         campaign_id: str,
         request: GenerationRequest,
+        *,
+        task: str | None = None,
     ) -> GenerationResult:
         async with self._metrics.measure("imagegen", "generate"):
             return await self._generate_sync_inner(campaign_id, request)
@@ -615,7 +639,12 @@ class ImageGenService:
         request: GenerationRequest,
     ) -> GenerationResult:
         _validate_campaign_id(campaign_id)
-        backend_id = self._campaign_backend.get(campaign_id, self.default_backend_id)
+        routed_backend, routed_model = await self._resolve_task_route(campaign_id, task)
+        if routed_model is not None:
+            request = request.model_copy(update={"model": routed_model})
+        backend_id = routed_backend or self._campaign_backend.get(
+            campaign_id, self.default_backend_id
+        )
         backend = self.registry.get(backend_id)
         if backend is None:
             raise KeyError(f"no backend registered with id {backend_id!r}")
@@ -625,6 +654,40 @@ class ImageGenService:
         result = await backend.generate(request)
         self._store_in_cache(campaign_id, request, backend=backend, result=result)
         return result
+
+    async def _resolve_task_route(
+        self, campaign_id: str, task: str | None
+    ) -> tuple[str | None, str | None]:
+        """Look up a per-campaign imagegen route for ``task``.
+
+        Returns ``(backend_id, model)``. Both are ``None`` when no task is
+        given, no gateway is wired, or no route exists for the task. A
+        route that names an unregistered backend silently falls through
+        to the campaign's active_backend so a stale config can't break
+        image generation outright.
+        """
+        if task is None or self._gateway is None:
+            return None, None
+        try:
+            await self._gateway.ensure_campaign_loaded(campaign_id)
+        except Exception:
+            logger.warning(
+                "imagegen: ensure_campaign_loaded failed for campaign=%s", campaign_id
+            )
+            return None, None
+        route = self._gateway.imagegen_route(task, campaign_id)
+        if route is None:
+            return None, None
+        if route.provider_id not in self.registry:
+            logger.warning(
+                "imagegen: campaign=%s task=%r routes to backend %r which is not "
+                "registered; falling back to active_backend",
+                campaign_id,
+                task,
+                route.provider_id,
+            )
+            return None, None
+        return route.provider_id, route.model
 
     # ------------------------------------------------------------------ #
     # Queue
