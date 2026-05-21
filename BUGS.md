@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## MEDIUM
 
-- **`SidePanel`'s `SourceBadge` ternary is dead** — `frontend/src/routes/campaign/SidePanel.tsx:59` — `source={pc ? "library" : "library"}`. Both branches return the same value. Should distinguish library vs emergent.
 - **`AppSettings` `patch()` defined outside `useCallback`** — `frontend/src/routes/AppSettings.tsx:156` — `const patch = (next: Partial<AppConfig>) => { ... }` is a plain function recreated each render. (`load()` itself was refactored into `useAppConfig`; the surviving smell is the inline `patch`.)
 - **`pluginsApi.configure` posts raw config as body** — `frontend/src/api/library.ts:548-549` — Sends the config dict as the top-level body; if the backend expects `{config: {...}}` the call silently 422s. Worth checking against the FastAPI route.
 - **`ImageTile` URL construction uses `encodeURI` not `encodeURIComponent`** — `frontend/src/routes/campaign/ImagesView.tsx:98-99` — `encodeURI` doesn't encode `?`, `#`, `+`. A `+` in a filename breaks the URL.

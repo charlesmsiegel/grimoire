@@ -56,7 +56,11 @@ export function SidePanel({ campaignId, scene, pcs, commitments, actions }: Prop
               return (
                 <li key={ref}>
                   {pc ? <strong>{pc.name}</strong> : <span>{ref}</span>}
-                  <SourceBadge source={pc ? "library" : "library"} />
+                  {/* A ref matched in the PC roster resolves from the
+                      library; one only mentioned in present_character_refs
+                      without a roster entry is an emergent NPC the model
+                      brought into the scene. */}
+                  <SourceBadge source={pc ? "library" : "emergent"} />
                 </li>
               );
             })}
