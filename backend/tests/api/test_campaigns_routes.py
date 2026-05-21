@@ -369,9 +369,7 @@ class FakeOrchestratorWithSceneBreak:
         self.result = result
         self.calls: list[tuple[str, str, str]] = []
 
-    async def resolve_scene_break(
-        self, campaign_id: str, turn_id: str, choice: str
-    ) -> bool:
+    async def resolve_scene_break(self, campaign_id: str, turn_id: str, choice: str) -> bool:
         self.calls.append((campaign_id, turn_id, choice))
         return self.result
 

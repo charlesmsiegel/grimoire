@@ -296,9 +296,7 @@ async def test_medium_confidence_timeout_defaults_to_continue(
         fake_extractor=fake_extractor,
         fake_context_builder=fake_context_builder,
         ws=ws,
-        config=OrchestratorConfig(
-            scene_break=SceneBreakConfig(prompt_resume_timeout_seconds=0.05)
-        ),
+        config=OrchestratorConfig(scene_break=SceneBreakConfig(prompt_resume_timeout_seconds=0.05)),
     )
 
     async def medium(*args: Any, **kwargs: Any) -> SceneBreakDecision:
