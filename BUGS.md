@@ -2,14 +2,11 @@
 
 Audit of the grimoire repo. Findings come from three parallel passes — backend, frontend, cross-cutting — collated and de-duplicated. Severities reflect blast radius × likelihood, not how easy each is to fix.
 
-This file is incremental: items are removed as they're fixed. The git log carries the per-item context. The original audit included all 7 CRITICAL items and the full HIGH set; those are resolved and have been deleted here. Re-verified 2026-05-20; the last four HIGH items were closed 2026-05-21.
+This file is incremental: items are removed as they're fixed. The git log carries the per-item context. CRITICAL, HIGH, and MEDIUM are all closed (2026-05-20/21); the LOW set below is what's left.
 
 Format: **Title** — file:line — one-line description.
 
 ---
-
-## MEDIUM
-
 
 ## LOW
 
