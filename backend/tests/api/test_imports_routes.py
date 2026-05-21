@@ -191,6 +191,105 @@ async def test_commit_rejects_wrong_world(client) -> None:
     assert bad.status_code == 400
 
 
+def _card_with_two_lore() -> dict:
+    return {
+        "spec": "chara_card_v2",
+        "data": {
+            "name": "Beatrice",
+            "description": "A witch.",
+            "first_mes": "Hi.",
+            "character_book": {
+                "entries": [
+                    {"name": "Brackhollow Cathedral", "keys": ["cathedral"], "content": "A village cathedral located on the hill."},
+                    {"name": "Some Note", "keys": ["note"], "content": "Random fact."},
+                ],
+            },
+        },
+    }
+
+
+async def test_commit_rejects_unknown_lore_override_kind(client) -> None:
+    ac, _ = client
+    png = _png_with_card(_card_with_two_lore())
+    response = await ac.post(
+        "/api/library/worlds/w1/imports/sillytavern/preview",
+        files={"file": ("card.png", png, "image/png")},
+    )
+    preview_id = response.json()["preview_id"]
+    commit = await ac.post(
+        "/api/library/worlds/w1/imports/sillytavern/commit",
+        json={
+            "preview_id": preview_id,
+            "options": {},
+            "lore_overrides": [{"source_index": 0, "kind": "quest"}],
+        },
+    )
+    assert commit.status_code == 422  # pydantic Literal mismatch
+
+
+async def test_commit_rejects_duplicate_source_index(client) -> None:
+    ac, _ = client
+    png = _png_with_card(_card_with_two_lore())
+    preview = await ac.post(
+        "/api/library/worlds/w1/imports/sillytavern/preview",
+        files={"file": ("card.png", png, "image/png")},
+    )
+    preview_id = preview.json()["preview_id"]
+    commit = await ac.post(
+        "/api/library/worlds/w1/imports/sillytavern/commit",
+        json={
+            "preview_id": preview_id,
+            "options": {},
+            "lore_overrides": [
+                {"source_index": 0, "kind": "skip"},
+                {"source_index": 0, "kind": "character"},
+            ],
+        },
+    )
+    assert commit.status_code == 400
+    assert "declared twice" in commit.text
+
+
+async def test_commit_rejects_out_of_range_source_index(client) -> None:
+    ac, _ = client
+    png = _png_with_card(_card_with_two_lore())
+    preview = await ac.post(
+        "/api/library/worlds/w1/imports/sillytavern/preview",
+        files={"file": ("card.png", png, "image/png")},
+    )
+    preview_id = preview.json()["preview_id"]
+    commit = await ac.post(
+        "/api/library/worlds/w1/imports/sillytavern/commit",
+        json={
+            "preview_id": preview_id,
+            "options": {},
+            "lore_overrides": [{"source_index": 99, "kind": "character"}],
+        },
+    )
+    assert commit.status_code == 400
+    assert "source_index" in commit.text
+
+
+async def test_commit_rejects_missing_required_override(client) -> None:
+    ac, _ = client
+    png = _png_with_card(_card_with_two_lore())
+    preview = await ac.post(
+        "/api/library/worlds/w1/imports/sillytavern/preview",
+        files={"file": ("card.png", png, "image/png")},
+    )
+    preview_id = preview.json()["preview_id"]
+    commit = await ac.post(
+        "/api/library/worlds/w1/imports/sillytavern/commit",
+        json={
+            "preview_id": preview_id,
+            "options": {},
+            "lore_overrides": [{"source_index": 0, "kind": "location"}],  # missing 'kind' override
+        },
+    )
+    assert commit.status_code == 400
+    assert "required override" in commit.text.lower() or "kind" in commit.text
+
+
 async def test_list_and_get_reports(client) -> None:
     ac, _store = client
     card = {"spec": "chara_card_v2", "data": {"name": "Beatrice", "first_mes": "Hi."}}
