@@ -423,7 +423,12 @@ class TransientStateService:
             raise TypeError("promote_to_fact requires a single-field get")
         fact_id = ""
         if continuity is not None:
-            from grimoire.types.continuity import Fact, FactScope, FactSource, FactSubject
+            from grimoire.continuity.types import (
+                Fact,
+                FactSource,
+                FactSubject,
+                InGameTime,
+            )
 
             subject_kwargs: dict[str, Any] = {}
             if entity_kind == EntityKind.CHARACTER:
@@ -434,14 +439,12 @@ class TransientStateService:
                 subject_kwargs["faction_ids"] = [entity_id]
             fact = Fact(
                 id=f"f_{entity_id}_{field}_{turn_id}",
-                campaign_id=campaign_id,
-                branch_id=branch_id or self._default_branch(campaign_id),
                 text=f"{entity_id} has {field}: {current.value}",
-                established_in_post=current.source_post_id,
-                established_at_in_game=None,
+                established_in_post=current.source_post_id or turn_id,
+                established_at_in_game=InGameTime(day_count=0),
                 confidence=current.confidence,
                 source=FactSource.INFERRED,
-                about=FactSubject(scope=FactScope.PUBLIC, **subject_kwargs),
+                about=FactSubject(scope="public", **subject_kwargs),
                 tags=[evidence] if evidence else [],
             )
             fact_id = await continuity.add_fact(fact, source="transient_state:promote")
