@@ -329,3 +329,52 @@ async def test_conformance_disabled_skips_for_failing_plugin(
     report = await svc.rescan()
     assert "bad" in report.loaded
     assert svc.get_llm_provider("bad") is not None
+
+
+# --- §12 closure tripwire ------------------------------------------- #
+#
+# Spec 17 §L1 "Plugins" mentions dependency resolution (topological sort,
+# cycle detection) and lifecycle ordering as test concerns. §12 of the
+# testing spec was closed without action because no inter-plugin
+# dependency surface exists today, so there's nothing for a
+# ``ManifestConformance`` suite to assert against. The two guards below
+# fail the build if that premise changes, prompting the dev who adds the
+# feature to also wire the conformance suite.
+
+
+def test_plugin_manifest_schema_has_no_dependency_surface() -> None:
+    """If a ``depends_on``/``requires_plugin`` field shows up, write the suite.
+
+    See module docstring §12 — when this fails, add
+    ``grimoire/testing/conformance/manifest.py`` (topological sort + cycle
+    detection) and register it alongside the per-kind suites in
+    ``grimoire.plugins.service._CONFORMANCE_SUITES``.
+    """
+    from grimoire.validation.manifests import PLUGIN_MANIFEST_SCHEMA
+
+    properties = set(PLUGIN_MANIFEST_SCHEMA.get("properties", {}).keys())
+    forbidden = {"depends_on", "requires_plugin", "plugin_dependencies"}
+    leaked = properties & forbidden
+    assert not leaked, (
+        f"manifest schema added inter-plugin dependency field(s) {sorted(leaked)}; "
+        "wire a ManifestConformance suite per the §12 note in this module."
+    )
+
+
+def test_plugin_loader_has_no_topological_sort() -> None:
+    """If the loader gains a topological sort, write the suite.
+
+    See module docstring §12. The loader currently iterates discovered
+    plugins independently; once it sorts by declared deps, the
+    conformance suite gains real invariants to check (acyclicity,
+    activation order, missing-dependency errors).
+    """
+    from grimoire.plugins import loader
+
+    public = {name for name in dir(loader) if not name.startswith("_")}
+    forbidden = {"topological_sort", "resolve_dependencies", "order_by_deps"}
+    leaked = public & forbidden
+    assert not leaked, (
+        f"loader exposes dependency-resolution symbol(s) {sorted(leaked)}; "
+        "wire a ManifestConformance suite per the §12 note in this module."
+    )
