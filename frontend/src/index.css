@@ -5742,3 +5742,87 @@ button.primary:disabled {
     max-height: 50vh;
   }
 }
+
+/* ----- Observability / Health panel ----- */
+
+.observability-health {
+  max-width: 90ch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.observability-header h2 {
+  margin: 0;
+}
+
+.observability-sub {
+  margin: var(--space-2) 0 0;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+
+.observability-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.observability-section h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.health-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.health-table th,
+.health-table td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+
+.health-table tbody tr[data-level="unhealthy"] th,
+.health-table tbody tr[data-level="degraded"] th {
+  color: var(--fg-default);
+}
+
+.health-message {
+  color: var(--fg-muted);
+  max-width: 36ch;
+  word-break: break-word;
+}
+
+.health-badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elev);
+}
+
+.health-badge[data-level="healthy"] {
+  color: var(--ok-fg, #1f7a3f);
+  border-color: var(--ok-fg, #1f7a3f);
+}
+
+.health-badge[data-level="degraded"] {
+  color: var(--warn-fg, #a86b00);
+  border-color: var(--warn-fg, #a86b00);
+}
+
+.health-badge[data-level="unhealthy"] {
+  color: var(--danger-fg, #b22a2a);
+  border-color: var(--danger-fg, #b22a2a);
+}
+
+.health-badge[data-level="unconfigured"] {
+  color: var(--fg-muted);
+}

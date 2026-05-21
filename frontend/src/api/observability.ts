@@ -1,6 +1,10 @@
 /**
- * Observability HTTP client. Mirrors the routes in
+ * REST client for observability endpoints. Mirrors the routes in
  * ``backend/src/grimoire/api/observability.py``.
+ *
+ * Covers performance metrics (#355), the per-turn delta diff (#351), and
+ * the Frontend Health panel (#357): latest probe results, manual
+ * re-probes, and errors grouped by module.
  */
 
 import { api } from "./client";
@@ -68,6 +72,33 @@ export interface TurnDeltaDiff {
   queued: TurnDeltaEntry[];
 }
 
+export type HealthLevel = "healthy" | "degraded" | "unhealthy" | "unconfigured";
+
+export interface HealthStatus {
+  level: HealthLevel;
+  target_id: string;
+  message: string;
+  checked_at: string | null;
+  details: Record<string, unknown>;
+}
+
+export type HealthLatest = Record<string, HealthStatus>;
+
+export type ErrorAggregate = Record<string, Record<string, number>>;
+
+export interface ErrorRecord {
+  timestamp: string;
+  module: string;
+  operation: string;
+  error_kind: string;
+  message: string;
+  turn_id: string | null;
+  traceback: string | null;
+  context: Record<string, unknown>;
+  user_visible: boolean;
+  user_action_taken: string | null;
+}
+
 export const observabilityApi = {
   getMetricsKnown(): Promise<MetricsKnownPair[]> {
     return api.get<MetricsKnownPair[]>("/api/observability/metrics/known");
@@ -100,4 +131,21 @@ export const observabilityApi = {
       { signal },
     );
   },
+
+  healthLatest: (signal?: AbortSignal) =>
+    api.get<HealthLatest>("/api/observability/health/latest", { signal }),
+  probe: (targetId: string) =>
+    api.post<HealthStatus>("/api/observability/health/probe", undefined, {
+      query: { target_id: targetId },
+    }),
+  errorsAggregate: (since?: string, signal?: AbortSignal) =>
+    api.get<ErrorAggregate>("/api/observability/errors/aggregate", {
+      query: since ? { since } : undefined,
+      signal,
+    }),
+  errorsRecent: (limit = 50, signal?: AbortSignal) =>
+    api.get<ErrorRecord[]>("/api/observability/errors/recent", {
+      query: { limit },
+      signal,
+    }),
 };

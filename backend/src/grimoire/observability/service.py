@@ -25,7 +25,7 @@ from grimoire.observability.metrics import MetricsRegistry
 from grimoire.observability.replayer import TurnReplayerService
 from grimoire.observability.turn_auditor import TurnAuditor
 from grimoire.storage.db import Database
-from grimoire.types.common import CampaignId, TurnId
+from grimoire.types.common import CampaignId, HealthStatus, SubscriptionId, TurnId
 from grimoire.types.llm import LLMCallRecord
 from grimoire.types.observability import (
     ErrorRecord,
@@ -80,6 +80,7 @@ class ObservabilityService:
             )
 
         self._cost_subscription: Subscription | None = None
+        self._health_subscription: SubscriptionId | None = None
 
     async def start(self) -> None:
         """Subscribe the turn auditor and start the health probe + retention
@@ -90,6 +91,13 @@ class ObservabilityService:
             self._cost_subscription = self._event_bus.subscribe(
                 "llm_response_received", self._on_llm_response
             )
+        if self._event_bus is not None and self._health_subscription is None:
+            # §12 Frontend Health panel: republish each probe result onto the
+            # event bus as ``health_status_changed`` so StreamManager can fan
+            # it out to live WebSocket subscribers.
+            self._health_subscription = self.health_monitor.subscribe(
+                self._on_health_status
+            )
         await self.health_monitor.load_latest()
 
     async def shutdown(self) -> None:
@@ -98,8 +106,30 @@ class ObservabilityService:
         if self._cost_subscription is not None:
             self._cost_subscription.unsubscribe()
             self._cost_subscription = None
+        if self._health_subscription is not None:
+            self.health_monitor.unsubscribe(self._health_subscription)
+            self._health_subscription = None
         await self.health_monitor.stop()
         await self.retention.stop()
+
+    async def _on_health_status(self, status: HealthStatus) -> None:
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.emit(
+                Event(
+                    type="health_status_changed",
+                    payload={
+                        "target_id": status.target_id,
+                        "level": status.level.value,
+                        "message": status.message,
+                        "checked_at": status.checked_at,
+                        "details": status.details or {},
+                    },
+                )
+            )
+        except Exception:
+            logger.exception("health_status_changed event emit failed")
 
     async def _on_llm_response(self, event: Event) -> None:
         try:

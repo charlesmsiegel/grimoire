@@ -197,3 +197,44 @@ async def _healthy() -> HealthStatus:
         target_id="prov",
         checked_at=datetime.now(UTC).isoformat(),
     )
+
+
+async def test_start_republishes_health_probes_as_bus_events(db) -> None:
+    """§12: Frontend Health panel needs each probe result to flow onto the
+    event bus so ``StreamManager`` can fan it out to live UIs."""
+    bus = EventBus()
+    service = ObservabilityService(db=db, event_bus=bus)
+    seen: list[Event] = []
+    bus.subscribe("health_status_changed", lambda e: seen.append(e) or None)
+    await service.start()
+    try:
+        service.health().register(
+            HealthTarget(id="prov", kind="llm_provider"), _healthy
+        )
+        await service.health().probe(HealthTarget(id="prov", kind="llm_provider"))
+        assert len(seen) == 1
+        payload = seen[0].payload
+        assert payload["target_id"] == "prov"
+        assert payload["level"] == HealthLevel.HEALTHY.value
+        assert "checked_at" in payload
+    finally:
+        await service.shutdown()
+
+
+async def test_shutdown_unsubscribes_health_handler(db) -> None:
+    """Shutdown must drop the bus-bridge handler so a re-started service
+    doesn't double-emit on the next probe."""
+    bus = EventBus()
+    service = ObservabilityService(db=db, event_bus=bus)
+    seen: list[Event] = []
+    bus.subscribe("health_status_changed", lambda e: seen.append(e) or None)
+    await service.start()
+    service.health().register(
+        HealthTarget(id="prov", kind="llm_provider"), _healthy
+    )
+    await service.health().probe(HealthTarget(id="prov", kind="llm_provider"))
+    assert len(seen) == 1
+    await service.shutdown()
+    # Probe again — the unsubscribed bridge must not republish.
+    await service.health().probe(HealthTarget(id="prov", kind="llm_provider"))
+    assert len(seen) == 1

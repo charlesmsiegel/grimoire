@@ -71,6 +71,13 @@ _FORWARDED_EVENTS: tuple[str, ...] = (
     "retcon_post_accepted",
     "retcon_cancelled",
     "retcon_complete",
+    # Observability §12 — Frontend Health panel. ``health_status_changed`` is
+    # emitted by ObservabilityService once per ``HealthMonitorService`` probe
+    # (see ``observability/service.py``); ``error_reported`` is emitted by
+    # ``record_error``. Both carry no ``campaign_id`` so the bridge below
+    # broadcasts to every subscribed socket.
+    "health_status_changed",
+    "error_reported",
 )
 
 
