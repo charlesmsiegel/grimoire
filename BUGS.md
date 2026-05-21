@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## LOW
 
-- **`settings = Settings()` evaluates `Path.home()` at import** — `backend/src/grimoire/config.py:35` — Tests that monkey-patch `Path.home()` after import won't see the override unless they re-instantiate `Settings()` or set `GRIMOIRE_DATA_ROOT`.
 - **`BackendRegistry.unregister` leaks the worker** — `backend/src/grimoire/imagegen/service.py:182-183` — `pop` removes from the registry dict, but `_handles[backend_id]` keeps the backend ref and its worker task. The worker awaits a queue tied to a backend the registry no longer knows.
 - **`to_payload` doesn't handle `datetime`** — `backend/src/grimoire/api/util.py:11-33` — Falls through to `return obj` for nested datetimes. Pydantic encoders catch it at response time but the heterogeneous payload shape varies.
 - **`_find_post` is O(scenes × posts)** — `backend/src/grimoire/scenes/manager.py:858-880` — Every `retcon_post` and `delete_post` walks every campaign dir reading every scene's posts. Quadratic on large campaigns.
