@@ -28,6 +28,7 @@ from grimoire.extractor.config import ExtractorConfig
 from grimoire.extractor.mode_select import select_mode
 from grimoire.extractor.routing import Decision, route_deltas
 from grimoire.llm_gateway.capabilities import ProviderCapabilities
+from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
 from grimoire.orchestrator.config import OrchestratorConfig
 from grimoire.orchestrator.errors import (
     AlternateNotFoundError,
@@ -192,6 +193,7 @@ class OrchestratorService:
         library: Any | None = None,
         context_cache: ContextBuilderCache | None = None,
         auto_disable: Any | None = None,
+        metrics: MetricsRegistryProtocol = _NullMetrics(),
     ) -> None:
         self._bus = event_bus
         self._scenes = scene_manager
@@ -224,6 +226,7 @@ class OrchestratorService:
         # Transient: cleared on restart per spec.
         self._inflight_aux: dict[str, Any] = {}
         self._auto_disable = auto_disable or _NullAutoDisable()
+        self._metrics: MetricsRegistryProtocol = metrics
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -1798,6 +1801,26 @@ class OrchestratorService:
     # ------------------------------------------------------------------ #
 
     async def _run_turn(
+        self,
+        *,
+        campaign_id: CampaignId,
+        scene_id: SceneId,
+        player_input: str,
+        triggering_pc: CharacterRef | None,
+        reuse_prompt_cache: bool = False,
+        player_post_id: PostId | None = None,
+    ) -> TurnId:
+        async with self._metrics.measure("orchestrator", "turn"):
+            return await self._run_turn_inner(
+                campaign_id=campaign_id,
+                scene_id=scene_id,
+                player_input=player_input,
+                triggering_pc=triggering_pc,
+                reuse_prompt_cache=reuse_prompt_cache,
+                player_post_id=player_post_id,
+            )
+
+    async def _run_turn_inner(
         self,
         *,
         campaign_id: CampaignId,

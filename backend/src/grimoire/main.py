@@ -526,6 +526,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 continuity=container.continuity,
                 transient_state=container.transient_state,
                 ws_push=container.stream.push,
+                metrics=obs.metrics(),
             )
 
         # Characters drift fan-out: subscribe to turn_complete and sample
