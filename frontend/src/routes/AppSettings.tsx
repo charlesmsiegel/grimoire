@@ -12,7 +12,7 @@
  * provider directly. Plugin/mechanics inventories and rescan are wired today.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
@@ -153,7 +153,7 @@ function useAppConfig(): {
     };
   }, []);
 
-  const patch = (next: Partial<AppConfig>) => {
+  const patch = useCallback((next: Partial<AppConfig>) => {
     setData((prev) => (prev ? { ...prev, ...next } : prev));
     pending.current = { ...(pending.current ?? {}), ...next };
     if (timer.current !== null) window.clearTimeout(timer.current);
@@ -175,7 +175,7 @@ function useAppConfig(): {
         }
       })();
     }, 500);
-  };
+  }, []);
 
   return { data, patch, status, error };
 }
