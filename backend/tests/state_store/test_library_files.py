@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from grimoire.files import read_markdown
 from grimoire.state_store import StateStore
+from grimoire.state_store import store as _store_module
+from grimoire.state_store.paths import library_path
 
 
 async def test_write_library_file_creates_file_and_index_row(store: StateStore) -> None:
@@ -115,6 +119,93 @@ async def test_delete_library_file_is_reversible(store: StateStore) -> None:
 
     assert result.path.exists()
     row = await store.get_library_entity("worlds/wod-london/characters/winifred")
+    assert row is not None
+    assert row["body"] == "prose"
+
+
+async def test_write_library_file_restores_disk_when_sql_rolls_back_for_new_file(
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    library_id = "worlds/wod-london/characters/winifred"
+    target = library_path(store.data_root, library_id)
+    assert not target.exists()
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated SQL failure")
+
+    monkeypatch.setattr(_store_module, "insert_delta", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated SQL failure"):
+        await store.write_library_file(
+            library_id=library_id,
+            frontmatter={"name": "winifred"},
+            body="prose",
+            source="user",
+        )
+
+    assert not target.exists()
+    assert await store.get_library_entity(library_id) is None
+
+
+async def test_write_library_file_restores_disk_when_sql_rolls_back_for_overwrite(
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    library_id = "worlds/wod-london/characters/winifred"
+    await store.write_library_file(
+        library_id=library_id,
+        frontmatter={"name": "winifred"},
+        body="original",
+        source="user",
+    )
+    target = library_path(store.data_root, library_id)
+    original_bytes = target.read_bytes()
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated SQL failure")
+
+    monkeypatch.setattr(_store_module, "insert_delta", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated SQL failure"):
+        await store.write_library_file(
+            library_id=library_id,
+            frontmatter={"name": "winifred"},
+            body="modified — must not survive",
+            source="user",
+        )
+
+    assert target.read_bytes() == original_bytes
+    row = await store.get_library_entity(library_id)
+    assert row is not None
+    assert row["body"] == "original"
+
+
+async def test_delete_library_file_restores_disk_when_sql_rolls_back(
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    library_id = "worlds/wod-london/characters/winifred"
+    await store.write_library_file(
+        library_id=library_id,
+        frontmatter={"name": "winifred"},
+        body="prose",
+        source="user",
+    )
+    target = library_path(store.data_root, library_id)
+    original_bytes = target.read_bytes()
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated SQL failure")
+
+    monkeypatch.setattr(_store_module, "insert_delta", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated SQL failure"):
+        await store.delete_library_file(library_id=library_id, source="user")
+
+    assert target.exists()
+    assert target.read_bytes() == original_bytes
+    row = await store.get_library_entity(library_id)
     assert row is not None
     assert row["body"] == "prose"
 

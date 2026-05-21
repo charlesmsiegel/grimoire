@@ -8,6 +8,7 @@ two halves stay coherent.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from collections.abc import AsyncIterator, Iterable
@@ -91,6 +92,21 @@ def _json_loads(value: Any) -> Any:
     if isinstance(value, (dict, list)):
         return value
     return json.loads(value)
+
+
+def _restore_file(target: Path, before_bytes: bytes | None) -> None:
+    """Undo a disk mutation when the surrounding SQL transaction rolled back.
+
+    If the file did not exist beforehand, unlink the new write; otherwise
+    restore the original bytes. Used by library and campaign file writes so
+    file state and ``library_index`` / ``campaign_content_index`` never drift
+    apart when the index update fails.
+    """
+    if before_bytes is None:
+        with contextlib.suppress(FileNotFoundError):
+            target.unlink()
+    else:
+        target.write_bytes(before_bytes)
 
 
 @dataclass(frozen=True)
@@ -181,7 +197,12 @@ class StateStore:
         target.parent.mkdir(parents=True, exist_ok=True)
 
         before_payload: dict | None
+        # Snapshot the prior on-disk bytes (or absence) so we can restore on
+        # SQL rollback — otherwise the file would be left mutated while the
+        # index reflects the old state. See BUGS.md ("apply_delta path leaves
+        # orphan files when SQL rolls back").
         if target.exists():
+            before_bytes: bytes | None = target.read_bytes()
             if ref.kind in {"world", "image_preset"}:
                 before_data = load_yaml(target) or {}
                 before_payload = {"frontmatter": before_data, "body": ""}
@@ -189,6 +210,7 @@ class StateStore:
                 doc = read_markdown(target)
                 before_payload = {"frontmatter": doc.frontmatter, "body": doc.body}
         else:
+            before_bytes = None
             before_payload = None
 
         # Write the file.
@@ -198,29 +220,33 @@ class StateStore:
         else:
             write_markdown(target, ParsedDocument(frontmatter=frontmatter, body=body))
 
-        async with self._txn() as conn:
-            version = await upsert_library_index(
-                conn,
-                data_root=self.data_root,
-                library_id=library_id,
-                path=target,
-                frontmatter=frontmatter,
-                body=body,
-            )
-            delta_id = await insert_delta(
-                conn,
-                campaign_id=campaign_id,
-                branch_id=None,
-                turn_id=turn_id,
-                source=source,
-                kind="library_file_write",
-                target_scope="library",
-                target_table=None,
-                target_path=str(target),
-                target_id=library_id,
-                before=before_payload,
-                after={"frontmatter": frontmatter, "body": body, "version": version},
-            )
+        try:
+            async with self._txn() as conn:
+                version = await upsert_library_index(
+                    conn,
+                    data_root=self.data_root,
+                    library_id=library_id,
+                    path=target,
+                    frontmatter=frontmatter,
+                    body=body,
+                )
+                delta_id = await insert_delta(
+                    conn,
+                    campaign_id=campaign_id,
+                    branch_id=None,
+                    turn_id=turn_id,
+                    source=source,
+                    kind="library_file_write",
+                    target_scope="library",
+                    target_table=None,
+                    target_path=str(target),
+                    target_id=library_id,
+                    before=before_payload,
+                    after={"frontmatter": frontmatter, "body": body, "version": version},
+                )
+        except BaseException:
+            _restore_file(target, before_bytes)
+            raise
 
         return FileWriteResult(
             library_id=library_id,
@@ -246,6 +272,9 @@ class StateStore:
         if not target.exists():
             raise NotFoundError(f"library file does not exist: {library_id}")
 
+        # Snapshot the file bytes before unlinking so an SQL rollback can
+        # put the file back (see write_library_file's matching comment).
+        before_bytes = target.read_bytes()
         if ref.kind in {"world", "image_preset"}:
             before_data = load_yaml(target) or {}
             before_payload = {"frontmatter": before_data, "body": ""}
@@ -255,22 +284,26 @@ class StateStore:
 
         target.unlink()
 
-        async with self._txn() as conn:
-            await delete_library_index_row(conn, library_id)
-            delta_id = await insert_delta(
-                conn,
-                campaign_id=campaign_id,
-                branch_id=None,
-                turn_id=None,
-                source=source,
-                kind="library_file_delete",
-                target_scope="library",
-                target_table=None,
-                target_path=str(target),
-                target_id=library_id,
-                before=before_payload,
-                after=None,
-            )
+        try:
+            async with self._txn() as conn:
+                await delete_library_index_row(conn, library_id)
+                delta_id = await insert_delta(
+                    conn,
+                    campaign_id=campaign_id,
+                    branch_id=None,
+                    turn_id=None,
+                    source=source,
+                    kind="library_file_delete",
+                    target_scope="library",
+                    target_table=None,
+                    target_path=str(target),
+                    target_id=library_id,
+                    before=before_payload,
+                    after=None,
+                )
+        except BaseException:
+            _restore_file(target, before_bytes)
+            raise
         return delta_id
 
     # ------------------------------------------------------------------
