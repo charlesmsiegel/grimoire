@@ -262,6 +262,27 @@ export interface PreRollPendingEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Scene-break medium-confidence prompt (spec 01 §Scene break decisions)
+// ---------------------------------------------------------------------------
+
+/**
+ * Inbound `scene_break_suggested` WebSocket event. The orchestrator emits
+ * this when the boundary detector's confidence falls in the
+ * `[prompt_threshold, auto_threshold)` band and pauses the turn waiting for
+ * a `resolve_scene_break` call from the frontend.
+ */
+export interface SceneBreakSuggestedEvent {
+  type: "scene_break_suggested";
+  turn_id: string;
+  scene_id: string;
+  confidence: number;
+  reason: string;
+}
+
+/** Player decision for a scene-break prompt. */
+export type SceneBreakChoice = "continue" | "new_scene";
+
+// ---------------------------------------------------------------------------
 // Mechanics: mid-campaign switch (spec 06 §Switching modules mid-campaign)
 // ---------------------------------------------------------------------------
 
@@ -506,6 +527,14 @@ export const campaignApi = {
     api.post<{ ok: boolean }>(
       `/api/campaigns/${enc(campaignId)}/turns/${enc(turnId)}/resolve-proposals`,
       { resolutions },
+    ),
+
+  // ----- Scene-break prompt (medium-confidence) -------------------------
+
+  resolveSceneBreak: (campaignId: string, turnId: string, choice: SceneBreakChoice) =>
+    api.post<{ resolved: boolean; turn_id: string; choice: SceneBreakChoice }>(
+      `/api/campaigns/${enc(campaignId)}/turns/${enc(turnId)}/resolve-scene-break`,
+      { choice },
     ),
 
   // ----- Mechanics switch -----------------------------------------------

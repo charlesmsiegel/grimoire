@@ -7,6 +7,7 @@ import { InputArea } from "./InputArea";
 import { InspectorPanel } from "./Inspector/InspectorPanel";
 import { PCSwitcher } from "./PCSwitcher";
 import { PreRollConfirmation } from "./PreRollConfirmation";
+import { SceneBreakPrompt } from "./SceneBreakPrompt";
 import { SceneHeader } from "./SceneHeader";
 import { ScenePane } from "./ScenePane";
 import { SideHud } from "./SideHud/SideHud";
@@ -154,6 +155,7 @@ export function PlayView({ campaignId }: Props) {
       <DriftBanner warnings={driftWarnings} onSuppress={play.suppressDrift} />
 
       <PreRollConfirmation campaignId={campaignId} />
+      <SceneBreakPrompt campaignId={campaignId} />
 
       {actionError && (
         <div className="play-error" role="alert">

@@ -46,10 +46,8 @@ While streaming, push periodic `{"type": "heartbeat", "turn_id"}` frames at a co
 
 Spec 01 §Scene break decisions defines three bands:
 - High (`>= scene_break.auto_threshold`, default 0.8) — auto-close, auto-open. **Shipped.**
-- Medium (`scene_break.prompt_threshold .. auto_threshold`, default 0.5..0.8) — "prompt the user — continue here or start a new scene?". **Today emits `scene_break_suggested` with no return path.**
+- Medium (`scene_break.prompt_threshold .. auto_threshold`, default 0.5..0.8) — "prompt the user — continue here or start a new scene?". **Shipped (#94):** orchestrator awaits `_ActiveTurn.scene_break_choice`; `POST /api/campaigns/{id}/turns/{turn_id}/resolve-scene-break` resolves it; `SceneBreakPrompt.tsx` drives the modal off the `scene_break_suggested` WS event.
 - Low (`< prompt_threshold`) — continue silently. **Shipped (implicit).**
-
-Needs: a return channel from the Frontend (`Orchestrator.resolve_scene_break(campaign_id, turn_id, choice)` plus a UI prompt), and a way to pause the turn between scene-break detection and context build while waiting for the user's choice. Today the orchestrator never waits — it just continues in the current scene.
 
 ## 6. Transactional post / response semantics
 
