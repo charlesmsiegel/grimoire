@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## MEDIUM
 
-- **`useResource` flashes "Loading…" on every dep change** — `frontend/src/api/useResource.ts:25` — `loading` resets to `true` unconditionally; `AsyncBoundary` hides existing data. Paginated/filtered re-fetches flicker.
 - **`InputArea` autofocus steals focus from sidepanel buttons on every busy→idle** — `frontend/src/routes/campaign/InputArea.tsx:113-115` — Effect with `[busy]` deps focuses the textarea after Regenerate/Undo/Skip — yanks focus from the user's next click target.
 - **`ScenePane` smooth-scroll-per-token queues animations** — `frontend/src/routes/campaign/ScenePane.tsx:19-21` — Scrolls on every `streaming.text.length`. Long streamed responses queue dozens of animations and never settle.
 - **`CampaignSettings.GeneralTab` has no `key={campaign.id}`** — `frontend/src/routes/CampaignSettings.tsx:121` — Switching campaigns keeps the prior draft state because the component instance isn't keyed; silent cross-campaign edit bleed.

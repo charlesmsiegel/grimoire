@@ -65,6 +65,43 @@ describe("useApi", () => {
 });
 
 describe("useResource", () => {
+  it("does not flash loading=true on a re-load once data exists", async () => {
+    let resolveLoad: (v: number) => void = () => {};
+    let calls = 0;
+    let setX!: (n: number) => void;
+
+    function Probe() {
+      const [x, _setX] = useState(1);
+      setX = _setX;
+      const loader = useCallback(
+        () =>
+          new Promise<number>((resolve) => {
+            calls += 1;
+            if (calls === 1) resolve(x);
+            else resolveLoad = resolve;
+          }),
+        [x],
+      );
+      const { data, loading } = useResource(loader);
+      return (
+        <span>
+          {loading ? "L" : "_"}|{data ?? "null"}
+        </span>
+      );
+    }
+
+    const { container } = render(<Probe />);
+    await waitFor(() => expect(container.textContent).toBe("_|1"));
+
+    await act(async () => setX(2));
+    // Old data must still be visible — and loading must NOT have flipped
+    // back to true — while the second load is in flight.
+    expect(container.textContent).toBe("_|1");
+
+    await act(async () => resolveLoad(2));
+    await waitFor(() => expect(container.textContent).toBe("_|2"));
+  });
+
   it("re-loads when fetcher identity changes", async () => {
     let calls = 0;
     let setX!: (n: number) => void;
