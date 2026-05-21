@@ -267,8 +267,15 @@ async def get_campaign(
     data = dict(row)
     try:
         data["composition"] = to_payload(await library.get_composition(campaign_id))
-    except Exception:
+        data["composition_error"] = None
+    except Exception as exc:
+        # Composition resolution can fail for many reasons (missing world,
+        # bad pin, broken mechanics module). Don't 500 the whole campaign
+        # GET — but surface the reason so the UI can show it instead of a
+        # bare "composition: null".
+        logger.exception("get_campaign: composition resolution failed for %s", campaign_id)
         data["composition"] = None
+        data["composition_error"] = f"{type(exc).__name__}: {exc}"
     return data
 
 
