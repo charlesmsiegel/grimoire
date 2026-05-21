@@ -412,3 +412,159 @@ async def test_conformance(diffusers_module) -> None:
     _install_fake_pipeline(backend)
     report = await ImageGenBackendConformance().run(backend)
     assert report.ok, report.failed
+
+
+# --------------------------------------------------------------------- #
+# §9 first-launch download gating + events
+# --------------------------------------------------------------------- #
+
+
+def _capture_bus(backend) -> list[tuple[str, dict]]:
+    """Attach a minimal recording bus to `backend` and return its log."""
+    events: list[tuple[str, dict]] = []
+
+    class _Bus:
+        async def emit(self, event):
+            events.append((event.type, dict(event.payload)))
+
+    backend.set_event_bus(_Bus())
+    return events
+
+
+def _patch_torch_free(backend, *, build_returns: Any = None, build_raises: Any = None) -> Any:
+    """Stub out the torch-touching helpers so `_ensure_pipeline` runs lean.
+
+    Returns the sentinel that `_build_pipeline` (or its replacement) will
+    yield to the cache so callers can assert identity.
+    """
+    pipe = build_returns if build_returns is not None else object()
+    backend._resolve_device = lambda: "cpu"  # type: ignore[method-assign]
+    backend._resolve_dtype = lambda device: (None, "float32")  # type: ignore[method-assign]
+
+    def _stub(**kwargs: Any) -> Any:
+        if build_raises is not None:
+            raise build_raises
+        backend._device = kwargs["device"]
+        return pipe
+
+    backend._build_pipeline = _stub  # type: ignore[method-assign]
+    return pipe
+
+
+@pytest.mark.asyncio
+async def test_health_unconfigured_when_never_and_uncached(diffusers_module) -> None:
+    """`download_on_first_use=never` + missing weights -> UNCONFIGURED."""
+    pytest.importorskip("diffusers")
+    pytest.importorskip("torch")
+    backend = diffusers_module.DiffusersImageGenBackend(config={"download_on_first_use": "never"})
+    # Force "not cached" so the gate fires regardless of the dev box's HF cache.
+    backend._is_model_cached_locally = lambda model_id: False  # type: ignore[method-assign]
+    status = await backend.health_check()
+    assert status.level == HealthLevel.UNCONFIGURED
+    assert "download disabled by config" in status.message
+    assert backend._active_model in status.message
+
+
+@pytest.mark.asyncio
+async def test_health_healthy_when_never_but_model_cached(diffusers_module) -> None:
+    """`never` is only blocking when weights aren't already on disk."""
+    pytest.importorskip("diffusers")
+    pytest.importorskip("torch")
+    backend = diffusers_module.DiffusersImageGenBackend(config={"download_on_first_use": "never"})
+    backend._is_model_cached_locally = lambda model_id: True  # type: ignore[method-assign]
+    status = await backend.health_check()
+    assert status.level == HealthLevel.HEALTHY
+
+
+@pytest.mark.asyncio
+async def test_prompt_mode_emits_needed_and_raises(diffusers_module) -> None:
+    backend = diffusers_module.DiffusersImageGenBackend(config={"download_on_first_use": "prompt"})
+    backend._is_model_cached_locally = lambda model_id: False  # type: ignore[method-assign]
+    _patch_torch_free(backend)
+    events = _capture_bus(backend)
+
+    with pytest.raises(RuntimeError, match="requires user confirmation"):
+        await backend._ensure_pipeline(backend._active_model, img2img=False)
+
+    types = [t for t, _ in events]
+    assert "imagegen_download_needed" in types
+    assert "imagegen_download_started" not in types
+    payload = next(p for t, p in events if t == "imagegen_download_needed")
+    assert payload["backend_id"] == backend.id
+    assert payload["model_id"] == backend._active_model
+
+
+@pytest.mark.asyncio
+async def test_prompt_mode_after_confirm_emits_started_and_finished(
+    diffusers_module,
+) -> None:
+    backend = diffusers_module.DiffusersImageGenBackend(config={"download_on_first_use": "prompt"})
+    backend._is_model_cached_locally = lambda model_id: False  # type: ignore[method-assign]
+    _patch_torch_free(backend)
+    events = _capture_bus(backend)
+
+    backend.confirm_download()
+    await backend._ensure_pipeline(backend._active_model, img2img=False)
+
+    types = [t for t, _ in events]
+    assert types.count("imagegen_download_started") == 1
+    assert types.count("imagegen_download_finished") == 1
+    assert "imagegen_download_needed" not in types
+    finished = next(p for t, p in events if t == "imagegen_download_finished")
+    assert finished["model_id"] == backend._active_model
+    assert isinstance(finished["duration_ms"], int)
+    assert finished["duration_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_auto_mode_emits_download_bracket(diffusers_module) -> None:
+    backend = diffusers_module.DiffusersImageGenBackend(config={"download_on_first_use": "auto"})
+    backend._is_model_cached_locally = lambda model_id: False  # type: ignore[method-assign]
+    _patch_torch_free(backend)
+    events = _capture_bus(backend)
+
+    await backend._ensure_pipeline(backend._active_model, img2img=False)
+    types = [t for t, _ in events]
+    assert types == ["imagegen_download_started", "imagegen_download_finished"]
+
+
+@pytest.mark.asyncio
+async def test_cached_load_emits_nothing(diffusers_module) -> None:
+    """Once the weights are on disk we shouldn't broadcast a download UI."""
+    backend = diffusers_module.DiffusersImageGenBackend()
+    backend._is_model_cached_locally = lambda model_id: True  # type: ignore[method-assign]
+    _patch_torch_free(backend)
+    events = _capture_bus(backend)
+
+    await backend._ensure_pipeline(backend._active_model, img2img=False)
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_never_mode_raises_in_ensure_pipeline(diffusers_module) -> None:
+    backend = diffusers_module.DiffusersImageGenBackend(config={"download_on_first_use": "never"})
+    backend._is_model_cached_locally = lambda model_id: False  # type: ignore[method-assign]
+    _patch_torch_free(backend)
+    events = _capture_bus(backend)
+    with pytest.raises(RuntimeError, match="download disabled by config"):
+        await backend._ensure_pipeline(backend._active_model, img2img=False)
+    # `never` is a config error, not a deferred prompt — no UI signal.
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_build_failure_emits_download_failed(diffusers_module) -> None:
+    backend = diffusers_module.DiffusersImageGenBackend(config={"download_on_first_use": "auto"})
+    backend._is_model_cached_locally = lambda model_id: False  # type: ignore[method-assign]
+    _patch_torch_free(backend, build_raises=RuntimeError("network unreachable"))
+    events = _capture_bus(backend)
+
+    with pytest.raises(RuntimeError, match="network unreachable"):
+        await backend._ensure_pipeline(backend._active_model, img2img=False)
+
+    types = [t for t, _ in events]
+    assert "imagegen_download_started" in types
+    assert "imagegen_download_failed" in types
+    assert "imagegen_download_finished" not in types
+    failed = next(p for t, p in events if t == "imagegen_download_failed")
+    assert "network unreachable" in failed["error"]

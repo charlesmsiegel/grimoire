@@ -144,6 +144,11 @@ class DiffusersImageGenBackend:
             self._download_mode = "auto"
         self._download_confirmed: bool = False
 
+        # Optional EventBus, injected by ImageGenService via set_event_bus().
+        # Emissions are best-effort: plugins instantiated outside the service
+        # (tests, CLIs) still work, the events just go nowhere.
+        self._event_bus: Any = None
+
         # Resolved device — set on first load.
         self._device: str | None = None
         # Cache of text-to-image pipelines, keyed by (model, dtype_str).
@@ -212,6 +217,19 @@ class DiffusersImageGenBackend:
                     f"(missing: {exc.name})"
                 ),
             )
+        # §9: when downloads are forbidden by config and the active model
+        # is not on disk, the backend can't generate anything — surface
+        # that as UNCONFIGURED so the UI nudges the user to either cache
+        # the weights manually or change the setting.
+        if self._download_mode == "never" and not self._is_model_cached_locally(self._active_model):
+            return HealthStatus(
+                level=HealthLevel.UNCONFIGURED,
+                target_id=self.id,
+                message=(
+                    "download disabled by config (download_on_first_use=never); "
+                    f"model {self._active_model!r} is not in the local cache"
+                ),
+            )
         if self._load_error:
             return HealthStatus(
                 level=HealthLevel.UNHEALTHY,
@@ -278,6 +296,31 @@ class DiffusersImageGenBackend:
         """
         self._download_confirmed = True
 
+    def set_event_bus(self, bus: Any) -> None:
+        """Inject the in-process event bus.
+
+        Called by :class:`grimoire.imagegen.service.ImageGenService` when
+        the backend is registered. Used to emit ``imagegen_download_*``
+        events around first-launch weight downloads (§9).
+        """
+        self._event_bus = bus
+
+    async def _emit_download_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Emit an ``imagegen_download_*`` event if a bus is wired.
+
+        Constructed lazily so the plugin still works when loaded outside
+        a running ImageGenService (tests, CLIs).
+        """
+        bus = self._event_bus
+        if bus is None:
+            return
+        try:
+            from grimoire.event_bus import Event
+
+            await bus.emit(Event(type=event_type, payload=payload))
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("imagegen-diffusers: download event emit failed (%s)", event_type)
+
     def _is_model_cached_locally(self, model_id: str) -> bool:
         """Best-effort check: do we already have the weights on disk?
 
@@ -309,17 +352,30 @@ class DiffusersImageGenBackend:
             # §9 download_on_first_use gating: only consult when the
             # model is NOT already cached locally. Once cached, every
             # subsequent load is free regardless of mode.
-            if not self._is_model_cached_locally(model_id):
+            needs_download = not self._is_model_cached_locally(model_id)
+            if needs_download:
                 if self._download_mode == "never":
                     raise RuntimeError(
                         f"download disabled by config (download_on_first_use=never); "
                         f"place {model_id!r} weights in the local HF cache to enable"
                     )
                 if self._download_mode == "prompt" and not self._download_confirmed:
+                    # Signal the UI that it should show the confirmation
+                    # prompt; the caller still fails fast so the job
+                    # doesn't hang waiting on user input.
+                    await self._emit_download_event(
+                        "imagegen_download_needed",
+                        {"backend_id": self.id, "model_id": model_id},
+                    )
                     raise RuntimeError(
                         f"model download for {model_id!r} requires user confirmation "
                         "(POST /imagegen/backends/{id}/confirm-download)"
                     )
+                await self._emit_download_event(
+                    "imagegen_download_started",
+                    {"backend_id": self.id, "model_id": model_id},
+                )
+            t0 = time.perf_counter()
             try:
                 pipe = await asyncio.to_thread(
                     self._build_pipeline,
@@ -331,7 +387,21 @@ class DiffusersImageGenBackend:
                 )
             except Exception as exc:
                 self._load_error = f"failed to load {model_id!r}: {exc}"
+                if needs_download:
+                    await self._emit_download_event(
+                        "imagegen_download_failed",
+                        {"backend_id": self.id, "model_id": model_id, "error": str(exc)},
+                    )
                 raise
+            if needs_download:
+                await self._emit_download_event(
+                    "imagegen_download_finished",
+                    {
+                        "backend_id": self.id,
+                        "model_id": model_id,
+                        "duration_ms": int((time.perf_counter() - t0) * 1000),
+                    },
+                )
             self._load_error = None
             self._device = device
             pipelines[key] = pipe
