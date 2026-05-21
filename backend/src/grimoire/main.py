@@ -452,6 +452,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 gateway=llm_gateway,
                 state_store=container.state_store,
                 transient_state=container.transient_state,
+                metrics=obs.metrics(),
             )
         context_builder = container.extras["context_builder"]
 
