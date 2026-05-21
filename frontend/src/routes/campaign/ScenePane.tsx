@@ -16,8 +16,21 @@ interface Props {
 
 export function ScenePane({ posts, pcs, streaming, images, campaignId, scene }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  // rAF-coalesce scrolls so dozens of streamed tokens in a single frame
+  // turn into one scroll, not dozens of queued animations. Also use
+  // ``auto`` (instant) for streaming deltas — smooth animations stacked
+  // and never settled. New posts still get a smooth scroll.
+  const lastPostCountRef = useRef(posts.length);
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    const isNewPost = posts.length !== lastPostCountRef.current;
+    lastPostCountRef.current = posts.length;
+    const handle = requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({
+        behavior: isNewPost ? "smooth" : "auto",
+        block: "end",
+      });
+    });
+    return () => cancelAnimationFrame(handle);
   }, [posts.length, streaming?.text.length]);
 
   const byPost: Record<string, SceneImage[]> = {};

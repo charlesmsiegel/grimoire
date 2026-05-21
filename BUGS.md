@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## MEDIUM
 
-- **`ScenePane` smooth-scroll-per-token queues animations** — `frontend/src/routes/campaign/ScenePane.tsx:19-21` — Scrolls on every `streaming.text.length`. Long streamed responses queue dozens of animations and never settle.
 - **`CampaignSettings.GeneralTab` has no `key={campaign.id}`** — `frontend/src/routes/CampaignSettings.tsx:121` — Switching campaigns keeps the prior draft state because the component instance isn't keyed; silent cross-campaign edit bleed.
 - **`SidePanel`'s `SourceBadge` ternary is dead** — `frontend/src/routes/campaign/SidePanel.tsx:59` — `source={pc ? "library" : "library"}`. Both branches return the same value. Should distinguish library vs emergent.
 - **`AppSettings` `patch()` defined outside `useCallback`** — `frontend/src/routes/AppSettings.tsx:156` — `const patch = (next: Partial<AppConfig>) => { ... }` is a plain function recreated each render. (`load()` itself was refactored into `useAppConfig`; the surviving smell is the inline `patch`.)
