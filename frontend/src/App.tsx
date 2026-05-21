@@ -10,6 +10,7 @@ import { Home } from "./routes/Home";
 import { LibraryRoutes } from "./routes/library";
 import { NotFound } from "./routes/NotFound";
 import { HealthPanel, ObservabilityRoutes } from "./routes/observability";
+import { BudgetView } from "./routes/campaign/BudgetView";
 import { CastView } from "./routes/campaign/CastView";
 import { CompositionView } from "./routes/campaign/CompositionView";
 import { ImagesView } from "./routes/campaign/ImagesView";
@@ -59,6 +60,7 @@ export function App() {
                 <Route path="debug/prompt" element={<PromptDebugView />} />
                 <Route path="debug/prompt/:turnId" element={<PromptDebugView />} />
                 <Route path="observability/turns" element={<ObservabilityTurnsRoute />} />
+                <Route path="budget" element={<BudgetView />} />
               </Route>
               <Route path="observability/*" element={<ObservabilityRoutes />} />
               <Route path="settings" element={<AppSettings />} />
