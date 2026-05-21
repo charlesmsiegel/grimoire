@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## LOW
 
-- **Wizard `update()` callback recreates `draft` identity every keystroke** — `frontend/src/routes/CampaignCreate/CampaignCreate.tsx:202-204` — Children aren't `React.memo`'d so today this is a non-issue, but `StepStartingScene`'s `useMemo(candidates, [draft.pcs, castByWorld])` re-runs on every keystroke anywhere in the wizard.
 - **`JsonSchema` interface escape-hatches `[key: string]: unknown`** — `frontend/src/components/schemaForm.ts:17` — Index signature was upgraded from `any` to `unknown` (partial improvement), but the escape-hatch defeats the discriminator at use sites. Intentional but flagged.
 - **`useCampaignEvent` wildcard mode fragile** — `frontend/src/state/useCampaignEvent.ts:30-36` — `typeKey` from `sort().join("|")`. Passing `["*"]` as an array becomes `"*"` after sort+join and is treated as wildcard. Undocumented edge.
 
