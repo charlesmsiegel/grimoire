@@ -49,10 +49,49 @@ export interface IngestedCardPreview {
   greetings: IngestedGreetingPreview[];
 }
 
+export type LoreOverrideKind =
+  | "lore"
+  | "character"
+  | "location"
+  | "faction"
+  | "item"
+  | "skip";
+
+export interface LoreSuggestion {
+  source_index: number;
+  kind: LoreOverrideKind;          // "lore" when below threshold, never "skip"
+  confidence: number;
+  reason: string;
+}
+
+export interface LoreOverridePayload {
+  source_index: number;
+  kind: LoreOverrideKind;
+  overrides?: Record<string, string>;
+}
+
 export interface PreviewResponse {
   preview_id: string;
   expires_in_seconds: number;
   ingested: IngestedCardPreview;
+  lore_suggestions: LoreSuggestion[];
+}
+
+/**
+ * Mirrors backend reclassify._REQUIRED_OVERRIDES. Keep in sync.
+ * Source of truth: backend/src/grimoire/library/reclassify.py.
+ */
+export function requiredOverridesFor(kind: LoreOverrideKind): string[] {
+  switch (kind) {
+    case "location":
+      return ["kind"];
+    case "character":
+    case "faction":
+    case "item":
+    case "lore":
+    case "skip":
+      return [];
+  }
 }
 
 export interface IngestOptionsPayload {
@@ -104,13 +143,18 @@ export async function commitSillyTavernImport(
   worldId: string,
   previewId: string,
   options: IngestOptionsPayload,
+  loreOverrides: LoreOverridePayload[] = [],
 ): Promise<CommitResponse> {
   const res = await fetch(
     `${API_BASE}/library/worlds/${encodeURIComponent(worldId)}/imports/sillytavern/commit`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ preview_id: previewId, options }),
+      body: JSON.stringify({
+        preview_id: previewId,
+        options,
+        lore_overrides: loreOverrides,
+      }),
     },
   );
   if (!res.ok) {
