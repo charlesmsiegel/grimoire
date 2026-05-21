@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Route, Routes, useParams } from "react-router-dom";
 
 import { AppSettings } from "./routes/AppSettings";
 import { CampaignCreate } from "./routes/CampaignCreate";
@@ -18,6 +18,7 @@ import { MechanicsView } from "./routes/campaign/MechanicsView";
 import { PromptDebugView } from "./routes/campaign/PromptDebugView";
 import { TimelineView } from "./routes/campaign/TimelineView";
 import { WorldView } from "./routes/campaign/WorldView";
+import { WhyCharacterPanel } from "./routes/observability";
 import { AppShell } from "./shell/AppShell";
 import { markEnd, markStart } from "./state/perf";
 import { StoreProvider } from "./state/store";
@@ -57,6 +58,7 @@ export function App() {
                 <Route path="images" element={<ImagesView />} />
                 <Route path="debug/prompt" element={<PromptDebugView />} />
                 <Route path="debug/prompt/:turnId" element={<PromptDebugView />} />
+                <Route path="observability/turns" element={<ObservabilityTurnsRoute />} />
               </Route>
               <Route path="observability/*" element={<ObservabilityRoutes />} />
               <Route path="settings" element={<AppSettings />} />
@@ -68,4 +70,10 @@ export function App() {
       </StoreProvider>
     </ThemeProvider>
   );
+}
+
+function ObservabilityTurnsRoute() {
+  const { campaignId } = useParams<{ campaignId: string }>();
+  if (!campaignId) return null;
+  return <WhyCharacterPanel campaignId={campaignId} />;
 }
