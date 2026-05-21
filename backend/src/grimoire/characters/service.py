@@ -150,10 +150,14 @@ class CharactersService:
         self._auto_capsule_llm = auto_capsule_llm
         self._voice_anchor_llm = voice_anchor_llm
         self._sheet_migrator = sheet_migrator
-        # Per-PC current scene cache; mirrors SceneManager._pc_current_scene
-        # but keyed by ``(campaign_id, character_ref)``. The authoritative
-        # source is the active-scene id stored on character_state.
-        self._active_pc: dict[str, CharacterRef] = {}
+        # Per-campaign active-PC cache. The authoritative source is the
+        # ``active`` flag on character_state in SQL; this OrderedDict is
+        # only a fast read-through. Bounded LRU so a long-running server
+        # that has seen many campaigns doesn't grow the dict without
+        # limit. 256 covers any realistic active-campaign set; misses
+        # round-trip to ``store.set_active_pc`` / DB lookup as before.
+        self._active_pc: OrderedDict[str, CharacterRef] = OrderedDict()
+        self._ACTIVE_PC_MAX = 256
         # Compressed-view LRU (spec 2026-05-17 §5). Key is
         # ``(ref, campaign_id, view, seed)``; value is the rendered string.
         # We rely solely on the in-process invalidation hooks below — the
@@ -823,6 +827,7 @@ class CharactersService:
         """
         cached = self._active_pc.get(campaign_id)
         if cached is not None:
+            self._active_pc.move_to_end(campaign_id)
             return cached
         if not rows:
             return None
@@ -830,8 +835,15 @@ class CharactersService:
             (row["character_ref"] for row in rows if bool(row["active"])),
             rows[0]["character_ref"],
         )
-        self._active_pc[campaign_id] = chosen
+        self._cache_active_pc(campaign_id, chosen)
         return chosen
+
+    def _cache_active_pc(self, campaign_id: str, character_ref: CharacterRef) -> None:
+        """Insert/refresh an LRU entry and evict if over capacity."""
+        self._active_pc[campaign_id] = character_ref
+        self._active_pc.move_to_end(campaign_id)
+        while len(self._active_pc) > self._ACTIVE_PC_MAX:
+            self._active_pc.popitem(last=False)
 
     async def list_pcs(self, campaign_id: CampaignId) -> list[PCEntry]:
         rows = await self.store.list_pcs(campaign_id)
@@ -878,7 +890,7 @@ class CharactersService:
             owner=owner,
         )
         if campaign_id not in self._active_pc:
-            self._active_pc[campaign_id] = character_ref
+            self._cache_active_pc(campaign_id, character_ref)
         return PCEntry(
             character_ref=character_ref,
             name=name,
@@ -899,7 +911,7 @@ class CharactersService:
         # Persist to DB so the choice survives restart. The in-memory cache
         # stays as a fast-path for list_pcs/active_pc within the same process.
         await self.store.set_active_pc(campaign_id=campaign_id, character_ref=character_ref)
-        self._active_pc[campaign_id] = character_ref
+        self._cache_active_pc(campaign_id, character_ref)
 
     async def active_pc(self, campaign_id: CampaignId) -> CharacterRef | None:
         """Return the currently active PC for ``campaign_id`` (None if no PCs)."""
