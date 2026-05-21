@@ -108,7 +108,11 @@ class EventBus:
 
         coros = [self._invoke(sub, event) for sub in handlers if sub._active]
         if coros:
-            await asyncio.gather(*coros, return_exceptions=False)
+            # _invoke already catches; return_exceptions=True keeps that
+            # contract explicit so if _invoke ever stops catching, sibling
+            # handlers still run (instead of one bad handler aborting the
+            # rest of the dispatch via gather's default fail-fast).
+            await asyncio.gather(*coros, return_exceptions=True)
 
     async def _invoke(self, sub: Subscription, event: Event) -> None:
         try:
