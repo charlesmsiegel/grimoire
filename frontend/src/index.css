@@ -2616,6 +2616,53 @@ pre {
   justify-content: flex-end;
 }
 
+/* ----- Time-advance digest ----- */
+
+.modal.time-digest {
+  max-width: 38rem;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.time-digest-range {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.time-digest-duration {
+  opacity: 0.7;
+}
+
+.time-digest-prose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  line-height: 1.5;
+}
+
+.time-digest-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.time-digest-section h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-muted, var(--fg));
+}
+
+.time-digest-list {
+  margin: 0;
+  padding-left: var(--space-4);
+}
+
+.time-digest-list ul {
+  margin: 0;
+  padding-left: var(--space-4);
+}
+
 /* ----- Variants ----- */
 
 .variants-panel,

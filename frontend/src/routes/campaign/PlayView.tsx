@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { campaignApi, type CampaignSummary, type OpenCommitment } from "../../api/campaign";
+import {
+  campaignApi,
+  type CampaignSummary,
+  type OpenCommitment,
+  type TimeAdvanceResult,
+} from "../../api/campaign";
 import { useCampaignEvent } from "../../state/useCampaignEvent";
 import { DriftBanner } from "./DriftBanner";
 import { InputArea } from "./InputArea";
@@ -12,6 +17,7 @@ import { SceneHeader } from "./SceneHeader";
 import { ScenePane } from "./ScenePane";
 import { SideHud } from "./SideHud/SideHud";
 import { SidePanel } from "./SidePanel";
+import { TimeAdvanceDigest } from "./TimeAdvanceDigest";
 import { usePlayState } from "./usePlayState";
 
 type RightView = "side" | "inspector" | "hud";
@@ -28,6 +34,7 @@ export function PlayView({ campaignId }: Props) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [rightView, setRightView] = useState<RightView>("hud");
+  const [timeDigest, setTimeDigest] = useState<TimeAdvanceResult | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,7 +88,10 @@ export function PlayView({ campaignId }: Props) {
     if (!raw) return;
     const minutes = Number.parseInt(raw, 10);
     if (!Number.isFinite(minutes) || minutes <= 0) return;
-    void runAction(() => campaignApi.timeAdvance(campaignId, { duration: { minutes } }));
+    void runAction(async () => {
+      const result = await campaignApi.timeAdvance(campaignId, { duration: { minutes } });
+      setTimeDigest(result);
+    });
   }, [campaignId, runAction]);
 
   const handleManualFact = useCallback(() => {
@@ -153,6 +163,8 @@ export function PlayView({ campaignId }: Props) {
       </div>
 
       <DriftBanner warnings={driftWarnings} onSuppress={play.suppressDrift} />
+
+      <TimeAdvanceDigest result={timeDigest} onDismiss={() => setTimeDigest(null)} />
 
       <PreRollConfirmation campaignId={campaignId} />
       <SceneBreakPrompt campaignId={campaignId} />
