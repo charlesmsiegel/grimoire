@@ -19,7 +19,6 @@ from pathlib import Path
 import pytest
 
 from grimoire.testing import TestApp
-from grimoire.types.state import DeltaKind
 
 pytestmark = pytest.mark.integration
 
@@ -89,9 +88,9 @@ async def test_submit_turn_records_post_deltas_and_continuity(tmp_path: Path) ->
         # The high-confidence commitment landed in the continuity ledger.
         assert app.continuity is not None
         commitments = await app.continuity.all_commitments()
-        assert any(
-            "forge a blade" in c.text for c in commitments
-        ), f"expected commitment in ledger; got {[c.text for c in commitments]}"
+        assert any("forge a blade" in c.text for c in commitments), (
+            f"expected commitment in ledger; got {[c.text for c in commitments]}"
+        )
 
         # The delta log records the COMMITMENT_ADD against this turn even
         # when continuity handles the application — _apply_continuity_delta
@@ -100,6 +99,6 @@ async def test_submit_turn_records_post_deltas_and_continuity(tmp_path: Path) ->
         # the store log here. The post-and-extraction event sequence is
         # the contract under test.
         ctx_calls = app.context_builder.calls if app.context_builder else []
-        assert any(
-            c["player_input"] == "I ask Garrick to forge me a blade." for c in ctx_calls
-        ), "context_builder was not invoked with the player input"
+        assert any(c["player_input"] == "I ask Garrick to forge me a blade." for c in ctx_calls), (
+            "context_builder was not invoked with the player input"
+        )

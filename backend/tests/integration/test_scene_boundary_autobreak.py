@@ -74,6 +74,4 @@ async def test_orchestrator_auto_breaks_scene_on_time_jump(tmp_path: Path) -> No
 
         # And the player input remains on the closed scene.
         opening_posts = await app.scene_manager.get_posts(opening.id)
-        assert [p.body for p in opening_posts] == [
-            "Hours later, she returns to the square."
-        ]
+        assert [p.body for p in opening_posts] == ["Hours later, she returns to the square."]
