@@ -172,7 +172,8 @@ export function CampaignCreate() {
     };
   }, [step, draft.worldRefs]);
 
-  // Greetings — lazy-load when arriving at step 6.
+  // Greetings — lazy-load when arriving at the starting-scene step
+  // (zero-indexed step 5; "Step 6" in the UI heading numbering).
   useEffect(() => {
     if (step !== 5) return;
     const worldIds = draft.worldRefs.map((r) => r.world_id);

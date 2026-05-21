@@ -43,7 +43,7 @@ export interface WizardDraft {
   imagePresetId: string | null;
   contentBoundaries: string;
 
-  // Step 6 — starting scene
+  // Starting-scene step (zero-indexed 5; "Step 6" in UI numbering)
   greetingId: string | null;
   startingLocation: string;
   startingTime: string;
