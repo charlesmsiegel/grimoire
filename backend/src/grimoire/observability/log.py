@@ -3,11 +3,18 @@
 Lightweight fine-grained events queryable by time range, module/operation,
 turn id, level, and a free-text match against ``message``/``payload``.
 Backed by the ``log_events`` table.
+
+A subscriber hook (:meth:`LogStore.subscribe`) lets live consumers — the
+``/ws/observability/log`` WebSocket route — receive each accepted event as
+it's written, without polling. Per-module level thresholds are enforced
+*before* fanout so subscribers only see events that also reached the table.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,12 +22,34 @@ from grimoire.observability.config import DebugLogConfig
 from grimoire.storage.db import Database
 from grimoire.types.observability import LogEvent, LogLevel, LogQuery
 
-_LEVEL_ORDER: dict[LogLevel, int] = {
+LEVEL_ORDER: dict[LogLevel, int] = {
     LogLevel.DEBUG: 10,
     LogLevel.INFO: 20,
     LogLevel.WARNING: 30,
     LogLevel.ERROR: 40,
 }
+
+
+@dataclass(slots=True)
+class LogSubscription:
+    """Live tail of accepted log events for one consumer.
+
+    Each subscriber owns an :class:`asyncio.Queue` it can ``await`` on. The
+    queue is bounded — a slow consumer never blocks log writes; once it
+    fills, additional events are dropped and counted on :attr:`dropped` so
+    the consumer can surface an "events dropped" hint.
+    """
+
+    queue: asyncio.Queue[LogEvent]
+    _store: LogStore
+    _active: bool = True
+    dropped: int = 0
+
+    def unsubscribe(self) -> None:
+        if not self._active:
+            return
+        self._active = False
+        self._store._unsubscribe(self)
 
 
 class LogStore:
@@ -38,12 +67,39 @@ class LogStore:
     ) -> None:
         self._db = db
         self._config = config or DebugLogConfig()
+        self._subscribers: list[LogSubscription] = []
 
     def _level_for(self, module: str) -> LogLevel:
         return self._config.levels_per_module.get(module, self._config.default_level)
 
     def _accept(self, module: str, level: LogLevel) -> bool:
-        return _LEVEL_ORDER[level] >= _LEVEL_ORDER[self._level_for(module)]
+        return LEVEL_ORDER[level] >= LEVEL_ORDER[self._level_for(module)]
+
+    def subscribe(self, *, queue_size: int = 256) -> LogSubscription:
+        """Register a live consumer. Call :meth:`LogSubscription.unsubscribe`
+        when done — typically in a ``finally`` after the WebSocket closes."""
+        sub = LogSubscription(queue=asyncio.Queue(maxsize=queue_size), _store=self)
+        self._subscribers.append(sub)
+        return sub
+
+    def _unsubscribe(self, sub: LogSubscription) -> None:
+        try:
+            self._subscribers.remove(sub)
+        except ValueError:
+            return
+
+    def _notify(self, event: LogEvent) -> None:
+        # put_nowait is non-blocking so a slow socket can never stall the
+        # producer. Inactive subs are pruned by ``_unsubscribe`` already; the
+        # _active guard covers the rare race where unsubscribe() ran on
+        # another task between this list iteration starting and now.
+        for sub in self._subscribers:
+            if not sub._active:
+                continue
+            try:
+                sub.queue.put_nowait(event)
+            except asyncio.QueueFull:
+                sub.dropped += 1
 
     async def log(self, event: LogEvent) -> None:
         if not self._accept(event.module, event.level):
@@ -72,6 +128,7 @@ class LogStore:
                 event.timestamp.isoformat() if event.timestamp else datetime.now(UTC).isoformat(),
             ),
         )
+        self._notify(event)
 
     async def query(self, query: LogQuery) -> list[LogEvent]:
         clauses: list[str] = []
@@ -132,4 +189,4 @@ class LogStore:
         return events
 
 
-__all__ = ["LogStore"]
+__all__ = ["LEVEL_ORDER", "LogStore", "LogSubscription"]
