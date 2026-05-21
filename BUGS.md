@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## LOW
 
-- **`useCampaignEvent` wildcard mode fragile** — `frontend/src/state/useCampaignEvent.ts:30-36` — `typeKey` from `sort().join("|")`. Passing `["*"]` as an array becomes `"*"` after sort+join and is treated as wildcard. Undocumented edge.
 
 ---
 

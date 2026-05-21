@@ -14,9 +14,10 @@ export function useCampaignId(): string | null {
 }
 
 /**
- * Subscribe to one or more WebSocket event types. Pass `"*"` to receive every
- * message. The handler is read through a ref so callers can pass a fresh
- * closure each render without thrashing the subscription.
+ * Subscribe to one or more WebSocket event types. Pass ``"*"`` (or an array
+ * containing it) to receive every message. The handler is read through a
+ * ref so callers can pass a fresh closure each render without thrashing
+ * the subscription.
  */
 export function useCampaignEvent(
   types: string | readonly string[],
@@ -26,14 +27,27 @@ export function useCampaignEvent(
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
 
+  // Encode the subscription as a stable key. ``*:`` prefix means wildcard
+  // (independent of how the caller spelled it: bare string "*", array
+  // ["*"], or any array containing "*"). Otherwise it's a sorted "|"-
+  // joined list of the requested types.
+  // Without the explicit wildcard branch, ``["*"]`` collapsed to "*"
+  // via sort+join and silently turned an explicit single-type subscription
+  // into a fire-on-everything one; ``["foo", "*"]`` was the inverse, never
+  // matching anything since "*" was treated literally.
   const typeKey = useMemo(() => {
-    if (typeof types === "string") return types;
-    return [...types].sort().join("|");
+    if (typeof types === "string") {
+      return types === "*" ? "*:" : `=:${types}`;
+    }
+    const arr = [...types];
+    if (arr.includes("*")) return "*:";
+    return `=:${arr.sort().join("|")}`;
   }, [types]);
 
   useEffect(() => {
     if (!socket) return;
-    const set = typeKey === "*" ? null : new Set(typeKey.split("|"));
+    const isWildcard = typeKey === "*:";
+    const set = isWildcard ? null : new Set(typeKey.slice(2).split("|"));
     const off = socket.onMessage((m) => {
       if (set === null || set.has(m.type)) handlerRef.current(m);
     });
