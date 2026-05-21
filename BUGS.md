@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## MEDIUM
 
-- **`ImageTile` URL construction uses `encodeURI` not `encodeURIComponent`** — `frontend/src/routes/campaign/ImagesView.tsx:98-99` — `encodeURI` doesn't encode `?`, `#`, `+`. A `+` in a filename breaks the URL.
 - **`kill_stale` TOCTOU race** — `scripts/run.sh:67-72` + `scripts/_lib.sh:89-97` — Enumerates PIDs, then kills. No re-check that the port is free before launching uvicorn/vite. A fresh process binding the port in the gap (or insufficient `taskkill` privilege) causes a less obvious "address already in use".
 - **`kill_stale` doesn't match Windows under non-MSYS bash** — `scripts/_lib.sh:10` — Case label is `MINGW*|MSYS*|CYGWIN*`. WSL falls through to Linux branch (correct); a PowerShell→`bash` invocation may not match either branch and skip cleanup (PLATFORM=unknown).
 - **Wizard step numbering inconsistency** — `frontend/src/routes/CampaignCreate/CampaignCreate.tsx:206-223` + `StepStartingScene.tsx:58,176` — Steps indices run 0–5; `StepStartingScene` heading says "Step 6 — Starting scene" while the lazy-load comment at `:176` says "step 6" but the condition is `if (step !== 5)`. Off-by-one between zero- and one-indexed counting.
