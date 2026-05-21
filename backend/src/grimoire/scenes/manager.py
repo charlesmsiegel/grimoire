@@ -189,12 +189,30 @@ class SceneManager:
         return f"{prefix}{campaign_id}:{base}"
 
     async def _emit(self, type_: str, scene: Scene, **payload: object) -> None:
+        # The shared in-process bus dispatches by ``event.type`` only, so
+        # SceneEvent flows through it duck-typed. Subscribers on that bus
+        # (api.stream, transient_state.triggers, imagegen.integration) read
+        # routing fields off ``event.payload``, so we duplicate the
+        # SceneEvent's top-level identity into the payload dict. The
+        # dedicated SceneEvent attributes are still populated for the
+        # SceneIndexer, which accesses ``event.scene_id`` directly.
+        merged: dict[str, object] = {
+            "campaign_id": scene.campaign_id,
+            "scene_id": scene.id,
+            "branch_id": scene.branch_id,
+            **payload,
+        }
+        if type_ == SCENE_ENDED:
+            merged.setdefault("location_ref", scene.location_ref)
+            merged.setdefault(
+                "present_character_refs", list(scene.present_character_refs)
+            )
         await self.event_bus.emit(
             SceneEvent(
                 type=type_,
                 campaign_id=scene.campaign_id,
                 scene_id=scene.id,
-                payload=dict(payload),
+                payload=merged,
             )
         )
 
