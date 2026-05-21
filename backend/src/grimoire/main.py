@@ -147,13 +147,22 @@ def _seed_defaults(data_root: Path) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    db = Database(
-        settings.resolved_database_path,
-        pool_size=settings.db_pool_size,
-        enable_wal=settings.enable_wal,
-    )
-    await db.connect()
-    container: ServiceContainer | None = None
+    container: ServiceContainer | None = getattr(app.state, "container", None)
+    # If the caller pre-wired a container with a state_store, reuse its db
+    # so any already-attached services (transient_state, library, …) keep
+    # pointing at the same connection pool. Otherwise opening a fresh db
+    # here would split-brain against those pre-wired services.
+    if container is not None and container.state_store is not None:
+        db = container.state_store.db
+        owned_db = False
+    else:
+        db = Database(
+            settings.resolved_database_path,
+            pool_size=settings.db_pool_size,
+            enable_wal=settings.enable_wal,
+        )
+        await db.connect()
+        owned_db = True
     try:
         # Wrap every step of startup so a failure anywhere (migration error,
         # malformed seed file, service init bug) still closes the connection
@@ -161,7 +170,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await apply_migrations(db)
         app.state.db = db
 
-        container = getattr(app.state, "container", None)
         if container is None:
             container = ServiceContainer(db=db)
         container.db = db
@@ -609,17 +617,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # otherwise the connection pool stays open and any partially-built
         # service that holds resources (imagegen workers, stream subscribers)
         # leaks for the life of the process.
-        await _shutdown(container, db)
+        await _shutdown(container, db, close_db=owned_db)
         raise
 
     try:
         yield
     finally:
         await _stop_mechanics_watcher(app)
-        await _shutdown(container, db)
+        await _shutdown(container, db, close_db=owned_db)
 
 
-async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
+async def _shutdown(container: ServiceContainer | None, db: Database, *, close_db: bool = True) -> None:
     if container is not None:
         summary_worker = container.extras.get("scene_summary_worker") if container.extras else None
         if summary_worker is not None:
@@ -717,10 +725,11 @@ async def _shutdown(container: ServiceContainer | None, db: Database) -> None:
                 await container.stream.aclose()
             except Exception:
                 log.exception("stream aclose failed during shutdown")
-    try:
-        await db.close()
-    except Exception:
-        log.exception("db close failed during shutdown")
+    if close_db:
+        try:
+            await db.close()
+        except Exception:
+            log.exception("db close failed during shutdown")
 
 
 async def _stop_mechanics_watcher(app: FastAPI) -> None:
