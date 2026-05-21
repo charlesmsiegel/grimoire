@@ -8,7 +8,7 @@
  * for the same BUGS.md HIGH item.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface Resource<T> {
   data: T | null;
@@ -22,16 +22,23 @@ export function useResource<T>(loader: () => Promise<T>): Resource<T> {
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
+  // Track whether we've ever resolved data, so paginated / filtered
+  // re-fetches keep the prior data visible (no AsyncBoundary "Loading…"
+  // flash) while the next page loads. Initial load still shows loading.
+  const hasResolvedRef = useRef(false);
 
   const reload = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    if (!hasResolvedRef.current) setLoading(true);
     setError(null);
     loader()
       .then((value) => {
-        if (!cancelled) setData(value);
+        if (!cancelled) {
+          setData(value);
+          hasResolvedRef.current = true;
+        }
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err : new Error(String(err)));
