@@ -5,6 +5,7 @@ import { CharacterSprite } from "../../components/CharacterSprite";
 import { Markdown } from "../../components/Markdown";
 import { campaignApi, type ApiAlternate, type ApiPost, type PCEntry } from "../../api/campaign";
 import { AuxPanel } from "./Auxiliary/AuxPanel";
+import { CostBreakdown } from "./CostBreakdown";
 import { RetconLauncher } from "./RetconLauncher";
 import type { SceneImage } from "./usePlayState";
 
@@ -69,6 +70,7 @@ export function PostItem({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retconOpen, setRetconOpen] = useState(false);
+  const [costOpen, setCostOpen] = useState(false);
   const [rewriteInstr, setRewriteInstr] = useState<string | null>(null);
   const [lastRewriteInstr, setLastRewriteInstr] = useState<string>("");
   const [auxResult, setAuxResult] = useState<AuxiliaryResult | null>(null);
@@ -101,6 +103,7 @@ export function PostItem({
   // Retcon is available on any model post (NOT gated to latest like swipes are).
   const canRetcon = !!campaignId && post.author_kind !== "pc" && !post.is_player;
   const canRewrite = canRetcon;
+  const canShowCost = canRetcon && !!post.turn_id;
 
   async function runRewrite(instruction: string) {
     if (!campaignId || !instruction.trim()) return;
@@ -245,6 +248,17 @@ export function PostItem({
               disabled={auxBusy}
             >
               Rewrite...
+            </button>
+          )}
+          {canShowCost && (
+            <button
+              type="button"
+              className="post-cost-toggle"
+              aria-label="Toggle cost breakdown"
+              aria-expanded={costOpen}
+              onClick={() => setCostOpen((v) => !v)}
+            >
+              Cost
             </button>
           )}
           {campaignId && candidateRefs.length > 0 && (
@@ -457,6 +471,7 @@ export function PostItem({
           }}
         />
       )}
+      {costOpen && canShowCost && <CostBreakdown turnId={post.turn_id} />}
       {retconOpen && campaignId && (
         <RetconLauncher
           campaignId={campaignId}
