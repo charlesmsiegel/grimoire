@@ -94,6 +94,40 @@ def test_websocket_receives_event_bus_messages(client, container: ServiceContain
 
 @pytest.mark.parametrize(
     "event_type",
+    ["health_status_changed", "error_reported"],
+)
+@pytest.mark.asyncio
+async def test_observability_events_are_broadcast(event_type: str) -> None:
+    """§12: ``health_status_changed`` and ``error_reported`` events carry no
+    campaign_id so they must reach every subscribed socket via broadcast."""
+    bus = EventBus()
+    stream = StreamManager(event_bus=bus)
+    received: list[dict] = []
+
+    class _FakeWS:
+        async def accept(self) -> None: ...
+        async def send_json(self, message: dict) -> None:
+            received.append(message)
+
+        async def close(self) -> None: ...
+
+    await stream.connect("c1", _FakeWS())  # type: ignore[arg-type]
+    await stream.connect("c2", _FakeWS())  # type: ignore[arg-type]
+
+    payload = (
+        {"target_id": "prov", "level": "healthy"}
+        if event_type == "health_status_changed"
+        else {"module": "orchestrator", "error_kind": "boom"}
+    )
+    await bus.emit(Event(type=event_type, payload=payload))
+
+    # Both sockets should have received the message (no campaign_id → broadcast).
+    assert [m["type"] for m in received] == [event_type, event_type]
+    await stream.aclose()
+
+
+@pytest.mark.parametrize(
+    "event_type",
     ["alternate_added", "primary_switched", "alternate_pinned", "alternate_deleted"],
 )
 @pytest.mark.asyncio
