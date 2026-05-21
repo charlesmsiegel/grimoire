@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## MEDIUM
 
-- **`pluginsApi.configure` posts raw config as body** — `frontend/src/api/library.ts:548-549` — Sends the config dict as the top-level body; if the backend expects `{config: {...}}` the call silently 422s. Worth checking against the FastAPI route.
 - **`ImageTile` URL construction uses `encodeURI` not `encodeURIComponent`** — `frontend/src/routes/campaign/ImagesView.tsx:98-99` — `encodeURI` doesn't encode `?`, `#`, `+`. A `+` in a filename breaks the URL.
 - **`kill_stale` TOCTOU race** — `scripts/run.sh:67-72` + `scripts/_lib.sh:89-97` — Enumerates PIDs, then kills. No re-check that the port is free before launching uvicorn/vite. A fresh process binding the port in the gap (or insufficient `taskkill` privilege) causes a less obvious "address already in use".
 - **`kill_stale` doesn't match Windows under non-MSYS bash** — `scripts/_lib.sh:10` — Case label is `MINGW*|MSYS*|CYGWIN*`. WSL falls through to Linux branch (correct); a PowerShell→`bash` invocation may not match either branch and skip cleanup (PLATFORM=unknown).
