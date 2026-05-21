@@ -87,6 +87,114 @@ async def test_get_turn_prompt(container_with_obs: ServiceContainer, client: Tes
 
 
 @pytest.mark.asyncio
+async def test_get_turn_deltas_envelope_shape(
+    container_with_obs: ServiceContainer, client: TestClient
+) -> None:
+    """Issue #351: the deltas endpoint returns an {applied, queued} envelope.
+
+    Verifies the API shape end-to-end so the frontend "What changed?"
+    panel can rely on the contract without re-deriving it.
+    """
+    from grimoire.types.common import Scope
+    from grimoire.types.state import (
+        AppliedDelta,
+        DeltaKind,
+        ReviewItem,
+        StateDelta,
+    )
+
+    obs = container_with_obs.observability
+    db = obs.audit_store._db
+    await db.execute(
+        """
+        INSERT INTO deltas (
+            id, campaign_id, branch_id, turn_id, source, kind,
+            target_scope, target_table, target_path, target_id,
+            before, after, confidence, applied_at, reversed_at, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+        """,
+        (
+            "d_a",
+            "c1",
+            "main",
+            "t_with_deltas",
+            "extractor",
+            DeltaKind.FACT_ADD.value,
+            Scope.CAMPAIGN_SQLITE.value,
+            None,
+            None,
+            "f_1",
+            "{}",
+            '{"name": "curfew"}',
+            0.95,
+            datetime.now(UTC).isoformat(),
+            "",
+        ),
+    )
+
+    audit = TurnAudit(
+        turn_id="t_with_deltas",
+        campaign_id="c1",
+        branch_id="main",
+        scene_id="s1",
+        started_at=datetime.now(UTC),
+        extracted_deltas=[
+            StateDelta(
+                kind=DeltaKind.FACT_ADD,
+                target_scope=Scope.CAMPAIGN_SQLITE,
+                target_id="f_1",
+                source="extractor",
+                evidence="A curfew is announced.",
+                confidence=0.95,
+            ),
+        ],
+        applied_deltas=[
+            AppliedDelta(
+                id="d_a",
+                delta=StateDelta(
+                    kind=DeltaKind.FACT_ADD,
+                    target_scope=Scope.CAMPAIGN_SQLITE,
+                    target_id="f_1",
+                ),
+                campaign_id="c1",
+                branch_id="main",
+                turn_id="t_with_deltas",
+                applied_at=datetime.now(UTC),
+            ),
+        ],
+        queued_for_review=[
+            ReviewItem(
+                id="r_pending",
+                delta=StateDelta(
+                    kind=DeltaKind.FACT_ADD,
+                    target_scope=Scope.CAMPAIGN_SQLITE,
+                    target_id="f_1",
+                ),
+                campaign_id="c1",
+            )
+        ],
+    )
+    await obs.record_turn_audit(audit)
+
+    resp = client.get("/api/observability/turns/t_with_deltas/deltas")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body.keys()) == {"applied", "queued"}
+    assert len(body["applied"]) == 1
+    applied = body["applied"][0]
+    assert applied["status"] == "auto"
+    assert applied["evidence"] == "A curfew is announced."
+    assert applied["strategy"] == "extractor"
+    assert applied["confidence"] == 0.95
+
+
+@pytest.mark.asyncio
+async def test_get_turn_deltas_unknown_returns_404(client: TestClient) -> None:
+    resp = client.get("/api/observability/turns/never-existed/deltas")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_health_latest_empty(client: TestClient) -> None:
     resp = client.get("/api/observability/health/latest")
     assert resp.status_code == 200

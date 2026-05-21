@@ -60,6 +60,34 @@ def _load(raw: str | None) -> Any:
     return json.loads(raw)
 
 
+def _coerce_id_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(v) for v in value if v is not None]
+
+
+def _pop_matching_evidence(
+    pool: list[dict[str, Any]], row: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Find the audit's extracted-delta entry that matches a stored row.
+
+    Correlation key is (kind, target_scope, target_id). Pops the first
+    match so a turn with two same-shape deltas (e.g. two FACT_ADD against
+    the same target) still gets distinct evidence per applied row.
+    """
+    kind = row.get("kind")
+    scope = row.get("target_scope")
+    target_id = row.get("target_id")
+    for idx, entry in enumerate(pool):
+        if (
+            entry.get("kind") == kind
+            and entry.get("target_scope") == scope
+            and entry.get("target_id") == target_id
+        ):
+            return pool.pop(idx)
+    return None
+
+
 class AuditStore:
     """Read/write façade over the ``turn_audits`` table."""
 
@@ -195,24 +223,131 @@ class AuditStore:
             return None
         return self._row_to_audit(dict(row))
 
-    async def deltas_for_turn(self, turn_id: TurnId) -> list[dict[str, Any]]:
+    async def deltas_for_turn(self, turn_id: TurnId) -> dict[str, list[dict[str, Any]]]:
+        """Return the per-turn delta diff for the "What changed?" view.
+
+        Joins the audit's applied/queued ids against the state-store
+        ``deltas`` table, then folds in ``evidence`` / ``target_scope`` /
+        ``extra`` from the audit's ``extracted_deltas`` JSON blob (which
+        carry fields the SQL row does not retain). Each entry is tagged
+        ``status`` = ``"auto"`` (applied automatically) or ``"queued"``
+        (pending human review); queued entries also carry the
+        ``review_id`` and ``review_status``.
+        """
         row = await self._db.fetchone(
-            "SELECT applied_delta_ids FROM turn_audits WHERE turn_id = ?",
+            "SELECT applied_delta_ids, queued_review_ids, extraction_summary "
+            "FROM turn_audits WHERE turn_id = ?",
             (turn_id,),
         )
         if row is None:
-            return []
-        ids = _load(row["applied_delta_ids"]) or []
-        if not isinstance(ids, list) or not ids:
+            raise KeyError(f"unknown turn {turn_id!r}")
+
+        applied_ids = _coerce_id_list(_load(row["applied_delta_ids"]))
+        queued_review_ids = _coerce_id_list(_load(row["queued_review_ids"]))
+        extraction = _load(row["extraction_summary"]) or {}
+        evidence_pool = list(extraction.get("deltas") or [])
+
+        applied_rows = await self._fetch_delta_rows(applied_ids)
+        queued_rows, review_meta = await self._fetch_queued_rows(queued_review_ids)
+
+        applied = [
+            self._build_delta_entry(r, evidence_pool, status="auto")
+            for r in applied_rows
+        ]
+        queued = [
+            self._build_delta_entry(
+                r,
+                evidence_pool,
+                status="queued",
+                review_id=review_meta[r["id"]]["review_id"],
+                review_status=review_meta[r["id"]]["status"],
+            )
+            for r in queued_rows
+        ]
+        return {"applied": applied, "queued": queued}
+
+    async def _fetch_delta_rows(self, ids: list[str]) -> list[dict[str, Any]]:
+        if not ids:
             return []
         placeholders = ",".join("?" for _ in ids)
         rows = await self._db.fetchall(
-            f"SELECT id, campaign_id, branch_id, turn_id, kind, target_table, "
-            f"target_id, before, after, confidence, applied_at, reversed_at, notes "
+            f"SELECT id, campaign_id, branch_id, turn_id, source, kind, "
+            f"target_scope, target_table, target_path, target_id, "
+            f"before, after, confidence, applied_at, reversed_at, notes "
             f"FROM deltas WHERE id IN ({placeholders})",
             tuple(ids),
         )
-        return [dict(r) for r in rows]
+        by_id = {r["id"]: dict(r) for r in rows}
+        # Preserve the caller's id ordering — applied_delta_ids reflects
+        # the order in which the orchestrator applied them, which the
+        # frontend uses to show "first thing that happened" first.
+        return [by_id[i] for i in ids if i in by_id]
+
+    async def _fetch_queued_rows(
+        self, review_ids: list[str]
+    ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+        if not review_ids:
+            return [], {}
+        placeholders = ",".join("?" for _ in review_ids)
+        review_rows = await self._db.fetchall(
+            f"SELECT id, delta_id, status FROM review_queue WHERE id IN ({placeholders})",
+            tuple(review_ids),
+        )
+        if not review_rows:
+            return [], {}
+        # Map delta_id → {review_id, status} so callers can render the
+        # review state alongside the underlying delta.
+        review_meta: dict[str, dict[str, Any]] = {}
+        delta_ids: list[str] = []
+        for r in review_rows:
+            row = dict(r)
+            review_meta[row["delta_id"]] = {
+                "review_id": row["id"],
+                "status": row["status"],
+            }
+            delta_ids.append(row["delta_id"])
+        rows = await self._fetch_delta_rows(delta_ids)
+        return rows, review_meta
+
+    def _build_delta_entry(
+        self,
+        row: dict[str, Any],
+        evidence_pool: list[dict[str, Any]],
+        *,
+        status: str,
+        review_id: str | None = None,
+        review_status: str | None = None,
+    ) -> dict[str, Any]:
+        evidence_match = _pop_matching_evidence(evidence_pool, row)
+        before = _load(row.get("before"))
+        after = _load(row.get("after"))
+        entry: dict[str, Any] = {
+            "id": row["id"],
+            "kind": row.get("kind"),
+            "target_scope": row.get("target_scope"),
+            "target_table": row.get("target_table"),
+            "target_path": row.get("target_path"),
+            "target_id": row.get("target_id"),
+            "before": before,
+            "after": after,
+            "confidence": row.get("confidence"),
+            # "strategy" is the producer that emitted the delta — the
+            # spec calls it strategy in the UI, the row stores it as
+            # ``source`` (e.g. "extractor:wod-mechanics", "mechanics",
+            # "user"). Surface both names so the frontend can pick.
+            "source": row.get("source"),
+            "strategy": row.get("source"),
+            "evidence": evidence_match.get("evidence", "") if evidence_match else "",
+            "extra": evidence_match.get("extra", {}) if evidence_match else {},
+            "notes": row.get("notes") or (evidence_match.get("notes") if evidence_match else ""),
+            "applied_at": row.get("applied_at"),
+            "reversed_at": row.get("reversed_at"),
+            "status": status,
+        }
+        if review_id is not None:
+            entry["review_id"] = review_id
+            entry["review_status"] = review_status
+        return entry
 
     async def list(
         self,
