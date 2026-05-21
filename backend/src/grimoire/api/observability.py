@@ -45,6 +45,28 @@ async def list_turn_audits(
     return [a.model_dump(mode="json") for a in audits]
 
 
+def _enrich_message(msg: Any) -> dict[str, Any]:
+    """Normalize an assembled message into a dict and add ``tier`` / ``tokens``.
+
+    Tier comes from ``metadata["tier"]`` (set by ContextBuilder); falls back to
+    ``None`` for legacy audits. Tokens are estimated as ``len(content) // 4``
+    so the debug view can render a per-message bar without re-running the
+    tokenizer.
+    """
+    if hasattr(msg, "model_dump"):
+        data = msg.model_dump(mode="json")
+    elif isinstance(msg, dict):
+        data = dict(msg)
+    else:
+        data = {"role": "system", "content": str(msg), "metadata": {}, "name": None}
+    metadata = data.get("metadata") or {}
+    tier = metadata.get("tier") if isinstance(metadata, dict) else None
+    content = data.get("content") or ""
+    data["tier"] = tier
+    data["tokens"] = max(1, len(content) // 4) if content else 0
+    return data
+
+
 @router.get("/turns/{turn_id}/prompt")
 async def get_turn_prompt(turn_id: str, observability: ObservabilityDep) -> Any:
     try:
@@ -52,12 +74,7 @@ async def get_turn_prompt(turn_id: str, observability: ObservabilityDep) -> Any:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     assembled = getattr(audit, "assembled_messages", None) or []
-    messages: list[Any] = []
-    for msg in assembled:
-        if hasattr(msg, "model_dump"):
-            messages.append(msg.model_dump(mode="json"))
-        else:
-            messages.append(msg)
+    messages = [_enrich_message(m) for m in assembled]
     sources = [s.model_dump(mode="json") for s in audit.context_sources]
     budget_used = {str(k): v for k, v in audit.context_budget_used.items()}
     composition = (
@@ -72,6 +89,20 @@ async def get_turn_prompt(turn_id: str, observability: ObservabilityDep) -> Any:
         "composition_snapshot": composition,
         "summary": summary,
     }
+
+
+@router.get("/turns/{turn_id}/prompt/diff")
+async def get_turn_prompt_diff(
+    turn_id: str,
+    observability: ObservabilityDep,
+    against: str,
+) -> Any:
+    """Diff this turn's assembled prompt against another (typically the
+    immediately preceding turn). 404 if either turn id is unknown."""
+    try:
+        return await observability.audit_store.diff_prompts(against, turn_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/turns/{turn_id}/deltas")

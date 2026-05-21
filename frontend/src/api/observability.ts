@@ -2,9 +2,12 @@
  * REST client for observability endpoints. Mirrors the routes in
  * ``backend/src/grimoire/api/observability.py``.
  *
- * Covers performance metrics (#355), the per-turn delta diff (#351), and
- * the Frontend Health panel (#357): latest probe results, manual
- * re-probes, and errors grouped by module.
+ * Covers performance metrics (#355), the per-turn delta diff (#351), the
+ * Frontend Health panel (#357) — latest probe results, manual re-probes,
+ * and errors grouped by module — and the "What did the model see?" debug
+ * view (#350): per-turn assembled prompt with tier annotations and
+ * per-source attribution, plus a diff helper that compares two turns'
+ * prompts.
  */
 
 import { api } from "./client";
@@ -99,6 +102,106 @@ export interface ErrorRecord {
   user_action_taken: string | null;
 }
 
+export type ContextTier = "lock-in" | "spotlight" | "background" | "archive";
+
+export interface PromptMessage {
+  role: string;
+  content: string;
+  name: string | null;
+  tier: string | null;
+  tokens: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface PromptSource {
+  source_id: string;
+  kind: string;
+  scope: string;
+  owner_id: string | null;
+  tier: ContextTier;
+  library_version: number | null;
+  override_applied: boolean;
+  tokens: number;
+  summary: string;
+}
+
+export interface PromptCompositionSnapshot {
+  mechanics_module: string | null;
+  world_refs: Array<Record<string, unknown>>;
+  style_guide_id: string | null;
+  image_preset_id: string | null;
+}
+
+export interface PromptContextSummary {
+  total_tokens: number;
+  per_tier: Record<string, number>;
+  source_count: number;
+  spotlight_characters: string[];
+}
+
+export interface PromptResponse {
+  messages: PromptMessage[];
+  sources: PromptSource[];
+  budget_used: Record<string, number>;
+  messages_hash: string;
+  composition_snapshot: PromptCompositionSnapshot | null;
+  summary: PromptContextSummary | null;
+}
+
+export interface PromptDiffMessage {
+  role: string;
+  tier: string | null;
+  tokens: number;
+  content: string;
+}
+
+export interface PromptDiffChange {
+  role: string;
+  tier: string | null;
+  before: PromptDiffMessage;
+  after: PromptDiffMessage;
+}
+
+export interface PromptDiffSource {
+  source_id: string;
+  kind: string;
+  owner_id: string | null;
+  scope: string | null;
+  tier: string | null;
+  tokens: number;
+  override_applied: boolean;
+  summary: string;
+}
+
+export interface PromptDiff {
+  turn_id_a: string;
+  turn_id_b: string;
+  messages_hash_changed: boolean;
+  added_messages: PromptDiffMessage[];
+  removed_messages: PromptDiffMessage[];
+  changed_messages: PromptDiffChange[];
+  added_sources: PromptDiffSource[];
+  removed_sources: PromptDiffSource[];
+  tier_budget_shifts: Record<string, number>;
+}
+
+export interface TurnAuditSummary {
+  turn_id: string;
+  campaign_id: string;
+  branch_id: string;
+  scene_id: string;
+  started_at: string;
+  completed_at: string | null;
+  player_input: string;
+  llm_model: string;
+  llm_provider: string;
+  context_messages_hash: string;
+}
+
+function base(turnId: string) {
+  return `/api/observability/turns/${encodeURIComponent(turnId)}`;
+}
+
 export const observabilityApi = {
   getMetricsKnown(): Promise<MetricsKnownPair[]> {
     return api.get<MetricsKnownPair[]>("/api/observability/metrics/known");
@@ -148,4 +251,16 @@ export const observabilityApi = {
       query: { limit },
       signal,
     }),
+
+  listTurns(campaignId: string, limit = 50): Promise<TurnAuditSummary[]> {
+    return api.get(`/api/observability/turns`, {
+      query: { campaign_id: campaignId, limit },
+    });
+  },
+  getPrompt(turnId: string): Promise<PromptResponse> {
+    return api.get(`${base(turnId)}/prompt`);
+  },
+  diffPrompts(turnId: string, against: string): Promise<PromptDiff> {
+    return api.get(`${base(turnId)}/prompt/diff`, { query: { against } });
+  },
 };
