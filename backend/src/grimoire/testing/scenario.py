@@ -134,20 +134,20 @@ class ScenarioApp:
         self.container.extras["llm_gateway"] = self._llm
         self.app.state.container = self.container
 
-        # Drive the lifespan manually via httpx's ASGI transport: a
-        # request lifecycle implicitly calls startup/shutdown. We use
-        # ``lifespan="on"`` on the transport so startup runs on
-        # ``__aenter__`` and shutdown on ``aclose``.
+        # httpx's ASGITransport does not run ASGI lifespan events, so we
+        # drive startup ourselves via FastAPI's ``lifespan_context``.
+        # Holding the context across the test gives us a proper shutdown
+        # call in ``__aexit__`` — without this, ``container.world`` and
+        # other services are never constructed and every request 503s
+        # with "<service> not configured".
+        self._lifespan_cm = self.app.router.lifespan_context(self.app)
+        await self._lifespan_cm.__aenter__()
+
         transport = httpx.ASGITransport(app=self.app)
         self.client = httpx.AsyncClient(
             transport=transport,
             base_url="http://scenario.local",
         )
-
-        # Trigger lifespan startup by issuing a no-op health probe.
-        # FastAPI's TestClient does this implicitly; with raw ASGI we
-        # poke /api/health/live (cheap, defined in health_router).
-        await self.client.get("/api/health/live")
         return self
 
     async def __aexit__(
@@ -159,6 +159,10 @@ class ScenarioApp:
         try:
             if self.client is not None:
                 await self.client.aclose()
+            if self._lifespan_cm is not None:
+                # Pass the active exception through so lifespan shutdown
+                # sees the same context the surrounding async with does.
+                await self._lifespan_cm.__aexit__(exc_type, exc, tb)
         finally:
             # Restore the global settings object so other tests in the
             # same process see the original configuration.
