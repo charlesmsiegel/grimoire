@@ -43,6 +43,17 @@ class _CharactersProvider(Protocol):
     async def resolve(self, character_ref: str, campaign_id: str) -> Any: ...
 
 
+class _VisualExtractor(Protocol):
+    """Optional pluggable visual-element extractor (spec 12 §15).
+
+    Implementations typically wrap the Extractor module's LLM strategy to
+    return richer scene hints than the keyword heuristic. An empty list or
+    a raised exception falls back to :func:`extract_visual_elements`.
+    """
+
+    async def extract_visual_elements(self, text: str) -> list[str]: ...
+
+
 def compose_prompt_parts(
     *,
     preset_preamble: str = "",
@@ -175,11 +186,13 @@ class PromptComposer:
         library: _LibraryProvider | None = None,
         world: _WorldProvider | None = None,
         characters: _CharactersProvider | None = None,
+        visual_extractor: _VisualExtractor | None = None,
     ) -> None:
         self.scene_manager = scene_manager
         self.library = library
         self.world = world
         self.characters = characters
+        self.visual_extractor = visual_extractor
 
     async def compose(
         self,
@@ -250,7 +263,17 @@ class PromptComposer:
         if extra_elements:
             scene_elements.extend(extra_elements)
         if post_body:
-            scene_elements.extend(extract_visual_elements(post_body))
+            extracted: list[str] = []
+            if self.visual_extractor is not None:
+                try:
+                    extracted = list(
+                        await self.visual_extractor.extract_visual_elements(post_body)
+                    )
+                except Exception:
+                    extracted = []
+            if not extracted:
+                extracted = extract_visual_elements(post_body)
+            scene_elements.extend(extracted)
 
         parts = compose_prompt_parts(
             preset_preamble=preset_preamble,
