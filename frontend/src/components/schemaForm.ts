@@ -14,6 +14,12 @@ export interface JsonSchema {
   properties?: Record<string, JsonSchema>;
   required?: string[];
   items?: JsonSchema;
+  // Intentional escape-hatch: JSON Schema defines many keywords beyond
+  // the named ones above (allOf/oneOf/anyOf, $ref, additionalProperties,
+  // pattern, minimum, etc.) and plugin authors may also stash custom
+  // x-* extensions. Typed as `unknown` (not `any`) so reads through this
+  // index must be narrowed at use sites; reads through the named keys
+  // are still type-checked discriminately.
   [key: string]: unknown;
 }
 
