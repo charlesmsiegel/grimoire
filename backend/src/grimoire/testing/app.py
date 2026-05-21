@@ -204,7 +204,7 @@ class TestApp:
         """
         if self.time_engine is None:
             raise RuntimeError("install_npc_tick_fn requires the TestApp to be entered")
-        self.time_engine._npc_tick_fn = fn  # noqa: SLF001 — intentional test seam
+        self.time_engine._npc_tick_fn = fn
 
     async def __aexit__(self, *exc: Any) -> None:
         await self.db.close()
