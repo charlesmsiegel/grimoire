@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## MEDIUM
 
-- **JsonField rewrites on every keystroke and discards in-progress edits** — `frontend/src/routes/library/FrontmatterEditor.tsx:149-158` — Calls `onChange` with the partial-parsed value when parse succeeds mid-typing; `useEffect` resets textarea from `value` on external change, blowing away user input.
 
 ## LOW
 
