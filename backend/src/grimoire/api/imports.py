@@ -23,9 +23,10 @@ from pydantic import BaseModel, Field
 from grimoire.api.deps import CharactersDep, LibraryDep, StateStoreDep
 from grimoire.api.util import to_payload
 from grimoire.library.classify import suggest_kind
-from grimoire.library.reclassify import _lore_entry_from_ingested
+from grimoire.library.reclassify import _lore_entry_from_ingested, required_overrides_for
 from grimoire.state_store.paths import library_root
-from grimoire.types.characters import IngestedCharacterCard, IngestOptions
+from grimoire.types.characters import IngestedCharacterCard, IngestOptions, LoreOverride
+from grimoire.types.common import EntityKind
 
 router = APIRouter()
 
@@ -62,6 +63,7 @@ def _gc_expired() -> None:
 class CommitPayload(BaseModel):
     preview_id: str
     options: dict[str, Any] = Field(default_factory=dict)
+    lore_overrides: list[LoreOverride] = Field(default_factory=list)
 
 
 @router.post("/library/worlds/{world_id}/imports/sillytavern/preview")
@@ -134,6 +136,36 @@ async def commit_sillytavern_import(
             status_code=400,
             detail=f"preview was created for {slot.world_id!r}, not {world_id!r}",
         )
+
+    valid_indices = {entry.source_index for entry in slot.ingested.lore_entries}
+    seen_indices: set[int] = set()
+    for override in payload.lore_overrides:
+        if override.source_index in seen_indices:
+            raise HTTPException(
+                status_code=400,
+                detail=f"lore override for source_index={override.source_index} declared twice",
+            )
+        seen_indices.add(override.source_index)
+        if override.source_index not in valid_indices:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"lore override source_index={override.source_index} not present "
+                    f"in preview (valid: {sorted(valid_indices)})"
+                ),
+            )
+        if override.kind not in ("lore", "skip"):
+            required = required_overrides_for(EntityKind(override.kind))
+            missing = [k for k in required if k not in override.overrides]
+            if missing:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"lore override for source_index={override.source_index} "
+                        f"(kind={override.kind}) missing required override(s): {missing}"
+                    ),
+                )
+
     try:
         options = IngestOptions.model_validate(payload.options or {})
     except Exception as exc:
