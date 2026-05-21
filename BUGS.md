@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## MEDIUM
 
-- **`scan_now` blocks the event loop on the entire library walk** — `backend/src/grimoire/watcher/watcher.py:263-301` — Synchronous filesystem walk + sync file parsing on the loop. Tolerable at boot but stalls everything if called from a rescan endpoint.
 - **Lifespan re-uses a pre-existing container's `state_store` against a new `Database`** — `backend/src/grimoire/main.py:167,195-196` — `container.db = db` is unconditional, but `state_store` is only constructed if `None`. A test that passes a container with a `state_store` bound to a different `Database` ends up with split-brain.
 - **Cursors leaked via double-await `await (await conn.execute(...)).fetchall()`** — `backend/src/grimoire/state_store/snapshots.py:33-49,112-139` — aiosqlite cursor finalizer is non-deterministic; on WAL these can hold reader locks briefly. Use `async with conn.execute(...) as cur:` consistently.
 - **Continuity `add_fact`/`add_commitment` mutate caller's input** — `backend/src/grimoire/continuity/service.py:162,457` — `fact.tags.append(...)`. Callers reusing the same dataclass accumulate `src:` tags.

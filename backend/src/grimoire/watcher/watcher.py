@@ -276,7 +276,12 @@ class FileWatcher:
 
         library_root = self.data_root / "library"
         if library_root.exists():
-            for path in _iter_files(library_root):
+            # Walk the tree off-loop so a deep library doesn't starve the
+            # event loop. Per-file I/O inside _reindex (_parse_file reads
+            # bytes) still runs on the loop, but the rglob walk is the
+            # dominant cost on large libraries.
+            paths = await asyncio.to_thread(lambda: list(_iter_files(library_root)))
+            for path in paths:
                 watched = classify_path(self.data_root, path)
                 if watched is None:
                     continue
@@ -284,10 +289,14 @@ class FileWatcher:
                 library_files += 1
                 if watched.library_id is not None and watched.scope == "library":
                     seen_library.add(watched.library_id)
+                # Yield to the loop so concurrent HTTP requests aren't
+                # starved during a large rescan.
+                await asyncio.sleep(0)
 
         campaigns_root = self.data_root / "campaigns"
         if campaigns_root.exists():
-            for path in _iter_files(campaigns_root):
+            paths = await asyncio.to_thread(lambda: list(_iter_files(campaigns_root)))
+            for path in paths:
                 watched = classify_path(self.data_root, path)
                 if watched is None:
                     continue
@@ -296,6 +305,7 @@ class FileWatcher:
                 cid = watched.content_index_id
                 if cid is not None:
                     seen_content.add(cid)
+                await asyncio.sleep(0)
 
         await self._drop_orphan_library_rows(seen_library)
         await self._drop_orphan_content_rows(seen_content)
