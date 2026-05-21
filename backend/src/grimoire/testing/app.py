@@ -29,12 +29,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from grimoire.characters.service import CharactersService
 from grimoire.continuity.config import ContinuityConfig
 from grimoire.continuity.service import ContinuityService
 from grimoire.event_bus import EventBus
+from grimoire.extractor.config import ExtractorConfig
+from grimoire.extractor.service import ExtractorService
 from grimoire.library.service import LibraryService
 from grimoire.mechanics.config import MechanicsConfig
 from grimoire.mechanics.service import MechanicsService
+from grimoire.orchestrator.config import OrchestratorConfig
+from grimoire.orchestrator.service import OrchestratorService
 from grimoire.scenes.manager import SceneManager, SceneManagerConfig
 from grimoire.state_store.store import StateStore
 from grimoire.storage import Database, apply_migrations
@@ -43,6 +48,11 @@ from grimoire.testing.fixtures import (
     seed_library_campaign_fixture,
 )
 from grimoire.testing.mock_llm import MockLLMGateway
+from grimoire.time_engine.config import TimeEngineConfig
+from grimoire.time_engine.service import NpcTickFn, TimeEngineService
+from grimoire.types.context import AssembledPrompt
+from grimoire.types.llm import Message, MessageRole, ModelParams
+from grimoire.world.service import WorldService
 
 FixtureFactory = Callable[["TestApp"], Awaitable[None]]
 
@@ -89,6 +99,9 @@ class TestApp:
         mechanics_config: MechanicsConfig | None = None,
         scene_config: SceneManagerConfig | None = None,
         continuity_config: ContinuityConfig | None = None,
+        extractor_config: ExtractorConfig | None = None,
+        time_engine_config: TimeEngineConfig | None = None,
+        orchestrator_config: OrchestratorConfig | None = None,
         llm: MockLLMGateway | None = None,
     ) -> None:
         self.data_root = Path(data_root)
@@ -103,6 +116,14 @@ class TestApp:
         )
         self._scene_config = scene_config or SceneManagerConfig()
         self._continuity_config = continuity_config or ContinuityConfig()
+        # Default the extractor to the structured_llm strategy only so tests
+        # opt-in to a fully-mockable extraction path (heuristics + rules add
+        # surprise deltas that drown out the queued response).
+        self._extractor_config = extractor_config or ExtractorConfig(
+            parallel_strategies=("structured_llm",),
+        )
+        self._time_engine_config = time_engine_config or TimeEngineConfig()
+        self._orchestrator_config = orchestrator_config or OrchestratorConfig()
 
         # Lazy: populated in ``__aenter__``.
         self.state_store: StateStore | None = None
@@ -110,6 +131,12 @@ class TestApp:
         self.continuity: ContinuityService | None = None
         self.scene_manager: SceneManager | None = None
         self.library: LibraryService | None = None
+        self.world: WorldService | None = None
+        self.characters: CharactersService | None = None
+        self.extractor: ExtractorService | None = None
+        self.context_builder: _StubContextBuilder | None = None
+        self.orchestrator: OrchestratorService | None = None
+        self.time_engine: TimeEngineService | None = None
         # Raw family records seeded from a LibraryCampaignFixture. Empty
         # by default; the seeder populates this so integration tests can
         # assert on family membership without a dedicated service.
@@ -130,7 +157,54 @@ class TestApp:
             config=self._scene_config,
         )
         self.library = LibraryService(self.state_store)
+        self.world = WorldService(self.library)
+        self.characters = CharactersService(self.library, self.mechanics)
+        # The Extractor and turn-loop services are mock-backed: the
+        # gateway is the MockLLMGateway, the context builder is a stub
+        # that returns the player's input verbatim. Real wiring requires
+        # the full Library/World/Characters/Composition stack which is
+        # out of scope for integration tests that target the turn loop
+        # itself.
+        self.extractor = ExtractorService(
+            gateway=self.llm,
+            config=self._extractor_config,
+        )
+        self.context_builder = _StubContextBuilder()
+        self.orchestrator = OrchestratorService(
+            event_bus=self.event_bus,
+            scene_manager=self.scene_manager,
+            llm_gateway=self.llm,
+            context_builder=self.context_builder,
+            extractor=self.extractor,
+            state_store=self.state_store,
+            mechanics=self.mechanics,
+            continuity=self.continuity,
+            library=self.library,
+            world=self.world,
+            extractor_config=self._extractor_config,
+            config=self._orchestrator_config,
+        )
+        self.time_engine = TimeEngineService(
+            store=self.state_store,
+            world=self.world,
+            characters=self.characters,
+            mechanics=self.mechanics,
+            continuity=self.continuity,
+            event_bus=self.event_bus,
+            config=self._time_engine_config,
+        )
         return self
+
+    def install_npc_tick_fn(self, fn: NpcTickFn) -> None:
+        """Swap the Time Engine's NPC-tick callable.
+
+        Tests that want to observe which NPCs got ticked register a
+        recording stub here instead of constructing their own
+        TimeEngineService.
+        """
+        if self.time_engine is None:
+            raise RuntimeError("install_npc_tick_fn requires the TestApp to be entered")
+        self.time_engine._npc_tick_fn = fn  # noqa: SLF001 — intentional test seam
 
     async def __aexit__(self, *exc: Any) -> None:
         await self.db.close()
@@ -209,6 +283,49 @@ class _TestAppBuilder:
     async def __aexit__(self, *exc: Any) -> None:
         if self._app is not None:
             await self._app.__aexit__(*exc)
+
+
+class _StubContextBuilder:
+    """Minimal duck-typed Context Builder for turn-loop integration tests.
+
+    Returns an :class:`AssembledPrompt` that threads the player input
+    verbatim into a user message. Records every call so tests can assert
+    the orchestrator invoked it with the expected arguments.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def build(
+        self,
+        player_input: str,
+        campaign_id: str,
+        mechanics_results: list[Any] | None = None,
+        *,
+        pc_ref: str | None = None,
+        extra: str | None = None,
+        branch_id: str | None = None,
+        turn_id: str | None = None,
+        extractor_mode: Any = None,
+        auxiliary_task: Any | None = None,
+    ) -> AssembledPrompt:
+        self.calls.append(
+            {
+                "player_input": player_input,
+                "campaign_id": campaign_id,
+                "pc_ref": pc_ref,
+                "turn_id": turn_id,
+                "extractor_mode": extractor_mode,
+            }
+        )
+        return AssembledPrompt(
+            messages=[
+                Message(role=MessageRole.SYSTEM, content="ctx"),
+                Message(role=MessageRole.USER, content=player_input),
+            ],
+            params=ModelParams(),
+            budget_used={},
+        )
 
 
 def _copy_tree(src: Path, dst: Path) -> None:
