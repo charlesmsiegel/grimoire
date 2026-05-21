@@ -12,6 +12,7 @@ interface NavSection {
 const navSections: NavSection[] = [
   { label: "Library", to: "/library", description: "Worlds, style guides, plugins", icon: "L" },
   { label: "Campaigns", to: "/campaigns", description: "Active plays and creation", icon: "C" },
+  { label: "Observability", to: "/observability", description: "Metrics, health, errors", icon: "O" },
   { label: "Settings", to: "/settings", description: "App-level configuration", icon: "S" },
 ];
 

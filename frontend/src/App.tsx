@@ -9,6 +9,7 @@ import { CampaignsView } from "./routes/CampaignsView";
 import { Home } from "./routes/Home";
 import { LibraryRoutes } from "./routes/library";
 import { NotFound } from "./routes/NotFound";
+import { ObservabilityRoutes } from "./routes/observability";
 import { CastView } from "./routes/campaign/CastView";
 import { CompositionView } from "./routes/campaign/CompositionView";
 import { ImagesView } from "./routes/campaign/ImagesView";
@@ -54,6 +55,7 @@ export function App() {
                 <Route path="composition" element={<CompositionView />} />
                 <Route path="images" element={<ImagesView />} />
               </Route>
+              <Route path="observability/*" element={<ObservabilityRoutes />} />
               <Route path="settings" element={<AppSettings />} />
               <Route path="*" element={<NotFound />} />
             </Route>
