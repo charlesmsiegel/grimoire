@@ -238,6 +238,59 @@ async def test_list_pcs_single_active_when_cache_cold(
         f"{[pc.character_ref for pc in active_entries]}"
     )
 
+    characters._active_pc.pop("camp-1", None)
+    assert await characters.active_pc("camp-1") == active_entries[0].character_ref
+
+
+async def test_add_pc_persists_inactive_for_subsequent_pcs(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """The store guards the at-most-one-active invariant at write time.
+
+    `add_pc` writes `active=1` only for the first PC in a campaign; subsequent
+    inserts default to `active=0`. Without that guarantee the cold-cache fix
+    in `_seed_active_pc_from_rows` would have nothing to anchor on.
+    """
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    pc1 = "library:worlds/wod-london/characters/vivienne"
+    pc2 = "library:worlds/wod-london/characters/winifred"
+    await characters.add_pc("camp-1", pc1, "vivienne")
+    await characters.add_pc("camp-1", pc2, "winifred")
+
+    rows = await store.list_pcs("camp-1")
+    active_rows = [r for r in rows if bool(r["active"])]
+    assert len(active_rows) == 1
+    assert active_rows[0]["character_ref"] == pc1
+
+
+async def test_list_pcs_picks_first_row_when_no_row_is_active(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """Cold cache + zero `active=1` rows still yields exactly one active PC.
+
+    Defends against a regression where a manual DB edit or future migration
+    leaves every row with `active=0` — the fallback must still pick one (the
+    earliest-added row) instead of returning all PCs as inactive.
+    """
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    pc1 = "library:worlds/wod-london/characters/vivienne"
+    pc2 = "library:worlds/wod-london/characters/winifred"
+    await characters.add_pc("camp-1", pc1, "vivienne")
+    await characters.add_pc("camp-1", pc2, "winifred")
+
+    await store.db.execute(
+        "UPDATE campaign_pcs SET active = 0 WHERE campaign_id = ?",
+        ("camp-1",),
+    )
+    characters._active_pc.pop("camp-1", None)
+
+    listed = await characters.list_pcs("camp-1")
+    active_entries = [pc for pc in listed if pc.active]
+    assert len(active_entries) == 1
+    assert active_entries[0].character_ref == pc1
+
 
 async def test_multi_pc_should_auto_respond(
     characters: CharactersService, store: StateStore

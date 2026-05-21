@@ -99,11 +99,9 @@ Spec 08 §Promotion: "Migrate any campaign-local sheet to library-level sheet if
 
 Needs: a `mechanics.migrate_sheet(campaign_id, character_ref, target_library_id)` hook that's called from `promote_to_library` after the markdown write. Coordinate with the Mechanics module owner — that API does not exist yet.
 
-## 14. PCEntry `active` semantics + multiplayer owner
+## 14. PCEntry `active` semantics + multiplayer owner — RESOLVED
 
-Spec 08 §PC role and multi-PC defines `owner: str` ("local in v1; account id in v2"). The shipped service already accepts `owner` on `add_pc` and stores it, so v1 is fine. The `active` flag has a subtle bug worth recording here:
-
-`list_pcs` (`service.py:465`) computes `active = (active_ref == row["character_ref"] if active_ref else bool(row["active"]))`. When there's no in-process active PC cached (e.g. right after restart in a fresh worker that hasn't called `active_pc` yet for this campaign), it falls back to `row["active"]` per row — but every persisted row has `active=1` from earlier writes, so multiple PCs can show as active. The `active_pc(...)` method hydrates the cache; ensure all `list_pcs` callers go through `active_pc` first or refactor `list_pcs` to always seed from DB before deciding.
+**Resolution:** `list_pcs` and `active_pc` both delegate to `_seed_active_pc_from_rows`, which hydrates the in-process `_active_pc` cache from the DB rows (picking the first row with `active=1`, or the earliest-added row if none carries the bit) and returns a single ref. PCEntry rows then derive `active` from equality against that one ref, so at most one PC is ever reported active per campaign — even on a cold worker with legacy data where multiple rows persist `active=1`. The store-side `add_pc` defaults new rows to `active=0` whenever the campaign already has a PC, and `set_active_pc` flips the bit atomically inside a transaction. Regression coverage in `backend/tests/characters/test_service.py` pins the cold-cache, multi-active, and all-inactive paths. The `owner` half of the spec section was already shipped — `add_pc` accepts and persists it.
 
 ## 15. Search ranking + advanced filters — RESOLVED (YAGNI)
 
