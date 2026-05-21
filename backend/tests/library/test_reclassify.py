@@ -15,8 +15,8 @@ from grimoire.library.reclassify import (
     iter_audit,
     required_overrides_for,
 )
-from grimoire.types.characters import IngestedLoreEntry
 from grimoire.state_store import StateStore
+from grimoire.types.characters import IngestedLoreEntry
 from grimoire.types.common import EntityKind
 from grimoire.types.world import LoreEntry
 
@@ -183,7 +183,9 @@ def test_apply_mapping_no_dropped_warning_for_lore_at_defaults() -> None:
     """
     lore = _lore()  # all defaulted matching-metadata fields
     _fm, _body, _kept, dropped, _into_notes, warnings = apply_mapping(
-        lore, EntityKind.CHARACTER, overrides=None,
+        lore,
+        EntityKind.CHARACTER,
+        overrides=None,
     )
     assert dropped == []
     assert not any("matching metadata" in w for w in warnings)

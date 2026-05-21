@@ -113,7 +113,11 @@ async def test_preview_returns_lore_suggestions_parallel_to_entries(client) -> N
             "first_mes": "Hi.",
             "character_book": {
                 "entries": [
-                    {"name": "Brackhollow Cathedral", "keys": ["cathedral"], "content": "A village cathedral located on the hill."},
+                    {
+                        "name": "Brackhollow Cathedral",
+                        "keys": ["cathedral"],
+                        "content": "A village cathedral located on the hill.",
+                    },
                     {"name": "obscure note", "keys": ["x"], "content": "tt."},
                 ],
             },
@@ -200,7 +204,11 @@ def _card_with_two_lore() -> dict:
             "first_mes": "Hi.",
             "character_book": {
                 "entries": [
-                    {"name": "Brackhollow Cathedral", "keys": ["cathedral"], "content": "A village cathedral located on the hill."},
+                    {
+                        "name": "Brackhollow Cathedral",
+                        "keys": ["cathedral"],
+                        "content": "A village cathedral located on the hill.",
+                    },
                     {"name": "Some Note", "keys": ["note"], "content": "Random fact."},
                 ],
             },

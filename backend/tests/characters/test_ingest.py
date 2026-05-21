@@ -482,6 +482,7 @@ def test_character_data_image_round_trip_via_pydantic() -> None:
 
 def test_lore_override_defaults_to_lore() -> None:
     from grimoire.types.characters import LoreOverride
+
     override = LoreOverride(source_index=0)
     assert override.kind == "lore"
     assert override.overrides == {}
@@ -489,12 +490,15 @@ def test_lore_override_defaults_to_lore() -> None:
 
 def test_lore_override_accepts_known_kinds() -> None:
     from grimoire.types.characters import LoreOverride
+
     for kind in ("lore", "character", "location", "faction", "item", "skip"):
         LoreOverride(source_index=0, kind=kind)  # no raise
 
 
 def test_lore_override_rejects_unknown_kind() -> None:
     from pydantic import ValidationError
+
     from grimoire.types.characters import LoreOverride
+
     with pytest.raises(ValidationError):
         LoreOverride(source_index=0, kind="quest")

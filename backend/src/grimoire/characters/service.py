@@ -19,11 +19,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from grimoire.library import LibraryService
+from grimoire.library.reclassify import _lore_entry_from_ingested, apply_mapping
 from grimoire.mechanics.service import MechanicsService
 from grimoire.state_store import StateStore
 from grimoire.state_store.indexers import make_library_id
 from grimoire.state_store.paths import library_path
-from grimoire.library.reclassify import _lore_entry_from_ingested, apply_mapping
 from grimoire.types.characters import (
     CapsuleDraft,
     Character,
@@ -1561,9 +1561,7 @@ class CharactersService:
             target_kind = override.kind if override else "lore"
 
             if target_kind == "skip":
-                result.warnings.append(
-                    f"lore entry {entry.source_index} skipped by user override"
-                )
+                result.warnings.append(f"lore entry {entry.source_index} skipped by user override")
                 continue
 
             if target_kind == "lore":
