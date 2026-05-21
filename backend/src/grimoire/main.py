@@ -635,7 +635,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await _shutdown(container, db, close_db=owned_db)
 
 
-async def _shutdown(container: ServiceContainer | None, db: Database, *, close_db: bool = True) -> None:
+async def _shutdown(
+    container: ServiceContainer | None, db: Database, *, close_db: bool = True
+) -> None:
     if container is not None:
         summary_worker = container.extras.get("scene_summary_worker") if container.extras else None
         if summary_worker is not None:

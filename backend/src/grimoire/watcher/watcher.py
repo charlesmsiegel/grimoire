@@ -696,14 +696,14 @@ class FileWatcher:
         """
         # Table name is a hard-coded literal from the caller (no user
         # input), so format-interpolation is safe here.
-        rows = await self.store.db.fetchall(f"SELECT id FROM {table}")  # noqa: S608
+        rows = await self.store.db.fetchall(f"SELECT id FROM {table}")
         orphans = [(row["id"],) for row in rows if row["id"] not in seen]
         if not orphans:
             return
         async with self.store.db.acquire() as conn:
             await conn.execute("BEGIN IMMEDIATE")
             try:
-                await conn.executemany(f"DELETE FROM {table} WHERE id = ?", orphans)  # noqa: S608
+                await conn.executemany(f"DELETE FROM {table} WHERE id = ?", orphans)
             except Exception:
                 await conn.execute("ROLLBACK")
                 raise

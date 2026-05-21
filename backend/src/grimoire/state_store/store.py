@@ -2254,7 +2254,7 @@ async def _capture_current_row(
         return None
     where = " AND ".join(f"{c} = ?" for c in pk)
     params = tuple(after[c] for c in pk)
-    async with conn.execute(  # noqa: S608  -- table verified above
+    async with conn.execute(
         f"SELECT * FROM {table} WHERE {where}",
         params,
     ) as cur:

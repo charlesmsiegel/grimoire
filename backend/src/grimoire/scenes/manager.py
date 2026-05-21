@@ -160,7 +160,7 @@ class SceneManager:
         # Per-scene in-memory state. Persisted lazily where needed.
         self._post_records: dict[str, dict[str, _PostRecord]] = {}
         # post_id -> scene_id soft index, populated as posts are read.
-        # _find_post consults it first to avoid the O(scenes × posts)
+        # _find_post consults it first to avoid the O(scenes x posts)
         # filesystem walk on every retcon/delete.
         self._post_scene_index: dict[str, str] = {}
         # Loaded sidecars whose `posts:` block we've already hydrated; avoids
