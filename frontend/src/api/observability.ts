@@ -4,10 +4,13 @@
  *
  * Covers performance metrics (#355), the per-turn delta diff (#351), the
  * Frontend Health panel (#357) — latest probe results, manual re-probes,
- * and errors grouped by module — and the "What did the model see?" debug
+ * and errors grouped by module — the "What did the model see?" debug
  * view (#350): per-turn assembled prompt with tier annotations and
  * per-source attribution, plus a diff helper that compares two turns'
- * prompts.
+ * prompts — and cost-breakdown debug surfaces (#353) that read from the
+ * per-turn audit / cost tables.
+ *
+ * Cost spec: docs/superpowers/specs/2026-05-20-cost-breakdown-design.md.
  */
 
 import { api } from "./client";
@@ -198,6 +201,14 @@ export interface TurnAuditSummary {
   context_messages_hash: string;
 }
 
+export interface TaskCostRow {
+  task: string;
+  total_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  call_count: number;
+}
+
 function base(turnId: string) {
   return `/api/observability/turns/${encodeURIComponent(turnId)}`;
 }
@@ -262,5 +273,8 @@ export const observabilityApi = {
   },
   diffPrompts(turnId: string, against: string): Promise<PromptDiff> {
     return api.get(`${base(turnId)}/prompt/diff`, { query: { against } });
+  },
+  turnCosts(turnId: string): Promise<TaskCostRow[]> {
+    return api.get(`${base(turnId)}/costs`);
   },
 };
