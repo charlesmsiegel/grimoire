@@ -34,6 +34,7 @@ from grimoire.continuity.registry import resolve_continuity
 from grimoire.continuity.types import InGameTime as ContinuityInGameTime
 from grimoire.event_bus import Event, EventBus
 from grimoire.mechanics.service import MechanicsService
+from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
 from grimoire.state_store import StateStore
 from grimoire.types.characters import CharacterRole, ResolvedCharacter
 from grimoire.types.common import CampaignId, CharacterRef, Duration, EventId, InGameTime
@@ -283,6 +284,7 @@ class TimeEngineService:
         drift_check_fn: DriftCheckFn | None = None,
         faction_conflicts_fn: FactionConflictsFn | None = None,
         faction_leader_fn: FactionLeaderFn | None = None,
+        metrics: MetricsRegistryProtocol = _NullMetrics(),
     ) -> None:
         self._store = store
         self._world = world
@@ -298,6 +300,7 @@ class TimeEngineService:
         self._faction_conflicts_fn = faction_conflicts_fn or _default_faction_conflicts
         self._faction_leader_fn = faction_leader_fn or _default_faction_leader_actions
         self._checkpoints = _CheckpointStore()
+        self._metrics: MetricsRegistryProtocol = metrics
 
     # ------------------------------------------------------------------ #
     # Time accessors
@@ -439,6 +442,30 @@ class TimeEngineService:
     # ------------------------------------------------------------------ #
 
     async def advance(
+        self,
+        campaign_id: CampaignId,
+        duration: Duration,
+        reason: TimeAdvanceReason,
+        *,
+        scene_id: str | None = None,
+        branch_id: str | None = None,
+        from_time: InGameTime | None = None,
+        activity_ref: str | None = None,
+        checkpoint_token: str | None = None,
+    ) -> TimeAdvanceResult:
+        async with self._metrics.measure("time_engine", "advance"):
+            return await self._advance_inner(
+                campaign_id,
+                duration,
+                reason,
+                scene_id=scene_id,
+                branch_id=branch_id,
+                from_time=from_time,
+                activity_ref=activity_ref,
+                checkpoint_token=checkpoint_token,
+            )
+
+    async def _advance_inner(
         self,
         campaign_id: CampaignId,
         duration: Duration,
