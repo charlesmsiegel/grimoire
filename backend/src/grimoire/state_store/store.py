@@ -2231,20 +2231,58 @@ async def _capture_current_row(
     table: str,
     after: dict,
 ) -> dict | None:
-    """Look up the current row for the PK in ``after``; ``None`` if absent."""
+    """Look up the current row for the PK in ``after``; ``None`` if absent.
+
+    ``table`` is interpolated into the SELECT — safe today because
+    ``primary_key_columns`` returns ``None`` for any table that isn't in
+    the hard-coded ``_PRIMARY_KEYS`` allowlist, so the gate below already
+    rejects untrusted names. The explicit membership check makes that
+    invariant local to this function rather than relying on a transitive
+    property of a helper in another module.
+    """
     pk = primary_key_columns(table)
     if pk is None:
         return None
+    if table not in _CAPTURE_SAFE_TABLES:
+        # Belt-and-braces: should be unreachable because primary_key_columns
+        # returns None for anything outside this set. If a future edit adds
+        # a table to _PRIMARY_KEYS but forgets to extend _CAPTURE_SAFE_TABLES,
+        # we'd rather fail closed here than silently interpolate the new
+        # name. Mismatch is a programming error, not a runtime contingency.
+        raise StateStoreError(f"refusing to capture from non-allowlisted table {table!r}")
     if not all(col in after for col in pk):
         return None
     where = " AND ".join(f"{c} = ?" for c in pk)
     params = tuple(after[c] for c in pk)
-    cur = await conn.execute(f"SELECT * FROM {table} WHERE {where}", params)
-    row = await cur.fetchone()
-    await cur.close()
+    async with conn.execute(  # noqa: S608  -- table verified above
+        f"SELECT * FROM {table} WHERE {where}",
+        params,
+    ) as cur:
+        row = await cur.fetchone()
     if row is None:
         return None
     return dict(row)
+
+
+# Tables _capture_current_row is allowed to SELECT from. Must be a
+# superset of the keys in delta_log._PRIMARY_KEYS for the check above
+# to pass; kept as a separate constant so a future edit to either has
+# to consciously mirror it.
+_CAPTURE_SAFE_TABLES: frozenset[str] = frozenset(
+    {
+        "character_state",
+        "location_state",
+        "faction_state",
+        "facts",
+        "commitments",
+        "relationships",
+        "knowledge_state",
+        "calendar",
+        "images",
+        "scenes",
+        "posts",
+    }
+)
 
 
 def _content_kind_from_id(composite_id: str) -> str:
