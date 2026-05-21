@@ -64,7 +64,7 @@ export interface PlayState {
   driftWarnings: Record<string, { score: number; suppressed: boolean }>;
 }
 
-type Action =
+export type Action =
   | { type: "loading" }
   | {
       type: "loaded";
@@ -85,7 +85,7 @@ type Action =
   | { type: "drift"; ref: string; score: number }
   | { type: "drift-suppress"; ref: string };
 
-const initial: PlayState = {
+export const initial: PlayState = {
   pcs: [],
   activePcRef: null,
   scene: null,
@@ -99,7 +99,7 @@ const initial: PlayState = {
   driftWarnings: {},
 };
 
-function reducer(state: PlayState, action: Action): PlayState {
+export function reducer(state: PlayState, action: Action): PlayState {
   switch (action.type) {
     case "loading":
       return { ...state, loading: true, error: null };
@@ -110,6 +110,21 @@ function reducer(state: PlayState, action: Action): PlayState {
       // server gave us about *why* the button is disabled.
       const presentCount = action.scene?.present_pc_refs.length ?? 0;
       const stickyDisabled = state.advanceReason !== "" && !state.advanceEnabled;
+      // turn_complete dispatches stream-end and kicks off refresh() in the
+      // same handler; any post_appended events that arrive between the two
+      // would otherwise be clobbered by the (stale) snapshot returned by
+      // refresh. When the loaded scene matches the current scene, union
+      // already-applied appends not present in the snapshot.
+      let posts = action.posts;
+      const newSceneId = action.scene?.id ?? null;
+      const oldSceneId = state.scene?.id ?? null;
+      if (newSceneId && newSceneId === oldSceneId) {
+        const snapshotIds = new Set(action.posts.map((p) => p.id));
+        const extra = state.posts.filter(
+          (p) => p.scene_id === newSceneId && !snapshotIds.has(p.id),
+        );
+        if (extra.length > 0) posts = [...action.posts, ...extra];
+      }
       return {
         ...state,
         loading: false,
@@ -117,7 +132,7 @@ function reducer(state: PlayState, action: Action): PlayState {
         pcs: action.pcs,
         activePcRef: action.activePcRef,
         scene: action.scene,
-        posts: action.posts,
+        posts,
         advanceEnabled: stickyDisabled ? false : presentCount >= 2,
         advanceReason: stickyDisabled ? state.advanceReason : "",
       };

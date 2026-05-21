@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## HIGH
 
-- **`usePlayState`: `turn_complete` + `post_appended` race** — `frontend/src/routes/campaign/usePlayState.tsx:308-343` — On `turn_complete` we dispatch `stream-end` *and* call `refresh()`. Concurrent `post_appended` events between the two state updates dedupe against a stale `posts` snapshot; a slow refresh racing with a fast next-turn submit can overwrite newer posts with older ones.
 - **`useApi` / `useResource` deps spread with hooks/exhaustive-deps disabled** — `frontend/src/api/useApi.ts:42-43`, `frontend/src/api/useResource.ts:40-41` — The fetcher closure isn't in deps; any state it reads must be in the caller's `deps` array. Easy to drift silently — one missing dep ⇒ stale data forever.
 
 ## MEDIUM
