@@ -8,7 +8,17 @@ _grimoire_detect_platform() {
         Linux*)              PLATFORM=linux ;;
         Darwin*)             PLATFORM=mac ;;
         MINGW*|MSYS*|CYGWIN*) PLATFORM=windows ;;
-        *)                   PLATFORM=unknown ;;
+        *)
+            # Fall back to the Windows-set $OS env var so a non-MSYS bash
+            # spawned from PowerShell (where uname -s returns an unrecognised
+            # banner) still picks up the Windows code paths instead of
+            # falling through to "unknown" and skipping kill_port entirely.
+            if [ "${OS:-}" = "Windows_NT" ]; then
+                PLATFORM=windows
+            else
+                PLATFORM=unknown
+            fi
+            ;;
     esac
 }
 _grimoire_detect_platform
@@ -86,6 +96,10 @@ kill_pid() {
 
 # Kill any process listening on the given port. Echoes a one-line report
 # for each PID it tried to kill. Idempotent; safe if no process is listening.
+# Polls afterwards so a TOCTOU race (kill returned but the OS hasn't released
+# the LISTENING entry yet, or a sibling process bound between enumerate and
+# kill) is more likely to surface as our wait-loop failing than as the next
+# bind hitting "address already in use".
 kill_port() {
     local port="$1" label="${2:-port $1}"
     local pid
@@ -94,6 +108,17 @@ kill_port() {
         echo "==> Killing PID $pid on $label ($port)"
         kill_pid "$pid"
     done < <(pids_on_port "$port")
+    # Wait up to ~2s for the port to actually be free. Without this the
+    # caller would race uvicorn/vite against a still-listening socket.
+    local attempts=0
+    while [ "$attempts" -lt 20 ]; do
+        if [ -z "$(pids_on_port "$port")" ]; then
+            return 0
+        fi
+        sleep 0.1
+        attempts=$((attempts + 1))
+    done
+    echo "==> Warning: $label ($port) still has listeners after kill" >&2
 }
 
 # Print PIDs of running processes whose command line references the given path.
