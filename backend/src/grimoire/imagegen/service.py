@@ -333,6 +333,23 @@ class ImageGenService:
         self._handles[backend_id] = handle
         return handle
 
+    async def unregister_backend(self, backend_id: str) -> None:
+        """Drop a backend from the registry AND cancel its worker.
+
+        Calling ``self.registry.unregister(backend_id)`` directly leaves
+        the per-backend ``_handles`` entry alive — the worker task keeps
+        awaiting a queue tied to a backend the registry no longer knows.
+        Always go through this method when removing a backend at runtime.
+        """
+        self.registry.unregister(backend_id)
+        handle = self._handles.pop(backend_id, None)
+        if handle is None or handle.task is None:
+            return
+        if not handle.task.done():
+            handle.task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await handle.task
+
     # ------------------------------------------------------------------ #
     # Backend management
     # ------------------------------------------------------------------ #
