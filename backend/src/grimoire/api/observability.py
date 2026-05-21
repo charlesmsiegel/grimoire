@@ -76,7 +76,19 @@ async def get_turn_prompt(turn_id: str, observability: ObservabilityDep) -> Any:
 
 @router.get("/turns/{turn_id}/deltas")
 async def get_turn_deltas(turn_id: str, observability: ObservabilityDep) -> Any:
-    return await observability.audit_store.deltas_for_turn(turn_id)
+    """Per-turn delta diff for the "What changed?" debug view.
+
+    Returns an envelope ``{applied: [...], queued: [...]}`` where each
+    entry has ``kind``, ``target_scope`` / ``target_id``, ``before`` /
+    ``after``, ``confidence``, ``source`` (the producing strategy),
+    ``evidence`` (the response-text snippet that justified the delta),
+    and ``status`` of ``"auto"`` or ``"queued"``. Queued entries also
+    carry ``review_id`` and ``review_status``.
+    """
+    try:
+        return await observability.audit_store.deltas_for_turn(turn_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/turns/{turn_id}/costs")

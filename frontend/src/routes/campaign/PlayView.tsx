@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   campaignApi,
@@ -19,8 +19,9 @@ import { SideHud } from "./SideHud/SideHud";
 import { SidePanel } from "./SidePanel";
 import { TimeAdvanceDigest } from "./TimeAdvanceDigest";
 import { usePlayState } from "./usePlayState";
+import { WhatChangedPanel } from "./WhatChangedPanel";
 
-type RightView = "side" | "inspector" | "hud";
+type RightView = "side" | "inspector" | "hud" | "debug";
 
 interface Props {
   campaignId: string;
@@ -100,6 +101,19 @@ export function PlayView({ campaignId }: Props) {
     void runAction(() => campaignApi.createFact(campaignId, { predicate: "user_note", statement }));
   }, [campaignId, runAction]);
 
+  // "What changed?" reads the most recent narrator turn — the one whose
+  // audit record carries the deltas that just landed. Player posts share
+  // a turn_id with the narrator response that followed; the latest
+  // narrator post is the clearest target. Hook lives above the early
+  // returns so the call order stays stable across renders.
+  const latestNarratorTurnId = useMemo(() => {
+    for (let i = play.state.posts.length - 1; i >= 0; i -= 1) {
+      const p = play.state.posts[i];
+      if (p.author_kind === "narrator" && p.turn_id) return p.turn_id;
+    }
+    return null;
+  }, [play.state.posts]);
+
   if (play.state.loading) {
     return (
       <section className="play-view play-view-loading" aria-busy="true">
@@ -158,6 +172,15 @@ export function PlayView({ campaignId }: Props) {
             onClick={() => setRightView("inspector")}
           >
             Inspector
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={rightView === "debug"}
+            className={rightView === "debug" ? "is-active" : ""}
+            onClick={() => setRightView("debug")}
+          >
+            What changed?
           </button>
         </div>
       </div>
@@ -221,13 +244,15 @@ export function PlayView({ campaignId }: Props) {
               busy,
             }}
           />
-        ) : (
+        ) : rightView === "inspector" ? (
           <InspectorPanel
             campaignId={campaignId}
             playerInput={draft}
             sessionId={campaignId}
             pcRef={play.state.activePcRef}
           />
+        ) : (
+          <WhatChangedPanel turnId={latestNarratorTurnId} />
         )}
       </div>
     </section>

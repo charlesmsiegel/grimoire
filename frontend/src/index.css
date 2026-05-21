@@ -1719,6 +1719,137 @@ pre {
   padding: 0.35rem 0.6rem;
 }
 
+/* ----- "What changed?" debug panel (issue #351) ----- */
+
+.what-changed-turn {
+  margin: 0 0 var(--space-2);
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.what-changed-filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 0.8rem;
+}
+
+.what-changed-filters label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-muted);
+}
+
+.what-changed-filters input[type="range"] {
+  flex: 1;
+}
+
+.what-changed-filters input[type="search"] {
+  flex: 1;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.85rem;
+}
+
+.what-changed-filter-value {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--fg);
+  min-width: 2.5rem;
+  text-align: right;
+}
+
+.what-changed-toggle {
+  font-size: 0.8rem;
+}
+
+.what-changed-count {
+  font-weight: 400;
+  color: var(--fg-muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.what-changed-group {
+  margin-top: var(--space-3);
+}
+
+.what-changed-group:first-child {
+  margin-top: 0;
+}
+
+.what-changed-kind {
+  margin: 0 0 var(--space-2);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+
+.what-changed-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border-subtle);
+}
+
+.what-changed-target {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.what-changed-target code {
+  font-size: 0.8rem;
+}
+
+.what-changed-scope {
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.what-changed-evidence {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--fg);
+  font-style: italic;
+  border-left: 2px solid var(--border-subtle);
+  padding-left: var(--space-2);
+}
+
+.what-changed-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.what-changed-chip {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--fg-muted);
+  border: 1px solid var(--border-subtle);
+}
+
+.what-changed-chip-review {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.what-changed-section[data-variant="queued"] .what-changed-kind {
+  color: var(--warn);
+}
+
 /* ----- Input area ----- */
 
 .input-area {
