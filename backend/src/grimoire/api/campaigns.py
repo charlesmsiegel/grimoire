@@ -11,6 +11,7 @@ container. Errors are translated by :func:`grimoire.api.util.map_lookup_errors`.
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -31,6 +32,7 @@ from grimoire.api.deps import (
     WorldDep,
 )
 from grimoire.api.util import map_lookup_errors, to_payload
+from grimoire.state_store.paths import campaigns_root
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +335,11 @@ async def update_campaign(
 @router.delete("/{campaign_id}", status_code=204)
 async def delete_campaign(campaign_id: str, state_store: StateStoreDep) -> None:
     await state_store.db.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
+    # Drop the on-disk tree too, otherwise re-creating with the same id
+    # silently inherits stale scenes / images / overrides.
+    campaign_dir = campaigns_root(state_store.data_root) / campaign_id
+    if campaign_dir.exists():
+        shutil.rmtree(campaign_dir, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------- #
