@@ -159,6 +159,10 @@ class SceneManager:
 
         # Per-scene in-memory state. Persisted lazily where needed.
         self._post_records: dict[str, dict[str, _PostRecord]] = {}
+        # post_id -> scene_id soft index, populated as posts are read.
+        # _find_post consults it first to avoid the O(scenes × posts)
+        # filesystem walk on every retcon/delete.
+        self._post_scene_index: dict[str, str] = {}
         # Loaded sidecars whose `posts:` block we've already hydrated; avoids
         # re-reading the same file every time get_posts is called.
         self._records_hydrated: set[str] = set()
@@ -543,9 +547,11 @@ class SceneManager:
         posts: list[Post] = []
         for order, kind, pc_ref, npc_ref, body in read_posts(md_path, scene_id):
             record = records.get(str(order))
+            post_id = record.id if record else f"{scene_id}#post-{order}"
+            self._post_scene_index[post_id] = scene_id
             posts.append(
                 Post(
-                    id=record.id if record else f"{scene_id}#post-{order}",
+                    id=post_id,
                     scene_id=scene_id,
                     order_in_scene=order,
                     author_kind=kind,
@@ -856,7 +862,24 @@ class SceneManager:
             )
 
     async def _find_post(self, post_id: str) -> tuple[Scene, Post]:
-        # Search active and known scenes first; fall back to a filesystem walk.
+        # Fast path: a prior get_posts populated the post_id -> scene_id
+        # index. Verify the post still exists in that scene (records on
+        # disk could have been retconned out from under us).
+        cached_scene_id = self._post_scene_index.get(post_id)
+        if cached_scene_id is not None:
+            try:
+                scene = await self.get_scene(cached_scene_id)
+            except KeyError:
+                self._post_scene_index.pop(post_id, None)
+            else:
+                for post in await self.get_posts(scene.id):
+                    if post.id == post_id:
+                        return scene, post
+                self._post_scene_index.pop(post_id, None)
+
+        # Slow path: walk active + known scenes first, then fall back to
+        # the full filesystem scan. Each scene we read populates the
+        # index, so subsequent _find_post calls hit the fast path above.
         candidates: list[Scene] = []
         for scene_id in {*(s for s in self._active_scene.values()), *self._post_records.keys()}:
             try:
@@ -864,19 +887,22 @@ class SceneManager:
             except KeyError:
                 continue
         searched_ids = {s.id for s in candidates}
+        for scene in candidates:
+            for post in await self.get_posts(scene.id):
+                if post.id == post_id:
+                    return scene, post
         campaigns_root = self.data_root / "campaigns"
         if campaigns_root.exists():
             for campaign_dir in campaigns_root.iterdir():
                 if not campaign_dir.is_dir():
                     continue
                 for scene in await self.list_scenes(campaign_dir.name):
-                    if scene.id not in searched_ids:
-                        candidates.append(scene)
-                        searched_ids.add(scene.id)
-        for scene in candidates:
-            for post in await self.get_posts(scene.id):
-                if post.id == post_id:
-                    return scene, post
+                    if scene.id in searched_ids:
+                        continue
+                    searched_ids.add(scene.id)
+                    for post in await self.get_posts(scene.id):
+                        if post.id == post_id:
+                            return scene, post
         raise KeyError(f"post not found: {post_id}")
 
     # -- Alternates (swipes) --------------------------------------------
