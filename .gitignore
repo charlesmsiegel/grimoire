@@ -38,17 +38,10 @@ package-lock.json
 .DS_Store
 Thumbs.db
 
-# Application data — local user content, not source-controlled
-# (Only the directory layout is tracked via .gitkeep files)
-data/library/settings/*/
-data/library/style-guides/*
-data/library/image-presets/*
-data/campaigns/*/
-data/campaigns.sqlite*
-data/mechanics/*/
-data/plugins/*/
-data/config/*
-data/cache/
-
-!**/.gitkeep
+# Legacy repo-local data/ tree — nothing in the codebase reads it now
+# (the default data root is $HOME/.grimoire; override with
+# GRIMOIRE_DATA_ROOT). Kept as an ignore so a developer pointing
+# GRIMOIRE_DATA_ROOT back at the repo doesn't accidentally commit user
+# content.
+data/
 docs/.obsidian/
