@@ -337,6 +337,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # place but the real registry is what makes data show up.
             if container.state_store is not None:
                 container.state_store._metrics = obs.metrics()
+            if container.scenes is not None:
+                container.scenes._metrics = obs.metrics()
         else:
             obs = container.observability
 

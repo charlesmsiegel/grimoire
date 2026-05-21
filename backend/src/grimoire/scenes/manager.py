@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
 from grimoire.scenes.boundary import BoundaryConfig, detect_scene_break
 from grimoire.scenes.events import (
     ADVANCE_DISABLED,
@@ -142,6 +143,7 @@ class SceneManager:
         scene_break_classifier: SceneBreakClassifier | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         continuity: object | None = None,
+        metrics: MetricsRegistryProtocol = _NullMetrics(),
     ) -> None:
         self.data_root = Path(data_root)
         self.config = config or SceneManagerConfig()
@@ -156,6 +158,7 @@ class SceneManager:
         # ``scene_started`` event so the Frontend can render a pre-scene
         # briefing without a follow-up round-trip.
         self._continuity = continuity
+        self._metrics: MetricsRegistryProtocol = metrics
 
         # Per-scene in-memory state. Persisted lazily where needed.
         self._post_records: dict[str, dict[str, _PostRecord]] = {}
@@ -710,6 +713,10 @@ class SceneManager:
         return AdvanceDecision(auto_respond=False, reason="multi_pc_pending_advance")
 
     async def on_advance_requested(self, scene_id: str) -> AdvanceResult:
+        async with self._metrics.measure("scene_manager", "scene_resolve"):
+            return await self._on_advance_requested_inner(scene_id)
+
+    async def _on_advance_requested_inner(self, scene_id: str) -> AdvanceResult:
         async with self._lock_for(scene_id):
             scene = await self.get_scene(scene_id)
             pending = await self.posts_since_last_advance(scene_id)
