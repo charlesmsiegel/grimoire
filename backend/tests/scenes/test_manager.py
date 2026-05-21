@@ -572,3 +572,171 @@ async def test_is_scene_break_uses_active_scene(tmp_path: Path) -> None:
     decision = await manager.is_scene_break(scene.id, "/end scene")
     assert decision.is_break is True
     assert decision.reason == "user_signal"
+
+
+# ----------------------------------------------------------------------
+# Issue #109 — events emitted on the shared bus must carry campaign_id /
+# scene_id / branch_id inside ``payload`` so subscribers that read those
+# fields off ``event.payload`` (api.stream, transient_state.triggers,
+# imagegen.integration) can route the event correctly.
+# ----------------------------------------------------------------------
+
+
+def _payload_for(bus: InMemoryEventBus, event_type: str) -> dict:
+    matching = [e for e in bus.events if e.type == event_type]
+    assert matching, f"{event_type} was not emitted"
+    return matching[-1].payload
+
+
+async def test_scene_started_payload_carries_routing_fields(tmp_path: Path) -> None:
+    manager, bus = _manager(tmp_path)
+    scene = await manager.start_scene(
+        SceneInit(
+            campaign_id="campaign-a",
+            title="Opening",
+            location_ref="elysium",
+            present_pc_refs=["alistair"],
+            present_character_refs=["alistair"],
+        )
+    )
+    payload = _payload_for(bus, SCENE_STARTED)
+    assert payload["campaign_id"] == "campaign-a"
+    assert payload["scene_id"] == scene.id
+    assert payload["branch_id"] == scene.branch_id
+
+
+async def test_scene_ended_payload_carries_decay_fields(tmp_path: Path) -> None:
+    manager, bus = _manager(tmp_path)
+    scene = await manager.start_scene(
+        SceneInit(
+            campaign_id="campaign-a",
+            title="Closing",
+            location_ref="loc_pub",
+            present_pc_refs=["alistair"],
+            present_character_refs=["alistair", "innkeeper"],
+        )
+    )
+    await manager.close_scene(scene.id, closed_at_turn="t-1")
+    payload = _payload_for(bus, SCENE_ENDED)
+    assert payload["campaign_id"] == "campaign-a"
+    assert payload["scene_id"] == scene.id
+    assert payload["branch_id"] == scene.branch_id
+    assert payload["location_ref"] == "loc_pub"
+    assert sorted(payload["present_character_refs"]) == ["alistair", "innkeeper"]
+
+
+async def test_pc_post_appended_payload_carries_routing_fields(tmp_path: Path) -> None:
+    manager, bus = _manager(tmp_path)
+    scene = await manager.start_scene(
+        SceneInit(
+            campaign_id="campaign-a",
+            title="Scene",
+            present_pc_refs=["alistair"],
+        )
+    )
+    await manager.append_post(
+        scene.id,
+        new_post(
+            author_kind=AuthorKind.PC,
+            author_pc_ref="alistair",
+            body="I bow.",
+            is_player=True,
+        ),
+    )
+    payload = _payload_for(bus, PC_POST_APPENDED)
+    assert payload["campaign_id"] == "campaign-a"
+    assert payload["scene_id"] == scene.id
+    assert payload["branch_id"] == scene.branch_id
+    payload_post_appended = _payload_for(bus, POST_APPENDED)
+    assert payload_post_appended["campaign_id"] == "campaign-a"
+    assert payload_post_appended["scene_id"] == scene.id
+
+
+async def test_advance_requested_payload_carries_routing_fields(tmp_path: Path) -> None:
+    manager, bus = _manager(tmp_path)
+    scene = await manager.start_scene(
+        SceneInit(
+            campaign_id="campaign-a",
+            title="Crossover",
+            present_pc_refs=["alistair", "beatrice"],
+        )
+    )
+    for pc in ("alistair", "beatrice"):
+        await manager.append_post(
+            scene.id,
+            new_post(
+                author_kind=AuthorKind.PC,
+                author_pc_ref=pc,
+                body=f"{pc} speaks",
+                is_player=True,
+            ),
+        )
+    await manager.on_advance_requested(scene.id)
+    payload = _payload_for(bus, ADVANCE_REQUESTED)
+    assert payload["campaign_id"] == "campaign-a"
+    assert payload["scene_id"] == scene.id
+    assert payload["branch_id"] == scene.branch_id
+
+
+async def test_advance_disabled_payload_carries_routing_fields(tmp_path: Path) -> None:
+    manager, bus = _manager(tmp_path)
+    scene = await manager.start_scene(
+        SceneInit(
+            campaign_id="campaign-a",
+            title="Crossover",
+            present_pc_refs=["alistair"],
+        )
+    )
+    await manager.add_present_pc(scene.id, "beatrice")
+    payload = _payload_for(bus, ADVANCE_DISABLED)
+    assert payload["campaign_id"] == "campaign-a"
+    assert payload["scene_id"] == scene.id
+    assert payload["branch_id"] == scene.branch_id
+
+
+async def test_advance_enabled_payload_carries_routing_fields(tmp_path: Path) -> None:
+    from grimoire.scenes import ADVANCE_ENABLED
+
+    manager, bus = _manager(tmp_path)
+    scene = await manager.start_scene(
+        SceneInit(
+            campaign_id="campaign-a",
+            title="Crossover",
+            present_pc_refs=["alistair", "beatrice"],
+        )
+    )
+    await manager.remove_present_character(scene.id, "beatrice")
+    payload = _payload_for(bus, ADVANCE_ENABLED)
+    assert payload["campaign_id"] == "campaign-a"
+    assert payload["scene_id"] == scene.id
+    assert payload["branch_id"] == scene.branch_id
+
+
+async def test_scene_events_route_through_shared_event_bus(tmp_path: Path) -> None:
+    """End-to-end: with the shared EventBus, a scene_started/scene_ended
+    handler reading ``event.payload['campaign_id']`` receives the right
+    value (rather than the StreamManager fallback that broadcasts to every
+    campaign)."""
+    from grimoire.event_bus import EventBus
+
+    bus = EventBus()
+    seen: list[tuple[str, str | None]] = []
+
+    async def record(event):
+        seen.append((event.type, event.payload.get("campaign_id")))
+
+    bus.subscribe(SCENE_STARTED, record)
+    bus.subscribe(SCENE_ENDED, record)
+
+    manager = SceneManager(
+        tmp_path,
+        config=SceneManagerConfig(running_summary_every_n_posts=0),
+        event_bus=bus,
+    )
+    scene = await manager.start_scene(
+        SceneInit(campaign_id="campaign-a", title="Scene", present_pc_refs=["alistair"])
+    )
+    await manager.close_scene(scene.id, closed_at_turn="t-1")
+
+    assert (SCENE_STARTED, "campaign-a") in seen
+    assert (SCENE_ENDED, "campaign-a") in seen
