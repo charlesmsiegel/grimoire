@@ -124,7 +124,10 @@ async def get_turn_deltas(turn_id: str, observability: ObservabilityDep) -> Any:
 
 @router.get("/turns/{turn_id}/costs")
 async def get_turn_costs(turn_id: str, observability: ObservabilityDep) -> Any:
-    return await observability.costs().by_turn(turn_id)
+    breakdown = await observability.costs().by_turn(turn_id)
+    rows = [{"task": task, **total.model_dump()} for task, total in breakdown.items()]
+    rows.sort(key=lambda r: (-r["total_usd"], r["task"]))
+    return rows
 
 
 @router.get("/costs/session")
