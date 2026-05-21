@@ -427,8 +427,14 @@ class ContextBuilderService:
         )
 
         # Step 4 — continuity
+        as_of = await self._current_in_game_time(campaign_id, branch_id, scene)
+        overdue_commitments = await self._overdue_commitments(campaign_id, as_of)
+        stale_commitments_list = await self._stale_commitments(campaign_id)
         commitments_block, commitments_source = self._render_commitments_block(
-            campaign_id, open_commitments
+            campaign_id,
+            open_commitments,
+            overdue=overdue_commitments,
+            stale=stale_commitments_list,
         )
         background_items.extend(
             await self._continuity_background(campaign_id, active_pc_ref, recent_posts)
@@ -1367,6 +1373,77 @@ class ContextBuilderService:
         except Exception:
             return []
 
+    def _continuity_config(self) -> Any | None:
+        """Return the active ContinuityConfig (works for both Registry and bare Service)."""
+        target = self._continuity
+        if target is None:
+            return None
+        # ContinuityRegistry exposes `.config`; ContinuityService stores `._config`.
+        return getattr(target, "config", None) or getattr(target, "_config", None)
+
+    async def _current_in_game_time(
+        self,
+        campaign_id: CampaignId,
+        branch_id: str | None,
+        scene: Any,
+    ) -> Any | None:
+        """Resolve the authoritative campaign clock for `as_of`-style queries."""
+        when = None
+        if self._time_engine is not None:
+            try:
+                when = await self._time_engine.current(campaign_id, branch_id=branch_id)
+            except TypeError:
+                try:
+                    when = await self._time_engine.current(campaign_id)
+                except Exception:
+                    when = None
+            except Exception:
+                when = None
+        if when is None and scene is not None:
+            when = getattr(scene, "in_game_start", None)
+        return when
+
+    async def _overdue_commitments(
+        self,
+        campaign_id: CampaignId,
+        as_of: Any | None,
+    ) -> list[Any]:
+        """§8 — query overdue rows only when ``surface_overdue_in_context`` is set."""
+        config = self._continuity_config()
+        if not getattr(config, "surface_overdue_in_context", True):
+            return []
+        if as_of is None:
+            return []
+        continuity = resolve_continuity(self._continuity, campaign_id)
+        if continuity is None:
+            return []
+        fetch = getattr(continuity, "overdue_commitments", None)
+        if fetch is None:
+            return []
+        try:
+            return list(await fetch(as_of))
+        except Exception:
+            return []
+
+    async def _stale_commitments(self, campaign_id: CampaignId) -> list[Any]:
+        """§8 — query stale rows only when ``surface_stale_in_context`` is set."""
+        config = self._continuity_config()
+        if not getattr(config, "surface_stale_in_context", False):
+            return []
+        threshold = getattr(config, "commitment_stale_threshold", None)
+        if threshold is None:
+            return []
+        continuity = resolve_continuity(self._continuity, campaign_id)
+        if continuity is None:
+            return []
+        fetch = getattr(continuity, "stale_commitments", None)
+        if fetch is None:
+            return []
+        try:
+            return list(await fetch(threshold))
+        except Exception:
+            return []
+
     async def _pc_refs(self, campaign_id: CampaignId) -> set[str]:
         """The set of every PC ref registered with this campaign."""
         lister = getattr(self._characters, "list_pcs", None)
@@ -1401,41 +1478,75 @@ class ContextBuilderService:
         return out
 
     def _render_commitments_block(
-        self, campaign_id: CampaignId, commitments: list[Any]
+        self,
+        campaign_id: CampaignId,
+        commitments: list[Any],
+        overdue: list[Any] | None = None,
+        stale: list[Any] | None = None,
     ) -> tuple[str, ContextSource | None]:
-        # §8: honour ``surface_overdue_in_context`` (default True) so
-        # OVERDUE rows get an ``[OVERDUE]`` suffix instead of being
-        # silently mixed in with active ones. The builder doesn't carry
-        # the current in-game time, so we split on commitment.status —
-        # the aging engine promotes due-passed items to OVERDUE on time
-        # advance.
-        config = getattr(self._continuity, "_config", None)
+        # §8: honour the three Context-Builder-facing knobs on ContinuityConfig.
+        #   surface_overdue_in_context (default True): when off, drop status-OVERDUE
+        #       rows from the open list and don't consult ``overdue_commitments``.
+        #   surface_stale_in_context (default False): when on, append stale rows
+        #       tagged ``[STALE]`` to the bottom of the block.
+        # OVERDUE comes from two sources: aged status (sitting in `commitments`)
+        # and `overdue_commitments(as_of)` (catches OPEN-but-due-passed rows the
+        # aging engine hasn't promoted yet). Both are tagged with [OVERDUE].
+        config = self._continuity_config()
         surface_overdue = getattr(config, "surface_overdue_in_context", True)
-        overdue_ids: set[str] = (
-            {
-                getattr(c, "id", "")
-                for c in commitments
-                if getattr(getattr(c, "status", None), "value", "") == "overdue"
-            }
-            if surface_overdue
-            else set()
-        )
-        if not commitments:
+        surface_stale = getattr(config, "surface_stale_in_context", False)
+        overdue = overdue or []
+        stale = stale or []
+
+        def _is_status_overdue(c: Any) -> bool:
+            return getattr(getattr(c, "status", None), "value", "") == "overdue"
+
+        if surface_overdue:
+            display: list[Any] = list(commitments)
+            seen_ids = {getattr(c, "id", "") for c in display}
+            for c in overdue:
+                cid = getattr(c, "id", "")
+                if cid and cid in seen_ids:
+                    continue
+                seen_ids.add(cid)
+                display.append(c)
+            overdue_ids = {getattr(c, "id", "") for c in display if _is_status_overdue(c)}
+            overdue_ids.update(getattr(c, "id", "") for c in overdue)
+        else:
+            display = [c for c in commitments if not _is_status_overdue(c)]
+            overdue_ids = set()
+
+        stale_ids: set[str] = set()
+        if surface_stale and stale:
+            display_ids = {getattr(c, "id", "") for c in display}
+            for c in stale:
+                cid = getattr(c, "id", "")
+                if cid and cid in display_ids:
+                    continue
+                display.append(c)
+                stale_ids.add(cid)
+
+        if not display:
             return "", None
         lines: list[str] = []
-        for c in commitments[:10]:
+        for c in display[:10]:
             text = getattr(c, "text", "") or ""
             due = getattr(c, "due_by", None)
             due_part = f" (due {due.day_count})" if due is not None else ""
-            overdue_part = " [OVERDUE]" if getattr(c, "id", "") in overdue_ids else ""
-            lines.append(f"- {text}{due_part}{overdue_part}")
+            cid = getattr(c, "id", "")
+            marker = ""
+            if cid in stale_ids:
+                marker = " [STALE]"
+            elif cid in overdue_ids:
+                marker = " [OVERDUE]"
+            lines.append(f"- {text}{due_part}{marker}")
         block = "Active commitments:\n" + "\n".join(lines)
         source = ContextSource(
             kind="commitment",
             scope="campaign-local",
             owner_id=campaign_id,
             tier=ContextTier.LOCK_IN,
-            summary=f"{len(commitments)} open",
+            summary=f"{len(display)} open",
             source_id=_make_source_id("commitments", campaign_id),
             inclusion_reasons=[InclusionReason.COMMITMENT_OPEN_TO_PC],
         )
