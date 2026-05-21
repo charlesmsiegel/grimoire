@@ -475,6 +475,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 mechanics=container.mechanics,
                 continuity=container.continuity,
                 event_bus=container.event_bus,
+                metrics=obs.metrics(),
             )
         # §1 (time-engine remaining): wire the orchestrator's
         # ``turn_complete`` event to drive Time Engine advances. The
