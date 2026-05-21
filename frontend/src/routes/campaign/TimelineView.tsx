@@ -7,7 +7,7 @@
  * and search by title or summary.
  */
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { viewsApi } from "../../api/views";
@@ -18,7 +18,7 @@ import { Loading } from "./common";
 export function TimelineView() {
   const { campaignId = "" } = useParams();
   const navigate = useNavigate();
-  const state = useApi(() => viewsApi.listScenes(campaignId), [campaignId]);
+  const state = useApi(useCallback(() => viewsApi.listScenes(campaignId), [campaignId]));
 
   const [search, setSearch] = useState("");
   const [moodFilter, setMoodFilter] = useState("all");

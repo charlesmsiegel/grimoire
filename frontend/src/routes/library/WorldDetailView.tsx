@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, libraryApi } from "../../api/library";
@@ -26,8 +26,7 @@ export function WorldDetailView() {
   const [forking, setForking] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const { data, loading, error, reload } = useResource(
-    () => libraryApi.getWorld(worldId),
-    [worldId],
+    useCallback(() => libraryApi.getWorld(worldId), [worldId]),
   );
 
   async function handleFork() {

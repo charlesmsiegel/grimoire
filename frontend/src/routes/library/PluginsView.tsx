@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Route, Routes, useParams } from "react-router-dom";
 
 import { ApiError, type PluginKind, type PluginManifest, pluginsApi } from "../../api/library";
@@ -25,7 +25,9 @@ export function PluginsView() {
 }
 
 function PluginsList() {
-  const { data, loading, error, reload } = useResource(() => pluginsApi.listInstalled(), []);
+  const { data, loading, error, reload } = useResource(
+    useCallback(() => pluginsApi.listInstalled(), []),
+  );
   const [activeKind, setActiveKind] = useState<PluginKind | "all">("all");
   const [rescanning, setRescanning] = useState(false);
   const [rescanErr, setRescanErr] = useState<string | null>(null);
@@ -104,7 +106,9 @@ function PluginsList() {
 
 function PluginDetail() {
   const { pluginId = "" } = useParams();
-  const { data, loading, error, reload } = useResource(() => pluginsApi.listInstalled(), []);
+  const { data, loading, error, reload } = useResource(
+    useCallback(() => pluginsApi.listInstalled(), []),
+  );
   const plugin = (data ?? []).find((p) => p.id === pluginId);
   return (
     <section className="library-section">

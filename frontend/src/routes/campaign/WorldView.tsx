@@ -7,7 +7,7 @@
  * by keyword.
  */
 
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { viewsApi } from "../../api/views";
@@ -65,7 +65,7 @@ function EntityTab({
   campaignId: string;
   kind: Exclude<WorldTab, "greetings" | "locations" | "lore">;
 }) {
-  const state = useApi(fetcherFor(campaignId, kind), [campaignId, kind]);
+  const state = useApi(useCallback(() => fetcherFor(campaignId, kind)(), [campaignId, kind]));
   return (
     <Loading state={state} emptyMessage={`No ${kind} resolved for this campaign yet.`}>
       {(rows) => (
@@ -84,7 +84,7 @@ function EntityTab({
 }
 
 function LocationsTab({ campaignId }: { campaignId: string }) {
-  const state = useApi(() => viewsApi.listLocations(campaignId), [campaignId]);
+  const state = useApi(useCallback(() => viewsApi.listLocations(campaignId), [campaignId]));
   return (
     <Loading state={state} emptyMessage="No locations resolved for this campaign yet.">
       {(rows) => {
@@ -112,7 +112,7 @@ function LocationsTab({ campaignId }: { campaignId: string }) {
 }
 
 function LoreTab({ campaignId }: { campaignId: string }) {
-  const state = useApi(() => viewsApi.listLore(campaignId), [campaignId]);
+  const state = useApi(useCallback(() => viewsApi.listLore(campaignId), [campaignId]));
   return (
     <Loading state={state} emptyMessage="No lore entries resolved for this campaign yet.">
       {(rows) => {
@@ -137,7 +137,9 @@ function LoreTab({ campaignId }: { campaignId: string }) {
 }
 
 function GreetingsTab({ campaignId }: { campaignId: string }) {
-  const composition = useApi<Composition>(() => viewsApi.getComposition(campaignId), [campaignId]);
+  const composition = useApi<Composition>(
+    useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
+  );
 
   if (composition.status !== "ok") {
     return (
@@ -151,12 +153,17 @@ function GreetingsTab({ campaignId }: { campaignId: string }) {
 }
 
 function GreetingsAcrossWorlds({ worldIds }: { worldIds: string[] }) {
+  const idsKey = useMemo(() => worldIds.join("|"), [worldIds]);
   const state = useApi<Greeting[]>(
-    () =>
-      Promise.all(
-        worldIds.map((id) => viewsApi.listGreetingsForWorld(id).catch(() => [])),
-      ).then((lists) => lists.flat()),
-    [worldIds.join("|")],
+    useCallback(
+      () =>
+        Promise.all(
+          worldIds.map((id) => viewsApi.listGreetingsForWorld(id).catch(() => [])),
+        ).then((lists) => lists.flat()),
+      // worldIds identity is unstable; collapse to a string key.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [idsKey],
+    ),
   );
   if (worldIds.length === 0) {
     return <p className="muted">No world refs in the composition.</p>;

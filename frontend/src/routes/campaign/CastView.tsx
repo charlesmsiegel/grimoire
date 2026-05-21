@@ -22,8 +22,10 @@ type SourceFilter = "all" | "library" | "emergent" | "override";
 
 export function CastView() {
   const { campaignId = "" } = useParams();
-  const state = useApi(() => viewsApi.listCharacters(campaignId), [campaignId]);
-  const composition = useApi(() => viewsApi.getComposition(campaignId), [campaignId]);
+  const state = useApi(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
+  const composition = useApi(
+    useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
+  );
   const moduleId = composition.status === "ok" ? composition.data.mechanics : null;
 
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
@@ -317,15 +319,19 @@ interface CastMechanicalSheetProps {
 
 function CastMechanicalSheet({ campaignId, moduleId, characterId }: CastMechanicalSheetProps) {
   const sheet = useApi<Record<string, unknown> | null>(
-    () =>
-      viewsApi.getSheet(campaignId, "character", characterId).catch((err: unknown) => {
-        if (err instanceof ApiError && err.status === 404) return null;
-        throw err;
-      }),
-    [campaignId, characterId],
+    useCallback(
+      () =>
+        viewsApi.getSheet(campaignId, "character", characterId).catch((err: unknown) => {
+          if (err instanceof ApiError && err.status === 404) return null;
+          throw err;
+        }),
+      [campaignId, characterId],
+    ),
   );
-  const schema = useApi(() => viewsApi.getSheetSchema(moduleId, "character"), [moduleId]);
-  const theme = useApi(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]);
+  const schema = useApi(
+    useCallback(() => viewsApi.getSheetSchema(moduleId, "character"), [moduleId]),
+  );
+  const theme = useApi(useCallback(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]));
 
   if (sheet.status === "ok" && sheet.data === null) return null;
   if (sheet.status === "error") return null;

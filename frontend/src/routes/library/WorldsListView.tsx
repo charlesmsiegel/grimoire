@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { ApiError, libraryApi } from "../../api/library";
@@ -8,7 +8,9 @@ import { AsyncBoundary } from "./AsyncBoundary";
 
 export function WorldsListView() {
   const navigate = useNavigate();
-  const { data, loading, error, reload } = useResource(() => libraryApi.listWorlds(), []);
+  const { data, loading, error, reload } = useResource(
+    useCallback(() => libraryApi.listWorlds(), []),
+  );
 
   // End the `library:render` span started in `LibraryLayout` the first time
   // the worlds list completes loading without error. Reloads don't restart

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, libraryApi } from "../../api/library";
@@ -40,7 +40,9 @@ export function StyleGuidesView() {
 
 function StyleGuideList() {
   const navigate = useNavigate();
-  const { data, loading, error, reload } = useResource(() => libraryApi.listStyleGuides(), []);
+  const { data, loading, error, reload } = useResource(
+    useCallback(() => libraryApi.listStyleGuides(), []),
+  );
 
   return (
     <section className="library-section">
@@ -321,8 +323,7 @@ function StyleGuideEdit() {
 function StyleGuideDetail() {
   const { guideId = "" } = useParams();
   const { data, loading, error, reload } = useResource(
-    () => libraryApi.getStyleGuide(guideId),
-    [guideId],
+    useCallback(() => libraryApi.getStyleGuide(guideId), [guideId]),
   );
 
   return (

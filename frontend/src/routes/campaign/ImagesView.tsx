@@ -6,7 +6,7 @@
  * / star actions invoke the REST endpoints in `api.client`.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { ApiError, libraryApi } from "../../api/library";
@@ -60,8 +60,7 @@ export function ImagesView() {
 function Gallery({ campaignId }: { campaignId: string }) {
   const [starredOnly, setStarredOnly] = useState(false);
   const state = useApi(
-    () => viewsApi.listImages(campaignId, { starredOnly }),
-    [campaignId, starredOnly],
+    useCallback(() => viewsApi.listImages(campaignId, { starredOnly }), [campaignId, starredOnly]),
   );
   return (
     <div className="image-gallery">
@@ -197,7 +196,7 @@ function ImageQueueRow({ campaignId, job }: { campaignId: string; job: ImageJobE
 }
 
 function Templates({ campaignId }: { campaignId: string }) {
-  const state = useApi(() => viewsApi.listCharacters(campaignId), [campaignId]);
+  const state = useApi(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
   return (
     <Loading state={state} emptyMessage="No characters to template prompts for.">
       {(rows) => (
