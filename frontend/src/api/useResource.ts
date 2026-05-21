@@ -1,6 +1,11 @@
 /**
- * Tiny async-resource hook: load once on mount (or when `deps` / reload tick
- * change), exposes `{ data, error, loading, reload }`.
+ * Tiny async-resource hook: load once on mount (or when the memoized
+ * ``loader`` identity changes / reload tick fires), exposes
+ * ``{ data, error, loading, reload }``.
+ *
+ * Callers MUST wrap ``loader`` in ``useCallback`` with its real
+ * dependencies. See the note on ``useApi`` for the rationale — same fix
+ * for the same BUGS.md HIGH item.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -12,7 +17,7 @@ export interface Resource<T> {
   reload: () => void;
 }
 
-export function useResource<T>(loader: () => Promise<T>, deps: unknown[]): Resource<T> {
+export function useResource<T>(loader: () => Promise<T>): Resource<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
@@ -37,8 +42,7 @@ export function useResource<T>(loader: () => Promise<T>, deps: unknown[]): Resou
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, tick]);
+  }, [loader, tick]);
 
   return { data, error, loading, reload };
 }

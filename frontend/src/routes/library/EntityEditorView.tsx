@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 
 import {
@@ -30,8 +30,7 @@ export function EntityEditorView() {
   const singular = ENTITY_KIND_SINGULAR[kind] ?? kind;
 
   const { data, loading, error, reload } = useResource(
-    () => libraryApi.getEntity(worldId, kind, entityId),
-    [worldId, kind, entityId],
+    useCallback(() => libraryApi.getEntity(worldId, kind, entityId), [worldId, kind, entityId]),
   );
 
   const isCharacter = singular === "character";
@@ -110,8 +109,10 @@ function EntityEditorBody({
   }, [entity]);
 
   const dependents = useResource(
-    () => libraryApi.dependents(worldId, kindPlural, entityId),
-    [worldId, kindPlural, entityId],
+    useCallback(
+      () => libraryApi.dependents(worldId, kindPlural, entityId),
+      [worldId, kindPlural, entityId],
+    ),
   );
 
   function patchFrontmatter(next: Frontmatter) {
@@ -395,8 +396,10 @@ function GreetingEditorBody({
   }, [greeting]);
 
   const dependents = useResource(
-    () => libraryApi.dependents(worldId, "greetings", entityId),
-    [worldId, entityId],
+    useCallback(
+      () => libraryApi.dependents(worldId, "greetings", entityId),
+      [worldId, entityId],
+    ),
   );
 
   function patch(next: GreetingFormValue) {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, Route, Routes, useParams } from "react-router-dom";
 
 import { ApiError, mechanicsApi, type RegisteredModule } from "../../api/library";
@@ -16,7 +16,9 @@ export function MechanicsView() {
 }
 
 function MechanicsList() {
-  const { data, loading, error, reload } = useResource(() => mechanicsApi.listInstalled(), []);
+  const { data, loading, error, reload } = useResource(
+    useCallback(() => mechanicsApi.listInstalled(), []),
+  );
   const [rescanning, setRescanning] = useState(false);
   const [rescanErr, setRescanErr] = useState<string | null>(null);
 
@@ -86,7 +88,9 @@ function MechanicsList() {
 
 function MechanicsDetail() {
   const { moduleId = "" } = useParams();
-  const { data, loading, error, reload } = useResource(() => mechanicsApi.listInstalled(), []);
+  const { data, loading, error, reload } = useResource(
+    useCallback(() => mechanicsApi.listInstalled(), []),
+  );
 
   const module = (data ?? []).find((m: RegisteredModule) => m.manifest.id === moduleId);
 

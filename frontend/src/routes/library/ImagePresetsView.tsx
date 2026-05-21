@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -23,7 +23,9 @@ export function ImagePresetsView() {
 
 function ImagePresetList() {
   const navigate = useNavigate();
-  const { data, loading, error, reload } = useResource(() => libraryApi.listImagePresets(), []);
+  const { data, loading, error, reload } = useResource(
+    useCallback(() => libraryApi.listImagePresets(), []),
+  );
   return (
     <section className="library-section">
       <header className="library-section-header">
@@ -367,8 +369,7 @@ function ImagePresetEdit() {
 function ImagePresetDetail() {
   const { presetId = "" } = useParams();
   const { data, loading, error, reload } = useResource(
-    () => libraryApi.getImagePreset(presetId),
-    [presetId],
+    useCallback(() => libraryApi.getImagePreset(presetId), [presetId]),
   );
   return (
     <section className="library-section">

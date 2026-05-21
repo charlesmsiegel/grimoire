@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { ApiError, libraryApi, type WorldMeta } from "../../api/library";
@@ -15,8 +15,7 @@ const FIELDS: { key: keyof WorldMeta; label: string; type: "text" | "textarea" |
 export function WorldMetaView() {
   const { worldId = "" } = useParams();
   const { data, loading, error, reload } = useResource(
-    () => libraryApi.getWorld(worldId),
-    [worldId],
+    useCallback(() => libraryApi.getWorld(worldId), [worldId]),
   );
 
   const [draft, setDraft] = useState<Partial<WorldMeta>>({});

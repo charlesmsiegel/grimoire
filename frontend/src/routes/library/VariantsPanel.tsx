@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { libraryApi, type LibraryEntity } from "../../api/library";
@@ -13,8 +13,7 @@ interface Props {
 
 export function VariantsPanel({ kindPlural, assetId }: Props) {
   const { data, loading, error, reload } = useResource(
-    () => libraryApi.variants(kindPlural, assetId),
-    [kindPlural, assetId],
+    useCallback(() => libraryApi.variants(kindPlural, assetId), [kindPlural, assetId]),
   );
   const [showDiff, setShowDiff] = useState(false);
 

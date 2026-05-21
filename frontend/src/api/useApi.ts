@@ -4,9 +4,17 @@
  * The store reducer (spec 14 §State management) owns durable state. Per-view
  * fetches that don't need to live in the store (lists pulled fresh whenever
  * the route mounts) use this hook instead.
+ *
+ * The hook drives off ``fetcher`` identity: callers MUST wrap the fetcher
+ * in ``useCallback`` with its real dependencies, so ``react-hooks/
+ * exhaustive-deps`` lints the dep list at the call site. Without that, a
+ * fresh arrow on every render would re-fetch endlessly — a loud failure
+ * mode that's preferable to the old silent ``stale data forever`` bug
+ * where the hook took an explicit ``deps`` array with exhaustive-deps
+ * disabled.
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type Loadable<T> =
   | { status: "idle" }
@@ -16,7 +24,6 @@ export type Loadable<T> =
 
 export function useApi<T>(
   fetcher: () => Promise<T>,
-  deps: readonly unknown[],
 ): Loadable<T> & { reload: () => void } {
   const [state, setState] = useState<Loadable<T>>({ status: "idle" });
   const [nonce, setNonce] = useState(0);
@@ -39,8 +46,7 @@ export function useApi<T>(
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, nonce]);
+  }, [fetcher, nonce]);
 
   return { ...state, reload };
 }

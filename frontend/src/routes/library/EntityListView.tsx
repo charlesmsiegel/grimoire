@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -33,8 +33,7 @@ export function EntityListView({ kindOverride }: Props) {
 
   const navigate = useNavigate();
   const { data, loading, error, reload } = useResource(
-    () => libraryApi.listEntities(worldId, kindPlural),
-    [worldId, kindPlural],
+    useCallback(() => libraryApi.listEntities(worldId, kindPlural), [worldId, kindPlural]),
   );
 
   const [creating, setCreating] = useState(false);

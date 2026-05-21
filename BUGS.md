@@ -2,15 +2,11 @@
 
 Audit of the grimoire repo. Findings come from three parallel passes — backend, frontend, cross-cutting — collated and de-duplicated. Severities reflect blast radius × likelihood, not how easy each is to fix.
 
-This file is incremental: items are removed as they're fixed. The git log carries the per-item context. The original audit included all 7 CRITICAL items and most of the HIGH set; those are resolved and have been deleted here. Re-verified 2026-05-20 (line numbers refreshed; three more items dropped).
+This file is incremental: items are removed as they're fixed. The git log carries the per-item context. The original audit included all 7 CRITICAL items and the full HIGH set; those are resolved and have been deleted here. Re-verified 2026-05-20; the last four HIGH items were closed 2026-05-21.
 
 Format: **Title** — file:line — one-line description.
 
 ---
-
-## HIGH
-
-- **`useApi` / `useResource` deps spread with hooks/exhaustive-deps disabled** — `frontend/src/api/useApi.ts:42-43`, `frontend/src/api/useResource.ts:40-41` — The fetcher closure isn't in deps; any state it reads must be in the caller's `deps` array. Easy to drift silently — one missing dep ⇒ stale data forever.
 
 ## MEDIUM
 

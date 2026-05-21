@@ -32,9 +32,13 @@ import { ContentBrowser } from "./ContentBrowser";
 
 export function MechanicsView() {
   const { campaignId = "" } = useParams();
-  const composition = useApi(() => viewsApi.getComposition(campaignId), [campaignId]);
-  const installed = useResource(() => mechanicsApi.listInstalled(), []);
-  const characters = useApi(() => viewsApi.listCharacters(campaignId), [campaignId]);
+  const composition = useApi(
+    useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
+  );
+  const installed = useResource(useCallback(() => mechanicsApi.listInstalled(), []));
+  const characters = useApi(
+    useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]),
+  );
 
   if (composition.status !== "ok") {
     return (
@@ -145,10 +149,14 @@ function SheetsPanel({ campaignId, module, moduleId, characters, onRefresh }: Sh
   // "missing" badge flips to "present" without reloading the whole page.
   const [sheetNonce, setSheetNonce] = useState(0);
 
-  const schemaState = useApi(() => viewsApi.getSheetSchema(moduleId, "character"), [moduleId]);
+  const schemaState = useApi(
+    useCallback(() => viewsApi.getSheetSchema(moduleId, "character"), [moduleId]),
+  );
   // Prefer the inlined `theme_css` on the RegisteredModule payload (one fewer
   // network hop); fall back to the standalone GET when missing.
-  const themeState = useApi(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]);
+  const themeState = useApi(
+    useCallback(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]),
+  );
 
   const selectedRow = characters.find((c) => c.character.id === selected) ?? null;
 
@@ -285,21 +293,27 @@ function CharacterSheet({
   onStartCreation,
 }: SheetProps) {
   const state = useApi<Record<string, unknown> | null>(
-    () =>
-      viewsApi.getSheet(campaignId, "character", characterId).then(
-        (sheet) => {
-          onStatus(characterId, "present");
-          return sheet;
-        },
-        (err: unknown) => {
-          if (err instanceof ApiError && err.status === 404) {
-            onStatus(characterId, "missing");
-            return null;
-          }
-          throw err;
-        },
-      ),
-    [campaignId, characterId],
+    useCallback(
+      () =>
+        viewsApi.getSheet(campaignId, "character", characterId).then(
+          (sheet) => {
+            onStatus(characterId, "present");
+            return sheet;
+          },
+          (err: unknown) => {
+            if (err instanceof ApiError && err.status === 404) {
+              onStatus(characterId, "missing");
+              return null;
+            }
+            throw err;
+          },
+        ),
+      // onStatus is intentionally NOT in deps: it's a parent prop that
+      // changes every render; including it would refetch the sheet on
+      // every keystroke. The status callbacks are write-only side effects.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [campaignId, characterId],
+    ),
   );
 
   const [working, setWorking] = useState<SheetValue | null>(null);

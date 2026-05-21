@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { campaignApi } from "../../api/campaign";
@@ -16,7 +16,7 @@ interface Props {
 }
 
 export function LedgerView({ campaignId }: Props) {
-  const state = useApi(() => campaignApi.getLedger(campaignId), [campaignId]);
+  const state = useApi(useCallback(() => campaignApi.getLedger(campaignId), [campaignId]));
 
   return (
     <section className="route campaign-ledger" aria-labelledby="ledger-heading">

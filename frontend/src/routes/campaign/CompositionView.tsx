@@ -37,11 +37,13 @@ interface CatalogOption {
 
 export function CompositionView() {
   const { campaignId = "" } = useParams();
-  const composition = useApi(() => viewsApi.getComposition(campaignId), [campaignId]);
-  const worlds = useApi(() => viewsApi.listWorlds(), []);
-  const mechanics = useApi(() => viewsApi.installedMechanics(), []);
-  const styleGuides = useApi(() => viewsApi.listStyleGuides(), []);
-  const imagePresets = useApi(() => viewsApi.listImagePresets(), []);
+  const composition = useApi(
+    useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
+  );
+  const worlds = useApi(useCallback(() => viewsApi.listWorlds(), []));
+  const mechanics = useApi(useCallback(() => viewsApi.installedMechanics(), []));
+  const styleGuides = useApi(useCallback(() => viewsApi.listStyleGuides(), []));
+  const imagePresets = useApi(useCallback(() => viewsApi.listImagePresets(), []));
 
   return (
     <section className="route campaign-composition" aria-labelledby="comp-heading">
