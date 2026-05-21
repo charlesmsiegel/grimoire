@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -13,12 +14,17 @@ def to_payload(obj: Any) -> Any:
 
     Pydantic models are dumped via ``model_dump``. Dataclasses are converted to
     ``dict``. Iterables of either are converted element-wise. Plain dicts and
-    primitives are returned unchanged.
+    primitives are returned unchanged. ``datetime``/``date`` are serialised to
+    ISO 8601 so a nested datetime inside e.g. a service-returned dataclass
+    doesn't fall through to the bare ``return obj`` branch and produce a
+    response shape that varies with Pydantic's downstream encoder.
     """
     if obj is None:
         return None
     if isinstance(obj, BaseModel):
         return obj.model_dump(mode="json")
+    if isinstance(obj, datetime | date):
+        return obj.isoformat()
     if isinstance(obj, list | tuple):
         return [to_payload(item) for item in obj]
     if isinstance(obj, dict):
