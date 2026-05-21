@@ -110,9 +110,14 @@ export function InputArea({
     }
   }, [advanceEnabled, advancing, busy, onAdvance]);
 
+  // Autofocus on initial mount only. The submit() handler refocuses the
+  // textarea explicitly after a successful submit; refocusing on every
+  // busy→idle (e.g. Regenerate / Undo / Skip) yanked focus off the button
+  // the user was about to click.
   useEffect(() => {
-    if (!busy && taRef.current) taRef.current.focus();
-  }, [busy]);
+    taRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <form
