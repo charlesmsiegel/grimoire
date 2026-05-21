@@ -240,8 +240,27 @@ class LLMGateway(Protocol):
     async def list_routes(self, campaign_id: CampaignId | None = None) -> dict[str, str]: ...
 
     async def set_route(
-        self, task: str, route: str, campaign_id: CampaignId | None = None
+        self,
+        task: str,
+        route: str,
+        campaign_id: CampaignId | None = None,
+        *,
+        kind: str = "llm",
     ) -> None: ...
+
+    async def clear_route(
+        self,
+        task: str,
+        campaign_id: CampaignId | None = None,
+        *,
+        kind: str = "llm",
+    ) -> None: ...
+
+    def imagegen_route(self, task: str, campaign_id: CampaignId) -> Any: ...
+
+    def imagegen_routes_for(self, campaign_id: CampaignId) -> dict[str, str]: ...
+
+    async def ensure_campaign_loaded(self, campaign_id: CampaignId) -> None: ...
 
     async def estimate_tokens(self, text: str, provider_id: str | None = None) -> int: ...
 
@@ -1037,12 +1056,16 @@ class ImageGen(Protocol):
         post_id: PostId | None,
         request: GenerationRequest | None = None,
         priority: int = 5,
+        *,
+        task: str | None = None,
     ) -> str: ...
 
     async def generate_sync(
         self,
         campaign_id: CampaignId,
         request: GenerationRequest,
+        *,
+        task: str | None = None,
     ) -> GenerationResult: ...
 
     async def list_jobs(

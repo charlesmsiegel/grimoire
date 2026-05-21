@@ -99,6 +99,17 @@ def get_extras_service(request: Request) -> Any:
     return _require(get_container(request), "extras_service")
 
 
+def get_llm_gateway(request: Request) -> Any:
+    container = get_container(request)
+    gw = container.extras.get("llm_gateway") if container.extras else None
+    if gw is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="llm_gateway service not configured",
+        )
+    return gw
+
+
 ContainerDep = Annotated[ServiceContainer, Depends(get_container)]
 LibraryDep = Annotated[Any, Depends(get_library)]
 WorldDep = Annotated[Any, Depends(get_world)]
@@ -116,6 +127,7 @@ ObservabilityDep = Annotated[Any, Depends(get_observability)]
 StreamDep = Annotated[Any, Depends(get_stream)]
 TransientStateDep = Annotated[Any, Depends(get_transient_state)]
 ExtrasServiceDep = Annotated[Any, Depends(get_extras_service)]
+LLMGatewayDep = Annotated[Any, Depends(get_llm_gateway)]
 
 
 __all__ = [
@@ -125,6 +137,7 @@ __all__ = [
     "ExportDep",
     "ExtrasServiceDep",
     "ImageGenDep",
+    "LLMGatewayDep",
     "LibraryDep",
     "MechanicsDep",
     "ObservabilityDep",
@@ -143,6 +156,7 @@ __all__ = [
     "get_extras_service",
     "get_imagegen",
     "get_library",
+    "get_llm_gateway",
     "get_mechanics",
     "get_observability",
     "get_orchestrator",

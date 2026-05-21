@@ -79,6 +79,11 @@ class LLMGatewayService:
             response_excerpt_chars=self._config.observability.response_excerpt_chars,
         )
         self._loaded_campaigns: set[CampaignId] = set()
+        # campaign_id → {task: "backend.model"} for imagegen tasks. Kept separate
+        # from `_router` because imagegen routes don't share the LLM resolver's
+        # task namespace and have their own backend kind (ImageGenBackend, not
+        # LLMProvider). Consumed by ImageGenService via `imagegen_route`.
+        self._imagegen_routes: dict[CampaignId, dict[str, str]] = {}
         # (provider_id, model) → ModelInfo or None (None = "no pricing available")
         self._pricing_cache: dict[tuple[str, str], ModelInfo | None] = {}
         # provider_id → last observed HealthLevel (populated by register_with_health_monitor)
@@ -190,10 +195,68 @@ class LLMGatewayService:
         task: str,
         route: str,
         campaign_id: CampaignId | None = None,
+        *,
+        kind: str = "llm",
     ) -> None:
-        self._router.set_route(task, route, campaign_id)
+        """Apply a route and (when campaign-scoped) persist to campaign.yaml.
+
+        ``kind`` selects which YAML block the route is written under:
+          * ``"llm"``       → ``model_routing``
+          * ``"embedding"`` → ``embedding_routing``
+          * ``"imagegen"``  → ``imagegen_routing``
+
+        LLM and embedding routes share the gateway's ``RouteResolver``;
+        imagegen routes are stored separately (the resolver only knows
+        about LLM/embedding providers).
+        """
+        Route.parse(route)  # validate before touching any state
+        if kind == "imagegen":
+            if campaign_id is not None:
+                self._imagegen_routes.setdefault(campaign_id, {})[task] = route
+        else:
+            self._router.set_route(task, route, campaign_id)
         if campaign_id is not None and self._data_root is not None:
-            self._persist_campaign_route(campaign_id, task, route)
+            self._persist_campaign_route(campaign_id, task, route, kind=kind)
+
+    async def clear_route(
+        self,
+        task: str,
+        campaign_id: CampaignId | None = None,
+        *,
+        kind: str = "llm",
+    ) -> None:
+        """Remove a per-campaign route entry and rewrite the YAML block."""
+        if kind == "imagegen":
+            if campaign_id is not None:
+                self._imagegen_routes.get(campaign_id, {}).pop(task, None)
+        else:
+            self._router.clear_route(task, campaign_id)
+        if campaign_id is not None and self._data_root is not None:
+            self._delete_campaign_route(campaign_id, task, kind=kind)
+
+    def imagegen_route(self, task: str, campaign_id: CampaignId) -> Route | None:
+        """Return the per-campaign imagegen route for ``task``, if any.
+
+        Returns ``None`` when no route is configured. The campaign must
+        already have been lazy-loaded (e.g. by an earlier ``complete()``
+        call or by calling :meth:`_load_campaign_routing` directly).
+        """
+        raw = self._imagegen_routes.get(campaign_id, {}).get(task)
+        return Route.parse(raw) if raw else None
+
+    def imagegen_routes_for(self, campaign_id: CampaignId) -> dict[str, str]:
+        """Return a copy of the imagegen routing table for ``campaign_id``."""
+        return dict(self._imagegen_routes.get(campaign_id, {}))
+
+    async def ensure_campaign_loaded(self, campaign_id: CampaignId) -> None:
+        """Public hook to trigger lazy YAML loading for ``campaign_id``.
+
+        ImageGenService calls this before reading :meth:`imagegen_route` so
+        routes are present even when no LLM call has happened yet for
+        this campaign.
+        """
+        if campaign_id not in self._loaded_campaigns:
+            await self._load_campaign_routing(campaign_id)
 
     # Well-known tasks that should "just work" once a single LLM / embedding
     # plugin is configured. Anything not listed here can still be set via
@@ -1349,13 +1412,14 @@ class LLMGatewayService:
         """Lazily read routing blocks from campaign.yaml and apply them.
 
         Recognises three top-level blocks:
-          * ``model_routing`` — applied to the resolver for LLM tasks.
+          * ``model_routing`` — applied to the LLM resolver.
           * ``embedding_routing`` — applied to the same resolver; task name
             uniqueness keeps it disjoint from LLM entries. Entries here
             override anything with the same task name in ``model_routing``.
-          * ``imagegen_routing`` — parsed and validated but not yet acted on;
-            a warning is logged per entry so users know the schema is
-            recognised but ImageGenService still uses ``active_backend``.
+          * ``imagegen_routing`` — stored in ``_imagegen_routes`` and
+            consulted by ImageGenService via :meth:`imagegen_route`. The
+            resolver here only knows LLM/embedding kinds, so a parallel
+            dict holds these.
 
         Always marks the campaign as loaded — even on failure — so we don't
         re-attempt on every subsequent call.
@@ -1375,7 +1439,6 @@ class LLMGatewayService:
         if not isinstance(raw, dict):
             return
 
-        # model_routing — LLM task routing.
         await self._apply_routing_block(
             raw.get("model_routing"),
             campaign_id,
@@ -1383,8 +1446,6 @@ class LLMGatewayService:
             block_name="model_routing",
             provider_kind="llm",
         )
-        # embedding_routing — embedding task routing. Same resolver; tasks like
-        # "embed:context" should not collide with LLM task names.
         await self._apply_routing_block(
             raw.get("embedding_routing"),
             campaign_id,
@@ -1392,29 +1453,32 @@ class LLMGatewayService:
             block_name="embedding_routing",
             provider_kind="embedding",
         )
-        # imagegen_routing — parsed only; not threaded through ImageGenService yet.
-        imagegen = raw.get("imagegen_routing")
-        if isinstance(imagegen, dict):
-            for task, route in imagegen.items():
-                try:
-                    Route.parse(str(route))
-                except ValueError:
-                    logger.warning(
-                        "llm_gateway: skipping bad imagegen_routing entry in %s — "
-                        "task=%r route=%r is not a valid 'provider.model' string",
-                        yaml_path,
-                        task,
-                        route,
-                    )
-                    continue
+        await self._apply_imagegen_routing(raw.get("imagegen_routing"), campaign_id, yaml_path)
+
+    async def _apply_imagegen_routing(
+        self,
+        routing: object,
+        campaign_id: CampaignId,
+        yaml_path: Path,
+    ) -> None:
+        """Validate and store ``imagegen_routing`` entries for later lookup."""
+        if not isinstance(routing, dict):
+            return
+        bucket = self._imagegen_routes.setdefault(campaign_id, {})
+        for task, route in routing.items():
+            try:
+                Route.parse(str(route))
+            except ValueError:
                 logger.warning(
-                    "llm_gateway: imagegen_routing entry recognised but not yet "
-                    "acted on — task=%r route=%r (campaign=%s); ImageGenService "
-                    "still uses active_backend",
+                    "llm_gateway: skipping bad imagegen_routing entry in %s — "
+                    "task=%r route=%r is not a valid 'provider.model' string",
+                    yaml_path,
                     task,
                     route,
-                    campaign_id,
                 )
+                continue
+            bucket[str(task)] = str(route)
+            await self._warn_unknown_model(str(task), str(route), provider_kind="imagegen")
 
     async def _apply_routing_block(
         self,
@@ -1456,6 +1520,9 @@ class LLMGatewayService:
             provider = self._plugins.get_llm_provider(parsed.provider_id)
         elif provider_kind == "embedding":
             provider = self._plugins.get_embedding_provider(parsed.provider_id)
+        elif provider_kind == "imagegen":
+            getter = getattr(self._plugins, "get_imagegen_backend", None)
+            provider = getter(parsed.provider_id) if getter is not None else None
         else:
             return
         if provider is None:
@@ -1482,29 +1549,80 @@ class LLMGatewayService:
                 provider_kind,
             )
 
-    def _persist_campaign_route(self, campaign_id: CampaignId, task: str, route: str) -> None:
-        """Synchronously write the route change back to campaign.yaml atomically."""
+    _BLOCK_FOR_KIND: dict[str, str] = {
+        "llm": "model_routing",
+        "embedding": "embedding_routing",
+        "imagegen": "imagegen_routing",
+    }
+
+    def _persist_campaign_route(
+        self,
+        campaign_id: CampaignId,
+        task: str,
+        route: str,
+        *,
+        kind: str = "llm",
+    ) -> None:
+        """Synchronously write a route into the right block of campaign.yaml.
+
+        Unknown ``kind`` falls back to ``model_routing`` (back-compat).
+        """
+        block = self._BLOCK_FOR_KIND.get(kind, "model_routing")
+        data = self._read_campaign_yaml_for_write(campaign_id)
+        if data is None:
+            return
+        if block not in data or not isinstance(data[block], dict):
+            data[block] = {}
+        data[block][task] = route
+        self._atomic_write_campaign_yaml(campaign_id, data)
+
+    def _delete_campaign_route(
+        self,
+        campaign_id: CampaignId,
+        task: str,
+        *,
+        kind: str = "llm",
+    ) -> None:
+        """Remove ``task`` from the block and rewrite the file."""
+        block = self._BLOCK_FOR_KIND.get(kind, "model_routing")
+        data = self._read_campaign_yaml_for_write(campaign_id)
+        if data is None:
+            return
+        existing = data.get(block)
+        if not isinstance(existing, dict) or task not in existing:
+            return
+        existing.pop(task, None)
+        if not existing:
+            data.pop(block, None)
+        self._atomic_write_campaign_yaml(campaign_id, data)
+
+    def _read_campaign_yaml_for_write(self, campaign_id: CampaignId) -> dict | None:
+        """Read campaign.yaml into a dict for in-place editing.
+
+        Returns ``None`` when there is no ``data_root`` to write to. Creates
+        the parent directory as a side effect.
+        """
+        yaml_path = self._campaign_yaml_path(campaign_id)
+        if yaml_path is None:
+            return None
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        if not yaml_path.is_file():
+            return {}
+        try:
+            raw = load_yaml(yaml_path)
+        except Exception:
+            logger.warning(
+                "llm_gateway: could not read %s for route persistence; "
+                "existing content may be overwritten",
+                yaml_path,
+            )
+            return {}
+        return dict(raw) if isinstance(raw, dict) else {}
+
+    def _atomic_write_campaign_yaml(self, campaign_id: CampaignId, data: dict) -> None:
         yaml_path = self._campaign_yaml_path(campaign_id)
         if yaml_path is None:
             return
-        yaml_path.parent.mkdir(parents=True, exist_ok=True)
-        # Read existing data, if any.
-        data: dict = {}
-        if yaml_path.is_file():
-            try:
-                raw = load_yaml(yaml_path)
-                if isinstance(raw, dict):
-                    data = dict(raw)
-            except Exception:
-                logger.warning(
-                    "llm_gateway: could not read %s for route persistence; "
-                    "existing content may be overwritten",
-                    yaml_path,
-                )
-        if "model_routing" not in data or not isinstance(data["model_routing"], dict):
-            data["model_routing"] = {}
-        data["model_routing"][task] = route
-        # Atomic write: write to .tmp then rename.
         tmp_path = yaml_path.with_suffix(".yaml.tmp")
         tmp_path.write_text(dump_yaml(data), encoding="utf-8")
         os.replace(tmp_path, yaml_path)

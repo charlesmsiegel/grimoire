@@ -397,6 +397,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             except Exception:
                 log.exception("register_provider_defaults failed at startup")
         llm_gateway = container.extras["llm_gateway"]
+        # ImageGenService is constructed earlier (before the gateway exists);
+        # wire the gateway in now so per-task imagegen routing works.
+        if container.imagegen is not None:
+            container.imagegen.set_gateway(llm_gateway)
         if obs.replayer is None:
             obs.replayer = TurnReplayerService(
                 audit_store=obs.audit_store,

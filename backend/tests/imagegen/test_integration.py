@@ -31,8 +31,10 @@ async def test_fires_queue_generation_on_turn_complete_per_post(bus) -> None:
         )
     finally:
         integ.stop()
+    # Integration tags the fan-out with a `task` so campaign imagegen_routing
+    # can pin a backend/model per-signal; without scene_open the fallback is "main".
     svc.queue_generation.assert_awaited_once_with(
-        campaign_id="camp-1", scene_id="scene-1", post_id=None
+        campaign_id="camp-1", scene_id="scene-1", post_id=None, task="main"
     )
 
 
