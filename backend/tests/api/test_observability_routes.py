@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from grimoire.api.container import ServiceContainer
 from grimoire.main import create_app
+from grimoire.observability.config import CostConfig, ObservabilityConfig
 from grimoire.observability.service import ObservabilityService
 from grimoire.storage import Database, apply_migrations
 from grimoire.types.observability import LogEvent, LogLevel, TurnAudit
@@ -465,3 +466,47 @@ async def test_turn_costs_unknown_returns_empty_list(client: TestClient) -> None
     resp = client.get("/api/observability/turns/no_such_turn/costs")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_cost_config_defaults(client: TestClient) -> None:
+    resp = client.get("/api/observability/config/cost")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "surface_in_status_bar": True,
+        "daily_budget_warn_usd": 5.00,
+        "daily_budget_alert_usd": 20.00,
+    }
+
+
+@pytest.mark.asyncio
+async def test_cost_config_custom(tmp_path: Path) -> None:
+    db = Database(tmp_path / "obs2.sqlite", pool_size=2)
+    await db.connect()
+    await apply_migrations(db)
+    obs = ObservabilityService(
+        db=db,
+        config=ObservabilityConfig(
+            cost=CostConfig(
+                surface_in_status_bar=False,
+                daily_budget_warn_usd=1.25,
+                daily_budget_alert_usd=9.99,
+            )
+        ),
+    )
+    container = ServiceContainer(db=db)
+    container.observability = obs
+    app = create_app()
+    app.state.container = container
+    try:
+        with TestClient(app) as test_client:
+            resp = test_client.get("/api/observability/config/cost")
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "surface_in_status_bar": False,
+            "daily_budget_warn_usd": 1.25,
+            "daily_budget_alert_usd": 9.99,
+        }
+    finally:
+        await obs.shutdown()
+        await db.close()

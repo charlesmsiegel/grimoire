@@ -181,6 +181,10 @@ class ObservabilityService:
     def costs(self) -> CostTrackerService:
         return self.costs_tracker
 
+    @property
+    def config(self) -> ObservabilityConfig:
+        return self._config
+
     def health(self) -> HealthMonitorService:
         return self.health_monitor
 

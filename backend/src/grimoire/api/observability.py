@@ -157,6 +157,16 @@ async def get_total_today(observability: ObservabilityDep, campaign_id: str) -> 
     return {"total_usd": total}
 
 
+@router.get("/config/cost")
+async def get_cost_config(observability: ObservabilityDep) -> Any:
+    cfg = observability.config.cost
+    return {
+        "surface_in_status_bar": cfg.surface_in_status_bar,
+        "daily_budget_warn_usd": cfg.daily_budget_warn_usd,
+        "daily_budget_alert_usd": cfg.daily_budget_alert_usd,
+    }
+
+
 @router.get("/metrics/summary")
 async def get_metrics_summary(
     observability: ObservabilityDep,

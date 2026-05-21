@@ -8,9 +8,11 @@
  * view (#350): per-turn assembled prompt with tier annotations and
  * per-source attribution, plus a diff helper that compares two turns'
  * prompts — cost-breakdown debug surfaces (#353) that read from the
- * per-turn audit / cost tables — and the "Why this character?" debug
+ * per-turn audit / cost tables — the "Why this character?" debug
  * view (#352): per-turn audit summaries plus the captured ContextSources
- * (each carrying its inclusion_reasons).
+ * (each carrying its inclusion_reasons) — and cost-surfacing endpoints
+ * (#354): cost-config read, session / rollup / today totals for the
+ * status bar and Budget tab.
  *
  * Cost spec: docs/superpowers/specs/2026-05-20-cost-breakdown-design.md.
  * Why-character spec: docs/superpowers/specs/2026-05-20-why-this-character-design.md.
@@ -235,6 +237,25 @@ export interface TaskCostRow {
   call_count: number;
 }
 
+export interface CostConfig {
+  surface_in_status_bar: boolean;
+  daily_budget_warn_usd: number;
+  daily_budget_alert_usd: number;
+}
+
+export interface CostTotal {
+  total_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  call_count: number;
+}
+
+export interface DailyCost {
+  date: string;
+  total_usd: number;
+  call_count: number;
+}
+
 function base(turnId: string) {
   return `/api/observability/turns/${encodeURIComponent(turnId)}`;
 }
@@ -305,5 +326,30 @@ export const observabilityApi = {
   },
   turnCosts(turnId: string): Promise<TaskCostRow[]> {
     return api.get(`${base(turnId)}/costs`);
+  },
+
+  getCostConfig(signal?: AbortSignal): Promise<CostConfig> {
+    return api.get<CostConfig>("/api/observability/config/cost", { signal });
+  },
+
+  getSessionCost(campaignId: string, since?: string, signal?: AbortSignal): Promise<CostTotal> {
+    return api.get<CostTotal>("/api/observability/costs/session", {
+      signal,
+      query: { campaign_id: campaignId, since },
+    });
+  },
+
+  getCostRollup(campaignId: string, days = 30, signal?: AbortSignal): Promise<DailyCost[]> {
+    return api.get<DailyCost[]>("/api/observability/costs/rollup", {
+      signal,
+      query: { campaign_id: campaignId, days },
+    });
+  },
+
+  getTotalToday(campaignId: string, signal?: AbortSignal): Promise<{ total_usd: number }> {
+    return api.get<{ total_usd: number }>("/api/observability/costs/total_today", {
+      signal,
+      query: { campaign_id: campaignId },
+    });
   },
 };
