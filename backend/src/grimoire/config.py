@@ -16,7 +16,11 @@ def _default_data_root() -> Path:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GRIMOIRE_", env_file=".env", extra="ignore")
 
-    data_root: Path = _default_data_root()
+    # default_factory so Path.home() runs on Settings() construction, not
+    # on module import — tests that monkey-patch Path.home() and then
+    # re-instantiate Settings() pick up the override. Without this the
+    # default was frozen at the moment grimoire.config first imported.
+    data_root: Path = Field(default_factory=_default_data_root)
     host: str = "127.0.0.1"
     port: int = 8173
 
