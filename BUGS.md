@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## MEDIUM
 
-- **`promote_entity` uses `kind.rstrip("s")` instead of `removesuffix`** — `backend/src/grimoire/api/campaigns.py:1155` — `rstrip("s")` strips *all* trailing s's, so `"glass"` ⇒ `"gla"`. Works for `"items"` and `"locations"` but is the wrong API.
 - **`get_campaign` swallows composition errors and returns `composition: null`** — `backend/src/grimoire/api/campaigns.py:270-271` — Bare `except Exception: composition = None`. User cannot diagnose why composition is missing.
 - **`put_sheet` silently falls back to `mechanics_id="null"`** — `backend/src/grimoire/api/campaigns.py:1289` — After the recent fix that reads `mechanics_module` from the campaign row, the fallback to `"null"` when no value is set is intentional, but the case still goes unsurfaced when the campaign row is missing entirely (404 now, previously silent). Re-evaluate after a few real PUT-sheet flows.
 - **`scan_now` blocks the event loop on the entire library walk** — `backend/src/grimoire/watcher/watcher.py:263-301` — Synchronous filesystem walk + sync file parsing on the loop. Tolerable at boot but stalls everything if called from a rescan endpoint.
