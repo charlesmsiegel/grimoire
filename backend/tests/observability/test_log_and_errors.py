@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 from grimoire.observability.config import DebugLogConfig
@@ -86,6 +87,68 @@ async def test_query_filters_by_free_text(db) -> None:
     await store.log(_event(payload={"message": "no match"}))
     matched = await store.query(LogQuery(free_text="successes"))
     assert len(matched) == 1
+
+
+async def test_subscribe_receives_written_events(db) -> None:
+    store = LogStore(db)
+    sub = store.subscribe()
+    await store.log(_event(payload={"message": "hello"}))
+    assert sub.queue.qsize() == 1
+    received = await asyncio.wait_for(sub.queue.get(), timeout=0.1)
+    assert received.module == "extractor"
+    assert received.payload["message"] == "hello"
+    sub.unsubscribe()
+
+
+async def test_subscribe_respects_level_threshold(db) -> None:
+    """Events filtered by the per-module level threshold are not fanned out."""
+    store = LogStore(
+        db,
+        config=DebugLogConfig(
+            default_level=LogLevel.INFO,
+            levels_per_module={"extractor": LogLevel.WARNING},
+        ),
+    )
+    sub = store.subscribe()
+    await store.log(_event(level=LogLevel.INFO))  # dropped on write
+    await store.log(_event(level=LogLevel.ERROR))  # accepted
+    assert sub.queue.qsize() == 1
+    received = await sub.queue.get()
+    assert received.level == LogLevel.ERROR
+    sub.unsubscribe()
+
+
+async def test_unsubscribe_stops_delivery(db) -> None:
+    store = LogStore(db)
+    sub = store.subscribe()
+    sub.unsubscribe()
+    await store.log(_event(payload={"message": "after unsub"}))
+    assert sub.queue.qsize() == 0
+
+
+async def test_overflow_drops_events_and_counts_them(db) -> None:
+    """A slow consumer with a tiny queue must not block log writes."""
+    store = LogStore(db)
+    sub = store.subscribe(queue_size=2)
+    for _ in range(5):
+        await store.log(_event())
+    assert sub.queue.qsize() == 2
+    assert sub.dropped == 3
+    sub.unsubscribe()
+
+
+async def test_unsubscribed_subscriber_does_not_receive(db) -> None:
+    """A second subscriber that unsubscribes mid-flight should not get the
+    next write; the still-active one should."""
+    store = LogStore(db)
+    sub_a = store.subscribe()
+    sub_b = store.subscribe()
+    await store.log(_event(payload={"message": "first"}))
+    sub_a.unsubscribe()
+    await store.log(_event(payload={"message": "second"}))
+    assert sub_a.queue.qsize() == 1  # only the pre-unsub event
+    assert sub_b.queue.qsize() == 2
+    sub_b.unsubscribe()
 
 
 async def test_error_record_and_recent(db) -> None:

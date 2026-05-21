@@ -13,7 +13,7 @@ from grimoire.api.container import ServiceContainer
 from grimoire.main import create_app
 from grimoire.observability.service import ObservabilityService
 from grimoire.storage import Database, apply_migrations
-from grimoire.types.observability import TurnAudit
+from grimoire.types.observability import LogEvent, LogLevel, TurnAudit
 
 
 @pytest.fixture()
@@ -34,6 +34,17 @@ def client(container_with_obs: ServiceContainer) -> Iterator[TestClient]:
     app = create_app()
     app.state.container = container_with_obs
     yield TestClient(app)
+
+
+@pytest.fixture()
+def ws_client(container_with_obs: ServiceContainer) -> Iterator[TestClient]:
+    """TestClient with the lifespan engaged so ``client.portal`` is available
+    for cross-loop calls — required for WebSocket tests that need to invoke
+    server-side coroutines while a socket is open."""
+    app = create_app()
+    app.state.container = container_with_obs
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 async def _seed_audit(obs: ObservabilityService, *, turn_id: str = "t_test") -> TurnAudit:
@@ -227,3 +238,96 @@ async def test_errors_aggregate_empty(client: TestClient) -> None:
 async def test_health_probe_unknown_returns_404(client: TestClient) -> None:
     resp = client.post("/api/observability/health/probe?target_id=nope")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------- #
+# /ws/observability/log — live debug-log tail (spec 16 §13)
+# ---------------------------------------------------------------------- #
+
+
+def _log_event(
+    *,
+    module: str = "extractor",
+    operation: str = "extract",
+    level: LogLevel = LogLevel.INFO,
+    message: str = "hello",
+    turn_id: str | None = None,
+) -> LogEvent:
+    return LogEvent(
+        timestamp=datetime.now(UTC),
+        level=level,
+        module=module,
+        operation=operation,
+        payload={"message": message},
+        turn_id=turn_id,
+    )
+
+
+def test_log_tail_streams_event(
+    container_with_obs: ServiceContainer, ws_client: TestClient
+) -> None:
+    """A connected tail receives each accepted event."""
+    obs = container_with_obs.observability
+    with ws_client.websocket_connect("/ws/observability/log") as ws:
+        # The connect() call's accept() races with the route's subscribe()
+        # path; if we call log() too early, the subscriber doesn't exist yet.
+        # ping the server with an idempotent log of our own after the WS is
+        # known-open by the test client.
+        ws_client.portal.call(obs.log, _log_event(message="hello tail"))
+        msg = ws.receive_json()
+        assert msg["module"] == "extractor"
+        assert msg["payload"]["message"] == "hello tail"
+
+
+def test_log_tail_filters_by_minimum_level(
+    container_with_obs: ServiceContainer, ws_client: TestClient
+) -> None:
+    obs = container_with_obs.observability
+    with ws_client.websocket_connect("/ws/observability/log?level=warning") as ws:
+        ws_client.portal.call(obs.log, _log_event(level=LogLevel.INFO, message="ignored"))
+        ws_client.portal.call(obs.log, _log_event(level=LogLevel.ERROR, message="kept"))
+        msg = ws.receive_json()
+        assert msg["level"] == "ERROR"
+        assert msg["payload"]["message"] == "kept"
+
+
+def test_log_tail_filters_by_module(
+    container_with_obs: ServiceContainer, ws_client: TestClient
+) -> None:
+    obs = container_with_obs.observability
+    with ws_client.websocket_connect("/ws/observability/log?module=orchestrator") as ws:
+        ws_client.portal.call(obs.log, _log_event(module="extractor", message="skip"))
+        ws_client.portal.call(
+            obs.log, _log_event(module="orchestrator", message="match")
+        )
+        msg = ws.receive_json()
+        assert msg["module"] == "orchestrator"
+        assert msg["payload"]["message"] == "match"
+
+
+def test_log_tail_invalid_level_closes_with_policy_violation(
+    ws_client: TestClient,
+) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    with (
+        pytest.raises(WebSocketDisconnect) as exc,
+        ws_client.websocket_connect("/ws/observability/log?level=bogus"),
+    ):
+        pass
+    assert exc.value.code == 1008
+
+
+def test_log_tail_unavailable_without_observability(
+    container_with_obs: ServiceContainer, ws_client: TestClient
+) -> None:
+    """Without an ObservabilityService on the container, close with 1011."""
+    from starlette.websockets import WebSocketDisconnect
+
+    container_with_obs.observability = None
+    with (
+        pytest.raises(WebSocketDisconnect) as exc,
+        ws_client.websocket_connect("/ws/observability/log"),
+    ):
+        pass
+    assert exc.value.code == 1011
