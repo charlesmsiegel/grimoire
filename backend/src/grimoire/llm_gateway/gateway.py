@@ -28,6 +28,7 @@ from grimoire.llm_gateway.errors import (
 from grimoire.llm_gateway.request_log import LLMRequestLog, request_hash
 from grimoire.llm_gateway.retry import resolve_retry_exceptions, run_with_retries
 from grimoire.llm_gateway.routing import Route, RouteResolver
+from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
 from grimoire.storage.db import Database
 from grimoire.types.common import CampaignId, HealthLevel, HealthStatus, TurnId
 from grimoire.types.llm import (
@@ -55,6 +56,7 @@ class LLMGatewayService:
         data_root: Path | None = None,
         event_bus: EventBus | None = None,
         health_monitor: HealthMonitor | None = None,
+        metrics: MetricsRegistryProtocol = _NullMetrics(),
     ) -> None:
         self._plugins = plugins
         self._db = db
@@ -87,6 +89,20 @@ class LLMGatewayService:
         self._retriable: tuple[type[BaseException], ...] = resolve_retry_exceptions(
             self._config.retry.retry_on
         )
+        self._metrics: MetricsRegistryProtocol = metrics
+
+    def _metrics_labels(self, task: str, request: Any) -> dict[str, Any]:
+        """Best-effort labels for the metric row. Producers should never
+        fail recording over a missing label, so attribute lookups are
+        defensive and ``None`` is dropped from the payload."""
+        provider = getattr(request, "provider_id", None) or getattr(request, "provider", None)
+        model = getattr(request, "model", None)
+        labels: dict[str, Any] = {"task": task}
+        if provider:
+            labels["provider"] = str(provider)
+        if model:
+            labels["model"] = str(model)
+        return labels
 
     def capabilities_for(self, provider_id: str):
         """Return the static `ProviderCapabilities` for ``provider_id``.
@@ -316,6 +332,28 @@ class LLMGatewayService:
     # ------------------------------------------------------------------ #
 
     async def complete(
+        self,
+        task: str,
+        request: CompletionRequest,
+        campaign_id: CampaignId | None = None,
+        *,
+        turn_id: TurnId | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: TimeoutPolicy | None = None,
+    ) -> CompletionResponse:
+        async with self._metrics.measure(
+            "llm_gateway", "complete", labels=self._metrics_labels(task, request)
+        ):
+            return await self._complete_inner(
+                task,
+                request,
+                campaign_id,
+                turn_id=turn_id,
+                retry=retry,
+                timeout=timeout,
+            )
+
+    async def _complete_inner(
         self,
         task: str,
         request: CompletionRequest,
@@ -606,6 +644,30 @@ class LLMGatewayService:
     # ------------------------------------------------------------------ #
 
     async def stream(
+        self,
+        task: str,
+        request: CompletionRequest,
+        campaign_id: CampaignId | None = None,
+        *,
+        turn_id: TurnId | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: TimeoutPolicy | None = None,
+    ) -> AsyncIterator[CompletionChunk]:
+        """Stream completion chunks; thin wrapper that records a metric and delegates."""
+        async with self._metrics.measure(
+            "llm_gateway", "stream", labels=self._metrics_labels(task, request)
+        ):
+            async for chunk in self._stream_inner(
+                task,
+                request,
+                campaign_id,
+                turn_id=turn_id,
+                retry=retry,
+                timeout=timeout,
+            ):
+                yield chunk
+
+    async def _stream_inner(
         self,
         task: str,
         request: CompletionRequest,

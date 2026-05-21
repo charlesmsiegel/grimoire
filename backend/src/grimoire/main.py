@@ -376,6 +376,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 data_root=settings.data_root,
                 event_bus=container.event_bus,
                 health_monitor=obs.health_monitor,
+                metrics=obs.metrics(),
             )
             await container.extras["llm_gateway"].register_with_health_monitor()
             # Wizard-configured plugins ship with an `active_model` but nothing
