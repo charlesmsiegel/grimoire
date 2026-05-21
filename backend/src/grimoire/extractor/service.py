@@ -37,6 +37,7 @@ from grimoire.extractor.together import (
     project_tracker_to_deltas,
 )
 from grimoire.extractor.tool_use import ToolCall, project_tool_calls
+from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
 from grimoire.types.common import CampaignId, EntityKind, Json, Scope, TurnId
 from grimoire.types.extraction import (
     EntityCandidate,
@@ -73,6 +74,7 @@ class ExtractorService:
         auto_disable: object | None = None,
         provider_id: str = "",
         model: str = "",
+        metrics: MetricsRegistryProtocol = _NullMetrics(),
     ) -> None:
         self._gateway = gateway
         self._mechanics = mechanics
@@ -83,12 +85,39 @@ class ExtractorService:
         self._auto_disable = auto_disable
         self._provider_id = provider_id
         self._model = model
+        self._metrics: MetricsRegistryProtocol = metrics
 
     # ------------------------------------------------------------------ #
     # Public surface
     # ------------------------------------------------------------------ #
 
     async def extract(
+        self,
+        response_text: str,
+        scene: Scene,
+        campaign_id: CampaignId,
+        prior_state_snapshot: StateSnapshot,
+        *,
+        pre_roll_resolved: bool = False,
+        turn_id: TurnId | None = None,
+        mode: ExtractionMode = ExtractionMode.SEPARATE,
+        together_tracker_text: str | None = None,
+        tool_calls: list[ToolCall] | None = None,
+    ) -> ExtractionResult:
+        async with self._metrics.measure("extractor", "extract"):
+            return await self._extract_inner(
+                response_text,
+                scene,
+                campaign_id,
+                prior_state_snapshot,
+                pre_roll_resolved=pre_roll_resolved,
+                turn_id=turn_id,
+                mode=mode,
+                together_tracker_text=together_tracker_text,
+                tool_calls=tool_calls,
+            )
+
+    async def _extract_inner(
         self,
         response_text: str,
         scene: Scene,
