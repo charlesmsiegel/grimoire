@@ -332,6 +332,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if container.observability is None:
             obs = ObservabilityService(db=db, event_bus=container.event_bus)
             container.observability = obs
+            # Backfill producers constructed before the observability service.
+            # See §4.3 of the design — _NullMetrics() is harmless if left in
+            # place but the real registry is what makes data show up.
+            if container.state_store is not None:
+                container.state_store._metrics = obs.metrics()
         else:
             obs = container.observability
 

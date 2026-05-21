@@ -68,6 +68,7 @@ from grimoire.state_store.search import (
     keyword_search_facts,
     keyword_search_library,
 )
+from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
 from grimoire.state_store.search import vector_search as _vector_search
 from grimoire.state_store.snapshots import (
     remove_snapshots_for_world,
@@ -146,9 +147,16 @@ class StateStore:
     ``"mechanics:wod"``, ``"user"``).
     """
 
-    def __init__(self, db: Database, data_root: Path) -> None:
+    def __init__(
+        self,
+        db: Database,
+        data_root: Path,
+        *,
+        metrics: MetricsRegistryProtocol = _NullMetrics(),
+    ) -> None:
         self.db = db
         self.data_root = Path(data_root)
+        self._metrics: MetricsRegistryProtocol = metrics
 
     # ------------------------------------------------------------------
     # Connection helpers
@@ -163,15 +171,16 @@ class StateStore:
         in WAL mode (the busy handler is not invoked for snapshot upgrades),
         so deferred transactions race against background writers.
         """
-        async with self.db.acquire() as conn:
-            await conn.execute("BEGIN IMMEDIATE")
-            try:
-                yield conn
-            except Exception:
-                await conn.execute("ROLLBACK")
-                raise
-            else:
-                await conn.execute("COMMIT")
+        async with self._metrics.measure("state_store", "write"):
+            async with self.db.acquire() as conn:
+                await conn.execute("BEGIN IMMEDIATE")
+                try:
+                    yield conn
+                except Exception:
+                    await conn.execute("ROLLBACK")
+                    raise
+                else:
+                    await conn.execute("COMMIT")
 
     # ------------------------------------------------------------------
     # Library file writes
@@ -798,6 +807,12 @@ class StateStore:
         return {p.name[: -len(suffix)] for p in sheets_dir.iterdir() if p.name.endswith(suffix)}
 
     async def list_scenes(self, campaign_id: str, branch_id: str | None = None) -> list[dict]:
+        async with self._metrics.measure("state_store", "query"):
+            return await self._list_scenes_inner(campaign_id, branch_id)
+
+    async def _list_scenes_inner(
+        self, campaign_id: str, branch_id: str | None = None
+    ) -> list[dict]:
         if branch_id is None:
             rows = await self.db.fetchall(
                 "SELECT * FROM scenes WHERE campaign_id = ? ORDER BY ordinal",
@@ -1197,6 +1212,10 @@ class StateStore:
             )
 
     async def list_pcs(self, campaign_id: str) -> list[dict]:
+        async with self._metrics.measure("state_store", "query"):
+            return await self._list_pcs_inner(campaign_id)
+
+    async def _list_pcs_inner(self, campaign_id: str) -> list[dict]:
         rows = await self.db.fetchall(
             "SELECT * FROM campaign_pcs WHERE campaign_id = ? ORDER BY added_at",
             (campaign_id,),
@@ -1217,6 +1236,10 @@ class StateStore:
         )
 
     async def list_world_refs(self, campaign_id: str) -> list[dict]:
+        async with self._metrics.measure("state_store", "query"):
+            return await self._list_world_refs_inner(campaign_id)
+
+    async def _list_world_refs_inner(self, campaign_id: str) -> list[dict]:
         rows = await self.db.fetchall(
             "SELECT * FROM campaign_world_refs WHERE campaign_id = ? ORDER BY priority",
             (campaign_id,),
