@@ -6,7 +6,7 @@
  * the per-kind editor components.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { Frontmatter, FrontmatterValue } from "./frontmatter";
 
@@ -136,7 +136,30 @@ function JsonField({
 }) {
   const [text, setText] = useState(() => JSON.stringify(value ?? null, null, 2));
   const [err, setErr] = useState<string | null>(null);
+  // Keep ``text`` readable from the effect below without re-running it on
+  // every keystroke. The effect should only fire for genuine value-prop
+  // changes from outside, not for the round-trip caused by our own
+  // onChange.
+  const textRef = useRef(text);
+  textRef.current = text;
   useEffect(() => {
+    // Skip the reset if the textarea already represents this value —
+    // that is, this prop update is the echo of an onChange we just
+    // dispatched. Otherwise the reset would reformat the user's
+    // in-progress JSON (collapsing extra whitespace, moving the cursor,
+    // discarding the next character they were about to type).
+    let mirrorsValue = false;
+    try {
+      mirrorsValue =
+        JSON.stringify(JSON.parse(textRef.current || "null")) ===
+        JSON.stringify(value ?? null);
+    } catch {
+      // Mid-typing partial — leave the user's text alone; we'd rather
+      // silently drop a rare external update than blow away an edit in
+      // progress.
+      mirrorsValue = true;
+    }
+    if (mirrorsValue) return;
     setText(JSON.stringify(value ?? null, null, 2));
   }, [value]);
 
