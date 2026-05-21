@@ -118,12 +118,20 @@ export function CampaignSettings() {
 
       {campaign && (
         <div className="tab-panel">
-          {tab === "general" && <GeneralTab campaign={campaign} onUpdate={setCampaign} />}
-          {tab === "routing" && <RoutingTab campaignId={campaignId} />}
-          {tab === "imagegen" && <ImageGenTab campaignId={campaignId} />}
-          {tab === "mechanics" && <MechanicsTab campaign={campaign} onUpdate={setCampaign} />}
-          {tab === "storage" && <StorageTab campaignId={campaignId} />}
-          {tab === "advanced" && <AdvancedTab campaignId={campaignId} />}
+          {/* key={campaign.id} on the campaign-scoped tabs so switching
+              campaigns remounts the panel — otherwise the local draft /
+              dirty / editing state from the previous campaign bleeds in
+              and the user sees the wrong unsaved edits. */}
+          {tab === "general" && (
+            <GeneralTab key={campaign.id} campaign={campaign} onUpdate={setCampaign} />
+          )}
+          {tab === "routing" && <RoutingTab key={campaignId} campaignId={campaignId} />}
+          {tab === "imagegen" && <ImageGenTab key={campaignId} campaignId={campaignId} />}
+          {tab === "mechanics" && (
+            <MechanicsTab key={campaign.id} campaign={campaign} onUpdate={setCampaign} />
+          )}
+          {tab === "storage" && <StorageTab key={campaignId} campaignId={campaignId} />}
+          {tab === "advanced" && <AdvancedTab key={campaignId} campaignId={campaignId} />}
         </div>
       )}
     </section>
