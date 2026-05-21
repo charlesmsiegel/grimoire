@@ -254,7 +254,7 @@ def apply_mapping(
 
 
 def _lore_entry_from_ingested(
-    entry: "IngestedLoreEntry",
+    entry: IngestedLoreEntry,
     *,
     world_id: str,
 ) -> LoreEntry:
