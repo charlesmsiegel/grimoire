@@ -750,12 +750,49 @@ async def _stop_mechanics_watcher(app: FastAPI) -> None:
         log.exception("mechanics watcher stop failed")
 
 
+_DEFAULT_CORS_ORIGINS: tuple[str, ...] = (
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+)
+
+
+def _resolve_cors_origins() -> list[str]:
+    """Build the CORS allowlist from the env vars run.sh already exposes.
+
+    GRIMOIRE_FRONTEND_ORIGINS wins outright (comma-separated). Otherwise we
+    keep the defaults plus, if the user overrode the frontend host/port,
+    the matching ``http://<host>:<port>`` so a non-default Vite dev server
+    isn't blocked at the browser without any signal.
+    """
+    explicit = os.environ.get("GRIMOIRE_FRONTEND_ORIGINS")
+    if explicit:
+        origins = [o.strip() for o in explicit.split(",") if o.strip()]
+        if origins:
+            return origins
+    origins = list(_DEFAULT_CORS_ORIGINS)
+    host = os.environ.get("GRIMOIRE_FRONTEND_HOST")
+    port = os.environ.get("GRIMOIRE_FRONTEND_PORT")
+    if host or port:
+        host = host or "127.0.0.1"
+        port = port or "5173"
+        extra = f"http://{host}:{port}"
+        if extra not in origins:
+            origins.append(extra)
+    return origins
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Grimoire", version=__version__, lifespan=lifespan)
 
+    # CORS allowlist: built from the same env vars that run.sh exposes so
+    # pointing Vite at a non-default host or port (or via tunnel) doesn't
+    # silently fall through to the default origins and 403 every request
+    # without a hint as to why. Set GRIMOIRE_FRONTEND_ORIGINS to override
+    # entirely (comma-separated).
+    cors_origins = _resolve_cors_origins()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
