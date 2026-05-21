@@ -21,6 +21,10 @@ class ImageGenConfig:
     queue_persist_pending: bool = False
     caching_enabled: bool = True
     caching_cache_dir: str | None = None
+    # Upper bound on the in-memory (request -> result) LRU. Each entry can
+    # hold image bytes (inline results), so an unbounded cache OOMs a
+    # long-running server. Set to 0 to disable bounding (not recommended).
+    caching_max_entries: int = 256
     thumbnails_size: tuple[int, int] = (256, 256)
     thumbnails_format: str = "JPEG"
     thumbnails_quality: int = 85
@@ -53,6 +57,7 @@ class ImageGenConfig:
             queue_persist_pending=bool(queue.get("persist_pending", False)),
             caching_enabled=bool(caching.get("enabled", True)),
             caching_cache_dir=caching.get("cache_dir") or None,
+            caching_max_entries=int(caching.get("max_entries", 256)),
             thumbnails_size=size,
             thumbnails_format=str(thumbs.get("format") or "JPEG").upper(),
             thumbnails_quality=int(thumbs.get("quality") or 85),
