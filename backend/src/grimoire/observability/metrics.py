@@ -9,12 +9,18 @@ compute percentile latencies and counts over a rolling window.
 from __future__ import annotations
 
 import json
+import logging
 import random
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from grimoire.observability.config import MetricsConfig
 from grimoire.storage.db import Database
+
+logger = logging.getLogger(__name__)
 
 # Operations classed as hot paths get sample-based collection. Everything
 # else is exhaustive. Producers can override per-call via ``force=True``.
@@ -26,8 +32,44 @@ _HOT_PATHS: frozenset[tuple[str, str]] = frozenset(
         ("llm_gateway", "stream"),
         ("state_store", "query"),
         ("state_store", "write"),
+        ("extractor", "extract"),
+        ("scene_manager", "scene_resolve"),
+        ("time_engine", "advance"),
+        ("imagegen", "generate"),
     }
 )
+
+
+class MetricsRegistryProtocol(Protocol):
+    """Narrow surface so producers can accept either a real registry or
+    :class:`_NullMetrics`. Adding methods here widens every producer's
+    ``metrics`` kwarg type, so keep it minimal."""
+
+    def measure(
+        self,
+        module: str,
+        operation: str,
+        *,
+        labels: dict[str, Any] | None = None,
+        force: bool = False,
+    ) -> Any: ...
+
+
+class _NullMetrics:
+    """No-op stand-in so producers don't have to branch on
+    ``metrics is None``. Default value for every producer's ``metrics``
+    kwarg; the lifespan swaps in a real :class:`MetricsRegistry`."""
+
+    @asynccontextmanager
+    async def measure(
+        self,
+        module: str,
+        operation: str,
+        *,
+        labels: dict[str, Any] | None = None,
+        force: bool = False,
+    ) -> AsyncIterator[None]:
+        yield
 
 
 class MetricsRegistry:
@@ -87,6 +129,50 @@ class MetricsRegistry:
                 (timestamp or datetime.now(UTC)).isoformat(),
             ),
         )
+
+    @asynccontextmanager
+    async def measure(
+        self,
+        module: str,
+        operation: str,
+        *,
+        labels: dict[str, Any] | None = None,
+        force: bool = False,
+    ) -> AsyncIterator[None]:
+        """Time the wrapped block and record success / failure.
+
+        - Sampling decision lives in :meth:`record` (unchanged) — the timer
+          always runs but the row may be dropped at the sampling layer.
+        - ``BaseException`` ensures :class:`asyncio.CancelledError` and
+          ``KeyboardInterrupt`` also flag as failures.
+        - A failure inside :meth:`record` is logged and swallowed so an
+          observability outage never propagates into the caller's hot path.
+        """
+        if not self._config.enabled:
+            yield
+            return
+        start = time.perf_counter()
+        success = True
+        try:
+            yield
+        except BaseException:
+            success = False
+            raise
+        finally:
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            try:
+                await self.record(
+                    module=module,
+                    operation=operation,
+                    duration_ms=duration_ms,
+                    success=success,
+                    labels=labels,
+                    force=force,
+                )
+            except Exception:
+                logger.exception(
+                    "metrics.measure: record failed for %s/%s", module, operation
+                )
 
     async def query_recent(
         self,
@@ -163,4 +249,4 @@ def _percentile(values: list[float], q: float) -> float:
     return values[lo] * (1.0 - frac) + values[hi] * frac
 
 
-__all__ = ["MetricsRegistry"]
+__all__ = ["MetricsRegistry", "MetricsRegistryProtocol", "_NullMetrics"]
