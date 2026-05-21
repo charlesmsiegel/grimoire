@@ -200,6 +200,93 @@ class MetricsRegistry:
         )
         return [dict(r) for r in rows]
 
+    async def trend(
+        self,
+        module: str,
+        operation: str,
+        *,
+        bucket: str,
+        window_seconds: int,
+    ) -> list[dict[str, Any]]:
+        """Group samples into ``minute|hour|day`` buckets over a window.
+
+        Each bucket carries count, success/failure split, and p50/p95/p99
+        latency. Empty buckets between samples are included with zero
+        counts so the caller can draw a continuous trend line.
+        """
+        if bucket not in ("minute", "hour", "day"):
+            raise ValueError(f"bucket must be minute|hour|day, got {bucket!r}")
+        if window_seconds < 1 or window_seconds > 30 * 86400:
+            raise ValueError(
+                f"window_seconds must be in [1, {30 * 86400}], got {window_seconds}"
+            )
+
+        bucket_seconds = {"minute": 60, "hour": 3600, "day": 86400}[bucket]
+        max_buckets = (window_seconds + bucket_seconds - 1) // bucket_seconds + 1
+        if max_buckets > 5000:
+            raise ValueError(
+                f"requested {max_buckets} buckets (limit 5000) for bucket={bucket}"
+            )
+
+        now = datetime.now(UTC)
+        since = now - timedelta(seconds=window_seconds)
+        rows = await self._db.fetchall(
+            "SELECT value, labels, recorded_at FROM metric_samples "
+            "WHERE module = ? AND metric = ? AND recorded_at >= ? "
+            "ORDER BY recorded_at ASC",
+            (module, operation, since.isoformat()),
+        )
+
+        def _truncate(ts: datetime) -> datetime:
+            if bucket == "minute":
+                return ts.replace(second=0, microsecond=0)
+            if bucket == "hour":
+                return ts.replace(minute=0, second=0, microsecond=0)
+            return ts.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        grouped: dict[datetime, list[tuple[float, bool]]] = {}
+        for r in rows:
+            try:
+                ts = datetime.fromisoformat(r["recorded_at"])
+            except ValueError:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            payload: dict[str, Any] = {}
+            if r["labels"]:
+                try:
+                    payload = json.loads(r["labels"])
+                except (TypeError, ValueError):
+                    payload = {}
+            success = bool(payload.get("success", True))
+            grouped.setdefault(_truncate(ts), []).append((float(r["value"]), success))
+
+        if not grouped:
+            return []
+
+        first_bucket = min(grouped)
+        last_bucket = _truncate(now)
+        buckets: list[dict[str, Any]] = []
+        cursor = first_bucket
+        while cursor <= last_bucket:
+            samples = grouped.get(cursor, [])
+            values = sorted(v for v, _ in samples)
+            successes = sum(1 for _, ok in samples if ok)
+            failures = len(samples) - successes
+            buckets.append(
+                {
+                    "bucket_start": cursor.isoformat(),
+                    "count": len(samples),
+                    "successes": successes,
+                    "failures": failures,
+                    "p50_ms": _percentile(values, 0.5),
+                    "p95_ms": _percentile(values, 0.95),
+                    "p99_ms": _percentile(values, 0.99),
+                }
+            )
+            cursor = cursor + timedelta(seconds=bucket_seconds)
+        return buckets
+
     async def summary(
         self,
         module: str,
