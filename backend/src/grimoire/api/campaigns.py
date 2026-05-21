@@ -1152,7 +1152,7 @@ async def promote_entity(
         return to_payload(
             await world.promote_to_library(
                 campaign_id,
-                kind.rstrip("s"),
+                kind.removesuffix("s"),
                 entity_id,
                 payload.target_world_id,
                 source=payload.source,
