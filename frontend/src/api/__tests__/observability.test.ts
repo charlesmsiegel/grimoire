@@ -21,6 +21,12 @@ describe("observabilityApi", () => {
     );
   }
 
+  function lastFetchUrl(): string {
+    const call = fetchSpy.mock.calls[0];
+    if (!call) throw new Error("fetch was not called");
+    return String(call[0]);
+  }
+
   it("getMetricsKnown calls /api/observability/metrics/known", async () => {
     mockJsonResponse([
       { module: "orchestrator", operation: "turn", last_recorded_at: "x" },
@@ -65,5 +71,68 @@ describe("observabilityApi", () => {
       new Response("boom", { status: 500, headers: { "Content-Type": "text/plain" } }),
     );
     await expect(observabilityApi.getMetricsKnown()).rejects.toThrow();
+  });
+
+  it("listTurns hits /api/observability/turns with campaign_id and limit", async () => {
+    mockJsonResponse([]);
+    await observabilityApi.listTurns("camp-1", 25);
+    const url = lastFetchUrl();
+    expect(url).toContain("/api/observability/turns");
+    expect(url).toContain("campaign_id=camp-1");
+    expect(url).toContain("limit=25");
+  });
+
+  it("listTurns defaults limit to 50", async () => {
+    mockJsonResponse([]);
+    await observabilityApi.listTurns("camp-1");
+    expect(lastFetchUrl()).toContain("limit=50");
+  });
+
+  it("getTurnPrompt hits /api/observability/turns/{id}/prompt and url-encodes the id", async () => {
+    mockJsonResponse({
+      messages: [],
+      sources: [],
+      budget_used: {},
+      messages_hash: "h",
+      composition_snapshot: null,
+      summary: null,
+    });
+    await observabilityApi.getTurnPrompt("turn id/with slash");
+    expect(lastFetchUrl()).toContain(
+      "/api/observability/turns/turn%20id%2Fwith%20slash/prompt",
+    );
+  });
+
+  it("getTurnPrompt parses sources with inclusion_reasons", async () => {
+    mockJsonResponse({
+      messages: [],
+      sources: [
+        {
+          source_id: "src_abc",
+          owner_id: "library:world1",
+          kind: "character",
+          scope: "library",
+          tier: "spotlight",
+          library_version: 3,
+          override_applied: false,
+          tokens: 120,
+          summary: "alice",
+          inclusion_reasons: ["present_in_scene", "mentioned_in_recent_posts"],
+        },
+      ],
+      budget_used: { spotlight: 120 },
+      messages_hash: "h",
+      composition_snapshot: null,
+      summary: null,
+    });
+    const result = await observabilityApi.getTurnPrompt("t1");
+    expect(result.sources).toHaveLength(1);
+    const first = result.sources[0];
+    if (!first) throw new Error("expected one source");
+    expect(first.kind).toBe("character");
+    expect(first.inclusion_reasons).toEqual([
+      "present_in_scene",
+      "mentioned_in_recent_posts",
+    ]);
   });
 });
