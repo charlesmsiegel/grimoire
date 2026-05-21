@@ -52,7 +52,14 @@ async function request<T>(
   }
   const res = await fetch(buildUrl(path, opts.query), init);
   if (!res.ok) {
-    const detail = await parseBody(res).catch(() => null);
+    const detail = await parseBody(res).catch((err) => {
+      // The previous catch silently swallowed JSON parse failures; the
+      // user saw "HTTP 500" with no `detail` and no clue why. Log so the
+      // root cause shows up in the browser console.
+      // eslint-disable-next-line no-console
+      console.warn(`[api] failed to parse error body for ${method} ${path}:`, err);
+      return null;
+    });
     throw new ApiError(res.status, detail);
   }
   if (res.status === 204) return undefined as T;
@@ -78,7 +85,14 @@ async function requestText(
 ): Promise<string> {
   const res = await fetch(buildUrl(path, opts.query), { method, signal: opts.signal });
   if (!res.ok) {
-    const detail = await parseBody(res).catch(() => null);
+    const detail = await parseBody(res).catch((err) => {
+      // The previous catch silently swallowed JSON parse failures; the
+      // user saw "HTTP 500" with no `detail` and no clue why. Log so the
+      // root cause shows up in the browser console.
+      // eslint-disable-next-line no-console
+      console.warn(`[api] failed to parse error body for ${method} ${path}:`, err);
+      return null;
+    });
     throw new ApiError(res.status, detail);
   }
   return res.text();
