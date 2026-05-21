@@ -237,12 +237,14 @@ includes 13 methods. Routes missing:
 Plus a WebSocket bridge so `imagegen_job_*` / `image_ready` /
 `imagegen_progress` (§3) reach the Frontend.
 
-## 14. Replicate bundled plugin (v2; deferred)
+## 14. Replicate bundled plugin (SHIPPED — issue #298)
 
 Spec 12 §Plugin backends lists `imagegen-replicate` ("Adapter for
-Replicate-hosted models") as a bundled plugin. The directory does not
-exist under `bundled_plugins/`. Record here so it doesn't drop off — the
-DALL-E plugin is structurally similar enough to be a useful template.
+Replicate-hosted models") as a bundled plugin. Now lives at
+`bundled_plugins/imagegen-replicate/` (modeled on the DALL-E plugin,
+plus a poll loop borrowed from ComfyUI for predictions that don't
+finish under the `Prefer: wait` window). Tests at
+`tests/bundled_plugins/test_imagegen_replicate.py`.
 
 ## 15. Pluggable visual-element extraction
 
