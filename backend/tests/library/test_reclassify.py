@@ -10,10 +10,12 @@ from grimoire.library import LibraryNotFoundError, LibraryService
 from grimoire.library.errors import ReclassificationError
 from grimoire.library.reclassify import (
     ReclassificationResult,
+    _lore_entry_from_ingested,
     apply_mapping,
     iter_audit,
     required_overrides_for,
 )
+from grimoire.types.characters import IngestedLoreEntry
 from grimoire.state_store import StateStore
 from grimoire.types.common import EntityKind
 from grimoire.types.world import LoreEntry
@@ -133,6 +135,44 @@ def test_apply_mapping_overrides_win_over_defaults() -> None:
     )
     assert fm["name"] == "Lady Beatrice"
     assert fm["role"] == "major_npc"
+
+
+def test_lore_entry_from_ingested_copies_fields() -> None:
+    ingested = IngestedLoreEntry(
+        source_index=3,
+        name="Brackhollow Inn",
+        keys=["Brackhollow", "inn"],
+        body="A quiet inn on the road north.",
+        secondary_keys=["alehouse"],
+        selective_logic="and_any",
+        priority=200,
+        probability=50,
+        position="before_cast",
+        at_depth=2,
+        scan_depth=4,
+        comment="cosy",
+    )
+    proxy = _lore_entry_from_ingested(ingested, world_id="w1")
+    assert proxy.world_id == "w1"
+    assert proxy.title == "Brackhollow Inn"
+    assert proxy.body == "A quiet inn on the road north."
+    assert proxy.keywords == ["Brackhollow", "inn"]
+    assert proxy.secondary_keys == ["alehouse"]
+    assert proxy.priority == 200
+    assert proxy.probability == 50
+    assert proxy.at_depth == 2
+    assert proxy.scan_depth == 4
+    assert proxy.comment == "cosy"
+
+
+def test_lore_entry_from_ingested_falls_back_to_keys_or_index_for_title() -> None:
+    no_name = IngestedLoreEntry(source_index=7, name=None, keys=["solo-key"], body="body")
+    proxy = _lore_entry_from_ingested(no_name, world_id="w1")
+    assert proxy.title == "solo-key"
+
+    bare = IngestedLoreEntry(source_index=9, name=None, keys=[], body="body")
+    proxy2 = _lore_entry_from_ingested(bare, world_id="w1")
+    assert proxy2.title == "entry-9"
 
 
 def test_apply_mapping_no_dropped_warning_for_lore_at_defaults() -> None:

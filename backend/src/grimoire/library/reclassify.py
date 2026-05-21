@@ -18,10 +18,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from grimoire.types.common import EntityKind
 from grimoire.types.world import LoreEntry, LorePosition, SelectiveLogic
+
+if TYPE_CHECKING:
+    from grimoire.types.characters import IngestedLoreEntry
 
 # --------------------------------------------------------------------------- #
 # Result types
@@ -248,6 +251,46 @@ def apply_mapping(
                 kept.append(key)
 
     return fm, body, kept, dropped, into_notes_keys, warnings
+
+
+def _lore_entry_from_ingested(
+    entry: "IngestedLoreEntry",
+    *,
+    world_id: str,
+) -> LoreEntry:
+    """Adapt an ``IngestedLoreEntry`` (preview-side) into a ``LoreEntry``.
+
+    The classifier (``suggest_kind``) and the mapping (``apply_mapping``)
+    both want a real ``LoreEntry``; the importer carries the raw card-side
+    ``IngestedLoreEntry`` instead. This thin adapter bridges them. Only
+    the fields the classifier + mapping read are copied; the rest stay at
+    LoreEntry defaults.
+
+    ``id`` is filled with a stable placeholder derived from ``source_index``
+    — callers that persist the result must re-derive a real id (the
+    ``_write_lore_entries`` path goes through ``_slug_for_lore_entry`` +
+    ``_unique_id`` to do exactly that).
+    """
+    title = entry.name or (entry.keys[0] if entry.keys else f"entry-{entry.source_index}")
+    return LoreEntry(
+        world_id=world_id,
+        id=f"ingested-{entry.source_index}",
+        title=title,
+        body=entry.body,
+        keywords=list(entry.keys),
+        secondary_keys=list(entry.secondary_keys),
+        selective_logic=SelectiveLogic(entry.selective_logic),
+        constant=entry.constant,
+        enabled=entry.enabled,
+        case_sensitive=entry.case_sensitive,
+        match_whole_words=entry.match_whole_words,
+        priority=entry.priority,
+        probability=entry.probability,
+        position=LorePosition(entry.position),
+        at_depth=entry.at_depth,
+        scan_depth=entry.scan_depth,
+        comment=entry.comment,
+    )
 
 
 # --------------------------------------------------------------------------- #
