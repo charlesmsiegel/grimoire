@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## MEDIUM
 
-- **`_drop_orphan_library_rows` opens N pool connections** — `backend/src/grimoire/watcher/watcher.py:672-684` — One `await self.store.db.execute(...)` per orphan, unwrapped from a transaction. Slow on large rescans; partial failure leaves SQLite half-cleaned.
 - **`mechanics`/`plugins` rescan exceptions logged but services still wired with no modules** — `backend/src/grimoire/main.py:223-235` — If rescan throws, the empty service is still installed. Endpoints will return empty/null behavior with no surface signal beyond a log line.
 - **`useResource` flashes "Loading…" on every dep change** — `frontend/src/api/useResource.ts:25` — `loading` resets to `true` unconditionally; `AsyncBoundary` hides existing data. Paginated/filtered re-fetches flicker.
 - **`InputArea` autofocus steals focus from sidepanel buttons on every busy→idle** — `frontend/src/routes/campaign/InputArea.tsx:113-115` — Effect with `[busy]` deps focuses the textarea after Regenerate/Undo/Skip — yanks focus from the user's next click target.
