@@ -10,7 +10,6 @@ Format: **Title** — file:line — one-line description.
 
 ## MEDIUM
 
-- **Wizard step numbering inconsistency** — `frontend/src/routes/CampaignCreate/CampaignCreate.tsx:206-223` + `StepStartingScene.tsx:58,176` — Steps indices run 0–5; `StepStartingScene` heading says "Step 6 — Starting scene" while the lazy-load comment at `:176` says "step 6" but the condition is `if (step !== 5)`. Off-by-one between zero- and one-indexed counting.
 - **JsonField rewrites on every keystroke and discards in-progress edits** — `frontend/src/routes/library/FrontmatterEditor.tsx:149-158` — Calls `onChange` with the partial-parsed value when parse succeeds mid-typing; `useEffect` resets textarea from `value` on external change, blowing away user input.
 
 ## LOW
