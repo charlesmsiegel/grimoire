@@ -339,6 +339,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 container.state_store._metrics = obs.metrics()
             if container.scenes is not None:
                 container.scenes._metrics = obs.metrics()
+            if container.imagegen is not None:
+                container.imagegen._metrics = obs.metrics()
         else:
             obs = container.observability
 

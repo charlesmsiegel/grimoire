@@ -39,6 +39,7 @@ from grimoire.files import load_yaml, write_yaml
 from grimoire.imagegen.backend import cache_key_for_request, make_thumbnail
 from grimoire.imagegen.config import ImageGenConfig
 from grimoire.imagegen.prompt import ComposedPrompt, PromptComposer
+from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
 from grimoire.state_store import StateStore
 from grimoire.state_store.paths import campaigns_root, image_metadata_path
 from grimoire.types.common import HealthLevel, HealthStatus
@@ -257,6 +258,7 @@ class ImageGenService:
         plugin_backend_ids: Iterable[str] | None = None,
         thumbnail_subdir: str = "thumbnails",
         config: ImageGenConfig | None = None,
+        metrics: MetricsRegistryProtocol = _NullMetrics(),
     ) -> None:
         self.store = store
         self.data_root = store.data_root
@@ -282,6 +284,7 @@ class ImageGenService:
         self._closed = False
         self._last_health: dict[str, HealthLevel] = {}
         self._cancel_tokens: dict[str, asyncio.Event] = {}
+        self._metrics: MetricsRegistryProtocol = metrics
 
         for backend in self.registry.all():
             self._ensure_handle(backend.id)
@@ -410,6 +413,19 @@ class ImageGenService:
     # ------------------------------------------------------------------ #
 
     async def queue_generation(
+        self,
+        campaign_id: str,
+        scene_id: str | None,
+        post_id: str | None,
+        request: GenerationRequest | None = None,
+        priority: int = 5,
+    ) -> str:
+        async with self._metrics.measure("imagegen", "generate"):
+            return await self._queue_generation_inner(
+                campaign_id, scene_id, post_id, request, priority
+            )
+
+    async def _queue_generation_inner(
         self,
         campaign_id: str,
         scene_id: str | None,
@@ -586,6 +602,14 @@ class ImageGenService:
             await handle.queue.put(_QueueEntry(job_id=job_id))
 
     async def generate_sync(
+        self,
+        campaign_id: str,
+        request: GenerationRequest,
+    ) -> GenerationResult:
+        async with self._metrics.measure("imagegen", "generate"):
+            return await self._generate_sync_inner(campaign_id, request)
+
+    async def _generate_sync_inner(
         self,
         campaign_id: str,
         request: GenerationRequest,
