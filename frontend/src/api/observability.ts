@@ -7,13 +7,19 @@
  * and errors grouped by module — the "What did the model see?" debug
  * view (#350): per-turn assembled prompt with tier annotations and
  * per-source attribution, plus a diff helper that compares two turns'
- * prompts — and cost-breakdown debug surfaces (#353) that read from the
- * per-turn audit / cost tables.
+ * prompts — cost-breakdown debug surfaces (#353) that read from the
+ * per-turn audit / cost tables — and the "Why this character?" debug
+ * view (#352): per-turn audit summaries plus the captured ContextSources
+ * (each carrying its inclusion_reasons).
  *
  * Cost spec: docs/superpowers/specs/2026-05-20-cost-breakdown-design.md.
+ * Why-character spec: docs/superpowers/specs/2026-05-20-why-this-character-design.md.
  */
 
 import { api } from "./client";
+import type { ContextTier, InclusionReason } from "./inspector";
+
+export type { ContextTier, InclusionReason };
 
 export interface MetricsKnownPair {
   module: string;
@@ -104,8 +110,6 @@ export interface ErrorRecord {
   user_visible: boolean;
   user_action_taken: string | null;
 }
-
-export type ContextTier = "lock-in" | "spotlight" | "background" | "archive";
 
 export interface PromptMessage {
   role: string;
@@ -201,6 +205,28 @@ export interface TurnAuditSummary {
   context_messages_hash: string;
 }
 
+export interface ContextSourceFromAudit {
+  source_id: string;
+  owner_id: string | null;
+  kind: string;
+  scope: string;
+  tier: ContextTier;
+  library_version: number | null;
+  override_applied: boolean;
+  tokens: number;
+  summary: string;
+  inclusion_reasons: InclusionReason[];
+}
+
+export interface TurnPromptResponse {
+  messages: unknown[];
+  sources: ContextSourceFromAudit[];
+  budget_used: Record<string, number>;
+  messages_hash: string;
+  composition_snapshot: unknown;
+  summary: unknown;
+}
+
 export interface TaskCostRow {
   task: string;
   total_usd: number;
@@ -264,12 +290,15 @@ export const observabilityApi = {
     }),
 
   listTurns(campaignId: string, limit = 50): Promise<TurnAuditSummary[]> {
-    return api.get(`/api/observability/turns`, {
+    return api.get<TurnAuditSummary[]>("/api/observability/turns", {
       query: { campaign_id: campaignId, limit },
     });
   },
   getPrompt(turnId: string): Promise<PromptResponse> {
     return api.get(`${base(turnId)}/prompt`);
+  },
+  getTurnPrompt(turnId: string): Promise<TurnPromptResponse> {
+    return api.get<TurnPromptResponse>(`${base(turnId)}/prompt`);
   },
   diffPrompts(turnId: string, against: string): Promise<PromptDiff> {
     return api.get(`${base(turnId)}/prompt/diff`, { query: { against } });
