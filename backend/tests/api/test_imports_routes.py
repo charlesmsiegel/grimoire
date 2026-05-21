@@ -103,6 +103,43 @@ async def test_preview_returns_ingest_and_id(client) -> None:
     assert payload["ingested"]["greetings"]
 
 
+async def test_preview_returns_lore_suggestions_parallel_to_entries(client) -> None:
+    ac, _ = client
+    card = {
+        "spec": "chara_card_v2",
+        "data": {
+            "name": "Beatrice",
+            "description": "A witch.",
+            "first_mes": "Hi.",
+            "character_book": {
+                "entries": [
+                    {"name": "Brackhollow Cathedral", "keys": ["cathedral"], "content": "A village cathedral located on the hill."},
+                    {"name": "obscure note", "keys": ["x"], "content": "tt."},
+                ],
+            },
+        },
+    }
+    png = _png_with_card(card)
+    response = await ac.post(
+        "/api/library/worlds/w1/imports/sillytavern/preview",
+        files={"file": ("card.png", png, "image/png")},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    suggestions = payload["lore_suggestions"]
+    assert len(suggestions) == 2
+    by_index = {s["source_index"]: s for s in suggestions}
+    # "Brackhollow Cathedral" has a place noun in the title → should suggest location.
+    cathedral = by_index[0]
+    assert cathedral["kind"] == "location"
+    assert cathedral["confidence"] >= 0.6
+    assert "place noun" in cathedral["reason"]
+    # No-signal entry stays at lore.
+    weak = by_index[1]
+    assert weak["kind"] == "lore"
+    assert weak["confidence"] == 0.0
+
+
 async def test_preview_then_commit_writes_character(client) -> None:
     ac, _store = client
     card = {

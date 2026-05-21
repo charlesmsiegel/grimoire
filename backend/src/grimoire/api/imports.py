@@ -20,8 +20,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from grimoire.api.deps import CharactersDep, StateStoreDep
+from grimoire.api.deps import CharactersDep, LibraryDep, StateStoreDep
 from grimoire.api.util import to_payload
+from grimoire.library.classify import suggest_kind
+from grimoire.library.reclassify import _lore_entry_from_ingested
 from grimoire.state_store.paths import library_root
 from grimoire.types.characters import IngestedCharacterCard, IngestOptions
 
@@ -66,6 +68,7 @@ class CommitPayload(BaseModel):
 async def preview_sillytavern_import(
     world_id: str,
     characters: CharactersDep,
+    library: LibraryDep,
     file: UploadFile,
 ) -> dict[str, Any]:
     """Parse a card without writing it; cache the ingest for a later commit."""
@@ -92,10 +95,26 @@ async def preview_sillytavern_import(
     # client (the preview UI shows the raw upload). Drop them before
     # serialising; the cached slot still has the bytes for commit.
     summary = ingested.model_dump(mode="json", exclude={"avatar_bytes"})
+
+    threshold = library.config.reclassification.suggestion_threshold
+    lore_suggestions: list[dict[str, Any]] = []
+    for entry in ingested.lore_entries:
+        proxy = _lore_entry_from_ingested(entry, world_id=world_id)
+        suggestion = suggest_kind(proxy, threshold=threshold)
+        lore_suggestions.append(
+            {
+                "source_index": entry.source_index,
+                "kind": suggestion.kind.value,
+                "confidence": suggestion.confidence,
+                "reason": suggestion.reason,
+            }
+        )
+
     return {
         "preview_id": preview_id,
         "expires_in_seconds": PREVIEW_TTL_SECONDS,
         "ingested": summary,
+        "lore_suggestions": lore_suggestions,
     }
 
 
