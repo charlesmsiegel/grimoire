@@ -163,12 +163,12 @@ Existing reclassify tests around dropped-fields rollup keep their behavior — t
 ## 6. Test wiring
 
 Backend:
-- `tests/api/test_imports.py` (new or extended): preview returns `lore_suggestions` + `suggestion_threshold`; commit with `lore_overrides` containing one of each non-lore kind writes the correct file under each kind; commit with `kind="skip"` skips; commit with missing required override returns 400.
+- `tests/api/test_imports_routes.py`: preview returns `lore_suggestions` parallel to ingested lore entries; commit with `lore_overrides` containing one of each non-lore kind writes the correct file under each kind; commit with `kind="skip"` skips; commit with missing required override returns 400; commit with duplicate or out-of-range `source_index` returns 400.
 - `tests/library/test_reclassify.py`: regression — a `LoreEntry` left at all defaults produces no "matching metadata discarded" warning.
-- `tests/characters/test_service_import.py` (or wherever `_write_lore_entries` is currently covered): override branches cover lore / character / location / faction / item / skip, and unique-id resolution still works when a name collides with an existing character.
+- `tests/characters/test_import_card_writes.py` (where `_write_lore_entries` is currently covered): override branches cover lore / character / location / faction / item / skip, and unique-id resolution still works when a name collides with an existing character.
 
 Frontend:
-- `ImportDialog.test.tsx` (new): renders preview with lore_suggestions, the default selection follows threshold, picking Location reveals the kind input, commit fires with the correct `lore_overrides`, skipped rows are excluded from the payload, commit with missing override shows inline error.
+- `frontend/src/routes/library/__tests__/ImportDialog.test.tsx` (new): renders preview with lore_suggestions, the default selection follows the server-supplied kind, picking Location reveals the kind input, commit fires with the correct `lore_overrides`, skipped rows are excluded from the payload, commit with missing override shows inline error.
 
 ## Out of scope (v1)
 
