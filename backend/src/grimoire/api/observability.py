@@ -133,6 +133,27 @@ async def get_metrics_recent(
     )
 
 
+@router.get("/metrics/trend")
+async def get_metrics_trend(
+    observability: ObservabilityDep,
+    module: str,
+    operation: str,
+    bucket: str,
+    window_seconds: int,
+) -> Any:
+    try:
+        return await observability.metrics().trend(
+            module, operation, bucket=bucket, window_seconds=window_seconds
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/metrics/known")
+async def get_metrics_known(observability: ObservabilityDep) -> Any:
+    return await observability.metrics().known_pairs()
+
+
 @router.get("/health/latest")
 async def get_health_latest(observability: ObservabilityDep) -> Any:
     latest = observability.health().latest()
