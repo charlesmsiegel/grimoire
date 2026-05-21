@@ -27,6 +27,7 @@ import json
 import logging
 import re
 import uuid
+from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -271,7 +272,10 @@ class ImageGenService:
         self._jobs: dict[str, GenerationJob] = {}
         self._results: dict[str, GenerationResult] = {}
         self._image_ids_by_job: dict[str, str] = {}
-        self._cache: dict[str, str] = {}  # cache_key -> image_id
+        # cache_key -> image_id. OrderedDict for LRU eviction; bounded by
+        # ``config.caching_max_entries`` so long-running servers don't OOM
+        # from retained inline image bytes (see BUGS.md).
+        self._cache: OrderedDict[str, str] = OrderedDict()
         self._handles: dict[str, _BackendHandle] = {}
         self._campaign_backend: dict[str, str] = {}
         self._lock = asyncio.Lock()
@@ -312,6 +316,10 @@ class ImageGenService:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await handle.task
         self._handles.clear()
+        # Drop the in-memory result/cache pair; otherwise repeated
+        # construct/aclose cycles in long-lived processes leak image bytes.
+        self._cache.clear()
+        self._results.clear()
 
     def _ensure_handle(self, backend_id: str) -> _BackendHandle:
         handle = self._handles.get(backend_id)
@@ -953,6 +961,9 @@ class ImageGenService:
         image_id = self._cache.get(key)
         if image_id is None:
             return None
+        # Promote this entry to MRU so the LRU eviction below favours dropping
+        # genuinely stale entries.
+        self._cache.move_to_end(key)
         return self._results.get(image_id)
 
     def _store_in_cache(
@@ -972,8 +983,30 @@ class ImageGenService:
         # Use the actually-applied seed (not the requested None) for downstream
         # reuse — but only when the caller provided one.
         ident = image_id or f"_inline_{key}"
+        if key in self._cache:
+            # Replacing an existing entry: drop the old result if no other
+            # cache key still references it.
+            old_ident = self._cache[key]
+            if old_ident != ident and not any(
+                v == old_ident for k, v in self._cache.items() if k != key
+            ):
+                self._results.pop(old_ident, None)
         self._cache[key] = ident
+        self._cache.move_to_end(key)
         self._results[ident] = result
+        self._evict_cache_if_full()
+
+    def _evict_cache_if_full(self) -> None:
+        """Drop oldest cache entries until size <= ``caching_max_entries``."""
+        max_entries = self.config.caching_max_entries
+        if max_entries <= 0:
+            return
+        while len(self._cache) > max_entries:
+            _, evicted_ident = self._cache.popitem(last=False)
+            # Only drop the matching result if no remaining cache entry maps
+            # to it (defensive — image_ids are normally 1:1 with cache keys).
+            if not any(v == evicted_ident for v in self._cache.values()):
+                self._results.pop(evicted_ident, None)
 
     async def _worker(self, backend_id: str) -> None:
         handle = self._handles[backend_id]
