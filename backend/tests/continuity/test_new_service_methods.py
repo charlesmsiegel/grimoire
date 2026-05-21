@@ -92,6 +92,31 @@ async def test_facts_for_terms_respects_min_keyword_length() -> None:
     assert rows
 
 
+async def test_facts_for_terms_respects_case_insensitive_flag() -> None:
+    """`keyword_retrieval.case_insensitive` must control matching, not just default."""
+    from grimoire.continuity.config import ContinuityConfig, KeywordRetrievalConfig
+
+    # Case-insensitive (default): lowercase query matches title-case fact.
+    ci_service = ContinuityService(
+        config=ContinuityConfig(
+            keyword_retrieval=KeywordRetrievalConfig(case_insensitive=True),
+        ),
+    )
+    await ci_service.add_fact(make_fact(text="Tremere watch silently."), source="n")
+    assert await ci_service.facts_for_terms(["tremere"], limit=5)
+
+    # Case-sensitive: lowercase query does NOT match title-case fact.
+    cs_service = ContinuityService(
+        config=ContinuityConfig(
+            keyword_retrieval=KeywordRetrievalConfig(case_insensitive=False),
+        ),
+    )
+    await cs_service.add_fact(make_fact(text="Tremere watch silently."), source="n")
+    assert await cs_service.facts_for_terms(["tremere"], limit=5) == []
+    # Exact case still matches.
+    assert await cs_service.facts_for_terms(["Tremere"], limit=5)
+
+
 async def test_reopen_commitment_resets_status(service: ContinuityService) -> None:
     cid = await service.add_commitment(
         Commitment(

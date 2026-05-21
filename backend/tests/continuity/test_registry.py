@@ -150,6 +150,33 @@ async def test_export_adapter_lists_facts_and_commitments(tmp_path: Path) -> Non
         await db.close()
 
 
+async def test_judge_uses_configured_model_route() -> None:
+    """`contradiction_check.model_route` must flow into `LLMContradictionJudge.task`."""
+    from grimoire.continuity.config import ContinuityConfig, ContradictionCheckConfig
+    from grimoire.continuity.llm_judge import LLMContradictionJudge
+
+    class _Gateway:
+        async def complete(self, task, request, *, turn_id=None):  # pragma: no cover - unused
+            raise AssertionError("not invoked in this test")
+
+    def _factory(system: str, user: str) -> object:
+        return object()
+
+    config = ContinuityConfig(
+        contradiction_check=ContradictionCheckConfig(model_route="custom_route"),
+    )
+    registry = ContinuityRegistry(
+        config=config,
+        judge_gateway=_Gateway(),
+        judge_request_factory=_factory,
+        store_factory=lambda c, b: InMemoryContinuityStore(),
+    )
+    service = registry.for_campaign("camp-x")
+    judge = service._judge
+    assert isinstance(judge, LLMContradictionJudge)
+    assert judge._task == "custom_route"
+
+
 async def test_resolve_continuity_unwraps_registry_or_passes_service() -> None:
     """Helper accepts either a registry (uses .for_campaign) or a bare service."""
 

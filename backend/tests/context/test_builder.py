@@ -149,6 +149,12 @@ class StubWorld:
             lore for lore in self._lore if any(kw in text for kw in getattr(lore, "keywords", []))
         ]
 
+    async def season_for(self, when: Any, campaign_id: str) -> Any:
+        return None
+
+    async def holiday_at(self, when: Any, campaign_id: str) -> Any:
+        return None
+
 
 @dataclass
 class _Post:
@@ -183,10 +189,18 @@ class StubScenes:
 
 
 @dataclass
+class _Status:
+    """Mimics CommitmentStatus's `.value` shape for stub commitments."""
+
+    value: str
+
+
+@dataclass
 class _Commitment:
     text: str
     id: str = ""
     due_by: Any = None
+    status: _Status | None = None
 
 
 @dataclass
@@ -200,15 +214,34 @@ class StubContinuity:
         self,
         commitments: list[_Commitment] | None = None,
         facts: list[_Fact] | None = None,
+        overdue: list[_Commitment] | None = None,
+        stale: list[_Commitment] | None = None,
+        config: Any | None = None,
     ) -> None:
         self._commitments = commitments or []
         self._facts = facts or []
+        self._overdue = overdue or []
+        self._stale = stale or []
+        # Mirror both registry (.config) and bare-service (._config) shapes so
+        # ContextBuilder can fish the active ContinuityConfig from either.
+        self.config = config
+        self._config = config
+        self.overdue_calls: list[Any] = []
+        self.stale_calls: list[Any] = []
 
     async def open_commitments(self, limit: int = 20) -> list[_Commitment]:
         return list(self._commitments)
 
     async def facts_about(self, limit: int = 50) -> list[_Fact]:
         return list(self._facts)
+
+    async def overdue_commitments(self, as_of: Any) -> list[_Commitment]:
+        self.overdue_calls.append(as_of)
+        return list(self._overdue)
+
+    async def stale_commitments(self, threshold: Any) -> list[_Commitment]:
+        self.stale_calls.append(threshold)
+        return list(self._stale)
 
 
 # --------------------------------------------------------------------------- #
@@ -423,6 +456,101 @@ async def test_commitments_appear_when_open() -> None:
     body = "\n".join(m.content for m in prompt.messages)
     assert "Return the heirloom" in body
     assert any(s.kind == "commitment" for s in prompt.sources)
+
+
+async def test_surface_overdue_in_context_true_tags_and_merges_overdue() -> None:
+    """When surface_overdue_in_context=True, overdue_commitments(as_of) is queried
+    and additional time-based overdue items are merged with [OVERDUE] tags."""
+    from grimoire.continuity.config import ContinuityConfig
+    from grimoire.continuity.types import InGameTime
+
+    config = ContinuityConfig(surface_overdue_in_context=True)
+    # c1 is OPEN-status, c2 has status=overdue, c3 is only in overdue_commitments(as_of).
+    cont = StubContinuity(
+        commitments=[
+            _Commitment(text="Return the heirloom", id="c1"),
+            _Commitment(text="Pay the smuggler", id="c2", status=_Status("overdue")),
+        ],
+        overdue=[_Commitment(text="Find the witness", id="c3", status=_Status("open"))],
+        config=config,
+    )
+    scene = _Scene(in_game_start=InGameTime(day_count=100))
+    builder = _builder(continuity=cont, scenes=StubScenes(scene=scene))
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "Return the heirloom" in body
+    assert "Pay the smuggler" in body
+    assert "Find the witness" in body
+    # Status-overdue and time-based overdue both carry the marker; the OPEN one doesn't.
+    assert "Pay the smuggler" in body and "[OVERDUE]" in body
+    assert "Find the witness [OVERDUE]" in body
+    assert "Return the heirloom [OVERDUE]" not in body
+    # `as_of` reached the service.
+    assert cont.overdue_calls == [InGameTime(day_count=100)]
+
+
+async def test_surface_overdue_in_context_false_hides_overdue() -> None:
+    """When surface_overdue_in_context=False, status-overdue items are dropped and
+    overdue_commitments(as_of) is not queried."""
+    from grimoire.continuity.config import ContinuityConfig
+    from grimoire.continuity.types import InGameTime
+
+    config = ContinuityConfig(surface_overdue_in_context=False)
+    cont = StubContinuity(
+        commitments=[
+            _Commitment(text="Return the heirloom", id="c1"),
+            _Commitment(text="Pay the smuggler", id="c2", status=_Status("overdue")),
+        ],
+        overdue=[_Commitment(text="Find the witness", id="c3", status=_Status("open"))],
+        config=config,
+    )
+    scene = _Scene(in_game_start=InGameTime(day_count=100))
+    builder = _builder(continuity=cont, scenes=StubScenes(scene=scene))
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "Return the heirloom" in body
+    assert "Pay the smuggler" not in body
+    assert "Find the witness" not in body
+    assert "[OVERDUE]" not in body
+    assert cont.overdue_calls == []
+
+
+async def test_surface_stale_in_context_true_surfaces_stale() -> None:
+    """When surface_stale_in_context=True, stale_commitments(threshold) is queried
+    and items appear with a [STALE] marker."""
+    from grimoire.continuity.config import ContinuityConfig
+    from grimoire.continuity.types import Duration
+
+    config = ContinuityConfig(surface_stale_in_context=True)
+    cont = StubContinuity(
+        commitments=[_Commitment(text="Return the heirloom", id="c1")],
+        stale=[_Commitment(text="Confront the patriarch", id="cs1", status=_Status("stale"))],
+        config=config,
+    )
+    builder = _builder(continuity=cont)
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "Confront the patriarch [STALE]" in body
+    # Threshold from config.commitment_stale_threshold flowed through.
+    assert cont.stale_calls == [Duration.months(6)]
+
+
+async def test_surface_stale_in_context_false_does_not_query_stale() -> None:
+    """When surface_stale_in_context=False (default), stale_commitments is not called."""
+    from grimoire.continuity.config import ContinuityConfig
+
+    config = ContinuityConfig(surface_stale_in_context=False)
+    cont = StubContinuity(
+        commitments=[_Commitment(text="Return the heirloom", id="c1")],
+        stale=[_Commitment(text="Confront the patriarch", id="cs1", status=_Status("stale"))],
+        config=config,
+    )
+    builder = _builder(continuity=cont)
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "Confront the patriarch" not in body
+    assert "[STALE]" not in body
+    assert cont.stale_calls == []
 
 
 async def test_location_resolution_with_weather() -> None:
