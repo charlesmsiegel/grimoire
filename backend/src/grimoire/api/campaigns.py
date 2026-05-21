@@ -1471,7 +1471,9 @@ async def resolve_scene_break(
         )
     try:
         resolved = await orchestrator.resolve_scene_break(
-            campaign_id, turn_id, payload.choice  # type: ignore[arg-type]
+            campaign_id,
+            turn_id,
+            payload.choice,  # type: ignore[arg-type]
         )
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
