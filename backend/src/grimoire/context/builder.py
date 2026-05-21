@@ -33,6 +33,7 @@ from grimoire.context.config import ContextBuilderConfig
 from grimoire.context.errors import LockInOverflowError
 from grimoire.context.tokens import TokenEstimator, cheap_estimator, estimate_tokens
 from grimoire.continuity.registry import resolve_continuity
+from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
 from grimoire.templates import render as render_template
 from grimoire.types.common import CampaignId, TurnId
 from grimoire.types.composition import Composition
@@ -224,6 +225,7 @@ class ContextBuilderService:
         time_engine: Any | None = None,
         transient_state: Any | None = None,
         config: ContextBuilderConfig | None = None,
+        metrics: MetricsRegistryProtocol = _NullMetrics(),
     ) -> None:
         self._library = library
         self._characters = characters
@@ -237,12 +239,39 @@ class ContextBuilderService:
         self._transient_state = transient_state
         self._config = config or ContextBuilderConfig()
         self._estimator: TokenEstimator = self._make_estimator()
+        self._metrics: MetricsRegistryProtocol = metrics
 
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
 
     async def build(
+        self,
+        player_input: str,
+        campaign_id: CampaignId,
+        mechanics_results: list[MechanicsResult] | None = None,
+        extra: str | None = None,
+        *,
+        branch_id: str | None = None,
+        pc_ref: str | None = None,
+        turn_id: TurnId | None = None,
+        extractor_mode: ExtractionMode = ExtractionMode.SEPARATE,
+        auxiliary_task: object | None = None,
+    ) -> AssembledPrompt:
+        async with self._metrics.measure("context_builder", "build"):
+            return await self._build_inner(
+                player_input,
+                campaign_id,
+                mechanics_results,
+                extra,
+                branch_id=branch_id,
+                pc_ref=pc_ref,
+                turn_id=turn_id,
+                extractor_mode=extractor_mode,
+                auxiliary_task=auxiliary_task,
+            )
+
+    async def _build_inner(
         self,
         player_input: str,
         campaign_id: CampaignId,
