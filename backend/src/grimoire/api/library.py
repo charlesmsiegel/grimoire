@@ -590,8 +590,20 @@ async def preview_image_preset(
 
 @router.get("/mechanics/installed")
 def installed_mechanics(mechanics: MechanicsDep) -> Any:
-    # ``installed()`` is the sync accessor; returns RegisteredModule list.
-    return to_payload(mechanics.installed())
+    # ``RegisteredModule.instance`` is the live imported MechanicsModule and is
+    # not JSON-serializable (Pydantic raises PydanticSerializationError on the
+    # dynamic class). The frontend treats it as opaque and only reads manifest
+    # / theme_css, so strip it here. ``module_dir`` is a Path; coerce to str.
+    return [
+        {
+            "manifest": to_payload(record.manifest),
+            "module_dir": str(record.module_dir) if record.module_dir is not None else None,
+            "sheet_schemas": record.sheet_schemas,
+            "content_schemas": record.content_schemas,
+            "theme_css": record.theme_css,
+        }
+        for record in mechanics.installed()
+    ]
 
 
 @router.post("/mechanics/rescan")
