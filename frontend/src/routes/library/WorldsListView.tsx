@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { ApiError, libraryApi } from "../../api/library";
+import { ApiError, fetchWorldDependents, libraryApi, type CampaignRef } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { markEnd } from "../../state/perf";
 import { AsyncBoundary } from "./AsyncBoundary";
+import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
 
 export function WorldsListView() {
   const navigate = useNavigate();
@@ -28,6 +29,40 @@ export function WorldsListView() {
   const [newName, setNewName] = useState("");
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const [deleting, setDeleting] = useState<{
+    worldId: string;
+    worldName: string;
+    dependents: CampaignRef[] | undefined;
+    busy: boolean;
+    err: string | null;
+  } | null>(null);
+
+  async function openDelete(worldId: string, worldName: string) {
+    setDeleting({ worldId, worldName, dependents: undefined, busy: false, err: null });
+    try {
+      const deps = await fetchWorldDependents(worldId);
+      setDeleting((d) => (d && d.worldId === worldId ? { ...d, dependents: deps } : d));
+    } catch {
+      setDeleting((d) => (d && d.worldId === worldId ? { ...d, dependents: [] } : d));
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeleting({ ...deleting, busy: true, err: null });
+    try {
+      await libraryApi.deleteWorld(deleting.worldId);
+      setDeleting(null);
+      reload();
+    } catch (err) {
+      setDeleting({
+        ...deleting,
+        busy: false,
+        err: err instanceof ApiError ? err.message : String(err),
+      });
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -101,10 +136,42 @@ export function WorldsListView() {
                   v{s.version} · {s.tags.length} tag{s.tags.length === 1 ? "" : "s"}
                 </p>
               </Link>
+              <button
+                type="button"
+                className="library-card-action"
+                onClick={(e) => {
+                  e.preventDefault();
+                  void openDelete(s.id, s.name || s.id);
+                }}
+              >
+                Delete world
+              </button>
             </li>
           ))}
         </ul>
       </AsyncBoundary>
+
+      {deleting && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete world "${deleting.worldName}"?`}
+          body={
+            <p>
+              This permanently removes the world directory and all its entities. Cannot be
+              undone.
+            </p>
+          }
+          dependents={deleting.dependents}
+          typedConfirmation={{
+            expected: deleting.worldId,
+            label: `Type id "${deleting.worldId}" to confirm`,
+          }}
+          busy={deleting.busy}
+          error={deleting.err}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setDeleting(null)}
+        />
+      )}
     </div>
   );
 }
