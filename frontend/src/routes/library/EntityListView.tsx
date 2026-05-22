@@ -5,6 +5,7 @@ import {
   ApiError,
   ENTITY_KIND_PLURAL,
   ENTITY_KIND_SINGULAR,
+  type CampaignRef,
   type EntityKind,
   type Greeting,
   type LibraryEntity,
@@ -12,6 +13,7 @@ import {
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { AsyncBoundary } from "./AsyncBoundary";
+import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
 import { ConvertModal } from "./ConvertModal";
 import { emptyGreetingForm, greetingFormToPayload, type GreetingFormValue } from "./greeting-form";
 import { GreetingFormFields } from "./GreetingFormFields";
@@ -43,8 +45,41 @@ export function EntityListView({ kindOverride }: Props) {
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [convertingId, setConvertingId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<{
+    entityId: string;
+    entityName: string;
+    dependents: CampaignRef[] | undefined;
+    busy: boolean;
+    err: string | null;
+  } | null>(null);
 
   const isGreetingKind = kindPlural === "greetings";
+
+  async function openDelete(entityId: string, entityName: string) {
+    setDeleting({ entityId, entityName, dependents: undefined, busy: false, err: null });
+    try {
+      const deps = await libraryApi.dependents(worldId, kindPlural, entityId);
+      setDeleting((d) => (d && d.entityId === entityId ? { ...d, dependents: deps } : d));
+    } catch {
+      setDeleting((d) => (d && d.entityId === entityId ? { ...d, dependents: [] } : d));
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeleting({ ...deleting, busy: true, err: null });
+    try {
+      await libraryApi.deleteEntity(worldId, kindPlural, deleting.entityId);
+      setDeleting(null);
+      reload();
+    } catch (err) {
+      setDeleting({
+        ...deleting,
+        busy: false,
+        err: err instanceof ApiError ? err.message : String(err),
+      });
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -156,6 +191,17 @@ export function EntityListView({ kindOverride }: Props) {
                     Convert
                   </button>
                 )}
+                <button
+                  type="button"
+                  className="library-card-action"
+                  onClick={(ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    void openDelete(id, name);
+                  }}
+                >
+                  Delete
+                </button>
               </li>
             );
           })}
@@ -174,6 +220,23 @@ export function EntityListView({ kindOverride }: Props) {
               `/library/worlds/${encodeURIComponent(worldId)}/${ENTITY_KIND_PLURAL[kind]}/${encodeURIComponent(targetId)}`,
             );
           }}
+        />
+      )}
+      {deleting && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete ${singular} "${deleting.entityName}"?`}
+          body={
+            <p>
+              This permanently removes <code>{deleting.entityId}</code> from this world. Cannot
+              be undone.
+            </p>
+          }
+          dependents={deleting.dependents}
+          busy={deleting.busy}
+          error={deleting.err}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setDeleting(null)}
         />
       )}
     </div>
