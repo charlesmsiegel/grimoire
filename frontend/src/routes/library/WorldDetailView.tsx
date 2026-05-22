@@ -1,9 +1,10 @@
 import { useCallback, useState } from "react";
 import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 
-import { ApiError, libraryApi } from "../../api/library";
+import { ApiError, fetchWorldDependents, libraryApi, type CampaignRef } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { AsyncBoundary } from "./AsyncBoundary";
+import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
 import { ImportDialog } from "./ImportDialog";
 
 const ENTITY_TABS = [
@@ -25,9 +26,39 @@ export function WorldDetailView() {
   const [forkErr, setForkErr] = useState<string | null>(null);
   const [forking, setForking] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [deleting, setDeleting] = useState<{
+    dependents: CampaignRef[] | undefined;
+    busy: boolean;
+    err: string | null;
+  } | null>(null);
   const { data, loading, error, reload } = useResource(
     useCallback(() => libraryApi.getWorld(worldId), [worldId]),
   );
+
+  async function openDelete() {
+    setDeleting({ dependents: undefined, busy: false, err: null });
+    try {
+      const deps = await fetchWorldDependents(worldId);
+      setDeleting((d) => (d ? { ...d, dependents: deps } : d));
+    } catch {
+      setDeleting((d) => (d ? { ...d, dependents: [] } : d));
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeleting({ ...deleting, busy: true, err: null });
+    try {
+      await libraryApi.deleteWorld(worldId);
+      navigate("/library/worlds");
+    } catch (err) {
+      setDeleting({
+        ...deleting,
+        busy: false,
+        err: err instanceof ApiError ? err.message : String(err),
+      });
+    }
+  }
 
   async function handleFork() {
     setForkErr(null);
@@ -80,6 +111,13 @@ export function WorldDetailView() {
             >
               Import character card
             </button>
+            <button
+              type="button"
+              className="world-delete-button"
+              onClick={() => void openDelete()}
+            >
+              Delete world
+            </button>
           </div>
           {forkErr && (
             <p className="library-error" role="alert">
@@ -112,6 +150,27 @@ export function WorldDetailView() {
             setImportOpen(false);
             if (committed) reload();
           }}
+        />
+      )}
+      {deleting && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete world "${data?.name || worldId}"?`}
+          body={
+            <p>
+              This permanently removes the world directory and all its entities. Cannot be
+              undone.
+            </p>
+          }
+          dependents={deleting.dependents}
+          typedConfirmation={{
+            expected: worldId,
+            label: `Type id "${worldId}" to confirm`,
+          }}
+          busy={deleting.busy}
+          error={deleting.err}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setDeleting(null)}
         />
       )}
       <Outlet />
