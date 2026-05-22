@@ -101,9 +101,7 @@ async def env(tmp_path: Path):
     registry.register(marker)
 
     bus = EventBus()
-    gw = LLMGatewayService(
-        _FakePluginsForRoutingWarning(), db, _gateway_config(), data_root=data
-    )
+    gw = LLMGatewayService(_FakePluginsForRoutingWarning(), db, _gateway_config(), data_root=data)
     svc = ImageGenService(
         store=store,
         registry=registry,
@@ -268,17 +266,11 @@ async def test_set_gateway_late_bind_works(tmp_path) -> None:
     marker = _MarkerBackend()
     registry.register(marker)
 
-    svc = ImageGenService(
-        store=store, registry=registry, default_backend_id="diffusers-memory"
-    )
-    gw = LLMGatewayService(
-        _FakePluginsForRoutingWarning(), db, _gateway_config(), data_root=data
-    )
+    svc = ImageGenService(store=store, registry=registry, default_backend_id="diffusers-memory")
+    gw = LLMGatewayService(_FakePluginsForRoutingWarning(), db, _gateway_config(), data_root=data)
     svc.set_gateway(gw)
 
-    await _write_campaign_yaml(
-        data, "camp-1", "imagegen_routing:\n  portrait: marker.alt\n"
-    )
+    await _write_campaign_yaml(data, "camp-1", "imagegen_routing:\n  portrait: marker.alt\n")
     try:
         result = await svc.generate_sync(
             "camp-1",

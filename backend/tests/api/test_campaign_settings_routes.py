@@ -26,13 +26,13 @@ from grimoire.types.llm import RetryPolicy, TimeoutPolicy
 
 
 class _NoOpPlugins:
-    def get_llm_provider(self, _id):  # noqa: ARG002
+    def get_llm_provider(self, _id):
         return None
 
-    def get_embedding_provider(self, _id):  # noqa: ARG002
+    def get_embedding_provider(self, _id):
         return None
 
-    def get_imagegen_backend(self, _id):  # noqa: ARG002
+    def get_imagegen_backend(self, _id):
         return None
 
     def llm_providers(self):

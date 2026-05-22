@@ -404,9 +404,7 @@ class TestEmbeddingRoutingBlock:
 
 
 class TestImagegenRoutingBlock:
-    async def test_imagegen_routing_loaded_into_lookup(
-        self, db, plugins, tmp_path: Path
-    ) -> None:
+    async def test_imagegen_routing_loaded_into_lookup(self, db, plugins, tmp_path: Path) -> None:
         """``imagegen_routing`` entries are stored for ImageGenService lookup."""
         campaign_dir = tmp_path / "campaigns" / "camp-img"
         campaign_dir.mkdir(parents=True)
@@ -470,7 +468,9 @@ class TestSetRouteByKind:
         self, db, plugins, tmp_path: Path
     ) -> None:
         gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
-        await gw.set_route("embed:context", "oai.text-embedding-3", campaign_id="c1", kind="embedding")
+        await gw.set_route(
+            "embed:context", "oai.text-embedding-3", campaign_id="c1", kind="embedding"
+        )
 
         data = yaml.safe_load(
             (tmp_path / "campaigns" / "c1" / "campaign.yaml").read_text(encoding="utf-8")

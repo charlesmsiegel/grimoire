@@ -15,7 +15,7 @@ import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from grimoire.event_bus import Event, EventBus
 from grimoire.files.yaml_io import dump_yaml, load_yaml
@@ -1549,7 +1549,7 @@ class LLMGatewayService:
                 provider_kind,
             )
 
-    _BLOCK_FOR_KIND: dict[str, str] = {
+    _BLOCK_FOR_KIND: ClassVar[dict[str, str]] = {
         "llm": "model_routing",
         "embedding": "embedding_routing",
         "imagegen": "imagegen_routing",
