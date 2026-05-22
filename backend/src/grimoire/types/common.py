@@ -35,6 +35,8 @@ class EntityKind(StrEnum):
     World = "world"
     STYLE_GUIDE = "style_guide"
     IMAGE_PRESET = "image_preset"
+    CALENDAR = "calendar"
+    HOLIDAY_SET = "holiday_set"
 
 
 class EntityRef(BaseModel):

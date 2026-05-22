@@ -5,6 +5,7 @@ import { ApiError, libraryApi, type WorldMeta } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { WorldAtmosphereForm } from "./WorldAtmosphereForm";
+import { WorldCalendarAttachments } from "./WorldCalendarAttachments";
 import { WorldCalendarForm } from "./WorldCalendarForm";
 import { WorldDefaultsForm } from "./WorldDefaultsForm";
 import { parseCalendar, serializeCalendar, type WorldCalendar } from "./world-calendar";
@@ -24,6 +25,9 @@ export function WorldMetaView() {
 
   const [draft, setDraft] = useState<Partial<WorldMeta>>({});
   const [calendar, setCalendar] = useState<WorldCalendar>(parseCalendar({}));
+  const [calendarIds, setCalendarIds] = useState<string[]>([]);
+  const [holidaySetIds, setHolidaySetIds] = useState<string[]>([]);
+  const [displayCalendarId, setDisplayCalendarId] = useState<string | null>(null);
   const [atmosphere, setAtmosphere] = useState<Record<string, unknown>>({});
   const [defaults, setDefaults] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
@@ -39,6 +43,9 @@ export function WorldMetaView() {
       tags: data.tags,
     });
     setCalendar(parseCalendar(data.calendar ?? {}));
+    setCalendarIds(data.calendar_ids ?? []);
+    setHolidaySetIds(data.holiday_set_ids ?? []);
+    setDisplayCalendarId(data.display_calendar_id ?? null);
     setAtmosphere((data.atmosphere ?? {}) as Record<string, unknown>);
     setDefaults((data.defaults ?? {}) as Record<string, unknown>);
     setDirty(false);
@@ -56,6 +63,9 @@ export function WorldMetaView() {
       await libraryApi.updateWorld(worldId, {
         ...draft,
         calendar: serializeCalendar(calendar),
+        calendar_ids: calendarIds,
+        holiday_set_ids: holidaySetIds,
+        display_calendar_id: displayCalendarId,
         atmosphere,
         defaults,
       });
@@ -105,13 +115,31 @@ export function WorldMetaView() {
             </label>
           ))}
 
-          <WorldCalendarForm
-            value={calendar}
+          <WorldCalendarAttachments
+            calendarIds={calendarIds}
+            holidaySetIds={holidaySetIds}
+            displayCalendarId={displayCalendarId}
             onChange={(next) => {
-              setCalendar(next);
+              setCalendarIds(next.calendar_ids);
+              setHolidaySetIds(next.holiday_set_ids);
+              setDisplayCalendarId(next.display_calendar_id);
               setDirty(true);
             }}
           />
+
+          <details className="legacy-inline-calendar">
+            <summary>
+              Legacy inline calendar (for worlds that haven't migrated to
+              attached Calendar entities)
+            </summary>
+            <WorldCalendarForm
+              value={calendar}
+              onChange={(next) => {
+                setCalendar(next);
+                setDirty(true);
+              }}
+            />
+          </details>
           <WorldAtmosphereForm
             value={atmosphere}
             onChange={(next) => {

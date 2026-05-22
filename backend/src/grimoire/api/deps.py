@@ -99,6 +99,10 @@ def get_extras_service(request: Request) -> Any:
     return _require(get_container(request), "extras_service")
 
 
+def get_calendar(request: Request) -> Any:
+    return _require(get_container(request), "calendar")
+
+
 def get_llm_gateway(request: Request) -> Any:
     container = get_container(request)
     gw = container.extras.get("llm_gateway") if container.extras else None
@@ -140,9 +144,11 @@ TransientStateDep = Annotated[Any, Depends(get_transient_state)]
 ExtrasServiceDep = Annotated[Any, Depends(get_extras_service)]
 LLMGatewayDep = Annotated[Any, Depends(get_llm_gateway)]
 FileWatcherDep = Annotated[Any, Depends(get_file_watcher)]
+CalendarDep = Annotated[Any, Depends(get_calendar)]
 
 
 __all__ = [
+    "CalendarDep",
     "CharactersDep",
     "ContainerDep",
     "ContinuityDep",
@@ -162,6 +168,7 @@ __all__ = [
     "TimeEngineDep",
     "TransientStateDep",
     "WorldDep",
+    "get_calendar",
     "get_characters",
     "get_container",
     "get_continuity",

@@ -1,7 +1,9 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
+import { CalendarsView } from "./CalendarsView";
 import { EntityEditorView } from "./EntityEditorView";
 import { EntityListView } from "./EntityListView";
+import { HolidaySetsView } from "./HolidaySetsView";
 import { ImagePresetsView } from "./ImagePresetsView";
 import { LibraryLayout } from "./LibraryLayout";
 import { MechanicsView } from "./MechanicsView";
@@ -29,6 +31,8 @@ export function LibraryRoutes() {
 
         <Route path="style-guides/*" element={<StyleGuidesView />} />
         <Route path="image-presets/*" element={<ImagePresetsView />} />
+        <Route path="calendars/*" element={<CalendarsView />} />
+        <Route path="holiday-sets/*" element={<HolidaySetsView />} />
         <Route path="mechanics/*" element={<MechanicsView />} />
         <Route path="plugins/*" element={<PluginsView />} />
       </Route>

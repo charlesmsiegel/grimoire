@@ -5,6 +5,8 @@ import { markStart } from "../../state/perf";
 
 const tabs = [
   { to: "/library/worlds", label: "Worlds" },
+  { to: "/library/calendars", label: "Calendars" },
+  { to: "/library/holiday-sets", label: "Holiday Sets" },
   { to: "/library/style-guides", label: "Style Guides" },
   { to: "/library/image-presets", label: "Image Presets" },
   { to: "/library/mechanics", label: "Installed Mechanics" },
