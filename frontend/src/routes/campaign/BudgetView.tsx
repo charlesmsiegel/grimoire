@@ -8,6 +8,7 @@
  * deployment, not the campaign — per-campaign overrides are not yet modelled).
  */
 
+import { useCallback } from "react";
 import { useParams } from "react-router-dom";
 
 import { observabilityApi, type CostConfig, type DailyCost } from "../../api/observability";
@@ -50,7 +51,7 @@ async function loadBudget(campaignId: string): Promise<BudgetSummary> {
 
 export function BudgetView() {
   const { campaignId = "" } = useParams();
-  const state = useApi(() => loadBudget(campaignId), [campaignId]);
+  const state = useApi(useCallback(() => loadBudget(campaignId), [campaignId]));
 
   return (
     <section className="route campaign-budget" aria-labelledby="budget-heading">
