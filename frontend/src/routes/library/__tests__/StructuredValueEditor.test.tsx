@@ -81,7 +81,7 @@ describe("StructuredValueEditor — arrays", () => {
     expect(onChange).toHaveBeenLastCalledWith(["a", "B"]);
   });
 
-  it.skip("nested object inside a list propagates edits", () => {
+  it("nested object inside a list propagates edits", () => {
     const onChange = vi.fn();
     render(
       <StructuredValueEditor
@@ -92,5 +92,53 @@ describe("StructuredValueEditor — arrays", () => {
     const daysInput = screen.getByDisplayValue("31");
     fireEvent.change(daysInput, { target: { value: "30" } });
     expect(onChange).toHaveBeenLastCalledWith([{ name: "January", days: 30 }]);
+  });
+});
+
+describe("StructuredValueEditor — objects", () => {
+  it("object renders one row per key with value editors", () => {
+    render(<StructuredValueEditor value={{ hair: "brown", eyes: "green" }} onChange={vi.fn()} />);
+    expect(screen.getByDisplayValue("brown")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("green")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("hair")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("eyes")).toBeInTheDocument();
+  });
+
+  it("typing then clicking + add field appends a null-valued key", () => {
+    const onChange = vi.fn();
+    render(<StructuredValueEditor value={{ a: "1" }} onChange={onChange} />);
+    const pending = screen.getByPlaceholderText(/add field/i);
+    fireEvent.change(pending, { target: { value: "b" } });
+    fireEvent.click(screen.getByRole("button", { name: /add field/i }));
+    expect(onChange).toHaveBeenLastCalledWith({ a: "1", b: null });
+  });
+
+  it("typing a new key fires onChange with the renamed key", () => {
+    const onChange = vi.fn();
+    render(<StructuredValueEditor value={{ a: "1" }} onChange={onChange} />);
+    fireEvent.change(screen.getByDisplayValue("a"), { target: { value: "alpha" } });
+    expect(onChange).toHaveBeenLastCalledWith({ alpha: "1" });
+  });
+
+  it("editing a value bubbles the new object up", () => {
+    const onChange = vi.fn();
+    render(<StructuredValueEditor value={{ hair: "brown" }} onChange={onChange} />);
+    fireEvent.change(screen.getByDisplayValue("brown"), { target: { value: "red" } });
+    expect(onChange).toHaveBeenLastCalledWith({ hair: "red" });
+  });
+
+  it("per-row delete removes that key", () => {
+    const onChange = vi.fn();
+    render(<StructuredValueEditor value={{ a: "1", b: "2" }} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Remove field a$/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ b: "2" });
+  });
+
+  it("renaming a key to a duplicate shows an error hint and does not fire onChange", () => {
+    const onChange = vi.fn();
+    render(<StructuredValueEditor value={{ a: "1", b: "2" }} onChange={onChange} />);
+    fireEvent.change(screen.getByDisplayValue("b"), { target: { value: "a" } });
+    expect(screen.getByText(/already exists/i)).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
   });
 });
