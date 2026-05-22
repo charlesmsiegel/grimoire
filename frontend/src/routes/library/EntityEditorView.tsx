@@ -78,11 +78,11 @@ interface EditorBodyProps {
   onReload: () => void;
 }
 
-const SUB_TABS = (isCharacter: boolean) => [
-  { to: "", label: "Editor", end: true },
-  ...(isCharacter ? [{ to: "capabilities", label: "Capabilities", end: false }] : []),
-  { to: "variants", label: "Variants", end: false },
-  { to: "preview", label: "Preview", end: false },
+const SUB_TABS = (isCharacter: boolean, basePath: string) => [
+  { to: basePath, label: "Editor", end: true },
+  ...(isCharacter ? [{ to: `${basePath}/capabilities`, label: "Capabilities", end: false }] : []),
+  { to: `${basePath}/variants`, label: "Variants", end: false },
+  { to: `${basePath}/preview`, label: "Preview", end: false },
 ];
 
 function EntityEditorBody({
@@ -167,7 +167,11 @@ function EntityEditorBody({
     }
   }
 
-  const subTabs = useMemo(() => SUB_TABS(isCharacter), [isCharacter]);
+  const basePath = `/library/worlds/${encodeURIComponent(worldId)}/${encodeURIComponent(kindPlural)}/${encodeURIComponent(entityId)}`;
+  const subTabs = useMemo(
+    () => SUB_TABS(isCharacter, basePath),
+    [isCharacter, basePath],
+  );
 
   return (
     <div className="entity-editor-body">
@@ -208,7 +212,7 @@ function EntityEditorBody({
       <nav className="entity-subtabs" aria-label="Entity sections">
         {subTabs.map((tab) => (
           <NavLink
-            key={tab.to || "editor"}
+            key={tab.label}
             to={tab.to}
             end={tab.end}
             className={({ isActive }) => (isActive ? "entity-subtab active" : "entity-subtab")}
