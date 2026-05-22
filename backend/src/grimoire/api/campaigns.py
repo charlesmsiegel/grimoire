@@ -468,7 +468,6 @@ class SceneUpdatePayload(BaseModel):
     clear_narrator_response_mode: bool = False
 
 
-
 def _read_routing_blocks(state_store: Any, campaign_id: str) -> dict[str, dict[str, str]]:
     """Pull the three routing blocks straight from ``campaign.yaml``.
 

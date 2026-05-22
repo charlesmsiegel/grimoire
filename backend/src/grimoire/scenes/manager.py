@@ -679,9 +679,7 @@ class SceneManager:
 
         async with self._lock_for(scene_id):
             scene = await self.get_scene(scene_id)
-            scene.narrator_response_mode = (
-                None if mode is None else normalize_response_mode(mode)
-            )
+            scene.narrator_response_mode = None if mode is None else normalize_response_mode(mode)
             self._write_sidecar(scene)
             return scene
 
