@@ -136,8 +136,14 @@
      plain sans for systems that don't have it installed. The browser ignores
      unknown font names so this is safe even when the font isn't shipped. */
   font-family:
-    "OpenDyslexic", "Comic Sans MS", "Trebuchet MS", "Verdana", -apple-system, BlinkMacSystemFont,
-    system-ui, sans-serif;
+    "OpenDyslexic",
+    "Comic Sans MS",
+    "Trebuchet MS",
+    "Verdana",
+    -apple-system,
+    BlinkMacSystemFont,
+    system-ui,
+    sans-serif;
   letter-spacing: 0.01em;
 }
 
@@ -5950,7 +5956,9 @@ button.primary:disabled {
   border-radius: var(--radius-sm);
   padding: var(--space-2);
   cursor: pointer;
-  transition: border-color var(--transition-fast), background var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
 }
 .why-character-turns button:hover {
   border-color: var(--accent);

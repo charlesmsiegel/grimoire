@@ -111,11 +111,7 @@ export function WorldDetailView() {
             >
               Import character card
             </button>
-            <button
-              type="button"
-              className="world-delete-button"
-              onClick={() => void openDelete()}
-            >
+            <button type="button" className="world-delete-button" onClick={() => void openDelete()}>
               Delete world
             </button>
           </div>
@@ -158,8 +154,7 @@ export function WorldDetailView() {
           title={`Delete world "${data?.name || worldId}"?`}
           body={
             <p>
-              This permanently removes the world directory and all its entities. Cannot be
-              undone.
+              This permanently removes the world directory and all its entities. Cannot be undone.
             </p>
           }
           dependents={deleting.dependents}

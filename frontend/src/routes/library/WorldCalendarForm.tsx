@@ -14,11 +14,7 @@ export function WorldCalendarForm({ value, onChange }: Props) {
       <legend>Calendar</legend>
       <label>
         <span>Epoch</span>
-        <input
-          type="date"
-          value={value.epoch}
-          onChange={(e) => patch({ epoch: e.target.value })}
-        />
+        <input type="date" value={value.epoch} onChange={(e) => patch({ epoch: e.target.value })} />
       </label>
       <label>
         <span>Days per week</span>

@@ -157,8 +157,7 @@ export function WorldsListView() {
           title={`Delete world "${deleting.worldName}"?`}
           body={
             <p>
-              This permanently removes the world directory and all its entities. Cannot be
-              undone.
+              This permanently removes the world directory and all its entities. Cannot be undone.
             </p>
           }
           dependents={deleting.dependents}
