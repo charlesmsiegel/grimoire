@@ -208,9 +208,7 @@ async def test_start_republishes_health_probes_as_bus_events(db) -> None:
     bus.subscribe("health_status_changed", lambda e: seen.append(e) or None)
     await service.start()
     try:
-        service.health().register(
-            HealthTarget(id="prov", kind="llm_provider"), _healthy
-        )
+        service.health().register(HealthTarget(id="prov", kind="llm_provider"), _healthy)
         await service.health().probe(HealthTarget(id="prov", kind="llm_provider"))
         assert len(seen) == 1
         payload = seen[0].payload
@@ -229,9 +227,7 @@ async def test_shutdown_unsubscribes_health_handler(db) -> None:
     seen: list[Event] = []
     bus.subscribe("health_status_changed", lambda e: seen.append(e) or None)
     await service.start()
-    service.health().register(
-        HealthTarget(id="prov", kind="llm_provider"), _healthy
-    )
+    service.health().register(HealthTarget(id="prov", kind="llm_provider"), _healthy)
     await service.health().probe(HealthTarget(id="prov", kind="llm_provider"))
     assert len(seen) == 1
     await service.shutdown()

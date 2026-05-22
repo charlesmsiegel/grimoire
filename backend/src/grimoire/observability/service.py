@@ -95,9 +95,7 @@ class ObservabilityService:
             # §12 Frontend Health panel: republish each probe result onto the
             # event bus as ``health_status_changed`` so StreamManager can fan
             # it out to live WebSocket subscribers.
-            self._health_subscription = self.health_monitor.subscribe(
-                self._on_health_status
-            )
+            self._health_subscription = self.health_monitor.subscribe(self._on_health_status)
         await self.health_monitor.load_latest()
 
     async def shutdown(self) -> None:
