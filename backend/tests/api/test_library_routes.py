@@ -396,6 +396,41 @@ def test_mechanics_installed(client, container) -> None:
     assert response.json() == []
 
 
+def test_mechanics_installed_strips_live_instance(client, container) -> None:
+    # Regression: the live ``MechanicsModule`` instance (a dynamically imported
+    # class such as ``grimoire_mechanics._loaded.adnd2e.Mechanics``) is not
+    # JSON-serializable; the route must drop it before encoding.
+    from pathlib import Path
+
+    from grimoire.mechanics.registry import RegisteredModule
+    from grimoire.types.mechanics import ModuleManifest
+
+    class _OpaqueInstance:  # deliberately not JSON-serializable
+        pass
+
+    record = RegisteredModule(
+        manifest=ModuleManifest(id="adnd2e", name="AD&D 2e", version="1", api_version="1"),
+        instance=_OpaqueInstance(),  # type: ignore[arg-type]
+        module_dir=Path("/modules/adnd2e"),
+        sheet_schemas={"character": {"type": "object"}},
+        content_schemas={},
+        theme_css="body{}",
+    )
+    mech = FakeMechanics()
+    mech.installed = lambda: [record]  # type: ignore[method-assign]
+    container.mechanics = mech
+
+    response = client.get("/api/mechanics/installed")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert "instance" not in body[0]
+    assert body[0]["manifest"]["id"] == "adnd2e"
+    assert body[0]["theme_css"] == "body{}"
+    assert body[0]["sheet_schemas"] == {"character": {"type": "object"}}
+    assert isinstance(body[0]["module_dir"], str)
+
+
 def test_mechanics_sheet_schema_returns_schema(client, container) -> None:
     mech = FakeMechanics()
     mech.schemas[("vamp", "character")] = {
