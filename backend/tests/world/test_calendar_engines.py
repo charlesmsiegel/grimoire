@@ -26,7 +26,6 @@ from grimoire.world.calendars.gregorian import (
 from grimoire.world.calendars.hebrew import is_hebrew_leap
 from grimoire.world.calendars.islamic import is_islamic_leap
 
-
 # ---------------------------------------------------------------------------
 # Gregorian — anchor everyone uses
 # ---------------------------------------------------------------------------
@@ -164,20 +163,28 @@ def test_custom_calendar_simple_round_trip() -> None:
 
 def test_custom_gregorian_like_leap_inserts_extra_day() -> None:
     config = CustomCalendarConfig(
-        months=[{"name": "M1", "days": 30}, {"name": "M2", "days": 30},  # type: ignore[list-item]
-                {"name": "M3", "days": 30}, {"name": "M4", "days": 30}],  # type: ignore[list-item]
+        months=[
+            {"name": "M1", "days": 30},
+            {"name": "M2", "days": 30},  # type: ignore[list-item]
+            {"name": "M3", "days": 30},
+            {"name": "M4", "days": 30},
+        ],  # type: ignore[list-item]
         leap_rule=LeapRule(
             kind=LeapRuleKind.GREGORIAN_LIKE,
-            cycle_short=4, cycle_skip=100, cycle_keep=400,
-            leap_days=1, leap_day_month=2,
+            cycle_short=4,
+            cycle_skip=100,
+            cycle_keep=400,
+            leap_days=1,
+            leap_day_month=2,
         ),
         epoch_jdn=2400000,
     )
     cal = Calendar(id="y", name="Y", system=CalendarSystem.CUSTOM, custom=config)
-    eng = engine_for(cal)
+    engine_for(cal)  # sanity check that the engine can be built
     # Year 4 should be leap (day added to month 2). Year 4 should have
     # 121 days (30+31+30+30) instead of 120.
     from grimoire.world.calendars.custom import custom_year_length
+
     assert custom_year_length(1, config) == 120
     assert custom_year_length(4, config) == 121
     assert custom_year_length(100, config) == 120  # cycle_skip
@@ -186,8 +193,11 @@ def test_custom_gregorian_like_leap_inserts_extra_day() -> None:
 
 def test_custom_leap_month_extends_year() -> None:
     config = CustomCalendarConfig(
-        months=[{"name": "A", "days": 30}, {"name": "B", "days": 30},  # type: ignore[list-item]
-                {"name": "C", "days": 30}],  # type: ignore[list-item]
+        months=[
+            {"name": "A", "days": 30},
+            {"name": "B", "days": 30},  # type: ignore[list-item]
+            {"name": "C", "days": 30},
+        ],  # type: ignore[list-item]
         leap_rule=LeapRule(
             kind=LeapRuleKind.LEAP_MONTH,
             cycle_years=3,
@@ -201,6 +211,7 @@ def test_custom_leap_month_extends_year() -> None:
     cal = Calendar(id="z", name="Z", system=CalendarSystem.CUSTOM, custom=config)
     eng = engine_for(cal)
     from grimoire.world.calendars.custom import custom_year_length
+
     # Year 3 is leap (offset 3 in cycle 3).
     assert custom_year_length(1, config) == 90
     assert custom_year_length(3, config) == 105  # +15 leap month
@@ -257,5 +268,5 @@ def test_jewish_rosh_hashanah_falls_at_hebrew_year_start() -> None:
     out = {o.holiday_id: o for o in occurrences_in_year(s, 5785)}
     rosh = out["rosh-hashanah"]
     # Rosh Hashanah 5785 = sundown 2 Oct 2024 -> calendar day 3 Oct.
-    y, m, d = gregorian_from_jdn(rosh.jdn_start)
+    y, m, _ = gregorian_from_jdn(rosh.jdn_start)
     assert (y, m) == (2024, 10)

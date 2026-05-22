@@ -29,7 +29,6 @@ from .julian import JulianEngine
 from .persian import PersianEngine
 from .stardate import StardateEngine
 
-
 # Map of built-in calendar id -> Calendar definition.
 BUILTIN_CALENDARS: dict[str, Calendar] = {
     "gregorian": Calendar(

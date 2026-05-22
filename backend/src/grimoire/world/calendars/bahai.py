@@ -23,10 +23,26 @@ from .gregorian import gregorian_from_jdn, gregorian_to_jdn, is_gregorian_leap
 BAHAI_EPOCH = 2394644
 
 MONTH_NAMES = [
-    "Baha", "Jalal", "Jamal", "'Azamat", "Nur", "Rahmat",
-    "Kalimat", "Kamal", "Asma'", "'Izzat", "Mashiyyat",
-    "'Ilm", "Qudrat", "Qawl", "Masa'il", "Sharaf",
-    "Sultan", "Mulk", "'Ayyam-i-Ha", "'Ala'",
+    "Baha",
+    "Jalal",
+    "Jamal",
+    "'Azamat",
+    "Nur",
+    "Rahmat",
+    "Kalimat",
+    "Kamal",
+    "Asma'",
+    "'Izzat",
+    "Mashiyyat",
+    "'Ilm",
+    "Qudrat",
+    "Qawl",
+    "Masa'il",
+    "Sharaf",
+    "Sultan",
+    "Mulk",
+    "'Ayyam-i-Ha",
+    "'Ala'",
 ]
 
 

@@ -19,9 +19,18 @@ from .base import CalendarEngine, DateParts
 ISLAMIC_EPOCH = 1948440  # JDN of 1 Muharram AH 1 (Friday, Julian 16 July 622)
 
 MONTH_NAMES = [
-    "Muharram", "Safar", "Rabi al-Awwal", "Rabi al-Thani",
-    "Jumada al-Awwal", "Jumada al-Thani", "Rajab", "Sha'ban",
-    "Ramadan", "Shawwal", "Dhu al-Qi'dah", "Dhu al-Hijjah",
+    "Muharram",
+    "Safar",
+    "Rabi al-Awwal",
+    "Rabi al-Thani",
+    "Jumada al-Awwal",
+    "Jumada al-Thani",
+    "Rajab",
+    "Sha'ban",
+    "Ramadan",
+    "Shawwal",
+    "Dhu al-Qi'dah",
+    "Dhu al-Hijjah",
 ]
 
 LEAP_OFFSETS_IN_CYCLE = {2, 5, 7, 10, 13, 16, 18, 21, 24, 26, 29}
@@ -48,11 +57,9 @@ def islamic_to_jdn(year: int, month: int, day: int) -> int:
 
 def islamic_from_jdn(jdn: int) -> tuple[int, int, int]:
     days = jdn - ISLAMIC_EPOCH
-    if days < 0:
-        # Pre-epoch — coarse handling, returns negative-ish year.
-        year = (days * 30) // 10631 - 1
-    else:
-        year = (30 * days + 10646) // 10631
+    # Pre-epoch falls back to a coarse estimate; post-epoch uses the
+    # standard 30-year cycle approximation.
+    year = (days * 30) // 10631 - 1 if days < 0 else (30 * days + 10646) // 10631
     if year < 1:
         year = 1
     # Adjust if our estimate is off.

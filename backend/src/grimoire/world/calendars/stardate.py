@@ -29,8 +29,20 @@ STARDATE_ANCHOR_YEAR = 2323  # CE year where stardate = 0.0
 
 
 def _day_of_year(year: int, month: int, day: int) -> int:
-    days_in_months = [31, 29 if is_gregorian_leap(year) else 28, 31, 30, 31, 30,
-                      31, 31, 30, 31, 30, 31]
+    days_in_months = [
+        31,
+        29 if is_gregorian_leap(year) else 28,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ]
     return sum(days_in_months[: month - 1]) + day
 
 

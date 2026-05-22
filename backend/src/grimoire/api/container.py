@@ -48,7 +48,7 @@ class ServiceContainer:
     extras_service: Any = None
     """``grimoire.extras.ExtrasService`` -- narrative extras CRUD + search."""
     calendar: Any = None
-    """``grimoire.world.calendar_service.CalendarService`` -- multi-calendar + holiday-set surface."""
+    """``grimoire.world.calendar_service.CalendarService``: multi-calendar + holiday surface."""
 
     extras: dict[str, Any] = field(default_factory=dict)
 

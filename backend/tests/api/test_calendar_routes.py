@@ -19,6 +19,7 @@ async def wired_container(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("GRIMOIRE_DATA_ROOT", str(tmp_path))
     monkeypatch.setenv("GRIMOIRE_DATABASE_PATH", str(tmp_path / "cal.sqlite"))
     from grimoire import config as config_module
+
     config_module.settings = config_module.Settings()
 
     data_root = tmp_path / "data"

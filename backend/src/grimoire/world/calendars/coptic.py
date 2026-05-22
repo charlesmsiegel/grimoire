@@ -22,14 +22,34 @@ COPTIC_EPOCH = 1825030
 ETHIOPIAN_EPOCH = 1724221
 
 COPTIC_MONTH_NAMES = [
-    "Thout", "Paopi", "Hathor", "Koiak", "Tobi", "Meshir",
-    "Paremhat", "Parmouti", "Pashons", "Paoni", "Epip",
-    "Mesori", "Pi Kogi Enavot",
+    "Thout",
+    "Paopi",
+    "Hathor",
+    "Koiak",
+    "Tobi",
+    "Meshir",
+    "Paremhat",
+    "Parmouti",
+    "Pashons",
+    "Paoni",
+    "Epip",
+    "Mesori",
+    "Pi Kogi Enavot",
 ]
 ETHIOPIAN_MONTH_NAMES = [
-    "Meskerem", "Tekemt", "Hedar", "Tahsas", "Tir", "Yekatit",
-    "Megabit", "Miyazya", "Genbot", "Sene", "Hamle",
-    "Nehasse", "Pagume",
+    "Meskerem",
+    "Tekemt",
+    "Hedar",
+    "Tahsas",
+    "Tir",
+    "Yekatit",
+    "Megabit",
+    "Miyazya",
+    "Genbot",
+    "Sene",
+    "Hamle",
+    "Nehasse",
+    "Pagume",
 ]
 
 

@@ -137,9 +137,7 @@ async def get_holidays_in_year(
 ) -> Any:
     set_ids = [s for s in sets.split(",") if s.strip()]
     try:
-        result = await calendar.holidays_in_year(
-            set_ids, year, anchor_calendar_id=calendar_id
-        )
+        result = await calendar.holidays_in_year(set_ids, year, anchor_calendar_id=calendar_id)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return to_payload(result)
@@ -151,11 +149,7 @@ async def update_calendar(
 ) -> Any:
     body = {k: v for k, v in payload.model_dump().items() if v is not None}
     try:
-        return to_payload(
-            await calendar.update_calendar(
-                calendar_id, body, source=payload.source
-            )
-        )
+        return to_payload(await calendar.update_calendar(calendar_id, body, source=payload.source))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
@@ -178,14 +172,10 @@ async def list_holiday_sets(calendar: CalendarDep) -> Any:
 
 
 @router.post("/library/holiday-sets", status_code=201)
-async def create_holiday_set(
-    payload: CreateHolidaySetPayload, calendar: CalendarDep
-) -> Any:
+async def create_holiday_set(payload: CreateHolidaySetPayload, calendar: CalendarDep) -> Any:
     try:
         return to_payload(
-            await calendar.create_holiday_set(
-                payload.model_dump(), source=payload.source
-            )
+            await calendar.create_holiday_set(payload.model_dump(), source=payload.source)
         )
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
@@ -205,11 +195,7 @@ async def update_holiday_set(
 ) -> Any:
     body = {k: v for k, v in payload.model_dump().items() if v is not None}
     try:
-        return to_payload(
-            await calendar.update_holiday_set(
-                set_id, body, source=payload.source
-            )
-        )
+        return to_payload(await calendar.update_holiday_set(set_id, body, source=payload.source))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 

@@ -25,12 +25,33 @@ from .base import CalendarEngine, DateParts
 HEBREW_EPOCH = 347997  # JDN of 1 Tishri AM 1
 
 MONTH_NAMES_COMMON = [
-    "Tishri", "Cheshvan", "Kislev", "Tevet", "Shevat", "Adar",
-    "Nisan", "Iyar", "Sivan", "Tammuz", "Av", "Elul",
+    "Tishri",
+    "Cheshvan",
+    "Kislev",
+    "Tevet",
+    "Shevat",
+    "Adar",
+    "Nisan",
+    "Iyar",
+    "Sivan",
+    "Tammuz",
+    "Av",
+    "Elul",
 ]
 MONTH_NAMES_LEAP = [
-    "Tishri", "Cheshvan", "Kislev", "Tevet", "Shevat", "Adar I",
-    "Adar II", "Nisan", "Iyar", "Sivan", "Tammuz", "Av", "Elul",
+    "Tishri",
+    "Cheshvan",
+    "Kislev",
+    "Tevet",
+    "Shevat",
+    "Adar I",
+    "Adar II",
+    "Nisan",
+    "Iyar",
+    "Sivan",
+    "Tammuz",
+    "Av",
+    "Elul",
 ]
 
 
@@ -49,15 +70,9 @@ def _elapsed_days(year: int) -> int:
     months_elapsed = _elapsed_months(year)
     # Conjunctions: each lunation = 29 days, 12 hours, 793/1080 parts.
     parts_elapsed = 204 + 793 * (months_elapsed % 1080)
-    hours_elapsed = (
-        5
-        + 12 * months_elapsed
-        + 793 * (months_elapsed // 1080)
-        + parts_elapsed // 1080
-    )
+    hours_elapsed = 5 + 12 * months_elapsed + 793 * (months_elapsed // 1080) + parts_elapsed // 1080
     parts_elapsed = parts_elapsed % 1080
     day = 1 + 29 * months_elapsed + hours_elapsed // 24
-    hours = hours_elapsed % 24
 
     # Dehiyyot (postponement rules).
     if (

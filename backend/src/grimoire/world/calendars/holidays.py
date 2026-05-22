@@ -21,7 +21,6 @@ from .gregorian import (
     gregorian_to_jdn,
 )
 
-
 # ---------------------------------------------------------------------------
 # Easter computation
 # ---------------------------------------------------------------------------
@@ -92,9 +91,7 @@ def _lunar_new_year_jdn(gregorian_year: int) -> int:
     # which most of it falls. CNY for Chinese year Y is in early Jan-Feb of Y.
     if gregorian_year in _YEAR_DATA:
         return _YEAR_DATA[gregorian_year][1]
-    raise ValueError(
-        f"Lunar New Year not available for Gregorian year {gregorian_year}"
-    )
+    raise ValueError(f"Lunar New Year not available for Gregorian year {gregorian_year}")
 
 
 # ---------------------------------------------------------------------------
@@ -148,9 +145,7 @@ def resolve_holiday(holiday: Holiday, year: int, system: CalendarSystem) -> int 
         return _native_fixed_to_jdn(year, holiday.month, holiday.day, system)
 
     if holiday.rule == HolidayRule.NTH_WEEKDAY:
-        day = _nth_weekday_of_month(
-            year, holiday.weekday_month, holiday.weekday, holiday.nth
-        )
+        day = _nth_weekday_of_month(year, holiday.weekday_month, holiday.weekday, holiday.nth)
         if day < 0:
             return None
         return gregorian_to_jdn(year, holiday.weekday_month, day)
@@ -177,9 +172,7 @@ def resolve_holiday(holiday: Holiday, year: int, system: CalendarSystem) -> int 
     return None
 
 
-def _native_fixed_to_jdn(
-    year: int, month: int, day: int, system: CalendarSystem
-) -> int | None:
+def _native_fixed_to_jdn(year: int, month: int, day: int, system: CalendarSystem) -> int | None:
     """Resolve a fixed (year, month, day) in a non-Gregorian system to JDN."""
     from .registry import _ENGINE_FACTORIES  # local import to avoid cycle
 
@@ -192,9 +185,7 @@ def _native_fixed_to_jdn(
         return None
 
 
-def occurrences_in_year(
-    holiday_set: HolidaySet, year: int
-) -> list[HolidayOccurrence]:
+def occurrences_in_year(holiday_set: HolidaySet, year: int) -> list[HolidayOccurrence]:
     """Expand `holiday_set` for a given year into concrete JDN ranges."""
     out: list[HolidayOccurrence] = []
     for h in holiday_set.holidays:
