@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
+import { Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import {
   ApiError,
@@ -93,6 +93,7 @@ function EntityEditorBody({
   isCharacter,
   onReload,
 }: EditorBodyProps) {
+  const navigate = useNavigate();
   const [frontmatter, setFrontmatter] = useState<Frontmatter>(
     ensureFrontmatter(entity.frontmatter),
   );
@@ -102,6 +103,22 @@ function EntityEditorBody({
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [confirmEdit, setConfirmEdit] = useState<null | { dependents: CampaignRef[] }>(null);
   const [pendingSave, setPendingSave] = useState(false);
+  const [deleting, setDeleting] = useState<{ busy: boolean; err: string | null } | null>(null);
+
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeleting({ ...deleting, busy: true, err: null });
+    try {
+      await libraryApi.deleteEntity(worldId, kindPlural, entityId);
+      navigate(`/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}`);
+    } catch (err) {
+      setDeleting({
+        ...deleting,
+        busy: false,
+        err: err instanceof ApiError ? err.message : String(err),
+      });
+    }
+  }
 
   useEffect(() => {
     setFrontmatter(ensureFrontmatter(entity.frontmatter));
@@ -169,6 +186,13 @@ function EntityEditorBody({
         <div className="entity-editor-actions">
           <button onClick={handleSaveClick} disabled={!dirty || saving}>
             {saving ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            className="entity-editor-delete"
+            onClick={() => setDeleting({ busy: false, err: null })}
+          >
+            Delete
           </button>
         </div>
       </header>
@@ -268,6 +292,23 @@ function EntityEditorBody({
           }}
         />
       )}
+
+      {deleting && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete ${ENTITY_KIND_SINGULAR[kindPlural] ?? kindPlural} "${entity.name || entity.asset_id}"?`}
+          body={
+            <p>
+              This permanently removes <code>{entity.path}</code>. Cannot be undone.
+            </p>
+          }
+          dependents={dependents.data ?? undefined}
+          busy={deleting.busy}
+          error={deleting.err}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setDeleting(null)}
+        />
+      )}
     </div>
   );
 }
@@ -362,12 +403,29 @@ function GreetingEditorBody({
   entityId: string;
   onReload: () => void;
 }) {
+  const navigate = useNavigate();
   const [form, setForm] = useState<GreetingFormValue>(() => greetingToForm(greeting));
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [confirmEdit, setConfirmEdit] = useState<null | { dependents: CampaignRef[] }>(null);
   const [pendingSave, setPendingSave] = useState(false);
+  const [deleting, setDeleting] = useState<{ busy: boolean; err: string | null } | null>(null);
+
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeleting({ ...deleting, busy: true, err: null });
+    try {
+      await libraryApi.deleteEntity(worldId, "greetings", entityId);
+      navigate(`/library/worlds/${encodeURIComponent(worldId)}/greetings`);
+    } catch (err) {
+      setDeleting({
+        ...deleting,
+        busy: false,
+        err: err instanceof ApiError ? err.message : String(err),
+      });
+    }
+  }
 
   useEffect(() => {
     setForm(greetingToForm(greeting));
@@ -427,6 +485,13 @@ function GreetingEditorBody({
           <button onClick={handleSaveClick} disabled={!dirty || saving}>
             {saving ? "Saving…" : "Save"}
           </button>
+          <button
+            type="button"
+            className="entity-editor-delete"
+            onClick={() => setDeleting({ busy: false, err: null })}
+          >
+            Delete
+          </button>
         </div>
       </header>
 
@@ -478,6 +543,23 @@ function GreetingEditorBody({
             setConfirmEdit(null);
             setPendingSave(false);
           }}
+        />
+      )}
+
+      {deleting && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete greeting "${form.name || greeting.id}"?`}
+          body={
+            <p>
+              This permanently removes greeting <code>{greeting.id}</code>. Cannot be undone.
+            </p>
+          }
+          dependents={dependents.data ?? undefined}
+          busy={deleting.busy}
+          error={deleting.err}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setDeleting(null)}
         />
       )}
     </div>
