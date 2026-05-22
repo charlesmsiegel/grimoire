@@ -28,7 +28,15 @@ import type {
 import { useApi } from "../../api/useApi";
 import { Loading } from "./common";
 
-const KINDS = ["characters", "items", "locations", "lore", "factions", "greetings"] as const;
+const KINDS = [
+  "characters",
+  "items",
+  "locations",
+  "lore",
+  "factions",
+  "greetings",
+  "monsters",
+] as const;
 
 interface CatalogOption {
   id: string;

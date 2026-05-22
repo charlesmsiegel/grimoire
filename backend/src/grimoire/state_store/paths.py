@@ -42,6 +42,7 @@ KIND_TO_DIR: dict[str, str] = {
     "lore": "lore",
     "faction": "factions",
     "greeting": "greetings",
+    "monster": "monsters",
 }
 
 DIR_TO_KIND: dict[str, str] = {v: k for k, v in KIND_TO_DIR.items()}

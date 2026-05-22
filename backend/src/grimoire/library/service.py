@@ -53,7 +53,7 @@ from grimoire.types.world import LoreEntry
 
 # Entity kinds that live inside a world directory.
 _World_ENTITY_KINDS: frozenset[str] = frozenset(
-    {"character", "item", "location", "lore", "faction", "greeting"}
+    {"character", "item", "location", "lore", "faction", "greeting", "monster"}
 )
 
 _DIR_TO_KIND: dict[str, str] = {
@@ -63,6 +63,7 @@ _DIR_TO_KIND: dict[str, str] = {
     "lore": "lore",
     "factions": "faction",
     "greetings": "greeting",
+    "monsters": "monster",
 }
 
 
@@ -954,10 +955,12 @@ class LibraryService:
             EntityKind.LOCATION,
             EntityKind.FACTION,
             EntityKind.ITEM,
+            EntityKind.MONSTER,
         }
         if value not in allowed:
             raise ReclassificationError(
-                f"reclassify target must be character/location/faction/item, got {value.value!r}"
+                "reclassify target must be character/location/faction/item/monster, "
+                f"got {value.value!r}"
             )
         return value
 

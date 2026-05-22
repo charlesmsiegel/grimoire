@@ -79,6 +79,38 @@ _ITEM_BODY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\benchant", re.IGNORECASE),
 )
 
+_MONSTER_NOUNS: frozenset[str] = frozenset(
+    {
+        "Dragon",
+        "Wyrm",
+        "Troll",
+        "Ogre",
+        "Goblin",
+        "Orc",
+        "Demon",
+        "Devil",
+        "Vampire",
+        "Werewolf",
+        "Wraith",
+        "Lich",
+        "Ghoul",
+        "Beast",
+        "Hydra",
+        "Basilisk",
+        "Chimera",
+        "Wyvern",
+    }
+)
+_MONSTER_BODY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bclaws\b", re.IGNORECASE),
+    re.compile(r"\bfangs\b", re.IGNORECASE),
+    re.compile(r"\bdevours?\b", re.IGNORECASE),
+    re.compile(r"\bstalks?\b", re.IGNORECASE),
+    re.compile(r"\bhunts?\b", re.IGNORECASE),
+    re.compile(r"\bhide\b", re.IGNORECASE),
+    re.compile(r"\bvenom\b", re.IGNORECASE),
+)
+
 _PRONOUN_RE = re.compile(
     r"\b(she|he|they|her|his|hers|him|them|their|theirs)\b",
     re.IGNORECASE,
@@ -97,6 +129,7 @@ _MAX_WEIGHTS: dict[EntityKind, float] = {
     EntityKind.LOCATION: 2.5,  # place noun(1.5) + "The"(0.5) + body match(0.5)
     EntityKind.FACTION: 2.5,  # org noun(1.5) + body matches(1.0)
     EntityKind.ITEM: 2.0,  # artifact noun(1.5) + body match(0.5)
+    EntityKind.MONSTER: 2.5,  # creature noun(1.5) + body match(1.0)
 }
 
 
@@ -185,6 +218,23 @@ def suggest_kind(entry: LoreEntry, *, threshold: float = 0.6) -> Suggestion:
     if item_weight > 0:
         weights[EntityKind.ITEM] = item_weight
         reasons[EntityKind.ITEM] = item_reasons
+
+    # Monster signals.
+    monster_weight = 0.0
+    monster_reasons: list[str] = []
+    if any(noun in title for noun in _MONSTER_NOUNS):
+        monster_weight += 1.5
+        monster_reasons.append("title contains a creature noun")
+    monster_body_hits = sum(1 for pat in _MONSTER_BODY_PATTERNS if pat.search(body))
+    if monster_body_hits >= 2:
+        monster_weight += 1.0
+        monster_reasons.append(f"body uses bestial language ({monster_body_hits} matches)")
+    elif monster_body_hits == 1:
+        monster_weight += 0.5
+        monster_reasons.append("body uses bestial language")
+    if monster_weight > 0:
+        weights[EntityKind.MONSTER] = monster_weight
+        reasons[EntityKind.MONSTER] = monster_reasons
 
     if not weights:
         return Suggestion(kind=EntityKind.LORE, confidence=0.0, reason="no strong signal")

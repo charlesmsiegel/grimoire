@@ -1176,6 +1176,14 @@ async def list_factions(campaign_id: str, world: WorldDep) -> Any:
         raise map_lookup_errors(exc) from exc
 
 
+@router.get("/{campaign_id}/monsters")
+async def list_monsters(campaign_id: str, world: WorldDep) -> Any:
+    try:
+        return await _list_kind(campaign_id, "monster", world)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
 @router.post("/{campaign_id}/characters/{entity_id}/promote-to-library")
 async def promote_character(
     campaign_id: str,

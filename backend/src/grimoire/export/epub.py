@@ -167,6 +167,7 @@ def _option_schema() -> JsonSchema:
                                 "lore",
                                 "factions",
                                 "items",
+                                "monsters",
                                 "calendar",
                                 "continuity",
                                 "gallery",
@@ -765,7 +766,10 @@ def _render_appendices(
 
     if "cast" in appendices and snapshot.characters:
         items.append(_appendix_item("cast", "Cast", _render_cast(snapshot.characters)))
-    if any(name in appendices for name in ("world", "locations", "lore", "factions", "items")):
+    if any(
+        name in appendices
+        for name in ("world", "locations", "lore", "factions", "items", "monsters")
+    ):
         show_attribution = bool((options.extra or {}).get("show_source_attribution", False))
         body = _render_world_appendix(snapshot, appendices, show_attribution=show_attribution)
         if body:
@@ -852,6 +856,7 @@ def _render_world_appendix(
         ("factions", "Factions", snapshot.factions),
         ("lore", "Lore", snapshot.lore),
         ("items", "Items", snapshot.items),
+        ("monsters", "Monsters", snapshot.monsters),
     ):
         if (kind in appendices or "world" in appendices) and items:
             parts.append(f"<h2>{label}</h2>")

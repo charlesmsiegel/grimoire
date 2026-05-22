@@ -73,6 +73,13 @@ _DIRECT_MAP: dict[EntityKind, dict[str, str]] = {
         "keywords": "aliases",
         "tags": "tags",
     },
+    EntityKind.MONSTER: {
+        "title": "name",
+        "keywords": "aliases",
+        "tags": "tags",
+        "related_locations": "habitat",
+        "secrecy": "secrecy",
+    },
 }
 
 # Fields that go into the body's ``## Notes`` section instead of frontmatter
@@ -110,6 +117,12 @@ _INTO_NOTES: dict[EntityKind, tuple[str, ...]] = {
         "related_factions",
         "secrecy",
         "related_locations",
+        "related_characters",
+    ),
+    EntityKind.MONSTER: (
+        "secondary_keys",
+        "comment",
+        "related_factions",
         "related_characters",
     ),
 }
@@ -160,10 +173,17 @@ _REQUIRED_OVERRIDES: dict[EntityKind, tuple[str, ...]] = {
     EntityKind.LOCATION: ("kind",),
     EntityKind.FACTION: (),
     EntityKind.ITEM: (),
+    EntityKind.MONSTER: (),
 }
 
 _VALID_TARGET_KINDS: frozenset[EntityKind] = frozenset(
-    {EntityKind.CHARACTER, EntityKind.LOCATION, EntityKind.FACTION, EntityKind.ITEM}
+    {
+        EntityKind.CHARACTER,
+        EntityKind.LOCATION,
+        EntityKind.FACTION,
+        EntityKind.ITEM,
+        EntityKind.MONSTER,
+    }
 )
 
 

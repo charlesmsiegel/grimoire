@@ -66,6 +66,7 @@ class CampaignSnapshot:
     lore: list[LibraryEntity] = field(default_factory=list)
     factions: list[LibraryEntity] = field(default_factory=list)
     items: list[LibraryEntity] = field(default_factory=list)
+    monsters: list[LibraryEntity] = field(default_factory=list)
     greetings: list[Greeting] = field(default_factory=list)
     facts: list[Fact] = field(default_factory=list)
     commitments: list[Commitment] = field(default_factory=list)
@@ -272,7 +273,10 @@ async def build_snapshot(
             snapshot.characters = [
                 _anonymize_character(ch, filter_ctx.anonymize) for ch in snapshot.characters
             ]
-    if any(name in appendices for name in ("world", "locations", "lore", "factions", "items")):
+    if any(
+        name in appendices
+        for name in ("world", "locations", "lore", "factions", "items", "monsters")
+    ):
         snapshot.worlds = list(await sources.world.get_composition_worlds(campaign_id))
         for st in snapshot.worlds:
             if "locations" in appendices or "world" in appendices:
@@ -283,6 +287,8 @@ async def build_snapshot(
                 snapshot.factions.extend(await sources.world.list_in_world(st.id, "faction"))
             if "items" in appendices or "world" in appendices:
                 snapshot.items.extend(await sources.world.list_in_world(st.id, "item"))
+            if "monsters" in appendices or "world" in appendices:
+                snapshot.monsters.extend(await sources.world.list_in_world(st.id, "monster"))
             if "greetings" in appendices:
                 snapshot.greetings.extend(await sources.world.list_greetings(st.id))
     if "continuity" in appendices:
