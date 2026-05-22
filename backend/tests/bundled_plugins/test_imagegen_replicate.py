@@ -111,6 +111,10 @@ def _install_mock_transport(backend, handler) -> list[httpx.Request]:
         },
         transport=httpx.MockTransport(_capture),
     )
+    # Unauthenticated client used for downloading the rendered image from
+    # the CDN — wired to the same handler so the test transport can serve
+    # both api.replicate.com and replicate.delivery URLs.
+    backend._download_client = httpx.AsyncClient(transport=httpx.MockTransport(_capture))
     return captured
 
 
@@ -222,6 +226,35 @@ async def test_generate_owner_name_uses_model_endpoint(replicate_module) -> None
     assert payload["input"]["prompt"] == "a knight"
     assert payload["input"]["seed"] == 7
     assert payload["input"]["negative_prompt"] == "blurry"
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_leak_api_token_to_cdn(replicate_module) -> None:
+    """The CDN download must not carry the Replicate API token.
+
+    Regression test for the security review on PR #416: the original
+    implementation reused the API client (which has
+    `Authorization: Bearer <token>` as a default header) to fetch the
+    image from `replicate.delivery`, leaking the token to the CDN host.
+    """
+    backend = replicate_module.ReplicateImageGenBackend(
+        config={"api_token": "r8-secret", "poll_interval_seconds": 0.001, "wait_seconds": 0}
+    )
+    captured = _install_mock_transport(backend, _make_handler())
+    await backend.generate(
+        GenerationRequest(
+            prompt="x",
+            width=64,
+            height=64,
+            steps=1,
+            cfg_scale=1.0,
+            seed=1,
+            model="black-forest-labs/flux-schnell",
+        )
+    )
+    download = next(r for r in captured if str(r.url) == OUTPUT_URL)
+    header_names = {k.lower() for k in download.headers}
+    assert "authorization" not in header_names
 
 
 @pytest.mark.asyncio

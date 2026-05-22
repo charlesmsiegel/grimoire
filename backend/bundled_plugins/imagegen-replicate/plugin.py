@@ -139,6 +139,13 @@ class ReplicateImageGenBackend:
         self._wait_seconds: int = int(wait if wait is not None else 30)
         self._client: Any | None = None
         self._client_lock = asyncio.Lock()
+        # Separate, unauthenticated client for downloading rendered images
+        # from Replicate's CDN (`replicate.delivery`). Reusing the API
+        # client here would leak `Authorization: Bearer <token>` to the
+        # CDN host, since httpx applies default headers to every request
+        # regardless of target.
+        self._download_client: Any | None = None
+        self._download_client_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ #
     # HTTP client lifecycle
@@ -168,10 +175,29 @@ class ReplicateImageGenBackend:
             )
             return self._client
 
+    async def _ensure_download_client(self) -> Any:
+        if self._download_client is not None:
+            return self._download_client
+        async with self._download_client_lock:
+            if self._download_client is not None:
+                return self._download_client
+            try:
+                import httpx
+            except ImportError as exc:  # pragma: no cover - exercised by integration
+                raise RuntimeError("httpx not installed; add `httpx` to the plugin's venv") from exc
+            self._download_client = httpx.AsyncClient(
+                timeout=self._timeout,
+                follow_redirects=True,
+            )
+            return self._download_client
+
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        if self._download_client is not None:
+            await self._download_client.aclose()
+            self._download_client = None
 
     # ------------------------------------------------------------------ #
     # ImageGenBackend protocol
@@ -216,7 +242,8 @@ class ReplicateImageGenBackend:
             raise RuntimeError(
                 "imagegen-replicate: prediction succeeded but produced no output URL"
             )
-        image_response = await client.get(url)
+        download_client = await self._ensure_download_client()
+        image_response = await download_client.get(url)
         if image_response.status_code >= 400:
             raise RuntimeError(
                 f"imagegen-replicate: image download returned {image_response.status_code}"
