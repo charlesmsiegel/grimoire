@@ -23,9 +23,7 @@ async def db(tmp_path):
 
 @pytest.fixture
 def metrics(db):
-    return MetricsRegistry(
-        db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0)
-    )
+    return MetricsRegistry(db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0))
 
 
 @pytest.mark.asyncio

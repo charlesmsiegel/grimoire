@@ -10,11 +10,11 @@ import {
 import { Sparkline } from "./Sparkline";
 import { useObservabilityPolling } from "./useObservabilityPolling";
 
-const WINDOW_OPTIONS: { label: string; seconds: number }[] = [
+const WINDOW_OPTIONS = [
   { label: "last 1h", seconds: 3600 },
   { label: "last 6h", seconds: 21600 },
   { label: "last 24h", seconds: 86400 },
-];
+] as const;
 
 const BUCKETS: TrendBucketSize[] = ["minute", "hour", "day"];
 
@@ -32,7 +32,7 @@ function formatMs(value: number): string {
 }
 
 export function PerformanceTab() {
-  const [windowSeconds, setWindowSeconds] = useState(WINDOW_OPTIONS[0].seconds);
+  const [windowSeconds, setWindowSeconds] = useState<number>(WINDOW_OPTIONS[0].seconds);
   const [bucket, setBucket] = useState<TrendBucketSize>("minute");
   const [pairs, setPairs] = useState<MetricsKnownPair[]>([]);
   const [summaries, setSummaries] = useState<Record<PairKey, MetricsSummary>>({});

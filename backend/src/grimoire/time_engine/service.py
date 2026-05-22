@@ -34,7 +34,7 @@ from grimoire.continuity.registry import resolve_continuity
 from grimoire.continuity.types import InGameTime as ContinuityInGameTime
 from grimoire.event_bus import Event, EventBus
 from grimoire.mechanics.service import MechanicsService
-from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
+from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.state_store import StateStore
 from grimoire.types.characters import CharacterRole, ResolvedCharacter
 from grimoire.types.common import CampaignId, CharacterRef, Duration, EventId, InGameTime
@@ -284,7 +284,7 @@ class TimeEngineService:
         drift_check_fn: DriftCheckFn | None = None,
         faction_conflicts_fn: FactionConflictsFn | None = None,
         faction_leader_fn: FactionLeaderFn | None = None,
-        metrics: MetricsRegistryProtocol = _NullMetrics(),
+        metrics: MetricsRegistryProtocol = NULL_METRICS,
     ) -> None:
         self._store = store
         self._world = world

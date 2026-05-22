@@ -26,9 +26,7 @@ async def db(tmp_path):
 async def test_extract_records_metric(db):
     from grimoire.extractor.service import ExtractorService
 
-    metrics = MetricsRegistry(
-        db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0)
-    )
+    metrics = MetricsRegistry(db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0))
 
     svc = ExtractorService.__new__(ExtractorService)
     svc._metrics = metrics

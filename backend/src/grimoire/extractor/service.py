@@ -37,7 +37,7 @@ from grimoire.extractor.together import (
     project_tracker_to_deltas,
 )
 from grimoire.extractor.tool_use import ToolCall, project_tool_calls
-from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
+from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.types.common import CampaignId, EntityKind, Json, Scope, TurnId
 from grimoire.types.extraction import (
     EntityCandidate,
@@ -74,7 +74,7 @@ class ExtractorService:
         auto_disable: object | None = None,
         provider_id: str = "",
         model: str = "",
-        metrics: MetricsRegistryProtocol = _NullMetrics(),
+        metrics: MetricsRegistryProtocol = NULL_METRICS,
     ) -> None:
         self._gateway = gateway
         self._mechanics = mechanics

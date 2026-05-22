@@ -26,9 +26,7 @@ async def db(tmp_path):
 async def test_generate_sync_records_metric(db):
     from grimoire.imagegen.service import ImageGenService
 
-    metrics = MetricsRegistry(
-        db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0)
-    )
+    metrics = MetricsRegistry(db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0))
 
     svc = ImageGenService.__new__(ImageGenService)
     svc._metrics = metrics
@@ -52,9 +50,7 @@ async def test_generate_sync_records_metric(db):
 async def test_queue_generation_records_metric(db):
     from grimoire.imagegen.service import ImageGenService
 
-    metrics = MetricsRegistry(
-        db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0)
-    )
+    metrics = MetricsRegistry(db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0))
 
     svc = ImageGenService.__new__(ImageGenService)
     svc._metrics = metrics

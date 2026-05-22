@@ -26,9 +26,7 @@ async def db(tmp_path):
 async def test_scene_manager_advance_records_metric(db):
     from grimoire.scenes.manager import SceneManager
 
-    metrics = MetricsRegistry(
-        db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0)
-    )
+    metrics = MetricsRegistry(db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0))
 
     sm = SceneManager.__new__(SceneManager)
     sm._metrics = metrics

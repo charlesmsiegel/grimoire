@@ -27,9 +27,7 @@ async def db(tmp_path):
 async def test_context_builder_build_records_metric(db):
     from grimoire.context.builder import ContextBuilderService
 
-    metrics = MetricsRegistry(
-        db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0)
-    )
+    metrics = MetricsRegistry(db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0))
 
     svc = ContextBuilderService.__new__(ContextBuilderService)
     svc._metrics = metrics

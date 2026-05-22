@@ -27,9 +27,7 @@ async def db(tmp_path):
 async def test_complete_records_metric(db):
     from grimoire.llm_gateway.gateway import LLMGatewayService
 
-    metrics = MetricsRegistry(
-        db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0)
-    )
+    metrics = MetricsRegistry(db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0))
 
     gw = LLMGatewayService.__new__(LLMGatewayService)
     gw._metrics = metrics
@@ -43,8 +41,7 @@ async def test_complete_records_metric(db):
     await gw.complete("turn", object())  # type: ignore[arg-type]
 
     rows = await db.fetchall(
-        "SELECT labels FROM metric_samples "
-        "WHERE module = 'llm_gateway' AND metric = 'complete'"
+        "SELECT labels FROM metric_samples WHERE module = 'llm_gateway' AND metric = 'complete'"
     )
     assert len(rows) == 1
     payload = json.loads(rows[0]["labels"])
@@ -56,9 +53,7 @@ async def test_complete_records_metric(db):
 async def test_stream_records_metric(db):
     from grimoire.llm_gateway.gateway import LLMGatewayService
 
-    metrics = MetricsRegistry(
-        db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0)
-    )
+    metrics = MetricsRegistry(db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0))
 
     gw = LLMGatewayService.__new__(LLMGatewayService)
     gw._metrics = metrics
@@ -74,8 +69,6 @@ async def test_stream_records_metric(db):
     async for _ in gw.stream("turn", object()):  # type: ignore[arg-type]
         pass
 
-    rows = await db.fetchall(
-        "SELECT module, metric FROM metric_samples WHERE metric = 'stream'"
-    )
+    rows = await db.fetchall("SELECT module, metric FROM metric_samples WHERE metric = 'stream'")
     assert len(rows) == 1
     assert rows[0]["module"] == "llm_gateway"

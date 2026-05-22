@@ -15,6 +15,7 @@ import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from grimoire.event_bus import Event, EventBus
 from grimoire.files.yaml_io import dump_yaml, load_yaml
@@ -28,7 +29,7 @@ from grimoire.llm_gateway.errors import (
 from grimoire.llm_gateway.request_log import LLMRequestLog, request_hash
 from grimoire.llm_gateway.retry import resolve_retry_exceptions, run_with_retries
 from grimoire.llm_gateway.routing import Route, RouteResolver
-from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
+from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.storage.db import Database
 from grimoire.types.common import CampaignId, HealthLevel, HealthStatus, TurnId
 from grimoire.types.llm import (
@@ -56,7 +57,7 @@ class LLMGatewayService:
         data_root: Path | None = None,
         event_bus: EventBus | None = None,
         health_monitor: HealthMonitor | None = None,
-        metrics: MetricsRegistryProtocol = _NullMetrics(),
+        metrics: MetricsRegistryProtocol = NULL_METRICS,
     ) -> None:
         self._plugins = plugins
         self._db = db
