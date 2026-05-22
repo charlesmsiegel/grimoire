@@ -266,9 +266,7 @@ class PromptComposer:
             extracted: list[str] = []
             if self.visual_extractor is not None:
                 try:
-                    extracted = list(
-                        await self.visual_extractor.extract_visual_elements(post_body)
-                    )
+                    extracted = list(await self.visual_extractor.extract_visual_elements(post_body))
                 except Exception:
                     extracted = []
             if not extracted:
