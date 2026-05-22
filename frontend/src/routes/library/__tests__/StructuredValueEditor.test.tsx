@@ -83,12 +83,7 @@ describe("StructuredValueEditor — arrays", () => {
 
   it("nested object inside a list propagates edits", () => {
     const onChange = vi.fn();
-    render(
-      <StructuredValueEditor
-        value={[{ name: "January", days: 31 }]}
-        onChange={onChange}
-      />,
-    );
+    render(<StructuredValueEditor value={[{ name: "January", days: 31 }]} onChange={onChange} />);
     const daysInput = screen.getByDisplayValue("31");
     fireEvent.change(daysInput, { target: { value: "30" } });
     expect(onChange).toHaveBeenLastCalledWith([{ name: "January", days: 30 }]);

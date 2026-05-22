@@ -25,9 +25,7 @@ describe("FrontmatterEditor — no JSON textareas", () => {
 
   it("editing inside a nested object propagates the whole frontmatter up", () => {
     const onChange = vi.fn();
-    render(
-      <FrontmatterEditor value={{ appearance: { hair: "brown" } }} onChange={onChange} />,
-    );
+    render(<FrontmatterEditor value={{ appearance: { hair: "brown" } }} onChange={onChange} />);
     fireEvent.change(screen.getByDisplayValue("brown"), { target: { value: "red" } });
     expect(onChange).toHaveBeenLastCalledWith({ appearance: { hair: "red" } });
   });

@@ -425,10 +425,7 @@ export const libraryApi = {
   getImagePreset: (id: string) =>
     request<LibraryEntity>("GET", `/library/image-presets/${encodeURIComponent(id)}`),
   getImagePresetEdit: (id: string) =>
-    request<ImagePresetEditPayload>(
-      "GET",
-      `/library/image-presets/${encodeURIComponent(id)}/edit`,
-    ),
+    request<ImagePresetEditPayload>("GET", `/library/image-presets/${encodeURIComponent(id)}/edit`),
   createImagePreset: (payload: {
     id: string;
     name: string;
@@ -448,18 +445,10 @@ export const libraryApi = {
       default_negative_prompt?: string;
       default_params?: Record<string, unknown>;
     },
-  ) =>
-    request<LibraryEntity>(
-      "PATCH",
-      `/library/image-presets/${encodeURIComponent(id)}`,
-      patch,
-    ),
+  ) => request<LibraryEntity>("PATCH", `/library/image-presets/${encodeURIComponent(id)}`, patch),
   deleteImagePreset: (id: string) =>
     request<void>("DELETE", `/library/image-presets/${encodeURIComponent(id)}`),
-  previewImagePreset: (
-    id: string,
-    body: { prompt?: string | null; seed?: number | null } = {},
-  ) =>
+  previewImagePreset: (id: string, body: { prompt?: string | null; seed?: number | null } = {}) =>
     request<{ image_data_url: string; backend: string; model: string; seed: number }>(
       "POST",
       `/library/image-presets/${encodeURIComponent(id)}/preview`,
@@ -619,13 +608,9 @@ interface _Composition {
  * Used by the world-delete dialog to render dependents.
  */
 export async function fetchWorldDependents(worldId: string): Promise<CampaignRef[]> {
-  const campaigns = await request<_CampaignSummary[]>(
-    "GET",
-    `/campaigns`,
-    undefined,
-    undefined,
-    { cache: false },
-  );
+  const campaigns = await request<_CampaignSummary[]>("GET", `/campaigns`, undefined, undefined, {
+    cache: false,
+  });
   const out: CampaignRef[] = [];
   for (const c of campaigns) {
     try {

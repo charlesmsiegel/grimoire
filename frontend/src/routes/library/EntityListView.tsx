@@ -228,8 +228,8 @@ export function EntityListView({ kindOverride }: Props) {
           title={`Delete ${singular} "${deleting.entityName}"?`}
           body={
             <p>
-              This permanently removes <code>{deleting.entityId}</code> from this world. Cannot
-              be undone.
+              This permanently removes <code>{deleting.entityId}</code> from this world. Cannot be
+              undone.
             </p>
           }
           dependents={deleting.dependents}

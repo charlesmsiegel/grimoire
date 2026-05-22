@@ -433,10 +433,7 @@ function GreetingEditorBody({
   }, [greeting]);
 
   const dependents = useResource(
-    useCallback(
-      () => libraryApi.dependents(worldId, "greetings", entityId),
-      [worldId, entityId],
-    ),
+    useCallback(() => libraryApi.dependents(worldId, "greetings", entityId), [worldId, entityId]),
   );
 
   function patch(next: GreetingFormValue) {

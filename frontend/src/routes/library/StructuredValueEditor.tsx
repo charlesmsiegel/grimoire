@@ -57,9 +57,7 @@ export function StructuredValueEditor({ value, onChange, readOnly = false }: Pro
     );
   }
   if (kind === "list") {
-    return (
-      <ArrayRows items={value as StructuredValue[]} onChange={onChange} readOnly={readOnly} />
-    );
+    return <ArrayRows items={value as StructuredValue[]} onChange={onChange} readOnly={readOnly} />;
   }
   return (
     <ObjectRows
