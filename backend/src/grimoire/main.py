@@ -22,6 +22,7 @@ from grimoire.api.health import router as health_router
 from grimoire.api.hud import router as hud_router
 from grimoire.api.imagegen import router as imagegen_router
 from grimoire.api.imports import router as imports_router
+from grimoire.api.calendars import router as calendars_router
 from grimoire.api.library import router as library_router
 from grimoire.api.observability import router as observability_router
 from grimoire.api.setup import router as setup_router
@@ -228,6 +229,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if container.world is None:
             world_cfg = WorldConfig.from_yaml(data_root / "config" / "world.yaml")
             container.world = WorldService(container.library, config=world_cfg)
+        if container.calendar is None:
+            from grimoire.world.calendar_service import CalendarService
+
+            container.calendar = CalendarService(container.library)
         if container.mechanics is None:
             container.mechanics = MechanicsService(
                 MechanicsConfig.for_data_root(data_root),
@@ -829,6 +834,7 @@ def create_app() -> FastAPI:
     app.include_router(setup_router, prefix="/api")
     app.include_router(config_router, prefix="/api")
     app.include_router(library_router, prefix="/api")
+    app.include_router(calendars_router, prefix="/api")
     app.include_router(imports_router, prefix="/api")
     app.include_router(templates_router, prefix="/api")
     app.include_router(campaigns_router, prefix="/api")

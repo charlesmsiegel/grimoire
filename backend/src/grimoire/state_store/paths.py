@@ -89,6 +89,10 @@ def _normalize_kind_segment(segment: str) -> str:
         return "style_guide"
     if segment == "image-presets":
         return "image_preset"
+    if segment == "calendars":
+        return "calendar"
+    if segment == "holiday-sets":
+        return "holiday_set"
     return segment
 
 
@@ -129,7 +133,7 @@ def parse_library_id(library_id: str) -> LibraryRef:
             path_segments=segments,
         )
 
-    if parts[0] in {"style-guides", "image-presets"}:
+    if parts[0] in {"style-guides", "image-presets", "calendars", "holiday-sets"}:
         if len(parts) < 2:
             raise InvalidRefError(f"malformed library_id: {library_id!r}")
         return LibraryRef(
@@ -225,6 +229,10 @@ def library_path(data_root: Path, library_id: str) -> Path:
         return root / "image-presets" / f"{ref.asset_id}.yaml"
     if ref.kind == "style_guide":
         return root / "style-guides" / f"{ref.asset_id}.md"
+    if ref.kind == "calendar":
+        return root / "calendars" / f"{ref.asset_id}.yaml"
+    if ref.kind == "holiday_set":
+        return root / "holiday-sets" / f"{ref.asset_id}.yaml"
     if ref.world_id is None:
         raise InvalidRefError(f"library kind {ref.kind!r} requires a world")
     dir_name = KIND_TO_DIR.get(ref.kind)

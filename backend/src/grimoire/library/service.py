@@ -157,6 +157,9 @@ def _world_meta_from_row(row: dict) -> WorldMeta:
         tags=list(fm.get("tags") or row.get("tags") or []),
         genre=fm.get("genre") or "",
         calendar=fm.get("calendar") or {},
+        calendar_ids=list(fm.get("calendar_ids") or []),
+        holiday_set_ids=list(fm.get("holiday_set_ids") or []),
+        display_calendar_id=fm.get("display_calendar_id") or None,
         atmosphere=fm.get("atmosphere") or {},
         defaults=fm.get("defaults") or {},
         version=int(fm.get("version") or row.get("version") or 0),
@@ -481,6 +484,92 @@ class LibraryService:
         row = await self.store.get_library_entity(library_id)
         if row is None:
             raise LibraryNotFoundError(f"image preset {id!r} not found")
+        await self.store.delete_library_file(library_id=library_id, source=source)
+
+    # ------------------------------------------------------------------ #
+    # Custom calendars + holiday sets
+    #
+    # Built-in calendars/holiday-sets are owned by the calendar service
+    # (see grimoire.world.calendar_service) and never touch the
+    # library_index. These methods only handle user-created custom
+    # entries persisted as YAML files in data/library/calendars/ and
+    # data/library/holiday-sets/.
+    # ------------------------------------------------------------------ #
+
+    async def list_custom_calendars(self) -> list[LibraryEntity]:
+        rows = await self.store.db.fetchall(
+            "SELECT * FROM library_index WHERE kind = 'calendar' ORDER BY name"
+        )
+        return [_entity_from_row(_normalize_row(row)) for row in rows]
+
+    async def get_custom_calendar(self, id: str) -> LibraryEntity:
+        library_id = f"calendars/{id}"
+        row = await self.store.get_library_entity(library_id)
+        if row is None:
+            raise LibraryNotFoundError(f"calendar {id!r} not found")
+        return _entity_from_row(row)
+
+    async def write_custom_calendar(
+        self,
+        id: str,
+        *,
+        frontmatter: dict[str, Any],
+        source: str = "user",
+    ) -> LibraryEntity:
+        library_id = f"calendars/{id}"
+        fm = dict(frontmatter or {})
+        fm["id"] = id
+        await self.store.write_library_file(
+            library_id=library_id,
+            frontmatter=fm,
+            body="",
+            source=source,
+        )
+        return await self.get_custom_calendar(id)
+
+    async def delete_custom_calendar(self, id: str, *, source: str = "user") -> None:
+        library_id = f"calendars/{id}"
+        row = await self.store.get_library_entity(library_id)
+        if row is None:
+            raise LibraryNotFoundError(f"calendar {id!r} not found")
+        await self.store.delete_library_file(library_id=library_id, source=source)
+
+    async def list_custom_holiday_sets(self) -> list[LibraryEntity]:
+        rows = await self.store.db.fetchall(
+            "SELECT * FROM library_index WHERE kind = 'holiday_set' ORDER BY name"
+        )
+        return [_entity_from_row(_normalize_row(row)) for row in rows]
+
+    async def get_custom_holiday_set(self, id: str) -> LibraryEntity:
+        library_id = f"holiday-sets/{id}"
+        row = await self.store.get_library_entity(library_id)
+        if row is None:
+            raise LibraryNotFoundError(f"holiday set {id!r} not found")
+        return _entity_from_row(row)
+
+    async def write_custom_holiday_set(
+        self,
+        id: str,
+        *,
+        frontmatter: dict[str, Any],
+        source: str = "user",
+    ) -> LibraryEntity:
+        library_id = f"holiday-sets/{id}"
+        fm = dict(frontmatter or {})
+        fm["id"] = id
+        await self.store.write_library_file(
+            library_id=library_id,
+            frontmatter=fm,
+            body="",
+            source=source,
+        )
+        return await self.get_custom_holiday_set(id)
+
+    async def delete_custom_holiday_set(self, id: str, *, source: str = "user") -> None:
+        library_id = f"holiday-sets/{id}"
+        row = await self.store.get_library_entity(library_id)
+        if row is None:
+            raise LibraryNotFoundError(f"holiday set {id!r} not found")
         await self.store.delete_library_file(library_id=library_id, source=source)
 
     # ------------------------------------------------------------------ #
@@ -1219,6 +1308,7 @@ class LibraryService:
             )
             for r in refs_raw
         ]
+        config = _maybe_json(camp_row["config"]) or {}
         return Composition(
             worlds=refs,
             mechanics=camp_row["mechanics_module"],
@@ -1226,6 +1316,9 @@ class LibraryService:
             image_preset_id=camp_row["image_preset_id"],
             inline_style_guide=camp_row["inline_style_guide"],
             content_boundaries=camp_row["content_boundaries"],
+            calendar_ids=list(config.get("calendar_ids") or []),
+            holiday_set_ids=list(config.get("holiday_set_ids") or []),
+            display_calendar_id=config.get("display_calendar_id"),
         )
 
     async def set_composition(self, campaign_id: str, composition: Composition) -> None:
@@ -1234,6 +1327,17 @@ class LibraryService:
         )
         if camp_row is None:
             raise LibraryNotFoundError(f"campaign {campaign_id!r} not found")
+
+        config = _maybe_json(camp_row["config"]) or {}
+        # Calendar attachments piggyback on the existing config JSON column
+        # to avoid a schema migration; built-in calendar/holiday-set ids
+        # are stable, so this is a small, stable shape.
+        if composition.calendar_ids or "calendar_ids" in config:
+            config["calendar_ids"] = list(composition.calendar_ids)
+        if composition.holiday_set_ids or "holiday_set_ids" in config:
+            config["holiday_set_ids"] = list(composition.holiday_set_ids)
+        if composition.display_calendar_id is not None or "display_calendar_id" in config:
+            config["display_calendar_id"] = composition.display_calendar_id
 
         await self.store.upsert_campaign(
             campaign_id=campaign_id,
@@ -1245,7 +1349,7 @@ class LibraryService:
             inline_style_guide=composition.inline_style_guide,
             content_boundaries=composition.content_boundaries,
             greeting_id=camp_row["greeting_id"],
-            config=_maybe_json(camp_row["config"]),
+            config=config if config else None,
         )
 
         existing = {r["world_id"] for r in await self.store.list_world_refs(campaign_id)}

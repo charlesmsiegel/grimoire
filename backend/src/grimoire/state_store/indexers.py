@@ -201,6 +201,10 @@ def make_library_id(world_id: str | None, kind: str, asset_id: str) -> str:
         return f"style-guides/{asset_id}"
     if kind == "image_preset":
         return f"image-presets/{asset_id}"
+    if kind == "calendar":
+        return f"calendars/{asset_id}"
+    if kind == "holiday_set":
+        return f"holiday-sets/{asset_id}"
     if world_id is None:
         raise ValueError(f"kind {kind!r} requires a world_id")
     dir_name = KIND_TO_DIR.get(kind, kind)

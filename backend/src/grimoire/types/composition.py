@@ -29,6 +29,13 @@ class Composition(BaseModel):
     image_preset_id: str | None = None
     inline_style_guide: str | None = None
     content_boundaries: str | None = None
+    # Calendars attached to this campaign. When empty, the campaign falls
+    # back to the worlds' calendars. The display calendar is the one shown
+    # to the user for scene tracking; the others are still tracked in the
+    # backend so any date can be rendered in any attached system.
+    calendar_ids: list[str] = Field(default_factory=list)
+    holiday_set_ids: list[str] = Field(default_factory=list)
+    display_calendar_id: str | None = None
 
 
 class WorldMeta(BaseModel):
@@ -37,7 +44,16 @@ class WorldMeta(BaseModel):
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     genre: str = ""
+    # Legacy inline calendar (kept as fallback). New worlds should use
+    # `calendar_ids` to attach first-class Calendar entities instead.
     calendar: Json = Field(default_factory=dict)
+    # Calendars attached to this world. When non-empty, the world supports
+    # multiple concurrent calendars reconciled through JDN. The display
+    # calendar (display_calendar_id) is the one rendered in scenes by
+    # default; others can be queried via the conversion endpoint.
+    calendar_ids: list[str] = Field(default_factory=list)
+    holiday_set_ids: list[str] = Field(default_factory=list)
+    display_calendar_id: str | None = None
     atmosphere: Json = Field(default_factory=dict)
     defaults: Json = Field(default_factory=dict)
     version: int = 0

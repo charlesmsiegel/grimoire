@@ -64,6 +64,9 @@ class CompositionPayload(BaseModel):
     image_preset_id: str | None = None
     inline_style_guide: str | None = None
     content_boundaries: str | None = None
+    calendar_ids: list[str] = Field(default_factory=list)
+    holiday_set_ids: list[str] = Field(default_factory=list)
+    display_calendar_id: str | None = None
 
 
 class CampaignCreatePayload(BaseModel):
@@ -632,6 +635,9 @@ async def set_composition(
             image_preset_id=payload.image_preset_id,
             inline_style_guide=payload.inline_style_guide,
             content_boundaries=payload.content_boundaries,
+            calendar_ids=list(payload.calendar_ids),
+            holiday_set_ids=list(payload.holiday_set_ids),
+            display_calendar_id=payload.display_calendar_id,
         )
         await library.set_composition(campaign_id, comp)
         return to_payload(await library.get_composition(campaign_id))

@@ -188,6 +188,32 @@ def _classify_library(abs_path: Path, rel: Path) -> WatchedFile | None:
             )
         return None
 
+    if head == "calendars":
+        if len(parts) == 2 and parts[1].endswith(".yaml"):
+            asset_id = parts[1][:-5]
+            return WatchedFile(
+                scope="library",
+                kind="library_calendar",
+                path=abs_path,
+                entity_kind="calendar",
+                asset_id=asset_id,
+                library_id=f"calendars/{asset_id}",
+            )
+        return None
+
+    if head == "holiday-sets":
+        if len(parts) == 2 and parts[1].endswith(".yaml"):
+            asset_id = parts[1][:-5]
+            return WatchedFile(
+                scope="library",
+                kind="library_holiday_set",
+                path=abs_path,
+                entity_kind="holiday_set",
+                asset_id=asset_id,
+                library_id=f"holiday-sets/{asset_id}",
+            )
+        return None
+
     return None
 
 
