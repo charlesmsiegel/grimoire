@@ -297,9 +297,7 @@ def test_log_tail_filters_by_module(
     obs = container_with_obs.observability
     with ws_client.websocket_connect("/ws/observability/log?module=orchestrator") as ws:
         ws_client.portal.call(obs.log, _log_event(module="extractor", message="skip"))
-        ws_client.portal.call(
-            obs.log, _log_event(module="orchestrator", message="match")
-        )
+        ws_client.portal.call(obs.log, _log_event(module="orchestrator", message="match"))
         msg = ws.receive_json()
         assert msg["module"] == "orchestrator"
         assert msg["payload"]["message"] == "match"
