@@ -600,3 +600,49 @@ export const templatesApi = {
       { variant },
     ),
 };
+
+interface _CampaignSummary {
+  id: string;
+  name?: string;
+}
+interface _WorldRef {
+  world_id: string;
+}
+interface _Composition {
+  worlds?: _WorldRef[];
+}
+
+/**
+ * Lists campaigns whose composition references `worldId`. Fans out across
+ * `/api/campaigns` and each composition; failures on individual compositions
+ * are silently skipped (the campaign just doesn't appear in the result).
+ * Used by the world-delete dialog to render dependents.
+ */
+export async function fetchWorldDependents(worldId: string): Promise<CampaignRef[]> {
+  const campaigns = await request<_CampaignSummary[]>(
+    "GET",
+    `/campaigns`,
+    undefined,
+    undefined,
+    { cache: false },
+  );
+  const out: CampaignRef[] = [];
+  for (const c of campaigns) {
+    try {
+      const comp = await request<_Composition>(
+        "GET",
+        `/campaigns/${encodeURIComponent(c.id)}/composition`,
+        undefined,
+        undefined,
+        { cache: false },
+      );
+      if (comp.worlds?.some((r) => r.world_id === worldId)) {
+        out.push({ id: c.id, name: c.name ?? "" });
+      }
+    } catch {
+      // Composition lookup failed; treat as "not a dependent" rather than
+      // failing the whole delete flow.
+    }
+  }
+  return out;
+}
