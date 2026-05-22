@@ -298,11 +298,7 @@ async def _cli(args: argparse.Namespace) -> int:
     for result in report.results:
         if not result.samples_ms:
             continue
-        print(
-            f"  {result.name}: "
-            f"median {result.median_ms:.2f}ms, "
-            f"stdev {result.stdev_ms:.2f}ms"
-        )
+        print(f"  {result.name}: median {result.median_ms:.2f}ms, stdev {result.stdev_ms:.2f}ms")
     return 0 if report.ok else 1
 
 
