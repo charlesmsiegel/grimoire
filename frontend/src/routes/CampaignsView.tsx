@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { ApiError } from "../api/client";
-import { fetchCampaigns, type CampaignSummaryPayload } from "../api/wizard";
+import { fetchCampaigns, rescanCampaigns, type CampaignSummaryPayload } from "../api/wizard";
 import { useStore } from "../state/useStore";
 import type { CampaignSummary } from "../state/storeContext";
 import { ForkDialog } from "./campaign/ForkDialog";
@@ -92,6 +92,21 @@ export function CampaignsView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [forkSource, setForkSource] = useState<CampaignSummary | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshErr, setRefreshErr] = useState<string | null>(null);
+
+  async function refresh() {
+    setRefreshing(true);
+    setRefreshErr(null);
+    try {
+      await rescanCampaigns();
+      await reload();
+    } catch (err) {
+      setRefreshErr(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   async function reload() {
     try {
@@ -147,6 +162,14 @@ export function CampaignsView() {
     <section className="route campaigns-view" aria-labelledby="campaigns-heading">
       <header className="route-header">
         <h2 id="campaigns-heading">Campaigns</h2>
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          disabled={refreshing}
+          title="Re-scan the campaigns folder for changes made outside the UI"
+        >
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </button>
         <Link to="/campaigns/new" className="button-link primary">
           + New campaign
         </Link>
@@ -155,6 +178,11 @@ export function CampaignsView() {
       {error && (
         <p className="wizard-error" role="alert">
           {error}
+        </p>
+      )}
+      {refreshErr && (
+        <p className="wizard-error" role="alert">
+          {refreshErr}
         </p>
       )}
       {!loading && state.campaigns.length === 0 && !error && (

@@ -213,6 +213,18 @@ export async function fetchCampaigns(): Promise<CampaignSummaryPayload[]> {
   return Array.isArray(result) ? (result as CampaignSummaryPayload[]) : [];
 }
 
+export interface CampaignsRescanReport {
+  scope: "all" | "library" | "campaigns";
+  library_files: number;
+  campaign_files: number;
+}
+
+/** Force the file watcher to re-walk ``data/campaigns`` and pick up edits
+ * made outside the UI. */
+export async function rescanCampaigns(): Promise<CampaignsRescanReport> {
+  return api.post<CampaignsRescanReport>("/api/campaigns/rescan");
+}
+
 export async function createCampaign(input: CampaignCreateInput): Promise<CampaignSummaryPayload> {
   return api.post<CampaignSummaryPayload>("/api/campaigns", input);
 }

@@ -345,6 +345,68 @@ async def test_scan_now_drops_orphan_library_rows(
     assert await store.get_library_entity("worlds/wod-london/characters/x") is None
 
 
+async def test_scan_now_library_scope_skips_campaign_root(
+    watcher: FileWatcher,
+    store: StateStore,
+) -> None:
+    """``scope="library"`` indexes library files and leaves campaign rows alone.
+
+    The orphan-cleanup branch must also be scoped — a partial rescan that
+    wiped the untouched root's rows would silently delete campaign content
+    every time the user clicks the Worlds refresh button.
+    """
+    lib = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "a.md"
+    camp = store.data_root / "campaigns" / "c1" / "emergent" / "characters" / "x.md"
+    _write_markdown(lib, "name: Alice", "Alice prose.")
+    _write_markdown(camp, "name: Stranger", "Stranger prose.")
+
+    # Full scan first so the campaign row exists.
+    await watcher.scan_now()
+    assert await store.get_library_entity("worlds/wod-london/characters/a") is not None
+
+    # Delete the library file. A library-scoped rescan should drop only its
+    # library_index row; the campaign_content_index row must survive.
+    lib.unlink()
+    report = await watcher.scan_now(scope="library")
+    assert report == {"scope": "library", "library_files": 0, "campaign_files": 0}
+    assert await store.get_library_entity("worlds/wod-london/characters/a") is None
+
+    # The campaign content row should still be present since the campaigns
+    # root was skipped entirely.
+    row = await store.db.fetchone(
+        "SELECT id FROM campaign_content_index WHERE campaign_id = ?", ("c1",)
+    )
+    assert row is not None
+
+
+async def test_scan_now_campaigns_scope_skips_library_root(
+    watcher: FileWatcher,
+    store: StateStore,
+) -> None:
+    lib = store.data_root / "library" / "worlds" / "wod-london" / "characters" / "a.md"
+    camp = store.data_root / "campaigns" / "c1" / "emergent" / "characters" / "x.md"
+    _write_markdown(lib, "name: Alice", "Alice prose.")
+    _write_markdown(camp, "name: Stranger", "Stranger prose.")
+    await watcher.scan_now()
+
+    # Delete the campaign file. A campaigns-scoped rescan should drop its
+    # campaign_content_index row but leave the library row alone.
+    camp.unlink()
+    report = await watcher.scan_now(scope="campaigns")
+    assert report["scope"] == "campaigns"
+    assert report["library_files"] == 0
+    assert await store.get_library_entity("worlds/wod-london/characters/a") is not None
+    row = await store.db.fetchone(
+        "SELECT id FROM campaign_content_index WHERE campaign_id = ?", ("c1",)
+    )
+    assert row is None
+
+
+async def test_scan_now_rejects_unknown_scope(watcher: FileWatcher) -> None:
+    with pytest.raises(ValueError):
+        await watcher.scan_now(scope="bogus")
+
+
 # --------------------------------------------------------------------------- #
 # Live observer end-to-end
 # --------------------------------------------------------------------------- #

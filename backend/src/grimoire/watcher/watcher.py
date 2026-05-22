@@ -17,7 +17,7 @@ from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from watchdog.events import EVENT_TYPE_MOVED, FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
@@ -260,55 +260,74 @@ class FileWatcher:
     # Public processing API
     # ------------------------------------------------------------------ #
 
-    async def scan_now(self) -> None:
-        """Walk both roots and bring SQLite indexes in line with the filesystem.
+    async def scan_now(self, *, scope: str = "all") -> dict[str, Any]:
+        """Walk one or both roots and bring SQLite indexes in line with the filesystem.
+
+        ``scope`` selects which roots to walk: ``"library"`` walks only
+        ``data/library``, ``"campaigns"`` walks only ``data/campaigns``, and
+        ``"all"`` (the default) walks both. Orphan cleanup is restricted to
+        the scopes actually walked so a partial rescan doesn't wipe rows for
+        the untouched root.
 
         Emits ``library_indexed`` once at completion so consumers (frontend
         progress UI, embedding worker) can react to the steady-state index.
         Live filesystem events are not emitted during the scan — they would
         produce a thundering herd of changes for state that's just being
         catching up to disk.
+
+        Returns a summary dict with the scope and the per-root file counts
+        the caller can surface to the UI.
         """
+        if scope not in {"all", "library", "campaigns"}:
+            raise ValueError(f"unknown scan scope {scope!r}")
+
+        do_library = scope in {"all", "library"}
+        do_campaigns = scope in {"all", "campaigns"}
+
         seen_library: set[str] = set()
         seen_content: set[str] = set()
         library_files = 0
         campaign_files = 0
 
-        library_root = self.data_root / "library"
-        if library_root.exists():
-            # Walk the tree off-loop so a deep library doesn't starve the
-            # event loop. Per-file I/O inside _reindex (_parse_file reads
-            # bytes) still runs on the loop, but the rglob walk is the
-            # dominant cost on large libraries.
-            paths = await asyncio.to_thread(lambda: list(_iter_files(library_root)))
-            for path in paths:
-                watched = classify_path(self.data_root, path)
-                if watched is None:
-                    continue
-                await self._reindex(watched, emit=False)
-                library_files += 1
-                if watched.library_id is not None and watched.scope == "library":
-                    seen_library.add(watched.library_id)
-                # Yield to the loop so concurrent HTTP requests aren't
-                # starved during a large rescan.
-                await asyncio.sleep(0)
+        if do_library:
+            library_root = self.data_root / "library"
+            if library_root.exists():
+                # Walk the tree off-loop so a deep library doesn't starve the
+                # event loop. Per-file I/O inside _reindex (_parse_file reads
+                # bytes) still runs on the loop, but the rglob walk is the
+                # dominant cost on large libraries.
+                paths = await asyncio.to_thread(lambda: list(_iter_files(library_root)))
+                for path in paths:
+                    watched = classify_path(self.data_root, path)
+                    if watched is None:
+                        continue
+                    await self._reindex(watched, emit=False)
+                    library_files += 1
+                    if watched.library_id is not None and watched.scope == "library":
+                        seen_library.add(watched.library_id)
+                    # Yield to the loop so concurrent HTTP requests aren't
+                    # starved during a large rescan.
+                    await asyncio.sleep(0)
 
-        campaigns_root = self.data_root / "campaigns"
-        if campaigns_root.exists():
-            paths = await asyncio.to_thread(lambda: list(_iter_files(campaigns_root)))
-            for path in paths:
-                watched = classify_path(self.data_root, path)
-                if watched is None:
-                    continue
-                await self._reindex(watched, emit=False)
-                campaign_files += 1
-                cid = watched.content_index_id
-                if cid is not None:
-                    seen_content.add(cid)
-                await asyncio.sleep(0)
+        if do_campaigns:
+            campaigns_root = self.data_root / "campaigns"
+            if campaigns_root.exists():
+                paths = await asyncio.to_thread(lambda: list(_iter_files(campaigns_root)))
+                for path in paths:
+                    watched = classify_path(self.data_root, path)
+                    if watched is None:
+                        continue
+                    await self._reindex(watched, emit=False)
+                    campaign_files += 1
+                    cid = watched.content_index_id
+                    if cid is not None:
+                        seen_content.add(cid)
+                    await asyncio.sleep(0)
 
-        await self._drop_orphan_library_rows(seen_library)
-        await self._drop_orphan_content_rows(seen_content)
+        if do_library:
+            await self._drop_orphan_library_rows(seen_library)
+        if do_campaigns:
+            await self._drop_orphan_content_rows(seen_content)
 
         await self.bus.emit(
             Event(
@@ -321,6 +340,11 @@ class FileWatcher:
                 },
             )
         )
+        return {
+            "scope": scope,
+            "library_files": library_files,
+            "campaign_files": campaign_files,
+        }
 
     async def process_path(self, path: Path) -> None:
         """Process a single filesystem event for ``path``.

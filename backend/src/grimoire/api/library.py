@@ -14,6 +14,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from grimoire.api.deps import (
+    FileWatcherDep,
     ImageGenDep,
     LibraryDep,
     MechanicsDep,
@@ -115,6 +116,17 @@ class ImagePresetPreviewPayload(BaseModel):
 @router.get("/library/worlds")
 async def list_worlds(library: LibraryDep) -> Any:
     return to_payload(await library.list_worlds())
+
+
+@router.post("/library/worlds/rescan")
+async def rescan_worlds(file_watcher: FileWatcherDep) -> Any:
+    """Force-rescan the ``data/library`` tree so edits made outside the UI
+    (file edits, ``git pull``, etc.) reach the SQLite index. Returns the
+    per-root file counts produced by the scan."""
+    try:
+        return await file_watcher.scan_now(scope="library")
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
 
 
 @router.post("/library/worlds", status_code=201)

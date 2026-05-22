@@ -23,6 +23,7 @@ from grimoire.api.deps import (
     CharactersDep,
     ContinuityDep,
     ExportDep,
+    FileWatcherDep,
     ImageGenDep,
     LibraryDep,
     LLMGatewayDep,
@@ -216,6 +217,19 @@ async def list_campaigns(state_store: StateStoreDep) -> Any:
         "forked_at_turn_id, forked_image_handling FROM campaigns ORDER BY id"
     )
     return [dict(row) for row in rows]
+
+
+# Registered before the ``/{campaign_id}`` routes so the literal ``rescan``
+# segment wins the FastAPI match order instead of being captured as an id.
+@router.post("/rescan")
+async def rescan_campaigns(file_watcher: FileWatcherDep) -> Any:
+    """Force-rescan the ``data/campaigns`` tree so file edits made outside
+    the UI reach the SQLite index. Returns the per-root file counts produced
+    by the scan."""
+    try:
+        return await file_watcher.scan_now(scope="campaigns")
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
 
 
 @router.post("", status_code=201)

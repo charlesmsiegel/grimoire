@@ -110,6 +110,17 @@ def get_llm_gateway(request: Request) -> Any:
     return gw
 
 
+def get_file_watcher(request: Request) -> Any:
+    container = get_container(request)
+    fw = container.extras.get("file_watcher") if container.extras else None
+    if fw is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="file_watcher service not configured",
+        )
+    return fw
+
+
 ContainerDep = Annotated[ServiceContainer, Depends(get_container)]
 LibraryDep = Annotated[Any, Depends(get_library)]
 WorldDep = Annotated[Any, Depends(get_world)]
@@ -128,6 +139,7 @@ StreamDep = Annotated[Any, Depends(get_stream)]
 TransientStateDep = Annotated[Any, Depends(get_transient_state)]
 ExtrasServiceDep = Annotated[Any, Depends(get_extras_service)]
 LLMGatewayDep = Annotated[Any, Depends(get_llm_gateway)]
+FileWatcherDep = Annotated[Any, Depends(get_file_watcher)]
 
 
 __all__ = [
@@ -136,6 +148,7 @@ __all__ = [
     "ContinuityDep",
     "ExportDep",
     "ExtrasServiceDep",
+    "FileWatcherDep",
     "ImageGenDep",
     "LLMGatewayDep",
     "LibraryDep",
@@ -154,6 +167,7 @@ __all__ = [
     "get_continuity",
     "get_export",
     "get_extras_service",
+    "get_file_watcher",
     "get_imagegen",
     "get_library",
     "get_llm_gateway",
