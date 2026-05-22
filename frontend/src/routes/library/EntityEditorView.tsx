@@ -13,6 +13,7 @@ import { useResource } from "../../api/useResource";
 import { Markdown } from "../../components/Markdown";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { CharacterExtras } from "./CharacterExtras";
+import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
 import { ExtrasTable } from "./ExtrasTable";
 import { FrontmatterEditor } from "./FrontmatterEditor";
 import { ensureFrontmatter, type Frontmatter } from "./frontmatter";
@@ -235,16 +236,36 @@ function EntityEditorBody({
         />
       </Routes>
 
-      {confirmEdit && (
-        <ConfirmEditDialog
-          dependents={confirmEdit.dependents}
+      {confirmEdit && pendingSave && (
+        <ConfirmDestructiveDialog
+          open
+          title="Save edit to library?"
+          body={
+            <>
+              <p>
+                This entity is referenced by {confirmEdit.dependents.length} campaign
+                {confirmEdit.dependents.length === 1 ? "" : "s"}:
+              </p>
+              <ul>
+                {confirmEdit.dependents.map((c) => (
+                  <li key={c.id}>{c.name || c.id}</li>
+                ))}
+              </ul>
+              <p>
+                Pinned campaigns will continue to see the previous version until they explicitly
+                upgrade. Tracking-latest campaigns pick up the change immediately.
+              </p>
+            </>
+          }
+          dependents={[]}
           busy={saving}
+          busyLabel="Saving…"
+          confirmLabel="Save anyway"
           onConfirm={() => void performSave()}
           onCancel={() => {
             setConfirmEdit(null);
             setPendingSave(false);
           }}
-          pending={pendingSave}
         />
       )}
     </div>
@@ -313,48 +334,6 @@ function DependentsBanner({
           </li>
         ))}
       </ul>
-    </div>
-  );
-}
-
-function ConfirmEditDialog({
-  dependents,
-  busy,
-  onConfirm,
-  onCancel,
-  pending,
-}: {
-  dependents: CampaignRef[];
-  busy: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-  pending: boolean;
-}) {
-  if (!pending) return null;
-  return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="confirm-edit">
-      <div className="modal">
-        <h4 id="confirm-edit">Save edit to library?</h4>
-        <p>
-          This entity is referenced by {dependents.length} campaign
-          {dependents.length === 1 ? "" : "s"}:
-        </p>
-        <ul>
-          {dependents.map((c) => (
-            <li key={c.id}>{c.name || c.id}</li>
-          ))}
-        </ul>
-        <p>
-          Pinned campaigns will continue to see the previous version until they explicitly upgrade.
-          Tracking-latest campaigns pick up the change immediately.
-        </p>
-        <div className="modal-actions">
-          <button onClick={onCancel}>Cancel</button>
-          <button onClick={onConfirm} disabled={busy}>
-            {busy ? "Saving…" : "Save anyway"}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -469,16 +448,36 @@ function GreetingEditorBody({
         <GreetingFormFields worldId={worldId} value={form} onChange={patch} />
       </form>
 
-      {confirmEdit && (
-        <ConfirmEditDialog
-          dependents={confirmEdit.dependents}
+      {confirmEdit && pendingSave && (
+        <ConfirmDestructiveDialog
+          open
+          title="Save edit to library?"
+          body={
+            <>
+              <p>
+                This entity is referenced by {confirmEdit.dependents.length} campaign
+                {confirmEdit.dependents.length === 1 ? "" : "s"}:
+              </p>
+              <ul>
+                {confirmEdit.dependents.map((c) => (
+                  <li key={c.id}>{c.name || c.id}</li>
+                ))}
+              </ul>
+              <p>
+                Pinned campaigns will continue to see the previous version until they explicitly
+                upgrade. Tracking-latest campaigns pick up the change immediately.
+              </p>
+            </>
+          }
+          dependents={[]}
           busy={saving}
+          busyLabel="Saving…"
+          confirmLabel="Save anyway"
           onConfirm={() => void performSave()}
           onCancel={() => {
             setConfirmEdit(null);
             setPendingSave(false);
           }}
-          pending={pendingSave}
         />
       )}
     </div>
