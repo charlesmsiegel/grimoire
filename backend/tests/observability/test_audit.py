@@ -322,16 +322,31 @@ def _audit_with_messages(
 async def test_diff_prompts_added_removed_changed(db) -> None:
     store = AuditStore(db)
     src_keep = ContextSource(
-        kind="character", scope=Scope.LIBRARY, owner_id="aragorn", tier=ContextTier.SPOTLIGHT,
-        source_id="src:char:aragorn", tokens=120, summary="Aragorn",
+        kind="character",
+        scope=Scope.LIBRARY,
+        owner_id="aragorn",
+        tier=ContextTier.SPOTLIGHT,
+        source_id="src:char:aragorn",
+        tokens=120,
+        summary="Aragorn",
     )
     src_drop = ContextSource(
-        kind="lore", scope=Scope.LIBRARY, owner_id="rohan", tier=ContextTier.BACKGROUND,
-        source_id="src:lore:rohan", tokens=80, summary="Rohan lore",
+        kind="lore",
+        scope=Scope.LIBRARY,
+        owner_id="rohan",
+        tier=ContextTier.BACKGROUND,
+        source_id="src:lore:rohan",
+        tokens=80,
+        summary="Rohan lore",
     )
     src_add = ContextSource(
-        kind="character", scope=Scope.LIBRARY, owner_id="gandalf", tier=ContextTier.SPOTLIGHT,
-        source_id="src:char:gandalf", tokens=140, summary="Gandalf",
+        kind="character",
+        scope=Scope.LIBRARY,
+        owner_id="gandalf",
+        tier=ContextTier.SPOTLIGHT,
+        source_id="src:char:gandalf",
+        tokens=140,
+        summary="Gandalf",
     )
     audit_a = _audit_with_messages(
         "t_a",

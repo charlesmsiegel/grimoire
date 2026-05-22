@@ -346,9 +346,7 @@ class AuditStore:
             entry["review_status"] = review_status
         return entry
 
-    async def diff_prompts(
-        self, turn_id_a: TurnId, turn_id_b: TurnId
-    ) -> dict[str, Any]:
+    async def diff_prompts(self, turn_id_a: TurnId, turn_id_b: TurnId) -> dict[str, Any]:
         """Diff two turns' assembled prompts.
 
         Returns a structured diff suitable for the "What did the model see?"
