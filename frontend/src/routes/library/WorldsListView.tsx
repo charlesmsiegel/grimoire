@@ -3,6 +3,8 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { ApiError, fetchWorldDependents, libraryApi, type CampaignRef } from "../../api/library";
 import { useResource } from "../../api/useResource";
+import { CardFilters } from "../../components/CardFilters";
+import { useCardFilters } from "../../hooks/useCardFilters";
 import { markEnd } from "../../state/perf";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
@@ -152,31 +154,10 @@ export function WorldsListView() {
         emptyMessage="No worlds yet. Create one to get started."
         onRetry={reload}
       >
-        <ul className="library-card-grid">
-          {data?.map((s) => (
-            <li key={s.id} className="library-card">
-              <Link to={`/library/worlds/${encodeURIComponent(s.id)}`}>
-                <h4>{s.name || s.id}</h4>
-                <small>{s.id}</small>
-                {s.genre && <p className="library-card-genre">{s.genre}</p>}
-                {s.description && <p className="library-card-desc">{s.description}</p>}
-                <p className="library-card-meta">
-                  v{s.version} · {s.tags.length} tag{s.tags.length === 1 ? "" : "s"}
-                </p>
-              </Link>
-              <button
-                type="button"
-                className="library-card-action"
-                onClick={(e) => {
-                  e.preventDefault();
-                  void openDelete(s.id, s.name || s.id);
-                }}
-              >
-                Delete world
-              </button>
-            </li>
-          ))}
-        </ul>
+        <WorldsListBody
+          worlds={data ?? []}
+          onDelete={openDelete}
+        />
       </AsyncBoundary>
 
       {deleting && (
@@ -200,5 +181,74 @@ export function WorldsListView() {
         />
       )}
     </div>
+  );
+}
+
+interface WorldsListBodyProps {
+  worlds: Array<{
+    id: string;
+    name: string;
+    description: string;
+    tags: string[];
+    genre: string;
+    version: number;
+  }>;
+  onDelete: (id: string, name: string) => void;
+}
+
+function WorldsListBody({ worlds, onDelete }: WorldsListBodyProps) {
+  const { filtered, search, setSearch, selectedTags, toggleTag, clearTags, availableTags } =
+    useCardFilters(worlds, {
+      text: (w) => [w.name, w.id, w.description, w.genre],
+      tags: (w) => w.tags,
+    });
+
+  return (
+    <>
+      <CardFilters
+        search={search}
+        onSearch={setSearch}
+        availableTags={availableTags}
+        selectedTags={selectedTags}
+        onToggleTag={toggleTag}
+        onClearTags={clearTags}
+        searchPlaceholder="Search worlds by name, id, or description…"
+        searchLabel="Search worlds"
+        resultSummary={
+          filtered.length === worlds.length
+            ? `${worlds.length} world${worlds.length === 1 ? "" : "s"}`
+            : `${filtered.length} of ${worlds.length}`
+        }
+      />
+      {filtered.length === 0 ? (
+        <p className="library-status">No worlds match the current filters.</p>
+      ) : (
+        <ul className="library-card-grid">
+          {filtered.map((s) => (
+            <li key={s.id} className="library-card">
+              <Link to={`/library/worlds/${encodeURIComponent(s.id)}`}>
+                <h4>{s.name || s.id}</h4>
+                <small>{s.id}</small>
+                {s.genre && <p className="library-card-genre">{s.genre}</p>}
+                {s.description && <p className="library-card-desc">{s.description}</p>}
+                <p className="library-card-meta">
+                  v{s.version} · {s.tags.length} tag{s.tags.length === 1 ? "" : "s"}
+                </p>
+              </Link>
+              <button
+                type="button"
+                className="library-card-action"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onDelete(s.id, s.name || s.id);
+                }}
+              >
+                Delete world
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }

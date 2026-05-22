@@ -31,6 +31,7 @@ export function CastView() {
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [tagFilter, setTagFilter] = useState("");
+  const [searchFilter, setSearchFilter] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   return (
@@ -41,7 +42,7 @@ export function CastView() {
       <Loading state={state} emptyMessage="No characters resolved for this campaign yet.">
         {(rows) => {
           const roles = collectRoles(rows);
-          const filtered = applyFilters(rows, sourceFilter, roleFilter, tagFilter);
+          const filtered = applyFilters(rows, sourceFilter, roleFilter, tagFilter, searchFilter);
           const selected =
             filtered.find((r) => r.character.id === selectedId) ?? filtered[0] ?? null;
           return (
@@ -55,6 +56,8 @@ export function CastView() {
                   onRole={setRoleFilter}
                   tag={tagFilter}
                   onTag={setTagFilter}
+                  search={searchFilter}
+                  onSearch={setSearchFilter}
                 />
                 <ul className="entity-list">
                   {filtered.map((c) => (
@@ -111,11 +114,33 @@ interface FiltersProps {
   onRole: (r: string) => void;
   tag: string;
   onTag: (t: string) => void;
+  search: string;
+  onSearch: (q: string) => void;
 }
 
-function Filters({ source, onSource, role, roles, onRole, tag, onTag }: FiltersProps) {
+function Filters({
+  source,
+  onSource,
+  role,
+  roles,
+  onRole,
+  tag,
+  onTag,
+  search,
+  onSearch,
+}: FiltersProps) {
   return (
     <div className="cast-filters">
+      <label className="field">
+        <span>Search</span>
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => onSearch(e.target.value)}
+          placeholder="Name, id, description…"
+          aria-label="Search characters"
+        />
+      </label>
       <label className="field">
         <span>Source</span>
         <select value={source} onChange={(e) => onSource(e.target.value as SourceFilter)}>
@@ -543,12 +568,22 @@ function applyFilters(
   source: SourceFilter,
   role: string,
   tag: string,
+  search: string,
 ): ResolvedCharacter[] {
   const tagLower = tag.trim().toLowerCase();
+  const searchLower = search.trim().toLowerCase();
   return rows.filter((r) => {
     if (role !== "all" && r.character.role !== role) return false;
     if (tagLower && !r.character.tags.some((t) => t.toLowerCase().includes(tagLower))) {
       return false;
+    }
+    if (searchLower) {
+      const c = r.character;
+      const haystack = [c.name, c.id, c.description, c.body]
+        .filter((s): s is string => typeof s === "string" && s.length > 0)
+        .join(" ")
+        .toLowerCase();
+      if (!haystack.includes(searchLower)) return false;
     }
     if (source === "all") return true;
     const top = r.source_chain[0];

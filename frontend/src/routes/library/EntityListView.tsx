@@ -12,6 +12,8 @@ import {
   libraryApi,
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
+import { CardFilters } from "../../components/CardFilters";
+import { useCardFilters } from "../../hooks/useCardFilters";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
 import { ConvertModal } from "./ConvertModal";
@@ -162,50 +164,13 @@ export function EntityListView({ kindOverride }: Props) {
         emptyMessage={`No ${kindPlural} yet.`}
         onRetry={reload}
       >
-        <ul className="library-card-grid">
-          {(data ?? []).map((e) => {
-            const id = "asset_id" in e ? e.asset_id : e.id;
-            const name = e.name || id;
-            const tags = isGreeting(e) ? e.tags : (e as LibraryEntity).tags;
-            return (
-              <li key={id} className="library-card">
-                <Link
-                  to={`/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(id)}`}
-                >
-                  <h4>{name}</h4>
-                  <small>{id}</small>
-                  {tags && tags.length > 0 && (
-                    <p className="library-card-meta">{tags.join(" · ")}</p>
-                  )}
-                </Link>
-                {kindPlural === "lore" && (
-                  <button
-                    type="button"
-                    className="library-card-action"
-                    onClick={(ev) => {
-                      ev.preventDefault();
-                      ev.stopPropagation();
-                      setConvertingId(id);
-                    }}
-                  >
-                    Convert
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="library-card-action"
-                  onClick={(ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    void openDelete(id, name);
-                  }}
-                >
-                  Delete
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+        <EntityListBody
+          entities={data ?? []}
+          worldId={worldId}
+          kindPlural={kindPlural}
+          onConvert={setConvertingId}
+          onDelete={openDelete}
+        />
       </AsyncBoundary>
 
       {convertingId && (
@@ -240,6 +205,100 @@ export function EntityListView({ kindOverride }: Props) {
         />
       )}
     </div>
+  );
+}
+
+interface EntityListBodyProps {
+  entities: Array<LibraryEntity | Greeting>;
+  worldId: string;
+  kindPlural: string;
+  onConvert: (id: string) => void;
+  onDelete: (id: string, name: string) => void;
+}
+
+function EntityListBody({
+  entities,
+  worldId,
+  kindPlural,
+  onConvert,
+  onDelete,
+}: EntityListBodyProps) {
+  const { filtered, search, setSearch, selectedTags, toggleTag, clearTags, availableTags } =
+    useCardFilters(entities, {
+      text: (e) => {
+        const id = "asset_id" in e ? e.asset_id : e.id;
+        const body = "body" in e ? e.body : "";
+        return [e.name, id, body];
+      },
+      tags: (e) => (isGreeting(e) ? e.tags : (e as LibraryEntity).tags) ?? [],
+    });
+
+  return (
+    <>
+      <CardFilters
+        search={search}
+        onSearch={setSearch}
+        availableTags={availableTags}
+        selectedTags={selectedTags}
+        onToggleTag={toggleTag}
+        onClearTags={clearTags}
+        searchPlaceholder={`Search ${kindPlural} by name, id, or text…`}
+        searchLabel={`Search ${kindPlural}`}
+        resultSummary={
+          filtered.length === entities.length
+            ? `${entities.length} entr${entities.length === 1 ? "y" : "ies"}`
+            : `${filtered.length} of ${entities.length}`
+        }
+      />
+      {filtered.length === 0 ? (
+        <p className="library-status">No {kindPlural} match the current filters.</p>
+      ) : (
+        <ul className="library-card-grid">
+          {filtered.map((e) => {
+            const id = "asset_id" in e ? e.asset_id : e.id;
+            const name = e.name || id;
+            const tags = isGreeting(e) ? e.tags : (e as LibraryEntity).tags;
+            return (
+              <li key={id} className="library-card">
+                <Link
+                  to={`/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(id)}`}
+                >
+                  <h4>{name}</h4>
+                  <small>{id}</small>
+                  {tags && tags.length > 0 && (
+                    <p className="library-card-meta">{tags.join(" · ")}</p>
+                  )}
+                </Link>
+                {kindPlural === "lore" && (
+                  <button
+                    type="button"
+                    className="library-card-action"
+                    onClick={(ev) => {
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      onConvert(id);
+                    }}
+                  >
+                    Convert
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="library-card-action"
+                  onClick={(ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    onDelete(id, name);
+                  }}
+                >
+                  Delete
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </>
   );
 }
 
