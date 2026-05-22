@@ -46,6 +46,11 @@ function extractCharacterRef(source: ContextSourceFromAudit): string {
   const s = source.summary;
   if (s.startsWith("Active PC: ")) return s.slice("Active PC: ".length);
   if (s.startsWith("voice:")) return s.slice("voice:".length);
+  if (s.startsWith("transient:")) return s.slice("transient:".length);
+  // "extras-breadcrumb:" must be checked before "extras:" — the latter
+  // is a prefix of the former, so the order matters.
+  if (s.startsWith("extras-breadcrumb:")) return s.slice("extras-breadcrumb:".length);
+  if (s.startsWith("extras:")) return s.slice("extras:".length);
   return s;
 }
 
