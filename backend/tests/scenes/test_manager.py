@@ -740,3 +740,34 @@ async def test_scene_events_route_through_shared_event_bus(tmp_path: Path) -> No
 
     assert (SCENE_STARTED, "campaign-a") in seen
     assert (SCENE_ENDED, "campaign-a") in seen
+
+
+async def test_narrator_response_mode_round_trips_through_sidecar(tmp_path: Path) -> None:
+    from grimoire.scenes.storage import read_sidecar
+
+    manager, _ = _manager(tmp_path)
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    assert scene.narrator_response_mode is None
+
+    updated = await manager.set_narrator_response_mode(scene.id, "per_character")
+    assert updated.narrator_response_mode == "per_character"
+
+    yaml_path = tmp_path / "campaigns" / "c" / "scenes" / "0001-scene.yaml"
+    reloaded = read_sidecar(yaml_path)
+    assert reloaded.narrator_response_mode == "per_character"
+
+
+async def test_narrator_response_mode_clears_override(tmp_path: Path) -> None:
+    manager, _ = _manager(tmp_path)
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    await manager.set_narrator_response_mode(scene.id, "per_character")
+    cleared = await manager.set_narrator_response_mode(scene.id, None)
+    assert cleared.narrator_response_mode is None
+
+
+async def test_narrator_response_mode_rejects_unknown_value(tmp_path: Path) -> None:
+    manager, _ = _manager(tmp_path)
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    # Unknown values normalize to None rather than being persisted as garbage.
+    updated = await manager.set_narrator_response_mode(scene.id, "round-robin")
+    assert updated.narrator_response_mode is None

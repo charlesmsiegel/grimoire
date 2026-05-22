@@ -218,6 +218,126 @@ def test_advanced_round_trip(settings_client) -> None:
     assert resp.json()["per_task_prompts"]["drift_check"] == "ignore weather drift"
 
 
+def test_narrator_response_mode_default(settings_client) -> None:
+    resp = settings_client.get("/api/campaigns/camp-1/narrator")
+    assert resp.status_code == 200
+    assert resp.json() == {"response_mode": "all_at_once"}
+
+
+def test_narrator_response_mode_round_trip(settings_client) -> None:
+    resp = settings_client.put(
+        "/api/campaigns/camp-1/narrator",
+        json={"response_mode": "per_character"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"response_mode": "per_character"}
+
+    resp = settings_client.get("/api/campaigns/camp-1/narrator")
+    assert resp.json()["response_mode"] == "per_character"
+
+
+def test_narrator_response_mode_rejects_unknown(settings_client) -> None:
+    resp = settings_client.put(
+        "/api/campaigns/camp-1/narrator",
+        json={"response_mode": "round_robin"},
+    )
+    assert resp.status_code == 422
+
+
+def test_narrator_response_mode_unknown_campaign_404(settings_client) -> None:
+    resp = settings_client.get("/api/campaigns/missing/narrator")
+    assert resp.status_code == 404
+
+
+def test_scene_narrator_override_round_trip(
+    settings_client: TestClient,
+    container: ServiceContainer,
+    state_store: StateStore,
+    tmp_path,
+) -> None:
+    """PATCH /campaigns/{id}/scenes/{scene_id} writes the override to the
+    sidecar and the response reports the effective mode."""
+    import asyncio
+
+    from grimoire.scenes import (
+        InMemoryEventBus,
+        SceneInit,
+        SceneManager,
+        SceneManagerConfig,
+    )
+
+    scenes_root = tmp_path / "scenes_data"
+    scenes_root.mkdir()
+    scene_mgr = SceneManager(
+        scenes_root,
+        config=SceneManagerConfig(running_summary_every_n_posts=0),
+        event_bus=InMemoryEventBus(),
+    )
+    scene = asyncio.get_event_loop().run_until_complete(
+        scene_mgr.start_scene(SceneInit(campaign_id="camp-1", title="Scene One")),
+    )
+    container.scenes = scene_mgr
+
+    # Campaign default starts at all_at_once; effective inherits it.
+    resp = settings_client.patch(
+        f"/api/campaigns/camp-1/scenes/{scene.id}",
+        json={"narrator_response_mode": "per_character"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["narrator_response_mode"]["scene_override"] == "per_character"
+    assert body["narrator_response_mode"]["effective"] == "per_character"
+
+    # Set the campaign default to per_character, then clear the scene override —
+    # effective should fall back to the campaign default.
+    settings_client.put(
+        "/api/campaigns/camp-1/narrator",
+        json={"response_mode": "per_character"},
+    )
+    resp = settings_client.patch(
+        f"/api/campaigns/camp-1/scenes/{scene.id}",
+        json={"clear_narrator_response_mode": True},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["narrator_response_mode"]["scene_override"] is None
+    assert body["narrator_response_mode"]["effective"] == "per_character"
+
+
+def test_scene_narrator_override_rejects_unknown_value(
+    settings_client: TestClient,
+    container: ServiceContainer,
+    state_store: StateStore,
+    tmp_path,
+) -> None:
+    import asyncio
+
+    from grimoire.scenes import (
+        InMemoryEventBus,
+        SceneInit,
+        SceneManager,
+        SceneManagerConfig,
+    )
+
+    scenes_root = tmp_path / "scenes_data_2"
+    scenes_root.mkdir()
+    scene_mgr = SceneManager(
+        scenes_root,
+        config=SceneManagerConfig(running_summary_every_n_posts=0),
+        event_bus=InMemoryEventBus(),
+    )
+    scene = asyncio.get_event_loop().run_until_complete(
+        scene_mgr.start_scene(SceneInit(campaign_id="camp-1", title="Scene Two")),
+    )
+    container.scenes = scene_mgr
+
+    resp = settings_client.patch(
+        f"/api/campaigns/camp-1/scenes/{scene.id}",
+        json={"narrator_response_mode": "round-robin"},
+    )
+    assert resp.status_code == 422
+
+
 def test_routing_storage_advanced_coexist(settings_client) -> None:
     """Routing now lives in campaign.yaml; storage/advanced stay in
     campaigns.config. Saving any one must not clobber the others."""

@@ -268,6 +268,7 @@ def _scene_to_yaml(scene: Scene, post_records: dict | None = None) -> dict:
         "running_summary": scene.running_summary,
         "final_summary": scene.final_summary,
         "key_beats": list(scene.key_beats),
+        "narrator_response_mode": scene.narrator_response_mode,
     }
     if post_records is not None:
         data["posts"] = _post_records_to_yaml(post_records)
@@ -307,7 +308,15 @@ def _yaml_to_scene(data: dict) -> Scene:
         running_summary=data.get("running_summary"),
         final_summary=data.get("final_summary"),
         key_beats=list(data.get("key_beats") or []),
+        narrator_response_mode=_normalize_response_mode(data.get("narrator_response_mode")),
     )
+
+
+def _normalize_response_mode(value: object) -> str | None:
+    """Drop unknown values so a hand-edited sidecar can't break the resolver."""
+    from grimoire.scenes.narrator_mode import normalize_response_mode
+
+    return normalize_response_mode(value)
 
 
 def read_sidecar_post_records(path: Path) -> dict:
