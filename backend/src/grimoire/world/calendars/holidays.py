@@ -85,12 +85,9 @@ def _lunar_new_year_jdn(gregorian_year: int) -> int:
     """Return the JDN of Chinese Lunar New Year that falls in `gregorian_year`."""
     from .chinese import _YEAR_DATA
 
-    # The chinese.py table is keyed by Chinese year; CNY is in
-    # Jan-Feb of (Chinese year + 1 - epoch_offset). Map by searching.
-    # Simpler: the Chinese year number == Gregorian year for the year in
-    # which most of it falls. CNY for Chinese year Y is in early Jan-Feb of Y.
+    # _YEAR_DATA[y] is (lunar_new_year_jdn, leap_month_or_zero); we want [0].
     if gregorian_year in _YEAR_DATA:
-        return _YEAR_DATA[gregorian_year][1]
+        return _YEAR_DATA[gregorian_year][0]
     raise ValueError(f"Lunar New Year not available for Gregorian year {gregorian_year}")
 
 

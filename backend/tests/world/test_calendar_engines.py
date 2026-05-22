@@ -270,3 +270,22 @@ def test_jewish_rosh_hashanah_falls_at_hebrew_year_start() -> None:
     # Rosh Hashanah 5785 = sundown 2 Oct 2024 -> calendar day 3 Oct.
     y, m, _ = gregorian_from_jdn(rosh.jdn_start)
     assert (y, m) == (2024, 10)
+
+
+def test_chinese_traditional_lunar_new_year_2025() -> None:
+    """Spring Festival in 2025 resolves to the correct Gregorian date.
+
+    Regression: an earlier version of _lunar_new_year_jdn returned the
+    leap-month indicator from the _YEAR_DATA tuple instead of the JDN,
+    sending every Lunar-anchored holiday back to 4713 BCE.
+    """
+    s = BUILTIN_HOLIDAY_SETS["chinese-traditional"]
+    out = {o.holiday_id: o for o in occurrences_in_year(s, 2025)}
+    lny = out["lunar-new-year"]
+    y, m, d = gregorian_from_jdn(lny.jdn_start)
+    # CNY 2025 was 29 January 2025.
+    assert (y, m, d) == (2025, 1, 29)
+    # Lantern Festival is +14 days = 12 Feb 2025.
+    lantern = out["lantern-festival"]
+    y, m, d = gregorian_from_jdn(lantern.jdn_start)
+    assert (y, m, d) == (2025, 2, 12)
