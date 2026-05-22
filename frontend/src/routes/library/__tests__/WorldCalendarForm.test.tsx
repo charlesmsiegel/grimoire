@@ -27,3 +27,42 @@ describe("WorldCalendarForm — scalars", () => {
     expect(onChange).toHaveBeenLastCalledWith({ ...SAKURA_CALENDAR, days_per_week: 8 });
   });
 });
+
+describe("WorldCalendarForm — months/seasons/holidays", () => {
+  it("editing a month's days propagates", () => {
+    const onChange = vi.fn();
+    render(<WorldCalendarForm value={SAKURA_CALENDAR} onChange={onChange} />);
+    fireEvent.change(screen.getByDisplayValue("31"), { target: { value: "30" } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...SAKURA_CALENDAR,
+      months: [{ name: "January", days: 30 }],
+    });
+  });
+
+  it("clicking + add holiday appends an empty holiday row", () => {
+    const onChange = vi.fn();
+    render(<WorldCalendarForm value={SAKURA_CALENDAR} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: /add holiday/i }));
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...SAKURA_CALENDAR,
+      holidays: [{ name: "", month: 1, day: 1, description: "", tags: [] }],
+    });
+  });
+
+  it("clicking remove on a month deletes that row", () => {
+    const onChange = vi.fn();
+    const twoMonths = {
+      ...SAKURA_CALENDAR,
+      months: [
+        { name: "January", days: 31 },
+        { name: "February", days: 28 },
+      ],
+    };
+    render(<WorldCalendarForm value={twoMonths} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Remove month 1$/ }));
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...SAKURA_CALENDAR,
+      months: [{ name: "February", days: 28 }],
+    });
+  });
+});
