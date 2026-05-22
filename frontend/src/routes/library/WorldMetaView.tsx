@@ -4,6 +4,14 @@ import { useParams } from "react-router-dom";
 import { ApiError, libraryApi, type WorldMeta } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { AsyncBoundary } from "./AsyncBoundary";
+import { WorldAtmosphereForm } from "./WorldAtmosphereForm";
+import {
+  parseCalendar,
+  serializeCalendar,
+  WorldCalendarForm,
+  type WorldCalendar,
+} from "./WorldCalendarForm";
+import { WorldDefaultsForm } from "./WorldDefaultsForm";
 
 const FIELDS: { key: keyof WorldMeta; label: string; type: "text" | "textarea" | "tags" }[] = [
   { key: "name", label: "Name", type: "text" },
@@ -19,9 +27,9 @@ export function WorldMetaView() {
   );
 
   const [draft, setDraft] = useState<Partial<WorldMeta>>({});
-  const [calendar, setCalendar] = useState("");
-  const [atmosphere, setAtmosphere] = useState("");
-  const [defaults, setDefaults] = useState("");
+  const [calendar, setCalendar] = useState<WorldCalendar>(parseCalendar({}));
+  const [atmosphere, setAtmosphere] = useState<Record<string, unknown>>({});
+  const [defaults, setDefaults] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -34,9 +42,9 @@ export function WorldMetaView() {
       description: data.description,
       tags: data.tags,
     });
-    setCalendar(JSON.stringify(data.calendar ?? {}, null, 2));
-    setAtmosphere(JSON.stringify(data.atmosphere ?? {}, null, 2));
-    setDefaults(JSON.stringify(data.defaults ?? {}, null, 2));
+    setCalendar(parseCalendar(data.calendar ?? {}));
+    setAtmosphere((data.atmosphere ?? {}) as Record<string, unknown>);
+    setDefaults((data.defaults ?? {}) as Record<string, unknown>);
     setDirty(false);
   }, [data]);
 
@@ -49,17 +57,12 @@ export function WorldMetaView() {
     setSaving(true);
     setSaveErr(null);
     try {
-      const body: Record<string, unknown> = { ...draft };
-      try {
-        body.calendar = JSON.parse(calendar || "{}");
-        body.atmosphere = JSON.parse(atmosphere || "{}");
-        body.defaults = JSON.parse(defaults || "{}");
-      } catch (parseErr) {
-        throw new Error(
-          `JSON parse error in calendar/atmosphere/defaults: ${(parseErr as Error).message}`,
-        );
-      }
-      await libraryApi.updateWorld(worldId, body);
+      await libraryApi.updateWorld(worldId, {
+        ...draft,
+        calendar: serializeCalendar(calendar),
+        atmosphere,
+        defaults,
+      });
       setDirty(false);
       reload();
     } catch (err) {
@@ -106,39 +109,27 @@ export function WorldMetaView() {
             </label>
           ))}
 
-          <label>
-            <span>Calendar (JSON)</span>
-            <textarea
-              rows={6}
-              value={calendar}
-              onChange={(e) => {
-                setCalendar(e.target.value);
-                setDirty(true);
-              }}
-            />
-          </label>
-          <label>
-            <span>Atmosphere (JSON)</span>
-            <textarea
-              rows={4}
-              value={atmosphere}
-              onChange={(e) => {
-                setAtmosphere(e.target.value);
-                setDirty(true);
-              }}
-            />
-          </label>
-          <label>
-            <span>Defaults (JSON)</span>
-            <textarea
-              rows={4}
-              value={defaults}
-              onChange={(e) => {
-                setDefaults(e.target.value);
-                setDirty(true);
-              }}
-            />
-          </label>
+          <WorldCalendarForm
+            value={calendar}
+            onChange={(next) => {
+              setCalendar(next);
+              setDirty(true);
+            }}
+          />
+          <WorldAtmosphereForm
+            value={atmosphere}
+            onChange={(next) => {
+              setAtmosphere(next);
+              setDirty(true);
+            }}
+          />
+          <WorldDefaultsForm
+            value={defaults}
+            onChange={(next) => {
+              setDefaults(next);
+              setDirty(true);
+            }}
+          />
 
           {saveErr && (
             <p className="library-error" role="alert">
