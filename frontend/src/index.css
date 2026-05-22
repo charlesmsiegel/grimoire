@@ -6045,3 +6045,73 @@ button.primary:disabled {
 .why-character-error {
   color: var(--danger);
 }
+
+/* ----- StructuredValueEditor ----- */
+
+.structured-null {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-muted);
+}
+
+.structured-type-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.structured-list {
+  list-style: decimal inside;
+  margin: 0;
+  padding-left: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.structured-list-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.structured-list-row > :first-child {
+  flex: 1;
+}
+
+.structured-object {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.structured-object-row,
+.structured-object-pending {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) 1fr auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.structured-add {
+  background: transparent;
+  border: 1px dashed var(--border);
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.85rem;
+}
+
+.structured-remove {
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 1.05rem;
+  line-height: 1;
+  padding: 0 var(--space-1);
+  align-self: center;
+}
+
+.structured-remove:hover {
+  color: var(--danger);
+  background: transparent;
+}
