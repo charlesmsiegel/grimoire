@@ -436,7 +436,7 @@ class ImageGenService:
     ) -> str:
         async with self._metrics.measure("imagegen", "generate"):
             return await self._queue_generation_inner(
-                campaign_id, scene_id, post_id, request, priority
+                campaign_id, scene_id, post_id, request, priority, task=task
             )
 
     async def _queue_generation_inner(
@@ -446,6 +446,8 @@ class ImageGenService:
         post_id: str | None,
         request: GenerationRequest | None = None,
         priority: int = 5,
+        *,
+        task: str | None = None,
     ) -> str:
         _validate_campaign_id(campaign_id)
         if request is None:
@@ -631,12 +633,14 @@ class ImageGenService:
         task: str | None = None,
     ) -> GenerationResult:
         async with self._metrics.measure("imagegen", "generate"):
-            return await self._generate_sync_inner(campaign_id, request)
+            return await self._generate_sync_inner(campaign_id, request, task=task)
 
     async def _generate_sync_inner(
         self,
         campaign_id: str,
         request: GenerationRequest,
+        *,
+        task: str | None = None,
     ) -> GenerationResult:
         _validate_campaign_id(campaign_id)
         routed_backend, routed_model = await self._resolve_task_route(campaign_id, task)
@@ -671,9 +675,7 @@ class ImageGenService:
         try:
             await self._gateway.ensure_campaign_loaded(campaign_id)
         except Exception:
-            logger.warning(
-                "imagegen: ensure_campaign_loaded failed for campaign=%s", campaign_id
-            )
+            logger.warning("imagegen: ensure_campaign_loaded failed for campaign=%s", campaign_id)
             return None, None
         route = self._gateway.imagegen_route(task, campaign_id)
         if route is None:

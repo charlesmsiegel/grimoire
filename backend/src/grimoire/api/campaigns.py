@@ -10,6 +10,7 @@ container. Errors are translated by :func:`grimoire.api.util.map_lookup_errors`.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 from datetime import datetime
@@ -23,8 +24,8 @@ from grimoire.api.deps import (
     ContinuityDep,
     ExportDep,
     ImageGenDep,
-    LLMGatewayDep,
     LibraryDep,
+    LLMGatewayDep,
     MechanicsDep,
     OrchestratorDep,
     ScenesDep,
@@ -486,10 +487,8 @@ async def set_campaign_routing(
     async def _apply(block: dict[str, str | None], kind: str) -> None:
         for task, value in block.items():
             if value is None or value == "":
-                try:
+                with contextlib.suppress(ValueError):
                     await gateway.clear_route(task, campaign_id=campaign_id, kind=kind)
-                except ValueError:
-                    pass
             else:
                 try:
                     await gateway.set_route(task, value, campaign_id=campaign_id, kind=kind)
