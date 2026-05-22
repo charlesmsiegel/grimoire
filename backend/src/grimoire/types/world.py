@@ -89,6 +89,37 @@ class Item(BaseModel):
     _check_extras = field_validator("extras", mode="before")(_validate_extras_before)
 
 
+class MonsterCategory(StrEnum):
+    BEAST = "beast"
+    UNDEAD = "undead"
+    DRAGON = "dragon"
+    FEY = "fey"
+    DEMON = "demon"
+    ABERRATION = "aberration"
+    HUMANOID = "humanoid"
+    CONSTRUCT = "construct"
+    ELEMENTAL = "elemental"
+    OTHER = "other"
+
+
+class Monster(BaseModel):
+    world_id: str
+    id: str
+    name: str
+    category: MonsterCategory = MonsterCategory.OTHER
+    aliases: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    threat_level: str = ""  # free-form: "trivial", "deadly", "CR 12", ...
+    habitat: list[str] = Field(default_factory=list)  # location refs or biome strings
+    abilities: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    description: str = ""
+    body: str = ""
+    extras: dict[str, ExtraValue] = Field(default_factory=dict)
+
+    _check_extras = field_validator("extras", mode="before")(_validate_extras_before)
+
+
 class Faction(BaseModel):
     world_id: str
     id: str

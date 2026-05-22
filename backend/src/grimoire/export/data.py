@@ -92,6 +92,7 @@ _ENTITY_DIRS: dict[str, str] = {
     "lore": "lore",
     "factions": "factions",
     "items": "items",
+    "monsters": "monsters",
     "greetings": "greetings",
 }
 

@@ -99,7 +99,14 @@ async function request<T>(
 // types/plugins.py / types/mechanics.py)
 // --------------------------------------------------------------------------
 
-export type EntityKind = "character" | "item" | "location" | "lore" | "faction" | "greeting";
+export type EntityKind =
+  | "character"
+  | "item"
+  | "location"
+  | "lore"
+  | "faction"
+  | "greeting"
+  | "monster";
 
 export const ENTITY_KIND_PLURAL: Record<EntityKind, string> = {
   character: "characters",
@@ -108,6 +115,7 @@ export const ENTITY_KIND_PLURAL: Record<EntityKind, string> = {
   lore: "lore",
   faction: "factions",
   greeting: "greetings",
+  monster: "monsters",
 };
 
 export const ENTITY_KIND_SINGULAR: Record<string, EntityKind> = {
@@ -117,6 +125,7 @@ export const ENTITY_KIND_SINGULAR: Record<string, EntityKind> = {
   lore: "lore",
   factions: "faction",
   greetings: "greeting",
+  monsters: "monster",
 };
 
 export interface WorldMeta {

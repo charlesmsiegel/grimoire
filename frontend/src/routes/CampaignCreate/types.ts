@@ -57,6 +57,7 @@ export const ENTITY_KINDS = [
   "lore",
   "factions",
   "greetings",
+  "monsters",
 ] as const;
 
 export type EntityKind = (typeof ENTITY_KINDS)[number];

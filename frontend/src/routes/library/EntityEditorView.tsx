@@ -24,7 +24,13 @@ import { VariantsPanel } from "./VariantsPanel";
 
 const CHARACTER_HIDDEN_KEYS = ["voice", "image", "name", "id", "extras"];
 const ENTITY_HIDDEN_KEYS = ["extras"];
-const EXTRAS_SUPPORTED_KINDS = new Set(["characters", "locations", "items", "factions"]);
+const EXTRAS_SUPPORTED_KINDS = new Set([
+  "characters",
+  "locations",
+  "items",
+  "factions",
+  "monsters",
+]);
 
 export function EntityEditorView() {
   const { worldId = "", kind = "characters", entityId = "" } = useParams();

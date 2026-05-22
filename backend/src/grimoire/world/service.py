@@ -55,6 +55,8 @@ from grimoire.types.world import (
     LocationKind,
     LocationStateData,
     LoreEntry,
+    Monster,
+    MonsterCategory,
     Season,
     SelectiveLogic,
     Weather,
@@ -72,7 +74,9 @@ from .weather import generate_weather
 logger = logging.getLogger(__name__)
 
 # World-internal entity kinds World owns CRUD for.
-_OWNED_KINDS: frozenset[str] = frozenset({"item", "location", "lore", "faction", "greeting"})
+_OWNED_KINDS: frozenset[str] = frozenset(
+    {"item", "location", "lore", "faction", "greeting", "monster"}
+)
 
 # §2 Lore secrecy → player-audience filter
 _PLAYER_HIDDEN_SECRECIES: frozenset[str] = frozenset({"restricted", "secret"})
@@ -89,7 +93,7 @@ def _normalize_kind(kind: EntityKind | str) -> str:
     """Accept enums and plural directory names."""
     if isinstance(kind, EntityKind):
         return kind.value
-    if kind in {"items", "locations", "lore", "factions", "greetings", "characters"}:
+    if kind in {"items", "locations", "lore", "factions", "greetings", "characters", "monsters"}:
         return {
             "items": "item",
             "locations": "location",
@@ -97,6 +101,7 @@ def _normalize_kind(kind: EntityKind | str) -> str:
             "factions": "faction",
             "greetings": "greeting",
             "characters": "character",
+            "monsters": "monster",
         }[kind]
     return kind
 
@@ -342,6 +347,17 @@ class WorldService:
     async def list_factions(self, world_id: str) -> list[Faction]:
         rows = await self.library.list_in_world(world_id, EntityKind.FACTION)
         return [_faction_from_entity(r) for r in rows]
+
+    async def list_monsters(self, world_id: str) -> list[Monster]:
+        rows = await self.library.list_in_world(world_id, EntityKind.MONSTER)
+        return [_monster_from_entity(r) for r in rows]
+
+    async def get_monster(self, world_id: str, entity_id: str) -> Monster:
+        try:
+            ent = await self.library.get_entity(world_id, "monster", entity_id)
+        except LibraryNotFoundError as exc:
+            raise WorldNotFoundError(str(exc)) from exc
+        return _monster_from_entity(ent)
 
     # ------------------------------------------------------------------ #
     # Per-campaign resolution
@@ -1338,6 +1354,28 @@ def _item_from_entity(ent: LibraryEntity) -> Item:
         tags=list(ent.tags or fm.get("tags") or []),
         provenance=fm.get("provenance"),
         current_holder=fm.get("current_holder"),
+        description=str(fm.get("description") or ""),
+        body=ent.body,
+    )
+
+
+def _monster_from_entity(ent: LibraryEntity) -> Monster:
+    fm = ent.frontmatter or {}
+    try:
+        category = MonsterCategory(fm.get("category") or "other")
+    except ValueError:
+        category = MonsterCategory.OTHER
+    return Monster(
+        world_id=ent.world_id or "",
+        id=ent.asset_id,
+        name=ent.name,
+        category=category,
+        aliases=list(fm.get("aliases") or []),
+        tags=list(ent.tags or fm.get("tags") or []),
+        threat_level=str(fm.get("threat_level") or ""),
+        habitat=[str(x) for x in (fm.get("habitat") or [])],
+        abilities=[str(x) for x in (fm.get("abilities") or [])],
+        weaknesses=[str(x) for x in (fm.get("weaknesses") or [])],
         description=str(fm.get("description") or ""),
         body=ent.body,
     )

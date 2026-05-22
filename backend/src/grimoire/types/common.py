@@ -32,6 +32,7 @@ class EntityKind(StrEnum):
     LORE = "lore"
     FACTION = "faction"
     GREETING = "greeting"
+    MONSTER = "monster"
     World = "world"
     STYLE_GUIDE = "style_guide"
     IMAGE_PRESET = "image_preset"
@@ -79,6 +80,7 @@ SceneRef = str
 LocationRef = str
 FactionRef = str
 ItemRef = str
+MonsterRef = str
 CampaignId = str
 BranchId = str
 TurnId = str
