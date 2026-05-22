@@ -101,6 +101,8 @@ export interface ReplayBatchView {
   cancelled_at_post_id: string | null;
 }
 
+export type NarratorResponseMode = "all_at_once" | "per_character";
+
 export interface ApiScene {
   id: string;
   campaign_id: string;
@@ -121,6 +123,7 @@ export interface ApiScene {
   summary: string;
   threads_introduced?: { text: string }[];
   threads_paid_off?: { text: string }[];
+  narrator_response_mode?: NarratorResponseMode | null;
 }
 
 export interface SceneDetail {
@@ -415,6 +418,24 @@ export const campaignApi = {
 
   endScene: (id: string, sceneId: string) =>
     api.post<ApiScene>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}/end`),
+
+  updateSceneNarratorMode: (
+    id: string,
+    sceneId: string,
+    next: "all_at_once" | "per_character" | null,
+  ) =>
+    api.patch<{
+      scene: ApiScene & { narrator_response_mode: NarratorResponseMode | null };
+      narrator_response_mode: {
+        scene_override: NarratorResponseMode | null;
+        effective: NarratorResponseMode;
+      };
+    }>(
+      `/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}`,
+      next === null
+        ? { clear_narrator_response_mode: true }
+        : { narrator_response_mode: next },
+    ),
 
   submitTurn: (id: string, pcRef: string, text: string) =>
     api.post<SubmitTurnResult>(`/api/campaigns/${enc(id)}/turns`, { pc_ref: pcRef, text }),

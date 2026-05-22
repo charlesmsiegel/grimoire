@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { ApiScene, OpenCommitment, PCEntry } from "../../api/campaign";
+import { campaignApi, type ApiScene, type NarratorResponseMode, type OpenCommitment, type PCEntry } from "../../api/campaign";
 import { ApiError } from "../../api/client";
 import type { ResolvedCharacter } from "../../api/types";
 import { viewsApi } from "../../api/views";
@@ -100,6 +100,8 @@ export function SidePanel({ campaignId, scene, pcs, commitments, actions }: Prop
       <section className="side-section">
         <AuxBrainstormPanel campaignId={campaignId} />
       </section>
+
+      {scene && <NarratorOverrideSection campaignId={campaignId} scene={scene} />}
 
       <section className="side-section">
         <h3>Quick actions</h3>
@@ -291,4 +293,72 @@ function formatScalar(value: unknown): string {
   if (typeof value === "string") return value.length > 60 ? `${value.slice(0, 60)}…` : value;
   if (Array.isArray(value)) return `[${value.length}]`;
   return "{…}";
+}
+
+interface NarratorOverrideProps {
+  campaignId: string;
+  scene: ApiScene;
+}
+
+function NarratorOverrideSection({ campaignId, scene }: NarratorOverrideProps) {
+  // ``undefined`` on the scene means "this build of the API didn't send the
+  // field"; ``null`` means "no override". Treat both as inherit-from-campaign
+  // in the dropdown.
+  const override = (scene.narrator_response_mode ?? null) as NarratorResponseMode | null;
+  const [selected, setSelected] = useState<NarratorResponseMode | "inherit">(
+    override === null ? "inherit" : override,
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Reset local state when the scene changes (e.g. a new scene opens).
+  useEffect(() => {
+    setSelected(override === null ? "inherit" : override);
+    setError(null);
+  }, [override, scene.id]);
+
+  async function save(next: NarratorResponseMode | "inherit") {
+    setSaving(true);
+    setError(null);
+    try {
+      await campaignApi.updateSceneNarratorMode(
+        campaignId,
+        scene.id,
+        next === "inherit" ? null : next,
+      );
+    } catch (err) {
+      const message =
+        err instanceof ApiError ? `${err.status}: ${err.message}` :
+        err instanceof Error ? err.message : String(err);
+      setError(message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="side-section">
+      <h3>Narrator response</h3>
+      <p className="side-empty">
+        Inherits the campaign default unless pinned for this scene.
+      </p>
+      <label className="wizard-field">
+        <span className="side-empty">Mode</span>
+        <select
+          value={selected}
+          disabled={saving}
+          onChange={(e) => {
+            const next = e.target.value as NarratorResponseMode | "inherit";
+            setSelected(next);
+            void save(next);
+          }}
+        >
+          <option value="inherit">Inherit from campaign</option>
+          <option value="all_at_once">All at once</option>
+          <option value="per_character">Per character</option>
+        </select>
+      </label>
+      {error && <p className="wizard-error" role="alert">{error}</p>}
+    </section>
+  );
 }

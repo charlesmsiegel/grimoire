@@ -663,6 +663,28 @@ class SceneManager:
                 scene.present_character_refs.append(character_ref)
             self._write_sidecar(scene)
 
+    async def set_narrator_response_mode(
+        self,
+        scene_id: str,
+        mode: str | None,
+    ) -> Scene:
+        """Update the per-scene narrator response mode override.
+
+        ``mode=None`` clears the override (scene falls back to the
+        campaign default). Unknown values are rejected by the resolver
+        so callers — typically the REST layer — should validate before
+        passing them in.
+        """
+        from grimoire.scenes.narrator_mode import normalize_response_mode
+
+        async with self._lock_for(scene_id):
+            scene = await self.get_scene(scene_id)
+            scene.narrator_response_mode = (
+                None if mode is None else normalize_response_mode(mode)
+            )
+            self._write_sidecar(scene)
+            return scene
+
     # -- Decisions -------------------------------------------------------
 
     async def is_scene_break(

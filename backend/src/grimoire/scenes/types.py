@@ -110,6 +110,12 @@ class Scene:
     final_summary: str | None = None
     key_beats: list[str] = field(default_factory=list)
 
+    # Per-scene override of the campaign's narrator response mode.
+    # ``None`` means "inherit from campaign". See
+    # :mod:`grimoire.scenes.narrator_mode` for the allowed values and
+    # the resolver that combines this with the campaign default.
+    narrator_response_mode: str | None = None
+
 
 @dataclass
 class SceneInit:

@@ -444,6 +444,31 @@ class AdvancedSettingsPayload(BaseModel):
     per_task_prompts: dict[str, str] = Field(default_factory=dict)
 
 
+class NarratorSettingsPayload(BaseModel):
+    """Campaign default narrator response mode.
+
+    ``response_mode`` chooses how the narrator addresses the present cast
+    on each beat: ``"all_at_once"`` packs every character into a single
+    post, while ``"per_character"`` produces one post per present
+    character. Individual scenes may override this default via
+    PATCH /campaigns/{id}/scenes/{scene_id}.
+    """
+
+    response_mode: str = "all_at_once"
+
+
+class SceneUpdatePayload(BaseModel):
+    """Per-scene overrides. Each field is optional; ``narrator_response_mode``
+    accepts ``"all_at_once"``, ``"per_character"``, or ``None`` to clear the
+    override and fall back to the campaign default."""
+
+    narrator_response_mode: str | None = Field(default=None)
+    # Sentinel: lets callers distinguish "I want to clear this" (explicit
+    # null in the JSON body) from "I didn't touch this field" (omitted).
+    clear_narrator_response_mode: bool = False
+
+
+
 def _read_routing_blocks(state_store: Any, campaign_id: str) -> dict[str, dict[str, str]]:
     """Pull the three routing blocks straight from ``campaign.yaml``.
 
@@ -604,6 +629,41 @@ async def set_campaign_advanced(
     }
     await _write_campaign_config(state_store, campaign_id, cfg)
     return cfg["advanced"]
+
+
+@router.get("/{campaign_id}/narrator")
+async def get_campaign_narrator(campaign_id: str, state_store: StateStoreDep) -> Any:
+    from grimoire.scenes.narrator_mode import DEFAULT_RESPONSE_MODE, normalize_response_mode
+
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    narrator = cfg.get("narrator") or {}
+    mode = normalize_response_mode(narrator.get("response_mode")) or DEFAULT_RESPONSE_MODE
+    return {"response_mode": mode}
+
+
+@router.put("/{campaign_id}/narrator")
+async def set_campaign_narrator(
+    campaign_id: str,
+    payload: NarratorSettingsPayload,
+    state_store: StateStoreDep,
+) -> Any:
+    from grimoire.scenes.narrator_mode import RESPONSE_MODES, normalize_response_mode
+
+    mode = normalize_response_mode(payload.response_mode)
+    if mode is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"response_mode must be one of {list(RESPONSE_MODES)}, "
+                f"got {payload.response_mode!r}"
+            ),
+        )
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    cfg["narrator"] = {"response_mode": mode}
+    await _write_campaign_config(state_store, campaign_id, cfg)
+    return cfg["narrator"]
 
 
 # --------------------------------------------------------------------------- #
@@ -1025,6 +1085,74 @@ async def get_scene(
         "scene": to_payload(scene),
         "body": body,
         "posts": to_payload(posts),
+    }
+
+
+@router.patch("/{campaign_id}/scenes/{scene_id}")
+async def update_scene(
+    campaign_id: str,
+    scene_id: str,
+    payload: SceneUpdatePayload,
+    scenes: ScenesDep,
+    state_store: StateStoreDep,
+) -> Any:
+    """Apply a scene-level override.
+
+    Currently exposes the narrator response mode override:
+    - ``narrator_response_mode`` set to a known mode pins the scene.
+    - ``clear_narrator_response_mode: true`` clears the override so the
+      scene inherits the campaign default again.
+    - Omitting both leaves the override unchanged.
+    """
+    from grimoire.scenes.narrator_mode import (
+        RESPONSE_MODES,
+        effective_response_mode,
+        normalize_response_mode,
+    )
+
+    try:
+        scene = await _require_scene_owned(scenes, campaign_id, scene_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+    touched_narrator = False
+    new_mode: str | None = scene.narrator_response_mode
+
+    if payload.clear_narrator_response_mode:
+        new_mode = None
+        touched_narrator = True
+    elif payload.narrator_response_mode is not None:
+        normalized = normalize_response_mode(payload.narrator_response_mode)
+        if normalized is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"narrator_response_mode must be one of {list(RESPONSE_MODES)} "
+                    f"or null, got {payload.narrator_response_mode!r}"
+                ),
+            )
+        new_mode = normalized
+        touched_narrator = True
+
+    if touched_narrator:
+        try:
+            scene = await scenes.set_narrator_response_mode(scene_id, new_mode)
+        except Exception as exc:
+            raise map_lookup_errors(exc) from exc
+
+    row = await state_store.db.fetchone("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
+    effective = effective_response_mode(
+        scene_override=scene.narrator_response_mode,
+        campaign_row=dict(row) if row else None,
+    )
+    return {
+        "scene": to_payload(scene),
+        "narrator_response_mode": {
+            "scene_override": scene.narrator_response_mode,
+            "effective": effective,
+        },
     }
 
 
