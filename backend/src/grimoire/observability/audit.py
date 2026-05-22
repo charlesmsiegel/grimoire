@@ -250,10 +250,7 @@ class AuditStore:
         applied_rows = await self._fetch_delta_rows(applied_ids)
         queued_rows, review_meta = await self._fetch_queued_rows(queued_review_ids)
 
-        applied = [
-            self._build_delta_entry(r, evidence_pool, status="auto")
-            for r in applied_rows
-        ]
+        applied = [self._build_delta_entry(r, evidence_pool, status="auto") for r in applied_rows]
         queued = [
             self._build_delta_entry(
                 r,
