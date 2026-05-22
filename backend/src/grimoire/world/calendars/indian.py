@@ -21,8 +21,18 @@ from .base import CalendarEngine, DateParts
 from .gregorian import gregorian_from_jdn, gregorian_to_jdn, is_gregorian_leap
 
 MONTH_NAMES = [
-    "Chaitra", "Vaisakha", "Jyaistha", "Ashadha", "Shravana", "Bhadra",
-    "Asvina", "Kartika", "Agrahayana", "Pausha", "Magha", "Phalguna",
+    "Chaitra",
+    "Vaisakha",
+    "Jyaistha",
+    "Ashadha",
+    "Shravana",
+    "Bhadra",
+    "Asvina",
+    "Kartika",
+    "Agrahayana",
+    "Pausha",
+    "Magha",
+    "Phalguna",
 ]
 
 
@@ -45,7 +55,7 @@ def saka_to_jdn(year: int, month: int, day: int) -> int:
 
 def saka_from_jdn(jdn: int) -> tuple[int, int, int]:
     # Saka new year falls in March of (saka + 78). Use Gregorian as anchor.
-    gy, gm, gd = gregorian_from_jdn(jdn)
+    gy, _, _ = gregorian_from_jdn(jdn)
     leap = is_gregorian_leap(gy)
     chaitra_start = gregorian_to_jdn(gy, 3, 21 if leap else 22)
     if jdn >= chaitra_start:

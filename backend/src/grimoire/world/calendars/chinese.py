@@ -18,19 +18,48 @@ from __future__ import annotations
 from .base import CalendarEngine, DateParts
 
 MONTH_NAMES = [
-    "正月 (Zhengyue)", "二月 (Eryue)", "三月 (Sanyue)", "四月 (Siyue)",
-    "五月 (Wuyue)", "六月 (Liuyue)", "七月 (Qiyue)", "八月 (Bayue)",
-    "九月 (Jiuyue)", "十月 (Shiyue)", "十一月 (Shiyiyue)", "腊月 (Layue)",
+    "正月 (Zhengyue)",
+    "二月 (Eryue)",
+    "三月 (Sanyue)",
+    "四月 (Siyue)",
+    "五月 (Wuyue)",
+    "六月 (Liuyue)",
+    "七月 (Qiyue)",
+    "八月 (Bayue)",
+    "九月 (Jiuyue)",
+    "十月 (Shiyue)",
+    "十一月 (Shiyiyue)",
+    "腊月 (Layue)",
 ]
 
 ANIMAL_NAMES = [
-    "Rat", "Ox", "Tiger", "Rabbit", "Dragon", "Snake",
-    "Horse", "Goat", "Monkey", "Rooster", "Dog", "Pig",
+    "Rat",
+    "Ox",
+    "Tiger",
+    "Rabbit",
+    "Dragon",
+    "Snake",
+    "Horse",
+    "Goat",
+    "Monkey",
+    "Rooster",
+    "Dog",
+    "Pig",
 ]
 STEM_NAMES = ["Jia", "Yi", "Bing", "Ding", "Wu", "Ji", "Geng", "Xin", "Ren", "Gui"]
 BRANCH_NAMES = [
-    "Zi", "Chou", "Yin", "Mao", "Chen", "Si",
-    "Wu", "Wei", "Shen", "You", "Xu", "Hai",
+    "Zi",
+    "Chou",
+    "Yin",
+    "Mao",
+    "Chen",
+    "Si",
+    "Wu",
+    "Wei",
+    "Shen",
+    "You",
+    "Xu",
+    "Hai",
 ]
 
 
@@ -162,18 +191,14 @@ def _slot_for_civil_month(year: int, civil_month: int, is_leap: bool) -> int:
         return civil_month - 1
     if is_leap:
         if civil_month != leap_month:
-            raise ValueError(
-                f"Chinese year {year} has leap month {leap_month}, not {civil_month}"
-            )
+            raise ValueError(f"Chinese year {year} has leap month {leap_month}, not {civil_month}")
         return leap_month
     if civil_month <= leap_month:
         return civil_month - 1
     return civil_month  # shifted by one because of inserted leap
 
 
-def chinese_to_jdn(
-    year: int, month: int, day: int, is_leap: bool = False
-) -> int:
+def chinese_to_jdn(year: int, month: int, day: int, is_leap: bool = False) -> int:
     start_jdn, _ = _year_data(year)
     months = _month_lengths(year)
     slot = _slot_for_civil_month(year, month, is_leap)

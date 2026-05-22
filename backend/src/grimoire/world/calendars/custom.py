@@ -38,9 +38,7 @@ def is_custom_leap(year: int, rule: LeapRule) -> bool:
         if year % short != 0:
             return False
         if skip > 0 and year % skip == 0:
-            if keep > 0 and year % keep == 0:
-                return True
-            return False
+            return bool(keep > 0 and year % keep == 0)
         return True
     if rule.kind in (LeapRuleKind.CUSTOM_CYCLE, LeapRuleKind.LEAP_MONTH):
         if rule.cycle_years <= 0:
@@ -75,7 +73,6 @@ def custom_year_length(year: int, config: CustomCalendarConfig) -> int:
 
 def custom_to_jdn(year: int, month: int, day: int, config: CustomCalendarConfig) -> int:
     if year >= 1:
-        years_before = year - 1
         years_iter = range(1, year)
         days_before_year = sum(custom_year_length(y, config) for y in years_iter)
     else:
@@ -129,10 +126,7 @@ class CustomCalendarEngine(CalendarEngine):
 
     def format(self, parts: DateParts) -> str:
         months = custom_month_lengths(parts.year, self.config)
-        if 1 <= parts.month <= len(months):
-            name = months[parts.month - 1][0]
-        else:
-            name = f"M{parts.month}"
+        name = months[parts.month - 1][0] if 1 <= parts.month <= len(months) else f"M{parts.month}"
         era = f" {self.era_name}" if self.era_name else ""
         return f"{parts.day} {name} {parts.year}{era}"
 

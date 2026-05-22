@@ -31,17 +31,34 @@ async def test_list_includes_all_builtins(calendar_svc: CalendarService) -> None
     cals = await calendar_svc.list_calendars()
     ids = {c.id for c in cals}
     assert {
-        "gregorian", "julian", "hebrew", "islamic", "persian", "chinese",
-        "japanese", "indian-saka", "ethiopian", "coptic", "bahai",
-        "buddhist", "iso-week", "stardate",
+        "gregorian",
+        "julian",
+        "hebrew",
+        "islamic",
+        "persian",
+        "chinese",
+        "japanese",
+        "indian-saka",
+        "ethiopian",
+        "coptic",
+        "bahai",
+        "buddhist",
+        "iso-week",
+        "stardate",
     } <= ids
 
 
 async def test_list_builtin_holiday_sets(calendar_svc: CalendarService) -> None:
     sets = await calendar_svc.list_holiday_sets()
     ids = {s.id for s in sets}
-    assert {"us-federal", "jewish", "islamic", "japanese-public",
-            "chinese-traditional", "wheel-of-the-year"} <= ids
+    assert {
+        "us-federal",
+        "jewish",
+        "islamic",
+        "japanese-public",
+        "chinese-traditional",
+        "wheel-of-the-year",
+    } <= ids
 
 
 async def test_get_builtin_calendar(calendar_svc: CalendarService) -> None:
@@ -142,12 +159,14 @@ async def test_custom_holiday_set_round_trip(calendar_svc: CalendarService) -> N
 
 
 async def test_delete_custom_calendar(calendar_svc: CalendarService) -> None:
-    await calendar_svc.create_calendar({
-        "id": "throwaway",
-        "name": "Throwaway",
-        "system": "custom",
-        "custom": {"months": [{"name": "x", "days": 1}]},
-    })
+    await calendar_svc.create_calendar(
+        {
+            "id": "throwaway",
+            "name": "Throwaway",
+            "system": "custom",
+            "custom": {"months": [{"name": "x", "days": 1}]},
+        }
+    )
     await calendar_svc.delete_calendar("throwaway")
     with pytest.raises(LibraryNotFoundError):
         await calendar_svc.get_calendar("throwaway")

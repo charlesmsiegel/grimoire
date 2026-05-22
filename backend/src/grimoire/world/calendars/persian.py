@@ -1,7 +1,7 @@
 """Persian (Solar Hijri / Jalali) calendar engine.
 
 Uses Birashk's algorithmic 2820-year cycle approximation. Months:
-6 × 31 days (Farvardin..Shahrivar), 5 × 30 days (Mehr..Bahman),
+6 x 31 days (Farvardin..Shahrivar), 5 x 30 days (Mehr..Bahman),
 and Esfand (29 or 30 in leap years).
 
 Epoch: 1 Farvardin AP 1 = 19 March 622 CE (Julian) = JDN 1948321.
@@ -18,8 +18,18 @@ from .base import CalendarEngine, DateParts
 PERSIAN_EPOCH = 1948321  # JDN of 1 Farvardin AP 1
 
 MONTH_NAMES = [
-    "Farvardin", "Ordibehesht", "Khordad", "Tir", "Mordad", "Shahrivar",
-    "Mehr", "Aban", "Azar", "Dey", "Bahman", "Esfand",
+    "Farvardin",
+    "Ordibehesht",
+    "Khordad",
+    "Tir",
+    "Mordad",
+    "Shahrivar",
+    "Mehr",
+    "Aban",
+    "Azar",
+    "Dey",
+    "Bahman",
+    "Esfand",
 ]
 
 
@@ -37,10 +47,7 @@ def persian_to_jdn(year: int, month: int, day: int) -> int:
     cycle = epoch_base // 2820
     cycle_year = (epoch_base % 2820) + 474
 
-    if month <= 7:
-        days_before_month = (month - 1) * 31
-    else:
-        days_before_month = (month - 1) * 30 + 6
+    days_before_month = (month - 1) * 31 if month <= 7 else (month - 1) * 30 + 6
 
     return (
         day

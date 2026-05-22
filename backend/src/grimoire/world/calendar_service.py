@@ -33,7 +33,6 @@ from grimoire.types.calendar import (
 from grimoire.types.composition import LibraryEntity
 
 from .calendars import (
-    BUILTIN_CALENDARS,
     engine_for,
     get_builtin_calendar,
     get_builtin_holiday_set,
@@ -57,16 +56,22 @@ def _calendar_from_entity(entity: LibraryEntity) -> Calendar:
     if fm.get("system") == CalendarSystem.CUSTOM.value or fm.get("system") == "custom":
         custom = CustomCalendarConfig(
             months=[
-                {"name": m.get("name") or f"M{i+1}", "days": int(m.get("days") or 30),
-                 "short_name": m.get("short_name") or ""}  # type: ignore[arg-type]
+                {
+                    "name": m.get("name") or f"M{i + 1}",
+                    "days": int(m.get("days") or 30),
+                    "short_name": m.get("short_name") or "",
+                }  # type: ignore[arg-type]
                 for i, m in enumerate(months_raw)
             ],
             days_per_week=int(custom_raw.get("days_per_week") or 7),
             week_day_names=list(custom_raw.get("week_day_names") or []),
             seasons=[
-                {"name": s.get("name") or "", "start_month": int(s.get("start_month") or 1),
-                 "start_day": int(s.get("start_day") or 1),
-                 "palette": s.get("palette") or ""}  # type: ignore[arg-type]
+                {
+                    "name": s.get("name") or "",
+                    "start_month": int(s.get("start_month") or 1),
+                    "start_day": int(s.get("start_day") or 1),
+                    "palette": s.get("palette") or "",
+                }  # type: ignore[arg-type]
                 for s in seasons_raw
             ],
             leap_rule=LeapRule(
@@ -207,9 +212,7 @@ class CalendarService:
         if not id_:
             raise ValueError("calendar id required")
         if is_builtin_calendar(id_):
-            raise LibraryConflictError(
-                f"calendar id {id_!r} is reserved for a built-in calendar"
-            )
+            raise LibraryConflictError(f"calendar id {id_!r} is reserved for a built-in calendar")
         # Reject if a custom one already exists with this id.
         try:
             await self.library.get_custom_calendar(id_)
@@ -218,18 +221,14 @@ class CalendarService:
         else:
             raise LibraryConflictError(f"calendar {id_!r} already exists")
         fm = _calendar_to_frontmatter(payload)
-        entity = await self.library.write_custom_calendar(
-            id_, frontmatter=fm, source=source
-        )
+        entity = await self.library.write_custom_calendar(id_, frontmatter=fm, source=source)
         return _calendar_from_entity(entity)
 
     async def update_calendar(
         self, calendar_id: str, payload: dict[str, Any], *, source: str = "user"
     ) -> Calendar:
         if is_builtin_calendar(calendar_id):
-            raise LibraryConflictError(
-                f"calendar {calendar_id!r} is built-in and cannot be edited"
-            )
+            raise LibraryConflictError(f"calendar {calendar_id!r} is built-in and cannot be edited")
         existing = await self.library.get_custom_calendar(calendar_id)
         fm = dict(existing.frontmatter or {})
         merged = {**fm, **_calendar_to_frontmatter({**fm, **payload, "id": calendar_id})}
@@ -252,9 +251,7 @@ class CalendarService:
         if not id_:
             raise ValueError("holiday set id required")
         if is_builtin_holiday_set(id_):
-            raise LibraryConflictError(
-                f"holiday set id {id_!r} is reserved for a built-in set"
-            )
+            raise LibraryConflictError(f"holiday set id {id_!r} is reserved for a built-in set")
         try:
             await self.library.get_custom_holiday_set(id_)
         except LibraryNotFoundError:
@@ -262,18 +259,14 @@ class CalendarService:
         else:
             raise LibraryConflictError(f"holiday set {id_!r} already exists")
         fm = _holiday_set_to_frontmatter(payload)
-        entity = await self.library.write_custom_holiday_set(
-            id_, frontmatter=fm, source=source
-        )
+        entity = await self.library.write_custom_holiday_set(id_, frontmatter=fm, source=source)
         return _holiday_set_from_entity(entity)
 
     async def update_holiday_set(
         self, set_id: str, payload: dict[str, Any], *, source: str = "user"
     ) -> HolidaySet:
         if is_builtin_holiday_set(set_id):
-            raise LibraryConflictError(
-                f"holiday set {set_id!r} is built-in and cannot be edited"
-            )
+            raise LibraryConflictError(f"holiday set {set_id!r} is built-in and cannot be edited")
         existing = await self.library.get_custom_holiday_set(set_id)
         fm = dict(existing.frontmatter or {})
         merged = {**fm, **_holiday_set_to_frontmatter({**fm, **payload, "id": set_id})}
@@ -284,16 +277,12 @@ class CalendarService:
 
     async def delete_holiday_set(self, set_id: str, *, source: str = "user") -> None:
         if is_builtin_holiday_set(set_id):
-            raise LibraryConflictError(
-                f"holiday set {set_id!r} is built-in and cannot be deleted"
-            )
+            raise LibraryConflictError(f"holiday set {set_id!r} is built-in and cannot be deleted")
         await self.library.delete_custom_holiday_set(set_id, source=source)
 
     # -------- conversion / reconciliation --------------------------------
 
-    async def date_to_jdn(
-        self, calendar_id: str, year: int, month: int, day: int
-    ) -> int:
+    async def date_to_jdn(self, calendar_id: str, year: int, month: int, day: int) -> int:
         calendar = await self.get_calendar(calendar_id)
         engine = engine_for(calendar)
         return engine.to_jdn(year, month, day)

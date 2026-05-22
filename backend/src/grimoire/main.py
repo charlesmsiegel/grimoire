@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from grimoire import __version__
 from grimoire.api.alternates import router as alternates_router
 from grimoire.api.auxiliary import router as auxiliary_router
+from grimoire.api.calendars import router as calendars_router
 from grimoire.api.campaigns import router as campaigns_router
 from grimoire.api.config import router as config_router
 from grimoire.api.container import ServiceContainer
@@ -22,7 +23,6 @@ from grimoire.api.health import router as health_router
 from grimoire.api.hud import router as hud_router
 from grimoire.api.imagegen import router as imagegen_router
 from grimoire.api.imports import router as imports_router
-from grimoire.api.calendars import router as calendars_router
 from grimoire.api.library import router as library_router
 from grimoire.api.observability import router as observability_router
 from grimoire.api.setup import router as setup_router
