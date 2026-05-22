@@ -109,7 +109,7 @@ export function PlayView({ campaignId }: Props) {
   const latestNarratorTurnId = useMemo(() => {
     for (let i = play.state.posts.length - 1; i >= 0; i -= 1) {
       const p = play.state.posts[i];
-      if (p.author_kind === "narrator" && p.turn_id) return p.turn_id;
+      if (p && p.author_kind === "narrator" && p.turn_id) return p.turn_id;
     }
     return null;
   }, [play.state.posts]);
