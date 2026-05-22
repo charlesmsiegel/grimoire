@@ -28,7 +28,7 @@ from grimoire.extractor.config import ExtractorConfig
 from grimoire.extractor.mode_select import select_mode
 from grimoire.extractor.routing import Decision, route_deltas
 from grimoire.llm_gateway.capabilities import ProviderCapabilities
-from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
+from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.orchestrator.config import OrchestratorConfig
 from grimoire.orchestrator.errors import (
     AlternateNotFoundError,
@@ -193,7 +193,7 @@ class OrchestratorService:
         library: Any | None = None,
         context_cache: ContextBuilderCache | None = None,
         auto_disable: Any | None = None,
-        metrics: MetricsRegistryProtocol = _NullMetrics(),
+        metrics: MetricsRegistryProtocol = NULL_METRICS,
     ) -> None:
         self._bus = event_bus
         self._scenes = scene_manager

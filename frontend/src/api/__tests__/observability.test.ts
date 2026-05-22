@@ -27,7 +27,7 @@ describe("observabilityApi", () => {
     ]);
     const result = await observabilityApi.getMetricsKnown();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const url = String(fetchSpy.mock.calls[0][0]);
+    const url = String(fetchSpy.mock.calls[0]![0]);
     expect(url).toContain("/api/observability/metrics/known");
     expect(result).toEqual([
       { module: "orchestrator", operation: "turn", last_recorded_at: "x" },
@@ -45,7 +45,7 @@ describe("observabilityApi", () => {
       max_ms: 10,
     });
     await observabilityApi.getMetricsSummary("orchestrator", "turn", 3600);
-    const url = String(fetchSpy.mock.calls[0][0]);
+    const url = String(fetchSpy.mock.calls[0]![0]);
     expect(url).toContain("/api/observability/metrics/summary");
     expect(url).toContain("module=orchestrator");
     expect(url).toContain("operation=turn");
@@ -55,7 +55,7 @@ describe("observabilityApi", () => {
   it("getMetricsTrend forwards bucket and window_seconds", async () => {
     mockJsonResponse([]);
     await observabilityApi.getMetricsTrend("llm_gateway", "complete", "minute", 600);
-    const url = String(fetchSpy.mock.calls[0][0]);
+    const url = String(fetchSpy.mock.calls[0]![0]);
     expect(url).toContain("bucket=minute");
     expect(url).toContain("window_seconds=600");
   });

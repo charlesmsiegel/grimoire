@@ -39,7 +39,7 @@ from grimoire.files import load_yaml, write_yaml
 from grimoire.imagegen.backend import cache_key_for_request, make_thumbnail
 from grimoire.imagegen.config import ImageGenConfig
 from grimoire.imagegen.prompt import ComposedPrompt, PromptComposer
-from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
+from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.state_store import StateStore
 from grimoire.state_store.paths import campaigns_root, image_metadata_path
 from grimoire.types.common import HealthLevel, HealthStatus
@@ -258,7 +258,7 @@ class ImageGenService:
         plugin_backend_ids: Iterable[str] | None = None,
         thumbnail_subdir: str = "thumbnails",
         config: ImageGenConfig | None = None,
-        metrics: MetricsRegistryProtocol = _NullMetrics(),
+        metrics: MetricsRegistryProtocol = NULL_METRICS,
     ) -> None:
         self.store = store
         self.data_root = store.data_root

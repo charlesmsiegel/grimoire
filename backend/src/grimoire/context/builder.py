@@ -33,7 +33,7 @@ from grimoire.context.config import ContextBuilderConfig
 from grimoire.context.errors import LockInOverflowError
 from grimoire.context.tokens import TokenEstimator, cheap_estimator, estimate_tokens
 from grimoire.continuity.registry import resolve_continuity
-from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
+from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.templates import render as render_template
 from grimoire.types.common import CampaignId, TurnId
 from grimoire.types.composition import Composition
@@ -225,7 +225,7 @@ class ContextBuilderService:
         time_engine: Any | None = None,
         transient_state: Any | None = None,
         config: ContextBuilderConfig | None = None,
-        metrics: MetricsRegistryProtocol = _NullMetrics(),
+        metrics: MetricsRegistryProtocol = NULL_METRICS,
     ) -> None:
         self._library = library
         self._characters = characters

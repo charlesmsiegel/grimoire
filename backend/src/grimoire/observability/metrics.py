@@ -72,6 +72,9 @@ class _NullMetrics:
         yield
 
 
+NULL_METRICS: MetricsRegistryProtocol = _NullMetrics()
+
+
 class MetricsRegistry:
     """Records and queries per-module metric samples."""
 
@@ -170,9 +173,7 @@ class MetricsRegistry:
                     force=force,
                 )
             except Exception:
-                logger.exception(
-                    "metrics.measure: record failed for %s/%s", module, operation
-                )
+                logger.exception("metrics.measure: record failed for %s/%s", module, operation)
 
     async def query_recent(
         self,
@@ -217,16 +218,12 @@ class MetricsRegistry:
         if bucket not in ("minute", "hour", "day"):
             raise ValueError(f"bucket must be minute|hour|day, got {bucket!r}")
         if window_seconds < 1 or window_seconds > 30 * 86400:
-            raise ValueError(
-                f"window_seconds must be in [1, {30 * 86400}], got {window_seconds}"
-            )
+            raise ValueError(f"window_seconds must be in [1, {30 * 86400}], got {window_seconds}")
 
         bucket_seconds = {"minute": 60, "hour": 3600, "day": 86400}[bucket]
         max_buckets = (window_seconds + bucket_seconds - 1) // bucket_seconds + 1
         if max_buckets > 5000:
-            raise ValueError(
-                f"requested {max_buckets} buckets (limit 5000) for bucket={bucket}"
-            )
+            raise ValueError(f"requested {max_buckets} buckets (limit 5000) for bucket={bucket}")
 
         now = datetime.now(UTC)
         since = now - timedelta(seconds=window_seconds)
@@ -323,7 +320,6 @@ class MetricsRegistry:
             "max_ms": values[-1] if values else 0.0,
         }
 
-
     async def known_pairs(self) -> list[dict[str, Any]]:
         """Return every ``(module, operation)`` with a row, plus its
         latest ``recorded_at`` (so the frontend can sort by recency)."""
@@ -354,4 +350,4 @@ def _percentile(values: list[float], q: float) -> float:
     return values[lo] * (1.0 - frac) + values[hi] * frac
 
 
-__all__ = ["MetricsRegistry", "MetricsRegistryProtocol", "_NullMetrics"]
+__all__ = ["NULL_METRICS", "MetricsRegistry", "MetricsRegistryProtocol", "_NullMetrics"]

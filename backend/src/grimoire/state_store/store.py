@@ -27,6 +27,7 @@ from grimoire.files import (
     write_markdown,
     write_yaml,
 )
+from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.state_store.delta_log import (
     DeltaRecord,
     get_delta,
@@ -68,7 +69,6 @@ from grimoire.state_store.search import (
     keyword_search_facts,
     keyword_search_library,
 )
-from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
 from grimoire.state_store.search import vector_search as _vector_search
 from grimoire.state_store.snapshots import (
     remove_snapshots_for_world,
@@ -152,7 +152,7 @@ class StateStore:
         db: Database,
         data_root: Path,
         *,
-        metrics: MetricsRegistryProtocol = _NullMetrics(),
+        metrics: MetricsRegistryProtocol = NULL_METRICS,
     ) -> None:
         self.db = db
         self.data_root = Path(data_root)
@@ -171,16 +171,18 @@ class StateStore:
         in WAL mode (the busy handler is not invoked for snapshot upgrades),
         so deferred transactions race against background writers.
         """
-        async with self._metrics.measure("state_store", "write"):
-            async with self.db.acquire() as conn:
-                await conn.execute("BEGIN IMMEDIATE")
-                try:
-                    yield conn
-                except Exception:
-                    await conn.execute("ROLLBACK")
-                    raise
-                else:
-                    await conn.execute("COMMIT")
+        async with (
+            self._metrics.measure("state_store", "write"),
+            self.db.acquire() as conn,
+        ):
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield conn
+            except Exception:
+                await conn.execute("ROLLBACK")
+                raise
+            else:
+                await conn.execute("COMMIT")
 
     # ------------------------------------------------------------------
     # Library file writes

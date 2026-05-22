@@ -36,9 +36,7 @@ async def test_run_turn_records_metric(db):
     """
     from grimoire.orchestrator.service import OrchestratorService
 
-    metrics = MetricsRegistry(
-        db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0)
-    )
+    metrics = MetricsRegistry(db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0))
 
     orch = OrchestratorService.__new__(OrchestratorService)
     orch._metrics = metrics
@@ -59,7 +57,8 @@ async def test_run_turn_records_metric(db):
 
     rows = await db.fetchall("SELECT module, metric, labels FROM metric_samples")
     matches = [
-        r for r in rows
+        r
+        for r in rows
         if r["module"] == "orchestrator"
         and r["metric"] == "turn"
         and json.loads(r["labels"])["success"] is True

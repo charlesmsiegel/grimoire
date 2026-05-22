@@ -26,9 +26,7 @@ async def db(tmp_path):
 async def test_time_engine_advance_records_metric(db):
     from grimoire.time_engine.service import TimeEngineService
 
-    metrics = MetricsRegistry(
-        db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0)
-    )
+    metrics = MetricsRegistry(db, config=MetricsConfig(enabled=True, sample_rate_hot_path=1.0))
 
     te = TimeEngineService.__new__(TimeEngineService)
     te._metrics = metrics

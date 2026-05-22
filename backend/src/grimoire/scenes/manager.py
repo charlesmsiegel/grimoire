@@ -16,7 +16,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from grimoire.observability.metrics import MetricsRegistryProtocol, _NullMetrics
+from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.scenes.boundary import BoundaryConfig, detect_scene_break
 from grimoire.scenes.events import (
     ADVANCE_DISABLED,
@@ -143,7 +143,7 @@ class SceneManager:
         scene_break_classifier: SceneBreakClassifier | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         continuity: object | None = None,
-        metrics: MetricsRegistryProtocol = _NullMetrics(),
+        metrics: MetricsRegistryProtocol = NULL_METRICS,
     ) -> None:
         self.data_root = Path(data_root)
         self.config = config or SceneManagerConfig()
