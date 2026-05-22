@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useEffect, useId, useState } from "react";
 
 export type StructuredValue =
   | string
@@ -61,8 +61,13 @@ export function StructuredValueEditor({ value, onChange, readOnly = false }: Pro
       <ArrayRows items={value as StructuredValue[]} onChange={onChange} readOnly={readOnly} />
     );
   }
-  // object branch arrives in Task 5
-  return <p className="library-status">(object editor coming)</p>;
+  return (
+    <ObjectRows
+      record={value as Record<string, StructuredValue>}
+      onChange={onChange}
+      readOnly={readOnly}
+    />
+  );
 }
 
 function ScalarRow({
@@ -155,6 +160,166 @@ function ArrayRows({
         </li>
       )}
     </ol>
+  );
+}
+
+function ObjectRows({
+  record,
+  onChange,
+  readOnly,
+}: {
+  record: Record<string, StructuredValue>;
+  onChange: (next: StructuredValue) => void;
+  readOnly: boolean;
+}) {
+  const entries = Object.entries(record);
+  const existingKeys = new Set(Object.keys(record));
+
+  const updateValue = (key: string, next: StructuredValue) => {
+    onChange({ ...record, [key]: next });
+  };
+  const removeKey = (key: string) => {
+    const next = { ...record };
+    delete next[key];
+    onChange(next);
+  };
+  // Rebuild the object preserving insertion order so a key rename doesn't
+  // jump to the end.
+  const renameKey = (oldKey: string, newKey: string) => {
+    const next: Record<string, StructuredValue> = {};
+    for (const [k, v] of Object.entries(record)) {
+      next[k === oldKey ? newKey : k] = v;
+    }
+    onChange(next);
+  };
+
+  return (
+    <div className="structured-object">
+      {entries.map(([key, val]) => (
+        <ObjectRow
+          key={key}
+          name={key}
+          value={val}
+          existingKeys={existingKeys}
+          onRename={(next) => renameKey(key, next)}
+          onValueChange={(next) => updateValue(key, next)}
+          onRemove={() => removeKey(key)}
+          readOnly={readOnly}
+        />
+      ))}
+      {!readOnly && (
+        <PendingObjectRow
+          existingKeys={existingKeys}
+          onCommit={(name) => onChange({ ...record, [name]: null })}
+        />
+      )}
+    </div>
+  );
+}
+
+function ObjectRow({
+  name,
+  value,
+  existingKeys,
+  onRename,
+  onValueChange,
+  onRemove,
+  readOnly,
+}: {
+  name: string;
+  value: StructuredValue;
+  existingKeys: Set<string>;
+  onRename: (next: string) => void;
+  onValueChange: (next: StructuredValue) => void;
+  onRemove: () => void;
+  readOnly: boolean;
+}) {
+  const [draft, setDraft] = useState(name);
+  const [err, setErr] = useState<string | null>(null);
+  // Keep the local draft in sync when the underlying key changes from
+  // outside (e.g. a successful rename re-keyed the object and we are now
+  // rendered for the new name).
+  useEffect(() => {
+    setDraft(name);
+    setErr(null);
+  }, [name]);
+
+  return (
+    <div className="structured-object-row">
+      <input
+        type="text"
+        value={draft}
+        readOnly={readOnly}
+        aria-label={`Key for ${name}`}
+        onChange={(e) => {
+          const next = e.target.value;
+          setDraft(next);
+          const trimmed = next.trim();
+          if (!trimmed) {
+            setErr(null);
+            return;
+          }
+          if (trimmed === name) {
+            setErr(null);
+            return;
+          }
+          if (existingKeys.has(trimmed)) {
+            setErr("key already exists");
+            return;
+          }
+          setErr(null);
+          onRename(trimmed);
+        }}
+      />
+      <div className="structured-object-value">
+        <StructuredValueEditor value={value} onChange={onValueChange} readOnly={readOnly} />
+      </div>
+      {!readOnly && (
+        <button
+          type="button"
+          className="structured-remove"
+          onClick={onRemove}
+          aria-label={`Remove field ${name}`}
+        >
+          ×
+        </button>
+      )}
+      {err && <p className="frontmatter-error">{err}</p>}
+    </div>
+  );
+}
+
+function PendingObjectRow({
+  existingKeys,
+  onCommit,
+}: {
+  existingKeys: Set<string>;
+  onCommit: (name: string) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const trimmed = draft.trim();
+  const valid = trimmed.length > 0 && !existingKeys.has(trimmed);
+  return (
+    <div className="structured-object-pending">
+      <input
+        type="text"
+        value={draft}
+        placeholder="add field…"
+        onChange={(e) => setDraft(e.target.value)}
+      />
+      <button
+        type="button"
+        className="structured-add"
+        disabled={!valid}
+        onClick={() => {
+          if (!valid) return;
+          onCommit(trimmed);
+          setDraft("");
+        }}
+      >
+        + add field
+      </button>
+    </div>
   );
 }
 
