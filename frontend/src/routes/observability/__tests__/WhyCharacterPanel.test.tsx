@@ -142,6 +142,63 @@ describe("WhyCharacterPanel", () => {
     expect(card).toHaveTextContent("280");
   });
 
+  it("merges sources from all backend character prefixes into one card", async () => {
+    // Regression for PR #429: the context builder emits character-kind
+    // sources with summaries prefixed `Active PC:`, `voice:`,
+    // `transient:`, `extras:`, and `extras-breadcrumb:`. Each must map
+    // back to the same ref so the panel shows one card per character.
+    listTurns.mockResolvedValue([turn()]);
+    getTurnPrompt.mockResolvedValue({
+      messages: [],
+      sources: [
+        characterSource({
+          source_id: "src_a",
+          summary: "Active PC: alice",
+          inclusion_reasons: ["pc_card"],
+          tokens: 10,
+        }),
+        characterSource({
+          source_id: "src_b",
+          summary: "voice:alice",
+          inclusion_reasons: ["present_in_scene"],
+          tokens: 20,
+        }),
+        characterSource({
+          source_id: "src_c",
+          summary: "transient:alice",
+          inclusion_reasons: ["mentioned_in_recent_posts"],
+          tokens: 30,
+        }),
+        characterSource({
+          source_id: "src_d",
+          summary: "extras:alice",
+          inclusion_reasons: ["mentioned_in_recent_posts"],
+          tokens: 40,
+        }),
+        characterSource({
+          source_id: "src_e",
+          summary: "extras-breadcrumb:alice",
+          inclusion_reasons: ["mentioned_in_recent_posts"],
+          tokens: 50,
+        }),
+      ],
+      budget_used: {},
+      messages_hash: "h",
+      composition_snapshot: null,
+      summary: null,
+    });
+
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: /turn-1/ }));
+
+    const card = await screen.findByTestId("character-card-alice");
+    expect(card).toHaveTextContent("Alice the Sage");
+    expect(card).toHaveTextContent("150");
+    expect(screen.queryByTestId("character-card-transient:alice")).toBeNull();
+    expect(screen.queryByTestId("character-card-extras:alice")).toBeNull();
+    expect(screen.queryByTestId("character-card-extras-breadcrumb:alice")).toBeNull();
+  });
+
   it("filters out non-character sources", async () => {
     listTurns.mockResolvedValue([turn()]);
     getTurnPrompt.mockResolvedValue({
