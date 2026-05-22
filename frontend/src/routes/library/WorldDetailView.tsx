@@ -26,6 +26,8 @@ export function WorldDetailView() {
   const [forkErr, setForkErr] = useState<string | null>(null);
   const [forking, setForking] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<{
     dependents: CampaignRef[] | undefined;
     busy: boolean;
@@ -57,6 +59,19 @@ export function WorldDetailView() {
         busy: false,
         err: err instanceof ApiError ? err.message : String(err),
       });
+    }
+  }
+
+  async function refresh() {
+    setRefreshing(true);
+    setRefreshErr(null);
+    try {
+      await libraryApi.rescanWorlds();
+      reload();
+    } catch (err) {
+      setRefreshErr(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -98,6 +113,15 @@ export function WorldDetailView() {
             <h3>{data?.name || worldId}</h3>
             <button
               type="button"
+              className="world-refresh-button"
+              onClick={() => void refresh()}
+              disabled={refreshing}
+              title="Re-scan the library folder for changes made outside the UI"
+            >
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </button>
+            <button
+              type="button"
               className="world-fork-button"
               onClick={() => void handleFork()}
               disabled={forking}
@@ -118,6 +142,11 @@ export function WorldDetailView() {
           {forkErr && (
             <p className="library-error" role="alert">
               {forkErr}
+            </p>
+          )}
+          {refreshErr && (
+            <p className="library-error" role="alert">
+              {refreshErr}
             </p>
           )}
           {data?.description && <p className="world-description">{data.description}</p>}

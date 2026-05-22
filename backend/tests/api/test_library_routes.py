@@ -473,6 +473,30 @@ def test_plugins_rescan(client, container) -> None:
     assert response.status_code == 200
 
 
+class _FakeFileWatcher:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def scan_now(self, *, scope: str = "all") -> dict[str, Any]:
+        self.calls.append(scope)
+        return {"scope": scope, "library_files": 3, "campaign_files": 2}
+
+
+def test_rescan_worlds_invokes_file_watcher_with_library_scope(client, container) -> None:
+    fw = _FakeFileWatcher()
+    container.extras["file_watcher"] = fw
+    response = client.post("/api/library/worlds/rescan")
+    assert response.status_code == 200
+    assert response.json() == {"scope": "library", "library_files": 3, "campaign_files": 2}
+    assert fw.calls == ["library"]
+
+
+def test_rescan_worlds_returns_503_when_watcher_not_configured(client, container) -> None:
+    container.extras.pop("file_watcher", None)
+    response = client.post("/api/library/worlds/rescan")
+    assert response.status_code == 503
+
+
 def test_plugins_discovery_errors_returns_recent_failures(client, container) -> None:
     """The endpoint exposes parse errors from the last discovery pass so the
     UI can render an actionable message instead of a bare ``failed`` entry."""

@@ -29,6 +29,21 @@ export function WorldsListView() {
   const [newName, setNewName] = useState("");
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshErr, setRefreshErr] = useState<string | null>(null);
+
+  async function refresh() {
+    setRefreshing(true);
+    setRefreshErr(null);
+    try {
+      await libraryApi.rescanWorlds();
+      reload();
+    } catch (err) {
+      setRefreshErr(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   const [deleting, setDeleting] = useState<{
     worldId: string;
@@ -85,10 +100,23 @@ export function WorldsListView() {
     <div className="library-section">
       <header className="library-section-header">
         <h3>Worlds</h3>
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          disabled={refreshing}
+          title="Re-scan the library folder for changes made outside the UI"
+        >
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </button>
         <button onClick={() => setCreating((c) => !c)} aria-expanded={creating}>
           {creating ? "Cancel" : "+ New world"}
         </button>
       </header>
+      {refreshErr && (
+        <p className="library-error" role="alert">
+          {refreshErr}
+        </p>
+      )}
 
       {creating && (
         <form onSubmit={submit} className="library-form" aria-label="Create world">

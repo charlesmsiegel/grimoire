@@ -802,3 +802,27 @@ def test_list_export_history_paginates(client, container) -> None:
     response = client.get("/api/campaigns/c1/exports?limit=0")
     assert response.status_code == 200
     assert response.json()["records"] == []
+
+
+class _FakeFileWatcher:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def scan_now(self, *, scope: str = "all") -> dict[str, Any]:
+        self.calls.append(scope)
+        return {"scope": scope, "library_files": 0, "campaign_files": 7}
+
+
+def test_rescan_campaigns_invokes_file_watcher_with_campaigns_scope(client, container) -> None:
+    fw = _FakeFileWatcher()
+    container.extras["file_watcher"] = fw
+    response = client.post("/api/campaigns/rescan")
+    assert response.status_code == 200
+    assert response.json() == {"scope": "campaigns", "library_files": 0, "campaign_files": 7}
+    assert fw.calls == ["campaigns"]
+
+
+def test_rescan_campaigns_returns_503_when_watcher_not_configured(client, container) -> None:
+    container.extras.pop("file_watcher", None)
+    response = client.post("/api/campaigns/rescan")
+    assert response.status_code == 503

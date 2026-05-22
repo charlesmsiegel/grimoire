@@ -285,6 +285,12 @@ export interface RescanReport {
   removed: string[];
 }
 
+export interface LibraryRescanReport {
+  scope: "all" | "library" | "campaigns";
+  library_files: number;
+  campaign_files: number;
+}
+
 export interface StyleGuideEditPayload {
   id: string;
   name: string;
@@ -304,6 +310,7 @@ export interface StyleGuideEditPayload {
 
 export const libraryApi = {
   listWorlds: () => request<WorldMeta[]>("GET", `/library/worlds`),
+  rescanWorlds: () => request<LibraryRescanReport>("POST", `/library/worlds/rescan`),
   getWorld: (worldId: string) =>
     request<WorldMeta>("GET", `/library/worlds/${encodeURIComponent(worldId)}`),
   createWorld: (id: string, meta: Record<string, unknown>) =>
