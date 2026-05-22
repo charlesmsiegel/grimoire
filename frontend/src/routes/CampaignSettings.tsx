@@ -24,6 +24,7 @@ import {
   patchCampaign,
 } from "../api/wizard";
 import { BulkSheetCreation } from "./campaign/BulkSheetCreation";
+import { cleanRoutes, type RoutingValue } from "./campaignRouting";
 
 type Tab = "general" | "routing" | "imagegen" | "mechanics" | "storage" | "advanced";
 
@@ -229,6 +230,7 @@ function useAutoSavedResource<T>(
   campaignId: string | undefined,
   path: string,
   initial: T,
+  transformForSave?: (value: T) => T,
 ): {
   value: T;
   setValue: (next: T | ((prev: T) => T)) => void;
@@ -254,7 +256,8 @@ function useAutoSavedResource<T>(
         const data = await api.get<T>(`/api/campaigns/${encodeURIComponent(campaignId)}${path}`);
         if (!cancelled) {
           setValueState(data);
-          lastSent.current = JSON.stringify(data);
+          const seed = transformForSave ? transformForSave(data) : data;
+          lastSent.current = JSON.stringify(seed);
           setReady(true);
         }
       } catch (err) {
@@ -267,20 +270,21 @@ function useAutoSavedResource<T>(
     return () => {
       cancelled = true;
     };
-  }, [campaignId, path]);
+  }, [campaignId, path, transformForSave]);
 
   // Debounced save
   useEffect(() => {
     if (!campaignId || !ready) return;
     if (!dirty.current) return;
-    const serialized = JSON.stringify(value);
+    const payload = transformForSave ? transformForSave(value) : value;
+    const serialized = JSON.stringify(payload);
     if (serialized === lastSent.current) return;
     const handle = window.setTimeout(() => {
       void (async () => {
         setStatus("saving");
         setError(null);
         try {
-          await api.put(`/api/campaigns/${encodeURIComponent(campaignId)}${path}`, value);
+          await api.put(`/api/campaigns/${encodeURIComponent(campaignId)}${path}`, payload);
           lastSent.current = serialized;
           setStatus("saved");
         } catch (err) {
@@ -290,7 +294,7 @@ function useAutoSavedResource<T>(
       })();
     }, 400);
     return () => window.clearTimeout(handle);
-  }, [campaignId, path, value, ready]);
+  }, [campaignId, path, value, ready, transformForSave]);
 
   const setValue = useCallback((next: T | ((prev: T) => T)) => {
     dirty.current = true;
@@ -311,12 +315,6 @@ function SaveIndicator({ status, error }: { status: SaveStatus; error: string | 
   }
   if (status === "saved") return <small className="library-ok">Saved.</small>;
   return null;
-}
-
-interface RoutingValue {
-  llm: Record<string, string>;
-  embedding: Record<string, string>;
-  imagegen: Record<string, string>;
 }
 
 type RoutingKind = "llm" | "embedding" | "imagegen";
@@ -521,6 +519,7 @@ function RoutingTab({ campaignId }: { campaignId: string }) {
     campaignId,
     "/routing",
     { llm: {}, embedding: {}, imagegen: {} },
+    cleanRoutes,
   );
 
   useEffect(() => {
@@ -554,8 +553,9 @@ function RoutingTab({ campaignId }: { campaignId: string }) {
     setValue((prev) => {
       const block = { ...(prev[kind] ?? {}) };
       // A trailing "provider." (no model picked yet) is incomplete — keep
-      // it locally so the dropdowns stay in sync, but PUT will clear the
-      // entry on the server (empty model → empty string → clear).
+      // it locally so the provider dropdown stays selected, but the PUT
+      // is run through `cleanRoutes` which drops trailing-dot entries
+      // (the backend's ``Route.parse`` rejects them with 422).
       if (next === "") delete block[task];
       else block[task] = next;
       return { ...prev, [kind]: block };
