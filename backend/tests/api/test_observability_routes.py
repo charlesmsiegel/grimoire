@@ -427,8 +427,23 @@ async def test_turn_costs_returns_sorted_list(
         "retries, fallback_used, request_hash, response_excerpt, error, created_at"
         ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            "r1", "c1", "t_cost", "primary", "p", "m-1",
-            800, 350, 1150, 0.05, 200, 0, 0, None, None, None, now,
+            "r1",
+            "c1",
+            "t_cost",
+            "primary",
+            "p",
+            "m-1",
+            800,
+            350,
+            1150,
+            0.05,
+            200,
+            0,
+            0,
+            None,
+            None,
+            None,
+            now,
         ),
     )
 
