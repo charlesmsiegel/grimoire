@@ -4,6 +4,7 @@ import { ObservabilityLayout } from "./ObservabilityLayout";
 import { PerformanceTab } from "./PerformanceTab";
 
 export { HealthPanel } from "./HealthPanel";
+export { WhyCharacterPanel } from "./WhyCharacterPanel";
 
 export function ObservabilityRoutes() {
   return (

@@ -1,1 +1,0 @@
-export { WhyCharacterPanel } from "./WhyCharacterPanel";
