@@ -13,6 +13,8 @@ import { useParams } from "react-router-dom";
 import { viewsApi } from "../../api/views";
 import type { Composition, Greeting, ResolvedEntity } from "../../api/types";
 import { useApi } from "../../api/useApi";
+import { CardFilters } from "../../components/CardFilters";
+import { useCardFilters } from "../../hooks/useCardFilters";
 import { Markdown } from "../../components/Markdown";
 import { ChainBadge, Loading, Tabs } from "./common";
 
@@ -69,18 +71,69 @@ function EntityTab({
   return (
     <Loading state={state} emptyMessage={`No ${kind} resolved for this campaign yet.`}>
       {(rows) => (
+        <FilteredEntityGrid
+          rows={rows}
+          kind={kind}
+          renderExtras={(row) =>
+            kind === "items" && row.extras && extractHolder(row.extras) ? (
+              <p className="muted">Holder: {extractHolder(row.extras)}</p>
+            ) : null
+          }
+        />
+      )}
+    </Loading>
+  );
+}
+
+interface FilteredEntityGridProps {
+  rows: ResolvedEntity[];
+  kind: string;
+  renderExtras?: (row: ResolvedEntity) => React.ReactNode;
+}
+
+function FilteredEntityGrid({ rows, kind, renderExtras }: FilteredEntityGridProps) {
+  const { filtered, search, setSearch, selectedTags, toggleTag, clearTags, availableTags } =
+    useCardFilters(rows, {
+      text: (row) => [row.name, row.asset_id, row.world_id, row.body],
+      tags: (row) => entityTags(row),
+    });
+  return (
+    <>
+      <CardFilters
+        search={search}
+        onSearch={setSearch}
+        availableTags={availableTags}
+        selectedTags={selectedTags}
+        onToggleTag={toggleTag}
+        onClearTags={clearTags}
+        searchPlaceholder={`Search ${kind} by name, id, or body…`}
+        searchLabel={`Search ${kind}`}
+        resultSummary={
+          filtered.length === rows.length
+            ? `${rows.length} ${kind}`
+            : `${filtered.length} of ${rows.length}`
+        }
+      />
+      {filtered.length === 0 ? (
+        <p className="muted">No {kind} match the current filters.</p>
+      ) : (
         <ul className="entity-grid">
-          {rows.map((row) => (
+          {filtered.map((row) => (
             <EntityCard key={`${row.world_id ?? "campaign"}:${row.asset_id}`} row={row}>
-              {kind === "items" && row.extras && extractHolder(row.extras) && (
-                <p className="muted">Holder: {extractHolder(row.extras)}</p>
-              )}
+              {renderExtras?.(row)}
             </EntityCard>
           ))}
         </ul>
       )}
-    </Loading>
+    </>
   );
+}
+
+function entityTags(row: ResolvedEntity): string[] {
+  const fm = row.frontmatter;
+  const raw = fm["tags"] ?? fm["keywords"];
+  if (Array.isArray(raw)) return raw.filter((v): v is string => typeof v === "string");
+  return [];
 }
 
 function LocationsTab({ campaignId }: { campaignId: string }) {
@@ -95,15 +148,15 @@ function LocationsTab({ campaignId }: { campaignId: string }) {
               <h3>Hierarchy</h3>
               <LocationTree nodes={tree} />
             </aside>
-            <ul className="entity-grid">
-              {rows.map((row) => (
-                <EntityCard key={`${row.world_id ?? "campaign"}:${row.asset_id}`} row={row}>
-                  {extractParent(row.frontmatter) && (
-                    <p className="muted">Parent: {extractParent(row.frontmatter)}</p>
-                  )}
-                </EntityCard>
-              ))}
-            </ul>
+            <FilteredEntityGrid
+              rows={rows}
+              kind="locations"
+              renderExtras={(row) =>
+                extractParent(row.frontmatter) ? (
+                  <p className="muted">Parent: {extractParent(row.frontmatter)}</p>
+                ) : null
+              }
+            />
           </div>
         );
       }}
@@ -115,24 +168,52 @@ function LoreTab({ campaignId }: { campaignId: string }) {
   const state = useApi(useCallback(() => viewsApi.listLore(campaignId), [campaignId]));
   return (
     <Loading state={state} emptyMessage="No lore entries resolved for this campaign yet.">
-      {(rows) => {
-        const grouped = groupByKeyword(rows);
-        return (
-          <div className="lore-grid">
-            {[...grouped.entries()].map(([kw, entries]) => (
-              <section key={kw} className="lore-group">
-                <h3>{kw}</h3>
-                <ul className="entity-grid">
-                  {entries.map((row) => (
-                    <EntityCard key={`${row.world_id ?? "campaign"}:${row.asset_id}`} row={row} />
-                  ))}
-                </ul>
-              </section>
-            ))}
-          </div>
-        );
-      }}
+      {(rows) => <FilteredLore rows={rows} />}
     </Loading>
+  );
+}
+
+function FilteredLore({ rows }: { rows: ResolvedEntity[] }) {
+  const { filtered, search, setSearch, selectedTags, toggleTag, clearTags, availableTags } =
+    useCardFilters(rows, {
+      text: (row) => [row.name, row.asset_id, row.world_id, row.body],
+      tags: (row) => readKeywords(row.frontmatter),
+    });
+  const grouped = groupByKeyword(filtered);
+  return (
+    <>
+      <CardFilters
+        search={search}
+        onSearch={setSearch}
+        availableTags={availableTags}
+        selectedTags={selectedTags}
+        onToggleTag={toggleTag}
+        onClearTags={clearTags}
+        searchPlaceholder="Search lore by name, id, or body…"
+        searchLabel="Search lore"
+        resultSummary={
+          filtered.length === rows.length
+            ? `${rows.length} lore entr${rows.length === 1 ? "y" : "ies"}`
+            : `${filtered.length} of ${rows.length}`
+        }
+      />
+      {filtered.length === 0 ? (
+        <p className="muted">No lore entries match the current filters.</p>
+      ) : (
+        <div className="lore-grid">
+          {[...grouped.entries()].map(([kw, entries]) => (
+            <section key={kw} className="lore-group">
+              <h3>{kw}</h3>
+              <ul className="entity-grid">
+                {entries.map((row) => (
+                  <EntityCard key={`${row.world_id ?? "campaign"}:${row.asset_id}`} row={row} />
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -170,9 +251,39 @@ function GreetingsAcrossWorlds({ worldIds }: { worldIds: string[] }) {
   }
   return (
     <Loading state={state} emptyMessage="No greetings declared in the composed worlds.">
-      {(rows) => (
+      {(rows) => <FilteredGreetings rows={rows} />}
+    </Loading>
+  );
+}
+
+function FilteredGreetings({ rows }: { rows: Greeting[] }) {
+  const { filtered, search, setSearch, selectedTags, toggleTag, clearTags, availableTags } =
+    useCardFilters(rows, {
+      text: (g) => [g.name, g.id, g.world_id, g.body, g.starting_location, g.mood],
+      tags: (g) => g.tags ?? [],
+    });
+  return (
+    <>
+      <CardFilters
+        search={search}
+        onSearch={setSearch}
+        availableTags={availableTags}
+        selectedTags={selectedTags}
+        onToggleTag={toggleTag}
+        onClearTags={clearTags}
+        searchPlaceholder="Search greetings by name, id, or body…"
+        searchLabel="Search greetings"
+        resultSummary={
+          filtered.length === rows.length
+            ? `${rows.length} greeting${rows.length === 1 ? "" : "s"}`
+            : `${filtered.length} of ${rows.length}`
+        }
+      />
+      {filtered.length === 0 ? (
+        <p className="muted">No greetings match the current filters.</p>
+      ) : (
         <ul className="entity-grid">
-          {rows.map((g) => (
+          {filtered.map((g) => (
             <li key={`${g.world_id}:${g.id}`} className="entity-card-static">
               <header>
                 <h4>{g.name}</h4>
@@ -191,7 +302,7 @@ function GreetingsAcrossWorlds({ worldIds }: { worldIds: string[] }) {
           ))}
         </ul>
       )}
-    </Loading>
+    </>
   );
 }
 
