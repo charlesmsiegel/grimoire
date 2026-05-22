@@ -45,9 +45,37 @@ function defaultFor(kind: Kind): StructuredValue {
 export function StructuredValueEditor({ value, onChange, readOnly = false }: Props) {
   const kind = kindOf(value);
 
-  if (kind === "null") {
-    return <NullRow onChange={onChange} readOnly={readOnly} />;
+  if (kind === "null") return <NullRow onChange={onChange} readOnly={readOnly} />;
+  if (kind === "text" || kind === "number" || kind === "boolean") {
+    return (
+      <ScalarRow
+        value={value as string | number | boolean}
+        kind={kind}
+        onChange={onChange}
+        readOnly={readOnly}
+      />
+    );
   }
+  if (kind === "list") {
+    return (
+      <ArrayRows items={value as StructuredValue[]} onChange={onChange} readOnly={readOnly} />
+    );
+  }
+  // object branch arrives in Task 5
+  return <p className="library-status">(object editor coming)</p>;
+}
+
+function ScalarRow({
+  value,
+  kind,
+  onChange,
+  readOnly,
+}: {
+  value: string | number | boolean;
+  kind: "text" | "number" | "boolean";
+  onChange: (next: StructuredValue) => void;
+  readOnly: boolean;
+}) {
   if (kind === "text") {
     return (
       <input
@@ -68,18 +96,66 @@ export function StructuredValueEditor({ value, onChange, readOnly = false }: Pro
       />
     );
   }
-  if (kind === "boolean") {
-    return (
-      <input
-        type="checkbox"
-        checked={value as boolean}
-        disabled={readOnly}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-    );
-  }
-  // list + object layouts arrive in later tasks
-  return <p className="library-status">(complex value — editor coming)</p>;
+  return (
+    <input
+      type="checkbox"
+      checked={value as boolean}
+      disabled={readOnly}
+      onChange={(e) => onChange(e.target.checked)}
+    />
+  );
+}
+
+function ArrayRows({
+  items,
+  onChange,
+  readOnly,
+}: {
+  items: StructuredValue[];
+  onChange: (next: StructuredValue) => void;
+  readOnly: boolean;
+}) {
+  const updateAt = (i: number, next: StructuredValue) => {
+    const out = items.slice();
+    out[i] = next;
+    onChange(out);
+  };
+  const removeAt = (i: number) => {
+    const out = items.slice();
+    out.splice(i, 1);
+    onChange(out);
+  };
+  const append = () => onChange([...items, null]);
+  return (
+    <ol className="structured-list">
+      {items.map((item, i) => (
+        <li key={i} className="structured-list-row">
+          <StructuredValueEditor
+            value={item}
+            onChange={(next) => updateAt(i, next)}
+            readOnly={readOnly}
+          />
+          {!readOnly && (
+            <button
+              type="button"
+              className="structured-remove"
+              onClick={() => removeAt(i)}
+              aria-label={`Remove item ${i + 1}`}
+            >
+              ×
+            </button>
+          )}
+        </li>
+      ))}
+      {!readOnly && (
+        <li>
+          <button type="button" className="structured-add" onClick={append}>
+            + add item
+          </button>
+        </li>
+      )}
+    </ol>
+  );
 }
 
 function NullRow({
