@@ -43,7 +43,13 @@ async def test_prober_swallows_health_check_errors() -> None:
     svc.health_check = AsyncMock(side_effect=RuntimeError("boom"))
     prober = ImageGenHealthProber(svc, interval_seconds=0.05)
     prober.start()
-    await asyncio.sleep(0.12)
+    # Poll until the loop has fired at least twice. A bare sleep is too
+    # flaky on slow CI runners where the prober task may not get scheduled
+    # within the interval window.
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + 2.0
+    while svc.health_check.await_count < 2 and loop.time() < deadline:
+        await asyncio.sleep(0.02)
     await prober.stop()
     # Loop kept running despite the exception.
     assert svc.health_check.await_count >= 2
