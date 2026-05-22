@@ -5,13 +5,9 @@ import { ApiError, libraryApi, type WorldMeta } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { WorldAtmosphereForm } from "./WorldAtmosphereForm";
-import {
-  parseCalendar,
-  serializeCalendar,
-  WorldCalendarForm,
-  type WorldCalendar,
-} from "./WorldCalendarForm";
+import { WorldCalendarForm } from "./WorldCalendarForm";
 import { WorldDefaultsForm } from "./WorldDefaultsForm";
+import { parseCalendar, serializeCalendar, type WorldCalendar } from "./world-calendar";
 
 const FIELDS: { key: keyof WorldMeta; label: string; type: "text" | "textarea" | "tags" }[] = [
   { key: "name", label: "Name", type: "text" },

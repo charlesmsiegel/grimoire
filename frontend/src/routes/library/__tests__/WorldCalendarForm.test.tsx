@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
-import { parseCalendar, WorldCalendarForm } from "../WorldCalendarForm";
+import { WorldCalendarForm } from "../WorldCalendarForm";
+import { parseCalendar } from "../world-calendar";
 
 const SAKURA_CALENDAR = parseCalendar({
   epoch: "2025-04-08",
