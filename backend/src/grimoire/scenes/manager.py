@@ -12,6 +12,7 @@ import asyncio
 import shutil
 import uuid
 from collections.abc import Awaitable, Callable
+from typing import Any
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -144,6 +145,7 @@ class SceneManager:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         continuity: object | None = None,
         metrics: MetricsRegistryProtocol = NULL_METRICS,
+        state_store: Any = None,
     ) -> None:
         self.data_root = Path(data_root)
         self.config = config or SceneManagerConfig()
@@ -159,6 +161,7 @@ class SceneManager:
         # briefing without a follow-up round-trip.
         self._continuity = continuity
         self._metrics: MetricsRegistryProtocol = metrics
+        self._state_store = state_store
 
         # Per-scene in-memory state. Persisted lazily where needed.
         self._post_records: dict[str, dict[str, _PostRecord]] = {}
@@ -190,6 +193,56 @@ class SceneManager:
         prefix = "" if branch_id == "main" else f"{branch_id}:"
         base = scene_basename(ordinal, slug, self.config.files.scene_naming_pattern)
         return f"{prefix}{campaign_id}:{base}"
+
+    def _should_emit_running_summary(
+        self,
+        *,
+        post_count: int,
+        override: int | None,
+    ) -> bool:
+        """Return True when a RUNNING_SUMMARY_DUE event should fire now.
+
+        ``override`` of ``0`` disables in-scene summaries entirely.
+        ``None`` falls back to the manager-wide default
+        (``self.config.running_summary_every_n_posts``).
+        """
+        n = override if override is not None else self.config.running_summary_every_n_posts
+        if n <= 0 or post_count <= 0:
+            return False
+        return post_count % n == 0
+
+    async def _campaign_summary_cadence(self, campaign_id: str) -> int | None:
+        """Read ``campaigns.config["summaries"]["running_every_n_posts"]``.
+
+        Returns ``None`` when no override is set (caller falls back to
+        the manager-wide default). Best-effort: any error returns
+        ``None`` to keep the post path stable.
+        """
+        store = getattr(self, "_state_store", None)
+        if store is None:
+            return None
+        try:
+            row = await store.db.fetchone(
+                "SELECT config FROM campaigns WHERE id = ?", (campaign_id,)
+            )
+        except Exception:
+            return None
+        if not row:
+            return None
+        raw = row.get("config") if hasattr(row, "get") else row["config"]
+        if not raw:
+            return None
+        import json as _json
+
+        try:
+            data = _json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        block = data.get("summaries") if isinstance(data, dict) else None
+        if not isinstance(block, dict):
+            return None
+        n = block.get("running_every_n_posts")
+        return int(n) if isinstance(n, int) else None
 
     async def _emit(self, type_: str, scene: Scene, **payload: object) -> None:
         # The shared in-process bus dispatches by ``event.type`` only, so
@@ -548,10 +601,10 @@ class SceneManager:
             # Cadence-based running summary kicks off out-of-band so a slow LLM
             # call doesn't block the next post append. Tests still drive
             # ``update_running_summary`` directly for the legacy inline path.
-            if (
-                self.config.running_summary_every_n_posts > 0
-                and scene.post_count > 0
-                and scene.post_count % self.config.running_summary_every_n_posts == 0
+            override = await self._campaign_summary_cadence(scene.campaign_id)
+            if self._should_emit_running_summary(
+                post_count=scene.post_count,
+                override=override,
             ):
                 await self._emit(
                     RUNNING_SUMMARY_DUE,

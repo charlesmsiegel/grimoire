@@ -272,7 +272,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # Continuity registry is wired below; SceneManager picks it up
             # via the attribute set after that block so the pre-scene
             # briefing can run.
-            container.scenes = SceneManager(data_root, event_bus=container.event_bus)
+            container.scenes = SceneManager(
+                data_root,
+                event_bus=container.event_bus,
+                state_store=container.state_store,
+            )
         # Scene indexer keeps the SQLite scenes/posts tables in sync with the
         # markdown + sidecar source-of-truth. Subscribed to manager events
         # post-construction; backfill walks the disk once to catch any
