@@ -32,6 +32,7 @@ type Tab =
   | "imagegen"
   | "mechanics"
   | "narrator"
+  | "generation"
   | "storage"
   | "advanced";
 
@@ -41,6 +42,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "imagegen", label: "ImageGen" },
   { id: "mechanics", label: "Mechanics" },
   { id: "narrator", label: "Narrator" },
+  { id: "generation", label: "Generation" },
   { id: "storage", label: "Storage" },
   { id: "advanced", label: "Advanced" },
 ];
@@ -140,6 +142,7 @@ export function CampaignSettings() {
             <MechanicsTab key={campaign.id} campaign={campaign} onUpdate={setCampaign} />
           )}
           {tab === "narrator" && <NarratorTab key={campaignId} campaignId={campaignId} />}
+          {tab === "generation" && <GenerationTab key={campaignId} campaignId={campaignId} />}
           {tab === "storage" && <StorageTab key={campaignId} campaignId={campaignId} />}
           {tab === "advanced" && <AdvancedTab key={campaignId} campaignId={campaignId} />}
         </div>
@@ -884,6 +887,72 @@ function NarratorTab({ campaignId }: { campaignId: string }) {
           <option value="all_at_once">All at once (one combined post)</option>
           <option value="per_character">Per character (one post per present character)</option>
         </select>
+      </label>
+      <SaveIndicator status={status} error={error} />
+    </div>
+  );
+}
+
+interface GenerationValue {
+  max_tokens: number | null;
+  temperature: number | null;
+}
+
+function GenerationTab({ campaignId }: { campaignId: string }) {
+  const { value, setValue, status, error, ready } = useAutoSavedResource<GenerationValue>(
+    campaignId,
+    "/generation",
+    { max_tokens: null, temperature: null },
+  );
+
+  // The text-field state is a string so users can clear the input
+  // ("", interpreted as "no override → fall back to default") without
+  // having to type a number. Empty / non-numeric input persists as null.
+  function parseOptional(value: string): number | null {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const n = Number(trimmed);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  return (
+    <div className="settings-form">
+      <p className="wizard-step-help">
+        Per-campaign overrides for the language model's generation parameters.
+        Leave a field blank to use the app-wide default (currently 4096 max
+        output tokens, temperature 1.0). Raise <code>max_tokens</code> if long
+        narrator responses are being cut off.
+      </p>
+      {!ready && <p className="wizard-meta">Loading saved settings…</p>}
+      <label className="wizard-field">
+        <span>Max output tokens</span>
+        <input
+          type="number"
+          min={1}
+          max={200000}
+          step={1}
+          placeholder="4096 (default)"
+          value={value.max_tokens ?? ""}
+          onChange={(e) =>
+            setValue((prev) => ({ ...prev, max_tokens: parseOptional(e.target.value) }))
+          }
+          disabled={!ready}
+        />
+      </label>
+      <label className="wizard-field">
+        <span>Temperature</span>
+        <input
+          type="number"
+          min={0}
+          max={2}
+          step={0.1}
+          placeholder="1.0 (default)"
+          value={value.temperature ?? ""}
+          onChange={(e) =>
+            setValue((prev) => ({ ...prev, temperature: parseOptional(e.target.value) }))
+          }
+          disabled={!ready}
+        />
       </label>
       <SaveIndicator status={status} error={error} />
     </div>

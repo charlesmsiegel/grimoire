@@ -18,6 +18,7 @@ const subSections: { to: string; label: string; end?: boolean }[] = [
   { to: "debug/prompt", label: "Debug prompt" },
   { to: "observability/turns", label: "Observability" },
   { to: "budget", label: "Budget" },
+  { to: "settings", label: "Settings" },
 ];
 
 interface PreservedSummary {
