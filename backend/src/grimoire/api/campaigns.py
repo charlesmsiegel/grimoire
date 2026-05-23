@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import shutil
 from datetime import datetime
 from typing import Annotated, Any
@@ -36,6 +37,151 @@ from grimoire.api.deps import (
 )
 from grimoire.api.util import map_lookup_errors, to_payload
 from grimoire.state_store.paths import campaigns_root
+
+
+_GREETING_IMG_RE = re.compile(
+    r"<img\s+[^>]*?src=[\"']([^\"']+)[\"'][^>]*?(?:alt=[\"']([^\"']*)[\"'][^>]*)?/?>",
+    re.IGNORECASE,
+)
+
+
+def _img_to_markdown(body: str) -> str:
+    """Convert inline ``<img src=... alt=...>`` tags to markdown ``![alt](src)``.
+
+    SillyTavern greetings embed images as raw HTML; the React markdown
+    renderer doesn't process raw HTML by default. Persisting markdown
+    syntax keeps the post renderable without enabling rehype-raw (which
+    would also accept arbitrary HTML — XSS risk).
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        src = match.group(1) or ""
+        alt = match.group(2) or ""
+        # Also handle alt= before src= ordering with a second pass below
+        return f"![{alt}]({src})"
+
+    out = _GREETING_IMG_RE.sub(replace, body)
+    # Fallback: <img alt="..." src="..."> ordering — re-scan for any
+    # remaining img tags using a permissive pattern.
+    alt_first = re.compile(
+        r"<img\s+[^>]*?alt=[\"']([^\"']*)[\"'][^>]*?src=[\"']([^\"']+)[\"'][^>]*?/?>",
+        re.IGNORECASE,
+    )
+    out = alt_first.sub(lambda m: f"![{m.group(1)}]({m.group(2)})", out)
+    return out
+
+
+def _substitute_placeholders(body: str, *, pc_name: str, char_name: str) -> str:
+    """Resolve SillyTavern-style placeholders.
+
+    Supports ``[PC]``, ``{{user}}``, ``{{char}}`` and their possessive
+    forms (``[PC]'s``, ``{{user}}'s``, ``{{char}}'s``). Substitution is
+    done once at seed time so the persisted post body is clean.
+    """
+    if pc_name:
+        body = body.replace("{{user}}", pc_name).replace("[PC]", pc_name)
+    if char_name:
+        body = body.replace("{{char}}", char_name)
+    return body
+
+
+async def _resolve_pc_display_name(
+    *, state_store: Any, library: Any, campaign_id: str
+) -> str:
+    """Look up the first PC's display name on the campaign.
+
+    Falls back to the bare character_ref tail if no display name is
+    available, and to ``"You"`` if the campaign has no PCs assigned.
+    """
+    try:
+        pc_rows = await state_store.list_pcs(campaign_id)
+    except Exception:
+        pc_rows = []
+    for row in pc_rows or []:
+        # The state-store row stores a 'name' for switcher rendering when
+        # set; otherwise fall back to the character_ref's tail.
+        name = row.get("name") if isinstance(row, dict) else None
+        if name:
+            return str(name)
+        ref = row.get("character_ref") if isinstance(row, dict) else None
+        if ref:
+            return ref.rsplit("/", 1)[-1]
+    return "You"
+
+
+async def _resolve_character_display_name(
+    *, library: Any, world_id: str | None, character_id: str | None
+) -> str:
+    """Look up a character's display name from the library."""
+    if not character_id or not world_id:
+        return ""
+    try:
+        ent = await library.get_entity(world_id, "character", character_id)
+        fm = getattr(ent, "frontmatter", {}) or {}
+        return str(fm.get("name") or ent.name or character_id)
+    except Exception:
+        return character_id
+
+
+async def _seed_greeting_first_post(
+    *,
+    scenes: Any,
+    scene: Any,
+    greeting: Any,
+    state_store: Any,
+    library: Any,
+    world_id: str | None,
+) -> None:
+    """Append the greeting's verbatim body as scene 1's first post.
+
+    Greetings ship with authored opening text (the SillyTavern "first
+    message" convention). Without this step, scene 1 is seeded with
+    metadata only and the body is silently lost. Best-effort: a failure
+    here doesn't roll back scene creation.
+
+    Persists with placeholders resolved (``[PC]``, ``{{user}}``,
+    ``{{char}}``) and inline ``<img>`` tags converted to markdown image
+    syntax — both decisions optimize for clean stored markdown over
+    runtime rewriting.
+    """
+    import uuid
+    from datetime import datetime, timezone
+
+    # SceneManager.append_post uses ``dataclasses.replace`` on the post,
+    # so we must build the dataclass-based Post from ``grimoire.scenes.types``,
+    # not the Pydantic Post from ``grimoire.types.scene``. Crossing them
+    # raises a silent TypeError inside the manager's lock.
+    from grimoire.scenes.types import AuthorKind, Post
+
+    body = (getattr(greeting, "body", "") or "").strip()
+    if not body:
+        return
+
+    pc_name = await _resolve_pc_display_name(
+        state_store=state_store, library=library, campaign_id=scene.campaign_id
+    )
+    char_id = getattr(greeting, "pov_character", None)
+    if not char_id:
+        present = list(getattr(greeting, "present_characters", []) or [])
+        char_id = present[0] if present else None
+    char_name = await _resolve_character_display_name(
+        library=library, world_id=world_id, character_id=char_id
+    )
+
+    body = _substitute_placeholders(body, pc_name=pc_name, char_name=char_name)
+    body = _img_to_markdown(body)
+
+    post = Post(
+        id=str(uuid.uuid4()),
+        scene_id=scene.id,
+        order_in_scene=0,  # append_post will assign next
+        author_kind=AuthorKind.NARRATOR,
+        body=body,
+        is_player=False,
+        created_at=datetime.now(timezone.utc),
+        turn_id=str(uuid.uuid4()),
+    )
+    await scenes.append_post(scene.id, post)
 
 logger = logging.getLogger(__name__)
 
@@ -273,11 +419,22 @@ async def create_campaign(
         if payload.greeting_id and comp.worlds:
             owning_ref = sorted(comp.worlds, key=lambda r: r.priority)[0]
             try:
-                await world.seed_scene_from_greeting(
+                scene = await world.seed_scene_from_greeting(
                     campaign_id=payload.id,
                     greeting_id=payload.greeting_id,
                     world_id=owning_ref.world_id,
                     scene_manager=scenes,
+                )
+                greeting = await library.get_greeting(
+                    owning_ref.world_id, payload.greeting_id
+                )
+                await _seed_greeting_first_post(
+                    scenes=scenes,
+                    scene=scene,
+                    greeting=greeting,
+                    state_store=state_store,
+                    library=library,
+                    world_id=owning_ref.world_id,
                 )
             except Exception:
                 logger.warning("greeting handoff failed; scene 1 not seeded", exc_info=True)
@@ -1190,7 +1347,11 @@ async def seed_first_scene(
     frontend wizard calls it as the final step of campaign creation,
     after PCs have been added.
     """
-    from grimoire.types.scene import SceneInit
+    # Import from ``grimoire.scenes.types`` (datetime in_game_start) — the
+    # SceneManager.start_scene type is the same. ``grimoire.types.scene``
+    # has a parallel SceneInit that wraps in_game_start in InGameTime and
+    # would reject the datetime we pass below.
+    from grimoire.scenes.types import SceneInit
 
     row = await state_store.db.fetchone("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
     if row is None:
@@ -1230,16 +1391,24 @@ async def seed_first_scene(
     pc_rows = await state_store.list_pcs(campaign_id)
     pc_refs = [r["character_ref"] for r in pc_rows if r.get("character_ref")]
 
-    # greeting.starting_time is an ISO string in the world's calendar;
-    # SceneInit.in_game_start wants InGameTime (a wrapped datetime). The
-    # mapping isn't always 1:1 (world calendars can be non-Gregorian),
-    # so leave it None for the seed and let the orchestrator's time
-    # engine attach a moment when the first turn runs.
+    # Parse greeting.starting_time (Gregorian ISO string by convention) so
+    # the HUD widgets that key off scene.in_game_start (date, time of day,
+    # weather) have something to display from turn 1. Non-Gregorian world
+    # calendars can override per scene later; this only sets a default.
+    in_game_start: datetime | None = None
+    starting_time = getattr(greeting, "starting_time", None)
+    if isinstance(starting_time, str) and starting_time:
+        try:
+            in_game_start = datetime.fromisoformat(starting_time)
+        except ValueError:
+            in_game_start = None
+
     init = SceneInit(
         campaign_id=campaign_id,
         branch_id="main",
         title=greeting.name or "Opening",
         location_ref=greeting.starting_location,
+        in_game_start=in_game_start,
         present_character_refs=list(greeting.present_characters or []),
         present_pc_refs=pc_refs,
         pov_character_ref=greeting.pov_character,
@@ -1251,6 +1420,22 @@ async def seed_first_scene(
         scene = await scenes.start_scene(init)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+    try:
+        # ``world_id`` was bound inside the for-loop above where the
+        # greeting was resolved; reuse it for placeholder substitution.
+        await _seed_greeting_first_post(
+            scenes=scenes,
+            scene=scene,
+            greeting=greeting,
+            state_store=state_store,
+            library=library,
+            world_id=world_id,
+        )
+    except Exception:
+        logger.warning(
+            "greeting first-post append failed; scene 1 exists with empty body",
+            exc_info=True,
+        )
     return {"scene": to_payload(scene), "created": True}
 
 
