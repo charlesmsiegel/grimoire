@@ -388,6 +388,7 @@ async def create_campaign(
     library: LibraryDep,
     world: WorldDep,
     scenes: ScenesDep,
+    gateway: LLMGatewayDep,
 ) -> Any:
     comp = payload.composition or CompositionPayload()
     try:
@@ -411,6 +412,24 @@ async def create_campaign(
                 include=list(ref.include) if ref.include is not None else None,
                 track_latest=ref.track_latest,
                 bound_at_version=ref.bound_at_version,
+            )
+        # Seed model_tiers from app defaults so new campaigns get
+        # cheap-by-default routing without the user touching settings.
+        try:
+            from grimoire.api.config import _DEFAULT_LLM_DEFAULTS, _read_app_yaml
+            from grimoire.llm_gateway.tiers import Tier
+
+            app_yaml = _read_app_yaml()
+            block = app_yaml.get("llm_defaults") if isinstance(app_yaml.get("llm_defaults"), dict) else {}
+            heavy = str(block.get("heavy") or _DEFAULT_LLM_DEFAULTS["heavy"])
+            light = str(block.get("light") or _DEFAULT_LLM_DEFAULTS["light"])
+            await gateway.set_tier_route(payload.id, Tier.HEAVY, heavy)
+            await gateway.set_tier_route(payload.id, Tier.LIGHT, light)
+        except Exception:
+            logger.warning(
+                "seeding default model_tiers for new campaign %s failed",
+                payload.id,
+                exc_info=True,
             )
         # §8 Greeting handoff: when a greeting is selected, seed scene 1
         # from it. Best-effort — a missing greeting shouldn't abort the

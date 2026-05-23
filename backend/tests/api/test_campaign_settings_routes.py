@@ -431,3 +431,49 @@ def test_summaries_negative_n_rejected(settings_client) -> None:
         json={"running_every_n_posts": -1, "final_on_close": True},
     )
     assert resp.status_code == 422
+
+
+def test_new_campaign_seeds_tiers_from_app_defaults(settings_client) -> None:
+    # 1. Set app-level LLM defaults via the /api/config/llm-defaults endpoint.
+    resp = settings_client.put(
+        "/api/config/llm-defaults",
+        json={"heavy": "deepseek.seed-pro", "light": "deepseek.seed-flash"},
+    )
+    assert resp.status_code == 200
+
+    # 2. Create a new campaign — no greeting, minimal composition.
+    resp = settings_client.post(
+        "/api/campaigns",
+        json={
+            "id": "seeded-camp",
+            "name": "Seeded",
+            "composition": {"worlds": []},
+        },
+    )
+    assert resp.status_code in (200, 201), resp.text
+
+    # 3. Read back the tiers — should match the app defaults.
+    resp = settings_client.get("/api/campaigns/seeded-camp/tiers")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["heavy"] == "deepseek.seed-pro"
+    assert body["light"] == "deepseek.seed-flash"
+
+
+def test_new_campaign_seeds_tiers_from_shipped_defaults(settings_client) -> None:
+    # When no app defaults have been explicitly set, the shipped fallbacks
+    # are deepseek-v4-pro / deepseek-v4-flash (see api/config.py).
+    resp = settings_client.post(
+        "/api/campaigns",
+        json={
+            "id": "shipped-default-camp",
+            "name": "Shipped Default",
+            "composition": {"worlds": []},
+        },
+    )
+    assert resp.status_code in (200, 201), resp.text
+
+    resp = settings_client.get("/api/campaigns/shipped-default-camp/tiers")
+    body = resp.json()
+    assert body["heavy"] == "deepseek.deepseek-v4-pro"
+    assert body["light"] == "deepseek.deepseek-v4-flash"
