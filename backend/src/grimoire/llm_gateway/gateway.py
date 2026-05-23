@@ -1454,6 +1454,47 @@ class LLMGatewayService:
             provider_kind="embedding",
         )
         await self._apply_imagegen_routing(raw.get("imagegen_routing"), campaign_id, yaml_path)
+        self._apply_tier_routing(raw.get("model_tiers"), campaign_id, yaml_path)
+
+    def _apply_tier_routing(
+        self,
+        block: object,
+        campaign_id: CampaignId,
+        yaml_path: Path,
+    ) -> None:
+        """Read the ``model_tiers`` block and populate the resolver.
+
+        Block shape: ``{"heavy": "provider.model", "light": "...",
+        "embedding": "..."}``. Unknown keys are ignored with a debug log;
+        malformed route strings are skipped with a warning. The campaign
+        keeps any per-task overrides loaded earlier.
+        """
+        from grimoire.llm_gateway.tiers import Tier
+
+        if not isinstance(block, dict):
+            return
+        for key, value in block.items():
+            try:
+                tier = Tier(str(key))
+            except ValueError:
+                logger.debug(
+                    "llm_gateway: unknown tier %r in %s; skipping",
+                    key,
+                    yaml_path,
+                )
+                continue
+            if not isinstance(value, str) or not value:
+                continue
+            try:
+                self._router.set_tier_route(campaign_id, tier, value)
+            except ValueError as exc:
+                logger.warning(
+                    "llm_gateway: bad route %r for tier %s in %s: %s",
+                    value,
+                    tier.value,
+                    yaml_path,
+                    exc,
+                )
 
     async def _apply_imagegen_routing(
         self,

@@ -128,3 +128,58 @@ def test_tiers_for_campaign() -> None:
     r.set_tier_route("camp-1", Tier.LIGHT, "deepseek.flash")
     tiers = r.tiers_for("camp-1")
     assert tiers == {Tier.HEAVY: "deepseek.pro", Tier.LIGHT: "deepseek.flash"}
+
+
+# ---------------------------------------------------------------------------
+# Gateway integration: model_tiers block loaded from campaign.yaml (Task 3)
+# ---------------------------------------------------------------------------
+
+from pathlib import Path
+
+import yaml
+
+from grimoire.llm_gateway.config import GatewayConfig
+from grimoire.llm_gateway.gateway import LLMGatewayService
+from grimoire.types.llm import RetryPolicy, TimeoutPolicy
+
+
+def _minimal_config() -> GatewayConfig:
+    return GatewayConfig(
+        retry=RetryPolicy(max_retries=0, initial_delay_ms=0, backoff_factor=1.0),
+        timeout=TimeoutPolicy(total_seconds=5.0, first_token_seconds=2.0),
+    )
+
+
+async def test_gateway_loads_model_tiers_from_yaml(db, plugins, tmp_path: Path) -> None:
+    camp_dir = tmp_path / "campaigns" / "camp-1"
+    camp_dir.mkdir(parents=True)
+    (camp_dir / "campaign.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model_tiers": {
+                    "heavy": "deepseek.deepseek-v4-pro",
+                    "light": "deepseek.deepseek-v4-flash",
+                }
+            }
+        )
+    )
+    gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+    await gw._load_campaign_routing("camp-1")
+    tiers = gw._router.tiers_for("camp-1")
+    assert tiers[Tier.HEAVY] == "deepseek.deepseek-v4-pro"
+    assert tiers[Tier.LIGHT] == "deepseek.deepseek-v4-flash"
+
+
+async def test_gateway_skips_unknown_tier_keys(db, plugins, tmp_path: Path) -> None:
+    camp_dir = tmp_path / "campaigns" / "camp-1"
+    camp_dir.mkdir(parents=True)
+    (camp_dir / "campaign.yaml").write_text(
+        yaml.safe_dump(
+            {"model_tiers": {"heavy": "deepseek.pro", "bogus": "x.y"}}
+        )
+    )
+    gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+    await gw._load_campaign_routing("camp-1")
+    tiers = gw._router.tiers_for("camp-1")
+    assert Tier.HEAVY in tiers
+    assert "bogus" not in [t.value for t in tiers]
