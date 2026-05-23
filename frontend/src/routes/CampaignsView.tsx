@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { ApiError } from "../api/client";
-import { fetchCampaigns, rescanCampaigns, type CampaignSummaryPayload } from "../api/wizard";
+import {
+  deleteCampaign,
+  fetchCampaigns,
+  rescanCampaigns,
+  type CampaignSummaryPayload,
+} from "../api/wizard";
 import { useStore } from "../state/useStore";
 import type { CampaignSummary } from "../state/storeContext";
 import { ForkDialog } from "./campaign/ForkDialog";
@@ -42,48 +47,55 @@ function buildForest(rows: CampaignSummary[]): CampaignNode[] {
   return roots;
 }
 
-interface CampaignNodeRowProps {
+/** Flatten the forest into a list of (node, depth) for card layout. */
+function flatten(forest: CampaignNode[]): { node: CampaignNode; depth: number }[] {
+  const out: { node: CampaignNode; depth: number }[] = [];
+  const visit = (n: CampaignNode, depth: number) => {
+    out.push({ node: n, depth });
+    n.children.forEach((c) => visit(c, depth + 1));
+  };
+  forest.forEach((n) => visit(n, 0));
+  return out;
+}
+
+interface CampaignCardProps {
   node: CampaignNode;
   depth: number;
   onFork: (campaign: CampaignSummary) => void;
+  onDelete: (campaign: CampaignSummary) => void;
+  busyDeleting: boolean;
 }
 
-function CampaignNodeRow({ node, depth, onFork }: CampaignNodeRowProps) {
+function CampaignCard({ node, depth, onFork, onDelete, busyDeleting }: CampaignCardProps) {
+  const isChild = depth > 0;
   return (
-    <>
-      <li
-        className="campaign-list-row"
-        style={{ paddingLeft: `${depth * 1.25}rem` }}
-      >
-        <Link to={`/campaigns/${node.campaign.id}`}>{node.campaign.name}</Link>
-        {node.forkedAtPostId && (
-          <span className="campaign-list-fork-meta">
-            (forked at {node.forkedAtPostId})
-          </span>
-        )}
-        <button
-          type="button"
-          className="campaign-list-fork-btn"
-          onClick={() => onFork(node.campaign)}
-        >
+    <li className={`campaign-card${isChild ? " is-child" : ""}`}>
+      <Link to={`/campaigns/${node.campaign.id}`} className="campaign-card-title">
+        {node.campaign.name}
+      </Link>
+      {(isChild || node.forkedAtPostId) && (
+        <p className="campaign-card-meta">
+          {isChild && <>Fork </>}
+          {node.forkedAtPostId && <>at {node.forkedAtPostId}</>}
+        </p>
+      )}
+      <div className="campaign-card-actions">
+        <button type="button" onClick={() => onFork(node.campaign)}>
           Fork
         </button>
-        <Link
-          to={`/campaigns/${node.campaign.id}/settings`}
-          className="campaign-list-settings"
+        <Link to={`/campaigns/${node.campaign.id}/settings`}>Settings</Link>
+        <button
+          type="button"
+          className="campaign-card-delete"
+          aria-label={`Delete campaign ${node.campaign.name}`}
+          title="Delete campaign"
+          onClick={() => onDelete(node.campaign)}
+          disabled={busyDeleting}
         >
-          Settings
-        </Link>
-      </li>
-      {node.children.map((child) => (
-        <CampaignNodeRow
-          key={child.campaign.id}
-          node={child}
-          depth={depth + 1}
-          onFork={onFork}
-        />
-      ))}
-    </>
+          {busyDeleting ? "Deleting…" : "Delete"}
+        </button>
+      </div>
+    </li>
   );
 }
 
@@ -94,6 +106,8 @@ export function CampaignsView() {
   const [forkSource, setForkSource] = useState<CampaignSummary | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
   async function refresh() {
     setRefreshing(true);
@@ -127,6 +141,26 @@ export function CampaignsView() {
     }
   }
 
+  async function handleDelete(c: CampaignSummary) {
+    if (
+      !window.confirm(
+        `Delete campaign "${c.name}"? This removes the campaign and all of its scenes from disk. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingId(c.id);
+    setDeleteErr(null);
+    try {
+      await deleteCampaign(c.id);
+      await reload();
+    } catch (err) {
+      setDeleteErr(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -157,6 +191,7 @@ export function CampaignsView() {
   }, [dispatch]);
 
   const forest = useMemo(() => buildForest(state.campaigns), [state.campaigns]);
+  const flat = useMemo(() => flatten(forest), [forest]);
 
   return (
     <section className="route campaigns-view" aria-labelledby="campaigns-heading">
@@ -185,17 +220,24 @@ export function CampaignsView() {
           {refreshErr}
         </p>
       )}
+      {deleteErr && (
+        <p className="wizard-error" role="alert">
+          {deleteErr}
+        </p>
+      )}
       {!loading && state.campaigns.length === 0 && !error && (
         <p>No campaigns yet. Click "New campaign" to start the creation wizard.</p>
       )}
-      {forest.length > 0 && (
+      {flat.length > 0 && (
         <ul className="campaign-list">
-          {forest.map((node) => (
-            <CampaignNodeRow
+          {flat.map(({ node, depth }) => (
+            <CampaignCard
               key={node.campaign.id}
               node={node}
-              depth={0}
+              depth={depth}
               onFork={(c) => setForkSource(c)}
+              onDelete={(c) => void handleDelete(c)}
+              busyDeleting={deletingId === node.campaign.id}
             />
           ))}
         </ul>

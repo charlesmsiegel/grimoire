@@ -84,6 +84,12 @@ export function PostItem({
   const [lastAuxAction, setLastAuxAction] = useState<(() => Promise<AuxiliaryResult>) | null>(
     null,
   );
+  const [editDraft, setEditDraft] = useState<string | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  // Local body override so the edit takes effect immediately without
+  // waiting for a full scene refetch; cleared if the parent reloads.
+  const [bodyOverride, setBodyOverride] = useState<string | null>(null);
 
   const candidateRefs = useMemo(() => {
     const initial = post.author_pc_ref ?? post.author_npc_ref ?? null;
@@ -100,6 +106,28 @@ export function PostItem({
   const showStrip = alternates.length > 1;
   const current = alternates[cursor];
   const canMutate = isLatestModelPost && !!campaignId;
+  const canEdit = !!campaignId;
+  const displayBody = bodyOverride ?? post.body;
+
+  async function saveEdit() {
+    if (!campaignId || editDraft === null) return;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      const updated = await campaignApi.editPostBody(
+        campaignId,
+        post.scene_id,
+        post.id,
+        editDraft,
+      );
+      setBodyOverride(updated.body);
+      setEditDraft(null);
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEditBusy(false);
+    }
+  }
   // Retcon is available on any model post (NOT gated to latest like swipes are).
   const canRetcon = !!campaignId && post.author_kind !== "pc" && !post.is_player;
   const canRewrite = canRetcon;
@@ -217,7 +245,46 @@ export function PostItem({
           {new Date(post.created_at).toLocaleTimeString()}
         </time>
       </header>
-      <Markdown className="post-body">{post.body}</Markdown>
+      {editDraft === null ? (
+        <Markdown className="post-body">{displayBody}</Markdown>
+      ) : (
+        <form
+          className="post-edit-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void saveEdit();
+          }}
+        >
+          <textarea
+            className="post-edit-textarea"
+            value={editDraft}
+            onChange={(e) => setEditDraft(e.target.value)}
+            rows={Math.max(8, Math.min(40, editDraft.split("\n").length + 2))}
+            aria-label="Edit post markdown"
+            autoFocus
+          />
+          <div className="post-edit-actions">
+            <button type="submit" disabled={editBusy}>
+              {editBusy ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              disabled={editBusy}
+              onClick={() => {
+                setEditDraft(null);
+                setEditError(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+          {editError && (
+            <p className="post-edit-error" role="alert">
+              {editError}
+            </p>
+          )}
+        </form>
+      )}
       {images.length > 0 && (
         <ul className="post-images" aria-label="Generated images">
           {images.map((img) => (
@@ -227,45 +294,60 @@ export function PostItem({
           ))}
         </ul>
       )}
-      {(canRetcon || canRewrite || campaignId) && (
-        <div className="post-actions">
+      {(canEdit || canRetcon || canRewrite || campaignId) && editDraft === null && (
+        <div className="post-actions post-actions-icons">
+          {canEdit && (
+            <button
+              type="button"
+              className="post-icon-btn post-edit"
+              aria-label="Edit post markdown"
+              title="Edit"
+              onClick={() => setEditDraft(displayBody)}
+            >
+              ✎
+            </button>
+          )}
           {canRetcon && (
             <button
               type="button"
-              className="post-retcon"
+              className="post-icon-btn post-retcon"
               aria-label="Retcon this post"
+              title="Retcon…"
               onClick={() => setRetconOpen(true)}
             >
-              Retcon...
+              ⟲
             </button>
           )}
           {canRewrite && (
             <button
               type="button"
-              className="post-rewrite"
-              aria-label="Rewrite this post"
+              className="post-icon-btn post-rewrite"
+              aria-label="Rewrite this post with an LLM"
+              title="Rewrite…"
               onClick={() => setRewriteInstr("")}
               disabled={auxBusy}
             >
-              Rewrite...
+              ✨
             </button>
           )}
           {canShowCost && (
             <button
               type="button"
-              className="post-cost-toggle"
+              className="post-icon-btn post-cost-toggle"
               aria-label="Toggle cost breakdown"
+              title={costOpen ? "Hide cost" : "Show cost"}
               aria-expanded={costOpen}
               onClick={() => setCostOpen((v) => !v)}
             >
-              Cost
+              ¢
             </button>
           )}
           {campaignId && candidateRefs.length > 0 && (
             <button
               type="button"
-              className="post-continue-as"
+              className="post-icon-btn post-continue-as"
               aria-label="Continue as a character"
+              title="Continue as…"
               onClick={() =>
                 setAuxForm({
                   kind: "continue_as",
@@ -275,25 +357,27 @@ export function PostItem({
               }
               disabled={auxBusy}
             >
-              Continue as...
+              ➤
             </button>
           )}
           {campaignId && (
             <button
               type="button"
-              className="post-translate"
+              className="post-icon-btn post-translate"
               aria-label="Translate this post"
+              title="Translate…"
               onClick={() => setAuxForm({ kind: "translate", targetLanguage: "" })}
               disabled={auxBusy}
             >
-              Translate...
+              🌐
             </button>
           )}
           {campaignId && candidateRefs.length > 0 && (
             <button
               type="button"
-              className="post-what-would-x-say"
+              className="post-icon-btn post-what-would-x-say"
               aria-label="Ask what a character would say"
+              title="What would they say…"
               onClick={() =>
                 setAuxForm({
                   kind: "what_would_x_say",
@@ -303,7 +387,7 @@ export function PostItem({
               }
               disabled={auxBusy}
             >
-              What would they say...
+              💬
             </button>
           )}
         </div>
