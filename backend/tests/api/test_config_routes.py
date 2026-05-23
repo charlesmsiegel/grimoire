@@ -76,3 +76,32 @@ def test_app_config_patch_rejects_bad_schedule(client: TestClient) -> None:
 def test_app_config_patch_rejects_negative_retention(client: TestClient) -> None:
     resp = client.patch("/api/config/app", json={"backup": {"retention_days": -1}})
     assert resp.status_code == 422
+
+
+def test_llm_defaults_default(client: TestClient) -> None:
+    resp = client.get("/api/config/llm-defaults")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "heavy": "deepseek.deepseek-v4-pro",
+        "light": "deepseek.deepseek-v4-flash",
+    }
+
+
+def test_llm_defaults_round_trip(client: TestClient) -> None:
+    resp = client.put(
+        "/api/config/llm-defaults",
+        json={"heavy": "anthropic.opus-5", "light": "anthropic.haiku-5"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["heavy"] == "anthropic.opus-5"
+
+    resp = client.get("/api/config/llm-defaults")
+    assert resp.json()["light"] == "anthropic.haiku-5"
+
+
+def test_llm_defaults_bad_route_rejected(client: TestClient) -> None:
+    resp = client.put(
+        "/api/config/llm-defaults",
+        json={"heavy": "missingdot", "light": "anthropic.haiku-5"},
+    )
+    assert resp.status_code == 422

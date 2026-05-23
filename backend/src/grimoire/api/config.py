@@ -37,6 +37,11 @@ _DEFAULT_BACKUP = {
     "location": "data/backups",
 }
 
+_DEFAULT_LLM_DEFAULTS = {
+    "heavy": "deepseek.deepseek-v4-pro",
+    "light": "deepseek.deepseek-v4-flash",
+}
+
 
 def _app_yaml_path() -> Path:
     return config_module.settings.data_root / "config" / "app.yaml"
@@ -73,6 +78,15 @@ def _shape_response(data: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         backup["retention_days"] = 30
     return {"library_path": library_path, "backup": backup}
+
+
+class LLMDefaultsPayload(BaseModel):
+    """App-wide default Heavy and Light routes used as the seed for
+    new campaigns' ``model_tiers`` block.
+    """
+
+    heavy: str = "deepseek.deepseek-v4-pro"
+    light: str = "deepseek.deepseek-v4-flash"
 
 
 class BackupPayload(BaseModel):
@@ -139,6 +153,33 @@ async def patch_app_config(payload: AppConfigPatch) -> Any:
         raise HTTPException(status_code=500, detail=f"failed to persist app.yaml: {exc}") from exc
 
     return _shape_response(data)
+
+
+@router.get("/llm-defaults")
+async def get_llm_defaults() -> Any:
+    raw = _read_app_yaml()
+    block = raw.get("llm_defaults") if isinstance(raw.get("llm_defaults"), dict) else {}
+    return {
+        "heavy": str(block.get("heavy") or _DEFAULT_LLM_DEFAULTS["heavy"]),
+        "light": str(block.get("light") or _DEFAULT_LLM_DEFAULTS["light"]),
+    }
+
+
+@router.put("/llm-defaults")
+async def set_llm_defaults(payload: LLMDefaultsPayload) -> Any:
+    from grimoire.llm_gateway.routing import Route
+
+    # Validate up-front so a half-written app.yaml isn't possible.
+    for value in (payload.heavy, payload.light):
+        try:
+            Route.parse(value)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    data = _read_app_yaml()
+    data["llm_defaults"] = {"heavy": payload.heavy, "light": payload.light}
+    write_yaml(_app_yaml_path(), data)
+    return data["llm_defaults"]
 
 
 __all__ = ["router"]
