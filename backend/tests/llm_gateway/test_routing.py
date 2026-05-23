@@ -172,9 +172,7 @@ async def test_gateway_skips_unknown_tier_keys(db, plugins, tmp_path: Path) -> N
     camp_dir = tmp_path / "campaigns" / "camp-1"
     camp_dir.mkdir(parents=True)
     (camp_dir / "campaign.yaml").write_text(
-        yaml.safe_dump(
-            {"model_tiers": {"heavy": "deepseek.pro", "bogus": "x.y"}}
-        )
+        yaml.safe_dump({"model_tiers": {"heavy": "deepseek.pro", "bogus": "x.y"}})
     )
     gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
     await gw._load_campaign_routing("camp-1")

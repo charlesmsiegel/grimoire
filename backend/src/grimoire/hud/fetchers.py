@@ -288,9 +288,7 @@ def _weather_fetcher(world: Any, library: Any):
         try:
             from grimoire.types.common import InGameTime
 
-            weather = await world.weather_for(
-                world_id, loc, InGameTime(moment=dt), campaign_id
-            )
+            weather = await world.weather_for(world_id, loc, InGameTime(moment=dt), campaign_id)
         except Exception as e:
             log.debug("world.weather_for failed: %s", e)
             return {"value": "—"}
@@ -316,9 +314,7 @@ def _temperature_fetcher(world: Any, library: Any):
         try:
             from grimoire.types.common import InGameTime
 
-            weather = await world.weather_for(
-                world_id, loc, InGameTime(moment=dt), campaign_id
-            )
+            weather = await world.weather_for(world_id, loc, InGameTime(moment=dt), campaign_id)
         except Exception:
             return {"value": "—"}
         temp = getattr(weather, "temperature_c", None)
