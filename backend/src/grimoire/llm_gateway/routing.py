@@ -68,6 +68,33 @@ class RouteResolver:
             raise RouteNotFoundError(task)
         return Route.parse(raw)
 
+    def resolve_with_source(
+        self, task: str, campaign_id: CampaignId | None = None
+    ) -> tuple[Route, str]:
+        """Like ``resolve`` but also returns the resolution source.
+
+        Returns ``(route, source)`` where source is one of
+        ``"per_task"``, ``"tier"``, or ``"default"``.
+        """
+        raw: str | None = None
+        source = "default"
+        if campaign_id is not None:
+            raw = self._campaigns.get(campaign_id, {}).get(task)
+            if raw is not None:
+                source = "per_task"
+            else:
+                tier = tier_for_task(task)
+                if tier is not None:
+                    raw = self._tiers.get(campaign_id, {}).get(tier)
+                    if raw is not None:
+                        source = "tier"
+        if raw is None:
+            raw = self._defaults.get(task)
+            source = "default"
+        if raw is None:
+            raise RouteNotFoundError(task)
+        return Route.parse(raw), source
+
     def fallback(self, task: str) -> Route | None:
         raw = self._fallbacks.get(task)
         return Route.parse(raw) if raw else None
