@@ -2606,6 +2606,8 @@ class OrchestratorService:
         the gateway hasn't been wired with route resolution (tests with
         fakes).
         """
+        if await self._campaign_integrated_deltas(campaign_id):
+            return ExtractionMode.TOGETHER
         provider_id = "unknown"
         model = "unknown"
         resolve = getattr(self._gateway, "resolve_route", None)
@@ -2626,6 +2628,33 @@ class OrchestratorService:
             provider_id=provider_id,
             model=model,
         )
+
+    async def _campaign_integrated_deltas(self, campaign_id: CampaignId) -> bool:
+        """Read ``campaigns.config["integrated_deltas"]``.
+
+        Returns ``True`` when the campaign has opted into the integrated
+        narrator+extraction flow (``ExtractionMode.TOGETHER``). Returns
+        ``False`` when the flag is absent or explicitly ``false`` so that
+        existing campaigns are unaffected.
+        """
+        try:
+            row = await self._store.db.fetchone(
+                "SELECT config FROM campaigns WHERE id = ?", (campaign_id,)
+            )
+        except Exception:
+            return False
+        if not row:
+            return False
+        raw = row["config"] if row else None
+        if not raw:
+            return False
+        import json as _json
+
+        try:
+            data = _json.loads(raw)
+        except (TypeError, ValueError):
+            return False
+        return bool(data.get("integrated_deltas")) if isinstance(data, dict) else False
 
     async def _do_extract(
         self,
