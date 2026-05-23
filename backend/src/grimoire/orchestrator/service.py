@@ -941,9 +941,7 @@ class OrchestratorService:
             target_post_id = aux.task.target_post_id
             if not target_post_id:
                 self._inflight_aux[result_id] = aux
-                raise OrchestratorError(
-                    f"continue-as result {result_id!r} has no target_post_id"
-                )
+                raise OrchestratorError(f"continue-as result {result_id!r} has no target_post_id")
             try:
                 _scene, existing = await self._scenes._find_post(target_post_id)
             except Exception as err:
@@ -953,9 +951,7 @@ class OrchestratorService:
                 ) from err
             joiner = "\n\n" if existing.body and not existing.body.endswith("\n") else ""
             new_body = f"{existing.body}{joiner}{text}"
-            await self._scenes.edit_post(
-                target_post_id, new_body, source="aux:continue_as"
-            )
+            await self._scenes.edit_post(target_post_id, new_body, source="aux:continue_as")
             logger.info(
                 "[aux-accept] task=%s campaign=%s result=%s extended=%s",
                 aux.task.kind.value,
@@ -3099,9 +3095,7 @@ async def _campaign_generation_overrides(store: Any, campaign_id: str) -> dict[s
     import json as _json
 
     try:
-        row = await store.db.fetchone(
-            "SELECT config FROM campaigns WHERE id = ?", (campaign_id,)
-        )
+        row = await store.db.fetchone("SELECT config FROM campaigns WHERE id = ?", (campaign_id,))
     except Exception:
         return {}
     if not row:

@@ -84,9 +84,7 @@ def _substitute_placeholders(body: str, *, pc_name: str, char_name: str) -> str:
     return body
 
 
-async def _resolve_pc_display_name(
-    *, state_store: Any, library: Any, campaign_id: str
-) -> str:
+async def _resolve_pc_display_name(*, state_store: Any, library: Any, campaign_id: str) -> str:
     """Look up the first PC's display name on the campaign.
 
     Falls back to the bare character_ref tail if no display name is
@@ -181,6 +179,7 @@ async def _seed_greeting_first_post(
         turn_id=str(uuid.uuid4()),
     )
     await scenes.append_post(scene.id, post)
+
 
 logger = logging.getLogger(__name__)
 
@@ -444,9 +443,7 @@ async def create_campaign(
                     world_id=owning_ref.world_id,
                     scene_manager=scenes,
                 )
-                greeting = await library.get_greeting(
-                    owning_ref.world_id, payload.greeting_id
-                )
+                greeting = await library.get_greeting(owning_ref.world_id, payload.greeting_id)
                 await _seed_greeting_first_post(
                     scenes=scenes,
                     scene=scene,
