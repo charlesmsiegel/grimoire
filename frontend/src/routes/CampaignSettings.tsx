@@ -526,7 +526,74 @@ function RoutingSection({
   );
 }
 
+interface TiersValue {
+  heavy: string | null;
+  light: string | null;
+  embedding: string | null;
+}
+
 function RoutingTab({ campaignId }: { campaignId: string }) {
+  const { value, setValue, status, error, ready } = useAutoSavedResource<TiersValue>(
+    campaignId,
+    "/tiers",
+    { heavy: null, light: null, embedding: null },
+  );
+
+  return (
+    <div className="settings-form">
+      <p className="wizard-step-help">
+        Heavy handles generation (narrator, summaries, rewrites). Light
+        handles classification and short transforms (drift checks,
+        scene-break, translate). Embedding handles vector embeddings.
+        Leave a field blank to use the app-wide default.
+      </p>
+      {!ready && <p className="wizard-meta">Loading saved settings…</p>}
+      <label className="wizard-field">
+        <span>Heavy model</span>
+        <input
+          type="text"
+          placeholder="e.g. deepseek.deepseek-v4-pro"
+          value={value.heavy ?? ""}
+          onChange={(e) =>
+            setValue((prev) => ({ ...prev, heavy: e.target.value.trim() || null }))
+          }
+          disabled={!ready}
+        />
+      </label>
+      <label className="wizard-field">
+        <span>Light model</span>
+        <input
+          type="text"
+          placeholder="e.g. deepseek.deepseek-v4-flash"
+          value={value.light ?? ""}
+          onChange={(e) =>
+            setValue((prev) => ({ ...prev, light: e.target.value.trim() || null }))
+          }
+          disabled={!ready}
+        />
+      </label>
+      <label className="wizard-field">
+        <span>Embedding model</span>
+        <input
+          type="text"
+          placeholder="e.g. voyage.voyage-3"
+          value={value.embedding ?? ""}
+          onChange={(e) =>
+            setValue((prev) => ({ ...prev, embedding: e.target.value.trim() || null }))
+          }
+          disabled={!ready}
+        />
+      </label>
+      <SaveIndicator status={status} error={error} />
+      <details className="routing-advanced">
+        <summary>Advanced: per-task overrides</summary>
+        <RoutingTabAdvanced campaignId={campaignId} />
+      </details>
+    </div>
+  );
+}
+
+function RoutingTabAdvanced({ campaignId }: { campaignId: string }) {
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [pluginsLoading, setPluginsLoading] = useState(true);
   const [pluginsError, setPluginsError] = useState<string | null>(null);
