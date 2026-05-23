@@ -90,11 +90,18 @@ export function InputArea({
   const submit = useCallback(async () => {
     if (!canSubmit) return;
     setSubmitting(true);
+    // Clear the textarea before awaiting the network round-trip so the
+    // user sees their submission disappear immediately and can start
+    // typing the next message. The captured snapshot is what we POST;
+    // if the request fails the entry-box stays cleared (the error is
+    // surfaced separately) — matching how Discord/Slack/etc. behave.
+    const snapshot = text;
+    const snapshotEmotion = emotion;
+    onTextChange("");
+    setEmotion("neutral");
+    taRef.current?.focus();
     try {
-      await onSubmit(text, emotion);
-      onTextChange("");
-      setEmotion("neutral");
-      taRef.current?.focus();
+      await onSubmit(snapshot, snapshotEmotion);
     } finally {
       setSubmitting(false);
     }
@@ -142,7 +149,9 @@ export function InputArea({
         value={text}
         onChange={(e) => onTextChange(e.target.value)}
         onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+          // Enter submits; Shift+Enter inserts a newline (default).
+          // Ctrl/Cmd+Enter also submits — preserved for muscle memory.
+          if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
             e.preventDefault();
             void submit();
           }
@@ -153,7 +162,7 @@ export function InputArea({
             : "Add a PC to begin posting."
         }
         rows={4}
-        aria-label="Post body (Ctrl/Cmd+Enter to submit)"
+        aria-label="Post body (Enter to submit, Shift+Enter for newline)"
       />
       <div className="input-actions">
         <ExpressionPicker
