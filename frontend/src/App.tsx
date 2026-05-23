@@ -47,7 +47,6 @@ export function App() {
               <Route path="library/*" element={<LibraryRoutes />} />
               <Route path="campaigns" element={<CampaignsView />} />
               <Route path="campaigns/new" element={<CampaignCreate />} />
-              <Route path="campaigns/:campaignId/settings" element={<CampaignSettings />} />
               <Route path="campaigns/:campaignId" element={<CampaignView />}>
                 <Route index element={<CampaignPlayRoute />} />
                 <Route path="cast" element={<CastView />} />
@@ -61,6 +60,7 @@ export function App() {
                 <Route path="debug/prompt/:turnId" element={<PromptDebugView />} />
                 <Route path="observability/turns" element={<ObservabilityTurnsRoute />} />
                 <Route path="budget" element={<BudgetView />} />
+                <Route path="settings" element={<CampaignSettings />} />
               </Route>
               <Route path="observability/*" element={<ObservabilityRoutes />} />
               <Route path="settings" element={<AppSettings />} />

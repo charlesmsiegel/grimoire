@@ -601,6 +601,20 @@ class AdvancedSettingsPayload(BaseModel):
     per_task_prompts: dict[str, str] = Field(default_factory=dict)
 
 
+class GenerationSettingsPayload(BaseModel):
+    """Per-campaign LLM generation parameters.
+
+    ``max_tokens`` caps the response length the provider may produce.
+    ``temperature`` is the sampling temperature (0.0–2.0 by convention;
+    most providers clamp). Unset / null means "use the orchestrator's
+    built-in default" (currently 4096 / 1.0 from
+    ``ContextBuilderConfig``).
+    """
+
+    max_tokens: int | None = Field(default=None, ge=1, le=200_000)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+
+
 class NarratorSettingsPayload(BaseModel):
     """Campaign default narrator response mode.
 
@@ -785,6 +799,40 @@ async def set_campaign_advanced(
     }
     await _write_campaign_config(state_store, campaign_id, cfg)
     return cfg["advanced"]
+
+
+@router.get("/{campaign_id}/generation")
+async def get_campaign_generation(campaign_id: str, state_store: StateStoreDep) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    gen = cfg.get("generation") or {}
+    return {
+        "max_tokens": gen.get("max_tokens"),
+        "temperature": gen.get("temperature"),
+    }
+
+
+@router.put("/{campaign_id}/generation")
+async def set_campaign_generation(
+    campaign_id: str,
+    payload: GenerationSettingsPayload,
+    state_store: StateStoreDep,
+) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    # Persist only the explicitly-set fields; ``None`` clears the override
+    # so the orchestrator falls back to the built-in default.
+    block: dict[str, Any] = {}
+    if payload.max_tokens is not None:
+        block["max_tokens"] = int(payload.max_tokens)
+    if payload.temperature is not None:
+        block["temperature"] = float(payload.temperature)
+    cfg["generation"] = block
+    await _write_campaign_config(state_store, campaign_id, cfg)
+    return {
+        "max_tokens": block.get("max_tokens"),
+        "temperature": block.get("temperature"),
+    }
 
 
 @router.get("/{campaign_id}/narrator")

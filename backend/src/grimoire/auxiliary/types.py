@@ -28,6 +28,7 @@ class CommitAction(StrEnum):
     SUBMIT_POST = "submit_post"
     REPLACE_POST = "replace_post"
     APPEND_POST = "append_post"
+    EXTEND_POST = "extend_post"
     COPY = "copy"
     REPLACE_DRAFT = "replace_draft"
 
@@ -35,7 +36,10 @@ class CommitAction(StrEnum):
 _COMMIT_ACTION: dict[TaskKind, CommitAction] = {
     TaskKind.IMPERSONATE_PC: CommitAction.SUBMIT_POST,
     TaskKind.REWRITE_POST: CommitAction.REPLACE_POST,
-    TaskKind.CONTINUE_AS: CommitAction.APPEND_POST,
+    # Continue-as extends the body of the post it was triggered from,
+    # rather than appending a fresh NPC post — the new text reads as a
+    # continuation of the same beat.
+    TaskKind.CONTINUE_AS: CommitAction.EXTEND_POST,
     TaskKind.WHAT_WOULD_X_SAY: CommitAction.COPY,
     TaskKind.BRAINSTORM: CommitAction.COPY,
     TaskKind.EDIT_PROSE: CommitAction.REPLACE_DRAFT,

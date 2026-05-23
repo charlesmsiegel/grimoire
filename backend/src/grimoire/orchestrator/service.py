@@ -934,6 +934,42 @@ class OrchestratorService:
                 self._inflight_aux[result_id] = aux
                 raise
 
+        if action == CommitAction.EXTEND_POST:
+            # Continue-as: extend the target post's body with the new text
+            # rather than creating a new NPC post. The new prose reads as
+            # a continuation of the same beat.
+            target_post_id = aux.task.target_post_id
+            if not target_post_id:
+                self._inflight_aux[result_id] = aux
+                raise OrchestratorError(
+                    f"continue-as result {result_id!r} has no target_post_id"
+                )
+            try:
+                _scene, existing = await self._scenes._find_post(target_post_id)
+            except Exception:
+                self._inflight_aux[result_id] = aux
+                raise OrchestratorError(
+                    f"continue-as target post {target_post_id!r} not found"
+                )
+            joiner = "\n\n" if existing.body and not existing.body.endswith("\n") else ""
+            new_body = f"{existing.body}{joiner}{text}"
+            await self._scenes.edit_post(
+                target_post_id, new_body, source="aux:continue_as"
+            )
+            logger.info(
+                "[aux-accept] task=%s campaign=%s result=%s extended=%s",
+                aux.task.kind.value,
+                campaign_id,
+                result_id,
+                target_post_id,
+            )
+            return {
+                "committed": True,
+                "action": "extend_post",
+                "result_id": result_id,
+                "post_id": target_post_id,
+            }
+
         if action == CommitAction.APPEND_POST:
             scene = await self._scenes.active_scene_for_campaign(campaign_id, "main")
             if scene is None:
@@ -2511,11 +2547,22 @@ class OrchestratorService:
     ) -> str:
         params = getattr(prompt, "params", None)
         seed = getattr(params, "seed", None) if params is not None else None
+        max_tokens = getattr(params, "max_tokens", 4096)
+        temperature = getattr(params, "temperature", 1.0)
+        # Per-campaign generation overrides (campaigns.config["generation"]).
+        # If the user sets ``max_tokens`` / ``temperature`` in the campaign
+        # settings UI, those values take precedence over the
+        # ContextBuilder's app-wide defaults.
+        gen = await _campaign_generation_overrides(self._store, campaign_id)
+        if gen.get("max_tokens") is not None:
+            max_tokens = int(gen["max_tokens"])
+        if gen.get("temperature") is not None:
+            temperature = float(gen["temperature"])
         request = CompletionRequest(
             model="",  # routing resolves the actual model
             messages=list(prompt.messages),
-            max_tokens=getattr(params, "max_tokens", 4096),
-            temperature=getattr(params, "temperature", 1.0),
+            max_tokens=max_tokens,
+            temperature=temperature,
             seed=seed,
         )
         accumulated: list[str] = []
@@ -3039,6 +3086,42 @@ class OrchestratorService:
 # --------------------------------------------------------------------------- #
 # Conversion helpers (scenes dataclass ↔ pydantic Scene)
 # --------------------------------------------------------------------------- #
+
+
+async def _campaign_generation_overrides(store: Any, campaign_id: str) -> dict[str, Any]:
+    """Read ``campaigns.config["generation"]`` for ``campaign_id``.
+
+    Returns ``{"max_tokens": int | None, "temperature": float | None}`` —
+    each key is ``None`` when the user hasn't set an override for that
+    field. Always best-effort: any error returns empty so the caller
+    falls back to the prompt's default params.
+    """
+    import json as _json
+
+    try:
+        row = await store.db.fetchone(
+            "SELECT config FROM campaigns WHERE id = ?", (campaign_id,)
+        )
+    except Exception:
+        return {}
+    if not row:
+        return {}
+    raw = row.get("config") if hasattr(row, "get") else row["config"]
+    if not raw:
+        return {}
+    try:
+        data = _json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    block = data.get("generation") or {}
+    if not isinstance(block, dict):
+        return {}
+    return {
+        "max_tokens": block.get("max_tokens"),
+        "temperature": block.get("temperature"),
+    }
 
 
 def _pydantic_scene(scene: SceneFileScene) -> PydanticScene:
