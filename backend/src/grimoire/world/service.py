@@ -747,7 +747,16 @@ class WorldService:
         from grimoire.scenes.types import SceneInit  # late import to avoid cycle
 
         greeting = await self.library.get_greeting(world_id, greeting_id)
-        branch = branch_id or f"{campaign_id}:main"
+        # Default to the bare "main" branch, which matches the on-disk
+        # convention used by ``scenes_dir`` (bare "main" → flat
+        # ``campaigns/<id>/scenes/`` directory; anything else gets a
+        # ``branches/<safe>/scenes/`` subdirectory). Earlier this defaulted
+        # to ``f"{campaign_id}:main"`` and produced an orphan scene under
+        # ``branches/<cid>__main/scenes/`` that ``list_scenes("main")``
+        # never returned, while the wizard's materialize step created a
+        # second scene at the canonical path — leaving the visible one
+        # without ``in_game_start`` or a first post.
+        branch = branch_id or "main"
 
         in_game_start: datetime | None = None
         starting_time = getattr(greeting, "starting_time", None)
