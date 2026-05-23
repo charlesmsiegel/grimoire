@@ -183,3 +183,43 @@ async def test_gateway_skips_unknown_tier_keys(db, plugins, tmp_path: Path) -> N
     tiers = gw._router.tiers_for("camp-1")
     assert Tier.HEAVY in tiers
     assert "bogus" not in [t.value for t in tiers]
+
+
+# ---------------------------------------------------------------------------
+# Gateway integration: set/clear_tier_route persist to campaign.yaml (Task 4)
+# ---------------------------------------------------------------------------
+
+
+async def test_gateway_set_tier_route_persists_to_yaml(db, plugins, tmp_path: Path) -> None:
+    camp_dir = tmp_path / "campaigns" / "camp-1"
+    camp_dir.mkdir(parents=True)
+    (camp_dir / "campaign.yaml").write_text(yaml.safe_dump({"id": "camp-1"}))
+    gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+    await gw.set_tier_route("camp-1", Tier.HEAVY, "deepseek.pro")
+    raw = yaml.safe_load((camp_dir / "campaign.yaml").read_text())
+    assert raw["model_tiers"] == {"heavy": "deepseek.pro"}
+
+    # Setting another tier preserves the first.
+    await gw.set_tier_route("camp-1", Tier.LIGHT, "deepseek.flash")
+    raw = yaml.safe_load((camp_dir / "campaign.yaml").read_text())
+    assert raw["model_tiers"] == {"heavy": "deepseek.pro", "light": "deepseek.flash"}
+
+
+async def test_gateway_clear_tier_route_persists(db, plugins, tmp_path: Path) -> None:
+    camp_dir = tmp_path / "campaigns" / "camp-1"
+    camp_dir.mkdir(parents=True)
+    (camp_dir / "campaign.yaml").write_text(
+        yaml.safe_dump({"model_tiers": {"heavy": "x.y", "light": "a.b"}})
+    )
+    gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+    # Load existing tiers so clear_tier_route sees them.
+    await gw._load_campaign_routing("camp-1")
+    await gw.clear_tier_route("camp-1", Tier.HEAVY)
+    raw = yaml.safe_load((camp_dir / "campaign.yaml").read_text())
+    assert raw["model_tiers"] == {"light": "a.b"}
+
+
+async def test_gateway_set_tier_route_rejects_bad_route(db, plugins, tmp_path: Path) -> None:
+    gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+    with pytest.raises(ValueError):
+        await gw.set_tier_route("camp-1", Tier.HEAVY, "missing_dot")

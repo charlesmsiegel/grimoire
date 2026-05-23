@@ -219,6 +219,47 @@ class LLMGatewayService:
         if campaign_id is not None and self._data_root is not None:
             self._persist_campaign_route(campaign_id, task, route, kind=kind)
 
+    async def set_tier_route(
+        self,
+        campaign_id: CampaignId,
+        tier: Tier,
+        route: str,
+    ) -> None:
+        """Apply a tier route and persist to campaign.yaml.
+
+        The route must parse via ``Route.parse``. Persistence preserves
+        any other ``model_tiers`` entries and any existing routing
+        blocks on the file.
+        """
+        Route.parse(route)  # validate before touching any state
+        self._router.set_tier_route(campaign_id, tier, route)
+        yaml_path = self._campaign_yaml_path(campaign_id)
+        if yaml_path is not None:
+            self._write_tier_block(campaign_id)
+
+    async def clear_tier_route(
+        self,
+        campaign_id: CampaignId,
+        tier: Tier,
+    ) -> None:
+        """Remove a tier route from in-memory state and campaign.yaml."""
+        self._router.clear_tier_route(campaign_id, tier)
+        yaml_path = self._campaign_yaml_path(campaign_id)
+        if yaml_path is not None:
+            self._write_tier_block(campaign_id)
+
+    def _write_tier_block(self, campaign_id: CampaignId) -> None:
+        """Serialize the resolver's tier state back to ``campaign.yaml``."""
+        data = self._read_campaign_yaml_for_write(campaign_id)
+        if data is None:
+            return
+        tiers = self._router.tiers_for(campaign_id)
+        if tiers:
+            data["model_tiers"] = {tier.value: route for tier, route in tiers.items()}
+        else:
+            data.pop("model_tiers", None)
+        self._atomic_write_campaign_yaml(campaign_id, data)
+
     async def clear_route(
         self,
         task: str,
