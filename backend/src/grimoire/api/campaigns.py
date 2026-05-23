@@ -601,6 +601,19 @@ class AdvancedSettingsPayload(BaseModel):
     per_task_prompts: dict[str, str] = Field(default_factory=dict)
 
 
+class TierSettingsPayload(BaseModel):
+    """Per-campaign tier routes.
+
+    Each field is ``"provider.model"`` or ``None``. ``None`` clears the
+    override and lets the resolver fall through to the app default
+    (or per-task route, if one is set).
+    """
+
+    heavy: str | None = None
+    light: str | None = None
+    embedding: str | None = None
+
+
 class GenerationSettingsPayload(BaseModel):
     """Per-campaign LLM generation parameters.
 
@@ -714,6 +727,76 @@ async def set_campaign_routing(
     await _apply(payload.embedding, "embedding")
     await _apply(payload.imagegen, "imagegen")
     return _read_routing_blocks(state_store, campaign_id)
+
+
+@router.get("/{campaign_id}/tiers")
+async def get_campaign_tiers(
+    campaign_id: str,
+    state_store: StateStoreDep,
+) -> Any:
+    await _require_campaign_row(state_store, campaign_id)
+    # Read directly from campaign.yaml — the gateway is the writer, but
+    # we don't want to require the gateway to have lazy-loaded this
+    # campaign before answering a GET.
+    from grimoire.files.yaml_io import load_yaml
+
+    data_root = getattr(state_store, "data_root", None)
+    tiers: dict[str, str | None] = {"heavy": None, "light": None, "embedding": None}
+    if data_root is None:
+        return tiers
+    yaml_path = data_root / "campaigns" / campaign_id / "campaign.yaml"
+    if not yaml_path.is_file():
+        return tiers
+    try:
+        raw = load_yaml(yaml_path)
+    except Exception:
+        return tiers
+    if not isinstance(raw, dict):
+        return tiers
+    block = raw.get("model_tiers") or {}
+    if isinstance(block, dict):
+        for k in ("heavy", "light", "embedding"):
+            v = block.get(k)
+            if isinstance(v, str) and v:
+                tiers[k] = v
+    return tiers
+
+
+@router.put("/{campaign_id}/tiers")
+async def set_campaign_tiers(
+    campaign_id: str,
+    payload: TierSettingsPayload,
+    state_store: StateStoreDep,
+    gateway: LLMGatewayDep,
+) -> Any:
+    from grimoire.llm_gateway.routing import Route
+    from grimoire.llm_gateway.tiers import Tier
+
+    await _require_campaign_row(state_store, campaign_id)
+    # Validate routes up-front so we don't half-apply.
+    for value in (payload.heavy, payload.light, payload.embedding):
+        if value is None:
+            continue
+        try:
+            Route.parse(value)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    for tier, value in (
+        (Tier.HEAVY, payload.heavy),
+        (Tier.LIGHT, payload.light),
+        (Tier.EMBEDDING, payload.embedding),
+    ):
+        if value is None:
+            await gateway.clear_tier_route(campaign_id, tier)
+        else:
+            await gateway.set_tier_route(campaign_id, tier, value)
+
+    return {
+        "heavy": payload.heavy,
+        "light": payload.light,
+        "embedding": payload.embedding,
+    }
 
 
 @router.get("/{campaign_id}/imagegen")
