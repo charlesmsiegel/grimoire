@@ -2182,6 +2182,12 @@ class OrchestratorService:
             ),
             duration_ms=extract_duration_ms,
         )
+        await self._emit_integrated_deltas_fallback(
+            extraction=extraction,
+            turn_id=turn_id,
+            campaign_id=campaign_id,
+            scene_id=scene_id,
+        )
         self._check_cancelled(active)
 
         # Time Engine subscriber drives the calendar advance from these
@@ -2628,6 +2634,30 @@ class OrchestratorService:
             provider_id=provider_id,
             model=model,
         )
+
+    async def _emit_integrated_deltas_fallback(
+        self,
+        *,
+        extraction: ExtractionResult | None,
+        turn_id: TurnId,
+        campaign_id: CampaignId,
+        scene_id: SceneId,
+    ) -> None:
+        """Emit ``integrated_deltas_fallback`` when TOGETHER mode fell back."""
+        if extraction is None:
+            return
+        _FALLBACK_CODES = {"together_no_tracker": "no_block", "together_malformed": "json_parse"}
+        for flag in getattr(extraction, "flags", []):
+            code = getattr(flag, "code", None)
+            if code in _FALLBACK_CODES:
+                await self._emit_turn_event(
+                    "integrated_deltas_fallback",
+                    turn_id,
+                    campaign_id,
+                    scene_id,
+                    reason=_FALLBACK_CODES[code],
+                )
+                return
 
     async def _campaign_integrated_deltas(self, campaign_id: CampaignId) -> bool:
         """Read ``campaigns.config["integrated_deltas"]``.

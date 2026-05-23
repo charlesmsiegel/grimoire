@@ -72,3 +72,123 @@ async def test_integrated_deltas_true_overrides_auto() -> None:
     cfg = ExtractorConfig(mode=ExtractionMode.AUTO)
     mode = await _resolve_mode(cfg, json.dumps({"integrated_deltas": True}))
     assert mode == ExtractionMode.TOGETHER
+
+
+from grimoire.event_bus import Event, EventBus
+from grimoire.types.extraction import ExtractionFlag, ExtractionResult, FlagLevel
+
+
+async def test_fallback_event_emitted_on_together_no_tracker() -> None:
+    """When extraction flags contain together_no_tracker, emit the fallback event."""
+    events: list[Event] = []
+    bus = EventBus()
+
+    async def _collect(ev: Event) -> None:
+        events.append(ev)
+
+    bus.subscribe("integrated_deltas_fallback", _collect)
+
+    orch = OrchestratorService.__new__(OrchestratorService)
+    orch._bus = bus
+    orch._ws_push = None
+
+    result = ExtractionResult(
+        flags=[
+            ExtractionFlag(
+                level=FlagLevel.WARNING,
+                code="together_no_tracker",
+                message="no tracker block found",
+            )
+        ]
+    )
+
+    await orch._emit_integrated_deltas_fallback(
+        extraction=result,
+        turn_id="turn-1",
+        campaign_id="camp-1",
+        scene_id="scene-1",
+    )
+    assert len(events) == 1
+    p = events[0].payload
+    assert p["turn_id"] == "turn-1"
+    assert p["reason"] == "no_block"
+    assert p["campaign_id"] == "camp-1"
+
+
+async def test_fallback_event_emitted_on_together_malformed() -> None:
+    events: list[Event] = []
+    bus = EventBus()
+
+    async def _collect(ev: Event) -> None:
+        events.append(ev)
+
+    bus.subscribe("integrated_deltas_fallback", _collect)
+
+    orch = OrchestratorService.__new__(OrchestratorService)
+    orch._bus = bus
+    orch._ws_push = None
+
+    result = ExtractionResult(
+        flags=[
+            ExtractionFlag(
+                level=FlagLevel.WARNING,
+                code="together_malformed",
+                message="tracker malformed",
+            )
+        ]
+    )
+
+    await orch._emit_integrated_deltas_fallback(
+        extraction=result,
+        turn_id="turn-1",
+        campaign_id="camp-1",
+        scene_id="scene-1",
+    )
+    assert len(events) == 1
+    assert events[0].payload["reason"] == "json_parse"
+
+
+async def test_no_fallback_event_when_no_together_flags() -> None:
+    events: list[Event] = []
+    bus = EventBus()
+
+    async def _collect(ev: Event) -> None:
+        events.append(ev)
+
+    bus.subscribe("integrated_deltas_fallback", _collect)
+
+    orch = OrchestratorService.__new__(OrchestratorService)
+    orch._bus = bus
+    orch._ws_push = None
+
+    result = ExtractionResult()
+
+    await orch._emit_integrated_deltas_fallback(
+        extraction=result,
+        turn_id="turn-1",
+        campaign_id="camp-1",
+        scene_id="scene-1",
+    )
+    assert len(events) == 0
+
+
+async def test_no_fallback_event_when_extraction_is_none() -> None:
+    events: list[Event] = []
+    bus = EventBus()
+
+    async def _collect(ev: Event) -> None:
+        events.append(ev)
+
+    bus.subscribe("integrated_deltas_fallback", _collect)
+
+    orch = OrchestratorService.__new__(OrchestratorService)
+    orch._bus = bus
+    orch._ws_push = None
+
+    await orch._emit_integrated_deltas_fallback(
+        extraction=None,
+        turn_id="turn-1",
+        campaign_id="camp-1",
+        scene_id="scene-1",
+    )
+    assert len(events) == 0
