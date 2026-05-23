@@ -907,34 +907,92 @@ pre {
   list-style: none;
   padding: 0;
   margin: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
   gap: var(--space-3);
+  align-items: stretch;
 }
 
-.campaign-list a {
+.campaign-card {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   background: var(--bg-elev);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  text-decoration: none;
-  color: var(--fg);
+  box-shadow: var(--shadow-xs);
   transition:
     border-color var(--transition-fast),
     background var(--transition-fast),
-    transform var(--transition-fast),
     box-shadow var(--transition-fast);
-  box-shadow: var(--shadow-xs);
 }
 
-.campaign-list a:hover {
+.campaign-card:hover {
   border-color: var(--accent);
   background: var(--bg-elev-2);
   box-shadow: var(--shadow-sm);
+}
+
+.campaign-card.is-child {
+  border-style: dashed;
+}
+
+.campaign-card-title {
+  display: block;
+  font-weight: 600;
+  font-size: 1.05rem;
   text-decoration: none;
+  color: var(--fg);
+  word-break: break-word;
+}
+
+.campaign-card-title:hover {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.campaign-card-meta {
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+}
+
+.campaign-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: auto;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.campaign-card-actions > * {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-sunken);
+  color: var(--fg-muted);
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.campaign-card-actions > *:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.campaign-card-delete {
+  margin-left: auto;
+}
+
+.campaign-card-delete:hover:not(:disabled) {
+  color: var(--danger, #c0392b);
+  border-color: var(--danger, #c0392b);
 }
 
 .campaign-list-settings {
@@ -1589,7 +1647,18 @@ pre {
   padding: var(--space-3) var(--space-4);
   box-shadow: var(--shadow-xs);
   position: relative;
-  overflow: hidden;
+  /* No ``overflow: hidden`` here — it clipped the action bar when an
+     image loaded asynchronously and the post grew past its initial
+     layout height. The ``::before`` accent stripe is contained by
+     ``border-radius`` + ``position: relative`` alone. */
+}
+
+.post-body img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: var(--space-2) 0;
+  border-radius: var(--radius-sm);
 }
 
 .post::before {
@@ -1697,6 +1766,70 @@ pre {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-xs);
+}
+
+.post-actions-icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1, 0.25rem);
+  margin-top: var(--space-2, 0.5rem);
+  padding-top: var(--space-2, 0.5rem);
+  border-top: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+}
+
+.post-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+  border-radius: var(--radius-sm, 0.25rem);
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  color: var(--text-muted, currentColor);
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.post-icon-btn:hover:not(:disabled) {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.04));
+  border-color: var(--border-strong, rgba(0, 0, 0, 0.2));
+  color: var(--text, currentColor);
+}
+
+.post-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.post-icon-btn[aria-expanded="true"] {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.06));
+  border-color: var(--border-strong, rgba(0, 0, 0, 0.25));
+}
+
+.post-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 0.5rem);
+  margin: var(--space-2, 0.5rem) 0;
+}
+
+.post-edit-textarea {
+  width: 100%;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.9rem;
+  padding: var(--space-2, 0.5rem);
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.15));
+  border-radius: var(--radius-sm, 0.25rem);
+  resize: vertical;
+}
+
+.post-edit-actions {
+  display: flex;
+  gap: var(--space-2, 0.5rem);
 }
 
 .streaming-pulse {

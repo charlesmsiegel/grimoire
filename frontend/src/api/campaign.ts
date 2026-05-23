@@ -495,6 +495,12 @@ export const campaignApi = {
       `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}/alternates/${enc(alternateId)}`,
     ),
 
+  editPostBody: (campaignId: string, sceneId: string, postId: string, body: string) =>
+    api.patch<ApiPost>(
+      `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}`,
+      { body, source: "manual_edit" },
+    ),
+
   // ----- Retcon (leave-as-is + replay) ----------------------------------
 
   retconPost: (

@@ -229,6 +229,10 @@ export async function createCampaign(input: CampaignCreateInput): Promise<Campai
   return api.post<CampaignSummaryPayload>("/api/campaigns", input);
 }
 
+export async function deleteCampaign(campaignId: string): Promise<void> {
+  await api.delete<void>(`/api/campaigns/${encodeURIComponent(campaignId)}`);
+}
+
 export async function addCampaignPC(
   campaignId: string,
   pc: { character_ref: string; name: string; owner?: string },

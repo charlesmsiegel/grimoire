@@ -40,6 +40,11 @@ class PinPayload(BaseModel):
     pinned: bool
 
 
+class EditPostPayload(BaseModel):
+    body: str
+    source: str = "manual_edit"
+
+
 async def _resolve_post(scenes: Any, campaign_id: str, scene_id: str, post_id: str) -> Any:
     """Return the post if it belongs to (campaign_id, scene_id), else raise 404."""
     scene = await scenes.get_scene(scene_id)
@@ -148,6 +153,29 @@ async def pin_alternate(
     except Exception as exc:
         raise _map_alternate_error(exc) from exc
     return {"post_id": post_id, "alternate_id": alternate_id, "pinned": payload.pinned}
+
+
+@router.patch("/{campaign_id}/scenes/{scene_id}/posts/{post_id}")
+async def edit_post_body(
+    campaign_id: str,
+    scene_id: str,
+    post_id: str,
+    payload: EditPostPayload,
+    scenes: ScenesDep,
+) -> Any:
+    """Directly edit a post's markdown body.
+
+    This is a manual edit by the user — no LLM, no alternates. It updates
+    the persisted .md and the post body returned by subsequent fetches.
+    """
+    await _resolve_post(scenes, campaign_id, scene_id, post_id)
+    try:
+        await scenes.edit_post(post_id, payload.body, source=payload.source)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    # Re-fetch to return the updated post
+    post = await _resolve_post(scenes, campaign_id, scene_id, post_id)
+    return to_payload(post)
 
 
 @router.delete(

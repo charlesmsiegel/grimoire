@@ -9,6 +9,7 @@ import { ImportDialog } from "./ImportDialog";
 
 const ENTITY_TABS = [
   { to: "characters", label: "Characters" },
+  { to: "monsters", label: "Monsters" },
   { to: "items", label: "Items" },
   { to: "locations", label: "Locations" },
   { to: "lore", label: "Lore" },
