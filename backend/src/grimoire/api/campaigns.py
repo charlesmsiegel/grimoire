@@ -596,6 +596,19 @@ class StorageSettingsPayload(BaseModel):
     retention_days: int = 30
 
 
+class SummariesSettingsPayload(BaseModel):
+    """Per-campaign summarization cadence.
+
+    ``running_every_n_posts`` of ``0`` disables in-scene summaries
+    entirely. ``final_on_close`` toggles the LLM call that runs when a
+    scene closes; when off, the final summary falls back to the
+    running summary (or empty string).
+    """
+
+    running_every_n_posts: int = Field(default=5, ge=0, le=1000)
+    final_on_close: bool = True
+
+
 class AdvancedSettingsPayload(BaseModel):
     debug_log: bool = False
     per_task_prompts: dict[str, str] = Field(default_factory=dict)
@@ -826,6 +839,36 @@ async def set_campaign_imagegen(
     }
     await _write_campaign_config(state_store, campaign_id, cfg)
     return cfg["imagegen"]
+
+
+@router.get("/{campaign_id}/summaries")
+async def get_campaign_summaries(
+    campaign_id: str,
+    state_store: StateStoreDep,
+) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    block = cfg.get("summaries") or {}
+    return {
+        "running_every_n_posts": int(block.get("running_every_n_posts", 5)),
+        "final_on_close": bool(block.get("final_on_close", True)),
+    }
+
+
+@router.put("/{campaign_id}/summaries")
+async def set_campaign_summaries(
+    campaign_id: str,
+    payload: SummariesSettingsPayload,
+    state_store: StateStoreDep,
+) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    cfg["summaries"] = {
+        "running_every_n_posts": int(payload.running_every_n_posts),
+        "final_on_close": bool(payload.final_on_close),
+    }
+    await _write_campaign_config(state_store, campaign_id, cfg)
+    return cfg["summaries"]
 
 
 @router.get("/{campaign_id}/storage")
