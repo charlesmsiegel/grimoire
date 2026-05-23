@@ -923,11 +923,31 @@ async def add_pc(
     campaign_id: str,
     payload: AddPCPayload,
     characters: CharactersDep,
+    scenes: ScenesDep,
 ) -> Any:
     try:
-        return to_payload(
-            await characters.add_pc(campaign_id, payload.character_ref, payload.name, payload.owner)
+        result = await characters.add_pc(
+            campaign_id, payload.character_ref, payload.name, payload.owner
         )
+        # Auto-attach the new PC to the campaign's active scene if one
+        # exists. Without this, a wizard-created campaign has a seeded
+        # greeting scene with present_pc_refs=[] (the scene is created
+        # before any PC is added), and ``submit_post`` fails with
+        # ``no active scene for pc`` until the user manually calls
+        # /pcs/{ref}/set-current-scene. Best-effort: failure here doesn't
+        # roll back the PC creation.
+        try:
+            active = await scenes.active_scene_for_campaign(campaign_id)
+            if active is not None:
+                await scenes.add_present_pc(active.id, payload.character_ref)
+        except Exception:
+            logger.warning(
+                "could not attach new PC %s to active scene in campaign %s",
+                payload.character_ref,
+                campaign_id,
+                exc_info=True,
+            )
+        return to_payload(result)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
