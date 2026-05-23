@@ -1,9 +1,10 @@
 """Routing: task -> `provider_id.model` resolution.
 
-The gateway accepts dotted route strings like
-`anthropic.claude-opus-4-7`. Defaults come from app config; per-campaign
-overrides take precedence; an optional fallback string is consulted when
-the primary path fails.
+Resolution chain (highest priority first):
+  1. Per-campaign per-task override  (``_campaigns[cid][task]``)
+  2. Per-campaign tier route          (``_tiers[cid][tier_for_task(task)]``)
+  3. App-level default route          (``_defaults[task]``)
+  4. Fallback route                   (``_fallbacks[task]``)
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from grimoire.llm_gateway.errors import RouteNotFoundError
+from grimoire.llm_gateway.tiers import Tier, tier_for_task
 from grimoire.types.common import CampaignId
 
 _SEPARATOR: Final[str] = "."
@@ -34,11 +36,7 @@ class Route:
 
 
 class RouteResolver:
-    """Owns default + per-campaign + fallback route mappings.
-
-    Reads are cheap (a couple of dict lookups). Writes go through
-    `set_route` which validates the string before storing it.
-    """
+    """Owns default + per-campaign per-task + per-campaign per-tier + fallback routes."""
 
     def __init__(
         self,
@@ -48,6 +46,7 @@ class RouteResolver:
         self._defaults: dict[str, str] = {}
         self._fallbacks: dict[str, str] = {}
         self._campaigns: dict[CampaignId, dict[str, str]] = {}
+        self._tiers: dict[CampaignId, dict[Tier, str]] = {}
         for task, route in (default_routes or {}).items():
             Route.parse(route)
             self._defaults[task] = route
@@ -59,6 +58,10 @@ class RouteResolver:
         raw: str | None = None
         if campaign_id is not None:
             raw = self._campaigns.get(campaign_id, {}).get(task)
+            if raw is None:
+                tier = tier_for_task(task)
+                if tier is not None:
+                    raw = self._tiers.get(campaign_id, {}).get(tier)
         if raw is None:
             raw = self._defaults.get(task)
         if raw is None:
@@ -86,6 +89,21 @@ class RouteResolver:
             self._defaults.pop(task, None)
         else:
             self._campaigns.get(campaign_id, {}).pop(task, None)
+
+    def set_tier_route(
+        self,
+        campaign_id: CampaignId,
+        tier: Tier,
+        route: str,
+    ) -> None:
+        Route.parse(route)
+        self._tiers.setdefault(campaign_id, {})[tier] = route
+
+    def clear_tier_route(self, campaign_id: CampaignId, tier: Tier) -> None:
+        self._tiers.get(campaign_id, {}).pop(tier, None)
+
+    def tiers_for(self, campaign_id: CampaignId) -> dict[Tier, str]:
+        return dict(self._tiers.get(campaign_id, {}))
 
     def routes_for(self, campaign_id: CampaignId | None = None) -> dict[str, str]:
         merged = dict(self._defaults)

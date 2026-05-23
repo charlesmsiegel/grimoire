@@ -75,3 +75,57 @@ def test_clear_route_removes_entry() -> None:
     resolver.clear_route("main")
     with pytest.raises(RouteNotFoundError):
         resolver.resolve("main")
+
+
+# ---------------------------------------------------------------------------
+# Tier-aware resolution (Task 2)
+# ---------------------------------------------------------------------------
+
+from grimoire.llm_gateway.tiers import Tier  # noqa: E402
+
+
+def test_per_task_wins_over_tier() -> None:
+    r = RouteResolver(default_routes={"main": "anthropic.opus"})
+    r.set_tier_route("camp-1", Tier.HEAVY, "deepseek.pro")
+    r.set_route("main", "openai.gpt-5", campaign_id="camp-1")
+    assert r.resolve("main", "camp-1").raw == "openai.gpt-5"
+
+
+def test_tier_used_when_no_per_task_override() -> None:
+    r = RouteResolver(default_routes={"main": "anthropic.opus"})
+    r.set_tier_route("camp-1", Tier.HEAVY, "deepseek.pro")
+    # No per-task override; tier route wins over the app default.
+    assert r.resolve("main", "camp-1").raw == "deepseek.pro"
+
+
+def test_default_used_when_no_tier_or_per_task() -> None:
+    r = RouteResolver(default_routes={"main": "anthropic.opus"})
+    assert r.resolve("main", "camp-1").raw == "anthropic.opus"
+
+
+def test_unknown_task_falls_through_to_default_not_tier() -> None:
+    r = RouteResolver(default_routes={"weird.task": "anthropic.opus"})
+    r.set_tier_route("camp-1", Tier.HEAVY, "deepseek.pro")
+    # "weird.task" isn't in _TASK_TIER → tier lookup fails → default used.
+    assert r.resolve("weird.task", "camp-1").raw == "anthropic.opus"
+
+
+def test_no_route_raises() -> None:
+    r = RouteResolver()
+    with pytest.raises(RouteNotFoundError):
+        r.resolve("main", "camp-1")
+
+
+def test_clear_tier_route() -> None:
+    r = RouteResolver(default_routes={"main": "anthropic.opus"})
+    r.set_tier_route("camp-1", Tier.HEAVY, "deepseek.pro")
+    r.clear_tier_route("camp-1", Tier.HEAVY)
+    assert r.resolve("main", "camp-1").raw == "anthropic.opus"
+
+
+def test_tiers_for_campaign() -> None:
+    r = RouteResolver()
+    r.set_tier_route("camp-1", Tier.HEAVY, "deepseek.pro")
+    r.set_tier_route("camp-1", Tier.LIGHT, "deepseek.flash")
+    tiers = r.tiers_for("camp-1")
+    assert tiers == {Tier.HEAVY: "deepseek.pro", Tier.LIGHT: "deepseek.flash"}
