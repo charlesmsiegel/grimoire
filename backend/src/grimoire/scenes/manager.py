@@ -244,6 +244,50 @@ class SceneManager:
         n = block.get("running_every_n_posts")
         return int(n) if isinstance(n, int) else None
 
+    def _should_run_final_summary(
+        self,
+        *,
+        final_on_close_override: bool | None,
+    ) -> bool:
+        """Return True when ``close_scene`` should invoke the final summarizer.
+
+        Default is True; ``False`` skips the LLM call and uses the
+        running summary (or empty string) as the final summary.
+        """
+        return True if final_on_close_override is None else bool(final_on_close_override)
+
+    async def _campaign_final_on_close(self, campaign_id: str) -> bool | None:
+        """Read ``campaigns.config["summaries"]["final_on_close"]``.
+
+        Mirrors :meth:`_campaign_summary_cadence`. Returns ``None`` when
+        no override is set; the caller falls back to the default of True.
+        """
+        store = getattr(self, "_state_store", None)
+        if store is None:
+            return None
+        try:
+            row = await store.db.fetchone(
+                "SELECT config FROM campaigns WHERE id = ?", (campaign_id,)
+            )
+        except Exception:
+            return None
+        if not row:
+            return None
+        raw = row.get("config") if hasattr(row, "get") else row["config"]
+        if not raw:
+            return None
+        import json as _json
+
+        try:
+            data = _json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        block = data.get("summaries") if isinstance(data, dict) else None
+        if not isinstance(block, dict):
+            return None
+        v = block.get("final_on_close")
+        return bool(v) if isinstance(v, bool) else None
+
     async def _emit(self, type_: str, scene: Scene, **payload: object) -> None:
         # The shared in-process bus dispatches by ``event.type`` only, so
         # SceneEvent flows through it duck-typed. Subscribers on that bus
@@ -489,7 +533,12 @@ class SceneManager:
                 )
 
             posts = await self.get_posts(scene_id)
-            final_summary, key_beats = await self._final_summary(scene, posts)
+            final_override = await self._campaign_final_on_close(scene.campaign_id)
+            if self._should_run_final_summary(final_on_close_override=final_override):
+                final_summary, key_beats = await self._final_summary(scene, posts)
+            else:
+                final_summary = scene.running_summary or ""
+                key_beats = []
             scene.final_summary = final_summary
             scene.key_beats = list(key_beats)
             scene.closed = True
