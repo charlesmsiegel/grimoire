@@ -29,6 +29,7 @@ from grimoire.llm_gateway.errors import (
 from grimoire.llm_gateway.request_log import LLMRequestLog, request_hash
 from grimoire.llm_gateway.retry import resolve_retry_exceptions, run_with_retries
 from grimoire.llm_gateway.routing import Route, RouteResolver
+from grimoire.llm_gateway.tiers import Tier
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.storage.db import Database
 from grimoire.types.common import CampaignId, HealthLevel, HealthStatus, TurnId
@@ -1411,7 +1412,7 @@ class LLMGatewayService:
     async def _load_campaign_routing(self, campaign_id: CampaignId) -> None:
         """Lazily read routing blocks from campaign.yaml and apply them.
 
-        Recognises three top-level blocks:
+        Recognises four top-level blocks:
           * ``model_routing`` — applied to the LLM resolver.
           * ``embedding_routing`` — applied to the same resolver; task name
             uniqueness keeps it disjoint from LLM entries. Entries here
@@ -1420,6 +1421,10 @@ class LLMGatewayService:
             consulted by ImageGenService via :meth:`imagegen_route`. The
             resolver here only knows LLM/embedding kinds, so a parallel
             dict holds these.
+          * ``model_tiers`` — a flat dict mapping tier names ("heavy",
+            "light", "embedding") to ``provider.model`` routes. Applied
+            to the resolver's tier dict; used as a fallback between
+            per-task overrides and app defaults.
 
         Always marks the campaign as loaded — even on failure — so we don't
         re-attempt on every subsequent call.
@@ -1454,9 +1459,9 @@ class LLMGatewayService:
             provider_kind="embedding",
         )
         await self._apply_imagegen_routing(raw.get("imagegen_routing"), campaign_id, yaml_path)
-        self._apply_tier_routing(raw.get("model_tiers"), campaign_id, yaml_path)
+        await self._apply_tier_routing(raw.get("model_tiers"), campaign_id, yaml_path)
 
-    def _apply_tier_routing(
+    async def _apply_tier_routing(
         self,
         block: object,
         campaign_id: CampaignId,
@@ -1468,9 +1473,11 @@ class LLMGatewayService:
         "embedding": "..."}``. Unknown keys are ignored with a debug log;
         malformed route strings are skipped with a warning. The campaign
         keeps any per-task overrides loaded earlier.
-        """
-        from grimoire.llm_gateway.tiers import Tier
 
+        Async to match the sibling ``_apply_*_routing`` helpers, even
+        though no I/O happens here today — future tier-validation work
+        (e.g. checking provider availability) may need to await.
+        """
         if not isinstance(block, dict):
             return
         for key, value in block.items():
