@@ -22,7 +22,7 @@ def test_task_kinds_complete():
 def test_task_kind_to_commit_action_map():
     assert commit_action_for(TaskKind.IMPERSONATE_PC) == CommitAction.SUBMIT_POST
     assert commit_action_for(TaskKind.REWRITE_POST) == CommitAction.REPLACE_POST
-    assert commit_action_for(TaskKind.CONTINUE_AS) == CommitAction.APPEND_POST
+    assert commit_action_for(TaskKind.CONTINUE_AS) == CommitAction.EXTEND_POST
     assert commit_action_for(TaskKind.WHAT_WOULD_X_SAY) == CommitAction.COPY
     assert commit_action_for(TaskKind.BRAINSTORM) == CommitAction.COPY
     assert commit_action_for(TaskKind.EDIT_PROSE) == CommitAction.REPLACE_DRAFT

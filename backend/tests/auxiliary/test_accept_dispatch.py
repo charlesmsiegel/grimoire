@@ -3,7 +3,7 @@
 Verifies that each `CommitAction` routes to the right canonical path:
   * SUBMIT_POST  → submit_post (canonical turn pipeline)
   * REPLACE_POST → new alternate + switch_primary
-  * APPEND_POST  → append NPC-authored post
+  * EXTEND_POST  → append text to an existing post's body (continue-as)
   * COPY / REPLACE_DRAFT → no server mutation
 """
 
@@ -66,22 +66,26 @@ async def test_accept_impersonate_pc_submits_canonical_turn(
     assert aux.id not in orchestrator._inflight_aux
 
 
-async def test_accept_continue_as_appends_npc_post(orchestrator, scene_manager, seeded_state):
+async def test_accept_continue_as_extends_target_post(orchestrator, scene_manager, seeded_state):
+    target = seeded_state.posts[0]
     aux = _aux(
         TaskKind.CONTINUE_AS,
         text="And he turned to the fire, troubled.",
-        task_kwargs={"target_character_ref": "npc_crow"},
+        task_kwargs={
+            "target_character_ref": "npc_crow",
+            "target_post_id": target.id,
+        },
     )
     orchestrator._inflight_aux[aux.id] = aux
 
     out = await orchestrator.accept_auxiliary(seeded_state.campaign_id, aux.id)
-    assert out["action"] == "append_post"
+    assert out["action"] == "extend_post"
+    assert out["post_id"] == target.id
 
-    posts = await scene_manager.get_posts(seeded_state.scene.id)
-    last = posts[-1]
-    assert last.body == "And he turned to the fire, troubled."
-    assert last.author_npc_ref == "npc_crow"
-    assert last.is_player is False
+    _, extended = await scene_manager._find_post(target.id)
+    assert extended.body == f"{target.body}\n\nAnd he turned to the fire, troubled."
+    assert extended.author_npc_ref == "npc_crow"
+    assert extended.is_player is False
 
 
 async def test_accept_copy_action_just_returns_text(orchestrator, seeded_state):
