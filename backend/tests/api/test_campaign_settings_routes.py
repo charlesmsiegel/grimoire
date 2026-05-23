@@ -404,3 +404,30 @@ def test_tiers_bad_route_rejected(settings_client) -> None:
         json={"heavy": "missing_dot"},
     )
     assert resp.status_code == 422
+
+
+def test_summaries_default(settings_client) -> None:
+    resp = settings_client.get("/api/campaigns/camp-1/summaries")
+    assert resp.status_code == 200
+    assert resp.json() == {"running_every_n_posts": 5, "final_on_close": True}
+
+
+def test_summaries_round_trip(settings_client) -> None:
+    resp = settings_client.put(
+        "/api/campaigns/camp-1/summaries",
+        json={"running_every_n_posts": 0, "final_on_close": False},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"running_every_n_posts": 0, "final_on_close": False}
+
+    resp = settings_client.get("/api/campaigns/camp-1/summaries")
+    assert resp.json()["running_every_n_posts"] == 0
+    assert resp.json()["final_on_close"] is False
+
+
+def test_summaries_negative_n_rejected(settings_client) -> None:
+    resp = settings_client.put(
+        "/api/campaigns/camp-1/summaries",
+        json={"running_every_n_posts": -1, "final_on_close": True},
+    )
+    assert resp.status_code == 422
