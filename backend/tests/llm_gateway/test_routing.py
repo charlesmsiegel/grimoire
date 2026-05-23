@@ -219,3 +219,40 @@ async def test_gateway_set_tier_route_rejects_bad_route(db, plugins, tmp_path: P
     gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
     with pytest.raises(ValueError):
         await gw.set_tier_route("camp-1", Tier.HEAVY, "missing_dot")
+
+
+# ---------------------------------------------------------------------------
+# resolve_with_source (PR 2 Task 1)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_with_source_per_task() -> None:
+    r = RouteResolver(default_routes={"main": "anthropic.opus"})
+    r.set_tier_route("camp-1", Tier.HEAVY, "deepseek.pro")
+    r.set_route("main", "openai.gpt-5", campaign_id="camp-1")
+    route, source = r.resolve_with_source("main", "camp-1")
+    assert route.raw == "openai.gpt-5"
+    assert source == "per_task"
+
+
+def test_resolve_with_source_tier() -> None:
+    r = RouteResolver(default_routes={"main": "anthropic.opus"})
+    r.set_tier_route("camp-1", Tier.HEAVY, "deepseek.pro")
+    route, source = r.resolve_with_source("main", "camp-1")
+    assert route.raw == "deepseek.pro"
+    assert source == "tier"
+
+
+def test_resolve_with_source_default() -> None:
+    r = RouteResolver(default_routes={"main": "anthropic.opus"})
+    route, source = r.resolve_with_source("main", "camp-1")
+    assert route.raw == "anthropic.opus"
+    assert source == "default"
+
+
+def test_resolve_with_source_unknown_task_default() -> None:
+    r = RouteResolver(default_routes={"weird.task": "anthropic.opus"})
+    r.set_tier_route("camp-1", Tier.HEAVY, "deepseek.pro")
+    route, source = r.resolve_with_source("weird.task", "camp-1")
+    assert route.raw == "anthropic.opus"
+    assert source == "default"
