@@ -539,6 +539,11 @@ class SceneManager:
             else:
                 final_summary = scene.running_summary or ""
                 key_beats = []
+                await self._emit(
+                    "summary_skipped",
+                    scene,
+                    reason="final_on_close_disabled",
+                )
             scene.final_summary = final_summary
             scene.key_beats = list(key_beats)
             scene.closed = True
@@ -660,6 +665,15 @@ class SceneManager:
                     scene,
                     post_count=scene.post_count,
                 )
+            elif override is not None and override <= 0:
+                default_n = self.config.running_summary_every_n_posts
+                if default_n > 0 and scene.post_count > 0 and scene.post_count % default_n == 0:
+                    await self._emit(
+                        "summary_skipped",
+                        scene,
+                        reason="running_cadence_disabled",
+                        post_count=scene.post_count,
+                    )
 
     async def get_posts(self, scene_id: str, range: tuple[int, int] | None = None) -> list[Post]:
         scene = await self.get_scene(scene_id)
