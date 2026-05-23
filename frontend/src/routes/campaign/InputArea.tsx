@@ -151,7 +151,7 @@ export function InputArea({
         onKeyDown={(e) => {
           // Enter submits; Shift+Enter inserts a newline (default).
           // Ctrl/Cmd+Enter also submits — preserved for muscle memory.
-          if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             void submit();
           }
