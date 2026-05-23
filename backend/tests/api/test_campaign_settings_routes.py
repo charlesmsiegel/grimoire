@@ -358,3 +358,49 @@ def test_routing_storage_advanced_coexist(settings_client) -> None:
     assert settings_client.get("/api/campaigns/camp-1/routing").json()["llm"]["main"] == "p.m"
     assert settings_client.get("/api/campaigns/camp-1/storage").json()["schedule"] == "weekly"
     assert settings_client.get("/api/campaigns/camp-1/advanced").json()["debug_log"] is True
+
+
+def test_tiers_default_empty(settings_client) -> None:
+    resp = settings_client.get("/api/campaigns/camp-1/tiers")
+    assert resp.status_code == 200
+    assert resp.json() == {"heavy": None, "light": None, "embedding": None}
+
+
+def test_tiers_round_trip(settings_client) -> None:
+    resp = settings_client.put(
+        "/api/campaigns/camp-1/tiers",
+        json={
+            "heavy": "deepseek.deepseek-v4-pro",
+            "light": "deepseek.deepseek-v4-flash",
+            "embedding": "voyage.voyage-3",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["heavy"] == "deepseek.deepseek-v4-pro"
+    assert body["light"] == "deepseek.deepseek-v4-flash"
+    assert body["embedding"] == "voyage.voyage-3"
+
+    resp = settings_client.get("/api/campaigns/camp-1/tiers")
+    assert resp.json()["heavy"] == "deepseek.deepseek-v4-pro"
+
+
+def test_tiers_null_clears(settings_client) -> None:
+    settings_client.put(
+        "/api/campaigns/camp-1/tiers",
+        json={"heavy": "deepseek.pro", "light": "deepseek.flash"},
+    )
+    resp = settings_client.put(
+        "/api/campaigns/camp-1/tiers",
+        json={"heavy": None, "light": "deepseek.flash"},
+    )
+    assert resp.json()["heavy"] is None
+    assert resp.json()["light"] == "deepseek.flash"
+
+
+def test_tiers_bad_route_rejected(settings_client) -> None:
+    resp = settings_client.put(
+        "/api/campaigns/camp-1/tiers",
+        json={"heavy": "missing_dot"},
+    )
+    assert resp.status_code == 422
