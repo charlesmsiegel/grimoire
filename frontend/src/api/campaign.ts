@@ -501,6 +501,34 @@ export const campaignApi = {
       { body, source: "manual_edit" },
     ),
 
+  getTiers: (campaignId: string) =>
+    api.get<{ heavy: string | null; light: string | null; embedding: string | null }>(
+      `/api/campaigns/${enc(campaignId)}/tiers`,
+    ),
+
+  setTiers: (
+    campaignId: string,
+    body: { heavy: string | null; light: string | null; embedding: string | null },
+  ) =>
+    api.put<{ heavy: string | null; light: string | null; embedding: string | null }>(
+      `/api/campaigns/${enc(campaignId)}/tiers`,
+      body,
+    ),
+
+  getSummaries: (campaignId: string) =>
+    api.get<{ running_every_n_posts: number; final_on_close: boolean }>(
+      `/api/campaigns/${enc(campaignId)}/summaries`,
+    ),
+
+  setSummaries: (
+    campaignId: string,
+    body: { running_every_n_posts: number; final_on_close: boolean },
+  ) =>
+    api.put<{ running_every_n_posts: number; final_on_close: boolean }>(
+      `/api/campaigns/${enc(campaignId)}/summaries`,
+      body,
+    ),
+
   // ----- Retcon (leave-as-is + replay) ----------------------------------
 
   retconPost: (
