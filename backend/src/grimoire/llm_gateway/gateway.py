@@ -147,6 +147,23 @@ class LLMGatewayService:
         except Exception:
             logger.exception("event emission failed for event_type=%s", event_type)
 
+    async def _emit_tier_resolved(self, task: str, campaign_id: CampaignId | None) -> None:
+        """Emit a ``tier_resolved`` event after route resolution."""
+        try:
+            route, source = self._router.resolve_with_source(task, campaign_id)
+        except Exception:
+            return
+        from grimoire.llm_gateway.tiers import tier_for_task
+
+        tier = tier_for_task(task)
+        await self._emit("tier_resolved", {
+            "task": task,
+            "tier": tier.value if tier is not None else None,
+            "route": route.raw,
+            "source": source,
+            "campaign_id": campaign_id,
+        })
+
     # ------------------------------------------------------------------ #
     # Pricing cache
     # ------------------------------------------------------------------ #
@@ -472,6 +489,7 @@ class LLMGatewayService:
         if campaign_id is not None and campaign_id not in self._loaded_campaigns:
             await self._load_campaign_routing(campaign_id)
         primary = self._router.resolve(task, campaign_id)
+        await self._emit_tier_resolved(task, campaign_id)
         fallback = self._router.fallback(task)
         return await self._complete_one(
             task=task,
@@ -801,6 +819,7 @@ class LLMGatewayService:
         if campaign_id is not None and campaign_id not in self._loaded_campaigns:
             await self._load_campaign_routing(campaign_id)
         primary_route = self._router.resolve(task, campaign_id)
+        await self._emit_tier_resolved(task, campaign_id)
         fallback_route = self._router.fallback(task)
 
         # Build the ordered attempt list: primary (possibly repeated for retries)
