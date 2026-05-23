@@ -6,6 +6,7 @@ import pytest
 
 from grimoire.llm_gateway.errors import RouteNotFoundError
 from grimoire.llm_gateway.routing import Route, RouteResolver
+from grimoire.llm_gateway.tiers import Tier
 
 
 def test_route_parse_splits_on_first_dot() -> None:
@@ -80,8 +81,6 @@ def test_clear_route_removes_entry() -> None:
 # ---------------------------------------------------------------------------
 # Tier-aware resolution (Task 2)
 # ---------------------------------------------------------------------------
-
-from grimoire.llm_gateway.tiers import Tier  # noqa: E402
 
 
 def test_per_task_wins_over_tier() -> None:

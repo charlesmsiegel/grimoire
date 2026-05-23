@@ -106,6 +106,12 @@ class RouteResolver:
         return dict(self._tiers.get(campaign_id, {}))
 
     def routes_for(self, campaign_id: CampaignId | None = None) -> dict[str, str]:
+        """Return per-task routes (defaults + per-campaign overrides).
+
+        Does NOT include tier routes; use :meth:`tiers_for` for tier-keyed
+        lookups. Callers needing the fully resolved route for a task
+        should call :meth:`resolve` instead.
+        """
         merged = dict(self._defaults)
         if campaign_id is not None:
             merged.update(self._campaigns.get(campaign_id, {}))
