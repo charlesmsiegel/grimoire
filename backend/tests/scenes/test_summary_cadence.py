@@ -46,3 +46,15 @@ def test_custom_override_changes_cadence(manager: SceneManager) -> None:
     assert manager._should_emit_running_summary(post_count=3, override=3) is True
     assert manager._should_emit_running_summary(post_count=5, override=3) is False
     assert manager._should_emit_running_summary(post_count=6, override=3) is True
+
+
+def test_should_run_final_summary_default(manager: SceneManager) -> None:
+    assert manager._should_run_final_summary(final_on_close_override=None) is True
+
+
+def test_should_run_final_summary_disabled(manager: SceneManager) -> None:
+    assert manager._should_run_final_summary(final_on_close_override=False) is False
+
+
+def test_should_run_final_summary_enabled(manager: SceneManager) -> None:
+    assert manager._should_run_final_summary(final_on_close_override=True) is True
