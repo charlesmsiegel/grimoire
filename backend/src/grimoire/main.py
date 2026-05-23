@@ -376,6 +376,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 extras=container.extras_service,
                 continuity=container.continuity,
                 scenes=container.scenes,
+                world=container.world,
             )
         except Exception:
             log.exception("hud: failed to register default fetchers")

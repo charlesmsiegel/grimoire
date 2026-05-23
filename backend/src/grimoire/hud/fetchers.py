@@ -182,6 +182,153 @@ def _empty_fetcher_with(default: Any):
     return fetch
 
 
+def _scene_in_game_dt(scene: Any) -> Any:
+    """Best-effort extraction of a datetime from ``scene.in_game_start``.
+
+    SceneRecord stores it as a plain ``datetime`` after YAML parses an
+    ISO string; some pathways may wrap it in an ``InGameTime``. Accept
+    either, return ``None`` on anything else.
+    """
+    val = getattr(scene, "in_game_start", None) if scene is not None else None
+    if val is None:
+        return None
+    if hasattr(val, "moment"):
+        return val.moment
+    return val
+
+
+async def _primary_world_id(library: Any, campaign_id: str) -> str | None:
+    """Return the highest-priority (lowest priority number) world_id, or None."""
+    if library is None:
+        return None
+    try:
+        comp = await library.get_composition(campaign_id)
+    except Exception as e:
+        log.debug("library.get_composition failed for %s: %s", campaign_id, e)
+        return None
+    refs = list(getattr(comp, "worlds", []) or [])
+    if not refs:
+        return None
+    refs.sort(key=lambda r: getattr(r, "priority", 0))
+    return getattr(refs[0], "world_id", None)
+
+
+def _format_date(dt: Any, calendar: Any) -> str:
+    """Format ``dt`` as a human-readable in-game date.
+
+    Uses the world calendar's month + weekday names when configured,
+    otherwise falls back to ISO date.
+    """
+    if dt is None:
+        return "—"
+    months = list(getattr(calendar, "months", []) or []) if calendar else []
+    weekdays = list(getattr(calendar, "week_day_names", []) or []) if calendar else []
+    month_name = months[dt.month - 1].name if 0 < dt.month <= len(months) else f"M{dt.month}"
+    weekday = ""
+    if weekdays:
+        # Python weekday(): Monday=0..Sunday=6; if the calendar lists 7 names
+        # in Mon..Sun order, line up directly.
+        idx = dt.weekday() % len(weekdays)
+        weekday = f"{weekdays[idx]}, "
+    return f"{weekday}{month_name} {dt.day}, {dt.year}"
+
+
+def _format_time(dt: Any) -> dict[str, Any]:
+    """Return both clock time and a coarse time-of-day band."""
+    if dt is None:
+        return {"value": "—", "clock": "—", "band": "—"}
+    hour = dt.hour
+    if 5 <= hour < 12:
+        band = "morning"
+    elif 12 <= hour < 17:
+        band = "afternoon"
+    elif 17 <= hour < 21:
+        band = "evening"
+    else:
+        band = "night"
+    clock = f"{dt.hour:02d}:{dt.minute:02d}"
+    return {"value": f"{clock} ({band})", "clock": clock, "band": band}
+
+
+def _in_game_date_fetcher(world: Any):
+    async def fetch(_w: HudWidget, campaign_id: str, scene: Any, _o: Any) -> dict[str, Any]:
+        dt = _scene_in_game_dt(scene)
+        if dt is None:
+            return {"value": "—"}
+        cal = None
+        if world is not None:
+            try:
+                cal = await world.calendar_for_campaign(campaign_id)
+            except Exception as e:
+                log.debug("world.calendar_for_campaign failed: %s", e)
+        return {
+            "value": _format_date(dt, cal),
+            "iso": dt.isoformat() if hasattr(dt, "isoformat") else str(dt),
+        }
+
+    return fetch
+
+
+def _in_game_time_fetcher():
+    async def fetch(_w: HudWidget, _c: str, scene: Any, _o: Any) -> dict[str, Any]:
+        return _format_time(_scene_in_game_dt(scene))
+
+    return fetch
+
+
+def _weather_fetcher(world: Any, library: Any):
+    async def fetch(_w: HudWidget, campaign_id: str, scene: Any, _o: Any) -> dict[str, Any]:
+        dt = _scene_in_game_dt(scene)
+        loc = getattr(scene, "location_ref", None) if scene is not None else None
+        if world is None or dt is None or not loc:
+            return {"value": "—"}
+        world_id = await _primary_world_id(library, campaign_id)
+        if not world_id:
+            return {"value": "—"}
+        try:
+            from grimoire.types.common import InGameTime
+
+            weather = await world.weather_for(
+                world_id, loc, InGameTime(moment=dt), campaign_id
+            )
+        except Exception as e:
+            log.debug("world.weather_for failed: %s", e)
+            return {"value": "—"}
+        summary = getattr(weather, "summary", "") or str(getattr(weather, "kind", "") or "—")
+        return {
+            "value": summary,
+            "kind": str(getattr(weather, "kind", "")) or None,
+            "palette": getattr(weather, "palette", "") or None,
+        }
+
+    return fetch
+
+
+def _temperature_fetcher(world: Any, library: Any):
+    async def fetch(_w: HudWidget, campaign_id: str, scene: Any, _o: Any) -> dict[str, Any]:
+        dt = _scene_in_game_dt(scene)
+        loc = getattr(scene, "location_ref", None) if scene is not None else None
+        if world is None or dt is None or not loc:
+            return {"value": "—"}
+        world_id = await _primary_world_id(library, campaign_id)
+        if not world_id:
+            return {"value": "—"}
+        try:
+            from grimoire.types.common import InGameTime
+
+            weather = await world.weather_for(
+                world_id, loc, InGameTime(moment=dt), campaign_id
+            )
+        except Exception:
+            return {"value": "—"}
+        temp = getattr(weather, "temperature_c", None)
+        if temp is None:
+            return {"value": "—"}
+        return {"value": f"{temp:.0f}°C", "celsius": temp}
+
+    return fetch
+
+
 def register_default_fetchers(
     hud: HudService,
     *,
@@ -190,6 +337,7 @@ def register_default_fetchers(
     extras: Any = None,
     continuity: Any = None,
     scenes: Any = None,
+    world: Any = None,
 ) -> None:
     """Register the canonical owner fetchers on ``hud``.
 
@@ -197,10 +345,10 @@ def register_default_fetchers(
     empty-payload fetcher so the snapshot is ``ok`` (with empty data)
     rather than ``error`` (no fetcher registered).
     """
-    hud.register_fetcher("core.in-game-date", _empty_fetcher_with({"value": "—"}))
-    hud.register_fetcher("core.in-game-time", _empty_fetcher_with({"value": "—"}))
-    hud.register_fetcher("core.weather", _empty_fetcher_with({"value": "—"}))
-    hud.register_fetcher("core.temperature", _empty_fetcher_with({"value": "—"}))
+    hud.register_fetcher("core.in-game-date", _in_game_date_fetcher(world))
+    hud.register_fetcher("core.in-game-time", _in_game_time_fetcher())
+    hud.register_fetcher("core.weather", _weather_fetcher(world, library))
+    hud.register_fetcher("core.temperature", _temperature_fetcher(world, library))
     hud.register_fetcher("core.location", _scene_location_fetcher())
     hud.register_fetcher("core.present-cast", _present_cast_fetcher(library, extras, hud_config))
     hud.register_fetcher("core.recent-events", _recent_facts_fetcher(continuity))
