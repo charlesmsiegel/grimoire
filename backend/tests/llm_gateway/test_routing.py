@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
+import pytest
+import yaml
+
+from grimoire.llm_gateway.config import GatewayConfig
 from grimoire.llm_gateway.errors import RouteNotFoundError
+from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.llm_gateway.routing import Route, RouteResolver
 from grimoire.llm_gateway.tiers import Tier
+from grimoire.types.llm import RetryPolicy, TimeoutPolicy
 
 
 def test_route_parse_splits_on_first_dot() -> None:
@@ -133,14 +139,6 @@ def test_tiers_for_campaign() -> None:
 # ---------------------------------------------------------------------------
 # Gateway integration: model_tiers block loaded from campaign.yaml (Task 3)
 # ---------------------------------------------------------------------------
-
-from pathlib import Path
-
-import yaml
-
-from grimoire.llm_gateway.config import GatewayConfig
-from grimoire.llm_gateway.gateway import LLMGatewayService
-from grimoire.types.llm import RetryPolicy, TimeoutPolicy
 
 
 def _minimal_config() -> GatewayConfig:

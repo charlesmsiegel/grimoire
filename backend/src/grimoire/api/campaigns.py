@@ -14,7 +14,7 @@ import contextlib
 import logging
 import re
 import shutil
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, HTTPException
@@ -37,7 +37,6 @@ from grimoire.api.deps import (
 )
 from grimoire.api.util import map_lookup_errors, to_payload
 from grimoire.state_store.paths import campaigns_root
-
 
 _GREETING_IMG_RE = re.compile(
     r"<img\s+[^>]*?src=[\"']([^\"']+)[\"'][^>]*?(?:alt=[\"']([^\"']*)[\"'][^>]*)?/?>",
@@ -145,7 +144,7 @@ async def _seed_greeting_first_post(
     runtime rewriting.
     """
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     # SceneManager.append_post uses ``dataclasses.replace`` on the post,
     # so we must build the dataclass-based Post from ``grimoire.scenes.types``,
@@ -178,7 +177,7 @@ async def _seed_greeting_first_post(
         author_kind=AuthorKind.NARRATOR,
         body=body,
         is_player=False,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
         turn_id=str(uuid.uuid4()),
     )
     await scenes.append_post(scene.id, post)
@@ -420,7 +419,8 @@ async def create_campaign(
             from grimoire.llm_gateway.tiers import Tier
 
             app_yaml = _read_app_yaml()
-            block = app_yaml.get("llm_defaults") if isinstance(app_yaml.get("llm_defaults"), dict) else {}
+            raw_block = app_yaml.get("llm_defaults")
+            block = raw_block if isinstance(raw_block, dict) else {}
             heavy = str(block.get("heavy") or _DEFAULT_LLM_DEFAULTS["heavy"])
             light = str(block.get("light") or _DEFAULT_LLM_DEFAULTS["light"])
             await gateway.set_tier_route(payload.id, Tier.HEAVY, heavy)
@@ -650,7 +650,7 @@ class GenerationSettingsPayload(BaseModel):
     """Per-campaign LLM generation parameters.
 
     ``max_tokens`` caps the response length the provider may produce.
-    ``temperature`` is the sampling temperature (0.0–2.0 by convention;
+    ``temperature`` is the sampling temperature (0.0-2.0 by convention;
     most providers clamp). Unset / null means "use the orchestrator's
     built-in default" (currently 4096 / 1.0 from
     ``ContextBuilderConfig``).

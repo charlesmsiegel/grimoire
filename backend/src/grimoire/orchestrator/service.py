@@ -946,11 +946,11 @@ class OrchestratorService:
                 )
             try:
                 _scene, existing = await self._scenes._find_post(target_post_id)
-            except Exception:
+            except Exception as err:
                 self._inflight_aux[result_id] = aux
                 raise OrchestratorError(
                     f"continue-as target post {target_post_id!r} not found"
-                )
+                ) from err
             joiner = "\n\n" if existing.body and not existing.body.endswith("\n") else ""
             new_body = f"{existing.body}{joiner}{text}"
             await self._scenes.edit_post(

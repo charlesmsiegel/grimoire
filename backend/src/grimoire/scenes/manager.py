@@ -12,10 +12,10 @@ import asyncio
 import shutil
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.scenes.boundary import BoundaryConfig, detect_scene_break
