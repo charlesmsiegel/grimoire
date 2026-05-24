@@ -8,11 +8,32 @@ raises ``503 Service Unavailable`` when it's not wired up. Routers use the
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import Depends, HTTPException, Request, status
 
 from grimoire.api.container import ServiceContainer
+
+if TYPE_CHECKING:
+    from grimoire.api.stream import StreamManager
+    from grimoire.characters import CharactersService
+    from grimoire.continuity import ContinuityRegistry
+    from grimoire.export.service import ExportService
+    from grimoire.extras import ExtrasService as _ExtrasService
+    from grimoire.imagegen import ImageGenService
+    from grimoire.library import LibraryService
+    from grimoire.llm_gateway.gateway import LLMGatewayService
+    from grimoire.mechanics import MechanicsService
+    from grimoire.observability.service import ObservabilityService
+    from grimoire.orchestrator.service import OrchestratorService
+    from grimoire.plugins import PluginsService
+    from grimoire.scenes import SceneManager
+    from grimoire.state_store import StateStore
+    from grimoire.time_engine.service import TimeEngineService
+    from grimoire.transient_state import TransientStateService
+    from grimoire.watcher.watcher import FileWatcher
+    from grimoire.world import WorldService
+    from grimoire.world.calendar_service import CalendarService
 
 
 def get_container(request: Request) -> ServiceContainer:
@@ -35,116 +56,102 @@ def _require(container: ServiceContainer, name: str) -> Any:
     return service
 
 
-def get_library(request: Request) -> Any:
+def get_library(request: Request) -> LibraryService:
     return _require(get_container(request), "library")
 
 
-def get_world(request: Request) -> Any:
+def get_world(request: Request) -> WorldService:
     return _require(get_container(request), "world")
 
 
-def get_characters(request: Request) -> Any:
+def get_characters(request: Request) -> CharactersService:
     return _require(get_container(request), "characters")
 
 
-def get_scenes(request: Request) -> Any:
+def get_scenes(request: Request) -> SceneManager:
     return _require(get_container(request), "scenes")
 
 
-def get_continuity(request: Request) -> Any:
+def get_continuity(request: Request) -> ContinuityRegistry:
     return _require(get_container(request), "continuity")
 
 
-def get_time_engine(request: Request) -> Any:
+def get_time_engine(request: Request) -> TimeEngineService:
     return _require(get_container(request), "time_engine")
 
 
-def get_imagegen(request: Request) -> Any:
+def get_imagegen(request: Request) -> ImageGenService:
     return _require(get_container(request), "imagegen")
 
 
-def get_export(request: Request) -> Any:
+def get_export(request: Request) -> ExportService:
     return _require(get_container(request), "export")
 
 
-def get_mechanics(request: Request) -> Any:
+def get_mechanics(request: Request) -> MechanicsService:
     return _require(get_container(request), "mechanics")
 
 
-def get_plugins(request: Request) -> Any:
+def get_plugins(request: Request) -> PluginsService:
     return _require(get_container(request), "plugins")
 
 
-def get_state_store(request: Request) -> Any:
+def get_state_store(request: Request) -> StateStore:
     return _require(get_container(request), "state_store")
 
 
-def get_orchestrator(request: Request) -> Any:
+def get_orchestrator(request: Request) -> OrchestratorService:
     return _require(get_container(request), "orchestrator")
 
 
-def get_observability(request: Request) -> Any:
+def get_observability(request: Request) -> ObservabilityService:
     return _require(get_container(request), "observability")
 
 
-def get_stream(request: Request) -> Any:
+def get_stream(request: Request) -> StreamManager:
     return _require(get_container(request), "stream")
 
 
-def get_transient_state(request: Request) -> Any:
+def get_transient_state(request: Request) -> TransientStateService:
     return _require(get_container(request), "transient_state")
 
 
-def get_extras_service(request: Request) -> Any:
+def get_extras_service(request: Request) -> _ExtrasService:
     return _require(get_container(request), "extras_service")
 
 
-def get_calendar(request: Request) -> Any:
+def get_calendar(request: Request) -> CalendarService:
     return _require(get_container(request), "calendar")
 
 
-def get_llm_gateway(request: Request) -> Any:
-    container = get_container(request)
-    gw = container.extras.get("llm_gateway") if container.extras else None
-    if gw is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="llm_gateway service not configured",
-        )
-    return gw
+def get_llm_gateway(request: Request) -> LLMGatewayService:
+    return _require(get_container(request), "llm_gateway")
 
 
-def get_file_watcher(request: Request) -> Any:
-    container = get_container(request)
-    fw = container.extras.get("file_watcher") if container.extras else None
-    if fw is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="file_watcher service not configured",
-        )
-    return fw
+def get_file_watcher(request: Request) -> FileWatcher:
+    return _require(get_container(request), "file_watcher")
 
 
 ContainerDep = Annotated[ServiceContainer, Depends(get_container)]
-LibraryDep = Annotated[Any, Depends(get_library)]
-WorldDep = Annotated[Any, Depends(get_world)]
-CharactersDep = Annotated[Any, Depends(get_characters)]
-ScenesDep = Annotated[Any, Depends(get_scenes)]
-ContinuityDep = Annotated[Any, Depends(get_continuity)]
-TimeEngineDep = Annotated[Any, Depends(get_time_engine)]
-ImageGenDep = Annotated[Any, Depends(get_imagegen)]
-ExportDep = Annotated[Any, Depends(get_export)]
-MechanicsDep = Annotated[Any, Depends(get_mechanics)]
-PluginsDep = Annotated[Any, Depends(get_plugins)]
-StateStoreDep = Annotated[Any, Depends(get_state_store)]
-OrchestratorDep = Annotated[Any, Depends(get_orchestrator)]
-ObservabilityDep = Annotated[Any, Depends(get_observability)]
-StreamDep = Annotated[Any, Depends(get_stream)]
-TransientStateDep = Annotated[Any, Depends(get_transient_state)]
-ExtrasServiceDep = Annotated[Any, Depends(get_extras_service)]
-LLMGatewayDep = Annotated[Any, Depends(get_llm_gateway)]
-FileWatcherDep = Annotated[Any, Depends(get_file_watcher)]
-CalendarDep = Annotated[Any, Depends(get_calendar)]
+LibraryDep = Annotated[LibraryService, Depends(get_library)]
+WorldDep = Annotated[WorldService, Depends(get_world)]
+CharactersDep = Annotated[CharactersService, Depends(get_characters)]
+ScenesDep = Annotated[SceneManager, Depends(get_scenes)]
+ContinuityDep = Annotated[ContinuityRegistry, Depends(get_continuity)]
+TimeEngineDep = Annotated[TimeEngineService, Depends(get_time_engine)]
+ImageGenDep = Annotated[ImageGenService, Depends(get_imagegen)]
+ExportDep = Annotated[ExportService, Depends(get_export)]
+MechanicsDep = Annotated[MechanicsService, Depends(get_mechanics)]
+PluginsDep = Annotated[PluginsService, Depends(get_plugins)]
+StateStoreDep = Annotated[StateStore, Depends(get_state_store)]
+OrchestratorDep = Annotated[OrchestratorService, Depends(get_orchestrator)]
+ObservabilityDep = Annotated[ObservabilityService, Depends(get_observability)]
+StreamDep = Annotated[StreamManager, Depends(get_stream)]
+TransientStateDep = Annotated[TransientStateService, Depends(get_transient_state)]
+ExtrasServiceDep = Annotated[_ExtrasService, Depends(get_extras_service)]
+LLMGatewayDep = Annotated[LLMGatewayService, Depends(get_llm_gateway)]
+FileWatcherDep = Annotated[FileWatcher, Depends(get_file_watcher)]
+CalendarDep = Annotated[CalendarService, Depends(get_calendar)]
 
 
 __all__ = [
