@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
+from grimoire.event_bus import Event, EventBus
 from grimoire.extractor.config import ExtractorConfig
 from grimoire.orchestrator.service import OrchestratorService
+from grimoire.types.extraction import ExtractionFlag, ExtractionResult, FlagLevel
 from grimoire.types.extraction_modes import ExtractionMode
 
 
@@ -72,10 +72,6 @@ async def test_integrated_deltas_true_overrides_auto() -> None:
     cfg = ExtractorConfig(mode=ExtractionMode.AUTO)
     mode = await _resolve_mode(cfg, json.dumps({"integrated_deltas": True}))
     assert mode == ExtractionMode.TOGETHER
-
-
-from grimoire.event_bus import Event, EventBus
-from grimoire.types.extraction import ExtractionFlag, ExtractionResult, FlagLevel
 
 
 async def test_fallback_event_emitted_on_together_no_tracker() -> None:

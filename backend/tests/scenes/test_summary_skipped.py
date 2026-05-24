@@ -57,7 +57,9 @@ async def test_summary_skipped_emitted_via_emit(manager, bus) -> None:
     assert ev.payload["scene_id"] == "scene-1"
 
 
-async def test_running_summary_skip_fires_when_cadence_zero_and_default_would_fire(manager, bus) -> None:
+async def test_running_summary_skip_fires_when_cadence_zero_and_default_would_fire(
+    manager, bus
+) -> None:
     """When override=0 and post_count matches the default cadence (5), emit summary_skipped."""
     scene = _fake_scene()
     scene.post_count = 5
@@ -84,12 +86,17 @@ async def test_no_skip_event_when_default_cadence_would_not_fire(manager, bus) -
     default_n = manager.config.running_summary_every_n_posts
     post_count = 3  # 3 % 5 != 0
 
-    if not manager._should_emit_running_summary(post_count=post_count, override=override):
-        if override is not None and override <= 0:
-            if default_n > 0 and post_count > 0 and post_count % default_n == 0:
-                await manager._emit(
-                    "summary_skipped", _fake_scene(), reason="running_cadence_disabled"
-                )
+    if (
+        not manager._should_emit_running_summary(post_count=post_count, override=override)
+        and override is not None
+        and override <= 0
+        and default_n > 0
+        and post_count > 0
+        and post_count % default_n == 0
+    ):
+        await manager._emit(
+            "summary_skipped", _fake_scene(), reason="running_cadence_disabled"
+        )
 
     assert len(bus.events) == 0
 
