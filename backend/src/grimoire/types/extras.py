@@ -39,9 +39,13 @@ SOFT_CAP_TOTAL_BYTES = 4096
 class ExtrasKeyError(ValueError):
     """Raised when an extras key is invalid (reserved prefix, bad chars, length)."""
 
+    http_status = 422
+
 
 class ExtrasCapError(ValueError):
     """Raised when a write would exceed a hard cap (per-entity, per-string)."""
+
+    http_status = 422
 
 
 def validate_extras_key(key: str) -> None:
