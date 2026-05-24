@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus
 from grimoire.state_store.config import AutoBackupConfig
 
@@ -168,7 +169,7 @@ class BackupScheduler:
 
         await self._bus.emit(
             Event(
-                type="backup_complete",
+                type=events.BACKUP_COMPLETE,
                 payload={
                     "path": str(zip_path),
                     "size_bytes": zip_path.stat().st_size,

@@ -12,6 +12,7 @@ import logging
 import re
 from collections.abc import Iterable
 
+from grimoire import events
 from grimoire.continuity.config import ContinuityConfig
 from grimoire.continuity.errors import (
     CommitmentNotFoundError,
@@ -161,7 +162,7 @@ class ContinuityService(Continuity):
                 fact = dataclasses.replace(fact, tags=[*fact.tags, src_tag])
         await self._store.put_fact(fact)
         await self._emit(
-            "fact_recorded",
+            events.FACT_RECORDED,
             {"fact_id": fact.id, "source": source},
         )
         return fact.id
@@ -364,7 +365,7 @@ class ContinuityService(Continuity):
         await self._store.put_contradiction_report(report)
         if report.conflicts:
             await self._emit(
-                "contradiction_detected",
+                events.CONTRADICTION_DETECTED,
                 {"report_id": report.id, "conflict_count": len(report.conflicts)},
             )
         return report
@@ -478,12 +479,12 @@ class ContinuityService(Continuity):
         await self._store.put_commitment(updated)
         if status == CommitmentStatus.PAID:
             await self._emit(
-                "commitment_paid_off",
+                events.COMMITMENT_PAID_OFF,
                 {"commitment_id": cid, "in_post": in_post},
             )
         elif status == CommitmentStatus.BROKEN:
             await self._emit(
-                "commitment_broken",
+                events.COMMITMENT_BROKEN,
                 {"commitment_id": cid, "in_post": in_post},
             )
 
@@ -510,7 +511,7 @@ class ContinuityService(Continuity):
         )
         await self._store.put_commitment(updated)
         await self._emit(
-            "commitment_reopened",
+            events.COMMITMENT_REOPENED,
             {"commitment_id": cid, "in_post": in_post},
         )
         return updated
@@ -693,13 +694,13 @@ class ContinuityService(Continuity):
                 if new_status == CommitmentStatus.OVERDUE:
                     became_overdue.append(updated)
                     await self._emit(
-                        "commitment_overdue",
+                        events.COMMITMENT_OVERDUE,
                         {"commitment_id": updated.id},
                     )
                 elif new_status == CommitmentStatus.STALE:
                     became_stale.append(updated)
                     await self._emit(
-                        "commitment_stale",
+                        events.COMMITMENT_STALE,
                         {"commitment_id": updated.id},
                     )
 

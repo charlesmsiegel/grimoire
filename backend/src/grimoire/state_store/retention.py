@@ -9,6 +9,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus
 from grimoire.state_store.config import RetentionConfig
 from grimoire.storage.db import Database
@@ -94,7 +95,7 @@ class RetentionSweeper:
         )
         if self._bus is not None:
             await self._bus.emit(
-                Event(type="retention_sweep_completed", payload={"deleted_embeddings": deleted})
+                Event(type=events.RETENTION_SWEEP_COMPLETED, payload={"deleted_embeddings": deleted})
             )
         return deleted
 

@@ -20,6 +20,7 @@ import re
 from datetime import timedelta
 from typing import Any
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus
 from grimoire.types.common import Duration
 from grimoire.types.state import DeltaKind, StateDelta
@@ -138,7 +139,7 @@ class TimeEngineSubscriber:
     def start(self) -> Any:
         if self._subscription is not None:
             return self._subscription
-        self._subscription = self._bus.subscribe("turn_complete", self._handle)
+        self._subscription = self._bus.subscribe(events.TURN_COMPLETE, self._handle)
         return self._subscription
 
     def stop(self) -> None:

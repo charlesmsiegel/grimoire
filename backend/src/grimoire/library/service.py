@@ -14,6 +14,7 @@ import re as _re
 from datetime import datetime
 from typing import Any
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus
 from grimoire.library.classify import suggest_kind
 from grimoire.library.config import LibraryConfig
@@ -801,7 +802,7 @@ class LibraryService:
             warnings.append(f"audit log write failed: {exc}")
 
         await self._emit(
-            "library.reclassify",
+            events.LIBRARY_RECLASSIFY,
             {
                 "world_id": world_id,
                 "source_id": source_id,
@@ -925,7 +926,7 @@ class LibraryService:
             warnings.append(f"audit log write failed: {exc}")
 
         await self._emit(
-            "library.reclassify_undo",
+            events.LIBRARY_RECLASSIFY_UNDO,
             {
                 "world_id": world_id,
                 "restored_source_id": restored_id,
@@ -1036,7 +1037,7 @@ class LibraryService:
             library_id=library_id,
         )
         await self._emit(
-            "library_entity_promoted",
+            events.LIBRARY_ENTITY_PROMOTED,
             {
                 "campaign_id": campaign_id,
                 "kind": normalized,
@@ -1192,7 +1193,7 @@ class LibraryService:
         await self.store.delete_library_file(library_id=library_id, source=source)
 
         await self._emit(
-            "library_entity_demoted",
+            events.LIBRARY_ENTITY_DEMOTED,
             {
                 "world_id": world_id,
                 "kind": normalized,
@@ -1275,7 +1276,7 @@ class LibraryService:
             source=f"{source}:save-back-cleanup",
         )
         await self._emit(
-            "library_entity_save_back",
+            events.LIBRARY_ENTITY_SAVE_BACK,
             {
                 "campaign_id": campaign_id,
                 "library_id": library_id,

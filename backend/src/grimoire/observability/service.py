@@ -13,6 +13,7 @@ import logging
 import uuid
 from datetime import datetime
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus, Subscription
 from grimoire.observability.audit import AuditStore
 from grimoire.observability.config import ObservabilityConfig
@@ -116,7 +117,7 @@ class ObservabilityService:
         try:
             await self._event_bus.emit(
                 Event(
-                    type="health_status_changed",
+                    type=events.HEALTH_STATUS_CHANGED,
                     payload={
                         "target_id": status.target_id,
                         "level": status.level.value,
@@ -205,7 +206,7 @@ class ObservabilityService:
             try:
                 await self._event_bus.emit(
                     Event(
-                        type="error_reported",
+                        type=events.ERROR_REPORTED,
                         payload={
                             "module": err.module,
                             "operation": err.operation,

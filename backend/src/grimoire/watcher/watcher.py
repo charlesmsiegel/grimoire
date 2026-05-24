@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from watchdog.events import EVENT_TYPE_MOVED, FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus
 from grimoire.files import (
     FrontmatterError,
@@ -331,7 +332,7 @@ class FileWatcher:
 
         await self.bus.emit(
             Event(
-                type="library_indexed",
+                type=events.LIBRARY_INDEXED,
                 payload={
                     "library_files": library_files,
                     "campaign_files": campaign_files,
@@ -376,10 +377,10 @@ class FileWatcher:
         campaigns_root = self.data_root / "campaigns"
         if _is_under(src_resolved, library_root) or _is_under(dest_resolved, library_root):
             scope = "library"
-            event_type = "library_rename_detected"
+            event_type = events.LIBRARY_RENAME_DETECTED
         elif _is_under(src_resolved, campaigns_root) or _is_under(dest_resolved, campaigns_root):
             scope = "campaign"
-            event_type = "campaign_rename_detected"
+            event_type = events.CAMPAIGN_RENAME_DETECTED
         else:
             return
 

@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from grimoire import events
 from grimoire.characters import CharactersService
 from grimoire.continuity.protocols import Continuity
 from grimoire.continuity.registry import resolve_continuity
@@ -653,7 +654,7 @@ class TimeEngineService:
         )
         if exceeded:
             await self._emit(
-                "time_advance_checkpoint_suggested",
+                events.TIME_ADVANCE_CHECKPOINT_SUGGESTED,
                 {
                     "campaign_id": campaign_id,
                     "branch_id": branch,
@@ -741,7 +742,7 @@ class TimeEngineService:
                 "subscribe_calendar requires the TimeEngineService to have been "
                 "constructed with an event_bus"
             )
-        return self._event_bus.subscribe("time_advance", handler)
+        return self._event_bus.subscribe(events.TIME_ADVANCE, handler)
 
     # ------------------------------------------------------------------ #
     # Pipeline
@@ -904,7 +905,7 @@ class TimeEngineService:
         )
 
         await self._emit(
-            "time_advance",
+            events.TIME_ADVANCE,
             {
                 "campaign_id": campaign_id,
                 "branch_id": branch_id,
@@ -1083,7 +1084,7 @@ class TimeEngineService:
                     result = await _default_npc_tick(payload)
                 summary = _npc_summary_from_payload(p, duration, result)
                 await self._emit(
-                    "npc_tick_complete",
+                    events.NPC_TICK_COMPLETE,
                     {
                         "campaign_id": campaign_id,
                         "character_ref": p.ref,
@@ -1453,7 +1454,7 @@ class TimeEngineService:
                 (ts, row["id"]),
             )
             await self._emit(
-                "scheduled_event_imminent",
+                events.SCHEDULED_EVENT_IMMINENT,
                 {
                     "campaign_id": campaign_id,
                     "branch_id": branch_id,
@@ -1515,7 +1516,7 @@ class TimeEngineService:
                 )
                 warnings.append(w)
                 await self._emit(
-                    "npc_drift_detected",
+                    events.NPC_DRIFT_DETECTED,
                     {
                         "campaign_id": campaign_id,
                         "character_id": w.character_id,

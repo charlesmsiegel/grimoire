@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus, Subscription
 from grimoire.imagegen.service import ImageGenService, should_illustrate
 
@@ -32,8 +33,8 @@ class ImageGenIntegration:
         if self._subs:
             return
         self._subs = [
-            self._bus.subscribe("turn_complete", self._on_turn_complete),
-            self._bus.subscribe("scene_started", self._on_scene_started),
+            self._bus.subscribe(events.TURN_COMPLETE, self._on_turn_complete),
+            self._bus.subscribe(events.SCENE_STARTED, self._on_scene_started),
         ]
 
     def stop(self) -> None:

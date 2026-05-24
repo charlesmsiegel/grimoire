@@ -20,6 +20,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Protocol
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus
 from grimoire.state_store.config import LibrarySectionConfig
 
@@ -160,7 +161,7 @@ class EmbeddingWorker:
         self._total_done += written
         await self._bus.emit(
             Event(
-                type="embedding_progress",
+                type=events.EMBEDDING_PROGRESS,
                 payload={
                     "pending": self._queue.pending,
                     "done_this_batch": written,
