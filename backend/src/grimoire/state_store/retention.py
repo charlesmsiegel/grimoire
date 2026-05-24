@@ -85,21 +85,72 @@ class RetentionSweeper:
 
     async def sweep_once(self) -> int:
         """Run a single sweep and return the number of deleted rows."""
+        deleted_embeddings = 0
         max_age = self._config.embeddings_for_retired_facts_seconds
-        if max_age is None:
-            return 0
-        deleted = await delete_expired_embeddings(
-            self._db,
-            max_age_seconds=max_age,
-            now=self._clock(),
-        )
-        if self._bus is not None:
+        if max_age is not None:
+            deleted_embeddings = await delete_expired_embeddings(
+                self._db,
+                max_age_seconds=max_age,
+                now=self._clock(),
+            )
+        deleted_deltas = await self._sweep_deltas()
+        total = deleted_embeddings + deleted_deltas
+        if self._bus is not None and total > 0:
             await self._bus.emit(
                 Event(
                     type=events.RETENTION_SWEEP_COMPLETED,
-                    payload={"deleted_embeddings": deleted},
+                    payload={
+                        "deleted_embeddings": deleted_embeddings,
+                        "deleted_deltas": deleted_deltas,
+                    },
                 )
             )
+        return total
+
+    async def _sweep_deltas(self) -> int:
+        """Delete reversed deltas past the retention window and enforce row cap."""
+        deleted = 0
+        delta_log_seconds = self._config.delta_log_seconds
+        if delta_log_seconds is not None:
+            cutoff = (
+                self._clock() - timedelta(seconds=delta_log_seconds)
+            ).isoformat()
+            async with self._db.acquire() as conn:
+                cur = await conn.execute(
+                    "DELETE FROM deltas WHERE reversed_at IS NOT NULL AND applied_at < ?",
+                    (cutoff,),
+                )
+                deleted += int(cur.rowcount or 0)
+
+        max_rows = self._config.delta_max_rows_per_campaign
+        if max_rows is not None:
+            async with self._db.acquire() as conn:
+                campaigns = await conn.execute(
+                    "SELECT DISTINCT campaign_id FROM deltas WHERE campaign_id IS NOT NULL"
+                )
+                campaign_rows = await campaigns.fetchall()
+                for row in campaign_rows:
+                    cid = row[0]
+                    count_cur = await conn.execute(
+                        "SELECT COUNT(*) FROM deltas WHERE campaign_id = ?", (cid,)
+                    )
+                    count_row = await count_cur.fetchone()
+                    total_count = int(count_row[0]) if count_row else 0
+                    if total_count <= max_rows:
+                        continue
+                    excess = total_count - max_rows
+                    cur = await conn.execute(
+                        """
+                        DELETE FROM deltas WHERE rowid IN (
+                            SELECT rowid FROM deltas
+                            WHERE campaign_id = ? AND reversed_at IS NOT NULL
+                            ORDER BY applied_at ASC
+                            LIMIT ?
+                        )
+                        """,
+                        (cid, excess),
+                    )
+                    deleted += int(cur.rowcount or 0)
         return deleted
 
     async def start(self) -> None:

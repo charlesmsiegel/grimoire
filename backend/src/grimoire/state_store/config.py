@@ -92,7 +92,8 @@ class AutoBackupConfig:
 class RetentionConfig:
     # None means "forever". Seconds-based so consumers don't re-parse.
     embeddings_for_retired_facts_seconds: int | None = 90 * 24 * 60 * 60
-    delta_log_seconds: int | None = None  # forever
+    delta_log_seconds: int | None = 180 * 24 * 60 * 60  # 180 days
+    delta_max_rows_per_campaign: int | None = 500_000
     # How often the retention sweep runs while the process is up.
     sweep_interval_seconds: int = 6 * 60 * 60
 
@@ -329,9 +330,19 @@ def _retention_from(raw: Any, base: RetentionConfig) -> RetentionConfig:
         raise ValueError(
             f"state_store.retention.sweep_interval_seconds must be positive, got {sweep_interval}"
         )
+    max_rows_raw = raw.get("delta_max_rows_per_campaign", base.delta_max_rows_per_campaign)
+    delta_max_rows: int | None = None
+    if max_rows_raw is not None:
+        delta_max_rows = int(max_rows_raw)
+        if delta_max_rows <= 0:
+            raise ValueError(
+                f"state_store.retention.delta_max_rows_per_campaign must be positive, "
+                f"got {delta_max_rows}"
+            )
     return RetentionConfig(
         embeddings_for_retired_facts_seconds=embeddings,
         delta_log_seconds=delta_log,
+        delta_max_rows_per_campaign=delta_max_rows,
         sweep_interval_seconds=sweep_interval,
     )
 
