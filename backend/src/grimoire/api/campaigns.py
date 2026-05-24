@@ -430,6 +430,21 @@ async def create_campaign(
                 payload.id,
                 exc_info=True,
             )
+        # Seed integrated_deltas=True for new campaigns so they
+        # default to single-call narrator+extraction.
+        try:
+            row = await state_store.db.fetchone(
+                "SELECT config FROM campaigns WHERE id = ?", (payload.id,)
+            )
+            cfg = _load_campaign_config(dict(row) if row else {})
+            cfg["integrated_deltas"] = True
+            await _write_campaign_config(state_store, payload.id, cfg)
+        except Exception:
+            logger.warning(
+                "seeding integrated_deltas for new campaign %s failed",
+                payload.id,
+                exc_info=True,
+            )
         # §8 Greeting handoff: when a greeting is selected, seed scene 1
         # from it. Best-effort — a missing greeting shouldn't abort the
         # whole campaign creation. We pick the highest-priority world ref

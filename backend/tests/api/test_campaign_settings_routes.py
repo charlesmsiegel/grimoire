@@ -512,3 +512,20 @@ def test_integrated_deltas_disable(settings_client) -> None:
         json={"enabled": False},
     )
     assert resp.json()["enabled"] is False
+
+
+# ---------------------------------------------------------------------------
+# New campaign defaults (PR 2 Task 7)
+# ---------------------------------------------------------------------------
+
+
+def test_new_campaign_defaults_integrated_deltas_true(settings_client) -> None:
+    """Newly created campaigns should have integrated_deltas=True in config."""
+    resp = settings_client.post(
+        "/api/campaigns",
+        json={"id": "new-camp", "name": "New", "greeting_id": None, "composition": {"worlds": []}},
+    )
+    assert resp.status_code in (200, 201)
+
+    resp = settings_client.get("/api/campaigns/new-camp/integrated-deltas")
+    assert resp.json()["enabled"] is True
