@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ApiPost, ApiScene, PCEntry } from "../../../api/campaign";
-import { initial, reducer } from "../usePlayState";
+import { initialPlayState as initial, playReducer as reducer } from "../playReducer";
 
 function makeScene(id: string): ApiScene {
   return {
