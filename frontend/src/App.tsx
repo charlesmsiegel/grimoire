@@ -3,7 +3,7 @@ import { BrowserRouter, Route, Routes, useParams } from "react-router-dom";
 
 import { AppSettings } from "./routes/AppSettings";
 import { CampaignCreate } from "./routes/CampaignCreate";
-import { CampaignSettings } from "./routes/CampaignSettings";
+import { CampaignSettings } from "./routes/campaign/settings";
 import { CampaignPlayRoute, CampaignView } from "./routes/CampaignView";
 import { CampaignsView } from "./routes/CampaignsView";
 import { Home } from "./routes/Home";
