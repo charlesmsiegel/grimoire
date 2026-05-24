@@ -28,10 +28,11 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
+from grimoire.context.cast import CastResolver
 from grimoire.context.config import ContextBuilderConfig
 from grimoire.context.errors import LockInOverflowError
 from grimoire.context.tokens import TokenEstimator, cheap_estimator, estimate_tokens
-from grimoire.context.types import BuiltContext, ContextBuildRequest, PinSet, TierItem
+from grimoire.context.types import BuiltContext, ContextBuildRequest, PinSet, TierItem, make_source_id
 from grimoire.continuity.registry import resolve_continuity
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.templates import render as render_template
@@ -177,6 +178,13 @@ class ContextBuilderService:
         self._config = config or ContextBuilderConfig()
         self._estimator: TokenEstimator = self._make_estimator()
         self._metrics: MetricsRegistryProtocol = metrics
+        self._cast = CastResolver(
+            characters=characters,
+            library=library,
+            transient_state=transient_state,
+            config=self._config,
+            estimator=self._estimator,
+        )
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -355,15 +363,15 @@ class ContextBuilderService:
             self._scenes.active_scene_for_campaign, campaign_id, branch_id or "main"
         )
         recent_posts = await self._recent_posts(scene)
-        scene_header = self._render_scene_header(scene)
+        scene_header = self._cast.render_scene_header(scene)
 
         # Step 2 — cast
         if pc_ref is None:
             active_pc_ref = await self._safe_call(self._characters.active_pc, campaign_id)
         else:
             active_pc_ref = pc_ref
-        active_pc_card, active_pc_source = await self._active_pc_card(active_pc_ref, campaign_id)
-        active_pc_name = await self._active_pc_name(active_pc_ref, campaign_id)
+        active_pc_card, active_pc_source = await self._cast.active_pc_card(active_pc_ref, campaign_id)
+        active_pc_name = await self._cast.active_pc_name(active_pc_ref, campaign_id)
 
         # Open commitments are reused for both the lock-in commitments block
         # and the tier-recommendation hint (`commitments_targeting_pcs`).
@@ -371,7 +379,7 @@ class ContextBuilderService:
         pc_refs = await self._pc_refs(campaign_id)
         commitments_targeting_pcs = self._commitments_targeting_pcs(open_commitments, pc_refs)
 
-        spotlight_items, background_items, voice_corrective = await self._resolve_cast(
+        spotlight_items, background_items, voice_corrective = await self._cast.resolve(
             scene=scene,
             campaign_id=campaign_id,
             active_pc_ref=active_pc_ref,
@@ -539,490 +547,6 @@ class ContextBuilderService:
         if not names:
             return ""
         return "Worlds in play: " + "; ".join(names)
-
-    # -- scene / cast --------------------------------------------------- #
-
-    def _render_scene_header(self, scene: Any) -> str:
-        if scene is None:
-            return "No active scene."
-        lines = [f"Scene: {getattr(scene, 'title', None) or getattr(scene, 'slug', '')}"]
-        if getattr(scene, "location_ref", None):
-            lines.append(f"Location: {scene.location_ref}")
-        igt = getattr(scene, "in_game_start", None)
-        if igt is not None:
-            lines.append(f"In-game start: {igt}")
-        if getattr(scene, "mood", None):
-            lines.append(f"Mood: {scene.mood}")
-        present = list(getattr(scene, "present_character_refs", []) or [])
-        if present:
-            lines.append("Present cast: " + ", ".join(present))
-        return "\n".join(lines)
-
-    async def _active_pc_card(
-        self, pc_ref: str | None, campaign_id: CampaignId
-    ) -> tuple[str, ContextSource | None]:
-        if not pc_ref:
-            return "", None
-        try:
-            card = await self._characters.get_full_card(pc_ref, campaign_id)
-        except Exception:
-            return "", None
-        if not card:
-            return "", None
-        source = ContextSource(
-            kind="character",
-            scope="campaign-local",
-            owner_id=campaign_id,
-            tier=ContextTier.LOCK_IN,
-            summary=f"Active PC: {pc_ref}",
-            source_id=_make_source_id("pc_card", pc_ref),
-            inclusion_reasons=[InclusionReason.PC_CARD],
-        )
-        return card, source
-
-    async def _active_pc_name(self, pc_ref: str | None, campaign_id: CampaignId) -> str:
-        """Resolve the active PC's display name; ``""`` if not loadable."""
-        if not pc_ref:
-            return ""
-        try:
-            resolved = await self._characters.resolve(pc_ref, campaign_id)
-        except Exception:
-            return ""
-        character = getattr(resolved, "character", None)
-        name = getattr(character, "name", "") if character is not None else ""
-        return name or ""
-
-    async def _resolve_cast(
-        self,
-        *,
-        scene: Any,
-        campaign_id: CampaignId,
-        active_pc_ref: str | None,
-        recent_posts: list[Any],
-        commitments_targeting_pcs: set[str] | None = None,
-    ) -> tuple[list[TierItem], list[TierItem], str]:
-        spotlight_items: list[TierItem] = []
-        background_items: list[TierItem] = []
-
-        present_refs: list[str] = []
-        if scene is not None:
-            present_refs = list(getattr(scene, "present_character_refs", []) or [])
-
-        # Reasons accumulator: each ref accumulates the set of reasons that
-        # contributed to its inclusion. Composed when a character is, e.g.,
-        # both present and has an open commitment to a PC.
-        reasons_by_ref: dict[str, set[InclusionReason]] = {}
-
-        def _add_reason(ref: str, reason: InclusionReason) -> None:
-            reasons_by_ref.setdefault(ref, set()).add(reason)
-
-        for ref in present_refs:
-            _add_reason(ref, InclusionReason.PRESENT_IN_SCENE)
-
-        mentioned_refs = self._mentions_in_posts(recent_posts)
-        for ref in mentioned_refs:
-            _add_reason(ref, InclusionReason.MENTIONED_IN_RECENT_POSTS)
-
-        for ref in commitments_targeting_pcs or set():
-            _add_reason(ref, InclusionReason.COMMITMENT_OPEN_TO_PC)
-
-        # Ask Characters for its tier recommendation. This bakes in: presence
-        # → spotlight, mentioned in recent posts → background, open commitment
-        # with a PC → background, inactivity → demote, and user pins → forced
-        # tier (spec characters §Tier management; remaining design §1/§2).
-        # If the caller (or test) wires a Characters stub without this method
-        # we fall back to a body-token scan of recent posts.
-        tier_map = await self._recommend_tiers(
-            scene=scene,
-            campaign_id=campaign_id,
-            recent_posts=recent_posts,
-            commitments_targeting_pcs=commitments_targeting_pcs,
-        )
-
-        seen: set[str] = set()
-        if active_pc_ref:
-            seen.add(active_pc_ref)
-
-        # Spotlight tier: present chars (excluding active PC) plus anyone
-        # else recommended to SPOTLIGHT by Characters (e.g. user pin).
-        spotlight_refs: list[str] = []
-        for ref in present_refs:
-            if ref in seen:
-                continue
-            spotlight_refs.append(ref)
-            seen.add(ref)
-        for ref, tier in tier_map.items():
-            if ref in seen or tier != ContextTier.SPOTLIGHT:
-                continue
-            spotlight_refs.append(ref)
-            seen.add(ref)
-
-        for ref in spotlight_refs:
-            card = await self._try_full_card(ref, campaign_id)
-            if not card:
-                continue
-            ref_reasons = sorted(reasons_by_ref.get(ref, set()), key=lambda r: r.value)
-            # §8: prepend a world-id-aware header so duplicate names in two
-            # worlds render distinctly. Library refs only — campaign-local
-            # entities don't have a world prefix to surface.
-            spotlight_items.append(
-                TierItem(
-                    tier=ContextTier.SPOTLIGHT,
-                    section="cast",
-                    text=_with_cast_header(ref, card),
-                    priority=10,
-                    source=self._character_source(
-                        ref, ContextTier.SPOTLIGHT, campaign_id, reasons=ref_reasons
-                    ),
-                )
-            )
-            # §9 — Voice anchor: emit a separate spotlight item carrying just
-            # the voice snippet, distinct from the full card.
-            if self._config.enable_voice_anchor:
-                voice_text = await self._voice_anchor(ref, campaign_id)
-                if voice_text:
-                    spotlight_items.append(
-                        TierItem(
-                            tier=ContextTier.SPOTLIGHT,
-                            section="voice_anchor",
-                            text=f"# Voice anchor — {ref}\n{voice_text}",
-                            priority=9,
-                            source=ContextSource(
-                                kind="character",
-                                scope="library" if ref.startswith("library:") else "campaign-local",
-                                owner_id=ref if ref.startswith("library:") else campaign_id,
-                                tier=ContextTier.SPOTLIGHT,
-                                summary=f"voice:{ref}",
-                                source_id=_make_source_id("voice", ref),
-                                inclusion_reasons=list(ref_reasons),
-                            ),
-                        )
-                    )
-            # Transient stanza: spotlight-tier compact "current state" block
-            # (mood / intent / action / thinking). Privacy-filtered upstream.
-            stanza_item = await self._maybe_transient_stanza_item(
-                ref=ref,
-                campaign_id=campaign_id,
-                active_pc_ref=active_pc_ref,
-            )
-            if stanza_item is not None:
-                spotlight_items.append(stanza_item)
-
-            # § Narrative extras stanza. Fits between voice anchor
-            # (priority 9) and recent dialogue (7). Demotes to a
-            # keys-only breadcrumb in BACKGROUND on overflow.
-            if self._config.enable_extras_stanza:
-                spot, bg = await self._extras_tier_items(ref, campaign_id)
-                spotlight_items.extend(spot)
-                background_items.extend(bg)
-
-            # §10 — recent direct dialogue per spotlighted speaker.
-            dialogue = self._recent_dialogue_for(ref, recent_posts)
-            if dialogue:
-                spotlight_items.append(
-                    TierItem(
-                        tier=ContextTier.SPOTLIGHT,
-                        section="recent_dialogue",
-                        text=f"# Recent dialogue — {ref}\n{dialogue}",
-                        priority=7,
-                        source=ContextSource(
-                            kind="post",
-                            scope="campaign-local",
-                            owner_id=campaign_id,
-                            tier=ContextTier.SPOTLIGHT,
-                            summary=f"dialogue:{ref}",
-                            source_id=_make_source_id("dialogue", ref),
-                            inclusion_reasons=list(ref_reasons),
-                        ),
-                    )
-                )
-
-        # Background tier: anyone recommended to BACKGROUND, plus the
-        # body-token fallback for stubs that don't implement recommend_tiers.
-        background_refs: list[str] = []
-        for ref, tier in tier_map.items():
-            if ref in seen or tier != ContextTier.BACKGROUND:
-                continue
-            background_refs.append(ref)
-            seen.add(ref)
-
-        if not tier_map:
-            # Legacy fallback when Characters lacks recommend_tiers.
-            mentioned = self._mentions_in_posts(recent_posts) - seen
-            for ref in mentioned:
-                background_refs.append(ref)
-                seen.add(ref)
-
-        for ref in background_refs[: self._config.background_character_limit]:
-            text = await self._try_compressed_card(ref, campaign_id)
-            if not text:
-                continue
-            ref_reasons = sorted(reasons_by_ref.get(ref, set()), key=lambda r: r.value)
-            background_items.append(
-                TierItem(
-                    tier=ContextTier.BACKGROUND,
-                    section="cast",
-                    text=_with_cast_header(ref, text),
-                    priority=5,
-                    source=self._character_source(
-                        ref, ContextTier.BACKGROUND, campaign_id, reasons=ref_reasons
-                    ),
-                )
-            )
-
-        # Drift corrective for the spotlight chars (or active PC).
-        corrective_lines: list[str] = []
-        for ref in [r for r in [active_pc_ref, *present_refs] if r]:
-            try:
-                snippet = await self._characters.drift_corrective_context(ref, campaign_id)
-            except Exception:
-                snippet = ""
-            if snippet:
-                corrective_lines.append(snippet)
-        return spotlight_items, background_items, "\n\n".join(corrective_lines)
-
-    async def _recommend_tiers(
-        self,
-        *,
-        scene: Any,
-        campaign_id: CampaignId,
-        recent_posts: list[Any],
-        commitments_targeting_pcs: set[str] | None,
-    ) -> dict[str, ContextTier]:
-        """Wrap ``CharactersService.recommend_tiers`` with graceful fallback.
-
-        Returns an empty dict when:
-        * the characters service does not expose ``recommend_tiers``
-        * the scene is None (no presence/commitment signal to feed the rule
-          engine)
-        * the call raises (we log at DEBUG and degrade to the legacy
-          body-token fallback in ``_resolve_cast``)
-        """
-        if scene is None:
-            return {}
-        recommend = getattr(self._characters, "recommend_tiers", None)
-        if recommend is None:
-            return {}
-        try:
-            out = await recommend(
-                scene,
-                campaign_id,
-                recent_posts=list(recent_posts),
-                commitments_targeting_pcs=commitments_targeting_pcs or set(),
-            )
-        except TypeError:
-            # Stubs / older signatures.
-            try:
-                out = await recommend(scene)
-            except Exception:
-                return {}
-        except Exception as exc:
-            logger.debug("recommend_tiers failed: %s", exc)
-            return {}
-        return dict(out or {})
-
-    async def _voice_anchor(self, ref: str, campaign_id: CampaignId) -> str:
-        getter = getattr(self._characters, "get_voice_only", None)
-        if getter is None:
-            return ""
-        try:
-            return (await getter(ref, campaign_id)) or ""
-        except Exception as exc:
-            logger.debug("get_voice_only(%s) failed: %s", ref, exc)
-            return ""
-
-    async def _maybe_transient_stanza_item(
-        self,
-        *,
-        ref: str,
-        campaign_id: CampaignId,
-        active_pc_ref: str | None,
-    ) -> TierItem | None:
-        """Render the optional spotlight-tier transient-state stanza.
-
-        Returns ``None`` when no transient service is wired or no
-        stanza-eligible fields are present. The active PC's owner sees
-        their own thoughts unconditionally; everyone else reads through
-        the privacy filter.
-        """
-        if self._transient_state is None:
-            return None
-        from grimoire.transient_state.stanza import render_transient_stanza
-        from grimoire.types.transient import EntityKind, ObserverKind
-
-        observer = ObserverKind.PC_OWNER if ref == active_pc_ref else ObserverKind.OTHER_PC
-        try:
-            bundle = await self._transient_state.get(
-                campaign_id,
-                EntityKind.CHARACTER,
-                ref,
-                for_observer=observer,
-            )
-        except Exception as exc:
-            logger.debug("transient_state.get(%s) failed: %s", ref, exc)
-            return None
-        if not bundle:
-            return None
-        if not isinstance(bundle, dict):
-            return None
-        name = await self._character_display_name(ref, campaign_id)
-        text = render_transient_stanza(name or ref, bundle)
-        if not text:
-            return None
-        return TierItem(
-            tier=ContextTier.SPOTLIGHT,
-            section="transient",
-            text=text,
-            priority=8,
-            source=ContextSource(
-                kind="character",
-                scope="campaign-local",
-                owner_id=campaign_id,
-                tier=ContextTier.SPOTLIGHT,
-                summary=f"transient:{ref}",
-            ),
-        )
-
-    async def _character_display_name(self, ref: str, campaign_id: CampaignId) -> str:
-        getter = getattr(self._characters, "get_display_name", None)
-        if getter is None:
-            return ref
-        try:
-            return (await getter(ref, campaign_id)) or ref
-        except Exception:
-            return ref
-
-    def _recent_dialogue_for(self, ref: str, posts: list[Any]) -> str:
-        """Pull the last ``recent_dialogue_per_speaker`` posts authored by ref.
-
-        We match against both PC and NPC author refs. Posts authored by
-        ``narrator`` / ``system`` are skipped — those are not dialogue.
-        """
-        n = self._config.recent_dialogue_per_speaker
-        if n <= 0 or not ref:
-            return ""
-        lines: list[str] = []
-        for post in reversed(list(posts)):
-            pc_ref = getattr(post, "author_pc_ref", None)
-            npc_ref = getattr(post, "author_npc_ref", None)
-            if pc_ref != ref and npc_ref != ref:
-                continue
-            body = (getattr(post, "body", "") or "").strip()
-            if not body:
-                continue
-            lines.append(f"- {body}")
-            if len(lines) >= n:
-                break
-        if not lines:
-            return ""
-        return "\n".join(reversed(lines))
-
-    async def _extras_tier_items(
-        self, ref: str, campaign_id: CampaignId
-    ) -> tuple[list[TierItem], list[TierItem]]:
-        """Render the narrative-extras stanza for one character.
-
-        Returns ``(spotlight_items, background_items)``. The spotlight item
-        carries the full ``key: value`` listing; on overflow (token estimate
-        exceeds ``extras_demote_to_breadcrumb_threshold_tokens``) the
-        stanza becomes a keys-only breadcrumb in BACKGROUND, with the
-        spotlight item dropped.
-        """
-        try:
-            resolved = await self._library.resolve(ref, campaign_id)
-        except Exception as exc:
-            logger.debug("library.resolve(%s) for extras failed: %s", ref, exc)
-            return ([], [])
-        fm = getattr(resolved, "frontmatter", None) or {}
-        raw = fm.get("extras") or {}
-        if not isinstance(raw, dict) or not raw:
-            return ([], [])
-
-        name = getattr(resolved, "name", None) or ref
-        rendered = _format_extras_stanza(name, raw)
-        if not rendered:
-            return ([], [])
-
-        token_estimate = await estimate_tokens(rendered, self._estimator)
-        source = self._character_source(ref, ContextTier.SPOTLIGHT, campaign_id)
-        if token_estimate <= self._config.extras_demote_to_breadcrumb_threshold_tokens:
-            return (
-                [
-                    TierItem(
-                        tier=ContextTier.SPOTLIGHT,
-                        section="extras",
-                        text=rendered,
-                        priority=self._config.extras_spotlight_priority,
-                        source=ContextSource(
-                            kind="character",
-                            scope=source.scope,
-                            owner_id=source.owner_id,
-                            tier=ContextTier.SPOTLIGHT,
-                            summary=f"extras:{ref}",
-                        ),
-                    )
-                ],
-                [],
-            )
-
-        breadcrumb = _format_extras_breadcrumb(name, raw)
-        return (
-            [],
-            [
-                TierItem(
-                    tier=ContextTier.BACKGROUND,
-                    section="extras",
-                    text=breadcrumb,
-                    priority=3,
-                    source=ContextSource(
-                        kind="character",
-                        scope=source.scope,
-                        owner_id=source.owner_id,
-                        tier=ContextTier.BACKGROUND,
-                        summary=f"extras-breadcrumb:{ref}",
-                    ),
-                )
-            ],
-        )
-
-    async def _try_full_card(self, ref: str, campaign_id: CampaignId) -> str:
-        try:
-            return await self._characters.get_full_card(ref, campaign_id)
-        except Exception as exc:
-            logger.debug("get_full_card(%s) failed: %s", ref, exc)
-            return ""
-
-    async def _try_compressed_card(self, ref: str, campaign_id: CampaignId) -> str:
-        try:
-            return await self._characters.get_compressed_card(ref, campaign_id)
-        except Exception as exc:
-            logger.debug("get_compressed_card(%s) failed: %s", ref, exc)
-            return ""
-
-    def _character_source(
-        self,
-        ref: str,
-        tier: ContextTier,
-        campaign_id: CampaignId,
-        *,
-        reasons: list[InclusionReason] | None = None,
-    ) -> ContextSource:
-        # Library-prefixed refs are library-sourced; otherwise campaign-local.
-        if ref.startswith("library:"):
-            scope = "library"
-            owner = ref
-        else:
-            scope = "campaign-local"
-            owner = campaign_id
-        return ContextSource(
-            kind="character",
-            scope=scope,
-            owner_id=owner,
-            tier=tier,
-            summary=ref,
-            source_id=_make_source_id("character", ref),
-            inclusion_reasons=list(reasons or []),
-        )
 
     # -- world -------------------------------------------------------- #
 
@@ -2541,82 +2065,6 @@ def _render_faction_state(ref: str, state: Any) -> str:
     return f"Faction state — {ref}: " + " | ".join(parts)
 
 
-def _with_cast_header(ref: str, card: str) -> str:
-    """Prepend a `[world:<world_id>]` header on a cast card.
-
-    §8 — when two referenced worlds carry a character with the same name,
-    the model needs the world prefix to tell them apart. Campaign-local
-    refs get no prefix.
-    """
-    if not ref.startswith("library:"):
-        return card
-    raw = ref[len("library:") :]
-    parts = raw.strip("/").split("/")
-    if len(parts) >= 2 and parts[0] == "worlds":
-        world_id = parts[1]
-        return f"[world:{world_id}]\n{card}"
-    return card
-
-
-def _format_extras_stanza(name: str, extras: dict) -> str:
-    """Render the per-character extras stanza for the spotlight tier.
-
-    Empty/None values are omitted. Lists are joined with ``; ``. Dicts are
-    rendered ``key=value`` comma-separated. ExtraValue dicts (carrying
-    metadata) project to their ``value`` field.
-    """
-    lines: list[str] = []
-    for key, raw in extras.items():
-        value = _project_extras_value(raw)
-        rendered = _render_extras_value(value)
-        if rendered is None or rendered == "":
-            continue
-        lines.append(f"  {key}: {rendered}")
-    if not lines:
-        return ""
-    header = f"{name} — extras:"
-    return "\n".join([header, *lines])
-
-
-def _format_extras_breadcrumb(name: str, extras: dict) -> str:
-    """Keys-only breadcrumb for the background tier on overflow."""
-    keys = [
-        key
-        for key, raw in extras.items()
-        if _render_extras_value(_project_extras_value(raw)) not in (None, "")
-    ]
-    if not keys:
-        return ""
-    return f"{name} — extras: {', '.join(keys)}"
-
-
-def _project_extras_value(raw: Any) -> Any:
-    """ExtraValue dicts on disk look like ``{value: ..., set_at: ..., ...}``."""
-    if isinstance(raw, dict) and "value" in raw and "set_at" in raw:
-        return raw.get("value")
-    return raw
-
-
-def _render_extras_value(value: Any) -> str | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    if isinstance(value, (int, float, str)):
-        return str(value)
-    if isinstance(value, list):
-        rendered = [_render_extras_value(v) for v in value if _render_extras_value(v) is not None]
-        return "; ".join(r for r in rendered if r) or None
-    if isinstance(value, dict):
-        rendered = [
-            f"{k}={_render_extras_value(v)}"
-            for k, v in value.items()
-            if _render_extras_value(v) is not None
-        ]
-        return ", ".join(rendered) or None
-    return str(value)
-
-
 def _render_scene_reference(scene_id: str, scene: Any | None) -> str:
     """One-paragraph reference card for a scene the player called out."""
     if scene is None:
@@ -2659,17 +2107,7 @@ def _proper_noun_terms(recent_posts: Iterable[Any]) -> list[str]:
     return out
 
 
-def _make_source_id(kind: str, owner: str | None) -> str:
-    """Stable id for a ``ContextSource``.
-
-    Deterministic across builds with identical inputs so the inspector's
-    diff can pair up the same logical chunk between two previews. The hash
-    is short (12 hex chars) — enough to keep collisions negligible for the
-    ~hundreds of sources per turn we expect.
-    """
-    raw = f"{kind}:{owner or ''}"
-    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
-    return f"src_{digest}"
+_make_source_id = make_source_id
 
 
 def _hash_messages(messages: list[Message]) -> str:
