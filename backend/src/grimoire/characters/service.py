@@ -12,31 +12,24 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from collections import OrderedDict
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from grimoire.library import LibraryService
-from grimoire.library.reclassify import _lore_entry_from_ingested, apply_mapping
 from grimoire.mechanics.service import MechanicsService
 from grimoire.state_store import StateStore
 from grimoire.state_store.indexers import make_library_id
-from grimoire.state_store.paths import library_path
 from grimoire.types.characters import (
     CapsuleDraft,
     Character,
     CharacterData,
     CharacterFilter,
     CharacterImage,
-    CharacterImageKind,
     CharacterRole,
     DriftReport,
-    ImagePromptTemplate,
     ImportResult,
     IngestedCharacterCard,
-    IngestedLoreEntry,
     IngestOptions,
     LoreOverride,
     PCEntry,
@@ -44,7 +37,6 @@ from grimoire.types.characters import (
     RelationshipEvent,
     RelationshipState,
     ResolvedCharacter,
-    StructuralRelationship,
     VoiceAnchor,
 )
 from grimoire.types.common import CampaignId, CharacterRef, EntityKind, PostId, Scope
@@ -58,20 +50,26 @@ from .config import CharactersConfig
 from .drift import (
     CallableDriftChecker,
     DriftChecker,
-    DriftEvent,
     DriftEventSink,
-    DriftInput,
     HeuristicDriftChecker,
     LLMCallable,
 )
+from .drift_service import CharacterDriftService
 from .errors import (
     CharacterNotFoundError,
     CharactersError,
     PromotionError,
 )
-from .imports import parse_plaintext
-from .ingest import LLMEnrichCallable, enrich_with_llm, ingest_character_card_v2
+from .ingest import LLMEnrichCallable
+from .promoter import CharacterPromoter
 from .protocols import SheetMigrator
+from .sheet_manager import (
+    CharacterSheetManager,
+    character_from_entity,
+    character_from_frontmatter,
+    frontmatter_from_payload,
+)
+from .view_cache import CharacterViewCache
 from .views import (
     render_capsule,
     render_compressed,
@@ -84,21 +82,8 @@ _log = logging.getLogger(__name__)
 PostFetcher = Callable[[str], Awaitable[list[Post]]]
 
 LLMCapsuleDrafter = Callable[[CharacterData], Awaitable[CapsuleDraft]]
-"""Async hook used by :meth:`CharactersService.create_emergent`.
-
-When the caller injects a ``LLMCapsuleDrafter`` and the emergent payload
-is "sparse" (empty ``description`` and ``tags``), the service awaits the
-drafter and writes the returned :class:`CapsuleDraft` back via
-``update_emergent`` (spec 2026-05-17 §10).
-"""
 
 LLMVoiceAnchorDrafter = Callable[[Character, list[Post]], Awaitable[VoiceAnchor]]
-"""Async hook used by :meth:`CharactersService.draft_voice_anchor`.
-
-Receives the resolved character and the recent posts that mention them
-(filtered to the configured ``sample_window``) and returns a draft
-:class:`VoiceAnchor` for the caller to review (spec 2026-05-17 §11).
-"""
 
 
 def _branch_for(campaign_id: str, branch_id: str | None) -> str:
@@ -106,20 +91,7 @@ def _branch_for(campaign_id: str, branch_id: str | None) -> str:
 
 
 class CharactersService:
-    """Spec 08 implementation.
-
-    Construct with a :class:`LibraryService` (which owns character files) and
-    a :class:`MechanicsService` (for capability surfacing). Per-campaign
-    state (drift scores, tier pins, relationships, active PC) lives in
-    SQLite; the service writes through the State Store.
-
-    ``post_fetcher`` is the optional hook the drift detector uses to fetch
-    recent posts for a character. The Scene Manager exposes
-    ``get_posts(scene_id)`` once task #17 is wired; tests inject a stub.
-
-    ``drift_checker`` is the pluggable drift evaluator. Defaults to the
-    cheap heuristic implementation; production injects an LLM-backed one.
-    """
+    """Spec 08 implementation — facade delegating to collaborators."""
 
     def __init__(
         self,
@@ -127,8 +99,6 @@ class CharactersService:
         mechanics: MechanicsService,
         *,
         config: CharactersConfig | None = None,
-        # Hook-shaped dependencies stay as ctor kwargs; only numeric /
-        # boolean / string knobs live on :class:`CharactersConfig`.
         post_fetcher: PostFetcher | None = None,
         drift_checker: DriftChecker | None = None,
         drift_event_sink: DriftEventSink | None = None,
@@ -141,75 +111,58 @@ class CharactersService:
         self.mechanics = mechanics
         self.store: StateStore = library.store
         self._config = config or CharactersConfig()
-        self._post_fetcher = post_fetcher
-        self._drift_checker = drift_checker or HeuristicDriftChecker(
-            drift_threshold=self._config.drift.threshold
-        )
-        self._drift_event_sink = drift_event_sink
-        self._ingest_llm = ingest_llm
-        self._auto_capsule_llm = auto_capsule_llm
         self._voice_anchor_llm = voice_anchor_llm
-        self._sheet_migrator = sheet_migrator
-        # Per-campaign active-PC cache. The authoritative source is the
-        # ``active`` flag on character_state in SQL; this OrderedDict is
-        # only a fast read-through. Bounded LRU so a long-running server
-        # that has seen many campaigns doesn't grow the dict without
-        # limit. 256 covers any realistic active-campaign set; misses
-        # round-trip to ``store.set_active_pc`` / DB lookup as before.
-        self._active_pc: OrderedDict[str, CharacterRef] = OrderedDict()
-        self._ACTIVE_PC_MAX = 256
-        # Compressed-view LRU (spec 2026-05-17 §5). Key is
-        # ``(ref, campaign_id, view, seed)``; value is the rendered string.
-        # We rely solely on the in-process invalidation hooks below — the
-        # Library exposes mtime but consulting it would require a DB
-        # roundtrip per cache check, defeating the cache. All mutation
-        # paths through this service call ``_view_cache_invalidate`` (or
-        # ``clear`` for cross-campaign library writes), so staleness is
-        # impossible as long as Library writes go through ``self.library``.
-        self._view_cache: OrderedDict[tuple[str, str, str, int | None], str] = OrderedDict()
+
+        # Collaborators
+        self._cache = CharacterViewCache(
+            max_view_entries=self._config.cache.max_size,
+            max_active_pc=256,
+        )
+        self._drift = CharacterDriftService(
+            config=self._config.drift,
+            post_fetcher=post_fetcher,
+            drift_checker=drift_checker,
+            drift_event_sink=drift_event_sink,
+        )
+        self._sheets = CharacterSheetManager(
+            library=library,
+            store=self.store,
+            cache=self._cache,
+            ingest_llm=ingest_llm,
+            auto_capsule_llm=auto_capsule_llm,
+        )
+        self._promoter = CharacterPromoter(
+            library=library,
+            store=self.store,
+            sheet_migrator=sheet_migrator,
+        )
+
+    @property
+    def _active_pc(self):
+        return self._cache._active_pc
+
+    @property
+    def _view_cache(self):
+        return self._cache._view_cache
 
     # ------------------------------------------------------------------ #
-    # CRUD (delegated to Library)
+    # CRUD (delegated to sheet_manager)
     # ------------------------------------------------------------------ #
 
     async def list_in_world(self, world_id: str) -> list[Character]:
-        rows = await self.library.list_in_world(world_id, "character")
-        return [_character_from_entity(r) for r in rows]
+        return await self._sheets.list_in_world(world_id)
 
     async def get(self, world_id: str, character_id: str) -> Character:
-        ent = await self.library.get_entity(world_id, "character", character_id)
-        return _character_from_entity(ent)
+        return await self._sheets.get(world_id, character_id)
 
     async def create(self, world_id: str, payload: CharacterData) -> Character:
-        fm = _frontmatter_from_payload(payload)
-        ent = await self.library.create_entity(
-            world_id, "character", payload.id, fm, payload.body, source="characters:create"
-        )
-        return _character_from_entity(ent)
+        return await self._sheets.create(world_id, payload)
 
     async def update(self, world_id: str, character_id: str, patch: dict) -> Character:
-        body = patch.pop("body", None)
-        ent = await self.library.update_entity(
-            world_id,
-            "character",
-            character_id,
-            frontmatter_patch=patch or None,
-            body=body,
-            source="characters:update",
-        )
-        # Pragmatic compromise (spec 2026-05-17 §5): a library write affects
-        # every campaign whose composition pulls in this world. We don't keep
-        # a campaign→world index here, so clear the entire cache instead of
-        # walking bindings. Library writes are rare relative to view reads.
-        self._view_cache_invalidate()
-        return _character_from_entity(ent)
+        return await self._sheets.update(world_id, character_id, patch)
 
     async def delete(self, world_id: str, character_id: str) -> None:
-        await self.library.delete_entity(
-            world_id, "character", character_id, source="characters:delete"
-        )
-        # Same compromise as ``update`` above — clear the whole cache.
-        self._view_cache_invalidate()
+        return await self._sheets.delete(world_id, character_id)
 
     # ------------------------------------------------------------------ #
     # Emergent (campaign-local) + override
@@ -222,38 +175,7 @@ class CharactersService:
         *,
         source: str = "characters:emergent",
     ) -> str:
-        fm = _frontmatter_from_payload(payload)
-        await self.store.write_emergent(
-            campaign_id=campaign_id,
-            kind="character",
-            entity_id=payload.id,
-            frontmatter=fm,
-            body=payload.body,
-            source=source,
-        )
-        # Spec 2026-05-17 §10: when the payload is sparse (no description
-        # and no tags) and an auto-capsule drafter is wired, ask the LLM to
-        # draft a summary line + tags and write the result back through
-        # ``update_emergent`` so the standard persistence path handles it.
-        # We await synchronously (option (a) in the spec) — the alternative
-        # ``asyncio.create_task`` background path makes error handling and
-        # ordering against subsequent reads harder to reason about; the
-        # awaited form keeps the contract obvious for v1.
-        if self._auto_capsule_llm is not None and _is_sparse_payload(payload):
-            try:
-                draft = await self._auto_capsule_llm(payload)
-            except Exception:  # pragma: no cover - drafter failures shouldn't block create
-                draft = None
-            if draft is not None:
-                patch = _capsule_draft_to_patch(draft)
-                if patch:
-                    await self.update_emergent(
-                        campaign_id,
-                        payload.id,
-                        patch,
-                        source="characters:auto-capsule",
-                    )
-        return f"campaign:emergent/character/{payload.id}"
+        return await self._sheets.create_emergent(campaign_id, payload, source=source)
 
     async def update_emergent(
         self,
@@ -263,38 +185,10 @@ class CharactersService:
         *,
         source: str = "characters:emergent-update",
     ) -> Character:
-        existing = await self.store.get_emergent(campaign_id, "character", character_id)
-        if existing is None:
-            raise CharacterNotFoundError(
-                f"no emergent character {character_id!r} in campaign {campaign_id!r}"
-            )
-        fm = dict(existing.get("frontmatter") or {})
-        body = patch.pop("body", existing.get("body") or "")
-        fm.update(patch or {})
-        fm["id"] = character_id
-        await self.store.write_emergent(
-            campaign_id=campaign_id,
-            kind="character",
-            entity_id=character_id,
-            frontmatter=fm,
-            body=body,
-            source=source,
-        )
-        emergent_ref = f"campaign:emergent/character/{character_id}"
-        self._view_cache_invalidate(ref=emergent_ref, campaign_id=campaign_id)
-        return _character_from_frontmatter(fm, body, world_id=None)
+        return await self._sheets.update_emergent(campaign_id, character_id, patch, source=source)
 
     async def delete_emergent(self, campaign_id: CampaignId, character_id: str) -> None:
-        from grimoire.state_store.paths import emergent_path
-
-        target = emergent_path(self.store.data_root, campaign_id, "character", character_id)
-        if not target.exists():
-            raise CharacterNotFoundError(
-                f"no emergent character {character_id!r} in campaign {campaign_id!r}"
-            )
-        target.unlink()
-        emergent_ref = f"campaign:emergent/character/{character_id}"
-        self._view_cache_invalidate(ref=emergent_ref, campaign_id=campaign_id)
+        return await self._sheets.delete_emergent(campaign_id, character_id)
 
     async def upsert_override(
         self,
@@ -304,20 +198,7 @@ class CharactersService:
         *,
         source: str = "characters:override",
     ) -> None:
-        """Persist a campaign-local override against a library character.
-
-        ``character_ref`` must be a ``library:worlds/<s>/characters/<id>``
-        reference. The override file lives under the campaign's
-        ``overrides/`` tree.
-        """
-        library_id = _library_id_from_ref(character_ref)
-        await self.store.write_override(
-            campaign_id=campaign_id,
-            library_id=library_id,
-            patch=patch,
-            source=source,
-        )
-        self._view_cache_invalidate(ref=character_ref, campaign_id=campaign_id)
+        return await self._sheets.upsert_override(campaign_id, character_ref, patch, source=source)
 
     # ------------------------------------------------------------------ #
     # Resolution
@@ -331,7 +212,7 @@ class CharactersService:
                 raise CharacterNotFoundError(
                     f"emergent character {ref_entity.asset_id!r} not found"
                 )
-            character = _character_from_frontmatter(
+            character = character_from_frontmatter(
                 row.get("frontmatter") or {},
                 row.get("body") or "",
                 world_id=None,
@@ -351,7 +232,7 @@ class CharactersService:
                 f"worlds/{ref_entity.world_id}/characters/{ref_entity.asset_id}",
                 campaign_id,
             )
-            character = _character_from_frontmatter(
+            character = character_from_frontmatter(
                 entity.frontmatter, entity.body, world_id=entity.world_id
             )
             chain = list(entity.source_chain)
@@ -372,9 +253,7 @@ class CharactersService:
         campaign_id: CampaignId,
         filter: CharacterFilter | None = None,
     ) -> list[ResolvedCharacter]:
-        """Resolved characters reachable through the campaign composition + emergents."""
         out: list[ResolvedCharacter] = []
-        # Library / composition path
         composed = await self.library.list_for_composition(campaign_id, "character")
         for ent in composed:
             if not _passes_filter(ent, filter):
@@ -384,7 +263,6 @@ class CharactersService:
                 out.append(await self.resolve(ref, campaign_id))
             except CharacterNotFoundError:
                 continue
-        # Emergent path
         emergent_rows = await self.store.list_emergent(campaign_id, "character")
         for row in emergent_rows:
             ref = f"campaign:emergent/character/{row['asset_id']}"
@@ -409,109 +287,55 @@ class CharactersService:
         rows = await self.library.variants_of(lookup_id, "character")
         if exclude_world:
             rows = [r for r in rows if r.world_id != exclude_world]
-        return [_character_from_entity(r) for r in rows]
+        return [character_from_entity(r) for r in rows]
 
     # ------------------------------------------------------------------ #
-    # Compressed views
+    # Compressed views (delegated to sheet_manager)
     # ------------------------------------------------------------------ #
 
     async def get_full_card(
         self, ref: str, campaign_id: CampaignId, *, seed: int | None = None
     ) -> str:
-        cached = self._view_cache_get(ref, campaign_id, "full", seed)
+        cached = self._cache.view_get(ref, campaign_id, "full", seed)
         if cached is not None:
             return cached
         resolved = await self.resolve(ref, campaign_id)
         rendered = render_full(resolved.character, seed=seed)
-        self._view_cache_set(ref, campaign_id, "full", seed, rendered)
+        self._cache.view_set(ref, campaign_id, "full", seed, rendered)
         return rendered
 
     async def get_compressed_card(
         self, ref: str, campaign_id: CampaignId, *, seed: int | None = None
     ) -> str:
-        cached = self._view_cache_get(ref, campaign_id, "compressed", seed)
+        cached = self._cache.view_get(ref, campaign_id, "compressed", seed)
         if cached is not None:
             return cached
         resolved = await self.resolve(ref, campaign_id)
         rendered = render_compressed(resolved.character, seed=seed)
-        self._view_cache_set(ref, campaign_id, "compressed", seed, rendered)
+        self._cache.view_set(ref, campaign_id, "compressed", seed, rendered)
         return rendered
 
     async def get_voice_only(
         self, ref: str, campaign_id: CampaignId, *, seed: int | None = None
     ) -> str:
-        cached = self._view_cache_get(ref, campaign_id, "voice_only", seed)
+        cached = self._cache.view_get(ref, campaign_id, "voice_only", seed)
         if cached is not None:
             return cached
         resolved = await self.resolve(ref, campaign_id)
         rendered = render_voice_only(resolved.character, seed=seed)
-        self._view_cache_set(ref, campaign_id, "voice_only", seed, rendered)
+        self._cache.view_set(ref, campaign_id, "voice_only", seed, rendered)
         return rendered
 
     async def get_capsule(
         self, ref: str, campaign_id: CampaignId, *, seed: int | None = None
     ) -> str:
-        cached = self._view_cache_get(ref, campaign_id, "capsule", seed)
+        cached = self._cache.view_get(ref, campaign_id, "capsule", seed)
         if cached is not None:
             return cached
         resolved = await self.resolve(ref, campaign_id)
         rendered = render_capsule(resolved.character, seed=seed)
-        self._view_cache_set(ref, campaign_id, "capsule", seed, rendered)
+        self._cache.view_set(ref, campaign_id, "capsule", seed, rendered)
         return rendered
-
-    # ------------------------------------------------------------------ #
-    # View cache helpers (spec 2026-05-17 §5)
-    # ------------------------------------------------------------------ #
-
-    def _view_cache_get(
-        self,
-        ref: CharacterRef,
-        campaign_id: CampaignId,
-        view: str,
-        seed: int | None,
-    ) -> str | None:
-        key = (ref, campaign_id, view, seed)
-        try:
-            value = self._view_cache[key]
-        except KeyError:
-            return None
-        self._view_cache.move_to_end(key)  # LRU touch
-        return value
-
-    def _view_cache_set(
-        self,
-        ref: CharacterRef,
-        campaign_id: CampaignId,
-        view: str,
-        seed: int | None,
-        value: str,
-    ) -> None:
-        key = (ref, campaign_id, view, seed)
-        self._view_cache[key] = value
-        self._view_cache.move_to_end(key)
-        while len(self._view_cache) > self._config.cache.max_size:
-            self._view_cache.popitem(last=False)
-
-    def _view_cache_invalidate(
-        self,
-        ref: CharacterRef | None = None,
-        campaign_id: CampaignId | None = None,
-    ) -> None:
-        """Drop all cache entries matching ``(ref, campaign_id)``.
-
-        ``view`` and ``seed`` are always cleared together — invalidation is
-        coarse on purpose. ``None`` for either field means "any".
-        """
-        if ref is None and campaign_id is None:
-            self._view_cache.clear()
-            return
-        doomed = [
-            key
-            for key in self._view_cache
-            if (ref is None or key[0] == ref) and (campaign_id is None or key[1] == campaign_id)
-        ]
-        for key in doomed:
-            del self._view_cache[key]
 
     # ------------------------------------------------------------------ #
     # Tier management
@@ -525,27 +349,11 @@ class CharactersService:
         recent_posts: list[Post] | None = None,
         commitments_targeting_pcs: set[CharacterRef] | None = None,
     ) -> dict[CharacterRef, ContextTier]:
-        """Per-character tier recommendation for a scene.
-
-        Spec 08 §Tier management lists four rules. They compose, with the
-        later rules in this list overriding earlier ones:
-
-        * Inactivity → demote (BACKGROUND after `tier_demote_to_background_after_turns`
-          turns of silence; ARCHIVE after `tier_demote_to_archive_after_turns`).
-        * Mentioned in recent posts (by name or alias) → at least BACKGROUND.
-        * Open commitments to a PC (caller-provided) → at least BACKGROUND.
-        * Present in the scene → SPOTLIGHT.
-        * User `tier_pin` → forced tier (wins over all the above).
-        """
         target_campaign = campaign_id or scene.campaign_id
         out: dict[CharacterRef, ContextTier] = {}
 
         present = set(scene.present_character_refs)
 
-        # Inactivity demotion + mention upgrade both need the full set of
-        # campaign characters. Skip the lookup if there are no posts to
-        # measure recency or matches against; otherwise fetch once and
-        # iterate twice.
         if recent_posts:
             recent_turn_ids = [p.turn_id for p in recent_posts]
             joined_body = "\n".join(p.body for p in recent_posts)
@@ -564,9 +372,6 @@ class CharactersService:
                 elif turns_off_screen >= self._config.tiers.demote_to_background_after_turns:
                     out[ref] = ContextTier.BACKGROUND
 
-            # Mentioned in recent posts → at least BACKGROUND. Already-demoted
-            # entries are upgraded back to BACKGROUND because being talked
-            # about is a stronger signal than time-since-screen.
             for resolved in resolved_list:
                 ref = _ref_from_resolved(resolved)
                 if ref in present:
@@ -576,8 +381,6 @@ class CharactersService:
                 ) < _tier_rank(ContextTier.BACKGROUND):
                     out[ref] = ContextTier.BACKGROUND
 
-        # Open commitments to a PC → at least BACKGROUND. Caller passes the
-        # set; we don't reach into Continuity here.
         if commitments_targeting_pcs:
             for ref in commitments_targeting_pcs:
                 if ref in present:
@@ -585,12 +388,9 @@ class CharactersService:
                 if _tier_rank(out.get(ref)) < _tier_rank(ContextTier.BACKGROUND):
                     out[ref] = ContextTier.BACKGROUND
 
-        # Presence overrides any demotion.
         for ref in scene.present_character_refs:
             out[ref] = ContextTier.SPOTLIGHT
 
-        # User pins win over heuristics. Batch-fetch all pins for the
-        # campaign in one query (instead of one query per character).
         pins = await self.store.list_tier_pins(
             campaign_id=target_campaign,
             branch_id=_branch_for(target_campaign, None),
@@ -604,16 +404,13 @@ class CharactersService:
     async def pin_tier(self, ref: CharacterRef, campaign_id: CampaignId, tier: ContextTier) -> None:
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
         state.tier_pin = tier
-        # Tier pins are a UI choice and must survive undo_turn replay, so we
-        # skip the delta log here (spec characters-remaining §8).
         await self._save_state(
             ref, campaign_id, state, source="characters:tier-pin", record_in_delta_log=False
         )
-        # tier_pin is rendered into the full card via current_state — bust.
-        self._view_cache_invalidate(ref=ref, campaign_id=campaign_id)
+        self._cache.view_invalidate(ref=ref, campaign_id=campaign_id)
 
     # ------------------------------------------------------------------ #
-    # Drift
+    # Drift (delegated to drift_service)
     # ------------------------------------------------------------------ #
 
     async def check_drift(
@@ -624,49 +421,18 @@ class CharactersService:
         window: int = 10,
         recent_posts: list[Post] | None = None,
     ) -> DriftReport:
-        """Compute a drift score for ``ref`` over the last ``window`` posts.
-
-        ``recent_posts`` may be supplied directly; otherwise the service
-        falls back to the injected ``post_fetcher``. With no fetcher and no
-        posts, drift is 0.
-
-        When the computed ``drift_score`` meets or exceeds
-        ``drift_threshold`` and a ``drift_event_sink`` is configured, a
-        :class:`DriftEvent` is dispatched (spec characters-remaining §4).
-        Sink failures are logged and swallowed.
-        """
         resolved = await self.resolve(ref, campaign_id)
-        posts: list[Post] = recent_posts or []
-        if not posts and self._post_fetcher is not None:
-            scene_id = resolved.current_state.current_scene_id
-            if scene_id:
-                fetched = await self._post_fetcher(scene_id)
-                posts = list(fetched[-window:])
-        report = await self._drift_checker.evaluate(
-            DriftInput(character=resolved.character, recent_posts=posts, window=window)
+        report = await self._drift.check_drift(
+            ref,
+            campaign_id,
+            resolved.character,
+            resolved.current_state,
+            window=window,
+            recent_posts=recent_posts,
         )
-        # Persist the drift score on character_state.
         state = resolved.current_state
         state.drift_score = report.drift_score
         await self._save_state(ref, campaign_id, state, source="characters:drift-check")
-
-        if (
-            self._drift_event_sink is not None
-            and report.drift_score >= self._config.drift.threshold
-        ):
-            event = DriftEvent(
-                character_ref=ref,
-                campaign_id=campaign_id,
-                drift_score=report.drift_score,
-                threshold=self._config.drift.threshold,
-                report=report,
-            )
-            try:
-                await self._drift_event_sink(event)
-            except Exception:  # sink must not block extraction
-                _log.warning(
-                    "drift_event_sink raised for %s in %s", ref, campaign_id, exc_info=True
-                )
         return report
 
     async def maybe_check_drift(
@@ -677,25 +443,11 @@ class CharactersService:
         recent_posts: list[Post] | None = None,
         force: bool = False,
     ) -> DriftReport | None:
-        """Run :meth:`check_drift` on the configured appearance cadence.
-
-        Spec characters-remaining §3: the Orchestrator's post-turn fan-out
-        calls this for each present character. The counter on
-        ``CharacterState.appearances_since_last_drift_check`` (bumped by
-        :meth:`mark_screen_time`) gates the actual drift check; the counter
-        resets to zero through ``_save_state`` so the reset itself goes into
-        the delta log. Returns ``None`` when the cadence threshold has not
-        been reached and ``force`` is false.
-        """
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
-        threshold = self._config.drift.check_every_n_appearances
-        if not force and threshold > 0 and state.appearances_since_last_drift_check < threshold:
+        if not self._drift.should_check(state, force=force):
             return None
 
         report = await self.check_drift(ref, campaign_id, recent_posts=recent_posts)
-        # Reset the counter through the standard persist path so undo_turn
-        # can reverse it. Re-load to capture drift_score written by
-        # check_drift, then zero the counter on top.
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
         state.appearances_since_last_drift_check = 0
         await self._save_state(ref, campaign_id, state, source="characters:drift-cadence-reset")
@@ -708,41 +460,16 @@ class CharactersService:
         *,
         inject_corrective_context: bool = True,
     ) -> str:
-        """Return a corrective voice snippet for the next prompt.
-
-        Spec characters-remaining §4 — when the cached drift score on
-        ``character_state`` is at or above ``drift_threshold``, return a
-        non-empty voice-anchor reminder; the Context Builder prepends the
-        result to the next prompt featuring ``ref`` so the model gets
-        explicit corrective guidance. Below threshold returns an empty
-        string so callers skip the injection.
-
-        Pass ``inject_corrective_context=False`` to short-circuit the lookup
-        entirely (returns ``""``) — useful for callers that have an
-        out-of-band reason to suppress the injection on a given turn (e.g.
-        a regenerate flow that's already including a stronger guidance
-        block).
-
-        Context Builder integration is wired separately — this method is
-        the source of truth for the snippet content.
-        """
         if not inject_corrective_context:
             return ""
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
         if state.drift_score < self._config.drift.threshold:
             return ""
         resolved = await self.resolve(ref, campaign_id)
-        # Use the heuristic checker's renderer; it works on any character.
-        from .drift import _corrective_text
-
-        return _corrective_text(resolved.character, [])
+        return self._drift.corrective_text(resolved.character)
 
     def set_drift_checker(self, checker: DriftChecker | LLMCallable) -> None:
-        """Swap in a different drift checker after construction."""
-        if callable(checker) and not hasattr(checker, "evaluate"):
-            self._drift_checker = CallableDriftChecker(checker)  # type: ignore[arg-type]
-        else:
-            self._drift_checker = checker  # type: ignore[assignment]
+        self._drift.set_drift_checker(checker)
 
     # ------------------------------------------------------------------ #
     # Voice anchor drafting (spec 2026-05-17 §11)
@@ -755,26 +482,14 @@ class CharactersService:
         *,
         sample_window: int = 10,
     ) -> VoiceAnchor:
-        """Ask the configured LLM to propose a :class:`VoiceAnchor`.
-
-        Pulls the character's recent dialogue from their current scene via
-        the injected ``post_fetcher`` (same pattern as :meth:`check_drift`),
-        filters to posts that mention the character by name or alias, and
-        hands the trimmed window to the drafter. The returned anchor is a
-        *proposal* — the caller routes it through ``update_emergent`` or
-        ``upsert_override`` to accept it (spec 2026-05-17 §11).
-
-        Raises :class:`CharactersError` when no ``voice_anchor_llm`` was
-        wired at construction.
-        """
         if self._voice_anchor_llm is None:
             raise CharactersError("draft_voice_anchor requires a voice_anchor_llm to be configured")
         resolved = await self.resolve(character_ref, campaign_id)
         posts: list[Post] = []
-        if self._post_fetcher is not None:
+        if self._drift._post_fetcher is not None:
             scene_id = resolved.current_state.current_scene_id
             if scene_id:
-                fetched = await self._post_fetcher(scene_id)
+                fetched = await self._drift._post_fetcher(scene_id)
                 posts = list(fetched)
         matching = [p for p in posts if _mentions_character(p.body, resolved.character)]
         trimmed = matching[-sample_window:] if sample_window > 0 else matching
@@ -793,15 +508,13 @@ class CharactersService:
         source: str = "characters:state-update",
     ) -> None:
         await self._save_state(ref, campaign_id, state, source=source)
-        self._view_cache_invalidate(ref=ref, campaign_id=campaign_id)
+        self._cache.view_invalidate(ref=ref, campaign_id=campaign_id)
 
     async def mark_screen_time(
         self, ref: CharacterRef, campaign_id: CampaignId, turn_id: str
     ) -> None:
         state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
         state.last_screen_time_turn = turn_id
-        # Drift-cadence counter (spec characters-remaining §3); reset by
-        # ``maybe_check_drift`` once it actually runs the checker.
         state.appearances_since_last_drift_check += 1
         await self._save_state(
             ref, campaign_id, state, source="characters:screen-time", turn_id=turn_id
@@ -814,40 +527,9 @@ class CharactersService:
     # PCs
     # ------------------------------------------------------------------ #
 
-    def _seed_active_pc_from_rows(
-        self, campaign_id: CampaignId, rows: list[dict]
-    ) -> CharacterRef | None:
-        """Return the cached active PC ref, hydrating from ``rows`` if needed.
-
-        Picks the first row whose ``active`` flag is truthy (rows are returned
-        by the store in ``added_at`` order); falls back to the first row when
-        no row carries an active bit. The choice is cached so subsequent calls
-        within the process are stable, matching ``set_active_pc`` semantics.
-        Returns ``None`` only when ``rows`` is empty.
-        """
-        cached = self._active_pc.get(campaign_id)
-        if cached is not None:
-            self._active_pc.move_to_end(campaign_id)
-            return cached
-        if not rows:
-            return None
-        chosen = next(
-            (row["character_ref"] for row in rows if bool(row["active"])),
-            rows[0]["character_ref"],
-        )
-        self._cache_active_pc(campaign_id, chosen)
-        return chosen
-
-    def _cache_active_pc(self, campaign_id: str, character_ref: CharacterRef) -> None:
-        """Insert/refresh an LRU entry and evict if over capacity."""
-        self._active_pc[campaign_id] = character_ref
-        self._active_pc.move_to_end(campaign_id)
-        while len(self._active_pc) > self._ACTIVE_PC_MAX:
-            self._active_pc.popitem(last=False)
-
     async def list_pcs(self, campaign_id: CampaignId) -> list[PCEntry]:
         rows = await self.store.list_pcs(campaign_id)
-        active_ref = self._seed_active_pc_from_rows(campaign_id, rows)
+        active_ref = self._cache.seed_active_pc_from_rows(campaign_id, rows)
         out: list[PCEntry] = []
         for row in rows:
             char_ref = row["character_ref"]
@@ -858,9 +540,6 @@ class CharactersService:
                 current_scene_id = state.current_scene_id
                 current_location_ref = state.location_ref
             except Exception:
-                # State load is best-effort; falling back to bare PC
-                # entry keeps the switcher functional when the per-PC
-                # state row hasn't been created yet (fresh campaign).
                 pass
             last_played_at = _parse_iso_dt(row.get("last_played_at"))
             out.append(
@@ -889,36 +568,33 @@ class CharactersService:
             display_name=name,
             owner=owner,
         )
-        if campaign_id not in self._active_pc:
-            self._cache_active_pc(campaign_id, character_ref)
+        if self._cache.get_active_pc(campaign_id) is None:
+            self._cache.cache_active_pc(campaign_id, character_ref)
         return PCEntry(
             character_ref=character_ref,
             name=name,
             owner=owner,
-            active=self._active_pc.get(campaign_id) == character_ref,
+            active=self._cache.get_active_pc(campaign_id) == character_ref,
         )
 
     async def remove_pc(self, campaign_id: CampaignId, character_ref: CharacterRef) -> None:
         await self.store.remove_pc(campaign_id=campaign_id, character_ref=character_ref)
-        if self._active_pc.get(campaign_id) == character_ref:
-            self._active_pc.pop(campaign_id, None)
+        if self._cache.get_active_pc(campaign_id) == character_ref:
+            self._cache.pop_active_pc(campaign_id)
 
     async def set_active_pc(self, campaign_id: CampaignId, character_ref: CharacterRef) -> None:
         pcs = await self.store.list_pcs(campaign_id)
         refs = {p["character_ref"] for p in pcs}
         if character_ref not in refs:
             raise CharactersError(f"{character_ref!r} is not a PC in campaign {campaign_id!r}")
-        # Persist to DB so the choice survives restart. The in-memory cache
-        # stays as a fast-path for list_pcs/active_pc within the same process.
         await self.store.set_active_pc(campaign_id=campaign_id, character_ref=character_ref)
-        self._cache_active_pc(campaign_id, character_ref)
+        self._cache.cache_active_pc(campaign_id, character_ref)
 
     async def active_pc(self, campaign_id: CampaignId) -> CharacterRef | None:
-        """Return the currently active PC for ``campaign_id`` (None if no PCs)."""
-        if campaign_id in self._active_pc:
-            return self._active_pc[campaign_id]
+        if self._cache.get_active_pc(campaign_id) is not None:
+            return self._cache.get_active_pc(campaign_id)
         pcs = await self.store.list_pcs(campaign_id)
-        return self._seed_active_pc_from_rows(campaign_id, pcs)
+        return self._cache.seed_active_pc_from_rows(campaign_id, pcs)
 
     # ------------------------------------------------------------------ #
     # Per-PC current scene
@@ -957,12 +633,6 @@ class CharactersService:
     async def should_auto_respond(
         self, scene: Scene, campaign_id: CampaignId | None = None
     ) -> bool:
-        """True when there is exactly one present PC.
-
-        When 2+ PCs are present in the same scene, the Orchestrator should
-        wait for an explicit advance trigger (spec 08 §PC role and multi-PC).
-        Single-PC scenes get the normal auto-response flow.
-        """
         present = await self.present_pcs_in_scene(scene, campaign_id)
         return len(present) <= 1
 
@@ -971,7 +641,6 @@ class CharactersService:
         scene: Scene,
         posts: list[Post],
     ) -> list[Post]:
-        """Return PC-authored posts after the scene's ``last_advance_at_post``."""
         threshold = scene.last_advance_at_post or 0
         return [p for p in posts if p.order_in_scene > threshold and p.is_player]
 
@@ -1017,20 +686,6 @@ class CharactersService:
         in_post: PostId | None = None,
         summary: str | None = None,
     ) -> dict:
-        """Apply ``delta`` to the relationship between ``from_ref`` and ``to_ref``.
-
-        Numeric fields (``affection``, ``trust``, ``dominance``,
-        ``intimacy``) are incremented; other fields are set. Creates the row
-        if it doesn't exist.
-
-        When the caller supplies a non-empty ``summary``, a
-        :class:`RelationshipEvent` is appended to the relationship's
-        ``history`` log (with optional ``in_post`` and the applied
-        ``delta``) so a "relationship timeline" view can reconstruct what
-        drove each shift. Calls without a summary leave the log alone,
-        avoiding empty/noise entries for background tooling that only
-        nudges the rolling state.
-        """
         branch = _branch_for(campaign_id, branch_id)
         existing = await self.store.db.fetchone(
             """
@@ -1049,7 +704,6 @@ class CharactersService:
             state = _relationship_state_from_json(existing["state"])
             existing_types = json.loads(existing["types"]) if existing["types"] else []
             if types:
-                # Merge new types in.
                 merged = list(dict.fromkeys(existing_types + types))
                 existing_types = merged
             row_id = existing["id"]
@@ -1118,13 +772,6 @@ class CharactersService:
         *,
         branch_id: str | None = None,
     ) -> list[dict]:
-        """Return the chronological :class:`RelationshipEvent` log.
-
-        Empty list if no relationship exists (or it has no recorded
-        events). Events are returned in the order they were appended,
-        which matches the wall-clock order of the originating
-        ``update_relationship`` calls.
-        """
         branch = _branch_for(campaign_id, branch_id)
         row = await self.store.db.fetchone(
             """
@@ -1139,7 +786,7 @@ class CharactersService:
         return _relationship_history_from_json(row["history"])
 
     # ------------------------------------------------------------------ #
-    # Promotion
+    # Promotion (delegated to promoter)
     # ------------------------------------------------------------------ #
 
     async def propose_promotion(
@@ -1150,58 +797,9 @@ class CharactersService:
         *,
         target_character_id: str | None = None,
     ) -> PromotionProposal:
-        """Render a preview of the library write without executing it.
-
-        Caller shows the proposal to the user; once confirmed, the same
-        args plus ``confirm=True`` go to :meth:`promote_to_library`. See
-        spec ``2026-05-17-characters-remaining-design`` §9.
-
-        Warnings call out conditions the UI should highlight before commit:
-        id collision in the target world, missing voice anchor, missing
-        description. Empty warnings = safe to commit unattended.
-        """
-        emergent = await self.store.get_emergent(campaign_id, "character", character_id)
-        if emergent is None:
-            raise PromotionError(
-                f"no emergent character {character_id!r} in campaign {campaign_id!r}"
-            )
-        target_id = target_character_id or character_id
-        fm = dict(emergent.get("frontmatter") or {})
-        fm["id"] = target_id
-        body = emergent.get("body") or ""
-        library_id = make_library_id(target_world_id, "character", target_id)
-        target_path = library_path(self.store.data_root, library_id)
-
-        warnings: list[str] = []
-        # Id collision: a real character already lives at this target slot.
-        try:
-            await self.library.get_entity(target_world_id, "character", target_id)
-        except Exception:
-            pass
-        else:
-            warnings.append(
-                f"target world {target_world_id!r} already has a character "
-                f"with id {target_id!r}; promotion would overwrite it"
-            )
-        # Voice anchor sanity — at minimum a summary or at least one sample.
-        voice = fm.get("voice") or {}
-        if not isinstance(voice, dict) or not (
-            str(voice.get("summary") or "").strip() or (voice.get("samples") or [])
-        ):
-            warnings.append("character has no voice anchor (summary or samples)")
-        # Description sanity.
-        if not str(fm.get("description") or "").strip():
-            warnings.append("character has no description")
-
-        return PromotionProposal(
-            campaign_id=campaign_id,
-            character_id=character_id,
-            target_world_id=target_world_id,
-            target_library_id=library_id,
-            target_path=str(target_path),
-            frontmatter=fm,
-            body=body,
-            warnings=warnings,
+        return await self._promoter.propose_promotion(
+            campaign_id, character_id, target_world_id,
+            target_character_id=target_character_id,
         )
 
     async def promote_to_library(
@@ -1216,76 +814,19 @@ class CharactersService:
         confirm: bool = False,
         proposal: PromotionProposal | None = None,
     ) -> str:
-        """Promote an emergent character into the library.
-
-        Two flows (spec ``2026-05-17-characters-remaining-design`` §9):
-
-        * ``confirm=False`` (default): generate a proposal and raise
-          :class:`PromotionError` if any warnings would fire — the
-          two-step UI flow forces the caller to acknowledge them.
-        * ``confirm=True``: commit the write. Programmatic / single-shot
-          callers (tests, batch tools) opt in here.
-
-        Pass ``proposal`` to reuse a previously generated preview verbatim;
-        otherwise a fresh proposal is rendered from the current emergent
-        data.
-
-        When ``self._sheet_migrator`` is wired (§13), ``migrate_sheet`` is
-        invoked after the markdown lands. Failures bubble up as
-        :class:`PromotionError` — silent swallow would leave the new
-        library character without the mechanics the user expected.
-
-        Wraps the store's ``write_library_file`` rather than going through
-        ``LibraryService.promote_to_library`` because that path explicitly
-        excludes ``character``. Returns the new library path.
-        """
-        if proposal is None:
-            proposal = await self.propose_promotion(
-                campaign_id,
-                character_id,
-                target_world_id,
-                target_character_id=target_character_id,
-            )
-        if not confirm:
-            if proposal.warnings:
-                raise PromotionError(
-                    "promotion has unresolved warnings; resolve or call with "
-                    f"confirm=True: {proposal.warnings}"
-                )
-            raise PromotionError(
-                "promote_to_library requires confirm=True; use propose_promotion "
-                "first to preview the write"
-            )
-
-        result = await self.store.write_library_file(
-            library_id=proposal.target_library_id,
-            frontmatter=dict(proposal.frontmatter),
-            body=proposal.body,
+        return await self._promoter.promote_to_library(
+            campaign_id,
+            character_id,
+            target_world_id,
             source=source,
-            campaign_id=campaign_id,
+            delete_emergent=delete_emergent,
+            target_character_id=target_character_id,
+            confirm=confirm,
+            proposal=proposal,
         )
 
-        if self._sheet_migrator is not None:
-            emergent_ref = f"campaign:emergent/character/{character_id}"
-            try:
-                await self._sheet_migrator.migrate_sheet(
-                    campaign_id,
-                    emergent_ref,
-                    proposal.target_library_id,
-                )
-            except Exception as exc:
-                raise PromotionError(f"sheet migration failed for {character_id!r}: {exc}") from exc
-
-        if delete_emergent:
-            from grimoire.state_store.paths import emergent_path
-
-            target = emergent_path(self.store.data_root, campaign_id, "character", character_id)
-            if target.exists():
-                target.unlink()
-        return str(result.path)
-
     # ------------------------------------------------------------------ #
-    # Imports
+    # Imports (delegated to sheet_manager)
     # ------------------------------------------------------------------ #
 
     async def import_sillytavern(
@@ -1295,16 +836,7 @@ class CharactersService:
         *,
         options: IngestOptions | None = None,
     ) -> ImportResult:
-        """Ingest a Character Card V2/V3 payload into ``target_world_id``.
-
-        Accepts JSON bytes (the canonical envelope or just the data
-        object) as well as PNG bytes with an embedded ``chara``/``ccv3``
-        tEXt chunk and ``.charx`` zip bundles. When ``options.enrich_with_llm``
-        is true and a ``ingest_llm`` callable was supplied at construction,
-        the parse is enriched before the character is written.
-        """
-        ingested = await self._ingest(card, options=options)
-        return await self._finalize_import(target_world_id, ingested, options=options)
+        return await self._sheets.import_sillytavern(card, target_world_id, options=options)
 
     async def import_charx(
         self,
@@ -1313,15 +845,10 @@ class CharactersService:
         *,
         options: IngestOptions | None = None,
     ) -> ImportResult:
-        ingested = await self._ingest(charx_bytes, options=options)
-        return await self._finalize_import(target_world_id, ingested, options=options)
+        return await self._sheets.import_charx(charx_bytes, target_world_id, options=options)
 
     async def import_plaintext(self, text: str, target_world_id: str) -> ImportResult:
-        data, warnings = parse_plaintext(text)
-        return await self._finalize_import(
-            target_world_id,
-            IngestedCharacterCard(data=data, warnings=warnings),
-        )
+        return await self._sheets.import_plaintext(text, target_world_id)
 
     async def import_character_card(
         self,
@@ -1330,27 +857,7 @@ class CharactersService:
         *,
         options: IngestOptions | None = None,
     ) -> tuple[ImportResult, IngestedCharacterCard]:
-        """Like :meth:`import_sillytavern` but also returns the full ingest.
-
-        Useful for UI flows that want to surface the creator notes, the
-        alternate greetings, or the embedded character book before
-        committing the character to disk.
-        """
-        ingested = await self._ingest(payload, options=options)
-        result = await self._finalize_import(target_world_id, ingested, options=options)
-        return result, ingested
-
-    async def _ingest(
-        self,
-        payload: bytes,
-        *,
-        options: IngestOptions | None,
-    ) -> IngestedCharacterCard:
-        opts = options or IngestOptions()
-        ingested = ingest_character_card_v2(payload, options=opts)
-        if opts.enrich_with_llm and self._ingest_llm is not None:
-            ingested = await enrich_with_llm(ingested, self._ingest_llm, options=opts)
-        return ingested
+        return await self._sheets.import_character_card(payload, target_world_id, options=options)
 
     async def add_character_image(
         self,
@@ -1361,61 +868,14 @@ class CharactersService:
         image_bytes: bytes | None = None,
         source: str = "characters:add-image",
     ) -> Character:
-        """Append ``image`` to ``character_id``'s gallery.
-
-        When ``image_bytes`` is supplied, the bytes are written to disk
-        next to the character markdown (the path is normalized to
-        ``library/worlds/<world>/characters/<id>/<filename>``).
-        Callers can pass any
-        :class:`grimoire.types.characters.CharacterImage` — generated
-        images from ImageGen, manually uploaded references, expression
-        sheets, etc.
-        """
-        ent = await self.library.get_entity(world_id, "character", character_id)
-        existing = list(_character_from_entity(ent).images)
-        stored = image
-        if image_bytes is not None:
-            stored = await self._write_image_bytes(
-                world_id=world_id,
-                character_id=character_id,
-                image=image,
-                payload=image_bytes,
-            )
-        existing.append(stored)
-        fm = dict(ent.frontmatter or {})
-        fm["images"] = [_image_to_dict(img) for img in existing]
-        updated = await self.library.update_entity(
-            world_id,
-            "character",
-            character_id,
-            frontmatter_patch=fm,
-            body=None,
-            source=source,
+        return await self._sheets.add_character_image(
+            world_id, character_id, image, image_bytes=image_bytes, source=source
         )
-        return _character_from_entity(updated)
 
-    async def _write_image_bytes(
-        self,
-        *,
-        world_id: str,
-        character_id: str,
-        image: CharacterImage,
-        payload: bytes,
-    ) -> CharacterImage:
-        from grimoire.state_store.paths import library_root, relative_to_root
-
-        # Default file name uses the image kind to keep multi-image
-        # galleries scannable on disk.
-        filename = image.path or f"{image.kind.value}.png"
-        if "/" in filename:
-            filename = filename.rsplit("/", 1)[-1]
-        target_dir = (
-            library_root(self.store.data_root) / "worlds" / world_id / "characters" / character_id
-        )
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / filename
-        target.write_bytes(payload)
-        return image.model_copy(update={"path": relative_to_root(self.store.data_root, target)})
+    async def _ingest(
+        self, payload: bytes, *, options: IngestOptions | None
+    ) -> IngestedCharacterCard:
+        return await self._sheets._ingest(payload, options=options)
 
     async def _finalize_import(
         self,
@@ -1425,339 +885,9 @@ class CharactersService:
         options: IngestOptions | None = None,
         lore_overrides: list[LoreOverride] | None = None,
     ) -> ImportResult:
-        opts = options or IngestOptions()
-        data = ingested.data
-        result = ImportResult(warnings=list(ingested.warnings))
-        try:
-            existing = await self.library.get_entity(target_world_id, "character", data.id)
-        except Exception:
-            existing = None
-        if existing is not None:
-            result.skipped.append(data.id)
-            result.warnings.append(
-                f"character {data.id!r} already exists in {target_world_id!r}; not overwriting"
-            )
-            return result
-
-        # Persist the embedded avatar (if any) before writing the markdown,
-        # so the CharacterImage path on the card already points at a real
-        # file rather than the placeholder we filled in during parsing.
-        if ingested.avatar_bytes and data.images:
-            avatar_index = next(
-                (i for i, img in enumerate(data.images) if img.source == "embedded_avatar"),
-                None,
-            )
-            if avatar_index is not None:
-                placeholder = data.images[avatar_index]
-                stored = await self._write_image_bytes(
-                    world_id=target_world_id,
-                    character_id=data.id,
-                    image=placeholder,
-                    payload=ingested.avatar_bytes,
-                )
-                images = list(data.images)
-                images[avatar_index] = stored
-                data = data.model_copy(update={"images": images})
-
-        # Character write is atomic — if it fails, abort the whole import
-        # rather than leaving orphan greetings / lore behind.
-        try:
-            await self.create(target_world_id, data)
-            result.created.append(data.id)
-        except Exception as exc:
-            result.errors.append(f"character {data.id!r}: {exc}")
-            return result
-
-        # Greetings + lore are non-fatal: collect per-file errors but keep
-        # going so the user gets a useful partial import.
-        if opts.import_primary_greeting or opts.import_alternate_greetings:
-            await self._write_greetings(
-                target_world_id=target_world_id,
-                char_slug=data.id,
-                char_name=data.name,
-                ingested=ingested,
-                opts=opts,
-                result=result,
-            )
-        if opts.import_character_book and ingested.lore_entries:
-            await self._write_lore_entries(
-                target_world_id=target_world_id,
-                char_slug=data.id,
-                ingested=ingested,
-                result=result,
-                lore_overrides=lore_overrides or [],
-            )
-
-        # Per-import markdown audit. Best-effort; failure to write the
-        # report should not fail the import — the user already has the
-        # data they asked for.
-        try:
-            await self._write_import_report(
-                target_world_id=target_world_id,
-                ingested=ingested,
-                result=result,
-                opts=opts,
-            )
-        except Exception as exc:
-            result.warnings.append(f"import report failed: {exc}")
-        return result
-
-    # ------------------------------------------------------------------ #
-    # Helpers for greeting / lore / report writes
-    # ------------------------------------------------------------------ #
-
-    async def _write_greetings(
-        self,
-        *,
-        target_world_id: str,
-        char_slug: str,
-        char_name: str,
-        ingested: IngestedCharacterCard,
-        opts: IngestOptions,
-        result: ImportResult,
-    ) -> None:
-        for greeting in ingested.greetings:
-            if greeting.is_primary and not opts.import_primary_greeting:
-                continue
-            if not greeting.is_primary and not opts.import_alternate_greetings:
-                continue
-            if greeting.is_primary:
-                suffix = "default"
-                kind = "sillytavern_first_mes"
-                name = f"Default greeting from {char_name}"
-            else:
-                suffix = f"alt-{greeting.source_index:02d}"
-                kind = "sillytavern_alternate_greeting"
-                name = f"Alternate greeting {greeting.source_index} from {char_name}"
-            base_id = f"{char_slug}--{suffix}"
-            entity_id = await self._unique_id(target_world_id, "greeting", base_id, result)
-            tags = ["imported", "from-card", char_slug]
-            if not greeting.is_primary:
-                tags.append("alternate-greeting")
-            frontmatter = {
-                "id": entity_id,
-                "name": name,
-                "present_characters": [char_slug],
-                "tags": tags,
-                "import_source": {
-                    "kind": kind,
-                    "card_asset_id": char_slug,
-                    "source_index": greeting.source_index,
-                },
-            }
-            try:
-                await self.library.create_entity(
-                    target_world_id,
-                    "greeting",
-                    entity_id,
-                    frontmatter,
-                    body=greeting.body,
-                    source="characters:import",
-                )
-                result.created.append(f"greeting:{entity_id}")
-            except Exception as exc:
-                result.errors.append(f"greeting {entity_id!r}: {exc}")
-
-    async def _write_lore_entries(
-        self,
-        *,
-        target_world_id: str,
-        char_slug: str,
-        ingested: IngestedCharacterCard,
-        result: ImportResult,
-        lore_overrides: list[LoreOverride] = (),
-    ) -> None:
-        overrides_by_index = {o.source_index: o for o in lore_overrides}
-        for entry in ingested.lore_entries:
-            override = overrides_by_index.get(entry.source_index)
-            target_kind = override.kind if override else "lore"
-
-            if target_kind == "skip":
-                result.warnings.append(f"lore entry {entry.source_index} skipped by user override")
-                continue
-
-            if target_kind == "lore":
-                await self._write_one_lore_entry(
-                    target_world_id=target_world_id,
-                    char_slug=char_slug,
-                    entry=entry,
-                    result=result,
-                )
-                continue
-
-            await self._promote_lore_entry(
-                target_world_id=target_world_id,
-                char_slug=char_slug,
-                entry=entry,
-                target_kind=EntityKind(target_kind),
-                overrides=override.overrides if override else {},
-                result=result,
-            )
-
-    async def _write_one_lore_entry(
-        self,
-        *,
-        target_world_id: str,
-        char_slug: str,
-        entry: IngestedLoreEntry,
-        result: ImportResult,
-    ) -> None:
-        entry_slug = _slug_for_lore_entry(entry, char_slug)
-        base_id = f"{char_slug}--{entry_slug}"
-        entity_id = await self._unique_id(target_world_id, "lore", base_id, result)
-        frontmatter: dict[str, Any] = {
-            "id": entity_id,
-            "name": entry.name or entity_id,
-            "title": entry.name or entity_id,
-            "keywords": entry.keys,
-            "secondary_keys": entry.secondary_keys,
-            "selective_logic": entry.selective_logic,
-            "constant": entry.constant,
-            "enabled": entry.enabled,
-            "case_sensitive": entry.case_sensitive,
-            "match_whole_words": entry.match_whole_words,
-            "priority": entry.priority,
-            "probability": entry.probability,
-            "position": entry.position,
-            "comment": entry.comment,
-            "tags": ["imported", "from-card", char_slug],
-            "import_source": {
-                "kind": "sillytavern_character_book",
-                "card_asset_id": char_slug,
-                "source_index": entry.source_index,
-            },
-        }
-        if entry.at_depth is not None:
-            frontmatter["at_depth"] = entry.at_depth
-        if entry.scan_depth is not None:
-            frontmatter["scan_depth"] = entry.scan_depth
-        try:
-            await self.library.create_entity(
-                target_world_id,
-                "lore",
-                entity_id,
-                frontmatter,
-                body=entry.body,
-                source="characters:import",
-            )
-            result.created.append(f"lore:{entity_id}")
-        except Exception as exc:
-            result.errors.append(f"lore {entity_id!r}: {exc}")
-
-    async def _promote_lore_entry(
-        self,
-        *,
-        target_world_id: str,
-        char_slug: str,
-        entry: IngestedLoreEntry,
-        target_kind: EntityKind,
-        overrides: dict[str, Any],
-        result: ImportResult,
-    ) -> None:
-        proxy = _lore_entry_from_ingested(entry, world_id=target_world_id)
-        fm, body, _kept, _dropped, _into_notes, warnings = apply_mapping(
-            proxy, target_kind, overrides
+        return await self._sheets._finalize_import(
+            target_world_id, ingested, options=options, lore_overrides=lore_overrides
         )
-        entry_slug = _slug_for_lore_entry(entry, char_slug)
-        base_id = f"{char_slug}--{entry_slug}"
-        kind_str = target_kind.value
-        entity_id = await self._unique_id(target_world_id, kind_str, base_id, result)
-        fm["id"] = entity_id
-        fm["import_source"] = {
-            "kind": "sillytavern_character_book",
-            "card_asset_id": char_slug,
-            "source_index": entry.source_index,
-        }
-        try:
-            await self.library.create_entity(
-                target_world_id,
-                kind_str,
-                entity_id,
-                fm,
-                body=body,
-                source="characters:import",
-            )
-            result.created.append(f"{kind_str}:{entity_id}")
-            for w in warnings:
-                result.warnings.append(f"{kind_str} {entity_id}: {w}")
-        except Exception as exc:
-            result.errors.append(f"{kind_str} {entity_id!r}: {exc}")
-
-    async def _unique_id(
-        self,
-        world_id: str,
-        kind: str,
-        base_id: str,
-        result: ImportResult,
-    ) -> str:
-        """Suffix ``-2``, ``-3``, … up to 99 to avoid overwriting."""
-        candidate = base_id
-        for suffix in range(2, 100):
-            try:
-                existing = await self.library.get_entity(world_id, kind, candidate)
-            except Exception:
-                existing = None
-            if existing is None:
-                return candidate
-            candidate = f"{base_id}-{suffix}"
-            if suffix == 2:
-                result.warnings.append(f"{kind} {base_id!r} already exists; trying suffix")
-        result.warnings.append(f"{kind} {base_id!r} collided 99 times; using {candidate!r}")
-        return candidate
-
-    async def _write_import_report(
-        self,
-        *,
-        target_world_id: str,
-        ingested: IngestedCharacterCard,
-        result: ImportResult,
-        opts: IngestOptions,
-    ) -> None:
-        from grimoire.state_store.paths import library_root
-
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        char_slug = ingested.data.id
-        report_dir = library_root(self.store.data_root) / "imports"
-        report_dir.mkdir(parents=True, exist_ok=True)
-        report_path = report_dir / f"{timestamp}-{char_slug}.md"
-        lines: list[str] = [
-            f"# Import: {ingested.data.name} ({char_slug})",
-            "",
-            f"- World: `{target_world_id}`",
-            f"- Spec: `{ingested.spec or 'unknown'}`",
-            f"- Imported at: `{timestamp}`",
-            "",
-            "## Created",
-        ]
-        for ref in result.created:
-            lines.append(f"- `{ref}`")
-        if result.skipped:
-            lines += ["", "## Skipped"]
-            for ref in result.skipped:
-                lines.append(f"- `{ref}`")
-        if result.errors:
-            lines += ["", "## Errors"]
-            for err in result.errors:
-                lines.append(f"- {err}")
-        if result.warnings:
-            lines += ["", "## Warnings"]
-            for warn in result.warnings:
-                lines.append(f"- {warn}")
-        lines += ["", "## Discarded inputs"]
-        if ingested.system_prompt:
-            lines.append(
-                "- `system_prompt`: routed to campaign-scoped addendum "
-                "(not written into the character body)."
-            )
-        if ingested.post_history_instructions:
-            lines.append("- `post_history_instructions`: discarded (anti-pattern).")
-        ext = ingested.extensions or {}
-        for key in ("depth_prompt", "risuai", "chub", "regex_scripts"):
-            if key in ext:
-                lines.append(f"- `extensions.{key}`: discarded.")
-        lines.append("")
-        report_path.write_text("\n".join(lines), encoding="utf-8")
-        result.created.append(f"report:{report_path.relative_to(self.store.data_root).as_posix()}")
 
     # ------------------------------------------------------------------ #
     # Search
@@ -1770,15 +900,6 @@ class CharactersService:
         scope: str = "all",
         campaign_id: CampaignId | None = None,
     ) -> list[Character]:
-        """Name / alias / tag substring search.
-
-        Scope:
-        * ``library`` — search across the entire library
-        * ``world`` — restrict to ``world_id``
-        * ``campaign`` — search composition + emergents for ``campaign_id``
-        * ``all`` — library if no ``world_id``, else world; falls back to
-          composition for ``campaign_id``
-        """
         q = (query or "").strip().lower()
         if not q:
             return []
@@ -1797,7 +918,7 @@ class CharactersService:
 
         results: list[Character] = []
         for r in rows:
-            character = _character_from_entity(r) if isinstance(r, LibraryEntity) else r
+            character = character_from_entity(r) if isinstance(r, LibraryEntity) else r
             if _matches_query(character, q):
                 results.append(character)
         return results
@@ -1852,17 +973,6 @@ class CharactersService:
         turn_id: str | None = None,
         record_in_delta_log: bool = True,
     ) -> None:
-        """Persist ``state`` to ``character_state``.
-
-        Per spec characters-remaining §8, writes route through
-        ``state_store.apply_delta`` so undo_turn can reverse them. The State
-        Store's apply_delta already writes the row via ``upsert_row`` for
-        campaign-sqlite targets, so there's no separate direct-write step.
-
-        Callers that should not be reversible by undo (currently only
-        ``pin_tier`` — UI choices must survive replay) pass
-        ``record_in_delta_log=False`` and we fall back to a direct upsert.
-        """
         branch = state.branch_id or _branch_for(campaign_id, None)
         after = {
             "character_ref": ref,
@@ -1902,7 +1012,6 @@ class CharactersService:
             )
             return
 
-        # record_in_delta_log=False: direct upsert, no delta row (pin_tier).
         await self.store.db.execute(
             """
             INSERT INTO character_state (
@@ -1949,185 +1058,67 @@ class CharactersService:
             ),
         )
 
-    async def _get_tier_pin(self, ref: CharacterRef, campaign_id: CampaignId) -> ContextTier | None:
-        state = await self._load_state(_asset_id_for_ref(ref), ref, campaign_id)
-        return state.tier_pin
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-
-_LORE_SLUG_RE = re.compile(r"[^a-z0-9]+")
-
-
-def _slug_for_lore_entry(entry: IngestedLoreEntry, char_slug: str) -> str:
-    """Derive a stable lore filename slug for an imported character_book entry.
-
-    Prefers the entry's ``name``, then its first keyword, falling back to
-    ``entry-<source_index>`` so every entry yields *some* slug even when
-    the card author left ``name``/``keys`` blank.
-    """
-    candidates: list[str] = []
-    if entry.name:
-        candidates.append(entry.name)
-    candidates.extend(entry.keys[:1])
-    for candidate in candidates:
-        slug = _LORE_SLUG_RE.sub("-", candidate.strip().lower()).strip("-")
-        if slug:
-            return slug
-    return f"entry-{entry.source_index:02d}"
+# Re-export for backward compatibility
+_character_from_entity = character_from_entity
+_character_from_frontmatter = character_from_frontmatter
+_frontmatter_from_payload = frontmatter_from_payload
 
 
-def _character_from_entity(ent: LibraryEntity) -> Character:
-    return _character_from_frontmatter(ent.frontmatter, ent.body, world_id=ent.world_id)
+class _CharacterRefView:
+    def __init__(self, is_emergent: bool, world_id: str | None, asset_id: str) -> None:
+        self.is_emergent = is_emergent
+        self.world_id = world_id
+        self.asset_id = asset_id
 
 
-def _character_from_frontmatter(frontmatter: dict, body: str, *, world_id: str | None) -> Character:
-    fm: dict[str, Any] = dict(frontmatter or {})
-    try:
-        role = CharacterRole(fm.get("role") or "major_npc")
-    except ValueError:
-        role = CharacterRole.MAJOR_NPC
-    voice_data = fm.get("voice") or {}
-    voice = VoiceAnchor(
-        summary=str(voice_data.get("summary") or ""),
-        voice_register=str(voice_data.get("register") or voice_data.get("voice_register") or ""),
-        samples=[str(s) for s in (voice_data.get("samples") or [])],
-        speech_patterns=[str(s) for s in (voice_data.get("speech_patterns") or [])],
-        address_terms=dict(voice_data.get("address_terms") or {}),
-        dos=[str(s) for s in (voice_data.get("dos") or [])],
-        donts=[str(s) for s in (voice_data.get("donts") or [])],
-    )
-    image_data = fm.get("image")
-    image = (
-        ImagePromptTemplate(
-            base_prompt=str(image_data.get("base_prompt") or ""),
-            negative_prompt=str(image_data.get("negative_prompt") or ""),
-            canonical_seed=image_data.get("canonical_seed"),
-            extra={
-                k: v
-                for k, v in image_data.items()
-                if k not in {"base_prompt", "negative_prompt", "canonical_seed"}
-            },
-        )
-        if isinstance(image_data, dict)
-        else None
-    )
-    images = [_image_from_dict(img) for img in (fm.get("images") or []) if isinstance(img, dict)]
-    structural = [
-        StructuralRelationship(
-            to_ref=str(r.get("to_ref") or ""),
-            kind=str(r.get("kind") or ""),
-            note=str(r.get("note") or ""),
-        )
-        for r in (fm.get("structural_relationships") or [])
-        if isinstance(r, dict)
-    ]
-    household_raw = fm.get("household_id")
-    household_id = str(household_raw) if household_raw else None
-    return Character(
-        id=str(fm.get("id") or ""),
-        name=str(fm.get("name") or fm.get("id") or ""),
-        role=role,
-        world_id=world_id,
-        aliases=[str(a) for a in (fm.get("aliases") or [])],
-        age=fm.get("age"),
-        tags=[str(t) for t in (fm.get("tags") or [])],
-        voice=voice,
-        image=image,
-        images=images,
-        structural_relationships=structural,
-        description=str(fm.get("description") or ""),
-        body=body or "",
-        household_id=household_id,
-    )
+def _parse_character_ref(ref: str) -> _CharacterRefView:
+    if not ref:
+        raise CharactersError("empty character_ref")
+    if ref.startswith("campaign:emergent/"):
+        _, _, rest = ref.partition("campaign:emergent/")
+        parts = rest.strip("/").split("/")
+        if parts[0] == "character" and len(parts) == 2:
+            return _CharacterRefView(True, None, parts[1])
+        if len(parts) == 1:
+            return _CharacterRefView(True, None, parts[0])
+    if ref.startswith("emergent/"):
+        parts = ref.split("/")
+        return _CharacterRefView(True, None, parts[-1])
+    if ref.startswith("library:"):
+        _, _, path = ref.partition("library:")
+        parts = path.strip("/").split("/")
+        if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"characters", "character"}:
+            return _CharacterRefView(False, parts[1], parts[3])
+    parts = ref.strip("/").split("/")
+    if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"characters", "character"}:
+        return _CharacterRefView(False, parts[1], parts[3])
+    raise CharactersError(f"unrecognized character_ref {ref!r}")
 
 
-def _frontmatter_from_payload(payload: CharacterData) -> dict:
-    voice_dict = payload.voice.model_dump()
-    # Map our internal field name back to the on-disk convention.
-    voice_dict["register"] = voice_dict.pop("voice_register", "") or voice_dict.pop("register", "")
-    fm: dict[str, Any] = {
-        "id": payload.id,
-        "name": payload.name,
-        "role": payload.role.value,
-        "aliases": list(payload.aliases),
-        "tags": list(payload.tags),
-        "description": payload.description,
-        "voice": voice_dict,
-    }
-    if payload.age:
-        fm["age"] = payload.age
-    if payload.image is not None:
-        img = payload.image
-        fm["image"] = {
-            "base_prompt": img.base_prompt,
-            "negative_prompt": img.negative_prompt,
-            "canonical_seed": img.canonical_seed,
-            **(img.extra or {}),
-        }
-    if payload.images:
-        fm["images"] = [_image_to_dict(img) for img in payload.images]
-    if payload.structural_relationships:
-        fm["structural_relationships"] = [
-            {"to_ref": r.to_ref, "kind": r.kind, "note": r.note}
-            for r in payload.structural_relationships
-        ]
-    if payload.household_id:
-        fm["household_id"] = payload.household_id
-    return fm
+def _asset_id_for_ref(ref: CharacterRef) -> str:
+    return _parse_character_ref(ref).asset_id
 
 
-def _image_to_dict(image: CharacterImage) -> dict:
-    out: dict[str, Any] = {
-        "path": image.path,
-        "kind": image.kind.value,
-        "description": image.description,
-        "tags": list(image.tags),
-        "source": image.source,
-    }
-    if image.seed is not None:
-        out["seed"] = image.seed
-    if image.prompt_used:
-        out["prompt_used"] = image.prompt_used
-    if image.created_at is not None:
-        out["created_at"] = image.created_at.isoformat()
-    if image.extra:
-        out["extra"] = dict(image.extra)
-    return out
+def _library_id_from_ref(ref: CharacterRef) -> str:
+    view = _parse_character_ref(ref)
+    if view.is_emergent or view.world_id is None:
+        raise CharactersError(f"cannot derive library_id from emergent ref {ref!r}")
+    return make_library_id(view.world_id, "character", view.asset_id)
 
 
-def _image_from_dict(raw: dict) -> CharacterImage:
-    try:
-        kind = CharacterImageKind(str(raw.get("kind") or "portrait"))
-    except ValueError:
-        kind = CharacterImageKind.PORTRAIT
-    created_at_raw = raw.get("created_at")
-    created_at: datetime | None = None
-    if isinstance(created_at_raw, str) and created_at_raw:
-        try:
-            created_at = datetime.fromisoformat(created_at_raw)
-        except ValueError:
-            created_at = None
-    elif isinstance(created_at_raw, datetime):
-        created_at = created_at_raw
-    return CharacterImage(
-        path=str(raw.get("path") or ""),
-        description=str(raw.get("description") or ""),
-        kind=kind,
-        tags=[str(t) for t in (raw.get("tags") or []) if t],
-        seed=raw.get("seed"),
-        prompt_used=str(raw.get("prompt_used") or ""),
-        source=str(raw.get("source") or ""),
-        created_at=created_at,
-        extra=dict(raw.get("extra") or {}),
-    )
+def _ref_from_resolved(resolved: ResolvedCharacter) -> CharacterRef:
+    char = resolved.character
+    if char.world_id:
+        return f"library:worlds/{char.world_id}/characters/{char.id}"
+    return f"campaign:emergent/character/{char.id}"
 
 
 def _entity_from_row_dict(row: Any) -> LibraryEntity:
-    """Project a ``library_index`` row (from db.fetchall) into a LibraryEntity."""
     if isinstance(row, LibraryEntity):
         return row
     raw = dict(row)
@@ -2215,12 +1206,6 @@ def _relationship_state_from_json(value: Any) -> RelationshipState:
 
 
 def _relationship_history_from_json(value: Any) -> list[dict]:
-    """Decode the ``history`` JSON column into a list of event dicts.
-
-    Returns an empty list on missing / malformed payloads; non-list JSON
-    is also rejected to keep callers from surfacing scalar / object
-    garbage as a "timeline".
-    """
     if not value:
         return []
     try:
@@ -2237,9 +1222,6 @@ def _relationship_row_to_dict(row: Any) -> dict:
     except (TypeError, json.JSONDecodeError):
         types = []
     state = _relationship_state_from_json(row["state"]).model_dump()
-    # Older rows (pre-migration 015) may not have a ``history`` column at
-    # all if a caller hand-built the row dict; guard the lookup so reads
-    # stay backward-compatible.
     try:
         history_raw = row["history"]
     except (IndexError, KeyError):
@@ -2257,48 +1239,7 @@ def _relationship_row_to_dict(row: Any) -> dict:
     }
 
 
-class _CharacterRefView:
-    """Lightweight parsed view of a character reference."""
-
-    def __init__(self, is_emergent: bool, world_id: str | None, asset_id: str) -> None:
-        self.is_emergent = is_emergent
-        self.world_id = world_id
-        self.asset_id = asset_id
-
-
-def _parse_character_ref(ref: str) -> _CharacterRefView:
-    """Accept library:/campaign: prefixed refs as well as bare emergent paths."""
-    if not ref:
-        raise CharactersError("empty character_ref")
-    if ref.startswith("campaign:emergent/"):
-        _, _, rest = ref.partition("campaign:emergent/")
-        parts = rest.strip("/").split("/")
-        if parts[0] == "character" and len(parts) == 2:
-            return _CharacterRefView(True, None, parts[1])
-        if len(parts) == 1:
-            return _CharacterRefView(True, None, parts[0])
-    if ref.startswith("emergent/"):
-        parts = ref.split("/")
-        # emergent/<kind>/<asset> or emergent/<asset>
-        return _CharacterRefView(True, None, parts[-1])
-    if ref.startswith("library:"):
-        _, _, path = ref.partition("library:")
-        parts = path.strip("/").split("/")
-        if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"characters", "character"}:
-            return _CharacterRefView(False, parts[1], parts[3])
-    # Bare "worlds/<s>/characters/<id>"
-    parts = ref.strip("/").split("/")
-    if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"characters", "character"}:
-        return _CharacterRefView(False, parts[1], parts[3])
-    raise CharactersError(f"unrecognized character_ref {ref!r}")
-
-
-def _asset_id_for_ref(ref: CharacterRef) -> str:
-    return _parse_character_ref(ref).asset_id
-
-
 def _parse_iso_dt(value: Any) -> datetime | None:
-    """Best-effort ISO-8601 -> datetime, tolerating None / bad strings."""
     if not value:
         return None
     if isinstance(value, datetime):
@@ -2307,20 +1248,6 @@ def _parse_iso_dt(value: Any) -> datetime | None:
         return datetime.fromisoformat(str(value))
     except ValueError:
         return None
-
-
-def _library_id_from_ref(ref: CharacterRef) -> str:
-    view = _parse_character_ref(ref)
-    if view.is_emergent or view.world_id is None:
-        raise CharactersError(f"cannot derive library_id from emergent ref {ref!r}")
-    return make_library_id(view.world_id, "character", view.asset_id)
-
-
-def _ref_from_resolved(resolved: ResolvedCharacter) -> CharacterRef:
-    char = resolved.character
-    if char.world_id:
-        return f"library:worlds/{char.world_id}/characters/{char.id}"
-    return f"campaign:emergent/character/{char.id}"
 
 
 _TIER_RANK: dict[ContextTier | None, int] = {
@@ -2337,13 +1264,6 @@ def _tier_rank(tier: ContextTier | None) -> int:
 
 
 def _turns_since(last_seen: str | None, recent_turn_ids: list[str]) -> int | None:
-    """How many recent turns post-date `last_seen`.
-
-    Returns `None` when we cannot answer (no last_seen recorded, or the
-    recent-turn window is empty). When `last_seen` is older than every id
-    in the window we return `len(recent_turn_ids)` — i.e. "at least the
-    whole window."
-    """
     if not recent_turn_ids:
         return None
     if last_seen is None:
@@ -2351,50 +1271,17 @@ def _turns_since(last_seen: str | None, recent_turn_ids: list[str]) -> int | Non
     try:
         idx = recent_turn_ids.index(last_seen)
     except ValueError:
-        # last_seen falls outside the window — treat as fully aged-out.
         return len(recent_turn_ids)
     return len(recent_turn_ids) - 1 - idx
 
 
-def _is_sparse_payload(payload: CharacterData) -> bool:
-    """Spec 2026-05-17 §10: "sparse" = no description AND no tags.
-
-    The voice anchor's contents are intentionally ignored — an emergent
-    NPC introduced mid-scene almost always lacks a fleshed-out voice
-    block, so requiring it would never trigger.
-    """
-    return not (payload.description or "").strip() and not payload.tags
-
-
-def _capsule_draft_to_patch(draft: CapsuleDraft) -> dict[str, object]:
-    """Translate a :class:`CapsuleDraft` into an ``update_emergent`` patch.
-
-    Empty fields are skipped so a partial draft (e.g. summary only) does
-    not blow away any defaults the caller provided.
-    """
-    patch: dict[str, object] = {}
-    summary = (draft.summary_line or "").strip()
-    if summary:
-        patch["description"] = summary
-    if draft.tags:
-        patch["tags"] = [t for t in draft.tags if t]
-    return patch
-
-
 def _mentions_character(text: str, character: Character) -> bool:
-    """Whole-word match against the character's name or any alias.
-
-    Matching is case-insensitive (spec characters-remaining §1 doesn't pin
-    case-sensitivity here; the related cross-world lookup flag in §7 is what
-    governs id matching, not mention scanning).
-    """
     needles = [character.name, *character.aliases]
     haystack = text.lower()
     for needle in needles:
         n = needle.strip().lower()
         if not n:
             continue
-        # Word-boundary check — substring would let "Tom" match "Tomato".
         i = 0
         while True:
             i = haystack.find(n, i)
