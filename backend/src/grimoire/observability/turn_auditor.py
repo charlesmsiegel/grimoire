@@ -15,6 +15,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus, Subscription
 from grimoire.observability.audit import AuditStore
 from grimoire.observability.config import AuditConfig
@@ -45,13 +46,13 @@ class TurnAuditor:
         if self._subs:
             return
         self._subs = [
-            self._bus.subscribe("turn_started", self._on_turn_started),
-            self._bus.subscribe("context_built", self._on_context_built),
-            self._bus.subscribe("model_response_received", self._on_model_response),
-            self._bus.subscribe("llm_response_received", self._on_llm_response),
-            self._bus.subscribe("deltas_extracted", self._on_deltas_extracted),
-            self._bus.subscribe("turn_audit_fragment", self._on_fragment),
-            self._bus.subscribe("turn_complete", self._on_turn_complete),
+            self._bus.subscribe(events.TURN_STARTED, self._on_turn_started),
+            self._bus.subscribe(events.CONTEXT_BUILT, self._on_context_built),
+            self._bus.subscribe(events.MODEL_RESPONSE_RECEIVED, self._on_model_response),
+            self._bus.subscribe(events.LLM_RESPONSE_RECEIVED, self._on_llm_response),
+            self._bus.subscribe(events.DELTAS_EXTRACTED, self._on_deltas_extracted),
+            self._bus.subscribe(events.TURN_AUDIT_FRAGMENT, self._on_fragment),
+            self._bus.subscribe(events.TURN_COMPLETE, self._on_turn_complete),
         ]
 
     def stop(self) -> None:

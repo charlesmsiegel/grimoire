@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus
 from grimoire.files.yaml_io import dump_yaml, load_yaml
 from grimoire.llm_gateway.cache import EmbeddingCache
@@ -157,7 +158,7 @@ class LLMGatewayService:
 
         tier = tier_for_task(task)
         await self._emit(
-            "tier_resolved",
+            events.TIER_RESOLVED,
             {
                 "task": task,
                 "tier": tier.value if tier is not None else None,
@@ -630,7 +631,7 @@ class LLMGatewayService:
         timeout_seconds = resolved_timeout.total_seconds
 
         await self._emit(
-            "llm_request_started",
+            events.LLM_REQUEST_STARTED,
             {
                 "task": task,
                 "provider": route.provider_id,
@@ -689,7 +690,7 @@ class LLMGatewayService:
                 timeout_override=self._timeout_dict(timeout),
             )
         await self._emit(
-            "llm_response_received",
+            events.LLM_RESPONSE_RECEIVED,
             {
                 "task": task,
                 "provider": route.provider_id,
@@ -732,7 +733,7 @@ class LLMGatewayService:
         timeout: TimeoutPolicy | None = None,
     ) -> None:
         await self._emit(
-            "llm_request_failed",
+            events.LLM_REQUEST_FAILED,
             {
                 "task": task,
                 "provider": route.provider_id,
@@ -1004,7 +1005,7 @@ class LLMGatewayService:
         started = time.monotonic()
 
         await self._emit(
-            "llm_request_started",
+            events.LLM_REQUEST_STARTED,
             {
                 "task": task,
                 "provider": route.provider_id,
@@ -1074,7 +1075,7 @@ class LLMGatewayService:
                 timeout_override=self._timeout_dict(timeout),
             )
         await self._emit(
-            "llm_response_received",
+            events.LLM_RESPONSE_RECEIVED,
             {
                 "task": task,
                 "provider": route.provider_id,
@@ -1143,7 +1144,7 @@ class LLMGatewayService:
             embed_retriable = self._retriable_for(retry)
 
             await self._emit(
-                "embedding_request_started",
+                events.EMBEDDING_REQUEST_STARTED,
                 {
                     "task": task,
                     "provider": route.provider_id,
@@ -1209,7 +1210,7 @@ class LLMGatewayService:
                         timeout_override=self._timeout_dict(timeout),
                     )
                 await self._emit(
-                    "llm_request_failed",
+                    events.LLM_REQUEST_FAILED,
                     {
                         "task": task,
                         "provider": route.provider_id,
@@ -1243,7 +1244,7 @@ class LLMGatewayService:
                         timeout_override=self._timeout_dict(timeout),
                     )
                 await self._emit(
-                    "llm_request_failed",
+                    events.LLM_REQUEST_FAILED,
                     {
                         "task": task,
                         "provider": route.provider_id,
@@ -1287,7 +1288,7 @@ class LLMGatewayService:
                     timeout_override=self._timeout_dict(timeout),
                 )
             await self._emit(
-                "embedding_response_received",
+                events.EMBEDDING_RESPONSE_RECEIVED,
                 {
                     "task": task,
                     "provider": route.provider_id,
@@ -1449,7 +1450,7 @@ class LLMGatewayService:
 
             # Emit the event.
             await self._emit(
-                "provider_health_changed",
+                events.PROVIDER_HEALTH_CHANGED,
                 {
                     "target_id": target_id,
                     "kind": kind_map.get(target_id, ""),

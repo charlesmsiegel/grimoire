@@ -9,10 +9,15 @@ prevents typos and makes event discovery possible via IDE search.
 TURN_STARTED = "turn_started"
 TURN_COMPLETE = "turn_complete"
 TURN_UNDONE = "turn_undone"
+TURN_TIMED_OUT = "turn_timed_out"
+TURN_CANCELLED = "turn_cancelled"
+TURN_FAILED = "turn_failed"
 CONTEXT_BUILT = "context_built"
 MODEL_RESPONSE_RECEIVED = "model_response_received"
 DELTAS_EXTRACTED = "deltas_extracted"
 DELTAS_APPLIED = "deltas_applied"
+INTEGRATED_DELTAS_FALLBACK = "integrated_deltas_fallback"
+PRE_ROLL_PENDING = "pre_roll_pending"
 TURN_AUDIT_FRAGMENT = "turn_audit_fragment"
 
 # Scene lifecycle

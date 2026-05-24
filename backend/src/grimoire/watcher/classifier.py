@@ -11,23 +11,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from grimoire import events
 from grimoire.scenes.storage import _from_safe_segment
 from grimoire.state_store.paths import DIR_TO_KIND
 
 # Map a watched-file ``kind`` to the bus event type the watcher emits.
 EVENT_TYPE_BY_KIND: dict[str, str] = {
-    "library_entity": "library_file_changed",
-    "library_world": "library_file_changed",
-    "library_style_guide": "library_file_changed",
-    "library_image_preset": "library_file_changed",
-    "scene_body": "scene_file_changed",
-    "scene_sidecar": "scene_file_changed",
-    "sheet": "sheet_file_changed",
-    "override": "campaign_file_changed",
-    "emergent": "campaign_file_changed",
-    "image_metadata": "campaign_file_changed",
-    "image_asset": "campaign_file_changed",
-    "campaign_config": "campaign_file_changed",
+    "library_entity": events.LIBRARY_FILE_CHANGED,
+    "library_world": events.LIBRARY_FILE_CHANGED,
+    "library_style_guide": events.LIBRARY_FILE_CHANGED,
+    "library_image_preset": events.LIBRARY_FILE_CHANGED,
+    "scene_body": events.SCENE_FILE_CHANGED,
+    "scene_sidecar": events.SCENE_FILE_CHANGED,
+    "sheet": events.SHEET_FILE_CHANGED,
+    "override": events.CAMPAIGN_FILE_CHANGED,
+    "emergent": events.CAMPAIGN_FILE_CHANGED,
+    "image_metadata": events.CAMPAIGN_FILE_CHANGED,
+    "image_asset": events.CAMPAIGN_FILE_CHANGED,
+    "campaign_config": events.CAMPAIGN_FILE_CHANGED,
 }
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from grimoire import events
 from grimoire.transient_state.decay import DecaySpec
 from grimoire.transient_state.service import TransientStateService
 from grimoire.types.transient import EntityKind
@@ -141,6 +142,6 @@ def attach_triggers(
         service=service,
         time_skip_threshold_seconds=time_skip_threshold_seconds,
     )
-    event_bus.subscribe("scene_ended", triggers.on_scene_ended)
-    event_bus.subscribe("time_advanced", triggers.on_time_advanced)
+    event_bus.subscribe(events.SCENE_ENDED, triggers.on_scene_ended)
+    event_bus.subscribe(events.TIME_ADVANCED, triggers.on_time_advanced)
     return triggers

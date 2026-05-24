@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus
 from grimoire.files import load_yaml, write_yaml
 from grimoire.imagegen.backend import cache_key_for_request, make_thumbnail
@@ -484,7 +485,7 @@ class ImageGenService:
                 backend_id = fallback
             else:
                 await self._emit(
-                    "imagegen_warning",
+                    events.IMAGEGEN_WARNING,
                     {
                         "campaign_id": campaign_id,
                         "reason": f"active backend {backend_id!r} unhealthy "
@@ -533,7 +534,7 @@ class ImageGenService:
             )
         await handle.queue.put(_QueueEntry(job_id=job_id))
         await self._emit(
-            "imagegen_job_queued",
+            events.IMAGEGEN_JOB_QUEUED,
             {"job_id": job_id, "campaign_id": campaign_id, "backend": backend_id},
         )
         return job_id
@@ -726,7 +727,7 @@ class ImageGenService:
         await self._update_persistent_job(
             job_id, status=JobStatus.CANCELLED.value, finished_at=_now()
         )
-        await self._emit("imagegen_job_failed", {"job_id": job_id, "reason": "cancelled"})
+        await self._emit(events.IMAGEGEN_JOB_FAILED, {"job_id": job_id, "reason": "cancelled"})
 
     async def prioritize_job(self, job_id: str, priority: int) -> None:
         # Mutate the existing job in place — the worker holds a local
@@ -918,7 +919,7 @@ class ImageGenService:
         if prev != status.level:
             self._last_health[backend_id] = status.level
             await self._emit(
-                "imagegen_backend_health_changed",
+                events.IMAGEGEN_BACKEND_HEALTH_CHANGED,
                 {"backend_id": backend_id, "level": status.level.value, "message": status.message},
             )
         return status
@@ -1144,7 +1145,7 @@ class ImageGenService:
                 job_id, status=JobStatus.RUNNING.value, started_at=job.started_at
             )
             await self._emit(
-                "imagegen_job_started",
+                events.IMAGEGEN_JOB_STARTED,
                 {"job_id": job_id, "campaign_id": job.campaign_id, "backend": backend_id},
             )
             try:
@@ -1175,7 +1176,7 @@ class ImageGenService:
                         error=str(exc),
                     )
                     await self._emit(
-                        "imagegen_job_failed",
+                        events.IMAGEGEN_JOB_FAILED,
                         {
                             "job_id": job_id,
                             "campaign_id": job.campaign_id,
@@ -1210,7 +1211,7 @@ class ImageGenService:
                     return cached
                 self._image_ids_by_job[job.id] = existing_image_id
                 await self._emit(
-                    "image_ready",
+                    events.IMAGE_READY,
                     {
                         "image_id": existing_image_id,
                         "campaign_id": job.campaign_id,
@@ -1221,7 +1222,7 @@ class ImageGenService:
 
         async def _on_progress(info: dict[str, Any]) -> None:
             await self._emit(
-                "imagegen_progress",
+                events.IMAGEGEN_PROGRESS,
                 {
                     "job_id": job.id,
                     "campaign_id": job.campaign_id,
@@ -1255,7 +1256,7 @@ class ImageGenService:
         )
         self._image_ids_by_job[job.id] = image_id
         await self._emit(
-            "image_ready",
+            events.IMAGE_READY,
             {
                 "image_id": image_id,
                 "campaign_id": job.campaign_id,

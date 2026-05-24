@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
+from grimoire import events
 from grimoire.context.cache import ContextBuilderCache, make_cache_key
 from grimoire.event_bus import Event, EventBus
 from grimoire.extractor.config import ExtractorConfig
@@ -280,7 +281,7 @@ class OrchestratorService:
             logger.warning("mark_pc_played failed", exc_info=True)
         await self._bus.emit(
             Event(
-                type="pc_post_appended",
+                type=events.PC_POST_APPENDED,
                 payload={
                     "campaign_id": campaign_id,
                     "scene_id": scene.id,
@@ -321,7 +322,7 @@ class OrchestratorService:
         # on the shared event bus.
         await self._bus.emit(
             Event(
-                type="advance_requested",
+                type=events.ADVANCE_REQUESTED,
                 payload={
                     "campaign_id": campaign_id,
                     "scene_id": scene_id,
@@ -553,7 +554,7 @@ class OrchestratorService:
 
             await self._bus.emit(
                 Event(
-                    type="alternate_added",
+                    type=events.ALTERNATE_ADDED,
                     payload={
                         "campaign_id": campaign_id,
                         "post_id": post_id,
@@ -689,7 +690,7 @@ class OrchestratorService:
         )
         await self._bus.emit(
             Event(
-                type="primary_switched",
+                type=events.PRIMARY_SWITCHED,
                 payload={
                     "campaign_id": campaign_id,
                     "post_id": post_id,
@@ -719,7 +720,7 @@ class OrchestratorService:
         await self._scenes.update_alternate(post_id, alternate_id, pinned=pinned)
         await self._bus.emit(
             Event(
-                type="alternate_pinned",
+                type=events.ALTERNATE_PINNED,
                 payload={
                     "campaign_id": scene.campaign_id,
                     "post_id": post_id,
@@ -760,7 +761,7 @@ class OrchestratorService:
         await self._scenes.remove_alternate(post_id, alternate_id)
         await self._bus.emit(
             Event(
-                type="alternate_deleted",
+                type=events.ALTERNATE_DELETED,
                 payload={
                     "campaign_id": scene.campaign_id,
                     "post_id": post_id,
@@ -1147,7 +1148,7 @@ class OrchestratorService:
             reversed_ids.extend(ids)
             await self._bus.emit(
                 Event(
-                    type="turn_undone",
+                    type=events.TURN_UNDONE,
                     payload={
                         "campaign_id": campaign_id,
                         "turn_id": turn_id,
@@ -1448,7 +1449,7 @@ class OrchestratorService:
 
         await self._bus.emit(
             Event(
-                type="campaign_fork_started",
+                type=events.CAMPAIGN_FORK_STARTED,
                 payload={
                     "source": campaign_id,
                     "new": new_campaign_id,
@@ -1512,7 +1513,7 @@ class OrchestratorService:
             # the REST layer maps to 409.
             await self._bus.emit(
                 Event(
-                    type="campaign_fork_failed",
+                    type=events.CAMPAIGN_FORK_FAILED,
                     payload={
                         "source": campaign_id,
                         "new": new_campaign_id,
@@ -1525,7 +1526,7 @@ class OrchestratorService:
             await self._wipe_failed_fork(new_campaign_id, new_dir)
             await self._bus.emit(
                 Event(
-                    type="campaign_fork_failed",
+                    type=events.CAMPAIGN_FORK_FAILED,
                     payload={
                         "source": campaign_id,
                         "new": new_campaign_id,
@@ -1537,7 +1538,7 @@ class OrchestratorService:
 
         await self._bus.emit(
             Event(
-                type="campaign_forked",
+                type=events.CAMPAIGN_FORKED,
                 payload={
                     "source": campaign_id,
                     "new": new_campaign_id,
@@ -1645,7 +1646,7 @@ class OrchestratorService:
         )
         await self._bus.emit(
             Event(
-                type="campaign_fork_queued",
+                type=events.CAMPAIGN_FORK_QUEUED,
                 payload={
                     "source": campaign_id,
                     "new": new_campaign_id,
@@ -1919,7 +1920,7 @@ class OrchestratorService:
             except TimeoutError:
                 active.cancel_event.set()
                 await self._emit_turn_event(
-                    "turn_timed_out",
+                    events.TURN_TIMED_OUT,
                     turn_id,
                     campaign_id,
                     active.scene_id,
@@ -1930,7 +1931,7 @@ class OrchestratorService:
                 ) from None
             except TurnCancelledError:
                 await self._emit_turn_event(
-                    "turn_cancelled",
+                    events.TURN_CANCELLED,
                     turn_id,
                     campaign_id,
                     active.scene_id,
@@ -1938,7 +1939,7 @@ class OrchestratorService:
                 await self._rollback_player_post(active)
             except _StreamFailure as exc:
                 await self._emit_turn_event(
-                    "turn_failed",
+                    events.TURN_FAILED,
                     turn_id,
                     campaign_id,
                     active.scene_id,
@@ -1962,7 +1963,7 @@ class OrchestratorService:
                 ) from exc.cause
             except Exception as exc:
                 await self._emit_turn_event(
-                    "turn_failed",
+                    events.TURN_FAILED,
                     turn_id,
                     campaign_id,
                     active.scene_id,
@@ -2004,7 +2005,7 @@ class OrchestratorService:
         # scene break path may swap scene_id but the branch is stable.
         initial_scene = await self._scenes.get_scene(scene_id)
         await self._emit_turn_event(
-            "turn_started",
+            events.TURN_STARTED,
             turn_id,
             campaign_id,
             scene_id,
@@ -2053,7 +2054,7 @@ class OrchestratorService:
             )
             active.stage = "pre_roll_pending"
             await self._emit_turn_event(
-                "pre_roll_pending",
+                events.PRE_ROLL_PENDING,
                 turn_id,
                 campaign_id,
                 scene_id,
@@ -2123,7 +2124,7 @@ class OrchestratorService:
         # ``CompositionSnapshot``. They'll be filled by ContextBuilder
         # enrichment in a follow-up pass.
         await self._emit_turn_event(
-            "context_built",
+            events.CONTEXT_BUILT,
             turn_id,
             campaign_id,
             scene_id,
@@ -2148,7 +2149,7 @@ class OrchestratorService:
         # the audit buffer keyed by turn_id. Here we only carry the
         # response text and length.
         await self._emit_turn_event(
-            "model_response_received",
+            events.MODEL_RESPONSE_RECEIVED,
             turn_id,
             campaign_id,
             scene_id,
@@ -2168,7 +2169,7 @@ class OrchestratorService:
         )
         extract_duration_ms = int((self._clock() - extract_started).total_seconds() * 1000)
         await self._emit_turn_event(
-            "deltas_extracted",
+            events.DELTAS_EXTRACTED,
             turn_id,
             campaign_id,
             scene_id,
@@ -2251,7 +2252,7 @@ class OrchestratorService:
         await self._emit_fragment(turn_id, campaign_id, scene_appended=True)
 
         await self._emit_turn_event(
-            "turn_complete",
+            events.TURN_COMPLETE,
             turn_id,
             campaign_id,
             scene_id,
@@ -2346,7 +2347,7 @@ class OrchestratorService:
         if decision.confidence < sb_cfg.auto_threshold:
             await self._bus.emit(
                 Event(
-                    type="scene_break_suggested",
+                    type=events.SCENE_BREAK_SUGGESTED,
                     payload={
                         "campaign_id": campaign_id,
                         "scene_id": scene_id,
@@ -2651,7 +2652,7 @@ class OrchestratorService:
             code = getattr(flag, "code", None)
             if code in _FALLBACK_CODES:
                 await self._emit_turn_event(
-                    "integrated_deltas_fallback",
+                    events.INTEGRATED_DELTAS_FALLBACK,
                     turn_id,
                     campaign_id,
                     scene_id,
@@ -2802,7 +2803,7 @@ class OrchestratorService:
         if applied_ids:
             await self._bus.emit(
                 Event(
-                    type="deltas_applied",
+                    type=events.DELTAS_APPLIED,
                     payload={
                         "turn_id": turn_id,
                         "campaign_id": campaign_id,
@@ -2823,7 +2824,7 @@ class OrchestratorService:
                     queued_ids.append(str(review_id))
                 await self._bus.emit(
                     Event(
-                        type="review_item_added",
+                        type=events.REVIEW_ITEM_ADDED,
                         payload={
                             "campaign_id": campaign_id,
                             "review_id": review_id,
@@ -2890,7 +2891,7 @@ class OrchestratorService:
                     )
                     await self._bus.emit(
                         Event(
-                            type="review_item_added",
+                            type=events.REVIEW_ITEM_ADDED,
                             payload={
                                 "campaign_id": campaign_id,
                                 "review_id": review_id,
@@ -3095,7 +3096,7 @@ class OrchestratorService:
     ) -> None:
         await self._bus.emit(
             Event(
-                type="turn_audit_fragment",
+                type=events.TURN_AUDIT_FRAGMENT,
                 payload={"turn_id": turn_id, "campaign_id": campaign_id, **fields},
             )
         )

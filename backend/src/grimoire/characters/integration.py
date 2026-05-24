@@ -16,6 +16,7 @@ import logging
 import random
 from typing import Any
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus, Subscription
 from grimoire.orchestrator.config import BackgroundWorkConfig
 
@@ -45,7 +46,7 @@ class CharactersIntegration:
     def start(self) -> None:
         if self._subs:
             return
-        self._subs = [self._bus.subscribe("turn_complete", self._on_turn_complete)]
+        self._subs = [self._bus.subscribe(events.TURN_COMPLETE, self._on_turn_complete)]
 
     def stop(self) -> None:
         for sub in self._subs:

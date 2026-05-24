@@ -640,11 +640,12 @@ class MechanicsService:
 
         if self._event_bus is not None:
             try:
-                from grimoire.event_bus import Event  # local import — avoid cycles
+                from grimoire import events  # local import — avoid cycles
+                from grimoire.event_bus import Event
 
                 await self._event_bus.emit(
                     Event(
-                        type="mechanics_switched",
+                        type=events.MECHANICS_SWITCHED,
                         payload={
                             "campaign_id": campaign_id,
                             "previous": previous,

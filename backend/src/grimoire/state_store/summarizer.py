@@ -20,6 +20,7 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
 
@@ -146,7 +147,7 @@ class BodySummarizer:
         if self._bus is not None and processed > 0:
             await self._bus.emit(
                 Event(
-                    type="library_summary_progress",
+                    type=events.LIBRARY_SUMMARY_PROGRESS,
                     payload={
                         "processed": processed,
                         "pending": self._queue.pending,
