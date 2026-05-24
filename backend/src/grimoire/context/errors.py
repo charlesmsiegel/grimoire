@@ -6,6 +6,8 @@ from __future__ import annotations
 class ContextBuilderError(Exception):
     """Base class for Context Builder errors."""
 
+    http_status = 500
+
 
 class LockInOverflowError(ContextBuilderError):
     """Raised when required lock-in tier content cannot fit the budget.
@@ -13,6 +15,8 @@ class LockInOverflowError(ContextBuilderError):
     Spec 02: ``If lock-in tier overflows the budget, that's a configuration
     error — the system surfaces it rather than silently dropping.``
     """
+
+    http_status = 400
 
     def __init__(self, used: int, budget: int) -> None:
         super().__init__(

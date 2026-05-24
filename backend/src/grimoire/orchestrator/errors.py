@@ -6,14 +6,20 @@ from __future__ import annotations
 class OrchestratorError(Exception):
     """Base class for orchestrator-specific failures."""
 
+    http_status = 409
+
 
 class UnknownCampaignError(OrchestratorError):
+    http_status = 404
+
     def __init__(self, campaign_id: str) -> None:
         super().__init__(f"campaign not found: {campaign_id!r}")
         self.campaign_id = campaign_id
 
 
 class UnknownPCError(OrchestratorError):
+    http_status = 404
+
     def __init__(self, campaign_id: str, pc_ref: str) -> None:
         super().__init__(f"pc {pc_ref!r} not registered for campaign {campaign_id!r}")
         self.campaign_id = campaign_id
@@ -53,6 +59,8 @@ class LatestPostOnlyError(OrchestratorError):
 class AlternateNotFoundError(OrchestratorError):
     """Raised when the requested alternate id is not on the given post."""
 
+    http_status = 404
+
     def __init__(self, post_id: str, alternate_id: str) -> None:
         super().__init__(f"alternate {alternate_id!r} not found on post {post_id!r}")
         self.post_id = post_id
@@ -82,6 +90,8 @@ class RetconInFlightError(OrchestratorError):
 class RetconBatchNotFoundError(OrchestratorError):
     """Raised when a batch_id doesn't match any open or recent retcon session."""
 
+    http_status = 404
+
     def __init__(self, batch_id: str) -> None:
         super().__init__(f"retcon replay batch {batch_id!r} not found")
         self.batch_id = batch_id
@@ -105,6 +115,8 @@ class CampaignIdExists(OrchestratorError):
 
 class AuxiliaryNotFoundError(OrchestratorError):
     """Raised when an accept/discard targets an unknown auxiliary result id."""
+
+    http_status = 404
 
     def __init__(self, result_id: str) -> None:
         super().__init__(f"auxiliary result not found: {result_id!r}")
