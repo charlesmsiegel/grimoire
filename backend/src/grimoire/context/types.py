@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -86,3 +87,16 @@ class ContextBuildRequest:
 
 class ContextProvider(Protocol):
     async def resolve(self, request: ContextBuildRequest) -> list[TierItem]: ...
+
+
+def make_source_id(kind: str, owner: str | None) -> str:
+    """Stable id for a ``ContextSource``.
+
+    Deterministic across builds with identical inputs so the inspector's
+    diff can pair up the same logical chunk between two previews. The hash
+    is short (12 hex chars) — enough to keep collisions negligible for the
+    ~hundreds of sources per turn we expect.
+    """
+    raw = f"{kind}:{owner or ''}"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+    return f"src_{digest}"

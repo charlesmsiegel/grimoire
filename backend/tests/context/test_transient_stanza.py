@@ -65,7 +65,7 @@ async def test_returns_none_when_no_transient_state():
         scenes=object(),
         continuity=object(),
     )
-    item = await builder._maybe_transient_stanza_item(
+    item = await builder._cast._maybe_transient_stanza_item(
         ref="char_florence", campaign_id="c1", active_pc_ref=None
     )
     assert item is None
@@ -73,7 +73,7 @@ async def test_returns_none_when_no_transient_state():
 
 async def test_returns_none_when_bundle_empty():
     builder = _build_builder(_StubTransientState({"char_florence": {}}))
-    item = await builder._maybe_transient_stanza_item(
+    item = await builder._cast._maybe_transient_stanza_item(
         ref="char_florence", campaign_id="c1", active_pc_ref=None
     )
     assert item is None
@@ -87,7 +87,7 @@ async def test_emits_tier_item_with_stanza():
     }
     stub = _StubTransientState({"char_florence": bundle})
     builder = _build_builder(stub)
-    item = await builder._maybe_transient_stanza_item(
+    item = await builder._cast._maybe_transient_stanza_item(
         ref="char_florence", campaign_id="c1", active_pc_ref=None
     )
     assert item is not None
@@ -105,7 +105,7 @@ async def test_uses_pc_owner_observer_for_active_pc():
     bundle = {"mood": _val("mood", "calm")}
     stub = _StubTransientState({"pc_anna": bundle})
     builder = _build_builder(stub)
-    await builder._maybe_transient_stanza_item(
+    await builder._cast._maybe_transient_stanza_item(
         ref="pc_anna", campaign_id="c1", active_pc_ref="pc_anna"
     )
     assert stub.calls
@@ -118,7 +118,7 @@ async def test_uses_other_pc_observer_for_npc():
     bundle = {"mood": _val("mood", "calm")}
     stub = _StubTransientState({"npc_x": bundle})
     builder = _build_builder(stub)
-    await builder._maybe_transient_stanza_item(
+    await builder._cast._maybe_transient_stanza_item(
         ref="npc_x", campaign_id="c1", active_pc_ref="pc_anna"
     )
     observer_strs = [c[1] for c in stub.calls]
@@ -131,7 +131,7 @@ async def test_failures_in_service_swallowed():
             raise RuntimeError("nope")
 
     builder = _build_builder(_Boom())
-    item = await builder._maybe_transient_stanza_item(
+    item = await builder._cast._maybe_transient_stanza_item(
         ref="char_x", campaign_id="c1", active_pc_ref=None
     )
     assert item is None
