@@ -2080,3 +2080,60 @@ async def test_check_drift_swallows_sink_exceptions(
     # Should NOT raise.
     report = await characters.check_drift(ref, "camp-1", recent_posts=posts)
     assert report.drift_score >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# Event-driven cache invalidation
+# ---------------------------------------------------------------------------
+
+
+async def test_event_bus_invalidates_character_cache(
+    library: LibraryService,
+    mechanics: MechanicsService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from grimoire.event_bus import Event, EventBus
+
+    bus = EventBus()
+    chars = CharactersService(library, mechanics, event_bus=bus)
+
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await chars.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    counts = _patch_render_counters(monkeypatch)
+    await chars.get_full_card(ref, "camp-1")
+    assert counts["full"] == 1
+
+    # Emit event — should invalidate the cache
+    await bus.emit(Event(type="library_entity_changed", payload={"kind": "character"}))
+    await chars.get_full_card(ref, "camp-1")
+    assert counts["full"] == 2
+
+
+async def test_event_bus_ignores_non_character_kinds(
+    library: LibraryService,
+    mechanics: MechanicsService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from grimoire.event_bus import Event, EventBus
+
+    bus = EventBus()
+    chars = CharactersService(library, mechanics, event_bus=bus)
+
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await chars.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    counts = _patch_render_counters(monkeypatch)
+    await chars.get_full_card(ref, "camp-1")
+    assert counts["full"] == 1
+
+    # Non-character entity change should NOT invalidate
+    await bus.emit(Event(type="library_entity_changed", payload={"kind": "location"}))
+    await chars.get_full_card(ref, "camp-1")
+    assert counts["full"] == 1

@@ -202,7 +202,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         template_registry.register_search_path(data_root / "templates", prepend=True)
 
         if container.state_store is None:
-            container.state_store = StateStore(db=db, data_root=data_root)
+            container.state_store = StateStore(
+                db=db, data_root=data_root, event_bus=container.event_bus
+            )
             await container.state_store.validate_schema()
         if container.transient_state is None:
             from grimoire.transient_state import TransientStateService
@@ -268,7 +270,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             except Exception:
                 log.exception("plugins periodic health loop start failed")
         if container.characters is None:
-            container.characters = CharactersService(container.library, container.mechanics)
+            container.characters = CharactersService(
+                container.library, container.mechanics, event_bus=container.event_bus
+            )
         if container.scenes is None:
             # Continuity registry is wired below; SceneManager picks it up
             # via the attribute set after that block so the pre-scene

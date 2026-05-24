@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
+from grimoire.event_bus import Event, EventBus
 from grimoire.library import LibraryService
 from grimoire.mechanics.service import MechanicsService
 from grimoire.state_store import StateStore
@@ -96,6 +97,7 @@ class CharactersService:
         mechanics: MechanicsService,
         *,
         config: CharactersConfig | None = None,
+        event_bus: EventBus | None = None,
         post_fetcher: PostFetcher | None = None,
         drift_checker: DriftChecker | None = None,
         drift_event_sink: DriftEventSink | None = None,
@@ -133,6 +135,13 @@ class CharactersService:
             store=self.store,
             sheet_migrator=sheet_migrator,
         )
+        if event_bus is not None:
+            event_bus.subscribe("library_entity_changed", self._on_entity_changed)
+
+    def _on_entity_changed(self, event: Event) -> None:
+        kind = event.payload.get("kind")
+        if kind == "character":
+            self._cache.view_invalidate()
 
     @property
     def _active_pc(self):

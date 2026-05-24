@@ -29,6 +29,7 @@ from grimoire.files import (
     write_yaml,
 )
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
+from grimoire.event_bus import Event, EventBus
 from grimoire.state_store.delta_log import (
     DeltaRecord,
     get_delta,
@@ -158,10 +159,12 @@ class StateStore:
         data_root: Path,
         *,
         metrics: MetricsRegistryProtocol = NULL_METRICS,
+        event_bus: EventBus | None = None,
     ) -> None:
         self.db = db
         self.data_root = Path(data_root)
         self._metrics: MetricsRegistryProtocol = metrics
+        self._bus: EventBus | None = event_bus
 
     def set_metrics(self, metrics: MetricsRegistryProtocol) -> None:
         self._metrics = metrics
@@ -275,6 +278,12 @@ class StateStore:
             _restore_file(target, before_bytes)
             raise
 
+        if self._bus is not None:
+            await self._bus.emit(Event(
+                type="library_entity_changed",
+                payload={"library_id": library_id, "kind": ref.kind},
+            ))
+
         return FileWriteResult(
             library_id=library_id,
             path=target,
@@ -331,6 +340,13 @@ class StateStore:
         except BaseException:
             _restore_file(target, before_bytes)
             raise
+
+        if self._bus is not None:
+            await self._bus.emit(Event(
+                type="library_entity_changed",
+                payload={"library_id": library_id, "kind": ref.kind},
+            ))
+
         return delta_id
 
     # ------------------------------------------------------------------

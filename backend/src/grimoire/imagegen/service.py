@@ -290,8 +290,16 @@ class ImageGenService:
         self._cancel_tokens: dict[str, asyncio.Event] = {}
         self._metrics: MetricsRegistryProtocol = metrics
 
+        if event_bus is not None:
+            event_bus.subscribe("library_entity_changed", self._on_entity_changed)
+
         for backend in self.registry.all():
             self._ensure_handle(backend.id)
+
+    def _on_entity_changed(self, event: Event) -> None:
+        kind = event.payload.get("kind")
+        if kind == "image_preset":
+            self._cache.clear()
 
     def set_gateway(self, gateway: LLMGateway) -> None:
         """Late-bind the gateway used for per-task imagegen routing."""
