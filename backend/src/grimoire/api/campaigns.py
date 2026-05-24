@@ -643,6 +643,18 @@ class TierSettingsPayload(BaseModel):
     embedding: str | None = None
 
 
+class IntegratedDeltasPayload(BaseModel):
+    """Toggle for integrated narrator+extraction mode.
+
+    When ``enabled`` is ``True``, the orchestrator combines the narrator
+    LLM call with delta extraction into a single response
+    (``ExtractionMode.TOGETHER``). When ``False`` or absent, extraction
+    runs as a separate LLM call (existing behavior).
+    """
+
+    enabled: bool = False
+
+
 class GenerationSettingsPayload(BaseModel):
     """Per-campaign LLM generation parameters.
 
@@ -885,6 +897,29 @@ async def set_campaign_summaries(
     }
     await _write_campaign_config(state_store, campaign_id, cfg)
     return cfg["summaries"]
+
+
+@router.get("/{campaign_id}/integrated-deltas")
+async def get_integrated_deltas(
+    campaign_id: str,
+    state_store: StateStoreDep,
+) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    return {"enabled": bool(cfg.get("integrated_deltas", False))}
+
+
+@router.put("/{campaign_id}/integrated-deltas")
+async def set_integrated_deltas(
+    campaign_id: str,
+    payload: IntegratedDeltasPayload,
+    state_store: StateStoreDep,
+) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    cfg["integrated_deltas"] = payload.enabled
+    await _write_campaign_config(state_store, campaign_id, cfg)
+    return {"enabled": payload.enabled}
 
 
 @router.get("/{campaign_id}/storage")
