@@ -300,6 +300,7 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
         "to_character_ref",
         "types",
         "state",
+        "history",
         "updated_at_turn",
     ],
     "knowledge_state": [
@@ -403,6 +404,25 @@ def _coerce_for_column(table: str, column: str, value: Any) -> Any:
     if isinstance(value, (dict, list)):
         return json.dumps(value, sort_keys=True, default=str)
     return value
+
+
+async def validate_table_columns(conn: aiosqlite.Connection) -> list[str]:
+    """Compare _TABLE_COLUMNS against actual DB schema. Return warnings for drift."""
+    warnings: list[str] = []
+    for table, columns in _TABLE_COLUMNS.items():
+        cursor = await conn.execute(f"PRAGMA table_info({table})")
+        rows = await cursor.fetchall()
+        if not rows:
+            continue
+        actual = {row[1] for row in rows}
+        declared = set(columns)
+        missing_from_declaration = actual - declared - {"rowid"}
+        if missing_from_declaration:
+            warnings.append(
+                f"{table}: columns {sorted(missing_from_declaration)} exist in DB "
+                f"but not in _TABLE_COLUMNS"
+            )
+    return warnings
 
 
 async def upsert_row(
