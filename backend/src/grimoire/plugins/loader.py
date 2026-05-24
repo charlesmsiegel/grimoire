@@ -16,14 +16,13 @@ are visible without leaking into other plugins' import resolution.
 
 from __future__ import annotations
 
-import importlib.util
 import inspect
-import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from grimoire.dynamic_loader import load_module_from_path
 from grimoire.plugins.discovery import DiscoveredPlugin
 from grimoire.plugins.venv import prepended_sys_path
 from grimoire.types.plugins import (
@@ -244,24 +243,12 @@ def _build_capabilities(raw_caps: Any) -> PluginCapabilities:
 
 
 def _import_plugin_module(plugin_id: str, entry_path: Path) -> Any:
-    """Import `plugin.py` under a stable synthetic module name.
-
-    Re-importing the same plugin id replaces the previous module entry so
-    rescans pick up edits without leaving stale state.
-    """
-    module_name = f"grimoire_plugins._loaded.{plugin_id.replace('-', '_')}"
-    spec = importlib.util.spec_from_file_location(module_name, entry_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"could not build import spec for {entry_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        # Don't leave a half-loaded module in sys.modules.
-        sys.modules.pop(module_name, None)
-        raise
-    return module
+    """Import `plugin.py` under a stable synthetic module name."""
+    return load_module_from_path(
+        entry_path,
+        module_prefix="grimoire_plugins._loaded",
+        module_id=plugin_id,
+    )
 
 
 def _instantiate(cls: type, config: dict[str, Any]) -> Any:
