@@ -9,15 +9,14 @@ to fail loudly or skip and continue.
 
 from __future__ import annotations
 
-import importlib.util
 import inspect
 import json
-import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from grimoire.dynamic_loader import load_module_from_path
 from grimoire.mechanics.discovery import DiscoveredModule
 from grimoire.types.mechanics import ModuleManifest
 from grimoire.types.protocols import MechanicsModule
@@ -294,23 +293,12 @@ def _build_manifest(raw: dict[str, Any]) -> ModuleManifest:
 
 
 def _import_module(module_id: str, entry_path: Path) -> Any:
-    """Import ``mechanics.py`` under a stable synthetic module name.
-
-    Re-importing the same module id replaces the previous module entry so
-    reloads pick up edits without leaving stale state.
-    """
-    module_name = f"grimoire_mechanics._loaded.{module_id.replace('-', '_')}"
-    spec = importlib.util.spec_from_file_location(module_name, entry_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"could not build import spec for {entry_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        sys.modules.pop(module_name, None)
-        raise
-    return module
+    """Import ``mechanics.py`` under a stable synthetic module name."""
+    return load_module_from_path(
+        entry_path,
+        module_prefix="grimoire_mechanics._loaded",
+        module_id=module_id,
+    )
 
 
 def _entry_name(raw: dict[str, Any]) -> str | None:
