@@ -154,7 +154,7 @@ async def test_complete_fallback_emits_full_sequence(db, plugins) -> None:
     resp = await gw.complete("main", _request())
     assert resp.text == "from local"
 
-    # Expected sequence: tier_resolved → started(cloud) → failed(cloud) → started(local) → received(local)
+    # tier_resolved → started(cloud) → failed(cloud) → started(local) → received(local)
     assert collector.types == [
         "tier_resolved",
         "llm_request_started",
