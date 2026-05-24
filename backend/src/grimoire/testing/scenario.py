@@ -121,7 +121,7 @@ class ScenarioApp:
 
         # Build the app and pre-install a RecordReplayLLM in the
         # container before lifespan runs — the lifespan code checks
-        # ``container.extras.get("llm_gateway")`` and respects an
+        # ``container.llm_gateway`` and respects an
         # existing value, so this is the supported way to inject.
         from grimoire.main import create_app
 
@@ -131,7 +131,7 @@ class ScenarioApp:
             fixture_dir=self._llm_fixture_dir,
             mode=self._replay_mode,
         )
-        self.container.extras["llm_gateway"] = self._llm
+        self.container.llm_gateway = self._llm
         self.app.state.container = self.container
 
         # httpx's ASGITransport does not run ASGI lifespan events, so we
