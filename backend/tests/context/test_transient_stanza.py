@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from grimoire.context.builder import ContextBuilderService as ContextBuilder
-from grimoire.context.builder import _TierItem
+from grimoire.context.types import TierItem
 from grimoire.context.config import ContextBuilderConfig
 from grimoire.types.context import ContextSource
 from grimoire.types.state import ContextTier
@@ -91,7 +91,7 @@ async def test_emits_tier_item_with_stanza():
         ref="char_florence", campaign_id="c1", active_pc_ref=None
     )
     assert item is not None
-    assert isinstance(item, _TierItem)
+    assert isinstance(item, TierItem)
     assert item.tier == ContextTier.SPOTLIGHT
     assert item.section == "transient"
     assert "current state:" in item.text

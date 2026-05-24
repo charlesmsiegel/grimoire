@@ -26,12 +26,12 @@ import json
 import logging
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass, field
 from typing import Any
 
 from grimoire.context.config import ContextBuilderConfig
 from grimoire.context.errors import LockInOverflowError
 from grimoire.context.tokens import TokenEstimator, cheap_estimator, estimate_tokens
+from grimoire.context.types import BuiltContext, ContextBuildRequest, PinSet, TierItem
 from grimoire.continuity.registry import resolve_continuity
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.templates import render as render_template
@@ -58,8 +58,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_BRANCH_SUFFIX = "main"
 
 
-def _route_lore_to_tier(lore: Any) -> _TierItem | None:
-    """Build a ``_TierItem`` for one triggered lore entry.
+def _route_lore_to_tier(lore: Any) -> TierItem | None:
+    """Build a ``TierItem`` for one triggered lore entry.
 
     Routes by the entry's ``position`` field per spec
     ``2026-05-19-card-imports-design.md`` §4:
@@ -104,7 +104,7 @@ def _route_lore_to_tier(lore: Any) -> _TierItem | None:
         priority = 2 if position_value == "archive" else 4
         reasons = [InclusionReason.LORE_ARCHIVE, InclusionReason.KEYWORD_TRIGGERED]
 
-    return _TierItem(
+    return TierItem(
         tier=tier,
         section=section,
         text=text,
@@ -133,69 +133,6 @@ def _resolve_runtime_macros(messages: list[Message], active_pc_name: str) -> lis
     return [
         m.model_copy(update={"content": m.content.replace("{{user}}", pc_name)}) for m in messages
     ]
-
-
-# --------------------------------------------------------------------------- #
-# Internal data shapes
-# --------------------------------------------------------------------------- #
-
-
-@dataclass
-class _TierItem:
-    """One piece of structured content destined for a tier."""
-
-    tier: ContextTier
-    section: str  # 'cast' | 'location' | 'commitments' | ...
-    text: str
-    source: ContextSource
-    priority: int = 0  # higher = packed first
-    pinned: bool = False  # exempt from budget-driven eviction
-
-
-@dataclass
-class _PinSet:
-    """Active context pins / excludes for a single build.
-
-    ``pinned_source_ids`` and ``excluded_source_ids`` reference
-    ``ContextSource.source_id`` values directly. ``pinned_entities`` and
-    ``excluded_entities`` are ``(kind, ref)`` tuples that match a source
-    via ``(source.kind, source.owner_id)``.
-    """
-
-    pinned_source_ids: set[str] = field(default_factory=set)
-    excluded_source_ids: set[str] = field(default_factory=set)
-    pinned_entities: set[tuple[str, str]] = field(default_factory=set)
-    excluded_entities: set[tuple[str, str]] = field(default_factory=set)
-
-    def is_excluded(self, source: ContextSource) -> bool:
-        if source.source_id and source.source_id in self.excluded_source_ids:
-            return True
-        return (source.kind, source.owner_id or "") in self.excluded_entities
-
-    def is_pinned(self, source: ContextSource) -> bool:
-        if source.source_id and source.source_id in self.pinned_source_ids:
-            return True
-        return (source.kind, source.owner_id or "") in self.pinned_entities
-
-
-@dataclass
-class _BuiltContext:
-    composition: Composition | None
-    style_text: str
-    content_boundaries: str
-    system_meta: str
-    scene_header: str
-    active_pc_card: str
-    active_pc_name: str
-    mechanics_block: str
-    commitments_block: str
-    spotlight_items: list[_TierItem] = field(default_factory=list)
-    background_items: list[_TierItem] = field(default_factory=list)
-    archive_items: list[_TierItem] = field(default_factory=list)
-    recent_posts_text: str = ""
-    voice_corrective: str = ""
-    sources: list[ContextSource] = field(default_factory=list)
-    extra: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -345,8 +282,8 @@ class ContextBuilderService:
         campaign_id: CampaignId,
         branch_id: str | None,
         turn_id: TurnId | None,
-    ) -> _PinSet:
-        pins = _PinSet()
+    ) -> PinSet:
+        pins = PinSet()
         if self._store is None:
             return pins
         lister = getattr(self._store, "list_active_context_pins", None)
@@ -361,7 +298,7 @@ class ContextBuilderService:
             )
         except Exception as exc:
             # Fail loud on pin-load failure: silently returning an empty
-            # ``_PinSet`` would leak user-excluded content into the next
+            # ``PinSet`` would leak user-excluded content into the next
             # prompt. Surface the error to operators and bubble up so the
             # turn can be retried (or the cause investigated) instead of
             # quietly sending suppressed entities to the LLM.
@@ -404,9 +341,9 @@ class ContextBuilderService:
         branch_id: str | None,
         pc_ref: str | None,
         turn_id: TurnId | None = None,
-        pins: _PinSet | None = None,
-    ) -> _BuiltContext:
-        pins = pins or _PinSet()
+        pins: PinSet | None = None,
+    ) -> BuiltContext:
+        pins = pins or PinSet()
         # Step 0 — composition
         composition = await self._safe_call(self._library.get_composition, campaign_id)
         style_text = await self._resolve_style_guide(composition)
@@ -518,8 +455,8 @@ class ContextBuilderService:
         mechanics_block = self._render_mechanics(mechanics_results)
 
         # Apply exclude pins and mark pinned items before assembly.
-        def _filter_items(items: list[_TierItem]) -> list[_TierItem]:
-            kept: list[_TierItem] = []
+        def _filter_items(items: list[TierItem]) -> list[TierItem]:
+            kept: list[TierItem] = []
             for it in items:
                 if pins.is_excluded(it.source):
                     continue
@@ -554,7 +491,7 @@ class ContextBuilderService:
         # Recent posts as text (last N)
         recent_posts_text = self._render_recent_posts(recent_posts)
 
-        return _BuiltContext(
+        return BuiltContext(
             composition=composition,
             style_text=style_text,
             content_boundaries=boundaries or "",
@@ -663,9 +600,9 @@ class ContextBuilderService:
         active_pc_ref: str | None,
         recent_posts: list[Any],
         commitments_targeting_pcs: set[str] | None = None,
-    ) -> tuple[list[_TierItem], list[_TierItem], str]:
-        spotlight_items: list[_TierItem] = []
-        background_items: list[_TierItem] = []
+    ) -> tuple[list[TierItem], list[TierItem], str]:
+        spotlight_items: list[TierItem] = []
+        background_items: list[TierItem] = []
 
         present_refs: list[str] = []
         if scene is not None:
@@ -729,7 +666,7 @@ class ContextBuilderService:
             # worlds render distinctly. Library refs only — campaign-local
             # entities don't have a world prefix to surface.
             spotlight_items.append(
-                _TierItem(
+                TierItem(
                     tier=ContextTier.SPOTLIGHT,
                     section="cast",
                     text=_with_cast_header(ref, card),
@@ -745,7 +682,7 @@ class ContextBuilderService:
                 voice_text = await self._voice_anchor(ref, campaign_id)
                 if voice_text:
                     spotlight_items.append(
-                        _TierItem(
+                        TierItem(
                             tier=ContextTier.SPOTLIGHT,
                             section="voice_anchor",
                             text=f"# Voice anchor — {ref}\n{voice_text}",
@@ -783,7 +720,7 @@ class ContextBuilderService:
             dialogue = self._recent_dialogue_for(ref, recent_posts)
             if dialogue:
                 spotlight_items.append(
-                    _TierItem(
+                    TierItem(
                         tier=ContextTier.SPOTLIGHT,
                         section="recent_dialogue",
                         text=f"# Recent dialogue — {ref}\n{dialogue}",
@@ -822,7 +759,7 @@ class ContextBuilderService:
                 continue
             ref_reasons = sorted(reasons_by_ref.get(ref, set()), key=lambda r: r.value)
             background_items.append(
-                _TierItem(
+                TierItem(
                     tier=ContextTier.BACKGROUND,
                     section="cast",
                     text=_with_cast_header(ref, text),
@@ -900,7 +837,7 @@ class ContextBuilderService:
         ref: str,
         campaign_id: CampaignId,
         active_pc_ref: str | None,
-    ) -> _TierItem | None:
+    ) -> TierItem | None:
         """Render the optional spotlight-tier transient-state stanza.
 
         Returns ``None`` when no transient service is wired or no
@@ -932,7 +869,7 @@ class ContextBuilderService:
         text = render_transient_stanza(name or ref, bundle)
         if not text:
             return None
-        return _TierItem(
+        return TierItem(
             tier=ContextTier.SPOTLIGHT,
             section="transient",
             text=text,
@@ -982,7 +919,7 @@ class ContextBuilderService:
 
     async def _extras_tier_items(
         self, ref: str, campaign_id: CampaignId
-    ) -> tuple[list[_TierItem], list[_TierItem]]:
+    ) -> tuple[list[TierItem], list[TierItem]]:
         """Render the narrative-extras stanza for one character.
 
         Returns ``(spotlight_items, background_items)``. The spotlight item
@@ -1011,7 +948,7 @@ class ContextBuilderService:
         if token_estimate <= self._config.extras_demote_to_breadcrumb_threshold_tokens:
             return (
                 [
-                    _TierItem(
+                    TierItem(
                         tier=ContextTier.SPOTLIGHT,
                         section="extras",
                         text=rendered,
@@ -1032,7 +969,7 @@ class ContextBuilderService:
         return (
             [],
             [
-                _TierItem(
+                TierItem(
                     tier=ContextTier.BACKGROUND,
                     section="extras",
                     text=breadcrumb,
@@ -1095,9 +1032,9 @@ class ContextBuilderService:
         scene: Any,
         campaign_id: CampaignId,
         branch_id: str | None,
-    ) -> tuple[list[_TierItem], list[_TierItem]]:
-        spotlight: list[_TierItem] = []
-        background: list[_TierItem] = []
+    ) -> tuple[list[TierItem], list[TierItem]]:
+        spotlight: list[TierItem] = []
+        background: list[TierItem] = []
         if scene is None:
             return spotlight, background
 
@@ -1116,7 +1053,7 @@ class ContextBuilderService:
                 desc = _render_location(location)
                 location_owner = f"library:worlds/{world_id}/locations/{location_id}"
                 spotlight.append(
-                    _TierItem(
+                    TierItem(
                         tier=ContextTier.SPOTLIGHT,
                         section="location",
                         text=desc,
@@ -1146,7 +1083,7 @@ class ContextBuilderService:
                     weather = None
                 if weather is not None:
                     spotlight.append(
-                        _TierItem(
+                        TierItem(
                             tier=ContextTier.SPOTLIGHT,
                             section="weather",
                             text=f"Weather: {weather.summary or weather.kind}",
@@ -1177,7 +1114,7 @@ class ContextBuilderService:
                     names = ", ".join(loc.name for loc in adjacent if getattr(loc, "name", ""))
                     if names:
                         background.append(
-                            _TierItem(
+                            TierItem(
                                 tier=ContextTier.BACKGROUND,
                                 section="adjacent_locations",
                                 text=f"Adjacent: {names}",
@@ -1200,7 +1137,7 @@ class ContextBuilderService:
         summary = getattr(scene, "running_summary", None) or ""
         if summary:
             spotlight.append(
-                _TierItem(
+                TierItem(
                     tier=ContextTier.SPOTLIGHT,
                     section="scene_summary",
                     text=f"Scene summary so far:\n{summary}",
@@ -1225,7 +1162,7 @@ class ContextBuilderService:
         scene: Any,
         campaign_id: CampaignId,
         branch_id: str | None,
-    ) -> list[_TierItem]:
+    ) -> list[TierItem]:
         """§3 — politically relevant faction state in the background tier.
 
         Politically relevant = any faction declared in the active composition.
@@ -1240,7 +1177,7 @@ class ContextBuilderService:
         getter = getattr(self._world, "faction_state", None)
         if getter is None:
             return []
-        items: list[_TierItem] = []
+        items: list[TierItem] = []
         for ref in faction_refs[: self._config.faction_state_limit]:
             try:
                 state = await getter(ref, campaign_id, branch_id=branch_id)
@@ -1257,7 +1194,7 @@ class ContextBuilderService:
             if not text:
                 continue
             items.append(
-                _TierItem(
+                TierItem(
                     tier=ContextTier.BACKGROUND,
                     section="faction_state",
                     text=text,
@@ -1307,7 +1244,7 @@ class ContextBuilderService:
         scene: Any,
         campaign_id: CampaignId,
         branch_id: str | None,
-    ) -> list[_TierItem]:
+    ) -> list[TierItem]:
         """§4 — calendar / world-time context for the background tier.
 
         Renders an at-most-one item summarising the current in-game date,
@@ -1374,7 +1311,7 @@ class ContextBuilderService:
             return []
         text = "Calendar\n" + "\n".join(lines)
         return [
-            _TierItem(
+            TierItem(
                 tier=ContextTier.BACKGROUND,
                 section="calendar",
                 text=text,
@@ -1586,7 +1523,7 @@ class ContextBuilderService:
         campaign_id: CampaignId,
         active_pc_ref: str | None = None,
         recent_posts: list[Any] | None = None,
-    ) -> list[_TierItem]:
+    ) -> list[TierItem]:
         """§5/§6/§7 — recent facts (POV-filtered + keyword-driven).
 
         Pulls the most recent facts the active PC knows about (§6) and
@@ -1642,7 +1579,7 @@ class ContextBuilderService:
             return []
         block = "Recent facts:\n" + "\n".join(lines)
         return [
-            _TierItem(
+            TierItem(
                 tier=ContextTier.BACKGROUND,
                 section="facts",
                 text=block,
@@ -1666,7 +1603,7 @@ class ContextBuilderService:
         scene: Any,
         campaign_id: CampaignId,
         branch_id: str | None,
-    ) -> list[_TierItem]:
+    ) -> list[TierItem]:
         """§6 — compact relationship deltas since the last scene.
 
         For each present character (excluding the active PC), we pull the
@@ -1714,7 +1651,7 @@ class ContextBuilderService:
             return []
         block = "Relationship deltas since last scene:\n" + "\n".join(lines)
         return [
-            _TierItem(
+            TierItem(
                 tier=ContextTier.BACKGROUND,
                 section="relationship_deltas",
                 text=block,
@@ -1742,8 +1679,8 @@ class ContextBuilderService:
         recent_posts: list[Any],
         turn_id: TurnId | None = None,
         composition: Composition | None = None,
-    ) -> list[_TierItem]:
-        items: list[_TierItem] = []
+    ) -> list[TierItem]:
+        items: list[TierItem] = []
         query = self._build_retrieval_query(player_input, scene, recent_posts)
         if not query:
             return items
@@ -1757,7 +1694,7 @@ class ContextBuilderService:
             if not text:
                 continue
             items.append(
-                _TierItem(
+                TierItem(
                     tier=ContextTier.ARCHIVE,
                     section="retrieved",
                     text=f"[retrieved · {hit.source_kind}] {text}",
@@ -1784,7 +1721,7 @@ class ContextBuilderService:
             if not text:
                 continue
             items.append(
-                _TierItem(
+                TierItem(
                     tier=ContextTier.ARCHIVE,
                     section="keyword",
                     text=f"[fact-match] {text}",
@@ -1809,7 +1746,7 @@ class ContextBuilderService:
         campaign_id: CampaignId,
         scene: Any,
         active_pc_ref: str | None,
-    ) -> list[_TierItem]:
+    ) -> list[TierItem]:
         """Surface power definitions for capabilities held by spotlight chars.
 
         For each unique capability id collected across the spotlight cast,
@@ -1845,7 +1782,7 @@ class ContextBuilderService:
                 seen_caps.add(cap_id)
                 capability_ids.append(cap_id)
 
-        items: list[_TierItem] = []
+        items: list[TierItem] = []
         for cap_id in capability_ids:
             try:
                 power = await self._mechanics.power_definition(campaign_id, cap_id)
@@ -1862,7 +1799,7 @@ class ContextBuilderService:
             body = " ".join(p for p in (description, effect) if p).strip()
             text = f"{header} {body}".strip()
             items.append(
-                _TierItem(
+                TierItem(
                     tier=ContextTier.ARCHIVE,
                     section="power",
                     text=text,
@@ -1886,7 +1823,7 @@ class ContextBuilderService:
         campaign_id: CampaignId,
         *,
         turn_id: TurnId | None = None,
-    ) -> tuple[list[_TierItem], list[_TierItem], list[_TierItem]]:
+    ) -> tuple[list[TierItem], list[TierItem], list[TierItem]]:
         """Return (spotlight, background, archive) lore items by position."""
         if self._world is None or not player_input:
             return [], [], []
@@ -1901,9 +1838,9 @@ class ContextBuilderService:
                 return [], [], []
         except Exception:
             return [], [], []
-        spotlight: list[_TierItem] = []
-        background: list[_TierItem] = []
-        archive: list[_TierItem] = []
+        spotlight: list[TierItem] = []
+        background: list[TierItem] = []
+        archive: list[TierItem] = []
         for lore in triggered:
             item = _route_lore_to_tier(lore)
             if item is None:
@@ -1999,7 +1936,7 @@ class ContextBuilderService:
 
     async def _scene_refs_from_input(
         self, player_input: str, campaign_id: CampaignId
-    ) -> list[_TierItem]:
+    ) -> list[TierItem]:
         """§7 — explicit past-scene references.
 
         Scan the player input for ``scene:<id>`` tokens and emit one archive
@@ -2012,7 +1949,7 @@ class ContextBuilderService:
         if not matches:
             return []
         seen: set[str] = set()
-        items: list[_TierItem] = []
+        items: list[TierItem] = []
         getter = getattr(self._scenes, "get_scene", None)
         for raw in matches:
             scene_id = raw.strip(".,;:!?)]}").strip()
@@ -2029,7 +1966,7 @@ class ContextBuilderService:
                     scene = None
             text = _render_scene_reference(scene_id, scene)
             items.append(
-                _TierItem(
+                TierItem(
                     tier=ContextTier.ARCHIVE,
                     section="scene_ref",
                     text=text,
@@ -2128,7 +2065,7 @@ class ContextBuilderService:
     # Internals — assembly + budgeting
     # ------------------------------------------------------------------ #
 
-    async def _assemble(self, ctx: _BuiltContext, player_input: str) -> AssembledPrompt:
+    async def _assemble(self, ctx: BuiltContext, player_input: str) -> AssembledPrompt:
         messages: list[Message] = []
         budget_used: dict[ContextTier, int] = {t: 0 for t in ContextTier}
 
@@ -2394,7 +2331,7 @@ class ContextBuilderService:
             "interleave it with narrative text."
         )
 
-    async def _system_block(self, ctx: _BuiltContext) -> str:
+    async def _system_block(self, ctx: BuiltContext) -> str:
         return render_template(
             "context_system_block",
             style_text=ctx.style_text,
@@ -2403,7 +2340,7 @@ class ContextBuilderService:
             voice_corrective=ctx.voice_corrective,
         ).strip()
 
-    async def _lock_in_block(self, ctx: _BuiltContext) -> str:
+    async def _lock_in_block(self, ctx: BuiltContext) -> str:
         return render_template(
             "context_lock_in_block",
             scene_header=ctx.scene_header,
@@ -2413,7 +2350,7 @@ class ContextBuilderService:
             verbatim_posts=self._lock_in_verbatim_posts(ctx),
         ).strip()
 
-    def _lock_in_verbatim_posts(self, ctx: _BuiltContext) -> str:
+    def _lock_in_verbatim_posts(self, ctx: BuiltContext) -> str:
         # ctx.recent_posts_text is all rendered posts; we just slice the tail.
         if not ctx.recent_posts_text:
             return ""
@@ -2421,7 +2358,7 @@ class ContextBuilderService:
         tail = all_posts[-self._config.lock_in_verbatim_posts :]
         return "\n\n".join(tail)
 
-    def _render_older_recent(self, ctx: _BuiltContext, verbatim: int) -> str:
+    def _render_older_recent(self, ctx: BuiltContext, verbatim: int) -> str:
         if not ctx.recent_posts_text:
             return ""
         all_posts = ctx.recent_posts_text.split("\n\n")
@@ -2434,7 +2371,7 @@ class ContextBuilderService:
 
     async def _pack_tier(
         self,
-        items: list[_TierItem],
+        items: list[TierItem],
         tier: ContextTier,
         messages: list[Message],
         *,
@@ -2504,7 +2441,7 @@ class ContextBuilderService:
             logger.debug("context builder: %s failed: %s", getattr(fn, "__name__", fn), exc)
             return None
 
-    def _summary(self, ctx: _BuiltContext, budget_used: dict[ContextTier, int]) -> str:
+    def _summary(self, ctx: BuiltContext, budget_used: dict[ContextTier, int]) -> str:
         parts: list[str] = []
         for tier in ContextTier:
             parts.append(f"{tier.value}={budget_used.get(tier, 0)}")
