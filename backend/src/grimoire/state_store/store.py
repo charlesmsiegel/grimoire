@@ -158,6 +158,9 @@ class StateStore:
         self.data_root = Path(data_root)
         self._metrics: MetricsRegistryProtocol = metrics
 
+    def set_metrics(self, metrics: MetricsRegistryProtocol) -> None:
+        self._metrics = metrics
+
     # ------------------------------------------------------------------
     # Connection helpers
     # ------------------------------------------------------------------

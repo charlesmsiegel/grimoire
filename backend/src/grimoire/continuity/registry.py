@@ -61,6 +61,17 @@ class ContinuityRegistry:
         self._search_factory = search_factory
         self._services: dict[tuple[str, str], ContinuityService] = {}
 
+    def set_embedder(self, embedder: QueryEmbedder | None) -> None:
+        self._embedder = embedder
+
+    def set_judge(
+        self,
+        gateway: Any,
+        request_factory: Callable[[str, str], Any] | None,
+    ) -> None:
+        self._judge_gateway = gateway
+        self._judge_request_factory = request_factory
+
     @property
     def config(self) -> ContinuityConfig:
         return self._config

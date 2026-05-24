@@ -296,6 +296,9 @@ class ImageGenService:
         """Late-bind the gateway used for per-task imagegen routing."""
         self._gateway = gateway
 
+    def set_metrics(self, metrics: MetricsRegistryProtocol) -> None:
+        self._metrics = metrics
+
     def register_with_health_monitor(self, monitor: Any) -> None:
         """§11: register all currently registered backends as health targets.
 
