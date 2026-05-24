@@ -57,12 +57,12 @@ def _get_expression_service(request: Request) -> ExpressionStateService:
     container = getattr(request.app.state, "container", None)
     if container is None:
         raise HTTPException(status_code=503, detail="container not initialised")
-    svc = container.extras.get("expressions") if container.extras else None
+    svc = container.expressions
     if svc is None:
         if container.db is None:
             raise HTTPException(status_code=503, detail="database not initialised")
         svc = ExpressionStateService(container.db)
-        container.extras["expressions"] = svc
+        container.expressions = svc
     return svc
 
 
