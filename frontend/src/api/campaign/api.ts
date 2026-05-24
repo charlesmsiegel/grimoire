@@ -1,4 +1,7 @@
+import { z } from "zod";
+
 import { api } from "../client";
+import { CampaignSummarySchema } from "../schemas/campaign";
 import type {
   AdvanceTurnResult,
   AlternateListResponse,
@@ -30,7 +33,10 @@ import type {
 const enc = encodeURIComponent;
 
 export const campaignApi = {
-  list: () => api.get<CampaignSummary[]>("/api/campaigns"),
+  list: () =>
+    api.get<CampaignSummary[]>("/api/campaigns", {
+      schema: z.array(CampaignSummarySchema),
+    }),
 
   get: (id: string) => api.get<CampaignSummary>(`/api/campaigns/${enc(id)}`),
 
