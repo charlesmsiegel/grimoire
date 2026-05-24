@@ -815,7 +815,7 @@ class _FakeFileWatcher:
 
 def test_rescan_campaigns_invokes_file_watcher_with_campaigns_scope(client, container) -> None:
     fw = _FakeFileWatcher()
-    container.extras["file_watcher"] = fw
+    container.file_watcher = fw
     response = client.post("/api/campaigns/rescan")
     assert response.status_code == 200
     assert response.json() == {"scope": "campaigns", "library_files": 0, "campaign_files": 7}
@@ -823,6 +823,6 @@ def test_rescan_campaigns_invokes_file_watcher_with_campaigns_scope(client, cont
 
 
 def test_rescan_campaigns_returns_503_when_watcher_not_configured(client, container) -> None:
-    container.extras.pop("file_watcher", None)
+    container.file_watcher = None
     response = client.post("/api/campaigns/rescan")
     assert response.status_code == 503
