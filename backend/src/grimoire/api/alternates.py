@@ -20,11 +20,6 @@ from pydantic import BaseModel
 
 from grimoire.api.deps import OrchestratorDep, ScenesDep
 from grimoire.api.util import map_lookup_errors, to_payload
-from grimoire.orchestrator.errors import (
-    AlternateNotFoundError,
-    CannotDeletePrimaryError,
-    LatestPostOnlyError,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -63,16 +58,6 @@ async def _resolve_post(scenes: Any, campaign_id: str, scene_id: str, post_id: s
     )
 
 
-def _map_alternate_error(exc: Exception) -> HTTPException:
-    """Translate alternate-specific errors before falling back to the generic map."""
-    if isinstance(exc, LatestPostOnlyError):
-        return HTTPException(status_code=400, detail=str(exc))
-    if isinstance(exc, CannotDeletePrimaryError):
-        return HTTPException(status_code=409, detail=str(exc))
-    if isinstance(exc, AlternateNotFoundError):
-        return HTTPException(status_code=404, detail=str(exc))
-    return map_lookup_errors(exc)
-
 
 @router.post("/{campaign_id}/scenes/{scene_id}/posts/{post_id}/regenerate")
 async def regenerate_post(
@@ -93,7 +78,7 @@ async def regenerate_post(
             model_override=body.model_override,
         )
     except Exception as exc:
-        raise _map_alternate_error(exc) from exc
+        raise map_lookup_errors(exc) from exc
     return to_payload(result)
 
 
@@ -129,7 +114,7 @@ async def switch_primary_alternate(
             alternate_id=alternate_id,
         )
     except Exception as exc:
-        raise _map_alternate_error(exc) from exc
+        raise map_lookup_errors(exc) from exc
     return to_payload(result)
 
 
@@ -151,7 +136,7 @@ async def pin_alternate(
             pinned=payload.pinned,
         )
     except Exception as exc:
-        raise _map_alternate_error(exc) from exc
+        raise map_lookup_errors(exc) from exc
     return {"post_id": post_id, "alternate_id": alternate_id, "pinned": payload.pinned}
 
 
@@ -194,7 +179,7 @@ async def delete_alternate(
     try:
         await orchestrator.delete_alternate(post_id=post_id, alternate_id=alternate_id)
     except Exception as exc:
-        raise _map_alternate_error(exc) from exc
+        raise map_lookup_errors(exc) from exc
 
 
 __all__ = ["router"]

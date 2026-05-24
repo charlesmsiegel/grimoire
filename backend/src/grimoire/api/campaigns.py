@@ -1305,25 +1305,8 @@ async def retcon_post(
             replay_subsequent=payload.replay_subsequent,
         )
     except Exception as exc:
-        raise _map_retcon_error(exc) from exc
+        raise map_lookup_errors(exc) from exc
     return to_payload(result)
-
-
-def _map_retcon_error(exc: Exception) -> HTTPException:
-    """Translate retcon-specific errors before falling back to the generic map."""
-    from grimoire.orchestrator.errors import (
-        RetconBatchClosedError,
-        RetconBatchNotFoundError,
-        RetconInFlightError,
-    )
-
-    if isinstance(exc, RetconInFlightError):
-        return HTTPException(status_code=409, detail=str(exc))
-    if isinstance(exc, RetconBatchNotFoundError):
-        return HTTPException(status_code=404, detail=str(exc))
-    if isinstance(exc, RetconBatchClosedError):
-        return HTTPException(status_code=409, detail=str(exc))
-    return map_lookup_errors(exc)
 
 
 @router.get("/{campaign_id}/retcon/replay/{batch_id}")
@@ -1335,7 +1318,7 @@ async def get_retcon_replay_state(
     try:
         result = await orchestrator.get_replay_state(campaign_id, batch_id)
     except Exception as exc:
-        raise _map_retcon_error(exc) from exc
+        raise map_lookup_errors(exc) from exc
     return to_payload(result)
 
 
@@ -1348,7 +1331,7 @@ async def accept_retcon_replay(
     try:
         result = await orchestrator.accept_replay(campaign_id, batch_id=batch_id)
     except Exception as exc:
-        raise _map_retcon_error(exc) from exc
+        raise map_lookup_errors(exc) from exc
     return to_payload(result)
 
 
@@ -1361,7 +1344,7 @@ async def try_again_retcon_replay(
     try:
         result = await orchestrator.try_again_replay(campaign_id, batch_id=batch_id)
     except Exception as exc:
-        raise _map_retcon_error(exc) from exc
+        raise map_lookup_errors(exc) from exc
     return to_payload(result)
 
 
@@ -1374,7 +1357,7 @@ async def cancel_retcon_replay(
     try:
         result = await orchestrator.cancel_replay(campaign_id, batch_id=batch_id)
     except Exception as exc:
-        raise _map_retcon_error(exc) from exc
+        raise map_lookup_errors(exc) from exc
     return to_payload(result)
 
 

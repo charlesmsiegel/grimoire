@@ -13,17 +13,9 @@ from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from grimoire.api.deps import ExtrasServiceDep
-from grimoire.extras import (
-    ExtrasHardCapError,
-    ExtrasNotFoundError,
-    ExtrasPromotionError,
-)
+from grimoire.api.util import map_lookup_errors
 from grimoire.types.common import EntityKind
-from grimoire.types.extras import (
-    ExtrasCapError,
-    ExtraScope,
-    ExtrasKeyError,
-)
+from grimoire.types.extras import ExtraScope
 
 router = APIRouter()
 
@@ -50,21 +42,6 @@ def _parse_kind(kind: str) -> EntityKind:
         raise HTTPException(status_code=404, detail=f"unknown entity kind: {kind!r}") from exc
 
 
-def _map_errors(call):
-    """Decorator-style helper for translating service errors to HTTP."""
-
-    async def _wrapped(*args, **kwargs):
-        try:
-            return await call(*args, **kwargs)
-        except (ExtrasKeyError, ExtrasCapError, ExtrasHardCapError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except ExtrasNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ExtrasPromotionError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    return _wrapped
-
 
 def _serialize_extras(extras: dict) -> dict[str, Any]:
     return {key: value.model_dump(mode="json") for key, value in extras.items()}
@@ -81,16 +58,15 @@ async def list_library_extras(
 ) -> dict[str, Any]:
     entity_kind = _parse_kind(kind)
 
-    @_map_errors
-    async def _go():
-        return await extras.get_raw(
+    try:
+        result = await extras.get_raw(
             entity_kind=entity_kind,
             entity_id=entity_id,
             scope=ExtraScope.LIBRARY,
             world_id=world_id,
         )
-
-    result = await _go()
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
     return {"extras": _serialize_extras(result)}
 
 
@@ -105,9 +81,8 @@ async def put_library_extra(
 ) -> dict[str, Any]:
     entity_kind = _parse_kind(kind)
 
-    @_map_errors
-    async def _go():
-        return await extras.set(
+    try:
+        result = await extras.set(
             entity_kind=entity_kind,
             entity_id=entity_id,
             key=key,
@@ -118,8 +93,8 @@ async def put_library_extra(
             actor=payload.actor,
             evidence=payload.evidence,
         )
-
-    result = await _go()
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
     return {
         "extra": result.extra.model_dump(mode="json"),
         "warnings": result.warnings,
@@ -136,8 +111,7 @@ async def delete_library_extra(
 ) -> None:
     entity_kind = _parse_kind(kind)
 
-    @_map_errors
-    async def _go():
+    try:
         await extras.delete(
             entity_kind=entity_kind,
             entity_id=entity_id,
@@ -146,8 +120,8 @@ async def delete_library_extra(
             campaign_id=None,
             world_id=world_id,
         )
-
-    await _go()
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -165,16 +139,16 @@ async def list_campaign_extras_resolved(
 ) -> dict[str, Any]:
     entity_kind = _parse_kind(kind)
 
-    @_map_errors
-    async def _go():
-        return await extras.get(
+    try:
+        result = await extras.get(
             entity_kind=entity_kind,
             entity_id=entity_id,
             campaign_id=campaign_id,
             world_id=world_id,
         )
-
-    return {"extras": _serialize_extras(await _go())}
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {"extras": _serialize_extras(result)}
 
 
 @router.get("/campaigns/{campaign_id}/{kind}/{entity_id}/extras/raw")
@@ -192,17 +166,17 @@ async def list_campaign_extras_raw(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"unknown scope: {scope!r}") from exc
 
-    @_map_errors
-    async def _go():
-        return await extras.get_raw(
+    try:
+        result = await extras.get_raw(
             entity_kind=entity_kind,
             entity_id=entity_id,
             scope=scope_enum,
             campaign_id=campaign_id,
             world_id=world_id,
         )
-
-    return {"extras": _serialize_extras(await _go())}
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {"extras": _serialize_extras(result)}
 
 
 @router.put("/campaigns/{campaign_id}/{kind}/{entity_id}/extras/{key}")
@@ -222,9 +196,8 @@ async def put_campaign_extra(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"unknown scope: {scope!r}") from exc
 
-    @_map_errors
-    async def _go():
-        return await extras.set(
+    try:
+        result = await extras.set(
             entity_kind=entity_kind,
             entity_id=entity_id,
             key=key,
@@ -235,8 +208,8 @@ async def put_campaign_extra(
             actor=payload.actor,
             evidence=payload.evidence,
         )
-
-    result = await _go()
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
     return {
         "extra": result.extra.model_dump(mode="json"),
         "warnings": result.warnings,
@@ -259,8 +232,7 @@ async def delete_campaign_extra(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"unknown scope: {scope!r}") from exc
 
-    @_map_errors
-    async def _go():
+    try:
         await extras.delete(
             entity_kind=entity_kind,
             entity_id=entity_id,
@@ -269,8 +241,8 @@ async def delete_campaign_extra(
             campaign_id=campaign_id,
             world_id=world_id,
         )
-
-    await _go()
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -340,9 +312,8 @@ async def promote_to_library(
     if world_id is None:
         raise HTTPException(status_code=422, detail="world_id is required to promote")
 
-    @_map_errors
-    async def _go():
-        return await extras.promote_to_library(
+    try:
+        result = await extras.promote_to_library(
             entity_kind=entity_kind,
             entity_id=entity_id,
             key=key,
@@ -350,8 +321,8 @@ async def promote_to_library(
             world_id=world_id,
             actor=payload.actor,
         )
-
-    result = await _go()
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
     return {
         "extra": result.extra.model_dump(mode="json"),
         "warnings": result.warnings,
