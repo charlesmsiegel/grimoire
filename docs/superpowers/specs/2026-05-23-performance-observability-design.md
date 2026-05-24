@@ -141,6 +141,26 @@ Invalidate on write (any PUT to the same endpoint clears its cache entry).
 
 ## Scope
 
+### Step 9: Frontend Render Marks
+
+Add `performance.mark()` / `performance.measure()` instrumentation to key frontend render paths so slow renders are visible in browser DevTools:
+
+- Campaign settings tab switch
+- Play view initial load and refresh
+- Scene jump (switching active scene)
+- Library table render (large entity lists)
+
+Wrap in a utility:
+
+```typescript
+function measureRender(name: string, fn: () => void): void {
+  performance.mark(`${name}-start`);
+  fn();
+  performance.mark(`${name}-end`);
+  performance.measure(name, `${name}-start`, `${name}-end`);
+}
+```
+
 ### In scope
 - Per-section metrics for context building (7 metrics)
 - LLM gateway metrics (7 metrics)
@@ -150,10 +170,10 @@ Invalidate on write (any PUT to the same endpoint clears its cache entry).
 - Frontend: avoid redundant refresh for 4 event types
 - Frontend: memoized selectors for settings/library views
 - Frontend: resource caches for campaign settings
+- Frontend: render marks for key render paths
 
 ### Not in scope
 - Distributed caching (Redis, etc.)
-- Frontend render profiling (React DevTools is sufficient)
 - Backend startup concurrency (covered in PR 3)
 - Query optimization or SQL index changes
 

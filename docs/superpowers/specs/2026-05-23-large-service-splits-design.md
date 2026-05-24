@@ -70,10 +70,12 @@ For each service, keep the public facade class and extract focused collaborator 
 | `FileWriteCoordinator` | Atomic file + SQLite writes, restore-on-failure | ~200 |
 | `LibraryIndexRepository` | Library index queries and updates | ~250 |
 | `CampaignIndexRepository` | Campaign-scoped entity queries | ~200 |
+| `DeltaRepository` | Delta log queries, listing, filtering by campaign/turn/target | ~200 |
+| `SnapshotRepository` | Campaign snapshot creation and restoration | ~150 |
 | `SearchRepository` | Vector + keyword search, priority hints | ~200 |
 | `ContextPinRepository` | Context pin CRUD | ~100 |
 
-**Stays on StateStore (~1,000 lines):** Transaction management (`_txn`), delta log, snapshot operations. `StateStore` remains the authoritative coherence boundary -- collaborators receive the database connection from it.
+**Stays on StateStore (~800 lines):** Transaction management (`_txn`), delta application/reversal, file+DB coherence coordination. `StateStore` remains the authoritative coherence boundary -- collaborators receive the database connection from it.
 
 ### Shared Pattern
 
@@ -167,13 +169,22 @@ def load_module_from_path(
     ...
 ```
 
+### Consolidate Date/JSON Parsing Helpers
+
+Duplicate detection found repeated date parsing and JSON decoding helpers across modules. Consolidate into `backend/src/grimoire/util.py` (or extend the existing one):
+
+- `parse_iso_datetime(s: str) -> datetime` — single consistent ISO 8601 parser
+- `safe_json_loads(s: str | dict | list) -> Any` — defensive JSON parsing that handles already-parsed values (currently duplicated as `_json_loads` in delta_log.py and similar patterns elsewhere)
+- `now_iso() -> str` — already exists in util.py, verify all call sites use it
+
 ## Scope
 
 ### In scope
-- Extract collaborator classes from 4 services
+- Extract collaborator classes from 4 services (including DeltaRepository and SnapshotRepository for StateStore)
 - Keep facade classes with same public API
 - Introduce `GatewayCallContext`, `LLMRequestLogEntry`, and `PostIndexRecord` request objects
 - Extract shared `dynamic_loader.py` from mechanics/plugins loaders
+- Consolidate duplicated date/JSON parsing helpers into shared utilities
 - Update tests to test collaborators directly where beneficial
 
 ### Not in scope
