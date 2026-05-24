@@ -160,3 +160,18 @@ class SceneCloseReport:
     key_beats: list[str]
     threads_resolved: list[Thread]
     threads_unresolved: list[Thread]
+
+
+@dataclass(frozen=True)
+class PostIndexRecord:
+    post_id: str
+    scene_id: str
+    campaign_id: str
+    branch_id: str
+    author: str
+    body: str
+    turn_id: str | None = None
+    ordinal: int = 0
+    is_player: bool = False
+    word_count: int = 0
+    character_ref: str | None = None
