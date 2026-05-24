@@ -13,6 +13,12 @@ import re
 from collections.abc import Iterable
 
 from grimoire.continuity.config import ContinuityConfig
+from grimoire.continuity.errors import (
+    CommitmentNotFoundError,
+    ConfidenceFloorError,
+    ContradictionReportNotFoundError,
+    FactNotFoundError,
+)
 from grimoire.continuity.protocols import (
     Continuity,
     ContinuityStore,
@@ -52,14 +58,6 @@ from grimoire.util import new_id
 logger = logging.getLogger(__name__)
 
 _TERM_RE = re.compile(r"\w+", re.UNICODE)
-
-
-from grimoire.continuity.errors import (
-    CommitmentNotFoundError,
-    ConfidenceFloorError,
-    ContradictionReportNotFoundError,
-    FactNotFoundError,
-)
 
 __all__ = [
     "CommitmentNotFoundError",

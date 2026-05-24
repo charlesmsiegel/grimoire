@@ -38,6 +38,7 @@ from grimoire.event_bus import Event, EventBus
 from grimoire.files import load_yaml, write_yaml
 from grimoire.imagegen.backend import cache_key_for_request, make_thumbnail
 from grimoire.imagegen.config import ImageGenConfig
+from grimoire.imagegen.errors import NoBackendAvailableError
 from grimoire.imagegen.prompt import ComposedPrompt, PromptComposer
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.state_store import StateStore
@@ -133,8 +134,6 @@ def should_illustrate(
         return (post_index % config.every_n) == 0
     return False
 
-
-from grimoire.imagegen.errors import NoBackendAvailableError
 
 __all__ = ["NoBackendAvailableError"]
 

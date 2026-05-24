@@ -63,7 +63,18 @@ def map_lookup_errors(exc: Exception) -> HTTPException:
             return HTTPException(status_code=status_code, detail=detail)
         cause = cause.__cause__ or cause.__context__
 
-    status_code = getattr(exc, "http_status", 500)
+    status_code = getattr(exc, "http_status", None)
+    if status_code is None:
+        # Fallback for stdlib exceptions raised by service code that hasn't
+        # been migrated to domain exception classes with http_status.
+        if isinstance(exc, KeyError | FileNotFoundError):
+            status_code = 404
+        elif isinstance(exc, ValueError):
+            status_code = 400
+        elif isinstance(exc, PermissionError):
+            status_code = 403
+        else:
+            status_code = 500
     return HTTPException(status_code=status_code, detail=detail)
 
 
