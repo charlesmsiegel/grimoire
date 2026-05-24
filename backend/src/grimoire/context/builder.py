@@ -30,11 +30,11 @@ from typing import Any
 
 from grimoire.context.cast import CastResolver
 from grimoire.context.config import ContextBuilderConfig
+from grimoire.context.continuity_context import ContinuityContextResolver
 from grimoire.context.world_context import WorldContextResolver
 from grimoire.context.errors import LockInOverflowError
 from grimoire.context.tokens import TokenEstimator, cheap_estimator, estimate_tokens
 from grimoire.context.types import BuiltContext, ContextBuildRequest, PinSet, TierItem, make_source_id
-from grimoire.continuity.registry import resolve_continuity
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.templates import render as render_template
 from grimoire.types.common import CampaignId, TurnId
@@ -189,6 +189,12 @@ class ContextBuilderService:
         self._world_ctx = WorldContextResolver(
             world=world,
             library=library,
+            time_engine=time_engine,
+            config=self._config,
+        )
+        self._continuity_ctx = ContinuityContextResolver(
+            continuity=continuity,
+            characters=characters,
             time_engine=time_engine,
             config=self._config,
         )
@@ -382,9 +388,11 @@ class ContextBuilderService:
 
         # Open commitments are reused for both the lock-in commitments block
         # and the tier-recommendation hint (`commitments_targeting_pcs`).
-        open_commitments = await self._open_commitments(campaign_id)
-        pc_refs = await self._pc_refs(campaign_id)
-        commitments_targeting_pcs = self._commitments_targeting_pcs(open_commitments, pc_refs)
+        open_commitments = await self._continuity_ctx.open_commitments(campaign_id)
+        pc_refs = await self._continuity_ctx.pc_refs(campaign_id)
+        commitments_targeting_pcs = self._continuity_ctx.commitments_targeting_pcs(
+            open_commitments, pc_refs
+        )
 
         spotlight_items, background_items, voice_corrective = await self._cast.resolve(
             scene=scene,
@@ -412,23 +420,22 @@ class ContextBuilderService:
         )
 
         # Step 4 — continuity
-        as_of = await self._current_in_game_time(campaign_id, branch_id, scene)
-        overdue_commitments = await self._overdue_commitments(campaign_id, as_of)
-        stale_commitments_list = await self._stale_commitments(campaign_id)
-        commitments_block, commitments_source = self._render_commitments_block(
+        as_of = await self._continuity_ctx.current_in_game_time(campaign_id, branch_id, scene)
+        overdue_commitments = await self._continuity_ctx.overdue_commitments(campaign_id, as_of)
+        stale_commitments_list = await self._continuity_ctx.stale_commitments(campaign_id)
+        commitments_block, commitments_source = self._continuity_ctx.render_commitments_block(
             campaign_id,
             open_commitments,
             overdue=overdue_commitments,
             stale=stale_commitments_list,
         )
         background_items.extend(
-            await self._continuity_background(campaign_id, active_pc_ref, recent_posts)
+            await self._continuity_ctx.continuity_background(
+                campaign_id, active_pc_ref, recent_posts
+            )
         )
-        # Relationship deltas (compact, lock-in tier): short summary lines of
-        # the most recent relationship updates between the active PC and any
-        # present cast member.
         background_items.extend(
-            await self._relationship_deltas(
+            await self._continuity_ctx.relationship_deltas(
                 active_pc_ref=active_pc_ref,
                 scene=scene,
                 campaign_id=campaign_id,
@@ -558,346 +565,6 @@ class ContextBuilderService:
         if not names:
             return ""
         return "Worlds in play: " + "; ".join(names)
-
-    # -- continuity ----------------------------------------------------- #
-
-    async def _open_commitments(self, campaign_id: CampaignId) -> list[Any]:
-        continuity = resolve_continuity(self._continuity, campaign_id)
-        if continuity is None:
-            return []
-        try:
-            return list(await continuity.open_commitments(limit=20))
-        except Exception:
-            return []
-
-    def _continuity_config(self) -> Any | None:
-        """Return the active ContinuityConfig (works for both Registry and bare Service)."""
-        target = self._continuity
-        if target is None:
-            return None
-        # ContinuityRegistry exposes `.config`; ContinuityService stores `._config`.
-        return getattr(target, "config", None) or getattr(target, "_config", None)
-
-    async def _current_in_game_time(
-        self,
-        campaign_id: CampaignId,
-        branch_id: str | None,
-        scene: Any,
-    ) -> Any | None:
-        """Resolve the authoritative campaign clock for `as_of`-style queries."""
-        when = None
-        if self._time_engine is not None:
-            try:
-                when = await self._time_engine.current(campaign_id, branch_id=branch_id)
-            except TypeError:
-                try:
-                    when = await self._time_engine.current(campaign_id)
-                except Exception:
-                    when = None
-            except Exception:
-                when = None
-        if when is None and scene is not None:
-            when = getattr(scene, "in_game_start", None)
-        return when
-
-    async def _overdue_commitments(
-        self,
-        campaign_id: CampaignId,
-        as_of: Any | None,
-    ) -> list[Any]:
-        """§8 — query overdue rows only when ``surface_overdue_in_context`` is set."""
-        config = self._continuity_config()
-        if not getattr(config, "surface_overdue_in_context", True):
-            return []
-        if as_of is None:
-            return []
-        continuity = resolve_continuity(self._continuity, campaign_id)
-        if continuity is None:
-            return []
-        fetch = getattr(continuity, "overdue_commitments", None)
-        if fetch is None:
-            return []
-        try:
-            return list(await fetch(as_of))
-        except Exception:
-            return []
-
-    async def _stale_commitments(self, campaign_id: CampaignId) -> list[Any]:
-        """§8 — query stale rows only when ``surface_stale_in_context`` is set."""
-        config = self._continuity_config()
-        if not getattr(config, "surface_stale_in_context", False):
-            return []
-        threshold = getattr(config, "commitment_stale_threshold", None)
-        if threshold is None:
-            return []
-        continuity = resolve_continuity(self._continuity, campaign_id)
-        if continuity is None:
-            return []
-        fetch = getattr(continuity, "stale_commitments", None)
-        if fetch is None:
-            return []
-        try:
-            return list(await fetch(threshold))
-        except Exception:
-            return []
-
-    async def _pc_refs(self, campaign_id: CampaignId) -> set[str]:
-        """The set of every PC ref registered with this campaign."""
-        lister = getattr(self._characters, "list_pcs", None)
-        if lister is None:
-            return set()
-        try:
-            entries = await lister(campaign_id)
-        except Exception:
-            return set()
-        out: set[str] = set()
-        for entry in entries or []:
-            ref = getattr(entry, "character_ref", None) or getattr(entry, "ref", None)
-            if ref:
-                out.add(ref)
-        return out
-
-    def _commitments_targeting_pcs(self, commitments: list[Any], pc_refs: set[str]) -> set[str]:
-        """Set of non-PC refs that owe a commitment to a PC.
-
-        Mirrors the contract expected by ``CharactersService.recommend_tiers``:
-        the caller passes the refs of NPCs whose commitments target the
-        active PCs, and those NPCs are promoted to at least BACKGROUND.
-        """
-        if not pc_refs:
-            return set()
-        out: set[str] = set()
-        for c in commitments:
-            from_id = getattr(c, "from_id", None)
-            to_id = getattr(c, "to_id", None)
-            if from_id and from_id not in pc_refs and to_id in pc_refs:
-                out.add(from_id)
-        return out
-
-    def _render_commitments_block(
-        self,
-        campaign_id: CampaignId,
-        commitments: list[Any],
-        overdue: list[Any] | None = None,
-        stale: list[Any] | None = None,
-    ) -> tuple[str, ContextSource | None]:
-        # §8: honour the three Context-Builder-facing knobs on ContinuityConfig.
-        #   surface_overdue_in_context (default True): when off, drop status-OVERDUE
-        #       rows from the open list and don't consult ``overdue_commitments``.
-        #   surface_stale_in_context (default False): when on, append stale rows
-        #       tagged ``[STALE]`` to the bottom of the block.
-        # OVERDUE comes from two sources: aged status (sitting in `commitments`)
-        # and `overdue_commitments(as_of)` (catches OPEN-but-due-passed rows the
-        # aging engine hasn't promoted yet). Both are tagged with [OVERDUE].
-        config = self._continuity_config()
-        surface_overdue = getattr(config, "surface_overdue_in_context", True)
-        surface_stale = getattr(config, "surface_stale_in_context", False)
-        overdue = overdue or []
-        stale = stale or []
-
-        def _is_status_overdue(c: Any) -> bool:
-            return getattr(getattr(c, "status", None), "value", "") == "overdue"
-
-        if surface_overdue:
-            display: list[Any] = list(commitments)
-            seen_ids = {getattr(c, "id", "") for c in display}
-            for c in overdue:
-                cid = getattr(c, "id", "")
-                if cid and cid in seen_ids:
-                    continue
-                seen_ids.add(cid)
-                display.append(c)
-            overdue_ids = {getattr(c, "id", "") for c in display if _is_status_overdue(c)}
-            overdue_ids.update(getattr(c, "id", "") for c in overdue)
-        else:
-            display = [c for c in commitments if not _is_status_overdue(c)]
-            overdue_ids = set()
-
-        stale_ids: set[str] = set()
-        if surface_stale and stale:
-            display_ids = {getattr(c, "id", "") for c in display}
-            for c in stale:
-                cid = getattr(c, "id", "")
-                if cid and cid in display_ids:
-                    continue
-                display.append(c)
-                stale_ids.add(cid)
-
-        if not display:
-            return "", None
-        lines: list[str] = []
-        for c in display[:10]:
-            text = getattr(c, "text", "") or ""
-            due = getattr(c, "due_by", None)
-            due_part = f" (due {due.day_count})" if due is not None else ""
-            cid = getattr(c, "id", "")
-            marker = ""
-            if cid in stale_ids:
-                marker = " [STALE]"
-            elif cid in overdue_ids:
-                marker = " [OVERDUE]"
-            lines.append(f"- {text}{due_part}{marker}")
-        block = "Active commitments:\n" + "\n".join(lines)
-        source = ContextSource(
-            kind="commitment",
-            scope="campaign-local",
-            owner_id=campaign_id,
-            tier=ContextTier.LOCK_IN,
-            summary=f"{len(display)} open",
-            source_id=_make_source_id("commitments", campaign_id),
-            inclusion_reasons=[InclusionReason.COMMITMENT_OPEN_TO_PC],
-        )
-        return block, source
-
-    async def _continuity_background(
-        self,
-        campaign_id: CampaignId,
-        active_pc_ref: str | None = None,
-        recent_posts: list[Any] | None = None,
-    ) -> list[TierItem]:
-        """§5/§6/§7 — recent facts (POV-filtered + keyword-driven).
-
-        Pulls the most recent facts the active PC knows about (§6) and
-        augments them with any extra facts whose keywords overlap with
-        proper nouns in the recent posts (§7). With no active PC we
-        keep the omniscient narrator view. Total characters are capped
-        at ``recent_facts_char_cap`` to keep background tight.
-        """
-        continuity = resolve_continuity(self._continuity, campaign_id)
-        if continuity is None:
-            return []
-        try:
-            limit = self._config.recent_facts_limit
-            if active_pc_ref and hasattr(continuity, "facts_known_by"):
-                facts = await continuity.facts_known_by(active_pc_ref, limit=limit)
-            else:
-                facts = await continuity.facts_about(limit=limit)
-        except Exception:
-            return []
-        # §7 keyword-driven retrieval: pull additional facts whose
-        # keywords overlap with proper nouns in the recent posts. Dedup
-        # by fact id so we don't surface the same fact twice.
-        if recent_posts and hasattr(continuity, "facts_for_terms"):
-            seen_ids = {getattr(f, "id", "") for f in facts}
-            try:
-                terms = _proper_noun_terms(recent_posts)
-                if terms:
-                    extra = await continuity.facts_for_terms(terms, limit=5)
-                    for f in extra:
-                        fid = getattr(f, "id", "")
-                        if fid and fid in seen_ids:
-                            continue
-                        seen_ids.add(fid)
-                        facts.append(f)
-            except Exception:
-                pass
-        if not facts:
-            return []
-        lines: list[str] = []
-        char_cap = self._config.recent_facts_char_cap
-        used = 0
-        for fact in facts:
-            text = (getattr(fact, "text", "") or "").strip()
-            if not text:
-                continue
-            line = f"- {text}"
-            cost = len(line) + 1
-            if used + cost > char_cap:
-                break
-            lines.append(line)
-            used += cost
-        if not lines:
-            return []
-        block = "Recent facts:\n" + "\n".join(lines)
-        return [
-            TierItem(
-                tier=ContextTier.BACKGROUND,
-                section="facts",
-                text=block,
-                priority=2,
-                source=ContextSource(
-                    kind="fact",
-                    scope="campaign-local",
-                    owner_id=campaign_id,
-                    tier=ContextTier.BACKGROUND,
-                    summary=f"{len(lines)} facts",
-                    source_id=_make_source_id("facts", campaign_id),
-                    inclusion_reasons=[InclusionReason.KEYWORD_TRIGGERED],
-                ),
-            )
-        ]
-
-    async def _relationship_deltas(
-        self,
-        *,
-        active_pc_ref: str | None,
-        scene: Any,
-        campaign_id: CampaignId,
-        branch_id: str | None,
-    ) -> list[TierItem]:
-        """§6 — compact relationship deltas since the last scene.
-
-        For each present character (excluding the active PC), we pull the
-        tail of the relationship history with the active PC and render the
-        most recent event as a single line. Calls are best-effort: missing
-        APIs, empty history, or thrown exceptions silently produce nothing.
-        """
-        if not active_pc_ref or scene is None:
-            return []
-        getter = getattr(self._characters, "get_relationship_history", None)
-        if getter is None:
-            return []
-        present = list(getattr(scene, "present_character_refs", []) or [])
-        lines: list[str] = []
-        for other in present:
-            if other == active_pc_ref:
-                continue
-            try:
-                history = await getter(active_pc_ref, other, campaign_id, branch_id=branch_id)
-            except TypeError:
-                try:
-                    history = await getter(active_pc_ref, other, campaign_id)
-                except Exception:
-                    history = []
-            except Exception:
-                history = []
-            if not history:
-                continue
-            event = history[-1]
-            summary = (
-                event.get("summary") if isinstance(event, dict) else getattr(event, "summary", "")
-            )
-            delta = event.get("delta") if isinstance(event, dict) else getattr(event, "delta", {})
-            if not summary and not delta:
-                continue
-            delta_str = _format_delta(delta or {})
-            text_parts = []
-            if delta_str:
-                text_parts.append(delta_str)
-            if summary:
-                text_parts.append(str(summary))
-            line = f"- {active_pc_ref} ↔ {other}: " + " — ".join(text_parts)
-            lines.append(line)
-        if not lines:
-            return []
-        block = "Relationship deltas since last scene:\n" + "\n".join(lines)
-        return [
-            TierItem(
-                tier=ContextTier.BACKGROUND,
-                section="relationship_deltas",
-                text=block,
-                priority=4,
-                source=ContextSource(
-                    kind="relationship",
-                    scope="campaign-local",
-                    owner_id=campaign_id,
-                    tier=ContextTier.BACKGROUND,
-                    summary=f"{len(lines)} deltas",
-                    source_id=_make_source_id("relationship_deltas", campaign_id),
-                    inclusion_reasons=[InclusionReason.RELATIONSHIP_TO_PRESENT],
-                ),
-            )
-        ]
 
     # -- archive retrieval --------------------------------------------- #
 
@@ -1689,23 +1356,6 @@ class ContextBuilderService:
 # --------------------------------------------------------------------------- #
 
 
-def _format_delta(delta: dict) -> str:
-    """Render a ``{trust: +2, affection: -1}`` style delta into one line."""
-    if not delta:
-        return ""
-    parts: list[str] = []
-    for key in ("affection", "trust", "dominance", "intimacy"):
-        if key not in delta:
-            continue
-        try:
-            val = int(delta[key])
-        except (TypeError, ValueError):
-            continue
-        sign = "+" if val >= 0 else ""
-        parts.append(f"{key} {sign}{val}")
-    return ", ".join(parts)
-
-
 def _render_scene_reference(scene_id: str, scene: Any | None) -> str:
     """One-paragraph reference card for a scene the player called out."""
     if scene is None:
@@ -1721,31 +1371,6 @@ def _render_scene_reference(scene_id: str, scene: Any | None) -> str:
     if summary:
         bits.append(f"Summary: {summary}")
     return "\n".join(bits)
-
-
-_PROPER_NOUN_RE = __import__("re").compile(r"\b[A-Z][a-zA-Z]{2,}\b")
-
-
-def _proper_noun_terms(recent_posts: Iterable[Any]) -> list[str]:
-    """Pull capitalised tokens (likely proper nouns) from the recent
-    posts so Continuity's keyword retrieval has something to anchor on.
-
-    Filters out single-letter capitals and obvious sentence starters by
-    requiring at least 3 chars; collisions with sentence-initial words
-    are tolerable since the retrieval scorer requires multiple matches
-    to surface anything.
-    """
-    seen: set[str] = set()
-    out: list[str] = []
-    for post in recent_posts:
-        text = getattr(post, "content", "") or getattr(post, "text", "")
-        if not isinstance(text, str):
-            continue
-        for match in _PROPER_NOUN_RE.findall(text):
-            if match not in seen:
-                seen.add(match)
-                out.append(match)
-    return out
 
 
 _make_source_id = make_source_id
