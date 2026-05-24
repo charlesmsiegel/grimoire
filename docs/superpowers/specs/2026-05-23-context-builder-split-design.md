@@ -180,11 +180,12 @@ class ContextBuildRequest:
 - Define `ContextProvider` protocol and `ContextBuildRequest` dataclass
 - Extract 5 provider classes from ContextBuilderService
 - Keep ContextBuilderService as coordinator/facade
+- `ContextBuildRequest` carries pre-parsed entities where available so providers avoid repeated YAML/frontmatter parsing within a single request (e.g., composition, active PC card parsed once and passed through)
 - Golden tests must produce identical prompt output
 
 ### Not in scope
-- Enabling concurrent providers (document as future step)
-- Adding per-section caching (separate performance PR)
+- Enabling concurrent providers (document as future step, PR 11)
+- Adding per-section caching (separate performance PR 11)
 - Changing the prompt format
 - Adding new context sections
 

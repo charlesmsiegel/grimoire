@@ -140,6 +140,7 @@ Build functions can live in `main.py` or be extracted to `backend/src/grimoire/b
 - Extract `LifecycleManager` with `Stoppable`/`SyncStoppable` protocols
 - Split `lifespan()` into phase functions
 - Fix the `file_watcher` conditional queue bug
+- Run independent startup tasks concurrently within `start_background_workers()` (health registrations, non-critical rescans, backfills can run via `asyncio.gather` since they don't depend on each other)
 
 ### Not in scope
 - Changing service construction signatures (deferred to service split PRs)
