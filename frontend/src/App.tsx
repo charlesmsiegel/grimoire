@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { BrowserRouter, Route, Routes, useParams } from "react-router-dom";
 
-import { AppSettings } from "./routes/AppSettings";
+import { AppSettings } from "./routes/appsettings";
 import { CampaignCreate } from "./routes/CampaignCreate";
 import { CampaignSettings } from "./routes/campaign/settings";
 import { CampaignPlayRoute, CampaignView } from "./routes/CampaignView";
