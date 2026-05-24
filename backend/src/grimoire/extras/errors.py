@@ -18,7 +18,7 @@ class ExtrasNotFoundError(ExtrasError):
 class ExtrasHardCapError(ExtrasError):
     """Write would exceed a hard cap (per-entity, per-string)."""
 
-    http_status = 409
+    http_status = 422
 
 
 class ExtrasPromotionError(ExtrasError):
