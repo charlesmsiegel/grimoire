@@ -49,6 +49,8 @@ class TurnTimeoutError(OrchestratorError):
 class LatestPostOnlyError(OrchestratorError):
     """Raised when an alternate operation targets a non-latest model post."""
 
+    http_status = 400
+
     def __init__(self, post_id: str) -> None:
         super().__init__(
             f"alternate operations are only allowed on the latest model post: {post_id!r}"

@@ -24,7 +24,7 @@ class ExtrasHardCapError(ExtrasError):
 class ExtrasPromotionError(ExtrasError):
     """promote-to-fact / promote-to-library cannot proceed."""
 
-    http_status = 400
+    http_status = 409
 
 
 class ExtrasSoftCapWarning(UserWarning):
