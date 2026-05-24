@@ -851,6 +851,44 @@ class StateStore:
         return _scene_row_to_dict(row) if row else None
 
     # ------------------------------------------------------------------
+    # Repository queries — common cross-service patterns
+    # ------------------------------------------------------------------
+
+    async def list_library_by_kind(self, kind: str) -> list[dict]:
+        rows = await self.db.fetchall(
+            "SELECT * FROM library_index WHERE kind = ? ORDER BY name",
+            (kind,),
+        )
+        return [_library_row_to_dict(row) for row in rows]
+
+    async def get_campaign_row(self, campaign_id: str) -> dict | None:
+        row = await self.db.fetchone(
+            "SELECT * FROM campaigns WHERE id = ?", (campaign_id,)
+        )
+        return dict(row) if row else None
+
+    async def get_campaign_config(self, campaign_id: str) -> dict | None:
+        row = await self.db.fetchone(
+            "SELECT config FROM campaigns WHERE id = ?", (campaign_id,)
+        )
+        if row is None:
+            return None
+        return _json_loads(row["config"])
+
+    async def campaign_exists(self, campaign_id: str) -> bool:
+        row = await self.db.fetchone(
+            "SELECT 1 FROM campaigns WHERE id = ?", (campaign_id,)
+        )
+        return row is not None
+
+    async def count_deltas(self, campaign_id: str) -> int:
+        row = await self.db.fetchone(
+            "SELECT COUNT(*) AS cnt FROM deltas WHERE campaign_id = ?",
+            (campaign_id,),
+        )
+        return int(row["cnt"]) if row else 0
+
+    # ------------------------------------------------------------------
     # Composition-aware resolve cascade
     # ------------------------------------------------------------------
 
