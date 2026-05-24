@@ -45,14 +45,14 @@ def inspector_container() -> ServiceContainer:
     store = StubPinStore()
     builder = _builder()
     inspector = ContextInspector(builder=builder, store=store)
-    container.extras["context_inspector"] = inspector
+    container.context_inspector = inspector
     return container
 
 
 @pytest.fixture()
 def client(inspector_container: ServiceContainer) -> Iterator[TestClient]:
     # Skip the FastAPI lifespan (no DB needed): the inspector is hand-
-    # wired into container.extras so routes can resolve it directly.
+    # wired into the container so routes can resolve it directly.
     app = create_app()
     app.state.container = inspector_container
     yield TestClient(app)

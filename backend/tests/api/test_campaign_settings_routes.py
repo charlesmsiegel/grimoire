@@ -64,9 +64,7 @@ def settings_client(
     container.state_store = state_store
     # Routing endpoints now write through the gateway; wire a real one
     # pointed at the same data root so the YAML round-trips.
-    if container.extras is None:
-        container.extras = {}
-    container.extras["llm_gateway"] = LLMGatewayService(
+    container.llm_gateway = LLMGatewayService(
         _NoOpPlugins(),
         state_store.db,
         GatewayConfig(
