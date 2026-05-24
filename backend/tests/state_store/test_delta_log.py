@@ -1,6 +1,11 @@
 """Tests for delta_log utility functions."""
 
-from grimoire.state_store.delta_log import _coerce_for_column
+from pathlib import Path
+
+import pytest
+
+from grimoire.state_store.delta_log import _coerce_for_column, validate_table_columns
+from grimoire.storage import Database, apply_migrations
 
 
 class TestCoerceForColumn:
@@ -32,3 +37,26 @@ class TestCoerceForColumn:
 
     def test_int_passes_through(self):
         assert _coerce_for_column("scenes", "turn_number", 42) == 42
+
+
+class TestValidateTableColumns:
+    @pytest.fixture
+    async def db(self, tmp_path: Path):
+        db = Database(tmp_path / "test.sqlite", pool_size=1)
+        await db.connect()
+        await apply_migrations(db)
+        try:
+            yield db
+        finally:
+            await db.close()
+
+    async def test_no_warnings_when_columns_match(self, db: Database):
+        async with db.acquire() as conn:
+            warnings = await validate_table_columns(conn)
+        assert warnings == []
+
+    async def test_warns_on_undeclared_column(self, db: Database):
+        async with db.acquire() as conn:
+            await conn.execute("ALTER TABLE character_state ADD COLUMN extra_col TEXT")
+            warnings = await validate_table_columns(conn)
+        assert any("extra_col" in w for w in warnings)

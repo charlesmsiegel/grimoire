@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ from grimoire.state_store.delta_log import (
     primary_key_columns,
     reverse_sqlite_delta,
     upsert_row,
+    validate_table_columns,
 )
 from grimoire.state_store.delta_log import queue_for_review as _queue_for_review
 from grimoire.state_store.errors import (
@@ -77,6 +79,9 @@ from grimoire.state_store.snapshots import (
 )
 from grimoire.storage import Database
 from grimoire.util import new_id, now_iso
+
+
+logger = logging.getLogger(__name__)
 
 
 def _json_dumps(value: Any) -> str | None:
@@ -160,6 +165,14 @@ class StateStore:
 
     def set_metrics(self, metrics: MetricsRegistryProtocol) -> None:
         self._metrics = metrics
+
+    async def validate_schema(self) -> list[str]:
+        """Check _TABLE_COLUMNS against actual DB schema and log warnings."""
+        async with self.db.acquire() as conn:
+            warnings = await validate_table_columns(conn)
+        for w in warnings:
+            logger.warning("schema drift: %s", w)
+        return warnings
 
     # ------------------------------------------------------------------
     # Connection helpers
