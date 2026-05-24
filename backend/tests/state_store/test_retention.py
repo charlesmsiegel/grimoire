@@ -121,7 +121,11 @@ async def test_sweeper_none_retention_is_noop(store: StateStore) -> None:
     await _insert_fact(store, "fact-x", retired=1, retired_in_post="post-x")
     await _insert_embedding(store, "emb-x", "fact-x", "fact")
 
-    config = RetentionConfig(embeddings_for_retired_facts_seconds=None)
+    config = RetentionConfig(
+        embeddings_for_retired_facts_seconds=None,
+        delta_log_seconds=None,
+        delta_max_rows_per_campaign=None,
+    )
     sweeper = RetentionSweeper(db=store.db, config=config, clock=lambda: NOW)
     deleted = await sweeper.sweep_once()
 
@@ -139,12 +143,17 @@ async def test_sweeper_emits_retention_sweep_completed(store: StateStore) -> Non
     received: list = []
     bus.subscribe("retention_sweep_completed", lambda e: received.append(e))
 
-    config = RetentionConfig(embeddings_for_retired_facts_seconds=MAX_AGE)
+    config = RetentionConfig(
+        embeddings_for_retired_facts_seconds=MAX_AGE,
+        delta_log_seconds=None,
+        delta_max_rows_per_campaign=None,
+    )
     sweeper = RetentionSweeper(db=store.db, config=config, bus=bus, clock=lambda: NOW)
     await sweeper.sweep_once()
 
     assert len(received) == 1
     assert received[0].payload["deleted_embeddings"] == 1
+    assert received[0].payload["deleted_deltas"] == 0
 
 
 async def test_sweeper_no_bus_does_not_raise(store: StateStore) -> None:
@@ -164,3 +173,87 @@ async def test_sweeper_start_stop(store: StateStore) -> None:
     assert sweeper._task is not None
     await sweeper.stop()
     assert sweeper._task is None
+
+
+# ---------------------------------------------------------------------------
+# Tests for delta retention sweep
+# ---------------------------------------------------------------------------
+
+
+async def _insert_delta(
+    store: StateStore,
+    delta_id: str,
+    campaign_id: str,
+    applied_at: str,
+    reversed_at: str | None = None,
+) -> None:
+    await store.db.execute(
+        """
+        INSERT INTO deltas (id, campaign_id, source, kind, target_scope, applied_at, reversed_at)
+        VALUES (?, ?, 'test', 'state_update', 'campaign-sqlite', ?, ?)
+        """,
+        (delta_id, campaign_id, applied_at, reversed_at),
+    )
+
+
+async def _count_deltas(store: StateStore, campaign_id: str) -> int:
+    row = await store.db.fetchone(
+        "SELECT COUNT(*) AS n FROM deltas WHERE campaign_id = ?", (campaign_id,)
+    )
+    assert row is not None
+    return int(row["n"])
+
+
+async def test_sweep_deletes_old_reversed_deltas(store: StateStore) -> None:
+    old_ts = (NOW - timedelta(days=200)).isoformat()
+    recent_ts = (NOW - timedelta(days=10)).isoformat()
+
+    await _insert_delta(store, "d-old-rev", "c1", old_ts, reversed_at=old_ts)
+    await _insert_delta(store, "d-old-active", "c1", old_ts)
+    await _insert_delta(store, "d-recent-rev", "c1", recent_ts, reversed_at=recent_ts)
+
+    config = RetentionConfig(
+        embeddings_for_retired_facts_seconds=None,
+        delta_log_seconds=180 * 24 * 3600,
+        delta_max_rows_per_campaign=None,
+    )
+    sweeper = RetentionSweeper(db=store.db, config=config, clock=lambda: NOW)
+    deleted = await sweeper.sweep_once()
+
+    assert deleted == 1
+    assert await _count_deltas(store, "c1") == 2
+
+
+async def test_sweep_enforces_row_cap(store: StateStore) -> None:
+    ts = NOW.isoformat()
+    for i in range(5):
+        await _insert_delta(store, f"d-active-{i}", "c1", ts)
+    for i in range(5):
+        await _insert_delta(store, f"d-rev-{i}", "c1", ts, reversed_at=ts)
+
+    config = RetentionConfig(
+        embeddings_for_retired_facts_seconds=None,
+        delta_log_seconds=None,
+        delta_max_rows_per_campaign=7,
+    )
+    sweeper = RetentionSweeper(db=store.db, config=config, clock=lambda: NOW)
+    deleted = await sweeper.sweep_once()
+
+    assert deleted == 3
+    assert await _count_deltas(store, "c1") == 7
+
+
+async def test_sweep_skips_when_disabled(store: StateStore) -> None:
+    old_ts = (NOW - timedelta(days=200)).isoformat()
+    await _insert_delta(store, "d-old", "c1", old_ts, reversed_at=old_ts)
+
+    config = RetentionConfig(
+        embeddings_for_retired_facts_seconds=None,
+        delta_log_seconds=None,
+        delta_max_rows_per_campaign=None,
+    )
+    sweeper = RetentionSweeper(db=store.db, config=config, clock=lambda: NOW)
+    deleted = await sweeper.sweep_once()
+
+    assert deleted == 0
+    assert await _count_deltas(store, "c1") == 1
