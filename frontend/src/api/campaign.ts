@@ -529,6 +529,17 @@ export const campaignApi = {
       body,
     ),
 
+  getIntegratedDeltas: (campaignId: string) =>
+    api.get<{ enabled: boolean }>(
+      `/api/campaigns/${enc(campaignId)}/integrated-deltas`,
+    ),
+
+  setIntegratedDeltas: (campaignId: string, body: { enabled: boolean }) =>
+    api.put<{ enabled: boolean }>(
+      `/api/campaigns/${enc(campaignId)}/integrated-deltas`,
+      body,
+    ),
+
   // ----- Retcon (leave-as-is + replay) ----------------------------------
 
   retconPost: (
