@@ -192,7 +192,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             database_path=settings.resolved_database_path,
             enable_wal=settings.enable_wal,
         )
-        container.extras["state_store_config"] = state_store_config
+        container.state_store_config = state_store_config
 
         # User-supplied prompt template variants live under {data_root}/templates
         # and take precedence over the bundled defaults so a user can drop in a
@@ -241,14 +241,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             try:
                 await container.mechanics.rescan()
-                container.extras["mechanics_rescan_error"] = None
+                container.mechanics_rescan_error = None
             except Exception as exc:
                 # An empty MechanicsService is still installed; without a
                 # surfaced signal beyond the log line, endpoints look like
                 # the user simply hasn't installed any modules. Stash the
                 # error so /health / debug endpoints can report it.
                 log.exception("mechanics rescan failed at startup")
-                container.extras["mechanics_rescan_error"] = f"{type(exc).__name__}: {exc}"
+                container.mechanics_rescan_error = f"{type(exc).__name__}: {exc}"
         if container.plugins is None:
             container.plugins = PluginsService(
                 PluginsConfig.for_data_root(data_root),
@@ -256,10 +256,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             try:
                 await container.plugins.rescan()
-                container.extras["plugins_rescan_error"] = None
+                container.plugins_rescan_error = None
             except Exception as exc:
                 log.exception("plugins rescan failed at startup")
-                container.extras["plugins_rescan_error"] = f"{type(exc).__name__}: {exc}"
+                container.plugins_rescan_error = f"{type(exc).__name__}: {exc}"
             # Kick off the periodic health loop so plugin_health_changed
             # events flow even when no UI request triggers a probe.
             try:
@@ -281,7 +281,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # markdown + sidecar source-of-truth. Subscribed to manager events
         # post-construction; backfill walks the disk once to catch any
         # direct-edit-while-down deltas.
-        if container.extras.get("scene_indexer") is None and container.state_store is not None:
+        if container.scene_indexer is None and container.state_store is not None:
             scene_indexer = SceneIndexer(
                 container.scenes, container.state_store.db, container.event_bus
             )
@@ -290,7 +290,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await scene_indexer.backfill()
             except Exception:
                 log.exception("scene indexer backfill failed at startup")
-            container.extras["scene_indexer"] = scene_indexer
+            container.scene_indexer = scene_indexer
         if container.continuity is None:
             # The registry hands out one ContinuityService per
             # (campaign_id, branch_id) backed by SqliteContinuityStore so
@@ -324,14 +324,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 event_bus=container.event_bus,
                 config=imagegen_cfg,
             )
-        if container.extras.get("imagegen_integration") is None and container.event_bus is not None:
+        if container.imagegen_integration is None and container.event_bus is not None:
             integration = ImageGenIntegration(container.imagegen, container.event_bus)
             integration.start()
-            container.extras["imagegen_integration"] = integration
-        if container.extras.get("imagegen_health_prober") is None:
+            container.imagegen_integration = integration
+        if container.imagegen_health_prober is None:
             prober = ImageGenHealthProber(container.imagegen, interval_seconds=30.0)
             prober.start()
-            container.extras["imagegen_health_prober"] = prober
+            container.imagegen_health_prober = prober
         # §8 Reload any jobs that were queued at shutdown.
         try:
             await container.imagegen.reload_pending_jobs()
@@ -393,8 +393,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 container.imagegen.register_with_health_monitor(obs.health_monitor)
             except Exception:
                 log.exception("imagegen register_with_health_monitor failed")
-        if container.extras.get("llm_gateway") is None:
-            container.extras["llm_gateway"] = LLMGatewayService(
+        if container.llm_gateway is None:
+            container.llm_gateway = LLMGatewayService(
                 plugins=container.plugins,
                 db=db,
                 config=settings.llm_gateway.to_gateway_config(),
@@ -403,16 +403,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 health_monitor=obs.health_monitor,
                 metrics=obs.metrics(),
             )
-            await container.extras["llm_gateway"].register_with_health_monitor()
+            await container.llm_gateway.register_with_health_monitor()
             # Wizard-configured plugins ship with an `active_model` but nothing
             # else wires them into the gateway's per-task routing — bridge the
             # gap so wizard-only installs can post turns / embed text / etc.
             # without the user also setting env vars or a campaign YAML.
             try:
-                await container.extras["llm_gateway"].register_provider_defaults()
+                await container.llm_gateway.register_provider_defaults()
             except Exception:
                 log.exception("register_provider_defaults failed at startup")
-        llm_gateway = container.extras["llm_gateway"]
+        llm_gateway = container.llm_gateway
         # ImageGenService is constructed earlier (before the gateway exists);
         # wire the gateway in now so per-task imagegen routing works.
         if container.imagegen is not None:
@@ -449,15 +449,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
         # Background worker drains running_summary_due events so a slow LLM
         # call doesn't block the next append. Coalesces per-scene FIFO.
-        if container.extras.get("scene_summary_worker") is None:
+        if container.scene_summary_worker is None:
             worker = RunningSummaryWorker(container.scenes, container.event_bus)
             worker.start()
-            container.extras["scene_summary_worker"] = worker
-        if container.extras.get("extractor") is None:
-            container.extras["extractor"] = ExtractorService(
+            container.scene_summary_worker = worker
+        if container.extractor is None:
+            container.extractor = ExtractorService(
                 gateway=llm_gateway, metrics=obs.metrics()
             )
-        extractor = container.extras["extractor"]
+        extractor = container.extractor
         # §3: Now that the gateway exists, wire it through the
         # ContinuityRegistry so per-campaign services get a real LLM
         # judge (instead of the always-uncertain stub) and a vector
@@ -473,8 +473,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             registry._judge_request_factory = make_judge_request_factory(
                 registry.config.contradiction_check.model_route
             )
-        if container.extras.get("context_builder") is None:
-            container.extras["context_builder"] = ContextBuilderService(
+        if container.context_builder is None:
+            container.context_builder = ContextBuilderService(
                 library=container.library,
                 characters=container.characters,
                 world=container.world,
@@ -486,7 +486,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 transient_state=container.transient_state,
                 metrics=obs.metrics(),
             )
-        context_builder = container.extras["context_builder"]
+        context_builder = container.context_builder
 
         # Time engine: every dep is already constructed above.
         if container.time_engine is None:
@@ -503,13 +503,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # ``turn_complete`` event to drive Time Engine advances. The
         # subscription lives on the container extras so shutdown can
         # disengage it cleanly.
-        if container.extras.get("time_engine_subscriber") is None:
+        if container.time_engine_subscriber is None:
             subscriber = TimeEngineSubscriber(
                 time_engine=container.time_engine,
                 event_bus=container.event_bus,
             )
             subscriber.start()
-            container.extras["time_engine_subscriber"] = subscriber
+            container.time_engine_subscriber = subscriber
 
         # Export: scenes is the only required source; others use the bundled
         # services as duck-typed sources. Adapters come from the plugin
@@ -567,7 +567,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # drift checks on present characters. The cadence gate inside
         # CharactersService.maybe_check_drift is the source of truth.
         if (
-            container.extras.get("characters_integration") is None
+            container.characters_integration is None
             and container.event_bus is not None
             and container.characters is not None
         ):
@@ -577,7 +577,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 container.event_bus,
             )
             chars_integration.start()
-            container.extras["characters_integration"] = chars_integration
+            container.characters_integration = chars_integration
 
         # Seed default library assets (style guides, etc.) and run one scan
         # so the library_index is populated. We don't start the live
@@ -593,7 +593,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 scene_manager=container.scenes,
                 config=library_cfg,
             )
-            container.extras["file_watcher"] = file_watcher
+            container.file_watcher = file_watcher
             if library_cfg.scan_on_startup:
                 try:
                     await file_watcher.scan_now()
@@ -616,7 +616,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             log.exception("reenqueue_missing_embeddings failed at startup")
         await embedding_worker.start()
-        container.extras["embedding_worker"] = embedding_worker
+        container.embedding_worker = embedding_worker
 
         body_summarizer = BodySummarizer(
             store=container.state_store,
@@ -625,7 +625,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             bus=container.event_bus,
         )
         body_summarizer.start()
-        container.extras["body_summarizer"] = body_summarizer
+        container.body_summarizer = body_summarizer
 
         retention_sweeper = RetentionSweeper(
             db=db,
@@ -633,7 +633,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             bus=container.event_bus,
         )
         await retention_sweeper.start()
-        container.extras["retention_sweeper"] = retention_sweeper
+        container.retention_sweeper = retention_sweeper
 
         backup_scheduler = BackupScheduler(
             data_root=data_root,
@@ -642,7 +642,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             bus=container.event_bus,
         )
         backup_scheduler.start()
-        container.extras["backup_scheduler"] = backup_scheduler
+        container.backup_scheduler = backup_scheduler
 
         mechanics_watcher: MechanicsFileWatcher | None = None
         if container.mechanics.config.reload_on_file_change:
@@ -674,13 +674,13 @@ async def _shutdown(
     container: ServiceContainer | None, db: Database, *, close_db: bool = True
 ) -> None:
     if container is not None:
-        summary_worker = container.extras.get("scene_summary_worker") if container.extras else None
+        summary_worker = container.scene_summary_worker
         if summary_worker is not None:
             try:
                 await summary_worker.stop()
             except Exception:
                 log.exception("scene summary worker stop failed during shutdown")
-        scene_indexer = container.extras.get("scene_indexer") if container.extras else None
+        scene_indexer = container.scene_indexer
         if scene_indexer is not None:
             try:
                 await scene_indexer.stop()
@@ -689,9 +689,7 @@ async def _shutdown(
         # Disengage the Time Engine ``turn_complete`` subscriber so the bus
         # doesn't keep forwarding events into a torn-down engine after the
         # lifespan ends.
-        time_engine_subscriber = (
-            container.extras.get("time_engine_subscriber") if container.extras else None
-        )
+        time_engine_subscriber = container.time_engine_subscriber
         if time_engine_subscriber is not None:
             try:
                 time_engine_subscriber.stop()
@@ -701,25 +699,25 @@ async def _shutdown(
         # State Store background workers — stop before closing the DB so they
         # don't hit a closed connection mid-loop. Each is independently
         # try/excepted so one failure doesn't strand the others.
-        backup_scheduler = container.extras.get("backup_scheduler") if container.extras else None
+        backup_scheduler = container.backup_scheduler
         if backup_scheduler is not None:
             try:
                 backup_scheduler.stop()
             except Exception:
                 log.exception("backup_scheduler stop failed during shutdown")
-        retention_sweeper = container.extras.get("retention_sweeper") if container.extras else None
+        retention_sweeper = container.retention_sweeper
         if retention_sweeper is not None:
             try:
                 await retention_sweeper.stop()
             except Exception:
                 log.exception("retention_sweeper stop failed during shutdown")
-        body_summarizer = container.extras.get("body_summarizer") if container.extras else None
+        body_summarizer = container.body_summarizer
         if body_summarizer is not None:
             try:
                 await body_summarizer.stop()
             except Exception:
                 log.exception("body_summarizer stop failed during shutdown")
-        embedding_worker = container.extras.get("embedding_worker") if container.extras else None
+        embedding_worker = container.embedding_worker
         if embedding_worker is not None:
             try:
                 await embedding_worker.stop()
@@ -731,25 +729,19 @@ async def _shutdown(
                 await container.observability.shutdown()
             except Exception:
                 log.exception("observability shutdown failed during shutdown")
-        imagegen_integration = (
-            container.extras.get("imagegen_integration") if container.extras else None
-        )
+        imagegen_integration = container.imagegen_integration
         if imagegen_integration is not None:
             try:
                 imagegen_integration.stop()
             except Exception:
                 log.exception("imagegen integration stop failed during shutdown")
-        characters_integration = (
-            container.extras.get("characters_integration") if container.extras else None
-        )
+        characters_integration = container.characters_integration
         if characters_integration is not None:
             try:
                 characters_integration.stop()
             except Exception:
                 log.exception("characters integration stop failed during shutdown")
-        imagegen_health_prober = (
-            container.extras.get("imagegen_health_prober") if container.extras else None
-        )
+        imagegen_health_prober = container.imagegen_health_prober
         if imagegen_health_prober is not None:
             try:
                 await imagegen_health_prober.stop()
