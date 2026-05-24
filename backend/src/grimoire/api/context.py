@@ -27,7 +27,7 @@ router = APIRouter(tags=["context"])
 
 def _get_inspector(request: Request) -> ContextInspector:
     container: ServiceContainer = get_container(request)
-    inspector = container.extras.get("context_inspector")
+    inspector = container.context_inspector
     if inspector is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
