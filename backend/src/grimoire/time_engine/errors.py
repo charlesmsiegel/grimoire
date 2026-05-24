@@ -6,6 +6,8 @@ from __future__ import annotations
 class TimeEngineError(Exception):
     """Base class for Time Engine errors."""
 
+    http_status = 500
+
 
 class TimeNotSetError(TimeEngineError):
     """The campaign has no recorded in-game time yet.
@@ -15,15 +17,21 @@ class TimeNotSetError(TimeEngineError):
     Hitting this means neither was true.
     """
 
+    http_status = 409
+
 
 class InvalidSkipError(TimeEngineError):
     """``skip_to`` was given a target that's not strictly in the future."""
+
+    http_status = 400
 
 
 class CheckpointTokenError(TimeEngineError):
     """``advance`` was handed an unknown / expired checkpoint token, or the
     token was issued for a different (campaign, branch) tuple than the caller
     is now passing in."""
+
+    http_status = 400
 
 
 __all__ = [
