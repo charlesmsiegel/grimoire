@@ -226,10 +226,8 @@ class LibraryService:
     # ------------------------------------------------------------------ #
 
     async def list_worlds(self) -> list[WorldMeta]:
-        rows = await self.store.db.fetchall(
-            "SELECT * FROM library_index WHERE kind = 'world' ORDER BY name"
-        )
-        return [_world_meta_from_row(_normalize_row(row)) for row in rows]
+        rows = await self.store.list_library_by_kind("world")
+        return [_world_meta_from_row(row) for row in rows]
 
     async def get_world(self, world_id: str) -> WorldMeta:
         library_id = make_library_id(world_id, "world", world_id)
@@ -258,16 +256,12 @@ class LibraryService:
     # ------------------------------------------------------------------ #
 
     async def list_style_guides(self) -> list[LibraryEntity]:
-        rows = await self.store.db.fetchall(
-            "SELECT * FROM library_index WHERE kind = 'style_guide' ORDER BY name"
-        )
-        return [_entity_from_row(_normalize_row(row)) for row in rows]
+        rows = await self.store.list_library_by_kind("style_guide")
+        return [_entity_from_row(row) for row in rows]
 
     async def list_image_presets(self) -> list[LibraryEntity]:
-        rows = await self.store.db.fetchall(
-            "SELECT * FROM library_index WHERE kind = 'image_preset' ORDER BY name"
-        )
-        return [_entity_from_row(_normalize_row(row)) for row in rows]
+        rows = await self.store.list_library_by_kind("image_preset")
+        return [_entity_from_row(row) for row in rows]
 
     async def get_style_guide(self, id: str) -> LibraryEntity:
         library_id = f"style-guides/{id}"
@@ -501,10 +495,8 @@ class LibraryService:
     # ------------------------------------------------------------------ #
 
     async def list_custom_calendars(self) -> list[LibraryEntity]:
-        rows = await self.store.db.fetchall(
-            "SELECT * FROM library_index WHERE kind = 'calendar' ORDER BY name"
-        )
-        return [_entity_from_row(_normalize_row(row)) for row in rows]
+        rows = await self.store.list_library_by_kind("calendar")
+        return [_entity_from_row(row) for row in rows]
 
     async def get_custom_calendar(self, id: str) -> LibraryEntity:
         library_id = f"calendars/{id}"
@@ -539,10 +531,8 @@ class LibraryService:
         await self.store.delete_library_file(library_id=library_id, source=source)
 
     async def list_custom_holiday_sets(self) -> list[LibraryEntity]:
-        rows = await self.store.db.fetchall(
-            "SELECT * FROM library_index WHERE kind = 'holiday_set' ORDER BY name"
-        )
-        return [_entity_from_row(_normalize_row(row)) for row in rows]
+        rows = await self.store.list_library_by_kind("holiday_set")
+        return [_entity_from_row(row) for row in rows]
 
     async def get_custom_holiday_set(self, id: str) -> LibraryEntity:
         library_id = f"holiday-sets/{id}"
