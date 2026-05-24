@@ -128,6 +128,9 @@ class WorldService:
         # and emergent location generation (§9). Both are no-ops when None.
         self.gateway = gateway
 
+    def set_gateway(self, gateway: Any) -> None:
+        self.gateway = gateway
+
     def _safe_world_dir(self, world_id: str) -> Path:
         """Resolve ``data/library/worlds/<world_id>`` after path-safety checks.
 

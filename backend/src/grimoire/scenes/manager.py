@@ -180,6 +180,18 @@ class SceneManager:
         self._pc_current_scene: dict[tuple[str, str], str] = {}  # (campaign_id, pc_ref) -> scene_id
         self._locks: dict[str, asyncio.Lock] = {}
 
+    def set_continuity(self, continuity: object) -> None:
+        self._continuity = continuity
+
+    def set_summarizer(self, summarizer: Summarizer | None) -> None:
+        self._summarizer = summarizer
+
+    def set_final_summarizer(self, summarizer: FinalSummarizer | None) -> None:
+        self._final_summarizer = summarizer
+
+    def set_metrics(self, metrics: MetricsRegistryProtocol) -> None:
+        self._metrics = metrics
+
     # -- helpers ---------------------------------------------------------
 
     def _lock_for(self, scene_id: str) -> asyncio.Lock:
