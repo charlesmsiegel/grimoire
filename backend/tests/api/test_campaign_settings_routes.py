@@ -477,3 +477,38 @@ def test_new_campaign_seeds_tiers_from_shipped_defaults(settings_client) -> None
     body = resp.json()
     assert body["heavy"] == "deepseek.deepseek-v4-pro"
     assert body["light"] == "deepseek.deepseek-v4-flash"
+
+
+# ---------------------------------------------------------------------------
+# integrated-deltas (PR 2 Task 6)
+# ---------------------------------------------------------------------------
+
+
+def test_integrated_deltas_default_false(settings_client) -> None:
+    resp = settings_client.get("/api/campaigns/camp-1/integrated-deltas")
+    assert resp.status_code == 200
+    assert resp.json() == {"enabled": False}
+
+
+def test_integrated_deltas_round_trip(settings_client) -> None:
+    resp = settings_client.put(
+        "/api/campaigns/camp-1/integrated-deltas",
+        json={"enabled": True},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"enabled": True}
+
+    resp = settings_client.get("/api/campaigns/camp-1/integrated-deltas")
+    assert resp.json()["enabled"] is True
+
+
+def test_integrated_deltas_disable(settings_client) -> None:
+    settings_client.put(
+        "/api/campaigns/camp-1/integrated-deltas",
+        json={"enabled": True},
+    )
+    resp = settings_client.put(
+        "/api/campaigns/camp-1/integrated-deltas",
+        json={"enabled": False},
+    )
+    assert resp.json()["enabled"] is False
