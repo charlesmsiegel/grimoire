@@ -398,6 +398,8 @@ def _coerce_for_column(table: str, column: str, value: Any) -> Any:
         return None
     if isinstance(value, bool):
         return 1 if value else 0
+    if isinstance(value, str):
+        return value
     if isinstance(value, (dict, list)):
         return json.dumps(value, sort_keys=True, default=str)
     return value
