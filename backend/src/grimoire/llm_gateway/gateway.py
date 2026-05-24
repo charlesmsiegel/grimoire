@@ -156,13 +156,16 @@ class LLMGatewayService:
         from grimoire.llm_gateway.tiers import tier_for_task
 
         tier = tier_for_task(task)
-        await self._emit("tier_resolved", {
-            "task": task,
-            "tier": tier.value if tier is not None else None,
-            "route": route.raw,
-            "source": source,
-            "campaign_id": campaign_id,
-        })
+        await self._emit(
+            "tier_resolved",
+            {
+                "task": task,
+                "tier": tier.value if tier is not None else None,
+                "route": route.raw,
+                "source": source,
+                "campaign_id": campaign_id,
+            },
+        )
 
     # ------------------------------------------------------------------ #
     # Pricing cache

@@ -454,9 +454,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             worker.start()
             container.scene_summary_worker = worker
         if container.extractor is None:
-            container.extractor = ExtractorService(
-                gateway=llm_gateway, metrics=obs.metrics()
-            )
+            container.extractor = ExtractorService(gateway=llm_gateway, metrics=obs.metrics())
         extractor = container.extractor
         # §3: Now that the gateway exists, wire it through the
         # ContinuityRegistry so per-campaign services get a real LLM

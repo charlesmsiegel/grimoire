@@ -94,9 +94,7 @@ async def test_no_skip_event_when_default_cadence_would_not_fire(manager, bus) -
         and post_count > 0
         and post_count % default_n == 0
     ):
-        await manager._emit(
-            "summary_skipped", _fake_scene(), reason="running_cadence_disabled"
-        )
+        await manager._emit("summary_skipped", _fake_scene(), reason="running_cadence_disabled")
 
     assert len(bus.events) == 0
 
