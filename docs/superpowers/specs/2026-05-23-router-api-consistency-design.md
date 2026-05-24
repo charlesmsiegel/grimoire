@@ -118,12 +118,46 @@ Verify all endpoints use kebab-case for multi-word path segments. Single-word se
 
 ## Scope
 
+### Step 6: WebSocket Timeout and Heartbeat
+
+**File:** `backend/src/grimoire/api/ws.py`
+
+The current WebSocket endpoint runs an infinite `while True` loop calling `receive_text()` with no timeout, heartbeat, or ping/pong. A client that connects and goes silent holds a connection open forever.
+
+Add:
+1. **Ping/pong heartbeat:** Send a WebSocket ping every 30 seconds. If no pong is received within 10 seconds, close the connection.
+2. **Idle timeout:** If no messages are received from the client for 5 minutes, close the connection with code 1000 (normal closure).
+3. **Configurable intervals:** Both intervals configurable via `StreamManager` constructor or app config.
+
+```python
+@router.websocket("/campaigns/{campaign_id}/stream")
+async def campaign_stream(websocket: WebSocket, campaign_id: str) -> None:
+    # ... existing setup ...
+    await stream.connect(campaign_id, websocket)
+    try:
+        while True:
+            try:
+                await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=IDLE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                # Idle timeout: close gracefully
+                await websocket.close(code=1000)
+                break
+            except WebSocketDisconnect:
+                break
+    finally:
+        await stream.disconnect(campaign_id, websocket)
+```
+
 ### In scope
 - Split `campaigns.py` into ~14 sub-modules
 - Create shared pagination dependency
 - Add response models to high-priority list/get endpoints
 - Normalize URL naming to kebab-case
 - Move helpers to shared module
+- Add WebSocket idle timeout and heartbeat
 
 ### Not in scope
 - Adding authentication
@@ -139,3 +173,4 @@ Verify all endpoints use kebab-case for multi-word path segments. Single-word se
 4. `ruff check` passes.
 5. Frontend can still call all endpoints (no URL changes except `world_diff` → `world-diff`).
 6. OpenAPI schema at `/docs` shows response models for priority endpoints.
+7. WebSocket connection closes after idle timeout (test with mock client).

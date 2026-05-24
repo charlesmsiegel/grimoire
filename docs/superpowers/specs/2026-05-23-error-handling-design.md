@@ -119,6 +119,18 @@ Four exception classes in `continuity/service.py` (`FactNotFoundError`, `Commitm
 
 Similarly, `NoBackendAvailableError` in `imagegen/service.py:137` should move to `imagegen/errors.py`.
 
+### Step 5: Fix Backend Ruff Failures
+
+Fix the 7 test-only Ruff issues to keep the lint floor clean:
+
+- `backend/tests/llm_gateway/test_event_emissions.py:157`: line too long
+- `backend/tests/orchestrator/test_integrated_deltas.py:7`: unused `pytest` import
+- `backend/tests/orchestrator/test_integrated_deltas.py:77`: import not at top of file
+- `backend/tests/orchestrator/test_integrated_deltas.py:78`: import not at top of file
+- `backend/tests/scenes/test_summary_skipped.py:60`: line too long
+- `backend/tests/scenes/test_summary_skipped.py:87`: nested `if` can be collapsed
+- `backend/tests/scenes/test_summary_skipped.py:88`: nested `if` can be collapsed
+
 ## Scope
 
 ### In scope
@@ -127,6 +139,7 @@ Similarly, `NoBackendAvailableError` in `imagegen/service.py:137` should move to
 - Remove 3 per-router wrapper functions
 - Move inline exception definitions to `errors.py` modules
 - Add `RateLimitError` → 429 mapping (currently falls through to 500)
+- Fix 7 backend Ruff test failures
 
 ### Not in scope
 - Changing exception hierarchies or class names
