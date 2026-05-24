@@ -135,7 +135,7 @@ async def test_stream_success_on_first_try(db, plugins) -> None:
     text = "".join(c.delta for c in chunks if c.delta)
     assert "a" in text and "b" in text and "c" in text
 
-    assert collector.types == ["llm_request_started", "llm_response_received"]
+    assert collector.types == ["tier_resolved", "llm_request_started", "llm_response_received"]
     started = collector.by_type("llm_request_started")[0]
     assert started.payload["provider"] == "primary"
     assert started.payload["fallback_used"] is False
@@ -179,6 +179,7 @@ async def test_stream_zero_chunk_transient_retry_succeeds(db, plugins) -> None:
     assert provider.call_count == 2
 
     assert collector.types == [
+        "tier_resolved",
         "llm_request_started",
         "llm_request_failed",
         "llm_request_started",
@@ -241,6 +242,7 @@ async def test_stream_zero_chunk_retries_exhausted_fallback_succeeds(db, plugins
     assert secondary.call_count == 1
 
     assert collector.types == [
+        "tier_resolved",
         "llm_request_started",  # primary attempt 1
         "llm_request_failed",  # primary attempt 1 fail
         "llm_request_started",  # primary retry 1
@@ -308,6 +310,7 @@ async def test_stream_zero_chunk_permanent_error_tries_fallback(db, plugins) -> 
     assert secondary.call_count == 1
 
     assert collector.types == [
+        "tier_resolved",
         "llm_request_started",  # primary
         "llm_request_failed",  # primary permanent fail
         "llm_request_started",  # fallback

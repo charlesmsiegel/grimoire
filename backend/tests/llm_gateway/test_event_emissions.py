@@ -80,7 +80,7 @@ async def test_complete_emits_started_then_received(db, plugins) -> None:
 
     await gw.complete("main", _request(), campaign_id="camp-1", turn_id="turn-42")
 
-    assert collector.types == ["llm_request_started", "llm_response_received"]
+    assert collector.types == ["tier_resolved", "llm_request_started", "llm_response_received"]
 
     started = collector.by_type("llm_request_started")[0]
     assert started.payload["task"] == "main"
@@ -119,7 +119,7 @@ async def test_complete_permanent_error_emits_started_then_failed(db, plugins) -
     with pytest.raises(InvalidRequestError):
         await gw.complete("main", _request())
 
-    assert collector.types == ["llm_request_started", "llm_request_failed"]
+    assert collector.types == ["tier_resolved", "llm_request_started", "llm_request_failed"]
 
     failed = collector.by_type("llm_request_failed")[0]
     assert failed.payload["task"] == "main"
@@ -154,8 +154,9 @@ async def test_complete_fallback_emits_full_sequence(db, plugins) -> None:
     resp = await gw.complete("main", _request())
     assert resp.text == "from local"
 
-    # Expected sequence: started(cloud) → failed(cloud) → started(local) → received(local)
+    # Expected sequence: tier_resolved → started(cloud) → failed(cloud) → started(local) → received(local)
     assert collector.types == [
+        "tier_resolved",
         "llm_request_started",
         "llm_request_failed",
         "llm_request_started",
@@ -193,7 +194,7 @@ async def test_stream_emits_started_then_received(db, plugins) -> None:
     async for chunk in gw.stream("main", _request(), campaign_id="camp-2", turn_id="turn-7"):
         chunks.append(chunk)
 
-    assert collector.types == ["llm_request_started", "llm_response_received"]
+    assert collector.types == ["tier_resolved", "llm_request_started", "llm_response_received"]
 
     started = collector.by_type("llm_request_started")[0]
     assert started.payload["task"] == "main"
