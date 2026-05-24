@@ -16,9 +16,12 @@ export class ApiError extends Error {
   }
 }
 
+import type { ZodType } from "zod";
+
 interface RequestOptions {
   signal?: AbortSignal;
   query?: Record<string, string | number | boolean | undefined | null>;
+  schema?: ZodType;
 }
 
 function buildUrl(path: string, query?: RequestOptions["query"]): string {
@@ -71,7 +74,9 @@ async function request<T>(
       `expected JSON response from ${path} but got ${ct || "unknown content-type"}`,
     );
   }
-  return (await parseBody(res)) as T;
+  const data = await parseBody(res);
+  if (opts.schema) return opts.schema.parse(data) as T;
+  return data as T;
 }
 
 async function requestText(
