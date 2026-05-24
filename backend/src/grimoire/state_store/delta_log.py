@@ -26,21 +26,7 @@ from typing import Any
 import aiosqlite
 
 from grimoire.state_store.errors import NotFoundError, StateStoreError
-from grimoire.util import new_id, now_iso
-
-
-def _json_dumps(value: Any) -> str | None:
-    if value is None:
-        return None
-    return json.dumps(value, sort_keys=True, default=str)
-
-
-def _json_loads(value: Any) -> Any:
-    if value is None or value == "":
-        return None
-    if isinstance(value, (dict, list)):
-        return value
-    return json.loads(value)
+from grimoire.util import new_id, now_iso, safe_json_dumps, safe_json_loads
 
 
 @dataclass(frozen=True)
@@ -83,8 +69,8 @@ class DeltaRecord:
             target_table=row["target_table"],
             target_path=row["target_path"],
             target_id=row["target_id"],
-            before=_json_loads(row["before"]),
-            after=_json_loads(row["after"]),
+            before=safe_json_loads(row["before"]),
+            after=safe_json_loads(row["after"]),
             confidence=row["confidence"],
             applied_at=row["applied_at"],
             reversed_at=row["reversed_at"],
@@ -133,8 +119,8 @@ async def insert_delta(
             target_table,
             target_path,
             target_id,
-            _json_dumps(before),
-            _json_dumps(after),
+            safe_json_dumps(before),
+            safe_json_dumps(after),
             confidence,
             now_iso(),
             notes,

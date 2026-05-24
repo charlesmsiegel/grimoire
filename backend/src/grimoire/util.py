@@ -6,9 +6,11 @@ Keep this file narrow — anything domain-specific belongs in its own package.
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 _DEFAULT_ID_HEX_WIDTH = 12
 _SLUGIFY_ID_RE = re.compile(r"[^a-z0-9]+")
@@ -43,4 +45,20 @@ def slugify_id(raw: str, *, fallback: str = "") -> str:
     return slug or fallback
 
 
-__all__ = ["new_id", "now_iso", "slugify_id"]
+def safe_json_loads(value: str | dict | list | None) -> Any:
+    """Parse JSON string, or return already-parsed dicts/lists unchanged."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    return json.loads(value)
+
+
+def safe_json_dumps(value: Any) -> str | None:
+    """Serialize to JSON with deterministic key ordering, or None passthrough."""
+    if value is None:
+        return None
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+__all__ = ["new_id", "now_iso", "safe_json_dumps", "safe_json_loads", "slugify_id"]
