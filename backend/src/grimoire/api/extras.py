@@ -42,7 +42,6 @@ def _parse_kind(kind: str) -> EntityKind:
         raise HTTPException(status_code=404, detail=f"unknown entity kind: {kind!r}") from exc
 
 
-
 def _serialize_extras(extras: dict) -> dict[str, Any]:
     return {key: value.model_dump(mode="json") for key, value in extras.items()}
 
