@@ -54,20 +54,19 @@ logger = logging.getLogger(__name__)
 _TERM_RE = re.compile(r"\w+", re.UNICODE)
 
 
-class FactNotFoundError(KeyError):
-    pass
+from grimoire.continuity.errors import (
+    CommitmentNotFoundError,
+    ConfidenceFloorError,
+    ContradictionReportNotFoundError,
+    FactNotFoundError,
+)
 
-
-class CommitmentNotFoundError(KeyError):
-    pass
-
-
-class ContradictionReportNotFoundError(KeyError):
-    pass
-
-
-class ConfidenceFloorError(ValueError):
-    """Raised when a fact is rejected because its confidence is too low."""
+__all__ = [
+    "CommitmentNotFoundError",
+    "ConfidenceFloorError",
+    "ContradictionReportNotFoundError",
+    "FactNotFoundError",
+]
 
 
 def _patch_dataclass(obj, patch: dict):

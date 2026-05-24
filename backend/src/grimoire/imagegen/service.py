@@ -134,13 +134,9 @@ def should_illustrate(
     return False
 
 
-class NoBackendAvailableError(RuntimeError):
-    """Raised when an operation requires a backend but none is registered.
+from grimoire.imagegen.errors import NoBackendAvailableError
 
-    Distinguishes the "no plugin installed yet" steady state from genuine
-    bugs, so callers (and the API layer) can translate it to a clean 503
-    instead of a 500.
-    """
+__all__ = ["NoBackendAvailableError"]
 
 
 # --------------------------------------------------------------------------- #
