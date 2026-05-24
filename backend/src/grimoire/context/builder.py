@@ -28,6 +28,7 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
+from grimoire.context.archive import ArchiveRetriever
 from grimoire.context.cast import CastResolver
 from grimoire.context.config import ContextBuilderConfig
 from grimoire.context.continuity_context import ContinuityContextResolver
@@ -58,69 +59,6 @@ logger = logging.getLogger(__name__)
 # panel exposes this same default via :class:`_InspectorConfig` so writes
 # from the UI line up with reads from the builder.
 DEFAULT_BRANCH_SUFFIX = "main"
-
-
-def _route_lore_to_tier(lore: Any) -> TierItem | None:
-    """Build a ``TierItem`` for one triggered lore entry.
-
-    Routes by the entry's ``position`` field per spec
-    ``2026-05-19-card-imports-design.md`` §4:
-
-    * ``before_cast`` → SPOTLIGHT (priority 8, ``"lore-before"``)
-    * ``after_cast`` → BACKGROUND (priority 5, ``"lore-after"``)
-    * ``at_depth``  → BACKGROUND (priority 7, ``"lore-depth-N"``)
-    * ``archive`` (or unknown) → ARCHIVE (priority 2, ``"lore-archive"``)
-
-    Stubs without a ``position`` attribute fall through to the ARCHIVE
-    branch, preserving backwards compatibility with older world stubs in
-    test fixtures.
-    """
-    body = getattr(lore, "body", "") or ""
-    title = getattr(lore, "title", "") or ""
-    text = f"[lore: {title}] {body[:400]}".strip()
-    world_id = getattr(lore, "world_id", "") or ""
-    lore_id = getattr(lore, "id", "") or ""
-    lore_owner = f"library:worlds/{world_id}/lore/{lore_id}"
-    position = getattr(lore, "position", None)
-    position_value = getattr(position, "value", position) or "archive"
-
-    if position_value == "before_cast":
-        tier = ContextTier.SPOTLIGHT
-        section = "lore-before"
-        priority = 8
-        reasons = [InclusionReason.LORE_ARCHIVE, InclusionReason.KEYWORD_TRIGGERED]
-    elif position_value == "after_cast":
-        tier = ContextTier.BACKGROUND
-        section = "lore-after"
-        priority = 5
-        reasons = [InclusionReason.LORE_ARCHIVE, InclusionReason.KEYWORD_TRIGGERED]
-    elif position_value == "at_depth":
-        tier = ContextTier.BACKGROUND
-        depth = getattr(lore, "at_depth", None)
-        section = f"lore-depth-{depth}" if depth is not None else "lore-depth"
-        priority = 7
-        reasons = [InclusionReason.LORE_ARCHIVE, InclusionReason.KEYWORD_TRIGGERED]
-    else:
-        tier = ContextTier.ARCHIVE
-        section = "lore-archive" if position_value == "archive" else "lore"
-        priority = 2 if position_value == "archive" else 4
-        reasons = [InclusionReason.LORE_ARCHIVE, InclusionReason.KEYWORD_TRIGGERED]
-
-    return TierItem(
-        tier=tier,
-        section=section,
-        text=text,
-        priority=priority,
-        source=ContextSource(
-            kind="lore",
-            scope="library",
-            owner_id=lore_owner,
-            tier=tier,
-            summary=title,
-            source_id=_make_source_id("lore", lore_owner),
-            inclusion_reasons=reasons,
-        ),
-    )
 
 
 def _resolve_runtime_macros(messages: list[Message], active_pc_name: str) -> list[Message]:
@@ -196,6 +134,14 @@ class ContextBuilderService:
             continuity=continuity,
             characters=characters,
             time_engine=time_engine,
+            config=self._config,
+        )
+        self._archive = ArchiveRetriever(
+            state_store=state_store,
+            gateway=gateway,
+            world=world,
+            mechanics=mechanics,
+            scenes=scenes,
             config=self._config,
         )
 
@@ -444,7 +390,7 @@ class ContextBuilderService:
         )
 
         # Step 5 — archive retrieval
-        archive_items = await self._retrieve_archive(
+        archive_items = await self._archive.retrieve_archive(
             player_input=player_input,
             campaign_id=campaign_id,
             scene=scene,
@@ -453,24 +399,17 @@ class ContextBuilderService:
             composition=composition,
         )
 
-        # Step 5a — lore keyword triggers (campaign-scoped); routed to the
-        # tier indicated by each entry's ``position`` field.
-        lore_spotlight, lore_background, lore_archive = await self._lore_triggers(
+        lore_spotlight, lore_background, lore_archive = await self._archive.lore_triggers(
             player_input, campaign_id, turn_id=turn_id
         )
         spotlight_items.extend(lore_spotlight)
         background_items.extend(lore_background)
         archive_items.extend(lore_archive)
 
-        # Step 5b — explicit scene references from the player input. These
-        # bypass the vector/keyword budget — the player asked for them.
-        archive_items.extend(await self._scene_refs_from_input(player_input, campaign_id))
+        archive_items.extend(await self._archive.scene_refs_from_input(player_input, campaign_id))
 
-        # Step 5c — power-definition lookups for capabilities named by
-        # spotlight characters (archive tier so they don't crowd the
-        # spotlight budget).
         archive_items.extend(
-            await self._power_definition_archive(
+            await self._archive.power_definition_archive(
                 campaign_id=campaign_id,
                 scene=scene,
                 active_pc_ref=active_pc_ref,
@@ -565,340 +504,6 @@ class ContextBuilderService:
         if not names:
             return ""
         return "Worlds in play: " + "; ".join(names)
-
-    # -- archive retrieval --------------------------------------------- #
-
-    async def _retrieve_archive(
-        self,
-        *,
-        player_input: str,
-        campaign_id: CampaignId,
-        scene: Any,
-        recent_posts: list[Any],
-        turn_id: TurnId | None = None,
-        composition: Composition | None = None,
-    ) -> list[TierItem]:
-        items: list[TierItem] = []
-        query = self._build_retrieval_query(player_input, scene, recent_posts)
-        if not query:
-            return items
-
-        priority_hints = self._priority_hints(composition)
-
-        # Vector
-        vector_hits = await self._vector_search(query, campaign_id, turn_id, priority_hints)
-        for hit in vector_hits:
-            text = getattr(hit, "text", "") or ""
-            if not text:
-                continue
-            items.append(
-                TierItem(
-                    tier=ContextTier.ARCHIVE,
-                    section="retrieved",
-                    text=f"[retrieved · {hit.source_kind}] {text}",
-                    priority=int(hit.score * 10),
-                    source=ContextSource(
-                        kind=hit.source_kind or "post",
-                        scope=hit.scope or "campaign-local",
-                        owner_id=hit.ref,
-                        tier=ContextTier.ARCHIVE,
-                        summary=f"score={hit.score:.3f}",
-                        source_id=_make_source_id("retrieved", f"{hit.source_kind}:{hit.ref}"),
-                        inclusion_reasons=[InclusionReason.KEYWORD_TRIGGERED],
-                    ),
-                )
-            )
-
-        # Keyword
-        keyword_hits = await self._keyword_search(query, campaign_id, priority_hints)
-        seen_refs: set[str] = {item.source.owner_id or "" for item in items}
-        for hit in keyword_hits:
-            if (hit.ref or "") in seen_refs:
-                continue
-            text = getattr(hit, "text", "") or ""
-            if not text:
-                continue
-            items.append(
-                TierItem(
-                    tier=ContextTier.ARCHIVE,
-                    section="keyword",
-                    text=f"[fact-match] {text}",
-                    priority=int(hit.score * 5),
-                    source=ContextSource(
-                        kind=hit.source_kind or "fact",
-                        scope=hit.scope or "campaign-local",
-                        owner_id=hit.ref,
-                        tier=ContextTier.ARCHIVE,
-                        summary=f"score={hit.score:.3f}",
-                        source_id=_make_source_id("keyword", f"{hit.source_kind}:{hit.ref}"),
-                        inclusion_reasons=[InclusionReason.KEYWORD_TRIGGERED],
-                    ),
-                )
-            )
-            seen_refs.add(hit.ref or "")
-        return items
-
-    async def _power_definition_archive(
-        self,
-        *,
-        campaign_id: CampaignId,
-        scene: Any,
-        active_pc_ref: str | None,
-    ) -> list[TierItem]:
-        """Surface power definitions for capabilities held by spotlight chars.
-
-        For each unique capability id collected across the spotlight cast,
-        ask the mechanics module for its ``PowerDefinition``; format any
-        hits as archive-tier items.
-        """
-        if self._mechanics is None:
-            return []
-        refs: list[str] = []
-        if active_pc_ref:
-            refs.append(active_pc_ref)
-        if scene is not None:
-            refs.extend(getattr(scene, "present_character_refs", []) or [])
-        if not refs:
-            return []
-        # Dedupe while preserving order.
-        seen: set[str] = set()
-        ordered_refs = [r for r in refs if not (r in seen or seen.add(r))]
-
-        # Collect capability ids across all spotlight characters.
-        capability_ids: list[str] = []
-        seen_caps: set[str] = set()
-        for ref in ordered_refs:
-            try:
-                caps = await self._mechanics.capabilities_of(campaign_id, ref)
-            except Exception as exc:
-                logger.debug("capabilities_of(%s) failed: %s", ref, exc)
-                continue
-            for cap in caps or []:
-                cap_id = cap.get("id") if isinstance(cap, dict) else getattr(cap, "id", None)
-                if not cap_id or cap_id in seen_caps:
-                    continue
-                seen_caps.add(cap_id)
-                capability_ids.append(cap_id)
-
-        items: list[TierItem] = []
-        for cap_id in capability_ids:
-            try:
-                power = await self._mechanics.power_definition(campaign_id, cap_id)
-            except Exception as exc:
-                logger.debug("power_definition(%s) failed: %s", cap_id, exc)
-                continue
-            if power is None:
-                continue
-            name = getattr(power, "name", cap_id) or cap_id
-            description = getattr(power, "description", "") or ""
-            effect = getattr(power, "effect", "") or ""
-            rating = getattr(power, "rating", None)
-            header = f"[power: {name}" + (f" ({rating})" if rating is not None else "") + "]"
-            body = " ".join(p for p in (description, effect) if p).strip()
-            text = f"{header} {body}".strip()
-            items.append(
-                TierItem(
-                    tier=ContextTier.ARCHIVE,
-                    section="power",
-                    text=text,
-                    priority=3,
-                    source=ContextSource(
-                        kind="power",
-                        scope="library",
-                        owner_id=f"power:{cap_id}",
-                        tier=ContextTier.ARCHIVE,
-                        summary=name,
-                        source_id=_make_source_id("power", cap_id),
-                        inclusion_reasons=[InclusionReason.MECHANICS_RELEVANT],
-                    ),
-                )
-            )
-        return items
-
-    async def _lore_triggers(
-        self,
-        player_input: str,
-        campaign_id: CampaignId,
-        *,
-        turn_id: TurnId | None = None,
-    ) -> tuple[list[TierItem], list[TierItem], list[TierItem]]:
-        """Return (spotlight, background, archive) lore items by position."""
-        if self._world is None or not player_input:
-            return [], [], []
-        try:
-            triggered = await self._world.lore_for_post(player_input, campaign_id, turn_id=turn_id)
-        except TypeError:
-            # Older WorldService signatures that don't accept turn_id —
-            # fall back gracefully so this caller never breaks the build.
-            try:
-                triggered = await self._world.lore_for_post(player_input, campaign_id)
-            except Exception:
-                return [], [], []
-        except Exception:
-            return [], [], []
-        spotlight: list[TierItem] = []
-        background: list[TierItem] = []
-        archive: list[TierItem] = []
-        for lore in triggered:
-            item = _route_lore_to_tier(lore)
-            if item is None:
-                continue
-            if item.tier == ContextTier.SPOTLIGHT:
-                spotlight.append(item)
-            elif item.tier == ContextTier.BACKGROUND:
-                background.append(item)
-            else:
-                archive.append(item)
-        return spotlight, background, archive
-
-    async def _vector_search(
-        self,
-        query: str,
-        campaign_id: CampaignId,
-        turn_id: TurnId | None = None,
-        priority_hints: dict[str, int] | None = None,
-    ) -> list[Any]:
-        if self._gateway is None or self._store is None:
-            return []
-        try:
-            vectors = await self._gateway.embed(
-                self._config.retrieval.embedding_task,
-                [query],
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-            )
-        except Exception:
-            return []
-        if not vectors:
-            return []
-        kwargs: dict[str, Any] = {
-            "query_vector": vectors[0],
-            "campaign_id": campaign_id,
-            "include_library": self._config.retrieval.include_library,
-            "top_k": self._config.retrieval.vector_top_k,
-        }
-        if priority_hints:
-            kwargs["priority_hints"] = priority_hints
-        return await self._invoke_store_search(self._store.vector_search, kwargs)
-
-    async def _keyword_search(
-        self,
-        query: str,
-        campaign_id: CampaignId,
-        priority_hints: dict[str, int] | None = None,
-    ) -> list[Any]:
-        if self._store is None:
-            return []
-        kwargs: dict[str, Any] = {
-            "query": query,
-            "campaign_id": campaign_id,
-            "kinds": self._config.retrieval.keyword_kinds,
-            "top_k": self._config.retrieval.keyword_top_k,
-        }
-        if priority_hints:
-            kwargs["priority_hints"] = priority_hints
-        return await self._invoke_store_search(self._store.keyword_search, kwargs)
-
-    async def _invoke_store_search(self, fn: Any, kwargs: dict[str, Any]) -> list[Any]:
-        """Call a store search with optional ``priority_hints`` retry.
-
-        If the store doesn't yet accept the priority kwarg we drop it and
-        retry once — the builder must keep working against older stores
-        (spec context-builder-remaining §13 is store-gated).
-        """
-        try:
-            return await fn(**kwargs)
-        except TypeError as exc:
-            if "priority_hints" in kwargs and "priority_hints" in str(exc):
-                kwargs = {k: v for k, v in kwargs.items() if k != "priority_hints"}
-                try:
-                    return await fn(**kwargs)
-                except Exception:
-                    return []
-            return []
-        except Exception:
-            return []
-
-    def _priority_hints(self, composition: Composition | None) -> dict[str, int]:
-        """Build a ``{world_id: priority}`` hint dict for the store.
-
-        Returns an empty dict (no hint) when weighting is disabled or the
-        composition is missing — the store should fall back to its own
-        ranking.
-        """
-        if not self._config.retrieval.enable_priority_weighting:
-            return {}
-        if composition is None or not composition.worlds:
-            return {}
-        return {wref.world_id: wref.priority for wref in composition.worlds}
-
-    async def _scene_refs_from_input(
-        self, player_input: str, campaign_id: CampaignId
-    ) -> list[TierItem]:
-        """§7 — explicit past-scene references.
-
-        Scan the player input for ``scene:<id>`` tokens and emit one archive
-        item per matched scene. These bypass retrieval budget because the
-        player asked for them by ref.
-        """
-        if not player_input or self._scenes is None:
-            return []
-        matches = re.findall(r"scene:([A-Za-z0-9_\-:.]+)", player_input)
-        if not matches:
-            return []
-        seen: set[str] = set()
-        items: list[TierItem] = []
-        getter = getattr(self._scenes, "get_scene", None)
-        for raw in matches:
-            scene_id = raw.strip(".,;:!?)]}").strip()
-            if not scene_id or scene_id in seen:
-                continue
-            seen.add(scene_id)
-            if len(items) >= self._config.scene_ref_limit:
-                break
-            scene = None
-            if getter is not None:
-                try:
-                    scene = await getter(scene_id)
-                except Exception:
-                    scene = None
-            text = _render_scene_reference(scene_id, scene)
-            items.append(
-                TierItem(
-                    tier=ContextTier.ARCHIVE,
-                    section="scene_ref",
-                    text=text,
-                    priority=20,  # explicit ref wins over vector/keyword hits
-                    source=ContextSource(
-                        kind="scene",
-                        scope="campaign-local",
-                        owner_id=campaign_id,
-                        tier=ContextTier.ARCHIVE,
-                        summary=f"scene:{scene_id}",
-                        source_id=_make_source_id("scene_ref", scene_id),
-                        inclusion_reasons=[InclusionReason.SCENE_ANCHOR],
-                    ),
-                )
-            )
-        return items
-
-    def _build_retrieval_query(
-        self, player_input: str, scene: Any, recent_posts: Iterable[Any]
-    ) -> str:
-        parts: list[str] = []
-        if player_input:
-            parts.append(player_input)
-        if scene is not None:
-            present = list(getattr(scene, "present_character_refs", []) or [])
-            if present:
-                parts.append(" ".join(present))
-            if getattr(scene, "location_ref", None):
-                parts.append(str(scene.location_ref))
-        # Names mentioned in the last few posts contribute terms too.
-        last_n_bodies = [getattr(p, "body", "") for p in list(recent_posts)[-3:]]
-        if last_n_bodies:
-            parts.append(" ".join(last_n_bodies))
-        return " ".join(p for p in parts if p).strip()
 
     # -- mechanics ------------------------------------------------------ #
 
@@ -1354,23 +959,6 @@ class ContextBuilderService:
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-
-
-def _render_scene_reference(scene_id: str, scene: Any | None) -> str:
-    """One-paragraph reference card for a scene the player called out."""
-    if scene is None:
-        return f"[explicit scene reference] scene:{scene_id} (not found)"
-    bits: list[str] = []
-    title = getattr(scene, "title", None) or getattr(scene, "slug", None) or scene_id
-    bits.append(f"[explicit scene reference] {title} (scene:{scene_id})")
-    if getattr(scene, "location_ref", None):
-        bits.append(f"Location: {scene.location_ref}")
-    final = getattr(scene, "final_summary", None) or ""
-    running = getattr(scene, "running_summary", None) or ""
-    summary = final or running
-    if summary:
-        bits.append(f"Summary: {summary}")
-    return "\n".join(bits)
 
 
 _make_source_id = make_source_id

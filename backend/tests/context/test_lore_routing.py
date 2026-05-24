@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from grimoire.context.builder import _route_lore_to_tier
+from grimoire.context.archive import _route_lore_to_tier
 from grimoire.types.state import ContextTier
 
 
