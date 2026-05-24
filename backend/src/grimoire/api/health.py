@@ -21,9 +21,8 @@ class HealthResponse(BaseModel):
 @router.get("/health", response_model=HealthResponse)
 def health(request: Request) -> HealthResponse:
     container = getattr(request.app.state, "container", None)
-    extras = getattr(container, "extras", {}) if container is not None else {}
-    mechanics_err = extras.get("mechanics_rescan_error")
-    plugins_err = extras.get("plugins_rescan_error")
+    mechanics_err = container.mechanics_rescan_error if container is not None else None
+    plugins_err = container.plugins_rescan_error if container is not None else None
     return HealthResponse(
         status="degraded" if (mechanics_err or plugins_err) else "ok",
         version=__version__,
