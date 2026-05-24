@@ -132,26 +132,31 @@ def get_file_watcher(request: Request) -> FileWatcher:
     return _require(get_container(request), "file_watcher")
 
 
+# Annotated aliases use Any at runtime because the concrete types are
+# imported under TYPE_CHECKING (to avoid circular imports) and Annotated
+# evaluates at import time.  Type safety comes from the get_X() return
+# annotations, which are lazy-evaluated via ``from __future__ import
+# annotations``.
 ContainerDep = Annotated[ServiceContainer, Depends(get_container)]
-LibraryDep = Annotated[LibraryService, Depends(get_library)]
-WorldDep = Annotated[WorldService, Depends(get_world)]
-CharactersDep = Annotated[CharactersService, Depends(get_characters)]
-ScenesDep = Annotated[SceneManager, Depends(get_scenes)]
-ContinuityDep = Annotated[ContinuityRegistry, Depends(get_continuity)]
-TimeEngineDep = Annotated[TimeEngineService, Depends(get_time_engine)]
-ImageGenDep = Annotated[ImageGenService, Depends(get_imagegen)]
-ExportDep = Annotated[ExportService, Depends(get_export)]
-MechanicsDep = Annotated[MechanicsService, Depends(get_mechanics)]
-PluginsDep = Annotated[PluginsService, Depends(get_plugins)]
-StateStoreDep = Annotated[StateStore, Depends(get_state_store)]
-OrchestratorDep = Annotated[OrchestratorService, Depends(get_orchestrator)]
-ObservabilityDep = Annotated[ObservabilityService, Depends(get_observability)]
-StreamDep = Annotated[StreamManager, Depends(get_stream)]
-TransientStateDep = Annotated[TransientStateService, Depends(get_transient_state)]
-ExtrasServiceDep = Annotated[_ExtrasService, Depends(get_extras_service)]
-LLMGatewayDep = Annotated[LLMGatewayService, Depends(get_llm_gateway)]
-FileWatcherDep = Annotated[FileWatcher, Depends(get_file_watcher)]
-CalendarDep = Annotated[CalendarService, Depends(get_calendar)]
+LibraryDep = Annotated[Any, Depends(get_library)]
+WorldDep = Annotated[Any, Depends(get_world)]
+CharactersDep = Annotated[Any, Depends(get_characters)]
+ScenesDep = Annotated[Any, Depends(get_scenes)]
+ContinuityDep = Annotated[Any, Depends(get_continuity)]
+TimeEngineDep = Annotated[Any, Depends(get_time_engine)]
+ImageGenDep = Annotated[Any, Depends(get_imagegen)]
+ExportDep = Annotated[Any, Depends(get_export)]
+MechanicsDep = Annotated[Any, Depends(get_mechanics)]
+PluginsDep = Annotated[Any, Depends(get_plugins)]
+StateStoreDep = Annotated[Any, Depends(get_state_store)]
+OrchestratorDep = Annotated[Any, Depends(get_orchestrator)]
+ObservabilityDep = Annotated[Any, Depends(get_observability)]
+StreamDep = Annotated[Any, Depends(get_stream)]
+TransientStateDep = Annotated[Any, Depends(get_transient_state)]
+ExtrasServiceDep = Annotated[Any, Depends(get_extras_service)]
+LLMGatewayDep = Annotated[Any, Depends(get_llm_gateway)]
+FileWatcherDep = Annotated[Any, Depends(get_file_watcher)]
+CalendarDep = Annotated[Any, Depends(get_calendar)]
 
 
 __all__ = [

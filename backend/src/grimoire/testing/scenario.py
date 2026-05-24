@@ -5,7 +5,7 @@ with the LLM gateway swapped for :class:`RecordReplayLLM` in replay
 mode so prose is deterministic. This module wires that up:
 
 * spins :func:`grimoire.main.create_app` against a temp data root;
-* pre-installs a :class:`RecordReplayLLM` into ``container.extras``
+* pre-installs a :class:`RecordReplayLLM` into ``container.llm_gateway``
   before the lifespan runs, so all LLM-touching services use it;
 * opens an in-process ``httpx.AsyncClient`` bound to the ASGI app
   (no sockets, no real network);
