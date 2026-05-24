@@ -58,7 +58,6 @@ async def _resolve_post(scenes: Any, campaign_id: str, scene_id: str, post_id: s
     )
 
 
-
 @router.post("/{campaign_id}/scenes/{scene_id}/posts/{post_id}/regenerate")
 async def regenerate_post(
     campaign_id: str,
