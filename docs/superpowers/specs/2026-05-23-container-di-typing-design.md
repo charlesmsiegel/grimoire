@@ -2,7 +2,7 @@
 
 Date: 2026-05-23
 Status: Approved
-PR: 1 of ~10 in the Grimoire code quality refactor series
+PR: 1 of ~11 in the Grimoire code quality refactor series
 
 ## Context
 
@@ -18,6 +18,7 @@ This is the first PR in a series that addresses findings from two code reviews (
 8. Data layer hardening (consolidate DB access, cache invalidation, JSON encoding)
 9. Event bus formalization (typed events, payload schemas, consistent adoption)
 10. Frontend restructuring (route splits, usePlayState extraction, runtime validation)
+11. Performance observability and optimization (metrics, context caching, frontend data flow)
 
 Each PR is ordered so that earlier work provides the foundation for later work. Container/DI typing is first because every subsequent PR benefits from typed service access.
 

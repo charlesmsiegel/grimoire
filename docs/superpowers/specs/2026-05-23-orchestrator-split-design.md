@@ -147,17 +147,58 @@ Move module-level helpers to `backend/src/grimoire/orchestrator/helpers.py`:
 - `_proposed_to_roll()` (line 3347)
 - `_clean_modifications()` (line 3368)
 
+### Request Objects
+
+Introduce request dataclasses to replace long parameter lists on the extracted collaborators:
+
+#### `ExtractionRequest`
+
+Replaces the 10-parameter `ExtractorService.extract()` call. Carried from orchestrator through delta applier:
+
+```python
+@dataclass(frozen=True)
+class ExtractionRequest:
+    campaign_id: str
+    branch_id: str
+    turn_id: str
+    scene_id: str
+    post_text: str
+    pc_ref: str | None
+    extract_mode: ExtractMode
+    composition: Composition
+    context_snapshot: AssembledPrompt | None = None
+    mechanics_module: str | None = None
+```
+
+#### `DeltaApplyRequest`
+
+Replaces the scattered parameter passing through `_apply_routing()` and `_apply_continuity_delta()`:
+
+```python
+@dataclass(frozen=True)
+class DeltaApplyRequest:
+    campaign_id: str
+    branch_id: str
+    turn_id: str
+    scene_id: str
+    pc_ref: str | None
+    deltas: list[StateDelta]
+    composition: Composition
+```
+
+Both dataclasses live in `backend/src/grimoire/orchestrator/types.py`.
+
 ## Scope
 
 ### In scope
 - Extract 5 collaborator classes from OrchestratorService
 - Keep OrchestratorService as public facade with delegation
 - Move module-level helpers to shared file
+- Introduce `ExtractionRequest` and `DeltaApplyRequest` dataclasses
 - Update tests to test collaborators directly where appropriate
 
 ### Not in scope
 - Changing the OrchestratorService public API
-- Introducing request objects (PR later in series)
 - Changing the turn execution flow
 - Splitting the pre-roll logic further
 

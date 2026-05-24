@@ -84,11 +84,96 @@ All splits follow the same pattern:
 4. Collaborators are independently testable.
 5. Existing public API signatures do not change.
 
+### Request Objects for LLMGatewayService
+
+Introduce request dataclasses to replace long parameter lists:
+
+#### `GatewayCallContext`
+
+Replaces scattered parameters through completion/streaming calls:
+
+```python
+@dataclass(frozen=True)
+class GatewayCallContext:
+    task: str
+    campaign_id: str | None
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    stop_sequences: list[str] | None = None
+```
+
+#### `LLMRequestLogEntry`
+
+Replaces the 16-parameter `request_log.record()` call:
+
+```python
+@dataclass(frozen=True)
+class LLMRequestLogEntry:
+    task: str
+    model: str
+    campaign_id: str | None
+    input_tokens: int
+    output_tokens: int
+    latency_ms: float
+    status: str
+    error: str | None = None
+    provider_id: str | None = None
+    route: str | None = None
+    cached: bool = False
+```
+
+#### `PostIndexRecord`
+
+Replaces the 12-parameter `scenes/indexer.py upsert_post_row()` call:
+
+```python
+@dataclass(frozen=True)
+class PostIndexRecord:
+    post_id: str
+    scene_id: str
+    campaign_id: str
+    branch_id: str
+    author: str
+    body: str
+    turn_id: str | None = None
+    ordinal: int = 0
+    is_player: bool = False
+    word_count: int = 0
+    character_ref: str | None = None
+```
+
+### Shared Plugin/Mechanics Dynamic Loader
+
+Extract a shared `backend/src/grimoire/dynamic_loader.py` helper from the duplicate loader implementations in `mechanics/loader.py` and `plugins/loader.py`.
+
+Both loaders perform the same steps:
+1. Stable module naming from filesystem path
+2. `importlib` spec creation and execution
+3. Cleanup on failed import (remove from `sys.modules`)
+4. Validation error formatting
+5. Path safety checks
+
+The shared helper handles steps 1-5. Each domain keeps its manifest interpretation (mechanics YAML schema vs plugin entry points) separate.
+
+```python
+def load_module_from_path(
+    path: Path,
+    *,
+    module_prefix: str,
+    validate: Callable[[ModuleType], list[str]] | None = None,
+) -> ModuleType:
+    """Load a Python module from a filesystem path with cleanup on failure."""
+    ...
+```
+
 ## Scope
 
 ### In scope
 - Extract collaborator classes from 4 services
 - Keep facade classes with same public API
+- Introduce `GatewayCallContext`, `LLMRequestLogEntry`, and `PostIndexRecord` request objects
+- Extract shared `dynamic_loader.py` from mechanics/plugins loaders
 - Update tests to test collaborators directly where beneficial
 
 ### Not in scope
@@ -104,3 +189,5 @@ All splits follow the same pattern:
 3. Each collaborator file is under 300 lines.
 4. All existing public methods still exist with same signatures.
 5. No circular imports.
+6. `mechanics/loader.py` and `plugins/loader.py` both import from `dynamic_loader.py`.
+7. Request object dataclasses have tests verifying construction and field access.
