@@ -123,7 +123,6 @@ export function InputArea({
   // the user was about to click.
   useEffect(() => {
     taRef.current?.focus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
