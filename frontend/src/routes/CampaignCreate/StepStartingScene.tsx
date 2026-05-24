@@ -153,7 +153,7 @@ function CastInput({ value, onChange, candidates }: CastInputProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listboxId = useId();
 
-  const selected = new Set(value);
+  const selected = useMemo(() => new Set(value), [value]);
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
     return candidates
