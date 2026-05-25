@@ -48,7 +48,10 @@ async def _reconcile_emergent_pcs(
             )
             try:
                 await characters.create_emergent(campaign_id, data)
-                logger.info("auto-created emergent character %r for campaign %s", asset_id, campaign_id)
+                logger.info(
+                    "auto-created emergent character %r for campaign %s",
+                    asset_id, campaign_id,
+                )
             except Exception:
                 logger.warning(
                     "failed to auto-create emergent character %r for campaign %s",
