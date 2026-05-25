@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from grimoire.context.builder import ContextBuilderService as ContextBuilder
-from grimoire.context.types import TierItem
 from grimoire.context.config import ContextBuilderConfig
+from grimoire.context.types import TierItem
 from grimoire.types.context import ContextSource
 from grimoire.types.state import ContextTier
 from grimoire.types.transient import Provenance, TransientValue

@@ -35,9 +35,9 @@ from grimoire.context.assembler import (
 from grimoire.context.cast import CastResolver
 from grimoire.context.config import ContextBuilderConfig
 from grimoire.context.continuity_context import ContinuityContextResolver
-from grimoire.context.world_context import WorldContextResolver
 from grimoire.context.tokens import TokenEstimator, cheap_estimator
 from grimoire.context.types import BuiltContext, PinSet, TierItem
+from grimoire.context.world_context import WorldContextResolver
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.types.common import CampaignId, TurnId
 from grimoire.types.composition import Composition
