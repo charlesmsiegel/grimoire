@@ -318,7 +318,9 @@ class ContextBuilderService:
             active_pc_ref = await self._safe_call(self._characters.active_pc, campaign_id)
         else:
             active_pc_ref = pc_ref
-        active_pc_card, active_pc_source = await self._cast.active_pc_card(active_pc_ref, campaign_id)
+        active_pc_card, active_pc_source = await self._cast.active_pc_card(
+            active_pc_ref, campaign_id
+        )
         active_pc_name = await self._cast.active_pc_name(active_pc_ref, campaign_id)
 
         # Open commitments are reused for both the lock-in commitments block
