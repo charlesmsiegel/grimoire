@@ -25,6 +25,8 @@ from grimoire.types.observability import LogEvent, LogLevel
 
 logger = logging.getLogger(__name__)
 
+IDLE_TIMEOUT_SECONDS = 300
+
 router = APIRouter()
 
 
@@ -38,12 +40,15 @@ async def campaign_stream(websocket: WebSocket, campaign_id: str) -> None:
 
     await stream.connect(campaign_id, websocket)
     try:
-        # Keep the connection open. We do not consume client messages today,
-        # but draining the socket keeps the underlying transport alive and
-        # lets us detect disconnects.
         while True:
             try:
-                await websocket.receive_text()
+                await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=IDLE_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                await websocket.close(code=1000)
+                break
             except WebSocketDisconnect:
                 break
     finally:
