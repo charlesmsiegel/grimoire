@@ -42,6 +42,17 @@ class ParsedTracker:
     change_location: dict[str, Any] | None = None
 
 
+def strip_tracker_block(text: str) -> str:
+    """Remove the ``<!-- TRACKER -->…<!-- /TRACKER -->`` block from *text*."""
+    start = text.find(DELIMITER_OPEN)
+    if start < 0:
+        return text
+    end = text.find(DELIMITER_CLOSE, start + len(DELIMITER_OPEN))
+    if end < 0:
+        return text
+    return (text[:start] + text[end + len(DELIMITER_CLOSE) :]).strip()
+
+
 def extract_tracker_block(text: str) -> str | None:
     """Pull the tracker JSON out of a streamed response.
 
@@ -338,4 +349,5 @@ __all__ = [
     "parse_tracker_text",
     "project_tracker_to_candidates",
     "project_tracker_to_deltas",
+    "strip_tracker_block",
 ]

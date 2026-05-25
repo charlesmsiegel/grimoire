@@ -662,9 +662,11 @@ class OrchestratorService:
                 )
                 if self._config.errors.surface_partial_response_on_llm_error and exc.partial_text:
                     try:
+                        from grimoire.extractor.together import strip_tracker_block
+
                         partial_post = self._new_post(
                             author_kind=SceneAuthorKind.NARRATOR,
-                            body=exc.partial_text,
+                            body=strip_tracker_block(exc.partial_text),
                             is_player=False,
                             turn_id=turn_id,
                         )
@@ -956,9 +958,11 @@ class OrchestratorService:
                     transient_state_conflicts=ts_summary.conflicts,
                 )
 
+        from grimoire.extractor.together import strip_tracker_block
+
         response_post = self._new_post(
             author_kind=SceneAuthorKind.NARRATOR,
-            body=response_text,
+            body=strip_tracker_block(response_text),
             is_player=False,
             turn_id=turn_id,
         )
