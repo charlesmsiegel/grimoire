@@ -290,11 +290,11 @@ class ImageGenService:
         self._cancel_tokens: dict[str, asyncio.Event] = {}
         self._metrics: MetricsRegistryProtocol = metrics
 
-        if event_bus is not None:
-            event_bus.subscribe("library_entity_changed", self._on_entity_changed)
-
         for backend in self.registry.all():
             self._ensure_handle(backend.id)
+
+        if event_bus is not None:
+            event_bus.subscribe("library_entity_changed", self._on_entity_changed)
 
     def _on_entity_changed(self, event: Event) -> None:
         kind = event.payload.get("kind")

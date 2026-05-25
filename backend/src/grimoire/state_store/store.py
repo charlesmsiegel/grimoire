@@ -21,6 +21,7 @@ from typing import Any
 
 import aiosqlite
 
+from grimoire.event_bus import Event, EventBus
 from grimoire.files import (
     ParsedDocument,
     load_yaml,
@@ -29,7 +30,6 @@ from grimoire.files import (
     write_yaml,
 )
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
-from grimoire.event_bus import Event, EventBus
 from grimoire.state_store.delta_log import (
     DeltaRecord,
     get_delta,
@@ -80,7 +80,6 @@ from grimoire.state_store.snapshots import (
 )
 from grimoire.storage import Database
 from grimoire.util import new_id, now_iso
-
 
 logger = logging.getLogger(__name__)
 
