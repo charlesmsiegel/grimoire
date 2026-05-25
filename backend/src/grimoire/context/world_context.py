@@ -333,7 +333,7 @@ def _parse_location_ref(ref: str | None) -> tuple[str | None, str | None]:
         return None, None
     raw = ref
     if raw.startswith("library:"):
-        raw = raw[len("library:"):]
+        raw = raw[len("library:") :]
     parts = raw.strip("/").split("/")
     if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"locations", "location"}:
         return parts[1], parts[3]

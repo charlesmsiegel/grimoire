@@ -475,7 +475,7 @@ def _mentions_in_posts(posts: list[Any]) -> set[str]:
 def _with_cast_header(ref: str, card: str) -> str:
     if not ref.startswith("library:"):
         return card
-    raw = ref[len("library:"):]
+    raw = ref[len("library:") :]
     parts = raw.strip("/").split("/")
     if len(parts) >= 2 and parts[0] == "worlds":
         world_id = parts[1]
