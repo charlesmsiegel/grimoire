@@ -95,7 +95,10 @@ class RetentionSweeper:
         )
         if self._bus is not None:
             await self._bus.emit(
-                Event(type=events.RETENTION_SWEEP_COMPLETED, payload={"deleted_embeddings": deleted})
+                Event(
+                    type=events.RETENTION_SWEEP_COMPLETED,
+                    payload={"deleted_embeddings": deleted},
+                )
             )
         return deleted
 
