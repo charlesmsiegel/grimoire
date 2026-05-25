@@ -1,6 +1,7 @@
 """Tests for lifecycle management."""
 
 import pytest
+
 from grimoire.lifecycle import LifecycleManager
 
 
