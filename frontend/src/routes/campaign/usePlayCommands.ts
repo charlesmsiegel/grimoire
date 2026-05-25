@@ -1,6 +1,7 @@
 import { type Dispatch, type MutableRefObject, useCallback } from "react";
 
 import { campaignApi } from "../../api/campaign";
+import { newSceneApi } from "../../api/campaign/newScene";
 import type { PlayAction, PlayState } from "./playReducer";
 
 export function usePlayCommands(
@@ -59,8 +60,24 @@ export function usePlayCommands(
     const scene = stateRef.current.scene;
     if (!scene) return;
     await campaignApi.endScene(campaignId, scene.id);
-    await refresh();
-  }, [campaignId, refresh, stateRef]);
+    dispatch({ type: "start-new-scene" });
+    try {
+      const resp = await newSceneApi.suggest(campaignId);
+      dispatch({ type: "suggestions-loaded", suggestions: resp });
+    } catch {
+      await refresh();
+    }
+  }, [campaignId, refresh, stateRef, dispatch]);
+
+  const newScene = useCallback(async () => {
+    dispatch({ type: "start-new-scene" });
+    try {
+      const resp = await newSceneApi.suggest(campaignId);
+      dispatch({ type: "suggestions-loaded", suggestions: resp });
+    } catch {
+      await refresh();
+    }
+  }, [campaignId, dispatch, refresh]);
 
   const suppressDrift = useCallback(
     (ref: string) => {
@@ -69,5 +86,5 @@ export function usePlayCommands(
     [dispatch],
   );
 
-  return { setActivePC, submit, advance, regenerate, undo, endScene, suppressDrift };
+  return { setActivePC, submit, advance, regenerate, undo, endScene, newScene, suppressDrift };
 }
