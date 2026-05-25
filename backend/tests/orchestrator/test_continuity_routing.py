@@ -78,7 +78,7 @@ async def test_fact_add_routes_to_continuity_when_no_conflict() -> None:
         confidence=0.9,
         source="extractor",
     )
-    handled = await orch._apply_continuity_delta(
+    handled = await orch._delta._apply_continuity_delta(
         delta=delta,
         campaign_id="camp-a",
         branch_id="camp-a:main",
@@ -142,7 +142,7 @@ async def test_fact_add_conflict_queues_for_review() -> None:
         confidence=0.9,
         source="extractor",
     )
-    handled = await orch._apply_continuity_delta(
+    handled = await orch._delta._apply_continuity_delta(
         delta=delta, campaign_id="camp-a", branch_id="camp-a:main", turn_id="t1"
     )
     assert handled is True  # conflict path "handled" by review queue
@@ -169,7 +169,7 @@ async def test_commitment_add_routes_to_continuity() -> None:
         confidence=0.9,
         source="extractor",
     )
-    handled = await orch._apply_continuity_delta(
+    handled = await orch._delta._apply_continuity_delta(
         delta=delta, campaign_id="camp-a", branch_id="camp-a:main", turn_id="t1"
     )
     assert handled is True
@@ -203,7 +203,7 @@ async def test_commitment_resolve_routes_to_continuity() -> None:
         confidence=1.0,
         source="extractor",
     )
-    handled = await orch._apply_continuity_delta(
+    handled = await orch._delta._apply_continuity_delta(
         delta=delta, campaign_id="camp-a", branch_id="camp-a:main", turn_id="t2"
     )
     assert handled is True
@@ -225,7 +225,7 @@ async def test_unrouted_kind_returns_false() -> None:
         confidence=1.0,
         source="extractor",
     )
-    handled = await orch._apply_continuity_delta(
+    handled = await orch._delta._apply_continuity_delta(
         delta=delta, campaign_id="camp-a", branch_id="camp-a:main", turn_id="t2"
     )
     assert handled is False
@@ -251,7 +251,7 @@ async def test_routes_skipped_when_no_continuity_wired() -> None:
         confidence=0.9,
         source="extractor",
     )
-    handled = await orch._apply_continuity_delta(
+    handled = await orch._delta._apply_continuity_delta(
         delta=delta, campaign_id="camp-a", branch_id="camp-a:main", turn_id="t1"
     )
     assert handled is False
