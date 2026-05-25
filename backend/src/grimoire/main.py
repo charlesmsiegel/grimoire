@@ -622,11 +622,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             bus=container.event_bus,
             config=state_store_config.library,
         )
-        try:
-            await reenqueue_missing_embeddings(container.state_store, file_watcher.embedding_queue)
-        except Exception:
-            log.exception("reenqueue_missing_embeddings failed at startup")
-        await embedding_worker.start()
+        if state_store_config.library.embed_on_index:
+            try:
+                await reenqueue_missing_embeddings(
+                    container.state_store, file_watcher.embedding_queue
+                )
+            except Exception:
+                log.exception("reenqueue_missing_embeddings failed at startup")
+            await embedding_worker.start()
+        else:
+            log.info("embedding worker disabled (embed_on_index=false)")
         container.embedding_worker = embedding_worker
 
         body_summarizer = BodySummarizer(
