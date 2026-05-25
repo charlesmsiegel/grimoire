@@ -34,3 +34,13 @@ def test_patch_embedding_defaults_clear(client: TestClient) -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["route"] is None
+
+
+def test_patch_empty_body_is_noop(client: TestClient) -> None:
+    client.patch(
+        "/api/config/embedding-defaults",
+        json={"route": "embed-openrouter.openai/text-embedding-3-small"},
+    )
+    resp = client.patch("/api/config/embedding-defaults", json={})
+    assert resp.status_code == 200
+    assert resp.json()["route"] == "embed-openrouter.openai/text-embedding-3-small"

@@ -254,24 +254,35 @@ class EmbeddingDefaultsPatch(BaseModel):
 async def get_embedding_defaults() -> Any:
     raw = _read_yaml_safe("state_store.yaml")
     lib = raw.get("library") if isinstance(raw.get("library"), dict) else {}
-    route = lib.get("embedding_provider") or None
-    return {"route": route}
+    return {"route": lib.get("embedding_provider") or None}
 
 
 @router.patch("/embedding-defaults")
 async def patch_embedding_defaults(payload: EmbeddingDefaultsPatch) -> Any:
-    raw = _read_yaml_safe("state_store.yaml")
-    lib = raw.get("library") if isinstance(raw.get("library"), dict) else {}
-    if payload.route is not None:
-        lib["embedding_provider"] = payload.route
-    else:
-        lib.pop("embedding_provider", None)
-    raw["library"] = lib
-    try:
-        _write_yaml_safe("state_store.yaml", raw)
-    except Exception as exc:
-        logger.exception("state_store.yaml write failed")
-        raise HTTPException(status_code=500, detail=f"failed to persist: {exc}") from exc
+    if "route" in payload.model_fields_set:
+        raw = _read_yaml_safe("state_store.yaml")
+        lib = raw.get("library") if isinstance(raw.get("library"), dict) else {}
+        if payload.route is not None:
+            lib["embedding_provider"] = payload.route
+        else:
+            lib.pop("embedding_provider", None)
+        raw["library"] = lib
+        try:
+            _write_yaml_safe("state_store.yaml", raw)
+        except Exception as exc:
+            logger.exception("state_store.yaml write failed")
+            raise HTTPException(status_code=500, detail=f"failed to persist: {exc}") from exc
+
+        app = _read_app_yaml()
+        app_embed = (
+            app.get("embedding_defaults") if isinstance(app.get("embedding_defaults"), dict) else {}
+        )
+        if payload.route is not None:
+            app_embed["route"] = payload.route
+        else:
+            app_embed.pop("route", None)
+        app["embedding_defaults"] = app_embed
+        write_yaml(_app_yaml_path(), app)
     return await get_embedding_defaults()
 
 
@@ -288,18 +299,28 @@ async def get_imagegen_defaults() -> Any:
 
 @router.patch("/imagegen-defaults")
 async def patch_imagegen_defaults(payload: ImagegenDefaultsPatch) -> Any:
-    raw = _read_app_yaml()
-    block = raw.get("imagegen_defaults") if isinstance(raw.get("imagegen_defaults"), dict) else {}
-    if payload.backend is not None:
-        block["backend"] = payload.backend
-    else:
-        block.pop("backend", None)
-    raw["imagegen_defaults"] = block
-    try:
-        write_yaml(_app_yaml_path(), raw)
-    except Exception as exc:
-        logger.exception("app.yaml write failed")
-        raise HTTPException(status_code=500, detail=f"failed to persist: {exc}") from exc
+    if "backend" in payload.model_fields_set:
+        raw = _read_app_yaml()
+        block = (
+            raw.get("imagegen_defaults") if isinstance(raw.get("imagegen_defaults"), dict) else {}
+        )
+        if payload.backend is not None:
+            block["backend"] = payload.backend
+        else:
+            block.pop("backend", None)
+        raw["imagegen_defaults"] = block
+        try:
+            write_yaml(_app_yaml_path(), raw)
+        except Exception as exc:
+            logger.exception("app.yaml write failed")
+            raise HTTPException(status_code=500, detail=f"failed to persist: {exc}") from exc
+
+        ig_raw = _read_yaml_safe("imagegen.yaml")
+        if payload.backend is not None:
+            ig_raw["default_backend"] = payload.backend
+        else:
+            ig_raw.pop("default_backend", None)
+        _write_yaml_safe("imagegen.yaml", ig_raw)
     return await get_imagegen_defaults()
 
 

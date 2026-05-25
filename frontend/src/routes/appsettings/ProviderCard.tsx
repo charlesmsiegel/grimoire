@@ -13,6 +13,7 @@ export interface ModelSlot {
   key: string;
   label: string;
   sublabel?: string;
+  clearable?: boolean;
 }
 
 interface Props {
@@ -22,7 +23,7 @@ interface Props {
   manifests: PluginManifest[];
   modelSlots: ModelSlot[];
   defaults: Record<string, string | null>;
-  onDefaultChange: (slotKey: string, route: string | null) => void;
+  onDefaultChange: (slotKey: string, value: string | null, providerId: string) => void;
   loading?: boolean;
 }
 
@@ -65,6 +66,14 @@ function findModelPathValue(
   return typeof val === "string" ? val : null;
 }
 
+function hasRequiredFields(manifest: PluginManifest | undefined): boolean {
+  if (!manifest) return false;
+  const schema = manifest.config_schema as
+    | { required?: string[] }
+    | undefined;
+  return Boolean(schema?.required?.length);
+}
+
 export function ProviderCard({
   title,
   icon,
@@ -79,14 +88,12 @@ export function ProviderCard({
   const [config, setConfig] = useState<PluginConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
 
-  // Auto-select the first plugin if only one is installed
   useEffect(() => {
     if (!selectedId && plugins.length === 1) {
       setSelectedId(plugins[0]!.id);
     }
   }, [plugins, selectedId]);
 
-  // Auto-select the plugin that matches the first default route's provider prefix
   useEffect(() => {
     if (selectedId || plugins.length === 0) return;
     const firstDefault = Object.values(defaults).find((v) => v != null);
@@ -121,6 +128,17 @@ export function ProviderCard({
   const activePlugin = plugins.find((p) => p.id === selectedId);
   const activeManifest = manifests.find((m) => m.id === selectedId);
   const modelPath = findModelPathValue(config, activeManifest);
+
+  const showPickers =
+    activePlugin &&
+    config &&
+    (config.configured || !hasRequiredFields(activeManifest));
+
+  const stripProviderPrefix = (route: string | null): string => {
+    if (!route) return "";
+    const dot = route.indexOf(".");
+    return dot >= 0 ? route.slice(dot + 1) : route;
+  };
 
   return (
     <section className="provider-card provider-card-primary">
@@ -163,28 +181,41 @@ export function ProviderCard({
         </p>
       )}
 
-      {activePlugin &&
-        config?.configured &&
+      {showPickers &&
         modelSlots.map((slot) => (
           <section key={slot.key} className="provider-model-picker">
             <PluginModelPicker
               pluginId={activePlugin.id}
               label={slot.label}
               description={slot.sublabel}
-              value={defaults[slot.key] ?? ""}
-              onChange={(next) => onDefaultChange(slot.key, next || null)}
+              value={stripProviderPrefix(defaults[slot.key])}
+              onChange={(next) =>
+                onDefaultChange(slot.key, next || null, activePlugin.id)
+              }
             />
+            {slot.clearable && defaults[slot.key] && (
+              <button
+                type="button"
+                className="button-link"
+                onClick={() => onDefaultChange(slot.key, null, activePlugin.id)}
+              >
+                Clear default
+              </button>
+            )}
           </section>
         ))}
 
-      {activePlugin && config && !config.configured && (
-        <p className="wizard-meta">
-          Configure your API key first.{" "}
-          <Link to={`/library/plugins/${encodeURIComponent(activePlugin.id)}`}>
-            Open settings
-          </Link>
-        </p>
-      )}
+      {activePlugin &&
+        config &&
+        !config.configured &&
+        hasRequiredFields(activeManifest) && (
+          <p className="wizard-meta">
+            Configure your API key first.{" "}
+            <Link to={`/library/plugins/${encodeURIComponent(activePlugin.id)}`}>
+              Open settings
+            </Link>
+          </p>
+        )}
 
       {modelPath && (
         <div className="provider-model-path">
