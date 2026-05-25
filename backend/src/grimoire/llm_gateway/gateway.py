@@ -331,7 +331,10 @@ class LLMGatewayService:
     # plugin is configured. Anything not listed here can still be set via
     # campaign YAML or env-var defaults — these are the ones the startup
     # wizard implicitly promises.
-    _DEFAULT_LLM_TASKS: tuple[str, ...] = ("main", "library.summarize", "extractor")
+    _DEFAULT_LLM_TASKS: tuple[str, ...] = (
+        "main", "library.summarize", "extractor",
+        "scene_suggest", "scene_preview", "scene_first_post",
+    )
     _DEFAULT_EMBEDDING_TASKS: tuple[str, ...] = ("library.embed",)
 
     async def register_provider_defaults(self) -> None:
