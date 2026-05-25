@@ -224,6 +224,25 @@ async def test_sweep_deletes_old_reversed_deltas(store: StateStore) -> None:
     assert await _count_deltas(store, "c1") == 2
 
 
+async def test_sweep_retains_recently_reversed_deltas(store: StateStore) -> None:
+    old_applied = (NOW - timedelta(days=200)).isoformat()
+    recent_reversed = (NOW - timedelta(days=10)).isoformat()
+
+    # Applied long ago but reversed recently — should survive
+    await _insert_delta(store, "d-old-apply-recent-rev", "c1", old_applied, reversed_at=recent_reversed)
+
+    config = RetentionConfig(
+        embeddings_for_retired_facts_seconds=None,
+        delta_log_seconds=180 * 24 * 3600,
+        delta_max_rows_per_campaign=None,
+    )
+    sweeper = RetentionSweeper(db=store.db, config=config, clock=lambda: NOW)
+    deleted = await sweeper.sweep_once()
+
+    assert deleted == 0
+    assert await _count_deltas(store, "c1") == 1
+
+
 async def test_sweep_enforces_row_cap(store: StateStore) -> None:
     ts = NOW.isoformat()
     for i in range(5):

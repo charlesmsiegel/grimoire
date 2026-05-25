@@ -115,7 +115,7 @@ class RetentionSweeper:
             cutoff = (self._clock() - timedelta(seconds=delta_log_seconds)).isoformat()
             async with self._db.acquire() as conn:
                 cur = await conn.execute(
-                    "DELETE FROM deltas WHERE reversed_at IS NOT NULL AND applied_at < ?",
+                    "DELETE FROM deltas WHERE reversed_at IS NOT NULL AND reversed_at < ?",
                     (cutoff,),
                 )
                 deleted += int(cur.rowcount or 0)
