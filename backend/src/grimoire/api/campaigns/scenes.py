@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from grimoire.api.deps import LibraryDep, ScenesDep, StateStoreDep
+from grimoire.api.deps import CharactersDep, LibraryDep, ScenesDep, StateStoreDep
 from grimoire.api.util import map_lookup_errors, to_payload
 
 from .helpers import _require_scene_owned, _seed_greeting_first_post
@@ -17,6 +17,54 @@ from .schemas import SceneSummary, SceneUpdatePayload
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_reconciled_campaigns: set[str] = set()
+
+
+async def _reconcile_emergent_pcs(
+    campaign_id: str, scene: Any, characters: Any, store: Any
+) -> None:
+    """Auto-create stub emergent characters and PC registrations for
+    ``present_pc_refs`` entries with the ``emergent/`` prefix that don't
+    exist yet. Runs at most once per campaign per process lifetime."""
+    if campaign_id in _reconciled_campaigns:
+        return
+    _reconciled_campaigns.add(campaign_id)
+    from grimoire.types.characters import CharacterData, CharacterRole
+
+    existing_pcs = {p["character_ref"] for p in await store.list_pcs(campaign_id)}
+    for ref in scene.present_pc_refs or []:
+        if not ref.startswith("emergent/"):
+            continue
+        asset_id = ref.split("/", 1)[1]
+        emergent = await store.get_emergent(campaign_id, "character", asset_id)
+        if emergent is None:
+            display = asset_id.replace("-", " ").title()
+            data = CharacterData(
+                id=asset_id,
+                name=display,
+                role=CharacterRole.PC,
+                description=f"Auto-created from scene reference '{ref}'.",
+            )
+            try:
+                await characters.create_emergent(campaign_id, data)
+                logger.info("auto-created emergent character %r for campaign %s", asset_id, campaign_id)
+            except Exception:
+                logger.warning(
+                    "failed to auto-create emergent character %r for campaign %s",
+                    asset_id, campaign_id, exc_info=True,
+                )
+                continue
+        if ref not in existing_pcs:
+            display = asset_id.replace("-", " ").title()
+            try:
+                await characters.add_pc(campaign_id, ref, display)
+                logger.info("auto-registered PC %r for campaign %s", ref, campaign_id)
+            except Exception:
+                logger.warning(
+                    "failed to auto-register PC %r for campaign %s",
+                    ref, campaign_id, exc_info=True,
+                )
 
 
 @router.get("/{campaign_id}/scenes", response_model=list[SceneSummary])
@@ -32,9 +80,12 @@ async def get_scene(
     campaign_id: str,
     scene_id: str,
     scenes: ScenesDep,
+    characters: CharactersDep,
+    state_store: StateStoreDep,
 ) -> Any:
     try:
         scene = await _require_scene_owned(scenes, campaign_id, scene_id)
+        await _reconcile_emergent_pcs(campaign_id, scene, characters, state_store)
         body = await scenes.load_scene_body(scene_id)
         posts = await scenes.get_posts(scene_id)
     except HTTPException:
