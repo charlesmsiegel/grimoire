@@ -111,6 +111,11 @@ echo "==> Starting backend on http://${BACKEND_HOST}:${BACKEND_PORT}"
 ) &
 backend_pid=$!
 
+echo "==> Waiting for backend to be ready…"
+if ! wait_for_url "http://${BACKEND_HOST}:${BACKEND_PORT}/api/setup/status" 30; then
+    echo "warning: backend did not respond within 30s; starting frontend anyway" >&2
+fi
+
 echo "==> Starting frontend (vite dev server) on $FRONTEND_URL"
 (
     cd "$REPO_ROOT/frontend"
