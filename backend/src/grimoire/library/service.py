@@ -16,21 +16,14 @@ from typing import Any
 
 from grimoire import events
 from grimoire.event_bus import Event, EventBus
-from grimoire.library.classify import suggest_kind
 from grimoire.library.config import LibraryConfig
 from grimoire.library.errors import (
     LibraryConflictError,
     LibraryError,
     LibraryNotFoundError,
-    PromotionError,
-    ReclassificationError,
 )
 from grimoire.library.reclassify import (
     ReclassificationResult,
-    append_audit,
-    apply_mapping,
-    iter_audit,
-    required_overrides_for,
 )
 from grimoire.state_store import StateStore
 from grimoire.state_store.indexers import make_library_id
@@ -44,11 +37,9 @@ from grimoire.types.composition import (
     ResolutionLayer,
     ResolutionSource,
     ResolvedEntity,
-    UpgradeEntityChange,
     UpgradePreview,
     UpgradeReport,
     WorldMeta,
-    WorldRef,
 )
 from grimoire.types.world import LoreEntry
 

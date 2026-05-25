@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -26,7 +25,7 @@ from grimoire.types.characters import (
     StructuralRelationship,
     VoiceAnchor,
 )
-from grimoire.types.common import CampaignId, CharacterRef, EntityKind
+from grimoire.types.common import CampaignId, EntityKind
 from grimoire.types.composition import LibraryEntity
 
 from .errors import CharacterNotFoundError
