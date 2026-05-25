@@ -15,9 +15,13 @@ const LLM_SLOTS: ModelSlot[] = [
   },
 ];
 
-const EMBED_SLOTS: ModelSlot[] = [{ key: "route", label: "Embedding model" }];
+const EMBED_SLOTS: ModelSlot[] = [
+  { key: "route", label: "Embedding model", clearable: true },
+];
 
-const IMAGEGEN_SLOTS: ModelSlot[] = [{ key: "backend", label: "Image model" }];
+const IMAGEGEN_SLOTS: ModelSlot[] = [
+  { key: "backend", label: "Image model", clearable: true },
+];
 
 export function ProvidersTab() {
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
@@ -37,19 +41,13 @@ export function ProvidersTab() {
     let cancelled = false;
     void (async () => {
       try {
-        const [data, full, llm, embed, img] = await Promise.all([
+        const [data, full] = await Promise.all([
           fetchInstalledPlugins(),
           pluginsApi.listInstalled(),
-          configApi.getLLMDefaults(),
-          configApi.getEmbeddingDefaults(),
-          configApi.getImagegenDefaults(),
         ]);
         if (!cancelled) {
           setPlugins(data);
           setManifests(full);
-          setLlmDefaults(llm);
-          setEmbedDefaults(embed);
-          setImagegenDefaults(img);
           setLoading(false);
         }
       } catch (err) {
@@ -57,6 +55,24 @@ export function ProvidersTab() {
           setError(errorMessage(err));
           setLoading(false);
         }
+      }
+      try {
+        const llm = await configApi.getLLMDefaults();
+        if (!cancelled) setLlmDefaults(llm);
+      } catch {
+        /* best-effort */
+      }
+      try {
+        const embed = await configApi.getEmbeddingDefaults();
+        if (!cancelled) setEmbedDefaults(embed);
+      } catch {
+        /* best-effort */
+      }
+      try {
+        const img = await configApi.getImagegenDefaults();
+        if (!cancelled) setImagegenDefaults(img);
+      } catch {
+        /* best-effort */
       }
     })();
     return () => {
@@ -69,8 +85,9 @@ export function ProvidersTab() {
   const imageBackends = plugins.filter((p) => p.kind === "imagegen_backend");
 
   const onLlmChange = useCallback(
-    async (slot: string, value: string | null) => {
-      const next = { ...llmDefaults, [slot]: value ?? "" };
+    async (slot: string, modelId: string | null, providerId: string) => {
+      const route = modelId ? `${providerId}.${modelId}` : "";
+      const next = { ...llmDefaults, [slot]: route };
       setLlmDefaults(next);
       try {
         await configApi.setLLMDefaults(next);
@@ -81,23 +98,31 @@ export function ProvidersTab() {
     [llmDefaults],
   );
 
-  const onEmbedChange = useCallback(async (_slot: string, value: string | null) => {
-    setEmbedDefaults({ route: value });
-    try {
-      await configApi.patchEmbeddingDefaults({ route: value });
-    } catch (err) {
-      setError(errorMessage(err));
-    }
-  }, []);
+  const onEmbedChange = useCallback(
+    async (_slot: string, modelId: string | null, providerId: string) => {
+      const route = modelId ? `${providerId}.${modelId}` : null;
+      setEmbedDefaults({ route });
+      try {
+        await configApi.patchEmbeddingDefaults({ route });
+      } catch (err) {
+        setError(errorMessage(err));
+      }
+    },
+    [],
+  );
 
-  const onImagegenChange = useCallback(async (_slot: string, value: string | null) => {
-    setImagegenDefaults({ backend: value });
-    try {
-      await configApi.patchImagegenDefaults({ backend: value });
-    } catch (err) {
-      setError(errorMessage(err));
-    }
-  }, []);
+  const onImagegenChange = useCallback(
+    async (_slot: string, _modelId: string | null, providerId: string) => {
+      const backend = providerId || null;
+      setImagegenDefaults({ backend });
+      try {
+        await configApi.patchImagegenDefaults({ backend });
+      } catch (err) {
+        setError(errorMessage(err));
+      }
+    },
+    [],
+  );
 
   return (
     <div className="settings-form providers-form">

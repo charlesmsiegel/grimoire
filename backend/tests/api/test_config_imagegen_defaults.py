@@ -34,3 +34,13 @@ def test_patch_imagegen_defaults_clear(client: TestClient) -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["backend"] is None
+
+
+def test_patch_empty_body_is_noop(client: TestClient) -> None:
+    client.patch(
+        "/api/config/imagegen-defaults",
+        json={"backend": "imagegen-a1111"},
+    )
+    resp = client.patch("/api/config/imagegen-defaults", json={})
+    assert resp.status_code == 200
+    assert resp.json()["backend"] == "imagegen-a1111"
