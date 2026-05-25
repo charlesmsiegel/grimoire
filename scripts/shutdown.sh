@@ -90,8 +90,11 @@ done
 _checkpoint_wal() {
     local db_path="$1"
     [ -f "$db_path" ] || return 0
+    local py
+    py="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+    [ -z "$py" ] && return 0
     echo "==> Checkpointing WAL: $db_path"
-    python3 -c "
+    "$py" -c "
 import sqlite3, sys
 try:
     conn = sqlite3.connect(sys.argv[1])

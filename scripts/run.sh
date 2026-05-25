@@ -96,7 +96,10 @@ cleanup() {
     # Checkpoint the SQLite WAL so the next startup sees a clean lock state.
     local _db="${GRIMOIRE_DATABASE_PATH:-${HOME}/.grimoire/campaigns.sqlite}"
     if [ -f "$_db" ]; then
-        python3 -c "
+        local _py
+        _py="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+        if [ -n "$_py" ]; then
+            "$_py" -c "
 import sqlite3, sys
 try:
     conn = sqlite3.connect(sys.argv[1])
@@ -105,6 +108,7 @@ try:
 except Exception:
     pass
 " "$_db" 2>/dev/null || true
+        fi
     fi
     rm -f "$STATE_FILE" 2>/dev/null || true
     wait 2>/dev/null || true
