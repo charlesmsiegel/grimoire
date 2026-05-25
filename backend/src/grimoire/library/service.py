@@ -14,7 +14,6 @@ import re as _re
 from datetime import datetime
 from typing import Any
 
-from grimoire import events
 from grimoire.event_bus import Event, EventBus
 from grimoire.library.config import LibraryConfig
 from grimoire.library.errors import (
@@ -193,6 +192,18 @@ class LibraryService:
         self.store = store
         self.config = config or LibraryConfig()
         self._event_bus = event_bus
+
+        from .composition import CompositionManager
+        from .scanner import LibraryScanner
+        from .validator import LibraryValidator
+
+        self._composition = CompositionManager(
+            store=store, config=self.config, event_bus=event_bus, service=self
+        )
+        self._scanner = LibraryScanner(store=store, service=self)
+        self._validator = LibraryValidator(
+            store=store, config=self.config, event_bus=event_bus, service=self
+        )
 
     async def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
         """Best-effort event emission; no-op when no bus is wired."""
@@ -682,38 +693,15 @@ class LibraryService:
         await self.store.delete_library_file(library_id=library_id, source=source)
 
     # ------------------------------------------------------------------ #
-    # Reclassification (spec §§1, 2, 6)
+    # Reclassification (delegated to validator)
     # ------------------------------------------------------------------ #
 
     async def preview_reclassification(
-        self,
-        world_id: str,
-        source_id: str,
-        *,
-        target_kind: EntityKind | str,
+        self, world_id: str, source_id: str, *, target_kind: EntityKind | str
     ) -> dict[str, Any]:
-        """Return the mapping result without writing — used by the Convert modal."""
-        target = self._coerce_reclassify_target(target_kind)
-        source_entity = await self.get_entity(world_id, "lore", source_id)
-        lore = _lore_from_entity(source_entity)
-        fm, body, kept, dropped, into_notes, warnings = apply_mapping(lore, target, None)
-        suggestion = suggest_kind(lore, threshold=self.config.reclassification.suggestion_threshold)
-        return {
-            "source_id": source_id,
-            "target_kind": target.value,
-            "frontmatter": fm,
-            "body": body,
-            "kept": kept,
-            "dropped": dropped,
-            "into_notes": into_notes,
-            "warnings": warnings,
-            "required_overrides": required_overrides_for(target),
-            "suggestion": {
-                "kind": suggestion.kind.value,
-                "confidence": suggestion.confidence,
-                "reason": suggestion.reason,
-            },
-        }
+        return await self._validator.preview_reclassification(
+            world_id, source_id, target_kind=target_kind
+        )
 
     async def reclassify_entity(
         self,
@@ -724,947 +712,106 @@ class LibraryService:
         overrides: dict[str, Any] | None = None,
         actor: str = "user",
     ) -> ReclassificationResult:
-        """Convert a lore entry into a new entity of ``target_kind``.
-
-        Order of operations: validate required overrides → read source →
-        resolve target id (collision suffix) → create target → delete
-        source → append audit → emit event. A failure at create surfaces
-        as :class:`ReclassificationError` with the source intact; a
-        failure at delete is a non-fatal warning on the result.
-        """
-        target = self._coerce_reclassify_target(target_kind)
-        overrides = dict(overrides or {})
-
-        missing = [
-            key
-            for key in required_overrides_for(target)
-            if key not in overrides or overrides[key] in (None, "")
-        ]
-        if missing:
-            raise ReclassificationError(
-                f"missing required override(s) for {target.value}: {missing!r}"
-            )
-
-        source_entity = await self.get_entity(world_id, "lore", source_id)
-        lore = _lore_from_entity(source_entity)
-        fm, body, kept, dropped, into_notes, warnings = apply_mapping(lore, target, overrides)
-
-        derived = _slugify(fm.get("name") or source_id)
-        target_id = await self._collision_suffix(world_id, target, derived)
-        fm["id"] = target_id
-
-        try:
-            await self.create_entity(
-                world_id,
-                target,
-                target_id,
-                fm,
-                body,
-                source=f"{actor}:reclassify",
-            )
-        except Exception as exc:
-            raise ReclassificationError(
-                f"failed to create {target.value}/{target_id}: {exc}"
-            ) from exc
-
-        try:
-            await self.delete_entity(world_id, "lore", source_id, source=f"{actor}:reclassify")
-        except Exception as exc:
-            warnings.append(f"source not deleted: {exc}")
-
-        # v1 always writes to <data_root>/library/imports/reclassifications.jsonl.
-        # The config.reclassification.audit_log knob is reserved for a future
-        # caller; not wired today.
-        try:
-            append_audit(
-                self.store.data_root,
-                world_id=world_id,
-                source_id=source_id,
-                source_snapshot={
-                    "frontmatter": dict(source_entity.frontmatter or {}),
-                    "body": source_entity.body or "",
-                },
-                target_id=target_id,
-                target_kind=target,
-                overrides=overrides,
-                actor=actor,
-            )
-        except Exception as exc:
-            warnings.append(f"audit log write failed: {exc}")
-
-        await self._emit(
-            events.LIBRARY_RECLASSIFY,
-            {
-                "world_id": world_id,
-                "source_id": source_id,
-                "target_id": target_id,
-                "target_kind": target.value,
-                "actor": actor,
-                "warnings": warnings,
-            },
+        return await self._validator.reclassify_entity(
+            world_id, source_id, target_kind=target_kind, overrides=overrides, actor=actor
         )
 
-        return ReclassificationResult(
-            source_id=source_id,
-            target_id=target_id,
-            target_kind=target,
-            fields_kept=kept,
-            fields_dropped=dropped,
-            fields_into_notes=into_notes,
-            warnings=warnings,
-        )
-
-    async def _collision_suffix(
-        self,
-        world_id: str,
-        kind: EntityKind,
-        base_id: str,
-    ) -> str:
-        """Return ``base_id`` unless it collides; otherwise ``base_id-2``, ``-3``, …, ``-99``."""
-        candidate = base_id
-        for n in range(1, 100):
-            library_id = make_library_id(world_id, kind.value, candidate)
-            existing = await self.store.get_library_entity(library_id)
-            if existing is None:
-                return candidate
-            candidate = f"{base_id}-{n + 1}"
-        raise ReclassificationError(
-            f"too many id collisions for {kind.value}/{base_id} (>99); refusing to write"
-        )
+    async def _collision_suffix(self, world_id: str, kind: EntityKind, base_id: str) -> str:
+        return await self._validator._collision_suffix(world_id, kind, base_id)
 
     async def list_reclassifications(self, world_id: str) -> list[dict[str, Any]]:
-        """Return audit records for ``world_id`` in append order."""
-        return list(iter_audit(self.store.data_root, world_id=world_id))
+        return await self._validator.list_reclassifications(world_id)
 
     async def undo_reclassification(
-        self,
-        world_id: str,
-        timestamp: str,
-        *,
-        actor: str = "user",
+        self, world_id: str, timestamp: str, *, actor: str = "user"
     ) -> dict[str, Any]:
-        """Reverse a reclassification by timestamp.
-
-        Reads ``source_snapshot``, recreates the source under its original
-        id (collision-suffixed if needed), deletes the target, and appends
-        an inverse audit record stamped with ``_undo_of: <original_ts>`` in
-        ``overrides``. Returns a summary dict with the restored and deleted
-        ids plus warnings.
-        """
-        target_record: dict[str, Any] | None = None
-        for record in iter_audit(self.store.data_root, world_id=world_id):
-            if record.get("ts") == timestamp:
-                target_record = record
-                break
-        if target_record is None:
-            raise ReclassificationError(
-                f"no audit record for world {world_id!r} at ts {timestamp!r}"
-            )
-
-        original_source_id = target_record["source_id"]
-        snapshot = target_record["source_snapshot"]
-        target_id = target_record["target_id"]
-        target_kind = EntityKind(target_record["target_kind"])
-
-        warnings: list[str] = []
-
-        restored_id = await self._collision_suffix(world_id, EntityKind.LORE, original_source_id)
-        snapshot_fm = dict(snapshot.get("frontmatter") or {})
-        snapshot_fm["id"] = restored_id
-        snapshot_body = snapshot.get("body") or ""
-        await self.create_entity(
-            world_id,
-            "lore",
-            restored_id,
-            snapshot_fm,
-            snapshot_body,
-            source=f"{actor}:reclassify-undo",
-        )
-
-        try:
-            await self.delete_entity(
-                world_id,
-                target_kind.value,
-                target_id,
-                source=f"{actor}:reclassify-undo",
-            )
-        except LibraryNotFoundError:
-            warnings.append(f"target {target_kind.value}/{target_id} already deleted")
-        except Exception as exc:
-            warnings.append(f"target not deleted: {exc}")
-
-        try:
-            deps = await self.dependents(world_id, target_kind.value, target_id)
-            if deps:
-                warnings.append(
-                    f"target was referenced by {len(deps)} campaign(s); those refs are now dangling"
-                )
-        except Exception:
-            pass
-
-        try:
-            append_audit(
-                self.store.data_root,
-                world_id=world_id,
-                source_id=target_id,
-                source_snapshot={},
-                target_id=restored_id,
-                target_kind=EntityKind.LORE,
-                overrides={"_undo_of": timestamp},
-                actor=actor,
-            )
-        except Exception as exc:
-            warnings.append(f"audit log write failed: {exc}")
-
-        await self._emit(
-            events.LIBRARY_RECLASSIFY_UNDO,
-            {
-                "world_id": world_id,
-                "restored_source_id": restored_id,
-                "deleted_target_id": target_id,
-                "undo_of": timestamp,
-                "warnings": warnings,
-            },
-        )
-
-        return {
-            "restored_source_id": restored_id,
-            "deleted_target_id": target_id,
-            "undo_of": timestamp,
-            "warnings": warnings,
-        }
+        return await self._validator.undo_reclassification(world_id, timestamp, actor=actor)
 
     def _coerce_reclassify_target(self, target_kind: EntityKind | str) -> EntityKind:
-        if isinstance(target_kind, EntityKind):
-            value = target_kind
-        else:
-            try:
-                value = EntityKind(_normalize_kind(target_kind))
-            except ValueError as exc:
-                raise ReclassificationError(f"unknown target_kind {target_kind!r}") from exc
-        allowed = {
-            EntityKind.CHARACTER,
-            EntityKind.LOCATION,
-            EntityKind.FACTION,
-            EntityKind.ITEM,
-            EntityKind.MONSTER,
-        }
-        if value not in allowed:
-            raise ReclassificationError(
-                "reclassify target must be character/location/faction/item/monster, "
-                f"got {value.value!r}"
-            )
-        return value
+        return self._validator._coerce_reclassify_target(target_kind)
 
     # ------------------------------------------------------------------ #
-    # Promotion
+    # Promotion (delegated to composition)
     # ------------------------------------------------------------------ #
 
     async def promote_to_library(
-        self,
-        campaign_id: str,
-        entity_kind: EntityKind | str,
-        campaign_entity_id: str,
-        target_world_id: str,
-        *,
-        source: str = "user",
+        self, campaign_id: str, entity_kind: EntityKind | str,
+        campaign_entity_id: str, target_world_id: str, *, source: str = "user",
     ) -> str:
-        """Promote a campaign-local emergent entity into the library.
-
-        Spec 18 §Promotion, with §4 of the remaining-design:
-
-        1. Read the emergent.
-        2. Write the library entity in ``target_world_id``.
-        3. Re-read emergent after the library write. If it matches what we
-           just wrote, delete the emergent file (and its index row) —
-           subsequent reads will resolve through the library.
-        4. If it diverges (a race or external edit between read and
-           promote), write the frontmatter diff as a campaign override
-           and delete the emergent. A body-only divergence is logged on
-           the emitted event because overrides only carry frontmatter
-           patches; the body change is dropped.
-        5. Rekey embeddings from the emergent ref to the new library id.
-        6. Emit ``library_entity_promoted`` for subscribers.
-
-        Characters are routed through the Characters module (the World
-        service rejects ``kind == "character"`` and the API maps that
-        kind to its own promotion endpoint).
-        """
-        normalized = _normalize_kind(entity_kind)
-        if normalized not in _World_ENTITY_KINDS:
-            raise PromotionError(
-                f"cannot promote kind {normalized!r}; only world-scoped kinds supported"
-            )
-        emergent = await self.store.get_emergent(campaign_id, normalized, campaign_entity_id)
-        if emergent is None:
-            raise PromotionError(
-                f"no emergent {normalized}/{campaign_entity_id} in campaign {campaign_id!r}"
-            )
-        frontmatter = dict(emergent.get("frontmatter") or {})
-        frontmatter.setdefault("id", campaign_entity_id)
-        body = emergent.get("body") or ""
-        library_id = make_library_id(target_world_id, normalized, campaign_entity_id)
-        result = await self.store.write_library_file(
-            library_id=library_id,
-            frontmatter=frontmatter,
-            body=body,
-            source=f"{source}:promotion",
-            campaign_id=campaign_id,
+        return await self._composition.promote_to_library(
+            campaign_id, entity_kind, campaign_entity_id, target_world_id, source=source
         )
 
-        cleanup_action, body_diverged = await self._cleanup_promoted_emergent(
-            campaign_id=campaign_id,
-            kind=normalized,
-            entity_id=campaign_entity_id,
-            target_world_id=target_world_id,
-            promoted_frontmatter=frontmatter,
-            promoted_body=body,
-            source=source,
-        )
-        await self._rekey_embeddings_after_promotion(
-            campaign_id=campaign_id,
-            kind=normalized,
-            entity_id=campaign_entity_id,
-            library_id=library_id,
-        )
-        await self._emit(
-            events.LIBRARY_ENTITY_PROMOTED,
-            {
-                "campaign_id": campaign_id,
-                "kind": normalized,
-                "entity_id": campaign_entity_id,
-                "target_world_id": target_world_id,
-                "library_id": library_id,
-                "library_path": str(result.path),
-                "cleanup": cleanup_action,
-                "body_diverged": body_diverged,
-            },
-        )
-        return str(result.path)
+    async def _cleanup_promoted_emergent(self, **kwargs: Any) -> tuple[str, bool]:
+        return await self._composition._cleanup_promoted_emergent(**kwargs)
 
-    async def _cleanup_promoted_emergent(
-        self,
-        *,
-        campaign_id: str,
-        kind: str,
-        entity_id: str,
-        target_world_id: str,
-        promoted_frontmatter: dict,
-        promoted_body: str,
-        source: str,
-    ) -> tuple[str, bool]:
-        """Finish step 5/6 of spec 18 §Promotion.
-
-        Returns a ``(action, body_diverged)`` tuple where ``action`` is one
-        of ``"deleted"``, ``"override+deleted"``, or ``"missing"``.
-        """
-        current = await self.store.get_emergent(campaign_id, kind, entity_id)
-        if current is None:
-            return ("missing", False)
-
-        current_fm = current.get("frontmatter") or {}
-        current_body = current.get("body") or ""
-        # Normalize 'id' since write_library_file may have stamped one in
-        # promoted_frontmatter; the on-disk emergent's 'id' is whatever the
-        # campaign chose to write.
-        fm_match = _json_equal(current_fm, promoted_frontmatter)
-        body_match = current_body == promoted_body
-
-        if fm_match and body_match:
-            await self.store.delete_emergent(
-                campaign_id=campaign_id,
-                kind=kind,
-                entity_id=entity_id,
-                source=f"{source}:promotion-cleanup",
-            )
-            return ("deleted", False)
-
-        # Mutations after the in-memory read — keep the divergence as a
-        # campaign-local override on the freshly-promoted library entity.
-        if not fm_match:
-            diff = _frontmatter_diff(current_fm, promoted_frontmatter)
-            if diff:
-                library_id = make_library_id(target_world_id, kind, entity_id)
-                await self.store.write_override(
-                    campaign_id=campaign_id,
-                    library_id=library_id,
-                    patch=diff,
-                    source=f"{source}:promotion-override",
-                )
-        await self.store.delete_emergent(
-            campaign_id=campaign_id,
-            kind=kind,
-            entity_id=entity_id,
-            source=f"{source}:promotion-cleanup",
-        )
-        return ("override+deleted", not body_match)
-
-    async def _rekey_embeddings_after_promotion(
-        self,
-        *,
-        campaign_id: str,
-        kind: str,
-        entity_id: str,
-        library_id: str,
-    ) -> None:
-        """Repoint vector rows from the emergent ref to the new library id.
-
-        Spec 18 §Promotion step 6. The watcher will eventually re-embed
-        the new library file out-of-band, but the existing campaign-scoped
-        embedding rows would double-count retrieval results until then —
-        prefer to delete them now and let the embedder repopulate cleanly
-        under the library ref.
-        """
-        emergent_ref = f"campaigns/{campaign_id}/emergent/{kind}/{entity_id}"
-        try:
-            await self.store.delete_embeddings(emergent_ref)
-        except Exception:
-            # Best-effort cleanup; embeddings are recomputed on next index.
-            return
-
-    # ------------------------------------------------------------------ #
-    # Demotion (reverse promotion) — §6
-    # ------------------------------------------------------------------ #
+    async def _rekey_embeddings_after_promotion(self, **kwargs: Any) -> None:
+        return await self._composition._rekey_embeddings_after_promotion(**kwargs)
 
     async def demote(
-        self,
-        world_id: str,
-        kind: EntityKind | str,
-        entity_id: str,
-        *,
-        copy_down_to: list[str] | None = None,
-        source: str = "user",
+        self, world_id: str, kind: EntityKind | str, entity_id: str,
+        *, copy_down_to: list[str] | None = None, source: str = "user",
     ) -> list[CampaignRef]:
-        """Reverse promotion: remove an entity from the library.
-
-        Spec 18 §Promotion (reverse): dependent campaigns get a
-        dangling-ref warning and an option to copy-down to campaign-local
-        emergent first.
-
-        Order of operations:
-
-        1. Look up dependents up front so the caller sees who will be
-           affected even if the file delete fails.
-        2. If ``copy_down_to`` is supplied, for each campaign id in the
-           list, materialize the current library entity as an emergent
-           file. The copy uses the live library row so what the campaign
-           keeps matches what it just lost.
-        3. Delete the library file + index row.
-        4. Emit ``library_entity_demoted`` with the dependent list and
-           the copy-down summary.
-
-        Returns the dependents list so callers can render the warning.
-        """
-        normalized = _normalize_kind(kind)
-        if normalized not in _World_ENTITY_KINDS:
-            raise LibraryError(
-                f"cannot demote kind {normalized!r}; only world-scoped kinds supported"
-            )
-        library_id = make_library_id(world_id, normalized, entity_id)
-        row = await self.store.get_library_entity(library_id)
-        if row is None:
-            raise LibraryNotFoundError(
-                f"cannot demote missing entity {kind}/{entity_id} in {world_id!r}"
-            )
-
-        dependents = await self.dependents(world_id, normalized, entity_id)
-        copy_down_to = copy_down_to or []
-        copied: list[str] = []
-        for campaign_id in copy_down_to:
-            await self.store.write_emergent(
-                campaign_id=campaign_id,
-                kind=normalized,
-                entity_id=entity_id,
-                frontmatter=row.get("frontmatter") or {},
-                body=row.get("body") or "",
-                source=f"{source}:demote-copy-down",
-            )
-            copied.append(campaign_id)
-
-        await self.store.delete_library_file(library_id=library_id, source=source)
-
-        await self._emit(
-            events.LIBRARY_ENTITY_DEMOTED,
-            {
-                "world_id": world_id,
-                "kind": normalized,
-                "entity_id": entity_id,
-                "library_id": library_id,
-                "dependents": [d.id for d in dependents],
-                "copied_down_to": copied,
-            },
+        return await self._composition.demote(
+            world_id, kind, entity_id, copy_down_to=copy_down_to, source=source
         )
-        return dependents
-
-    # ------------------------------------------------------------------ #
-    # Save-back-to-library (override → library file) — §7
-    # ------------------------------------------------------------------ #
 
     async def preview_save_override_to_library(
-        self,
-        campaign_id: str,
-        library_id: str,
+        self, campaign_id: str, library_id: str
     ) -> dict[str, Any]:
-        """Render the before/after of a save-back without committing.
-
-        The frontend uses this to render an inline diff before the user
-        confirms. Returns ``{"before": {...}, "after": {...}}`` where each
-        side has ``frontmatter`` and ``body``. ``after`` is the merged
-        cascade result (override + base) — what the library file will look
-        like once the override is folded in.
-        """
-        ref = parse_library_id(library_id)
-        if ref.world_id is None:
-            raise LibraryError(f"library_id {library_id!r} is not world-scoped")
-        before_row = await self.store.get_library_entity(library_id)
-        if before_row is None:
-            raise LibraryNotFoundError(f"library entity {library_id!r} does not exist")
-        override = await self.store.get_override(campaign_id, library_id)
-        if not override:
-            raise LibraryError(f"no override on {library_id!r} for campaign {campaign_id!r}")
-        merged_fm = dict(before_row.get("frontmatter") or {})
-        merged_fm.update(override)
-        return {
-            "library_id": library_id,
-            "before": {
-                "frontmatter": before_row.get("frontmatter") or {},
-                "body": before_row.get("body") or "",
-                "version": int(before_row.get("version") or 0),
-            },
-            "after": {
-                "frontmatter": merged_fm,
-                "body": before_row.get("body") or "",
-            },
-        }
+        return await self._composition.preview_save_override_to_library(campaign_id, library_id)
 
     async def save_override_to_library(
-        self,
-        campaign_id: str,
-        library_id: str,
-        *,
-        source: str = "user",
+        self, campaign_id: str, library_id: str, *, source: str = "user"
     ) -> dict[str, Any]:
-        """Fold a campaign override into the underlying library file.
-
-        Spec 18 §Overrides: "A 'Save back to library' action propagates
-        an override into the underlying library file (writes the file,
-        increments version, clears the override)."
-
-        Returns the preview shape (``before`` / ``after`` plus the new
-        ``version``) so the caller can confirm what was written.
-        """
-        preview = await self.preview_save_override_to_library(campaign_id, library_id)
-        result = await self.store.write_library_file(
-            library_id=library_id,
-            frontmatter=preview["after"]["frontmatter"],
-            body=preview["after"]["body"],
-            source=f"{source}:save-back-from-override",
-            campaign_id=campaign_id,
+        return await self._composition.save_override_to_library(
+            campaign_id, library_id, source=source
         )
-        await self.store.delete_override(
-            campaign_id=campaign_id,
-            library_id=library_id,
-            source=f"{source}:save-back-cleanup",
-        )
-        await self._emit(
-            events.LIBRARY_ENTITY_SAVE_BACK,
-            {
-                "campaign_id": campaign_id,
-                "library_id": library_id,
-                "from_version": preview["before"]["version"],
-                "to_version": result.version,
-            },
-        )
-        return {
-            "library_id": library_id,
-            "before": preview["before"],
-            "after": {**preview["after"], "version": result.version},
-        }
 
     # ------------------------------------------------------------------ #
-    # Composition
+    # Composition (delegated)
     # ------------------------------------------------------------------ #
 
     async def get_composition(self, campaign_id: str) -> Composition:
-        camp_row = await self.store.db.fetchone(
-            "SELECT * FROM campaigns WHERE id = ?", (campaign_id,)
-        )
-        if camp_row is None:
-            raise LibraryNotFoundError(f"campaign {campaign_id!r} not found")
-
-        refs_raw = await self.store.list_world_refs(campaign_id)
-        refs = [
-            WorldRef(
-                world_id=r["world_id"],
-                priority=int(r["priority"]),
-                include=list(r.get("include") or []),
-                bound_at_version=int(r.get("bound_at_version") or 0),
-                track_latest=bool(r.get("track_latest")),
-            )
-            for r in refs_raw
-        ]
-        config = _maybe_json(camp_row["config"]) or {}
-        return Composition(
-            worlds=refs,
-            mechanics=camp_row["mechanics_module"],
-            style_guide_id=camp_row["style_guide_id"],
-            image_preset_id=camp_row["image_preset_id"],
-            inline_style_guide=camp_row["inline_style_guide"],
-            content_boundaries=camp_row["content_boundaries"],
-            calendar_ids=list(config.get("calendar_ids") or []),
-            holiday_set_ids=list(config.get("holiday_set_ids") or []),
-            display_calendar_id=config.get("display_calendar_id"),
-        )
+        return await self._composition.get_composition(campaign_id)
 
     async def set_composition(self, campaign_id: str, composition: Composition) -> None:
-        camp_row = await self.store.db.fetchone(
-            "SELECT * FROM campaigns WHERE id = ?", (campaign_id,)
-        )
-        if camp_row is None:
-            raise LibraryNotFoundError(f"campaign {campaign_id!r} not found")
+        return await self._composition.set_composition(campaign_id, composition)
 
-        config = _maybe_json(camp_row["config"]) or {}
-        # Calendar attachments piggyback on the existing config JSON column
-        # to avoid a schema migration; built-in calendar/holiday-set ids
-        # are stable, so this is a small, stable shape.
-        if composition.calendar_ids or "calendar_ids" in config:
-            config["calendar_ids"] = list(composition.calendar_ids)
-        if composition.holiday_set_ids or "holiday_set_ids" in config:
-            config["holiday_set_ids"] = list(composition.holiday_set_ids)
-        if composition.display_calendar_id is not None or "display_calendar_id" in config:
-            config["display_calendar_id"] = composition.display_calendar_id
-
-        await self.store.upsert_campaign(
-            campaign_id=campaign_id,
-            name=camp_row["name"],
-            description=camp_row["description"],
-            mechanics_module=composition.mechanics,
-            style_guide_id=composition.style_guide_id,
-            image_preset_id=composition.image_preset_id,
-            inline_style_guide=composition.inline_style_guide,
-            content_boundaries=composition.content_boundaries,
-            greeting_id=camp_row["greeting_id"],
-            config=config if config else None,
-        )
-
-        existing = {r["world_id"] for r in await self.store.list_world_refs(campaign_id)}
-        desired_ids: set[str] = set()
-        for ref in composition.worlds:
-            desired_ids.add(ref.world_id)
-            await self.store.upsert_world_ref(
-                campaign_id=campaign_id,
-                world_id=ref.world_id,
-                priority=ref.priority,
-                include=list(ref.include or []),
-                track_latest=ref.track_latest,
-                bound_at_version=(ref.bound_at_version if ref.bound_at_version else None),
-                snapshot_on_bind=self.config.version_pinning.snapshot_on_bind,
-            )
-
-        for old in existing - desired_ids:
-            await self.store.db.execute(
-                """
-                DELETE FROM campaign_world_refs
-                WHERE campaign_id = ? AND world_id = ?
-                """,
-                (campaign_id, old),
-            )
-            await self.store.db.execute(
-                """
-                DELETE FROM library_snapshots
-                WHERE campaign_id = ? AND library_id IN (
-                  SELECT id FROM library_index WHERE world_id = ?
-                )
-                """,
-                (campaign_id, old),
-            )
+    # ------------------------------------------------------------------ #
+    # Scanner (delegated)
+    # ------------------------------------------------------------------ #
 
     async def world_diff(
-        self,
-        world_id: str,
-        from_version: int,
-        to_version: int | None = None,
+        self, world_id: str, from_version: int, to_version: int | None = None
     ) -> dict[str, Any]:
-        """Synthesize a flat diff between two versions of a world.
-
-        Compares the world's current ``library_index`` rows against
-        ``from_version``. Entities whose ``version > from_version``
-        appear as ``changed`` (with the current frontmatter+body as
-        ``after``; ``before`` is None because we don't retain historical
-        bodies). Entities whose ``version <= from_version`` are
-        unchanged. ``added`` and ``removed`` are surfaced empty in v1
-        and reserved for a future history table.
-
-        ``to_version`` is accepted for symmetry with the spec but
-        clamped to the world's current max version — we cannot
-        reconstruct future or intermediate state without history.
-        """
-        # Ensure the world exists; raises if not.
-        await self.get_world(world_id)
-        max_row = await self.store.db.fetchone(
-            "SELECT MAX(version) AS v FROM library_index WHERE world_id = ?",
-            (world_id,),
-        )
-        current_max = int((max_row["v"] if max_row else 0) or 0)
-        if to_version is None:
-            to_version = current_max
-        # Clamp; we cannot synthesize state past the latest indexed version.
-        effective_to = min(to_version, current_max)
-
-        rows = await self.store.db.fetchall(
-            "SELECT id, kind, asset_id, name, frontmatter, body, version, world_id "
-            "FROM library_index WHERE world_id = ? AND kind != 'world' "
-            "ORDER BY kind, asset_id",
-            (world_id,),
-        )
-
-        changed: list[dict[str, Any]] = []
-        for raw in rows:
-            row = _normalize_row(raw)
-            version = int(row.get("version") or 0)
-            if version <= from_version:
-                continue
-            path = f"{row.get('kind')}/{row.get('asset_id')}"
-            after = {
-                "name": row.get("name") or row.get("asset_id"),
-                "frontmatter": row.get("frontmatter") or {},
-                "body": row.get("body") or "",
-                "version": version,
-            }
-            changed.append({"path": path, "before": None, "after": after})
-
-        return {
-            "world_id": world_id,
-            "from_version": int(from_version),
-            "to_version": int(effective_to),
-            "added": [],
-            "removed": [],
-            "changed": changed,
-        }
+        return await self._scanner.world_diff(world_id, from_version, to_version)
 
     async def preview_upgrade_world_ref(
-        self,
-        campaign_id: str,
-        world_id: str,
+        self, campaign_id: str, world_id: str
     ) -> UpgradePreview:
-        """Render the per-entity before/after of an upgrade without committing.
-
-        Spec 18 §Version pinning: "Upgrade is a user action with a diff
-        preview." The frontend uses this to render an inline diff per
-        changed entity before calling :meth:`upgrade_world_ref`.
-
-        For a pinned world ref we compare the campaign's snapshot rows
-        (what it sees today) against the live ``library_index`` rows
-        (what the upgrade would write). For a track-latest ref the
-        snapshot table is empty by design, so the preview is empty —
-        the campaign already sees live content.
-        """
-        camp_row = await self.store.db.fetchone(
-            """
-            SELECT bound_at_version, track_latest FROM campaign_world_refs
-            WHERE campaign_id = ? AND world_id = ?
-            """,
-            (campaign_id, world_id),
-        )
-        if camp_row is None:
-            raise LibraryNotFoundError(f"campaign {campaign_id!r} does not bind world {world_id!r}")
-        from_version = int(camp_row["bound_at_version"] or 0)
-        branch_id = f"{campaign_id}:main"
-
-        live_rows = await self.store.list_library_in_world(world_id)
-        live_by_id = {row["id"]: row for row in live_rows}
-
-        snap_rows = await self.store.db.fetchall(
-            """
-            SELECT s.library_id AS library_id, s.version AS version,
-                   s.frontmatter AS frontmatter, s.body AS body
-            FROM library_snapshots s
-            JOIN library_index i ON i.id = s.library_id
-            WHERE s.campaign_id = ? AND s.branch_id = ? AND i.world_id = ?
-            """,
-            (campaign_id, branch_id, world_id),
-        )
-        snap_by_id = {row["library_id"]: row for row in snap_rows}
-
-        max_row = await self.store.db.fetchone(
-            "SELECT MAX(version) AS v FROM library_index WHERE world_id = ?",
-            (world_id,),
-        )
-        to_version = int((max_row["v"] if max_row else 0) or 0)
-
-        entries: list[UpgradeEntityChange] = []
-        changed: list[str] = []
-        added: list[str] = []
-        removed: list[str] = []
-        for lib_id in sorted(set(live_by_id) | set(snap_by_id)):
-            live = live_by_id.get(lib_id)
-            snap = snap_by_id.get(lib_id)
-            before_version = int(snap["version"]) if snap else None
-            after_version = int(live["version"]) if live else None
-            if snap is None and live is not None:
-                added.append(lib_id)
-            elif live is None and snap is not None:
-                removed.append(lib_id)
-            elif snap is not None and live is not None and before_version != after_version:
-                changed.append(lib_id)
-            else:
-                continue
-            entries.append(
-                UpgradeEntityChange(
-                    library_id=lib_id,
-                    before_version=before_version,
-                    after_version=after_version,
-                    before_frontmatter=_maybe_json(snap["frontmatter"]) if snap else None,
-                    after_frontmatter=(live.get("frontmatter") if live else None),
-                    before_body=(snap["body"] if snap and snap["body"] else None),
-                    after_body=(live.get("body") if live else None),
-                )
-            )
-
-        return UpgradePreview(
-            campaign_id=campaign_id,
-            world_id=world_id,
-            from_version=from_version,
-            to_version=to_version,
-            changed_entities=changed,
-            added_entities=added,
-            removed_entities=removed,
-            entries=entries,
-        )
+        return await self._scanner.preview_upgrade_world_ref(campaign_id, world_id)
 
     async def upgrade_world_ref(self, campaign_id: str, world_id: str) -> UpgradeReport:
-        before_max = await self.store.db.fetchone(
-            "SELECT bound_at_version FROM campaign_world_refs "
-            "WHERE campaign_id = ? AND world_id = ?",
-            (campaign_id, world_id),
-        )
-        if before_max is None:
-            raise LibraryNotFoundError(f"campaign {campaign_id!r} does not bind world {world_id!r}")
-        from_version = int(before_max["bound_at_version"] or 0)
-
-        report = await self.store.upgrade_world_ref(campaign_id=campaign_id, world_id=world_id)
-        max_row = await self.store.db.fetchone(
-            "SELECT MAX(version) AS v FROM library_index WHERE world_id = ?",
-            (world_id,),
-        )
-        to_version = int((max_row["v"] if max_row else 0) or 0)
-        return UpgradeReport(
-            campaign_id=campaign_id,
-            world_id=world_id,
-            from_version=from_version,
-            to_version=to_version,
-            changed_entities=sorted(report.diff.keys()),
-            diff=report.diff,
-        )
-
-    # ------------------------------------------------------------------ #
-    # Resolution cascade
-    # ------------------------------------------------------------------ #
+        return await self._scanner.upgrade_world_ref(campaign_id, world_id)
 
     async def resolve(self, entity_id: str, campaign_id: str) -> ResolvedEntity:
-        """Resolve an entity through the campaign cascade.
-
-        ``entity_id`` is either a composite ``library_id``
-        (``worlds/<world>/<kind>/<id>``) or a campaign-local
-        ``emergent/<kind>/<id>`` reference. Walks emergent → override →
-        snapshot (pinned) → live index → fail.
-        """
-        target_kind, world_id, asset_id, is_emergent_only = _parse_resolve_ref(entity_id)
-
-        branch_id = f"{campaign_id}:main"
-
-        if is_emergent_only:
-            data = await self.store.resolve_entity(
-                campaign_id=campaign_id,
-                branch_id=branch_id,
-                kind=target_kind,
-                asset_id=asset_id,
-                world_id=None,
-            )
-            if data is None:
-                raise LibraryNotFoundError(
-                    f"emergent {target_kind}/{asset_id} not found in campaign {campaign_id!r}"
-                )
-            return _build_resolved(target_kind, world_id, asset_id, data)
-
-        # Worlds ref path: check emergent first (campaign-shadowed name),
-        # then the store's override/snapshot/live cascade.
-        emergent = await self.store.get_emergent(campaign_id, target_kind, asset_id)
-        if emergent is not None:
-            data = {
-                "source": "campaign-emergent",
-                "frontmatter": emergent.get("frontmatter") or {},
-                "body": emergent.get("body") or "",
-            }
-            return _build_resolved(target_kind, world_id, asset_id, data)
-
-        data = await self.store.resolve_entity(
-            campaign_id=campaign_id,
-            branch_id=branch_id,
-            kind=target_kind,
-            asset_id=asset_id,
-            world_id=world_id,
-        )
-        if data is None:
-            raise LibraryNotFoundError(f"cannot resolve {entity_id!r} for campaign {campaign_id!r}")
-        return _build_resolved(target_kind, world_id, asset_id, data)
+        return await self._scanner.resolve(entity_id, campaign_id)
 
     # ------------------------------------------------------------------ #
-    # Dependents
+    # Dependents + composition-aware listing (delegated)
     # ------------------------------------------------------------------ #
 
     async def dependents(
         self, world_id: str, kind: EntityKind | str, entity_id: str
     ) -> list[CampaignRef]:
-        """Return campaigns that reference ``world_id``.
-
-        v1: a campaign is a dependent of any entity in a world it
-        composes. Fine-grained per-entity dependency tracking (e.g. via
-        override files) is a v2 refinement.
-        """
-        rows = await self.store.db.fetchall(
-            """
-            SELECT c.id AS id, c.name AS name
-            FROM campaigns c
-            JOIN campaign_world_refs r ON r.campaign_id = c.id
-            WHERE r.world_id = ?
-            ORDER BY c.name
-            """,
-            (world_id,),
-        )
-        return [CampaignRef(id=row["id"], name=row["name"]) for row in rows]
-
-    # ------------------------------------------------------------------ #
-    # Composition-aware listing (used by World/Context Builder)
-    # ------------------------------------------------------------------ #
+        return await self._composition.dependents(world_id, kind, entity_id)
 
     async def list_for_composition(
-        self,
-        campaign_id: str,
-        kind: EntityKind | str,
+        self, campaign_id: str, kind: EntityKind | str
     ) -> list[LibraryEntity]:
-        """Return entities of ``kind`` reachable through a campaign's composition.
+        return await self._composition.list_for_composition(campaign_id, kind)
 
-        Walks world refs in priority order, respecting each ref's
-        ``include`` filter. Higher-priority refs win when asset ids
-        collide.
-        """
-        normalized = _normalize_kind(kind)
-        refs = await self.store.list_world_refs(campaign_id)
-        refs.sort(key=lambda r: int(r.get("priority") or 0))
-
-        seen: dict[str, LibraryEntity] = {}
-        for ref in refs:
-            include_kinds = _include_to_kinds(ref.get("include"))
-            if include_kinds is not None and normalized not in include_kinds:
-                continue
-            rows = await self.store.list_library_in_world(ref["world_id"], normalized)
-            for row in rows:
-                asset = row["asset_id"]
-                if asset in seen:
-                    continue
-                seen[asset] = _entity_from_row(row)
-        return list(seen.values())
 
 
 # ---------------------------------------------------------------------------
