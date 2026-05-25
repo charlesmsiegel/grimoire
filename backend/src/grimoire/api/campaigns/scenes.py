@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from grimoire.api.deps import CharactersDep, LibraryDep, ScenesDep, StateStoreDep
+from grimoire.api.deps import CharactersDep, ContainerDep, LibraryDep, ScenesDep, StateStoreDep
 from grimoire.api.util import map_lookup_errors, to_payload
 
 from .helpers import _require_scene_owned, _seed_greeting_first_post
@@ -188,6 +188,7 @@ async def seed_first_scene(
     state_store: StateStoreDep,
     library: LibraryDep,
     scenes: ScenesDep,
+    container: ContainerDep,
 ) -> Any:
     from grimoire.scenes.types import SceneInit
 
@@ -269,4 +270,27 @@ async def seed_first_scene(
             "greeting first-post append failed; scene 1 exists with empty body",
             exc_info=True,
         )
+    # Populate the scene ledger with all greetings from the campaign's worlds.
+    ledger = getattr(container, "scene_ledger", None)
+    if ledger is not None:
+        used_greeting_id = greeting.id if greeting else None
+        for ref in world_refs:
+            wid = getattr(ref, "world_id", None) or (ref.get("world_id") if isinstance(ref, dict) else None)
+            if not wid:
+                continue
+            try:
+                all_greetings = await library.list_greetings(wid)
+            except Exception:
+                continue
+            for g in all_greetings:
+                item_id = await ledger.add(
+                    campaign_id=campaign_id,
+                    summary=g.name or g.body[:80],
+                    source="greeting",
+                    greeting_id=g.id,
+                    proposed_location=g.starting_location,
+                )
+                if g.id == used_greeting_id:
+                    await ledger.mark_used(item_id, scene_id=scene.id)
+
     return {"scene": to_payload(scene), "created": True}
