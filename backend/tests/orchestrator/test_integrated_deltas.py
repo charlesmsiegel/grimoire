@@ -6,7 +6,7 @@ import json
 
 from grimoire.event_bus import Event, EventBus
 from grimoire.extractor.config import ExtractorConfig
-from grimoire.orchestrator.service import OrchestratorService
+from grimoire.orchestrator.delta_applier import DeltaApplier
 from grimoire.types.extraction import ExtractionFlag, ExtractionResult, FlagLevel
 from grimoire.types.extraction_modes import ExtractionMode
 
@@ -40,14 +40,19 @@ async def _resolve_mode(
     extractor_config: ExtractorConfig,
     campaign_config_json: str,
 ) -> ExtractionMode:
-    """Build a minimal orchestrator and call _select_extract_mode."""
-    orch = OrchestratorService.__new__(OrchestratorService)
-    orch._extractor_config = extractor_config
-    orch._auto_disable = _FakeAutoDisable()
-    orch._store = _FakeStore(campaign_config_json)
-    orch._config = _MinimalConfig()
-    orch._gateway = object()
-    return await orch._select_extract_mode(campaign_id="camp-1")
+    """Build a minimal DeltaApplier and call select_extract_mode."""
+    applier = DeltaApplier(
+        state_store=_FakeStore(campaign_config_json),
+        continuity=None,
+        extractor=None,
+        world=None,
+        event_bus=EventBus(),
+        gateway=object(),
+        extractor_config=extractor_config,
+        config=_MinimalConfig(),  # type: ignore[arg-type]
+        auto_disable=_FakeAutoDisable(),
+    )
+    return await applier.select_extract_mode(campaign_id="camp-1")
 
 
 async def test_integrated_deltas_true_forces_together() -> None:
@@ -74,6 +79,20 @@ async def test_integrated_deltas_true_overrides_auto() -> None:
     assert mode == ExtractionMode.TOGETHER
 
 
+def _make_applier(bus: EventBus) -> DeltaApplier:
+    return DeltaApplier(
+        state_store=_FakeStore(),
+        continuity=None,
+        extractor=None,
+        world=None,
+        event_bus=bus,
+        gateway=object(),
+        extractor_config=ExtractorConfig(),
+        config=_MinimalConfig(),  # type: ignore[arg-type]
+        auto_disable=_FakeAutoDisable(),
+    )
+
+
 async def test_fallback_event_emitted_on_together_no_tracker() -> None:
     """When extraction flags contain together_no_tracker, emit the fallback event."""
     events: list[Event] = []
@@ -84,9 +103,7 @@ async def test_fallback_event_emitted_on_together_no_tracker() -> None:
 
     bus.subscribe("integrated_deltas_fallback", _collect)
 
-    orch = OrchestratorService.__new__(OrchestratorService)
-    orch._bus = bus
-    orch._ws_push = None
+    applier = _make_applier(bus)
 
     result = ExtractionResult(
         flags=[
@@ -98,7 +115,7 @@ async def test_fallback_event_emitted_on_together_no_tracker() -> None:
         ]
     )
 
-    await orch._emit_integrated_deltas_fallback(
+    await applier.emit_integrated_deltas_fallback(
         extraction=result,
         turn_id="turn-1",
         campaign_id="camp-1",
@@ -120,9 +137,7 @@ async def test_fallback_event_emitted_on_together_malformed() -> None:
 
     bus.subscribe("integrated_deltas_fallback", _collect)
 
-    orch = OrchestratorService.__new__(OrchestratorService)
-    orch._bus = bus
-    orch._ws_push = None
+    applier = _make_applier(bus)
 
     result = ExtractionResult(
         flags=[
@@ -134,7 +149,7 @@ async def test_fallback_event_emitted_on_together_malformed() -> None:
         ]
     )
 
-    await orch._emit_integrated_deltas_fallback(
+    await applier.emit_integrated_deltas_fallback(
         extraction=result,
         turn_id="turn-1",
         campaign_id="camp-1",
@@ -153,13 +168,10 @@ async def test_no_fallback_event_when_no_together_flags() -> None:
 
     bus.subscribe("integrated_deltas_fallback", _collect)
 
-    orch = OrchestratorService.__new__(OrchestratorService)
-    orch._bus = bus
-    orch._ws_push = None
-
+    applier = _make_applier(bus)
     result = ExtractionResult()
 
-    await orch._emit_integrated_deltas_fallback(
+    await applier.emit_integrated_deltas_fallback(
         extraction=result,
         turn_id="turn-1",
         campaign_id="camp-1",
@@ -177,11 +189,9 @@ async def test_no_fallback_event_when_extraction_is_none() -> None:
 
     bus.subscribe("integrated_deltas_fallback", _collect)
 
-    orch = OrchestratorService.__new__(OrchestratorService)
-    orch._bus = bus
-    orch._ws_push = None
+    applier = _make_applier(bus)
 
-    await orch._emit_integrated_deltas_fallback(
+    await applier.emit_integrated_deltas_fallback(
         extraction=None,
         turn_id="turn-1",
         campaign_id="camp-1",

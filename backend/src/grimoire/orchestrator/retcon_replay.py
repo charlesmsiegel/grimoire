@@ -191,8 +191,8 @@ class RetconReplaySession:
             alt_id = state.current_alternate_id
             if post_id is None or alt_id is None:
                 raise RetconBatchClosedError(state.batch_id)
-            scene, post = await self._orch._find_scene_and_post(post_id)
-            await self._orch._switch_primary_alternate_core(
+            scene, post = await self._orch._alternates.find_scene_and_post(post_id)
+            await self._orch._alternates.switch_primary_alternate_core(
                 scene=scene, post=post, campaign_id=campaign_id, alternate_id=alt_id
             )
             await self._collect_contradictions(state, post_id)
@@ -300,7 +300,7 @@ class RetconReplaySession:
         original_primary_ds: str | None = None
         branch_id = "main"
         try:
-            scene, post = await self._orch._find_scene_and_post(post_id)
+            scene, post = await self._orch._alternates.find_scene_and_post(post_id)
             branch_id = scene.branch_id or "main"
             original_primary_ds = next(
                 (
@@ -348,8 +348,8 @@ class RetconReplaySession:
         post_id = state.current_post_id
         if post_id is None:
             return
-        scene, post = await self._orch._find_scene_and_post(post_id)
-        regen = await self._orch._regenerate_post_core(
+        scene, post = await self._orch._alternates.find_scene_and_post(post_id)
+        regen = await self._orch._alternates.regenerate_post_core(
             scene=scene,
             post=post,
             campaign_id=state.campaign_id,
@@ -396,7 +396,7 @@ class RetconReplaySession:
     ) -> list[PostId]:
         """All model-authored posts strictly after the edited one in temporal
         order: the rest of its scene, then every post in later scenes."""
-        edited_scene, edited_post = await self._orch._find_scene_and_post(edited_post_id)
+        edited_scene, edited_post = await self._orch._alternates.find_scene_and_post(edited_post_id)
         branch_id = edited_scene.branch_id or "main"
         scenes = await self._orch._scenes.list_scenes(campaign_id, branch_id)
         ordered: list[PostId] = []

@@ -15,54 +15,50 @@ import asyncio
 import contextlib
 import logging
 import random
-import sqlite3
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from grimoire import events
 from grimoire.context.cache import ContextBuilderCache, make_cache_key
 from grimoire.event_bus import Event, EventBus
 from grimoire.extractor.config import ExtractorConfig
-from grimoire.extractor.mode_select import select_mode
-from grimoire.extractor.routing import Decision, route_deltas
-from grimoire.llm_gateway.capabilities import ProviderCapabilities
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
+from grimoire.orchestrator.alternates import AlternatesManager
+from grimoire.orchestrator.auxiliary import AuxiliaryCoordinator
 from grimoire.orchestrator.config import OrchestratorConfig
+from grimoire.orchestrator.delta_applier import DeltaApplier
 from grimoire.orchestrator.errors import (
-    AlternateNotFoundError,
-    CampaignIdExists,
-    CannotDeletePrimaryError,
-    LatestPostOnlyError,
     NoTurnsToUndoError,
     OrchestratorError,
-    RetconInFlightError,
     TurnCancelledError,
     TurnTimeoutError,
     UnknownCampaignError,
     UnknownPCError,
 )
-from grimoire.orchestrator.fork_images import fork_image_files
-from grimoire.orchestrator.retcon_replay import RetconReplaySession
+from grimoire.orchestrator.fork import ForkCoordinator
+from grimoire.orchestrator.helpers import (
+    _campaign_generation_overrides,
+    _clean_modifications,
+    _PreRollOutcome,
+    _proposed_to_roll,
+    _pydantic_post,
+    _pydantic_scene,
+)
+from grimoire.orchestrator.retcon import RetconCoordinator
+from grimoire.orchestrator.retcon_replay import RetconReplaySession  # re-exported via property
 from grimoire.scenes.manager import SceneManager
-from grimoire.scenes.types import Alternate as SceneAlternate
 from grimoire.scenes.types import AuthorKind as SceneAuthorKind
 from grimoire.scenes.types import Post as SceneFilePost
-from grimoire.scenes.types import Scene as SceneFileScene
 from grimoire.scenes.types import SceneInit as SceneFileInit
-from grimoire.state_store.fork import bulk_copy, fingerprint, replay_to_turn
 from grimoire.types.common import CampaignId, CharacterRef, PostId, SceneId, TurnId
-from grimoire.types.extraction import ExtractionResult
-from grimoire.types.extraction_modes import ExtractionMode
 from grimoire.types.llm import CompletionRequest
 from grimoire.types.mechanics import (
     MechanicsResult,
     ProposalResolution,
     ProposedRoll,
-    Roll,
-    RollModifier,
 )
 from grimoire.types.orchestrator import (
     ForkCampaignResult,
@@ -76,9 +72,7 @@ from grimoire.types.orchestrator import (
     UndoResult,
 )
 from grimoire.types.scene import AdvanceResult
-from grimoire.types.scene import Scene as PydanticScene
 from grimoire.types.scene import SceneContext as PydanticSceneContext
-from grimoire.types.state import DeltaKind, StateSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -217,8 +211,6 @@ class OrchestratorService:
         self._clock = clock
         self._rng = rng or random.Random()
         self._campaigns: dict[CampaignId, _CampaignTurnState] = {}
-        # Lazy-initialised on first access — see :pyattr:`retcon_replay`.
-        self._retcon_replay: RetconReplaySession | None = None
         # § Spec context-builder-remaining §11. The cache lives at the
         # orchestrator boundary so invalidation sits next to the regenerate
         # logic. Defaults to a fresh in-memory store when not provided.
@@ -228,6 +220,51 @@ class OrchestratorService:
         self._inflight_aux: dict[str, Any] = {}
         self._auto_disable = auto_disable or _NullAutoDisable()
         self._metrics: MetricsRegistryProtocol = metrics
+        self._delta = DeltaApplier(
+            state_store=self._store,
+            continuity=self._continuity,
+            extractor=self._extractor,
+            world=self._world,
+            event_bus=self._bus,
+            gateway=self._gateway,
+            extractor_config=self._extractor_config,
+            config=self._config,
+            auto_disable=self._auto_disable,
+            ws_push=self._ws_push,
+        )
+        self._alternates = AlternatesManager(
+            scenes=self._scenes,
+            state_store=self._store,
+            event_bus=self._bus,
+            context_builder=self._context,
+            delta=self._delta,
+            config=self._config,
+            clock=self._clock,
+            stream_response=self._stream_main_response,
+        )
+        self._auxiliary = AuxiliaryCoordinator(
+            host=self,
+            scenes=self._scenes,
+            state_store=self._store,
+            context_builder=self._context,
+            extractor=self._extractor,
+            inflight_aux=self._inflight_aux,
+        )
+        self._retcon = RetconCoordinator(
+            host=self,
+            scenes=self._scenes,
+            state_store=self._store,
+            event_bus=self._bus,
+            extractor=self._extractor,
+            extractor_config=self._extractor_config,
+        )
+        self._fork = ForkCoordinator(
+            host=self,
+            scenes=self._scenes,
+            state_store=self._store,
+            event_bus=self._bus,
+            clock=self._clock,
+        )
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -387,745 +424,41 @@ class OrchestratorService:
         return RegenerateResult(turn_id=turn_id, accepted=True, reason="regenerated")
 
     # ------------------------------------------------------------------ #
-    # Swipes / alternates
+    # Swipes / alternates (delegated to AlternatesManager)
     # ------------------------------------------------------------------ #
 
-    async def _find_scene_and_post(self, post_id: PostId) -> tuple[SceneFileScene, SceneFilePost]:
-        return await self._scenes._find_post(post_id)
+    async def regenerate_post(self, **kw: Any) -> RegeneratePostResult:
+        return await self._alternates.regenerate_post(**kw)
 
-    async def _ensure_latest_model_post(self, scene: SceneFileScene, post: SceneFilePost) -> None:
-        """Enforce the latest-post-only rule for alternate mutations."""
-        posts = await self._scenes.get_posts(scene.id)
-        # Find the last model post (non-PC, non-player).
-        last_model: SceneFilePost | None = None
-        for p in posts:
-            if p.author_kind != SceneAuthorKind.PC and not p.is_player:
-                last_model = p
-        if last_model is None or last_model.id != post.id:
-            raise LatestPostOnlyError(post.id)
+    async def switch_primary_alternate(self, **kw: Any) -> dict[str, Any]:
+        return await self._alternates.switch_primary_alternate(**kw)
 
-    async def regenerate_post(
-        self,
-        *,
-        campaign_id: CampaignId,
-        post_id: PostId,
-        steering_hint: str | None = None,
-        model_override: str | None = None,
-    ) -> RegeneratePostResult:
-        """Re-sample the model for an existing post, producing a new alternate.
+    async def pin_alternate(self, **kw: Any) -> None:
+        return await self._alternates.pin_alternate(**kw)
 
-        Per the swipes-alternates design (branch C): finds the player input
-        that drove the post, re-runs the canonical generation, atomically
-        rewinds the current primary's delta set and applies the new deltas
-        under a fresh ``delta_set_id``, then appends a non-primary
-        :class:`Alternate` to the post's sidecar.
+    async def delete_alternate(self, **kw: Any) -> None:
+        return await self._alternates.delete_alternate(**kw)
 
-        The new alternate is **not** auto-promoted to primary; the user
-        reviews via the swipes UI and accepts with
-        :meth:`switch_primary_alternate`. Latest-model-post-only.
-        """
-        await self._require_campaign(campaign_id)
-        scene, post = await self._find_scene_and_post(post_id)
-        await self._ensure_latest_model_post(scene, post)
-        return await self._regenerate_post_core(
-            scene=scene,
-            post=post,
-            campaign_id=campaign_id,
-            steering_hint=steering_hint,
-            model_override=model_override,
-        )
-
-    async def _regenerate_post_core(
-        self,
-        *,
-        scene: SceneFileScene,
-        post: SceneFilePost,
-        campaign_id: CampaignId,
-        steering_hint: str | None = None,
-        model_override: str | None = None,
-        replay_batch_id: str | None = None,
-    ) -> RegeneratePostResult:
-        """Body of :meth:`regenerate_post`, minus the latest-post check.
-
-        The retcon replay path (``orchestrator/retcon_replay.py``) calls this
-        directly to re-sample model posts that are deliberately *not* the
-        latest one in their scene. ``replay_batch_id`` is stamped on the new
-        alternate so the replay UI can group it with its batch.
-        """
-        post_id = post.id
-
-        # Walk back from this post to find the triggering player input.
-        posts = await self._scenes.get_posts(scene.id)
-        player_input = ""
-        pc_ref: CharacterRef | None = None
-        for prior in reversed([p for p in posts if p.order_in_scene < post.order_in_scene]):
-            if prior.is_player:
-                player_input = prior.body
-                pc_ref = prior.author_pc_ref
-                break
-
-        branch_id = scene.branch_id or "main"
-        new_alt_id = f"a_{uuid.uuid4().hex[:16]}"
-        new_ds_id = f"ds_{uuid.uuid4().hex[:16]}"
-        applied = False
-
-        try:
-            extract_mode = await self._select_extract_mode(campaign_id=campaign_id)
-            prompt = await self._context.build(
-                player_input,
-                campaign_id,
-                mechanics_results=[],
-                pc_ref=pc_ref,
-                turn_id=post.turn_id,
-                extra=steering_hint,
-                extractor_mode=extract_mode,
-            )
-            response_text = await self._stream_main_response(
-                campaign_id=campaign_id,
-                turn_id=post.turn_id,
-                prompt=prompt,
-            )
-            scene_obj = await self._scenes.get_scene(scene.id)
-            extraction = await self._do_extract(
-                response_text=response_text,
-                scene=scene_obj,
-                campaign_id=campaign_id,
-                turn_id=post.turn_id,
-                mode=extract_mode,
-            )
-            deltas = list(extraction.deltas) if extraction is not None else []
-
-            # Atomic swap: rewind current primary's set + apply new deltas
-            # under the fresh set. Falls back to plain apply when the
-            # current primary has no associated delta set (legacy posts).
-            current_primary = next(
-                (a for a in post.alternates if a.id == post.primary_alternate_id),
-                None,
-            )
-            rewind_ds = (
-                current_primary.delta_set_id
-                if current_primary and current_primary.delta_set_id
-                else None
-            )
-            if rewind_ds:
-                await self._store.swap_delta_set(
-                    rewind_set_id=rewind_ds,
-                    apply_deltas=deltas,
-                    apply_set_id=new_ds_id,
-                    campaign_id=campaign_id,
-                    branch_id=branch_id,
-                    turn_id=post.turn_id,
-                    source="orchestrator:regenerate",
-                )
-            else:
-                await self._store.apply_delta_set(
-                    deltas=deltas,
-                    delta_set_id=new_ds_id,
-                    campaign_id=campaign_id,
-                    branch_id=branch_id,
-                    turn_id=post.turn_id,
-                    source="orchestrator:regenerate",
-                )
-            applied = True
-
-            alt = SceneAlternate(
-                id=new_alt_id,
-                post_id=post_id,
-                text=response_text,
-                delta_set_id=new_ds_id,
-                author_kind=post.author_kind,
-                model=model_override,
-                steering_hint=steering_hint,
-                created_at=self._clock(),
-                is_primary=False,
-                replay_batch_id=replay_batch_id,
-            )
-            await self._scenes.append_alternate(post_id, alt)
-
-            # Track that the new set is currently active for this post.
-            # The primary pointer on the post still references the old
-            # alternate; switch_primary_alternate will reconcile.
-            await self._store.set_current_alternate_delta_set(
-                campaign_id=campaign_id,
-                branch_id=branch_id,
-                post_id=post_id,
-                delta_set_id=new_ds_id,
-            )
-
-            await self._bus.emit(
-                Event(
-                    type=events.ALTERNATE_ADDED,
-                    payload={
-                        "campaign_id": campaign_id,
-                        "post_id": post_id,
-                        "alternate_id": new_alt_id,
-                        "delta_set_id": new_ds_id,
-                    },
-                )
-            )
-
-            # Eviction: if the post now exceeds the per-post cap of
-            # non-primary, non-pinned alternates, drop the oldest one. The
-            # just-added alternate is the newest by created_at, so it is
-            # never the eviction target.
-            try:
-                await self._evict_overflow_alternate(post_id)
-            except Exception:  # pragma: no cover - eviction is best-effort
-                logger.warning(
-                    "alternate eviction after regenerate_post failed for %s",
-                    post_id,
-                    exc_info=True,
-                )
-            return RegeneratePostResult(
-                post_id=post_id,
-                new_alternate_id=new_alt_id,
-                delta_set_id=new_ds_id,
-            )
-        except Exception:
-            if applied:
-                # Best-effort restore: rewind the new set, then re-activate
-                # the prior primary's set so the world state matches the
-                # unchanged primary pointer.
-                try:
-                    await self._store.rewind_delta_set(
-                        new_ds_id, campaign_id=campaign_id, branch_id=branch_id
-                    )
-                except Exception:
-                    logger.warning(
-                        "rollback of new delta set %s during regenerate_post failed",
-                        new_ds_id,
-                        exc_info=True,
-                    )
-                if rewind_ds:
-                    try:
-                        await self._store.re_activate_delta_set(
-                            delta_set_id=rewind_ds,
-                            campaign_id=campaign_id,
-                            branch_id=branch_id,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "re-activate of prior set %s during regenerate_post rollback failed",
-                            rewind_ds,
-                            exc_info=True,
-                        )
-            raise
-
-    async def switch_primary_alternate(
-        self,
-        *,
-        campaign_id: CampaignId,
-        post_id: PostId,
-        alternate_id: str,
-    ) -> dict[str, Any]:
-        """Atomically swap which alternate is primary for ``post_id``.
-
-        Rewinds the current primary's delta set, re-activates the target's,
-        rewrites the scene .md from primaries, updates the materialized view,
-        and emits a ``primary_switched`` event.
-        """
-        await self._require_campaign(campaign_id)
-        scene, post = await self._find_scene_and_post(post_id)
-        await self._ensure_latest_model_post(scene, post)
-        return await self._switch_primary_alternate_core(
-            scene=scene,
-            post=post,
-            campaign_id=campaign_id,
-            alternate_id=alternate_id,
-        )
-
-    async def _switch_primary_alternate_core(
-        self,
-        *,
-        scene: SceneFileScene,
-        post: SceneFilePost,
-        campaign_id: CampaignId,
-        alternate_id: str,
-    ) -> dict[str, Any]:
-        """Body of :meth:`switch_primary_alternate`, minus the latest-post
-        check. Used by the retcon replay path, which deliberately switches
-        primaries on earlier posts as the user accepts each replayed turn."""
-        post_id = post.id
-        target = next((a for a in post.alternates if a.id == alternate_id), None)
-        if target is None:
-            raise AlternateNotFoundError(post_id, alternate_id)
-
-        if post.primary_alternate_id == alternate_id:
-            return {"unchanged": True, "post_id": post_id, "alternate_id": alternate_id}
-
-        current = next(
-            (a for a in post.alternates if a.id == post.primary_alternate_id),
-            None,
-        )
-        if current is None or not current.delta_set_id or not target.delta_set_id:
-            # Legacy alternates without delta_set_id can still have their
-            # primary pointer switched + .md rebuilt; just skip the delta swap.
-            await self._scenes.set_primary_alternate(post_id, alternate_id)
-            await self._scenes.rebuild_md_from_primaries(scene.id)
-            return {
-                "unchanged": False,
-                "post_id": post_id,
-                "from": current.id if current else None,
-                "to": alternate_id,
-                "delta_swap": False,
-            }
-
-        branch_id = scene.branch_id or "main"
-        await self._store.swap_delta_set(
-            rewind_set_id=current.delta_set_id,
-            apply_deltas=None,
-            apply_set_id=target.delta_set_id,
-            campaign_id=campaign_id,
-            branch_id=branch_id,
-            turn_id=post.turn_id,
-            source="orchestrator:switch-primary",
-        )
-        await self._scenes.set_primary_alternate(post_id, alternate_id)
-        await self._scenes.rebuild_md_from_primaries(scene.id)
-        await self._store.set_current_alternate_delta_set(
-            campaign_id=campaign_id,
-            branch_id=branch_id,
-            post_id=post_id,
-            delta_set_id=target.delta_set_id,
-        )
-        await self._bus.emit(
-            Event(
-                type=events.PRIMARY_SWITCHED,
-                payload={
-                    "campaign_id": campaign_id,
-                    "post_id": post_id,
-                    "from": current.id,
-                    "to": alternate_id,
-                },
-            )
-        )
-        return {
-            "unchanged": False,
-            "post_id": post_id,
-            "from": current.id,
-            "to": alternate_id,
-            "delta_swap": True,
-        }
-
-    async def pin_alternate(
-        self,
-        *,
-        post_id: PostId,
-        alternate_id: str,
-        pinned: bool,
-    ) -> None:
-        scene, post = await self._find_scene_and_post(post_id)
-        if not any(a.id == alternate_id for a in post.alternates):
-            raise AlternateNotFoundError(post_id, alternate_id)
-        await self._scenes.update_alternate(post_id, alternate_id, pinned=pinned)
-        await self._bus.emit(
-            Event(
-                type=events.ALTERNATE_PINNED,
-                payload={
-                    "campaign_id": scene.campaign_id,
-                    "post_id": post_id,
-                    "alternate_id": alternate_id,
-                    "pinned": bool(pinned),
-                },
-            )
-        )
-
-    async def delete_alternate(
-        self,
-        *,
-        post_id: PostId,
-        alternate_id: str,
-    ) -> None:
-        """Remove a non-primary alternate. Rewinds its delta set first."""
-        scene, post = await self._find_scene_and_post(post_id)
-        if post.primary_alternate_id == alternate_id:
-            raise CannotDeletePrimaryError(post_id, alternate_id)
-        target = next((a for a in post.alternates if a.id == alternate_id), None)
-        if target is None:
-            raise AlternateNotFoundError(post_id, alternate_id)
-        branch_id = scene.branch_id or "main"
-        if target.delta_set_id:
-            # Rewind only if not already reversed (idempotent at the row level).
-            try:
-                await self._store.rewind_delta_set(
-                    target.delta_set_id,
-                    campaign_id=scene.campaign_id,
-                    branch_id=branch_id,
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning(
-                    "failed to rewind delta set %s on delete_alternate: %s",
-                    target.delta_set_id,
-                    exc,
-                )
-        await self._scenes.remove_alternate(post_id, alternate_id)
-        await self._bus.emit(
-            Event(
-                type=events.ALTERNATE_DELETED,
-                payload={
-                    "campaign_id": scene.campaign_id,
-                    "post_id": post_id,
-                    "alternate_id": alternate_id,
-                },
-            )
-        )
-
-    async def _evict_overflow_alternate(self, post_id: PostId) -> None:
-        """Drop the oldest non-primary, non-pinned alternate if over the cap."""
-        cap = self._config.swipes.max_alternates_per_post
-        if cap <= 0:
-            return
-        _scene, post = await self._find_scene_and_post(post_id)
-        eligible = [
-            a
-            for a in post.alternates
-            if not a.pinned and a.id != post.primary_alternate_id and a.created_at is not None
-        ]
-        if len(eligible) <= cap:
-            return
-        oldest = min(eligible, key=lambda a: a.created_at)  # type: ignore[arg-type, return-value]
-        await self.delete_alternate(post_id=post_id, alternate_id=oldest.id)
-
-    async def purge_stale_alternates(
-        self,
-        campaign_id: CampaignId,
-        *,
-        older_than_days: int | None = None,
-        now: datetime | None = None,
-    ) -> list[str]:
-        """Vacuum alternates older than the retention threshold.
-
-        Walks every scene in the campaign and deletes any alternate that is
-        not the primary, not pinned, and whose ``created_at`` is older than
-        the configured threshold. Returns the list of deleted alternate ids
-        for observability. Safe to invoke repeatedly; no-op when no scenes
-        contain stale alternates.
-        """
-        threshold_days = (
-            older_than_days
-            if older_than_days is not None
-            else self._config.swipes.auto_purge_older_than_days
-        )
-        if threshold_days <= 0:
-            return []
-        await self._require_campaign(campaign_id)
-        reference = now or datetime.now(UTC)
-        cutoff = reference - timedelta(days=threshold_days)
-        deleted: list[str] = []
-        scenes = await self._scenes.list_scenes(campaign_id)
-        for scene in scenes:
-            posts = await self._scenes.get_posts(scene.id)
-            for post in posts:
-                stale = [
-                    a
-                    for a in list(post.alternates)
-                    if not a.pinned
-                    and a.id != post.primary_alternate_id
-                    and a.created_at is not None
-                    and a.created_at < cutoff
-                ]
-                for alt in stale:
-                    try:
-                        await self.delete_alternate(post_id=post.id, alternate_id=alt.id)
-                        deleted.append(alt.id)
-                    except Exception:  # pragma: no cover - sweep is best-effort
-                        logger.warning(
-                            "purge_stale_alternates: failed to delete %s on %s",
-                            alt.id,
-                            post.id,
-                            exc_info=True,
-                        )
-        return deleted
+    async def purge_stale_alternates(self, campaign_id: CampaignId, **kw: Any) -> list[str]:
+        return await self._alternates.purge_stale_alternates(campaign_id, **kw)
 
     # ------------------------------------------------------------------ #
-    # Auxiliary tasks (drafts, rewrites, brainstorms — non-canonical)
+    # Auxiliary tasks (delegated to AuxiliaryCoordinator)
     # ------------------------------------------------------------------ #
 
-    async def run_auxiliary_task(
-        self,
-        *,
-        campaign_id: CampaignId,
-        task: Any,
-        on_token: Callable[[str], Awaitable[None]] | None = None,
-        branch_id: str | None = None,
-    ) -> Any:
-        """Run one auxiliary task; park the result in `_inflight_aux`.
-
-        No canonical state is mutated — see
-        ``docs/superpowers/specs/2026-05-19-auxiliary-tasks-design.md``.
-        """
-        from grimoire.orchestrator.auxiliary_runner import run_auxiliary_task as _run
-
-        await self._require_campaign(campaign_id)
-        return await _run(
-            self,
-            campaign_id=campaign_id,
-            task=task,
-            on_token=on_token,
-            branch_id=branch_id,
-        )
+    async def run_auxiliary_task(self, **kw: Any) -> Any:
+        return await self._auxiliary.run_auxiliary_task(**kw)
 
     async def discard_auxiliary(self, result_id: str) -> bool:
-        return self._inflight_aux.pop(result_id, None) is not None
+        return self._auxiliary.discard_auxiliary(result_id)
 
     def list_inflight_auxiliary(self, campaign_id: CampaignId | None = None) -> list[Any]:
-        results = list(self._inflight_aux.values())
-        if campaign_id is None:
-            return results
-        # Best-effort filter: aux tasks aren't tagged with campaign on the
-        # result itself, so callers either get all or pass the campaign id
-        # and we filter by it via a side dict (set by run_auxiliary_task).
-        tagged = getattr(self, "_inflight_aux_campaign", {})
-        return [r for r in results if tagged.get(r.id) == campaign_id]
+        return self._auxiliary.list_inflight_auxiliary(campaign_id)
 
     async def accept_auxiliary(
-        self,
-        campaign_id: CampaignId,
-        result_id: str,
-        *,
-        edited_text: str | None = None,
+        self, campaign_id: CampaignId, result_id: str, **kw: Any
     ) -> dict[str, Any]:
-        """Commit an auxiliary result via the canonical path for its kind.
-
-        Dispatch matrix:
-          * `SUBMIT_POST`  → canonical `submit_post` as the active PC.
-          * `REPLACE_POST` → build a new alternate, swap primary.
-          * `APPEND_POST`  → append an NPC-authored post.
-          * `COPY` / `REPLACE_DRAFT` → return the text; no server mutation.
-        """
-        from grimoire.auxiliary.types import CommitAction
-        from grimoire.orchestrator.errors import (
-            AuxiliaryAlreadyCommittedError,
-            AuxiliaryNotFoundError,
-        )
-
-        await self._require_campaign(campaign_id)
-        aux = self._inflight_aux.pop(result_id, None)
-        if aux is None:
-            # Distinguish unknown id from already-committed: if the id
-            # looks like an `ar_` id but isn't present, treat as not-found.
-            raise AuxiliaryNotFoundError(result_id)
-
-        text = edited_text if edited_text is not None else aux.text
-        action = aux.pending_commit_action
-
-        if action == CommitAction.SUBMIT_POST:
-            pc_ref = (aux.task.extra_params or {}).get("active_pc_ref")
-            if not pc_ref:
-                pc_ref = await self._characters_active_pc(campaign_id)
-            submit = await self.submit_post(campaign_id, pc_ref, text)
-            logger.info(
-                "[aux-accept] task=%s campaign=%s result=%s submitted",
-                aux.task.kind.value,
-                campaign_id,
-                result_id,
-            )
-            return {
-                "committed": True,
-                "action": "submit_post",
-                "result_id": result_id,
-                "turn_id": getattr(submit, "turn_id", None),
-            }
-
-        if action == CommitAction.REPLACE_POST:
-            try:
-                return await self._accept_rewrite_post(campaign_id, aux, text)
-            except Exception:
-                # Re-park so the user can retry.
-                self._inflight_aux[result_id] = aux
-                raise
-
-        if action == CommitAction.EXTEND_POST:
-            # Continue-as: extend the target post's body with the new text
-            # rather than creating a new NPC post. The new prose reads as
-            # a continuation of the same beat.
-            target_post_id = aux.task.target_post_id
-            if not target_post_id:
-                self._inflight_aux[result_id] = aux
-                raise OrchestratorError(f"continue-as result {result_id!r} has no target_post_id")
-            try:
-                _scene, existing = await self._scenes._find_post(target_post_id)
-            except Exception as err:
-                self._inflight_aux[result_id] = aux
-                raise OrchestratorError(
-                    f"continue-as target post {target_post_id!r} not found"
-                ) from err
-            joiner = "\n\n" if existing.body and not existing.body.endswith("\n") else ""
-            new_body = f"{existing.body}{joiner}{text}"
-            await self._scenes.edit_post(target_post_id, new_body, source="aux:continue_as")
-            logger.info(
-                "[aux-accept] task=%s campaign=%s result=%s extended=%s",
-                aux.task.kind.value,
-                campaign_id,
-                result_id,
-                target_post_id,
-            )
-            return {
-                "committed": True,
-                "action": "extend_post",
-                "result_id": result_id,
-                "post_id": target_post_id,
-            }
-
-        if action == CommitAction.APPEND_POST:
-            scene = await self._scenes.active_scene_for_campaign(campaign_id, "main")
-            if scene is None:
-                raise OrchestratorError(
-                    f"no active scene for aux append in campaign {campaign_id!r}"
-                )
-            post = self._new_post(
-                author_kind=SceneAuthorKind.NPC,
-                body=text,
-                is_player=False,
-                author_npc_ref=aux.task.target_character_ref,
-            )
-            await self._scenes.append_post(scene.id, post)
-            logger.info(
-                "[aux-accept] task=%s campaign=%s result=%s appended=%s",
-                aux.task.kind.value,
-                campaign_id,
-                result_id,
-                post.id,
-            )
-            return {
-                "committed": True,
-                "action": "append_post",
-                "result_id": result_id,
-                "post_id": post.id,
-            }
-
-        # COPY / REPLACE_DRAFT — no server-side change.
-        logger.info(
-            "[aux-accept] task=%s campaign=%s result=%s action=%s no-op",
-            aux.task.kind.value,
-            campaign_id,
-            result_id,
-            action.value,
-        )
-        return {
-            "committed": True,
-            "action": action.value,
-            "result_id": result_id,
-            "text": text,
-        }
-        # `AuxiliaryAlreadyCommittedError` is reserved for a future double-
-        # accept race; the pop-on-entry above already makes the common case
-        # idempotent (second call sees an unknown id → AuxiliaryNotFoundError).
-        _ = AuxiliaryAlreadyCommittedError  # keep import live for re-export
-
-    async def _characters_active_pc(self, campaign_id: CampaignId) -> CharacterRef:
-        getter = getattr(self._context, "_characters", None)
-        if getter is not None and hasattr(getter, "active_pc"):
-            ref = await getter.active_pc(campaign_id)
-            if ref:
-                return ref
-        # Fallback: read from campaign_pcs.
-        row = await self._store.db.fetchone(
-            "SELECT character_ref FROM campaign_pcs WHERE campaign_id = ? LIMIT 1",
-            (campaign_id,),
-        )
-        if row is None:
-            raise OrchestratorError(f"no active PC for campaign {campaign_id!r}")
-        return row["character_ref"] if hasattr(row, "__getitem__") else row[0]
-
-    async def _accept_rewrite_post(
-        self,
-        campaign_id: CampaignId,
-        aux: Any,
-        text: str,
-    ) -> dict[str, Any]:
-        """Build a new alternate from the auxiliary's text and switch primary.
-
-        Run extraction against the rewritten text so the new alternate
-        carries its own delta set, then call `switch_primary_alternate`
-        to atomically rewind the old set and apply the new one.
-        """
-        from grimoire.auxiliary.types import TaskKind
-        from grimoire.scenes.types import Alternate
-
-        post_id = aux.task.target_post_id
-        if not post_id:
-            raise OrchestratorError("rewrite_post auxiliary missing target_post_id")
-        scene, post = await self._find_scene_and_post(post_id)
-        branch_id = scene.branch_id or "main"
-        new_alt_id = f"a_{uuid.uuid4().hex[:16]}"
-        new_ds_id = f"ds_{uuid.uuid4().hex[:16]}"
-
-        # Extract deltas from the new text against the scene snapshot.
-        deltas: list[Any] = []
-        try:
-            pyd_scene = _pydantic_scene(scene)
-            snapshot = StateSnapshot(
-                campaign_id=campaign_id, branch_id=branch_id, scene_id=scene.id
-            )
-            # Rewrite prose comes from the auxiliary pipeline, which doesn't
-            # attach tracker instructions or tools, so always extract via the
-            # SEPARATE pipeline regardless of campaign mode preference.
-            extraction = await self._extractor.extract(
-                text,
-                pyd_scene,
-                campaign_id,
-                snapshot,
-                turn_id=post.turn_id,
-                mode=ExtractionMode.SEPARATE,
-            )
-            deltas = list(getattr(extraction, "deltas", []) or [])
-        except Exception as exc:
-            logger.warning("aux rewrite_post extraction failed: %s", exc)
-            deltas = []
-
-        # Persist a non-primary alternate first.
-        alt = Alternate(
-            id=new_alt_id,
-            post_id=post_id,
-            text=text,
-            delta_set_id=new_ds_id,
-            author_kind=post.author_kind,
-            model=getattr(aux, "model_used", None) or "",
-            prompt_hash=None,
-            steering_hint=aux.task.edit_instruction,
-            created_at=datetime.now(UTC),
-            tokens=getattr(aux, "tokens", None),
-            pinned=False,
-            is_primary=False,
-        )
-        await self._scenes.append_alternate(post_id, alt)
-
-        # Apply the new delta set under its own id without flipping the
-        # current pointer yet; switch_primary_alternate will rewind the
-        # currently-active set and re-activate this one atomically.
-        if deltas and hasattr(self._store, "apply_delta_set"):
-            try:
-                await self._store.apply_delta_set(
-                    deltas=deltas,
-                    delta_set_id=new_ds_id,
-                    campaign_id=campaign_id,
-                    branch_id=branch_id,
-                    turn_id=post.turn_id,
-                    source="orchestrator:aux-rewrite",
-                )
-            except Exception as exc:
-                logger.warning("aux rewrite_post apply_delta_set failed: %s", exc)
-
-        switch = await self.switch_primary_alternate(
-            campaign_id=campaign_id, post_id=post_id, alternate_id=new_alt_id
-        )
-        logger.info(
-            "[aux-accept] task=%s campaign=%s result=%s cascaded_replace=%s alt=%s",
-            TaskKind.REWRITE_POST.value,
-            campaign_id,
-            aux.id,
-            bool(switch.get("delta_swap")),
-            new_alt_id,
-        )
-        return {
-            "committed": True,
-            "action": "replace_post",
-            "result_id": aux.id,
-            "post_id": post_id,
-            "alternate_id": new_alt_id,
-            "cascaded_replace": bool(switch.get("delta_swap")),
-        }
+        return await self._auxiliary.accept_auxiliary(campaign_id, result_id, **kw)
 
     async def undo_turn(self, campaign_id: CampaignId, count: int = 1) -> UndoResult:
         await self._require_campaign(campaign_id)
@@ -1163,671 +496,52 @@ class OrchestratorService:
         state.last_turn_id = all_ids[0] if all_ids else None
         return UndoResult(turns_undone=undone, reversed_delta_ids=reversed_ids, warnings=warnings)
 
-    async def retcon_post(
-        self,
-        post_id: PostId,
-        new_text: str,
-        *,
-        campaign_id: CampaignId | None = None,
-        replay_subsequent: bool = False,
-    ) -> RetconResult:
-        """Edit a past post and either leave subsequent turns alone or replay them.
+    # ------------------------------------------------------------------ #
+    # Retcon / replay (delegated to RetconCoordinator)
+    # ------------------------------------------------------------------ #
 
-        The leave-as-is path (default) is the existing behavior: rewind the
-        edited post's deltas, re-extract from ``new_text``, flag downstream
-        turns whose deltas touch the same targets. When ``replay_subsequent``
-        is ``True`` a :class:`RetconReplaySession` opens (one batch per
-        campaign at a time) and the user reviews each subsequent model post
-        via the replay control routes; the returned ``RetconResult`` carries
-        the ``replay_batch_id`` so the client can poll batch state.
-        """
-        # When the caller asked for a replay, check the in-flight guard
-        # BEFORE doing any mutation — otherwise a 409 would leave the
-        # leave-as-is edit (delta rewind + new body + new extraction)
-        # already applied while pretending the call was a no-op.
-        if replay_subsequent:
-            if campaign_id is None:
-                scene_file, _ = await self._scenes._find_post(post_id)  # type: ignore[attr-defined]
-                campaign_id = scene_file.campaign_id
-            if self.retcon_replay.is_active(campaign_id):
-                raise RetconInFlightError(campaign_id)
-
-        base = await self._retcon_leave_as_is(post_id, new_text)
-        if not replay_subsequent:
-            return base
-        assert campaign_id is not None  # guarded above
-        state = await self.retcon_replay.start(campaign_id=campaign_id, edited_post_id=post_id)
-        return base.model_copy(update={"replay_batch_id": state.batch_id})
+    async def retcon_post(self, post_id: PostId, new_text: str, **kw: Any) -> RetconResult:
+        return await self._retcon.retcon_post(post_id, new_text, **kw)
 
     @property
     def retcon_replay(self) -> RetconReplaySession:
-        if self._retcon_replay is None:
-            self._retcon_replay = RetconReplaySession(self, event_bus=self._bus)
-        return self._retcon_replay
+        return self._retcon.retcon_replay
 
-    async def accept_replay(
-        self, campaign_id: CampaignId, *, batch_id: str | None = None
-    ) -> ReplayBatchStateView:
-        """``batch_id`` is the path parameter the client thought it was
-        acting on. When supplied, the session validates the open batch's
-        id matches — closing a TOCTOU race where cancel + start between
-        the GET (which validated the id) and the POST could silently
-        operate on a different batch."""
-        await self._require_campaign(campaign_id)
-        state = await self.retcon_replay.accept(campaign_id, expected_batch_id=batch_id)
-        return state.to_view()
+    async def accept_replay(self, campaign_id: CampaignId, **kw: Any) -> ReplayBatchStateView:
+        return await self._retcon.accept_replay(campaign_id, **kw)
 
-    async def try_again_replay(
-        self, campaign_id: CampaignId, *, batch_id: str | None = None
-    ) -> ReplayBatchStateView:
-        await self._require_campaign(campaign_id)
-        state = await self.retcon_replay.try_again(campaign_id, expected_batch_id=batch_id)
-        return state.to_view()
+    async def try_again_replay(self, campaign_id: CampaignId, **kw: Any) -> ReplayBatchStateView:
+        return await self._retcon.try_again_replay(campaign_id, **kw)
 
-    async def cancel_replay(
-        self, campaign_id: CampaignId, *, batch_id: str | None = None
-    ) -> ReplayBatchStateView:
-        await self._require_campaign(campaign_id)
-        state = await self.retcon_replay.cancel(campaign_id, expected_batch_id=batch_id)
-        return state.to_view()
+    async def cancel_replay(self, campaign_id: CampaignId, **kw: Any) -> ReplayBatchStateView:
+        return await self._retcon.cancel_replay(campaign_id, **kw)
 
     async def get_replay_state(
         self, campaign_id: CampaignId, batch_id: str
     ) -> ReplayBatchStateView:
-        await self._require_campaign(campaign_id)
-        state = self.retcon_replay.get(batch_id)
-        if state.campaign_id != campaign_id:
-            from grimoire.orchestrator.errors import RetconBatchNotFoundError
+        return await self._retcon.get_replay_state(campaign_id, batch_id)
 
-            raise RetconBatchNotFoundError(batch_id)
-        return state.to_view()
+    # ------------------------------------------------------------------ #
+    # Fork (delegated to ForkCoordinator)
+    # ------------------------------------------------------------------ #
 
-    async def _retcon_leave_as_is(self, post_id: PostId, new_text: str) -> RetconResult:
-        """Edit a past post, reverse its deltas, re-run extraction (the
-        leave-as-is variant). The replay variant wraps this and then opens
-        a :class:`RetconReplaySession`."""
-        # Find the post & scene
-        scene_file, post = await self._scenes._find_post(post_id)  # type: ignore[attr-defined]
-        original = post.body
-        # Capture target_ids the retconned turn touched BEFORE reversal so we
-        # can walk forward and flag downstream turns that touch any of them.
-        downstream_targets: set[str] = set()
-        if post.turn_id:
-            try:
-                pre_log = await self._store.get_delta_log(
-                    campaign_id=scene_file.campaign_id,
-                    turn_id=post.turn_id,
-                    include_reversed=False,
-                )
-                for record in pre_log:
-                    target = getattr(record, "target_id", None)
-                    if target:
-                        downstream_targets.add(str(target))
-            except Exception:
-                logger.debug("retcon: could not compute downstream targets", exc_info=True)
+    async def fork(self, campaign_id: CampaignId, from_turn_id: TurnId, label: str) -> ForkResult:
+        return await self._fork.fork(campaign_id, from_turn_id, label)
 
-        # Reverse deltas sourced from this post's turn (if any).
-        reversed_ids: list[str] = []
-        if post.turn_id:
-            try:
-                reversed_ids = await self._reverse_turn_deltas(scene_file.campaign_id, post.turn_id)
-            except Exception as exc:
-                logger.warning("retcon: could not reverse deltas for %s: %s", post_id, exc)
-        # Update the post body on disk.
-        await self._scenes.edit_post(post_id, new_text, source="retcon")
-
-        # Re-run extractor on the new text.
-        new_delta_ids: list[str] = []
-        try:
-            snapshot = StateSnapshot(
-                campaign_id=scene_file.campaign_id,
-                branch_id=scene_file.branch_id,
-                scene_id=scene_file.id,
-            )
-            pyd_scene = _pydantic_scene(scene_file)
-            result: ExtractionResult = await self._extractor.extract_from_user_text(
-                new_text,
-                pyd_scene,
-                scene_file.campaign_id,
-                snapshot=snapshot,
-                player_pc_ref=post.author_pc_ref,
-                turn_id=post.turn_id,
-            )
-            routing = route_deltas(list(result.deltas), config=self._extractor_config)
-            for delta in routing.auto_apply:
-                did = await self._store.apply_delta(
-                    delta=delta,
-                    source="retcon",
-                    turn_id=post.turn_id,
-                    branch_id=scene_file.branch_id,
-                    campaign_id=scene_file.campaign_id,
-                )
-                new_delta_ids.append(did)
-            for delta in routing.review:
-                await self._store.queue_for_review(
-                    delta=delta, source="retcon", campaign_id=scene_file.campaign_id
-                )
-        except Exception as exc:
-            logger.warning("retcon: extractor failure on post %s: %s", post_id, exc)
-
-        flagged: list[TurnId] = []
-        if downstream_targets and post.turn_id:
-            try:
-                full_log = await self._store.get_delta_log(
-                    campaign_id=scene_file.campaign_id,
-                    include_reversed=True,
-                )
-                seen: set[TurnId] = set()
-                # Walk in application order; flag the first occurrence of any
-                # turn whose deltas touch a target the retconned turn produced.
-                # Skip the retconned turn itself and the just-applied retcon
-                # deltas (which carry the same turn_id).
-                for record in full_log:
-                    tid = getattr(record, "turn_id", None)
-                    if not tid or tid == post.turn_id or tid in seen:
-                        continue
-                    target = getattr(record, "target_id", None)
-                    if target and str(target) in downstream_targets:
-                        flagged.append(tid)
-                        seen.add(tid)
-            except Exception:
-                logger.debug("retcon: downstream flagging walk failed", exc_info=True)
-
-        return RetconResult(
-            post_id=post_id,
-            original_text=original,
-            new_text=new_text,
-            reversed_delta_ids=reversed_ids,
-            new_delta_ids=new_delta_ids,
-            downstream_flagged_turns=flagged,
-        )
-
-    async def fork(
-        self,
-        campaign_id: CampaignId,
-        from_turn_id: TurnId,
-        label: str,
-    ) -> ForkResult:
-        await self._require_campaign(campaign_id)
-        parent_branch = f"{campaign_id}:main"
-        new_branch_id = await self._store.fork_branch(
-            campaign_id=campaign_id,
-            parent_branch_id=parent_branch,
-            new_label=label,
-            at_turn_id=from_turn_id,
-        )
-        # Copy-on-write scene files into the new branch directory. If the
-        # branch already has a scenes dir, that's fine.
-        with contextlib.suppress(FileExistsError):
-            await self._scenes.fork_scenes_for_branch(
-                campaign_id, new_branch_id, from_branch_id="main"
-            )
-        return ForkResult(
-            new_branch_id=new_branch_id,
-            from_turn_id=from_turn_id,
-            label=label,
-            created_at=self._clock(),
-        )
-
-    async def fork_campaign(
-        self,
-        *,
-        campaign_id: CampaignId,
-        new_campaign_id: str,
-        new_name: str,
-        fork_at_post_id: str | None = None,
-        description: str | None = None,
-        make_active: bool = False,
-    ) -> ForkCampaignResult:
-        """Branch a whole campaign into a new campaign id.
-
-        With ``fork_at_post_id=None`` the entire current state of the
-        source is duplicated. With a post id, state is materialized via
-        copy-and-truncate at that post's ``created_at``; a fingerprint
-        comparison guards correctness and the ``degraded`` flag surfaces
-        any mismatch.
-
-        Forks requested while a turn is streaming are queued in
-        ``pending_forks`` and processed once the active turn completes.
-        """
-        await self._require_campaign(campaign_id)
-
-        if await self._campaign_exists(new_campaign_id):
-            raise CampaignIdExists(new_campaign_id)
-
-        if self._is_streaming(campaign_id):
-            return await self._enqueue_fork(
-                campaign_id=campaign_id,
-                new_campaign_id=new_campaign_id,
-                new_name=new_name,
-                fork_at_post_id=fork_at_post_id,
-                description=description,
-                make_active=make_active,
-            )
-
-        return await self._execute_fork(
-            campaign_id=campaign_id,
-            new_campaign_id=new_campaign_id,
-            new_name=new_name,
-            fork_at_post_id=fork_at_post_id,
-            description=description,
-            make_active=make_active,
-        )
-
-    async def _execute_fork(
-        self,
-        *,
-        campaign_id: CampaignId,
-        new_campaign_id: str,
-        new_name: str,
-        fork_at_post_id: str | None,
-        description: str | None,
-        make_active: bool,
-    ) -> ForkCampaignResult:
-        db = self._store.db
-        data_root = self._store.data_root
-        src_dir = data_root / "campaigns" / campaign_id
-        new_dir = data_root / "campaigns" / new_campaign_id
-
-        cutoff_iso: str | None = None
-        cutoff_turn_id: str | None = None
-        deltas_replayed = 0
-        fingerprint_match = True
-        degraded = False
-
-        if fork_at_post_id is not None:
-            row = await db.fetchone(
-                "SELECT created_at, turn_id FROM posts WHERE id = ? AND campaign_id = ?",
-                (fork_at_post_id, campaign_id),
-            )
-            if row is None:
-                raise OrchestratorError(
-                    f"fork_at_post_id {fork_at_post_id!r} not found in campaign {campaign_id!r}"
-                )
-            cutoff_iso = row["created_at"]
-            cutoff_turn_id = row["turn_id"]
-
-        await self._bus.emit(
-            Event(
-                type=events.CAMPAIGN_FORK_STARTED,
-                payload={
-                    "source": campaign_id,
-                    "new": new_campaign_id,
-                    "at_post": fork_at_post_id,
-                },
-            )
-        )
-
-        # 1. Create the new campaign row up front (cloned from the source
-        #    with id, name, and provenance fields rewritten). bulk_copy
-        #    skips the ``campaigns`` table itself.
-        try:
-            await self._clone_campaign_row(
-                source_id=campaign_id,
-                new_id=new_campaign_id,
-                new_name=new_name,
-                description=description,
-                fork_at_post_id=fork_at_post_id,
-                cutoff_turn_id=cutoff_turn_id,
-            )
-
-            # 2. Bulk-copy / replay state into the new campaign id.
-            if cutoff_iso is None:
-                await bulk_copy(db, original=campaign_id, new=new_campaign_id, cutoff_iso=None)
-            else:
-                fp_origin = await fingerprint(db, campaign_id, cutoff_iso=cutoff_iso)
-                deltas_replayed = await replay_to_turn(
-                    db,
-                    original=campaign_id,
-                    new=new_campaign_id,
-                    cutoff_iso=cutoff_iso,
-                )
-                fp_new = await fingerprint(db, new_campaign_id)
-                if fp_origin != fp_new:
-                    fingerprint_match = False
-                    degraded = True
-
-            # 3. Copy narrative files (scene markdown + sidecars + sheets etc.).
-            try:
-                self._copy_campaign_files(src_dir, new_dir)
-            except Exception as exc:
-                logger.warning("fork file copy failed: %s", exc, exc_info=True)
-
-            # 4. Images.
-            new_dir.mkdir(parents=True, exist_ok=True)
-            img_result = await fork_image_files(src_dir, new_dir)
-            await db.execute(
-                "UPDATE campaigns SET forked_image_handling = ? WHERE id = ?",
-                (img_result.handling, new_campaign_id),
-            )
-
-            if make_active:
-                await db.execute(
-                    "UPDATE campaigns SET last_played_at = ? WHERE id = ?",
-                    (datetime.now(UTC).isoformat(), new_campaign_id),
-                )
-        except sqlite3.IntegrityError as exc:
-            # Lost a race against a concurrent fork that committed the
-            # same ``new_campaign_id`` first. Do NOT wipe — that would
-            # delete the winner's rows. Re-raise as CampaignIdExists so
-            # the REST layer maps to 409.
-            await self._bus.emit(
-                Event(
-                    type=events.CAMPAIGN_FORK_FAILED,
-                    payload={
-                        "source": campaign_id,
-                        "new": new_campaign_id,
-                        "error": "collision (concurrent fork won)",
-                    },
-                )
-            )
-            raise CampaignIdExists(new_campaign_id) from exc
-        except Exception as exc:
-            await self._wipe_failed_fork(new_campaign_id, new_dir)
-            await self._bus.emit(
-                Event(
-                    type=events.CAMPAIGN_FORK_FAILED,
-                    payload={
-                        "source": campaign_id,
-                        "new": new_campaign_id,
-                        "error": str(exc),
-                    },
-                )
-            )
-            raise
-
-        await self._bus.emit(
-            Event(
-                type=events.CAMPAIGN_FORKED,
-                payload={
-                    "source": campaign_id,
-                    "new": new_campaign_id,
-                    "at_post": fork_at_post_id,
-                    "image_handling": img_result.handling,
-                    "deltas_replayed": deltas_replayed,
-                    "degraded": degraded,
-                },
-            )
-        )
-
-        return ForkCampaignResult(
-            new_campaign_id=new_campaign_id,
-            new_name=new_name,
-            forked_from_campaign_id=campaign_id,
-            forked_at_post_id=fork_at_post_id,
-            image_handling=img_result.handling,
-            files_copied=img_result.files_copied,
-            deltas_replayed=deltas_replayed,
-            fingerprint_match=fingerprint_match,
-            degraded=degraded,
-            queued=False,
-            created_at=self._clock(),
-        )
-
-    async def _clone_campaign_row(
-        self,
-        *,
-        source_id: str,
-        new_id: str,
-        new_name: str,
-        description: str | None,
-        fork_at_post_id: str | None,
-        cutoff_turn_id: str | None,
-    ) -> None:
-        db = self._store.db
-        src = await db.fetchone("SELECT * FROM campaigns WHERE id = ?", (source_id,))
-        if src is None:
-            raise UnknownCampaignError(source_id)
-        # Read column names so we copy whatever columns exist in this DB.
-        async with db.acquire() as conn:
-            cur = await conn.execute("PRAGMA table_info(campaigns)")
-            cols = [r["name"] for r in await cur.fetchall()]
-            await cur.close()
-        overrides = {
-            "id": new_id,
-            "name": new_name,
-            "description": description if description is not None else src["description"],
-            "created_at": datetime.now(UTC).isoformat(),
-            "last_played_at": None,
-            "forked_from_campaign_id": source_id,
-            "forked_at_post_id": fork_at_post_id,
-            "forked_at_turn_id": cutoff_turn_id,
-            "forked_image_handling": None,
-        }
-        values = []
-        for col in cols:
-            if col in overrides:
-                values.append(overrides[col])
-            else:
-                values.append(src[col])
-        placeholders = ", ".join("?" for _ in cols)
-        col_list = ", ".join(cols)
-        await db.execute(
-            f"INSERT INTO campaigns ({col_list}) VALUES ({placeholders})",
-            tuple(values),
-        )
-
-    async def _campaign_exists(self, campaign_id: str) -> bool:
-        row = await self._store.db.fetchone("SELECT 1 FROM campaigns WHERE id = ?", (campaign_id,))
-        return row is not None
-
-    def _is_streaming(self, campaign_id: str) -> bool:
-        state = self._campaigns.get(campaign_id)
-        return state is not None and state.active is not None
-
-    async def _enqueue_fork(
-        self,
-        *,
-        campaign_id: str,
-        new_campaign_id: str,
-        new_name: str,
-        fork_at_post_id: str | None,
-        description: str | None,
-        make_active: bool,
-    ) -> ForkCampaignResult:
-        pending_id = f"pf_{uuid.uuid4().hex[:16]}"
-        await self._store.db.execute(
-            """
-            INSERT INTO pending_forks (
-                id, source_campaign_id, new_campaign_id, new_name,
-                fork_at_post_id, description, make_active, enqueued_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                pending_id,
-                campaign_id,
-                new_campaign_id,
-                new_name,
-                fork_at_post_id,
-                description,
-                1 if make_active else 0,
-                datetime.now(UTC).isoformat(),
-            ),
-        )
-        await self._bus.emit(
-            Event(
-                type=events.CAMPAIGN_FORK_QUEUED,
-                payload={
-                    "source": campaign_id,
-                    "new": new_campaign_id,
-                    "pending_id": pending_id,
-                },
-            )
-        )
-        return ForkCampaignResult(
-            new_campaign_id=new_campaign_id,
-            new_name=new_name,
-            forked_from_campaign_id=campaign_id,
-            forked_at_post_id=fork_at_post_id,
-            image_handling="pending",
-            queued=True,
-            created_at=self._clock(),
-        )
+    async def fork_campaign(self, **kw: Any) -> ForkCampaignResult:
+        return await self._fork.fork_campaign(**kw)
 
     async def list_pending_forks(self, campaign_id: str) -> list[dict]:
-        rows = await self._store.db.fetchall(
-            """
-            SELECT id, new_campaign_id, new_name, fork_at_post_id,
-                   description, make_active, enqueued_at, started_at,
-                   completed_at, error
-              FROM pending_forks
-             WHERE source_campaign_id = ?
-               AND completed_at IS NULL
-             ORDER BY enqueued_at
-            """,
-            (campaign_id,),
-        )
-        return [dict(r) for r in rows]
+        return await self._fork.list_pending_forks(campaign_id)
 
     async def process_pending_forks(self, campaign_id: str) -> list[ForkCampaignResult]:
-        """Drain queued forks for ``campaign_id``. Caller must ensure the
-        source campaign is no longer streaming."""
-        if self._is_streaming(campaign_id):
-            return []
-        results: list[ForkCampaignResult] = []
-        while True:
-            row = await self._store.db.fetchone(
-                """
-                SELECT id, new_campaign_id, new_name, fork_at_post_id,
-                       description, make_active
-                  FROM pending_forks
-                 WHERE source_campaign_id = ?
-                   AND completed_at IS NULL
-                   AND started_at IS NULL
-                 ORDER BY enqueued_at
-                 LIMIT 1
-                """,
-                (campaign_id,),
-            )
-            if row is None:
-                break
-            pending_id = row["id"]
-            # Atomically claim the row. ``AND started_at IS NULL`` makes
-            # the UPDATE a no-op if another drain already started it; we
-            # check the affected row count and skip to the next row when
-            # we lose the race.
-            async with self._store.db.acquire() as conn:
-                cur = await conn.execute(
-                    "UPDATE pending_forks SET started_at = ? WHERE id = ? AND started_at IS NULL",
-                    (datetime.now(UTC).isoformat(), pending_id),
-                )
-                claimed = cur.rowcount
-                await cur.close()
-            if claimed == 0:
-                # Another worker grabbed it; loop to look for the next
-                # unclaimed row.
-                continue
-            try:
-                result = await self._execute_fork(
-                    campaign_id=campaign_id,
-                    new_campaign_id=row["new_campaign_id"],
-                    new_name=row["new_name"],
-                    fork_at_post_id=row["fork_at_post_id"],
-                    description=row["description"],
-                    make_active=bool(row["make_active"]),
-                )
-                await self._store.db.execute(
-                    "UPDATE pending_forks SET completed_at = ? WHERE id = ?",
-                    (datetime.now(UTC).isoformat(), pending_id),
-                )
-                results.append(result)
-            except Exception as exc:
-                await self._store.db.execute(
-                    "UPDATE pending_forks SET completed_at = ?, error = ? WHERE id = ?",
-                    (datetime.now(UTC).isoformat(), str(exc), pending_id),
-                )
-                logger.warning("pending fork %s failed: %s", pending_id, exc)
-        return results
+        return await self._fork.process_pending_forks(campaign_id)
 
     async def get_lineage(self, campaign_id: str) -> dict:
-        """Return ancestors + descendants tree rooted at ``campaign_id``."""
-        ancestors = await self.get_lineage_ancestors(campaign_id)
-        rows = await self._store.db.fetchall(
-            """
-            WITH RECURSIVE descendants(id, depth) AS (
-                SELECT id, 0 FROM campaigns WHERE id = ?
-                UNION ALL
-                SELECT c.id, descendants.depth + 1
-                  FROM campaigns c
-                  JOIN descendants ON c.forked_from_campaign_id = descendants.id
-            )
-            SELECT c.id, c.name, c.forked_from_campaign_id,
-                   c.forked_at_post_id, c.forked_at_turn_id, c.created_at,
-                   descendants.depth AS depth
-              FROM descendants
-              JOIN campaigns c ON c.id = descendants.id
-             ORDER BY depth, c.id
-            """,
-            (campaign_id,),
-        )
-        return {
-            "root": campaign_id,
-            "ancestors": ancestors,
-            "descendants": [dict(r) for r in rows],
-        }
+        return await self._fork.get_lineage(campaign_id)
 
     async def get_lineage_ancestors(self, campaign_id: str) -> list[dict]:
-        """Walk parents from ``campaign_id`` up to the root."""
-        chain: list[dict] = []
-        current: str | None = campaign_id
-        seen: set[str] = set()
-        while current is not None and current not in seen:
-            seen.add(current)
-            row = await self._store.db.fetchone(
-                """
-                SELECT id, name, forked_from_campaign_id,
-                       forked_at_post_id, forked_at_turn_id, created_at
-                  FROM campaigns
-                 WHERE id = ?
-                """,
-                (current,),
-            )
-            if row is None:
-                break
-            chain.append(dict(row))
-            current = row["forked_from_campaign_id"]
-        return chain
-
-    def _copy_campaign_files(self, src_dir, new_dir) -> None:
-        """Mirror narrative files (scenes/sheets/overrides/emergent) from
-        ``src_dir`` to ``new_dir``. Images are handled separately via
-        :func:`fork_image_files`."""
-        import shutil
-
-        if not src_dir.exists():
-            return
-        new_dir.mkdir(parents=True, exist_ok=True)
-        for child in src_dir.iterdir():
-            if child.name == "images":
-                continue
-            target = new_dir / child.name
-            if child.is_dir():
-                if target.exists():
-                    shutil.rmtree(target)
-                shutil.copytree(child, target)
-            else:
-                shutil.copy2(child, target)
-
-    async def _wipe_failed_fork(self, new_campaign_id: str, new_dir) -> None:
-        import shutil
-
-        db = self._store.db
-        # Best-effort cleanup of any partial rows the bulk_copy / replay
-        # transaction may have committed before failing.
-        from grimoire.state_store.fork import CAMPAIGN_SCOPED_TABLES
-
-        for spec in CAMPAIGN_SCOPED_TABLES:
-            try:
-                await db.execute(
-                    f"DELETE FROM {spec['table']} WHERE campaign_id = ?",
-                    (new_campaign_id,),
-                )
-            except Exception:
-                continue
-        with contextlib.suppress(Exception):
-            await db.execute("DELETE FROM campaigns WHERE id = ?", (new_campaign_id,))
-        if new_dir.exists():
-            shutil.rmtree(new_dir, ignore_errors=True)
+        return await self._fork.get_lineage_ancestors(campaign_id)
 
     # ------------------------------------------------------------------ #
     # Turn loop
@@ -2096,7 +810,7 @@ class OrchestratorService:
         # Decide the extraction mode for this turn before assembling the
         # prompt so the Context Builder can attach tracker instructions or
         # tool declarations as appropriate.
-        extract_mode = await self._select_extract_mode(campaign_id=campaign_id)
+        extract_mode = await self._delta.select_extract_mode(campaign_id=campaign_id)
         cache_key = make_cache_key(
             campaign_id=campaign_id,
             player_input=player_input,
@@ -2160,7 +874,7 @@ class OrchestratorService:
         active.stage = "extracting"
         scene_obj = await self._scenes.get_scene(scene_id)
         extract_started = self._clock()
-        extraction = await self._do_extract(
+        extraction = await self._delta.extract(
             response_text=response_text,
             scene=scene_obj,
             campaign_id=campaign_id,
@@ -2183,7 +897,7 @@ class OrchestratorService:
             ),
             duration_ms=extract_duration_ms,
         )
-        await self._emit_integrated_deltas_fallback(
+        await self._delta.emit_integrated_deltas_fallback(
             extraction=extraction,
             turn_id=turn_id,
             campaign_id=campaign_id,
@@ -2205,7 +919,7 @@ class OrchestratorService:
         applied_ids: list[str] = []
         queued_ids: list[str] = []
         if extraction is not None:
-            applied_ids, queued_ids = await self._apply_routing(
+            applied_ids, queued_ids = await self._delta.apply_routing(
                 campaign_id=campaign_id,
                 branch_id=scene_obj.branch_id,
                 turn_id=turn_id,
@@ -2599,384 +1313,6 @@ class OrchestratorService:
             raise _StreamFailure("".join(accumulated), exc) from exc
         return "".join(accumulated)
 
-    async def _select_extract_mode(
-        self,
-        *,
-        campaign_id: CampaignId,
-        aux_task: Any | None = None,
-    ) -> ExtractionMode:
-        """Pick the extraction mode for one turn.
-
-        Resolves the route the gateway will pick for ``main_llm_task``,
-        consults `ProviderCapabilities`, and runs the shared `select_mode`
-        decision function. Falls back to the campaign config preference if
-        the gateway hasn't been wired with route resolution (tests with
-        fakes).
-        """
-        if await self._campaign_integrated_deltas(campaign_id):
-            return ExtractionMode.TOGETHER
-        provider_id = "unknown"
-        model = "unknown"
-        resolve = getattr(self._gateway, "resolve_route", None)
-        if resolve is not None:
-            try:
-                route = resolve(self._config.main_llm_task, campaign_id)
-                provider_id = route.provider_id
-                model = route.model
-            except Exception:
-                pass
-        caps_for = getattr(self._gateway, "capabilities_for", None)
-        caps = caps_for(provider_id) if caps_for is not None else ProviderCapabilities()
-        return await select_mode(
-            campaign_config=self._extractor_config,
-            provider_caps=caps,
-            auto_disable=self._auto_disable,
-            aux_task=aux_task,
-            provider_id=provider_id,
-            model=model,
-        )
-
-    async def _emit_integrated_deltas_fallback(
-        self,
-        *,
-        extraction: ExtractionResult | None,
-        turn_id: TurnId,
-        campaign_id: CampaignId,
-        scene_id: SceneId,
-    ) -> None:
-        """Emit ``integrated_deltas_fallback`` when TOGETHER mode fell back."""
-        if extraction is None:
-            return
-        _FALLBACK_CODES = {"together_no_tracker": "no_block", "together_malformed": "json_parse"}
-        for flag in getattr(extraction, "flags", []):
-            code = getattr(flag, "code", None)
-            if code in _FALLBACK_CODES:
-                await self._emit_turn_event(
-                    events.INTEGRATED_DELTAS_FALLBACK,
-                    turn_id,
-                    campaign_id,
-                    scene_id,
-                    reason=_FALLBACK_CODES[code],
-                )
-                return
-
-    async def _campaign_integrated_deltas(self, campaign_id: CampaignId) -> bool:
-        """Read ``campaigns.config["integrated_deltas"]``.
-
-        Returns ``True`` when the campaign has opted into the integrated
-        narrator+extraction flow (``ExtractionMode.TOGETHER``). Returns
-        ``False`` when the flag is absent or explicitly ``false`` so that
-        existing campaigns are unaffected.
-        """
-        try:
-            row = await self._store.db.fetchone(
-                "SELECT config FROM campaigns WHERE id = ?", (campaign_id,)
-            )
-        except Exception:
-            return False
-        if not row:
-            return False
-        raw = row["config"] if row else None
-        if not raw:
-            return False
-        import json as _json
-
-        try:
-            data = _json.loads(raw)
-        except (TypeError, ValueError):
-            return False
-        return bool(data.get("integrated_deltas")) if isinstance(data, dict) else False
-
-    async def _do_extract(
-        self,
-        *,
-        response_text: str,
-        scene: SceneFileScene,
-        campaign_id: CampaignId,
-        turn_id: TurnId,
-        mode: ExtractionMode = ExtractionMode.SEPARATE,
-    ) -> ExtractionResult | None:
-        snapshot = StateSnapshot(
-            campaign_id=campaign_id,
-            branch_id=scene.branch_id,
-            scene_id=scene.id,
-        )
-        pyd_scene = _pydantic_scene(scene)
-        retries = max(0, int(self._config.errors.retry_extractor_on_parse_failure))
-        attempts = retries + 1
-        parse_failure_codes = {
-            "llm_json_unparseable",
-            "structured_llm_failed",
-            "llm_call_failed",
-        }
-        last_result: ExtractionResult | None = None
-        for attempt in range(attempts):
-            try:
-                result = await self._extractor.extract(
-                    response_text,
-                    pyd_scene,
-                    campaign_id,
-                    snapshot,
-                    turn_id=turn_id,
-                    mode=mode,
-                )
-            except Exception as exc:
-                logger.warning("extractor failed for turn %s: %s", turn_id, exc)
-                return None
-            last_result = result
-            flags = getattr(result, "flags", []) or []
-            has_parse_failure = any(getattr(f, "code", None) in parse_failure_codes for f in flags)
-            if not has_parse_failure or attempt == attempts - 1:
-                return result
-        return last_result
-
-    async def _apply_routing(
-        self,
-        *,
-        campaign_id: CampaignId,
-        branch_id: str,
-        turn_id: TurnId,
-        extraction: ExtractionResult,
-    ) -> tuple[list[str], list[str]]:
-        routing = route_deltas(list(extraction.deltas), config=self._extractor_config)
-        auto_deltas = [d for d, dec in routing.decisions() if dec is Decision.AUTO_APPLY]
-        review_deltas = [d for d, dec in routing.decisions() if dec is Decision.REVIEW]
-
-        applied_ids: list[str] = []
-        queued_ids: list[str] = []
-        try:
-            for delta in auto_deltas:
-                # §5 Domain-specific dispatch: weather override deltas go
-                # through WorldService.override_weather so the row gets
-                # tagged source="override" (which the read path looks for).
-                if (
-                    self._world is not None
-                    and delta.kind == DeltaKind.OVERRIDE_WRITE
-                    and delta.target_table == "location_state"
-                ):
-                    try:
-                        await self._world.apply_weather_override_delta(delta)
-                        continue
-                    except Exception:
-                        logger.exception("world weather-override apply failed; falling through")
-                # §5 (continuity remaining-design): route continuity-shaped
-                # deltas to the per-campaign Continuity service. Falls
-                # through to apply_delta when no continuity is wired so
-                # tests that don't compose the registry still get rows in
-                # the state-store delta log.
-                if self._continuity is not None and delta.kind in (
-                    DeltaKind.FACT_ADD,
-                    DeltaKind.FACT_RETIRE,
-                    DeltaKind.FACT_UPDATE,
-                    DeltaKind.COMMITMENT_ADD,
-                    DeltaKind.COMMITMENT_RESOLVE,
-                    DeltaKind.KNOWLEDGE_REVEAL,
-                ):
-                    handled = await self._apply_continuity_delta(
-                        delta=delta,
-                        campaign_id=campaign_id,
-                        branch_id=branch_id,
-                        turn_id=turn_id,
-                    )
-                    if handled:
-                        continue
-                did = await self._store.apply_delta(
-                    delta=delta,
-                    source=delta.source or "extractor",
-                    turn_id=turn_id,
-                    branch_id=branch_id,
-                    campaign_id=campaign_id,
-                )
-                applied_ids.append(did)
-        except Exception:
-            for did in reversed(applied_ids):
-                try:
-                    await self._store.reverse_delta(did)
-                except Exception:
-                    logger.warning(
-                        "rollback of delta %s failed during apply-batch unwind",
-                        did,
-                        exc_info=True,
-                    )
-            raise
-
-        if applied_ids:
-            await self._bus.emit(
-                Event(
-                    type=events.DELTAS_APPLIED,
-                    payload={
-                        "turn_id": turn_id,
-                        "campaign_id": campaign_id,
-                        "count": len(applied_ids),
-                        "ids": list(applied_ids),
-                    },
-                )
-            )
-
-        for delta in review_deltas:
-            try:
-                review_id = await self._store.queue_for_review(
-                    delta=delta,
-                    source=delta.source or "extractor",
-                    campaign_id=campaign_id,
-                )
-                if review_id:
-                    queued_ids.append(str(review_id))
-                await self._bus.emit(
-                    Event(
-                        type=events.REVIEW_ITEM_ADDED,
-                        payload={
-                            "campaign_id": campaign_id,
-                            "review_id": review_id,
-                            "turn_id": turn_id,
-                        },
-                    )
-                )
-            except Exception as exc:
-                logger.warning(
-                    "queue_for_review failed (kind=%s turn=%s): %s",
-                    delta.kind,
-                    turn_id,
-                    exc,
-                )
-
-        return applied_ids, queued_ids
-
-    async def _apply_continuity_delta(
-        self,
-        *,
-        delta: Any,
-        campaign_id: CampaignId,
-        branch_id: str,
-        turn_id: TurnId,
-    ) -> bool:
-        """Dispatch a continuity-shaped delta to the Continuity service.
-
-        Returns ``True`` when the delta was handled (so the caller skips
-        the generic ``state_store.apply_delta`` fallthrough), ``False``
-        if the routing decided it couldn't translate the payload — in
-        which case the caller falls back to the state-store path so
-        nothing silently disappears.
-
-        FACT_ADD runs a contradiction check first: when the check
-        returns a non-empty conflict list the fact lands in the State
-        Store review queue instead of the ledger so the user can pick a
-        resolution via ``POST /campaigns/{id}/contradictions/{id}``.
-        """
-        from grimoire.continuity.registry import resolve_continuity
-        from grimoire.continuity.service import ContinuityService
-
-        service = resolve_continuity(self._continuity, campaign_id, branch_id=branch_id)
-        if service is None:
-            return False
-
-        payload = delta.after or {}
-        try:
-            if delta.kind == DeltaKind.FACT_ADD:
-                fact = _build_continuity_fact(
-                    payload=payload,
-                    confidence=delta.confidence,
-                    source=delta.source or "extractor",
-                    turn_id=turn_id,
-                )
-                # §5: contradiction check before write. A report with
-                # non-empty conflicts blocks the write and queues the
-                # delta for the State Store review queue.
-                report = await service.check_contradictions(fact, turn_id=turn_id)
-                if report.conflicts:
-                    review_id = await self._store.queue_for_review(
-                        delta=delta,
-                        source=delta.source or "extractor",
-                        campaign_id=campaign_id,
-                    )
-                    await self._bus.emit(
-                        Event(
-                            type=events.REVIEW_ITEM_ADDED,
-                            payload={
-                                "campaign_id": campaign_id,
-                                "review_id": review_id,
-                                "turn_id": turn_id,
-                                "report_id": report.id,
-                                "reason": "contradiction_detected",
-                            },
-                        )
-                    )
-                    return True
-                await service.add_fact(fact, source=delta.source or "extractor")
-                return True
-
-            if delta.kind == DeltaKind.FACT_RETIRE:
-                fact_id = payload.get("fact_id") or payload.get("id")
-                if not fact_id:
-                    return False
-                await service.retire_fact(
-                    fact_id,
-                    in_post=str(payload.get("in_post") or turn_id),
-                    reason=str(payload.get("reason") or "retconned"),
-                )
-                return True
-
-            if delta.kind == DeltaKind.FACT_UPDATE:
-                fact_id = payload.get("fact_id") or payload.get("id")
-                if not fact_id:
-                    return False
-                patch = payload.get("patch") or {}
-                await service.update_fact(fact_id, patch)
-                return True
-
-            if delta.kind == DeltaKind.COMMITMENT_ADD:
-                commitment = _build_continuity_commitment(
-                    payload=payload,
-                    turn_id=turn_id,
-                )
-                if commitment is None:
-                    return False
-                await service.add_commitment(commitment, source=delta.source or "extractor")
-                return True
-
-            if delta.kind == DeltaKind.COMMITMENT_RESOLVE:
-                from grimoire.continuity.types import CommitmentStatus
-
-                cid = payload.get("commitment_id") or payload.get("id")
-                status_raw = str(payload.get("status") or "paid").lower()
-                if not cid:
-                    return False
-                try:
-                    status = CommitmentStatus(status_raw)
-                except ValueError:
-                    return False
-                await service.resolve_commitment(
-                    cid, status, in_post=str(payload.get("in_post") or turn_id)
-                )
-                return True
-
-            if delta.kind == DeltaKind.KNOWLEDGE_REVEAL:
-                fact_id = payload.get("fact_id")
-                to_refs = payload.get("to") or payload.get("character_ids") or []
-                if not fact_id or not to_refs:
-                    return False
-                await service.reveal(
-                    fact_id,
-                    list(to_refs),
-                    in_post=str(payload.get("in_post") or turn_id),
-                    source=delta.source or "extractor",
-                )
-                return True
-        except Exception:
-            logger.exception(
-                "continuity delta apply failed (kind=%s campaign=%s turn=%s)",
-                delta.kind,
-                campaign_id,
-                turn_id,
-            )
-            # Fall back to the state-store path so the delta is still
-            # logged somewhere visible.
-            return False
-
-        # Unknown / unsupported continuity kind — fall back.
-        del ContinuityService  # imported for type-check clarity only
-        return False
-
     # ------------------------------------------------------------------ #
     # Undo helpers
     # ------------------------------------------------------------------ #
@@ -3137,263 +1473,6 @@ class OrchestratorService:
             await self._ws_push(campaign_id, message)
         except Exception as exc:
             logger.debug("ws_push failed: %s", exc)
-
-
-# --------------------------------------------------------------------------- #
-# Conversion helpers (scenes dataclass ↔ pydantic Scene)
-# --------------------------------------------------------------------------- #
-
-
-async def _campaign_generation_overrides(store: Any, campaign_id: str) -> dict[str, Any]:
-    """Read ``campaigns.config["generation"]`` for ``campaign_id``.
-
-    Returns ``{"max_tokens": int | None, "temperature": float | None}`` —
-    each key is ``None`` when the user hasn't set an override for that
-    field. Always best-effort: any error returns empty so the caller
-    falls back to the prompt's default params.
-    """
-    import json as _json
-
-    try:
-        row = await store.db.fetchone("SELECT config FROM campaigns WHERE id = ?", (campaign_id,))
-    except Exception:
-        return {}
-    if not row:
-        return {}
-    raw = row.get("config") if hasattr(row, "get") else row["config"]
-    if not raw:
-        return {}
-    try:
-        data = _json.loads(raw)
-    except (TypeError, ValueError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    block = data.get("generation") or {}
-    if not isinstance(block, dict):
-        return {}
-    return {
-        "max_tokens": block.get("max_tokens"),
-        "temperature": block.get("temperature"),
-    }
-
-
-def _pydantic_scene(scene: SceneFileScene) -> PydanticScene:
-    """Adapt a scene-manager dataclass into the pydantic Scene used by
-    Extractor/Mechanics.
-
-    The pydantic model expects an ``InGameTime`` for ``in_game_start`` /
-    ``in_game_end``; the dataclass stores a ``datetime``. We drop those
-    fields here — the Extractor reads them but doesn't fail when absent.
-    """
-    return PydanticScene(
-        id=scene.id,
-        campaign_id=scene.campaign_id,
-        branch_id=scene.branch_id,
-        ordinal=scene.ordinal,
-        slug=scene.slug,
-        file_path="",
-        title=scene.title or "",
-        location_ref=scene.location_ref,
-        in_game_start=None,
-        in_game_end=None,
-        greeting_id=scene.greeting_id,
-        pov_character_ref=scene.pov_character_ref,
-        present_character_refs=list(scene.present_character_refs),
-        present_pc_refs=list(scene.present_pc_refs),
-        mood=scene.mood or "",
-        post_count=scene.post_count,
-        threads_introduced=[],
-        threads_paid_off=[],
-        tags=list(scene.tags),
-        closed=scene.closed,
-        closed_at_turn=scene.closed_at_turn,
-        last_advance_at_post=scene.last_advance_at_post or None,
-        running_summary=scene.running_summary or "",
-        summary=scene.final_summary or "",
-        key_beats=list(scene.key_beats),
-        emotional_arc="",
-    )
-
-
-def _pydantic_post(post: SceneFilePost) -> Any:
-    from grimoire.types.scene import AuthorKind as PydAuthorKind
-    from grimoire.types.scene import Post as PydPost
-
-    return PydPost(
-        id=post.id,
-        scene_id=post.scene_id,
-        order_in_scene=post.order_in_scene,
-        author_kind=PydAuthorKind(post.author_kind.value),
-        body=post.body,
-        is_player=post.is_player,
-        created_at=post.created_at,
-        turn_id=post.turn_id,
-        author_pc_ref=post.author_pc_ref,
-        author_npc_ref=post.author_npc_ref,
-    )
-
-
-def _build_continuity_fact(
-    *,
-    payload: dict,
-    confidence: float,
-    source: str,
-    turn_id: TurnId,
-) -> Any:
-    """Build a dataclass :class:`Fact` from an extractor FACT_ADD payload.
-
-    The extractor emits a dict-shaped delta; the Continuity service
-    expects a :mod:`grimoire.continuity.types` dataclass. The
-    conversion lives here rather than in the extractor so the extractor
-    stays JSON-clean and tests of the extractor don't drag in the
-    continuity types.
-    """
-    from grimoire.continuity.types import Fact, FactSource, FactSubject, InGameTime
-
-    about_data = payload.get("about") or {}
-    if isinstance(about_data, FactSubject):
-        about = about_data
-    else:
-        about = FactSubject(
-            character_ids=list(about_data.get("character_ids") or []),
-            location_ids=list(about_data.get("location_ids") or []),
-            faction_ids=list(about_data.get("faction_ids") or []),
-            item_ids=list(about_data.get("item_ids") or []),
-            scope=str(about_data.get("scope") or "public"),
-        )
-    src_raw = payload.get("source") or source
-    try:
-        fact_source = FactSource(str(src_raw))
-    except ValueError:
-        fact_source = FactSource.NARRATOR
-    when_data = payload.get("in_game_when") or {}
-    when = InGameTime(
-        day_count=int(when_data.get("day_count", 0)),
-        label=str(when_data.get("label", "")),
-    )
-    return Fact(
-        id="",
-        text=str(payload.get("text", "")),
-        established_in_post=str(payload.get("established_in_post") or turn_id),
-        established_at_in_game=when,
-        confidence=float(confidence),
-        source=fact_source,
-        speaker_id=payload.get("speaker_id"),
-        about=about,
-        keywords=list(payload.get("keywords") or []),
-    )
-
-
-def _build_continuity_commitment(
-    *,
-    payload: dict,
-    turn_id: TurnId,
-) -> Any | None:
-    """Build a :class:`Commitment` from an extractor COMMITMENT_ADD payload.
-
-    Returns ``None`` when the payload is missing the required ``text``
-    field; the caller falls back to the generic state-store path so the
-    delta stays in the log even if the continuity ledger can't accept it.
-    """
-    from grimoire.continuity.types import (
-        Commitment,
-        CommitmentKind,
-        CommitmentStatus,
-        InGameTime,
-    )
-
-    text = str(payload.get("text") or "").strip()
-    if not text:
-        return None
-    kind_raw = str(payload.get("kind") or "promise").lower()
-    try:
-        kind = CommitmentKind(kind_raw)
-    except ValueError:
-        kind = CommitmentKind.PROMISE
-    when_data = payload.get("in_game_created_at") or {}
-    created_at = InGameTime(
-        day_count=int(when_data.get("day_count", 0)),
-        label=str(when_data.get("label", "")),
-    )
-    due_data = payload.get("due") or payload.get("due_by")
-    due_by: InGameTime | None = None
-    if isinstance(due_data, dict):
-        due_by = InGameTime(
-            day_count=int(due_data.get("day_count", 0)),
-            label=str(due_data.get("label", "")),
-        )
-    return Commitment(
-        id="",
-        kind=kind,
-        text=text,
-        created_in_post=str(payload.get("created_in_post") or turn_id),
-        in_game_created_at=created_at,
-        weight=int(payload.get("weight") or 1),
-        from_id=payload.get("from") or payload.get("from_id"),
-        to_id=payload.get("to") or payload.get("to_id"),
-        due_by=due_by,
-        status=CommitmentStatus.OPEN,
-    )
-
-
-@dataclass
-class _PreRollOutcome:
-    """Result of partitioning + resolving pre-roll proposals."""
-
-    results: list[MechanicsResult]
-    pending: list[ProposedRoll]
-
-
-def _proposed_to_roll(proposal: ProposedRoll) -> Roll:
-    """Materialise a ``ProposedRoll`` into a concrete ``Roll`` ready for resolve.
-
-    The proposal carries label/kind/pool/difficulty/modifiers; the Roll
-    needs an id and a seed. The id is derived from the label so retries
-    of the same proposal stay deterministic; the seed is zero by default
-    and the mechanics service mixes it with the branch seed.
-    """
-    return Roll(
-        id=f"proposal:{proposal.label}",
-        kind=proposal.kind,
-        pool=proposal.pool,
-        seed=0,
-        actor_ref=proposal.actor_ref,
-        target_ref=proposal.target_ref,
-        difficulty=proposal.difficulty,
-        modifiers=list(proposal.modifiers),
-        metadata=dict(proposal.metadata),
-    )
-
-
-def _clean_modifications(modifications: dict) -> dict:
-    """Filter caller-supplied overrides to fields ``ProposedRoll`` actually accepts.
-
-    Modifiers are re-validated through ``RollModifier`` so a malformed
-    entry surfaces as a ``ValueError`` before resolution.
-    """
-    allowed = {
-        "kind",
-        "pool",
-        "difficulty",
-        "actor_ref",
-        "target_ref",
-        "rationale",
-        "high_stakes",
-        "modifiers",
-        "metadata",
-    }
-    out: dict = {}
-    for key, value in modifications.items():
-        if key not in allowed:
-            continue
-        if key == "modifiers" and isinstance(value, list):
-            out[key] = [
-                v if isinstance(v, RollModifier) else RollModifier.model_validate(v) for v in value
-            ]
-        else:
-            out[key] = value
-    return out
 
 
 __all__ = ["OrchestratorService", "WSPushFn"]
