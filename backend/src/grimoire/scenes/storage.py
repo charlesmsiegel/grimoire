@@ -28,7 +28,7 @@ from grimoire.files import slugify as _base_slugify
 from grimoire.files.hashing import content_hash  # noqa: F401  (re-exported)
 from grimoire.scenes.types import Alternate, AuthorKind, Post, Scene
 
-POST_HEADING_RE = re.compile(r"^##\s+Post\s+(\d+)\s+[—-]\s+(.+?)\s*$", re.MULTILINE)
+POST_HEADING_RE = re.compile(r"^##\s+Post\s+(\d+)\s+(?:—|--?)\s+(.+?)\s*$", re.MULTILINE)
 
 # Defaults for the file/heading naming patterns. Both are exposed via
 # ``SceneManagerConfig.files`` so a campaign can override them without
