@@ -291,6 +291,50 @@ export interface LineageTree {
   descendants: LineageNode[];
 }
 
+// ---------------------------------------------------------------------------
+// New scene workflow
+// ---------------------------------------------------------------------------
+
+export interface LedgerItem {
+  ledger_id: string;
+  summary: string;
+  greeting_id: string | null;
+  source: "greeting" | "llm" | "user";
+}
+
+export interface GeneratedSuggestion {
+  summary: string;
+  proposed_location: string | null;
+  proposed_cast: string[];
+}
+
+export interface SuggestResponse {
+  ledger_picks: LedgerItem[];
+  generated: GeneratedSuggestion[];
+}
+
+export interface PreviewResponse {
+  title: string;
+  location_ref: string | null;
+  in_game_start: string | null;
+  present_character_refs: string[];
+  present_pc_refs: string[];
+  greeting_id: string | null;
+  first_post_source: "greeting" | "adapted_greeting" | "generated";
+  ledger_id: string | null;
+}
+
+export interface LedgerEntry {
+  id: string;
+  campaign_id: string;
+  summary: string;
+  greeting_id: string | null;
+  source: "greeting" | "llm" | "user";
+  status: "active" | "used" | "dismissed";
+  created_at: string;
+  used_in_scene_id: string | null;
+}
+
 export interface InGameTime {
   moment: string;
   calendar_id?: string | null;
