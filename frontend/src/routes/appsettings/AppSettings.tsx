@@ -2,7 +2,6 @@ import { useState } from "react";
 
 import { AppearanceTab } from "./AppearanceTab";
 import { BackupTab } from "./BackupTab";
-import { LLMDefaultsTab } from "./LLMDefaultsTab";
 import { LibraryTab } from "./LibraryTab";
 import { MechanicsTab } from "./MechanicsTab";
 import { PluginsTab } from "./PluginsTab";
@@ -12,7 +11,6 @@ import { TemplatesTab } from "./TemplatesTab";
 type Tab =
   | "library"
   | "providers"
-  | "llm-defaults"
   | "templates"
   | "mechanics"
   | "plugins"
@@ -22,7 +20,6 @@ type Tab =
 const TABS: { id: Tab; label: string }[] = [
   { id: "library", label: "Library" },
   { id: "providers", label: "Providers" },
-  { id: "llm-defaults", label: "LLM defaults" },
   { id: "templates", label: "Prompts" },
   { id: "mechanics", label: "Mechanics" },
   { id: "plugins", label: "Plugins" },
@@ -55,7 +52,6 @@ export function AppSettings() {
       <div className="tab-panel">
         {tab === "library" && <LibraryTab />}
         {tab === "providers" && <ProvidersTab />}
-        {tab === "llm-defaults" && <LLMDefaultsTab />}
         {tab === "templates" && <TemplatesTab />}
         {tab === "mechanics" && <MechanicsTab />}
         {tab === "plugins" && <PluginsTab />}
