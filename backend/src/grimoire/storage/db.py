@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import aiosqlite
 import sqlite_vec
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -46,6 +50,7 @@ class Database:
             if self._pool is not None:
                 return
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._checkpoint_wal()
             pool: asyncio.Queue[aiosqlite.Connection] = asyncio.Queue(maxsize=self.pool_size)
             for _ in range(self.pool_size):
                 conn = await self._open_connection()
@@ -53,6 +58,26 @@ class Database:
                 await pool.put(conn)
             self._pool = pool
             self._closed = False
+
+    def _checkpoint_wal(self) -> None:
+        """Flush a stale WAL left by a crashed prior run.
+
+        A hard kill or power loss can leave -wal/-shm files whose presence
+        forces every new connection to attempt WAL recovery — which needs the
+        write lock and blocks behind busy_timeout. Checkpointing once with a
+        synchronous connection (before the async pool exists) clears that
+        state so the pool opens cleanly.
+        """
+        if not self.path.exists():
+            return
+        try:
+            conn = sqlite3.connect(str(self.path), timeout=5)
+            conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.close()
+            logger.debug("WAL checkpoint completed for %s", self.path)
+        except Exception:
+            logger.debug("WAL checkpoint skipped for %s (likely first run)", self.path)
 
     async def _open_connection(self) -> aiosqlite.Connection:
         # ``isolation_level=None`` puts the underlying sqlite3 connection in
