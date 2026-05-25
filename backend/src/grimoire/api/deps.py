@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from grimoire.orchestrator.service import OrchestratorService
     from grimoire.plugins import PluginsService
     from grimoire.scenes import SceneManager
+    from grimoire.scenes.ledger import SceneLedger
     from grimoire.state_store import StateStore
     from grimoire.time_engine.service import TimeEngineService
     from grimoire.transient_state import TransientStateService
@@ -70,6 +71,10 @@ def get_characters(request: Request) -> CharactersService:
 
 def get_scenes(request: Request) -> SceneManager:
     return _require(get_container(request), "scenes")
+
+
+def get_scene_ledger(request: Request) -> SceneLedger:
+    return _require(get_container(request), "scene_ledger")
 
 
 def get_continuity(request: Request) -> ContinuityRegistry:
@@ -142,6 +147,7 @@ LibraryDep = Annotated[Any, Depends(get_library)]
 WorldDep = Annotated[Any, Depends(get_world)]
 CharactersDep = Annotated[Any, Depends(get_characters)]
 ScenesDep = Annotated[Any, Depends(get_scenes)]
+SceneLedgerDep = Annotated[Any, Depends(get_scene_ledger)]
 ContinuityDep = Annotated[Any, Depends(get_continuity)]
 TimeEngineDep = Annotated[Any, Depends(get_time_engine)]
 ImageGenDep = Annotated[Any, Depends(get_imagegen)]
@@ -174,6 +180,7 @@ __all__ = [
     "ObservabilityDep",
     "OrchestratorDep",
     "PluginsDep",
+    "SceneLedgerDep",
     "ScenesDep",
     "StateStoreDep",
     "StreamDep",
@@ -194,6 +201,7 @@ __all__ = [
     "get_observability",
     "get_orchestrator",
     "get_plugins",
+    "get_scene_ledger",
     "get_scenes",
     "get_state_store",
     "get_stream",
