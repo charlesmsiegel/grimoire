@@ -2,15 +2,39 @@
  * Application configuration REST client.
  *
  * Wraps endpoints for managing app-level defaults and settings,
- * including LLM tier configuration.
+ * including LLM tier configuration, embedding, and imagegen defaults.
  */
 
 import { api } from "./client";
 
-export const configApi = {
-  getLLMDefaults: () =>
-    api.get<{ heavy: string; light: string }>("/api/config/llm-defaults"),
+export interface LLMDefaults {
+  heavy: string;
+  light: string;
+}
 
-  setLLMDefaults: (body: { heavy: string; light: string }) =>
-    api.put<{ heavy: string; light: string }>("/api/config/llm-defaults", body),
+export interface EmbeddingDefaults {
+  route: string | null;
+}
+
+export interface ImagegenDefaults {
+  backend: string | null;
+}
+
+export const configApi = {
+  getLLMDefaults: () => api.get<LLMDefaults>("/api/config/llm-defaults"),
+
+  setLLMDefaults: (body: LLMDefaults) =>
+    api.put<LLMDefaults>("/api/config/llm-defaults", body),
+
+  getEmbeddingDefaults: () =>
+    api.get<EmbeddingDefaults>("/api/config/embedding-defaults"),
+
+  patchEmbeddingDefaults: (body: Partial<EmbeddingDefaults>) =>
+    api.patch<EmbeddingDefaults>("/api/config/embedding-defaults", body),
+
+  getImagegenDefaults: () =>
+    api.get<ImagegenDefaults>("/api/config/imagegen-defaults"),
+
+  patchImagegenDefaults: (body: Partial<ImagegenDefaults>) =>
+    api.patch<ImagegenDefaults>("/api/config/imagegen-defaults", body),
 };
