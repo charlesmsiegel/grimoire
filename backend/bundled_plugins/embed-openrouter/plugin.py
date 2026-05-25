@@ -115,9 +115,7 @@ class OpenRouterEmbeddingProvider:
             )
         data = response.json()
         if data.get("error"):
-            raise RuntimeError(
-                f"embed-openrouter: API error: {data['error']}"
-            )
+            raise RuntimeError(f"embed-openrouter: API error: {data['error']}")
         rows = data.get("data") or []
         if not rows:
             raise RuntimeError(

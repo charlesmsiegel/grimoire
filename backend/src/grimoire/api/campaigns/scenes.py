@@ -50,12 +50,15 @@ async def _reconcile_emergent_pcs(
                 await characters.create_emergent(campaign_id, data)
                 logger.info(
                     "auto-created emergent character %r for campaign %s",
-                    asset_id, campaign_id,
+                    asset_id,
+                    campaign_id,
                 )
             except Exception:
                 logger.warning(
                     "failed to auto-create emergent character %r for campaign %s",
-                    asset_id, campaign_id, exc_info=True,
+                    asset_id,
+                    campaign_id,
+                    exc_info=True,
                 )
                 continue
         if ref not in existing_pcs:
@@ -66,7 +69,9 @@ async def _reconcile_emergent_pcs(
             except Exception:
                 logger.warning(
                     "failed to auto-register PC %r for campaign %s",
-                    ref, campaign_id, exc_info=True,
+                    ref,
+                    campaign_id,
+                    exc_info=True,
                 )
 
 
