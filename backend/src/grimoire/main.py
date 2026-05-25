@@ -297,6 +297,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             except Exception:
                 log.exception("scene indexer backfill failed at startup")
             container.scene_indexer = scene_indexer
+        if container.scene_ledger is None:
+            from grimoire.scenes.ledger import SceneLedger
+
+            container.scene_ledger = SceneLedger(db)
         if container.continuity is None:
             # The registry hands out one ContinuityService per
             # (campaign_id, branch_id) backed by SqliteContinuityStore so

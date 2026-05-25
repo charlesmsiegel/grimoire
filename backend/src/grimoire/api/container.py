@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from grimoire.plugins import PluginsService
     from grimoire.scenes import SceneManager
     from grimoire.scenes.indexer import SceneIndexer
+    from grimoire.scenes.ledger import SceneLedger
     from grimoire.scenes.summary_jobs import RunningSummaryWorker
     from grimoire.state_store import (
         BackupScheduler,
@@ -97,6 +98,7 @@ class ServiceContainer:
     # Background workers (previously in extras dict)
     file_watcher: FileWatcher | None = None
     scene_indexer: SceneIndexer | None = None
+    scene_ledger: SceneLedger | None = None
     embedding_worker: EmbeddingWorker | None = None
     body_summarizer: BodySummarizer | None = None
     retention_sweeper: RetentionSweeper | None = None
