@@ -229,7 +229,9 @@ async def test_sweep_retains_recently_reversed_deltas(store: StateStore) -> None
     recent_reversed = (NOW - timedelta(days=10)).isoformat()
 
     # Applied long ago but reversed recently — should survive
-    await _insert_delta(store, "d-old-apply-recent-rev", "c1", old_applied, reversed_at=recent_reversed)
+    await _insert_delta(
+        store, "d-old-apply-recent-rev", "c1", old_applied, reversed_at=recent_reversed
+    )
 
     config = RetentionConfig(
         embeddings_for_retired_facts_seconds=None,
