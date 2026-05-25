@@ -11,6 +11,8 @@ interface QuickActions {
   onRegenerate: () => void;
   onUndo: () => void;
   onEndScene: () => void;
+  onNewScene: () => void;
+  onOpenLedger: () => void;
   onSkipTime: () => void;
   onManualFact: () => void;
   busy: boolean;
@@ -118,6 +120,16 @@ export function SidePanel({ campaignId, scene, pcs, commitments, actions }: Prop
             disabled={actions.busy || !scene || scene.closed}
           >
             End scene
+          </button>
+          <button
+            type="button"
+            onClick={actions.onNewScene}
+            disabled={actions.busy || (scene != null && !scene.closed)}
+          >
+            New scene
+          </button>
+          <button type="button" onClick={actions.onOpenLedger} disabled={actions.busy}>
+            Scene ledger
           </button>
           <button type="button" onClick={actions.onSkipTime} disabled={actions.busy || !scene}>
             Skip time

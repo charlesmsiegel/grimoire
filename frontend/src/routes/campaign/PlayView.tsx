@@ -7,6 +7,9 @@ import {
   type TimeAdvanceResult,
 } from "../../api/campaign";
 import { useCampaignEvent } from "../../state/useCampaignEvent";
+import { SceneLedgerDialog } from "./SceneLedgerDialog";
+import { ScenePreviewPanel } from "./ScenePreviewPanel";
+import { SceneSuggestionView } from "./SceneSuggestionView";
 import { DriftBanner } from "./DriftBanner";
 import { InputArea } from "./InputArea";
 import { InspectorPanel } from "./Inspector/InspectorPanel";
@@ -36,6 +39,7 @@ export function PlayView({ campaignId }: Props) {
   const [draft, setDraft] = useState("");
   const [rightView, setRightView] = useState<RightView>("hud");
   const [timeDigest, setTimeDigest] = useState<TimeAdvanceResult | null>(null);
+  const [ledgerOpen, setLedgerOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -204,14 +208,34 @@ export function PlayView({ campaignId }: Props) {
       <div className="play-layout">
         <div className="play-main">
           <SceneHeader scene={play.state.scene} />
-          <ScenePane
-            posts={play.state.posts}
-            pcs={play.state.pcs}
-            streaming={play.state.streaming}
-            images={play.state.images}
-            campaignId={campaignId}
-            scene={play.state.scene}
-          />
+          {play.state.mode === "picking" && play.state.suggestions ? (
+            <SceneSuggestionView
+              campaignId={campaignId}
+              suggestions={play.state.suggestions}
+              dispatch={play.dispatch}
+            />
+          ) : play.state.mode === "previewing" && play.state.preview ? (
+            <ScenePreviewPanel
+              campaignId={campaignId}
+              preview={play.state.preview}
+              suggestions={play.state.suggestions}
+              dispatch={play.dispatch}
+              onSceneCreated={play.refresh}
+            />
+          ) : play.state.mode === "suggesting" || play.state.mode === "creating" ? (
+            <div className="play-loading-scene">
+              <p>{play.state.mode === "creating" ? "Creating scene..." : "Loading suggestions..."}</p>
+            </div>
+          ) : (
+            <ScenePane
+              posts={play.state.posts}
+              pcs={play.state.pcs}
+              streaming={play.state.streaming}
+              images={play.state.images}
+              campaignId={campaignId}
+              scene={play.state.scene}
+            />
+          )}
           <InputArea
             campaignId={campaignId}
             scene={play.state.scene}
@@ -239,6 +263,8 @@ export function PlayView({ campaignId }: Props) {
               onRegenerate: () => void runAction(() => play.regenerate()),
               onUndo: () => void runAction(() => play.undo()),
               onEndScene: () => void runAction(() => play.endScene()),
+              onNewScene: () => void runAction(() => play.newScene()),
+              onOpenLedger: () => setLedgerOpen(true),
               onSkipTime: handleSkipTime,
               onManualFact: handleManualFact,
               busy,
@@ -255,6 +281,11 @@ export function PlayView({ campaignId }: Props) {
           <WhatChangedPanel turnId={latestNarratorTurnId} />
         )}
       </div>
+      <SceneLedgerDialog
+        campaignId={campaignId}
+        open={ledgerOpen}
+        onClose={() => setLedgerOpen(false)}
+      />
     </section>
   );
 }

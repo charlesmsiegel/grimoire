@@ -1,4 +1,4 @@
-import { useMemo, useReducer, useRef } from "react";
+import { type Dispatch, useMemo, useReducer, useRef } from "react";
 
 import {
   type PlayState,
@@ -16,12 +16,14 @@ export type { PlayState, PlayAction, PendingTurn, SceneImage };
 
 export interface PlayApi {
   state: PlayState;
+  dispatch: Dispatch<PlayAction>;
   setActivePC: (ref: string) => Promise<void>;
   submit: (text: string, emotion?: string) => Promise<void>;
   advance: () => Promise<void>;
   regenerate: () => Promise<void>;
   undo: () => Promise<void>;
   endScene: () => Promise<void>;
+  newScene: () => Promise<void>;
   refresh: () => Promise<void>;
   suppressDrift: (ref: string) => void;
 }
@@ -38,7 +40,7 @@ export function usePlayState(campaignId: string): PlayApi {
   const commands = usePlayCommands(campaignId, dispatch, stateRef, pendingExpressionRef, refresh);
 
   return useMemo<PlayApi>(
-    () => ({ state, ...commands, refresh }),
-    [state, commands, refresh],
+    () => ({ state, dispatch, ...commands, refresh }),
+    [state, dispatch, commands, refresh],
   );
 }
