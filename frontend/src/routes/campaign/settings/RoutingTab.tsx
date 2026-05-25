@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { configApi } from "../../../api/config";
 import { pluginsApi, type PluginModelInfo } from "../../../api/library";
 import {
   type PluginSummary,
@@ -228,6 +229,32 @@ export function RoutingTab({ campaignId }: { campaignId: string }) {
     { heavy: null, light: null, embedding: null },
   );
 
+  const [appDefaults, setAppDefaults] = useState<{
+    heavy: string;
+    light: string;
+    embedding: string | null;
+  }>({ heavy: "", light: "", embedding: null });
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [llm, embed] = await Promise.all([
+          configApi.getLLMDefaults(),
+          configApi.getEmbeddingDefaults(),
+        ]);
+        if (!cancelled) {
+          setAppDefaults({ heavy: llm.heavy, light: llm.light, embedding: embed.route });
+        }
+      } catch {
+        // Best-effort: placeholders degrade to generic text
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="settings-form">
       <p className="wizard-step-help">
@@ -241,7 +268,11 @@ export function RoutingTab({ campaignId }: { campaignId: string }) {
         <span>Heavy model</span>
         <input
           type="text"
-          placeholder="e.g. deepseek.deepseek-v4-pro"
+          placeholder={
+            appDefaults.heavy
+              ? `App default: ${appDefaults.heavy}`
+              : "e.g. deepseek.deepseek-v4-pro"
+          }
           value={value.heavy ?? ""}
           onChange={(e) =>
             setValue((prev) => ({ ...prev, heavy: e.target.value.trim() || null }))
@@ -253,7 +284,11 @@ export function RoutingTab({ campaignId }: { campaignId: string }) {
         <span>Light model</span>
         <input
           type="text"
-          placeholder="e.g. deepseek.deepseek-v4-flash"
+          placeholder={
+            appDefaults.light
+              ? `App default: ${appDefaults.light}`
+              : "e.g. deepseek.deepseek-v4-flash"
+          }
           value={value.light ?? ""}
           onChange={(e) =>
             setValue((prev) => ({ ...prev, light: e.target.value.trim() || null }))
@@ -265,7 +300,11 @@ export function RoutingTab({ campaignId }: { campaignId: string }) {
         <span>Embedding model</span>
         <input
           type="text"
-          placeholder="e.g. voyage.voyage-3"
+          placeholder={
+            appDefaults.embedding
+              ? `App default: ${appDefaults.embedding}`
+              : "e.g. voyage.voyage-3"
+          }
           value={value.embedding ?? ""}
           onChange={(e) =>
             setValue((prev) => ({ ...prev, embedding: e.target.value.trim() || null }))
