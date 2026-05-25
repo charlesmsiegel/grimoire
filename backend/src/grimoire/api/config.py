@@ -250,4 +250,73 @@ async def patch_library_settings(payload: LibrarySettingsPatch) -> Any:
     return await get_library_settings()
 
 
+class EmbeddingDefaultsPatch(BaseModel):
+    route: str | None = None
+
+
+@router.get("/embedding-defaults")
+async def get_embedding_defaults() -> Any:
+    raw = _read_yaml_safe("state_store.yaml")
+    lib = raw.get("library") if isinstance(raw.get("library"), dict) else {}
+    route = lib.get("embedding_provider") or None
+    return {"route": route}
+
+
+@router.patch("/embedding-defaults")
+async def patch_embedding_defaults(payload: EmbeddingDefaultsPatch) -> Any:
+    raw = _read_yaml_safe("state_store.yaml")
+    lib = raw.get("library") if isinstance(raw.get("library"), dict) else {}
+    if payload.route is not None:
+        lib["embedding_provider"] = payload.route
+    else:
+        lib.pop("embedding_provider", None)
+    raw["library"] = lib
+    try:
+        _write_yaml_safe("state_store.yaml", raw)
+    except Exception as exc:
+        logger.exception("state_store.yaml write failed")
+        raise HTTPException(
+            status_code=500, detail=f"failed to persist: {exc}"
+        ) from exc
+    return await get_embedding_defaults()
+
+
+class ImagegenDefaultsPatch(BaseModel):
+    backend: str | None = None
+
+
+@router.get("/imagegen-defaults")
+async def get_imagegen_defaults() -> Any:
+    raw = _read_app_yaml()
+    block = (
+        raw.get("imagegen_defaults")
+        if isinstance(raw.get("imagegen_defaults"), dict)
+        else {}
+    )
+    return {"backend": block.get("backend") or None}
+
+
+@router.patch("/imagegen-defaults")
+async def patch_imagegen_defaults(payload: ImagegenDefaultsPatch) -> Any:
+    raw = _read_app_yaml()
+    block = (
+        raw.get("imagegen_defaults")
+        if isinstance(raw.get("imagegen_defaults"), dict)
+        else {}
+    )
+    if payload.backend is not None:
+        block["backend"] = payload.backend
+    else:
+        block.pop("backend", None)
+    raw["imagegen_defaults"] = block
+    try:
+        write_yaml(_app_yaml_path(), raw)
+    except Exception as exc:
+        logger.exception("app.yaml write failed")
+        raise HTTPException(
+            status_code=500, detail=f"failed to persist: {exc}"
+        ) from exc
+    return await get_imagegen_defaults()
+
+
 __all__ = ["router"]
