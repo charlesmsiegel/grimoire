@@ -1,4 +1,5 @@
 import type { ApiPost, ApiScene, PCEntry } from "../../api/campaign";
+import type { PreviewResponse, SuggestResponse } from "../../api/campaign/types";
 
 export interface PendingTurn {
   turn_id: string;
@@ -24,6 +25,9 @@ export interface PlayState {
   advanceReason: string;
   images: Record<string, SceneImage>;
   driftWarnings: Record<string, { score: number; suppressed: boolean }>;
+  mode: "play" | "suggesting" | "picking" | "previewing" | "creating";
+  suggestions: SuggestResponse | null;
+  preview: PreviewResponse | null;
 }
 
 export type PlayAction =
@@ -45,7 +49,12 @@ export type PlayAction =
   | { type: "set-advance"; enabled: boolean; reason: string }
   | { type: "image-ready"; image: SceneImage }
   | { type: "drift"; ref: string; score: number }
-  | { type: "drift-suppress"; ref: string };
+  | { type: "drift-suppress"; ref: string }
+  | { type: "start-new-scene" }
+  | { type: "suggestions-loaded"; suggestions: SuggestResponse }
+  | { type: "preview-loaded"; preview: PreviewResponse }
+  | { type: "back-to-picking" }
+  | { type: "creating-scene" };
 
 export const initialPlayState: PlayState = {
   pcs: [],
@@ -59,6 +68,9 @@ export const initialPlayState: PlayState = {
   advanceReason: "",
   images: {},
   driftWarnings: {},
+  mode: "play",
+  suggestions: null,
+  preview: null,
 };
 
 function stripTrackerBlocks(text: string): { stripped: string; captured: string } {
@@ -98,6 +110,9 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
         posts,
         advanceEnabled: stickyDisabled ? false : presentCount >= 2,
         advanceReason: stickyDisabled ? state.advanceReason : "",
+        mode: "play",
+        suggestions: null,
+        preview: null,
       };
     }
     case "error":
@@ -141,6 +156,9 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
         posts: action.posts,
         advanceEnabled: action.scene.present_pc_refs.length >= 2,
         advanceReason: "",
+        mode: "play",
+        suggestions: null,
+        preview: null,
       };
     case "set-advance":
       return { ...state, advanceEnabled: action.enabled, advanceReason: action.reason };
@@ -164,5 +182,15 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
         driftWarnings: { ...state.driftWarnings, [action.ref]: { ...prev, suppressed: true } },
       };
     }
+    case "start-new-scene":
+      return { ...state, mode: "suggesting", suggestions: null, preview: null };
+    case "suggestions-loaded":
+      return { ...state, mode: "picking", suggestions: action.suggestions };
+    case "preview-loaded":
+      return { ...state, mode: "previewing", preview: action.preview };
+    case "back-to-picking":
+      return { ...state, mode: "picking", preview: null };
+    case "creating-scene":
+      return { ...state, mode: "creating" };
   }
 }
