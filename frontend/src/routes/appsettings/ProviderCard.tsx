@@ -24,6 +24,7 @@ interface Props {
   modelSlots: ModelSlot[];
   defaults: Record<string, string | null>;
   onDefaultChange: (slotKey: string, value: string | null, providerId: string) => void;
+  onProviderChange?: (providerId: string | null) => void;
   loading?: boolean;
 }
 
@@ -82,6 +83,7 @@ export function ProviderCard({
   modelSlots,
   defaults,
   onDefaultChange,
+  onProviderChange,
   loading: parentLoading,
 }: Props) {
   const [selectedId, setSelectedId] = useState<string>("");
@@ -160,7 +162,10 @@ export function ProviderCard({
         <span className="provider-combobox-label">Provider</span>
         <select
           value={selectedId}
-          onChange={(e) => setSelectedId(e.target.value)}
+          onChange={(e) => {
+            setSelectedId(e.target.value);
+            onProviderChange?.(e.target.value || null);
+          }}
           disabled={parentLoading || plugins.length === 0}
         >
           <option value="">
