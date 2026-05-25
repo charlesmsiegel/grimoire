@@ -602,12 +602,14 @@ async def start_background_workers(
     if mechanics_watcher is not None:
         lifecycle.register_async("mechanics_watcher", mechanics_watcher)
 
-    try:
-        await reenqueue_missing_embeddings(container.state_store, queues.embedding)
-    except Exception:
-        log.exception("reenqueue_missing_embeddings failed at startup")
-
-    await embedding_worker.start()
+    if container.state_store_config.library.embed_on_index:
+        try:
+            await reenqueue_missing_embeddings(container.state_store, queues.embedding)
+        except Exception:
+            log.exception("reenqueue_missing_embeddings failed at startup")
+        await embedding_worker.start()
+    else:
+        log.info("embedding worker disabled (embed_on_index=false)")
     await retention_sweeper.start()
 
     coros: list[Awaitable[Any]] = []
