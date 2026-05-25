@@ -59,4 +59,23 @@ class TestValidateTableColumns:
         async with db.acquire() as conn:
             await conn.execute("ALTER TABLE character_state ADD COLUMN extra_col TEXT")
             warnings = await validate_table_columns(conn)
-        assert any("extra_col" in w for w in warnings)
+        assert any("extra_col" in w and "exist in DB" in w for w in warnings)
+
+    async def test_warns_on_missing_table(self, db: Database):
+        from grimoire.state_store.delta_log import _TABLE_COLUMNS
+
+        async with db.acquire() as conn:
+            await conn.execute("DROP TABLE IF EXISTS calendar")
+            warnings = await validate_table_columns(conn)
+        assert any("calendar" in w and "missing from database" in w for w in warnings)
+
+    async def test_warns_on_declared_column_missing_from_db(self, db: Database):
+        from grimoire.state_store.delta_log import _TABLE_COLUMNS
+
+        async with db.acquire() as conn:
+            # Rename a column to simulate a declared column missing from DB
+            await conn.execute(
+                "ALTER TABLE character_state RENAME COLUMN drift_score TO drift_score_old"
+            )
+            warnings = await validate_table_columns(conn)
+        assert any("drift_score" in w and "missing from DB" in w for w in warnings)

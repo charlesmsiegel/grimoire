@@ -413,6 +413,7 @@ async def validate_table_columns(conn: aiosqlite.Connection) -> list[str]:
         cursor = await conn.execute(f"PRAGMA table_info({table})")
         rows = await cursor.fetchall()
         if not rows:
+            warnings.append(f"{table}: table missing from database schema entirely")
             continue
         actual = {row[1] for row in rows}
         declared = set(columns)
@@ -421,6 +422,12 @@ async def validate_table_columns(conn: aiosqlite.Connection) -> list[str]:
             warnings.append(
                 f"{table}: columns {sorted(missing_from_declaration)} exist in DB "
                 f"but not in _TABLE_COLUMNS"
+            )
+        missing_from_db = declared - actual
+        if missing_from_db:
+            warnings.append(
+                f"{table}: columns {sorted(missing_from_db)} declared in "
+                f"_TABLE_COLUMNS but missing from DB"
             )
     return warnings
 
