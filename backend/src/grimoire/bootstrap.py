@@ -602,10 +602,10 @@ async def start_background_workers(
     except Exception:
         log.exception("reenqueue_missing_embeddings failed at startup")
 
-    coros: list[Awaitable[Any]] = [
-        _safe("embedding_worker", embedding_worker.start()),
-        _safe("retention_sweeper", retention_sweeper.start()),
-    ]
+    await embedding_worker.start()
+    await retention_sweeper.start()
+
+    coros: list[Awaitable[Any]] = []
     if container.scene_indexer is not None:
         coros.append(_safe("scene_backfill", container.scene_indexer.backfill()))
     if container.imagegen is not None:
@@ -614,4 +614,5 @@ async def start_background_workers(
         coros.append(_safe("library_scan", container.file_watcher.scan_now()))
     if mechanics_watcher is not None:
         coros.append(_safe("mechanics_watcher", mechanics_watcher.start()))
-    await asyncio.gather(*coros)
+    if coros:
+        await asyncio.gather(*coros)
