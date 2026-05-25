@@ -19,9 +19,7 @@ const EMBED_SLOTS: ModelSlot[] = [
   { key: "route", label: "Embedding model", clearable: true },
 ];
 
-const IMAGEGEN_SLOTS: ModelSlot[] = [
-  { key: "backend", label: "Image model", clearable: true },
-];
+const IMAGEGEN_SLOTS: ModelSlot[] = [];
 
 export function ProvidersTab() {
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
@@ -87,11 +85,13 @@ export function ProvidersTab() {
   const onLlmChange = useCallback(
     async (slot: string, modelId: string | null, providerId: string) => {
       const route = modelId ? `${providerId}.${modelId}` : "";
+      const prev = { ...llmDefaults };
       const next = { ...llmDefaults, [slot]: route };
       setLlmDefaults(next);
       try {
         await configApi.setLLMDefaults(next);
       } catch (err) {
+        setLlmDefaults(prev);
         setError(errorMessage(err));
       }
     },
@@ -101,27 +101,30 @@ export function ProvidersTab() {
   const onEmbedChange = useCallback(
     async (_slot: string, modelId: string | null, providerId: string) => {
       const route = modelId ? `${providerId}.${modelId}` : null;
+      const prev = { ...embedDefaults };
       setEmbedDefaults({ route });
       try {
         await configApi.patchEmbeddingDefaults({ route });
       } catch (err) {
+        setEmbedDefaults(prev);
         setError(errorMessage(err));
       }
     },
-    [],
+    [embedDefaults],
   );
 
-  const onImagegenChange = useCallback(
-    async (_slot: string, _modelId: string | null, providerId: string) => {
-      const backend = providerId || null;
-      setImagegenDefaults({ backend });
+  const onImagegenProviderChange = useCallback(
+    async (providerId: string | null) => {
+      const prev = { ...imagegenDefaults };
+      setImagegenDefaults({ backend: providerId });
       try {
-        await configApi.patchImagegenDefaults({ backend });
+        await configApi.patchImagegenDefaults({ backend: providerId });
       } catch (err) {
+        setImagegenDefaults(prev);
         setError(errorMessage(err));
       }
     },
-    [],
+    [imagegenDefaults],
   );
 
   return (
@@ -175,7 +178,8 @@ export function ProvidersTab() {
         manifests={manifests}
         modelSlots={IMAGEGEN_SLOTS}
         defaults={{ backend: imagegenDefaults.backend }}
-        onDefaultChange={onImagegenChange}
+        onDefaultChange={() => {}}
+        onProviderChange={onImagegenProviderChange}
         loading={loading}
       />
     </div>
