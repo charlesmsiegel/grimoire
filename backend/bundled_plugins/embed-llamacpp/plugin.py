@@ -114,9 +114,7 @@ class LlamaCppEmbeddingProvider:
         if not self._model_path:
             raise RuntimeError("embed-llamacpp: model_path not configured")
         if not Path(self._model_path).exists():
-            raise RuntimeError(
-                f"embed-llamacpp: model file not found at {self._model_path}"
-            )
+            raise RuntimeError(f"embed-llamacpp: model file not found at {self._model_path}")
         try:
             from llama_cpp import Llama
         except ImportError as exc:

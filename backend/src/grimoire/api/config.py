@@ -232,9 +232,7 @@ async def patch_library_settings(payload: LibrarySettingsPatch) -> Any:
             _write_yaml_safe("state_store.yaml", ss)
         except Exception as exc:
             logger.exception("state_store.yaml write failed")
-            raise HTTPException(
-                status_code=500, detail=f"failed to persist: {exc}"
-            ) from exc
+            raise HTTPException(status_code=500, detail=f"failed to persist: {exc}") from exc
     if payload.summarize_on_index is not None:
         lib = _read_yaml_safe("library.yaml")
         idx = lib.get("indexing") if isinstance(lib.get("indexing"), dict) else {}
@@ -244,9 +242,7 @@ async def patch_library_settings(payload: LibrarySettingsPatch) -> Any:
             _write_yaml_safe("library.yaml", lib)
         except Exception as exc:
             logger.exception("library.yaml write failed")
-            raise HTTPException(
-                status_code=500, detail=f"failed to persist: {exc}"
-            ) from exc
+            raise HTTPException(status_code=500, detail=f"failed to persist: {exc}") from exc
     return await get_library_settings()
 
 
@@ -275,9 +271,7 @@ async def patch_embedding_defaults(payload: EmbeddingDefaultsPatch) -> Any:
         _write_yaml_safe("state_store.yaml", raw)
     except Exception as exc:
         logger.exception("state_store.yaml write failed")
-        raise HTTPException(
-            status_code=500, detail=f"failed to persist: {exc}"
-        ) from exc
+        raise HTTPException(status_code=500, detail=f"failed to persist: {exc}") from exc
     return await get_embedding_defaults()
 
 
@@ -288,22 +282,14 @@ class ImagegenDefaultsPatch(BaseModel):
 @router.get("/imagegen-defaults")
 async def get_imagegen_defaults() -> Any:
     raw = _read_app_yaml()
-    block = (
-        raw.get("imagegen_defaults")
-        if isinstance(raw.get("imagegen_defaults"), dict)
-        else {}
-    )
+    block = raw.get("imagegen_defaults") if isinstance(raw.get("imagegen_defaults"), dict) else {}
     return {"backend": block.get("backend") or None}
 
 
 @router.patch("/imagegen-defaults")
 async def patch_imagegen_defaults(payload: ImagegenDefaultsPatch) -> Any:
     raw = _read_app_yaml()
-    block = (
-        raw.get("imagegen_defaults")
-        if isinstance(raw.get("imagegen_defaults"), dict)
-        else {}
-    )
+    block = raw.get("imagegen_defaults") if isinstance(raw.get("imagegen_defaults"), dict) else {}
     if payload.backend is not None:
         block["backend"] = payload.backend
     else:
@@ -313,9 +299,7 @@ async def patch_imagegen_defaults(payload: ImagegenDefaultsPatch) -> Any:
         write_yaml(_app_yaml_path(), raw)
     except Exception as exc:
         logger.exception("app.yaml write failed")
-        raise HTTPException(
-            status_code=500, detail=f"failed to persist: {exc}"
-        ) from exc
+        raise HTTPException(status_code=500, detail=f"failed to persist: {exc}") from exc
     return await get_imagegen_defaults()
 
 
