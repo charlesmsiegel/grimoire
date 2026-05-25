@@ -56,6 +56,23 @@ class _DB(Protocol):
     async def execute(self, sql: str, params: tuple = ()) -> None: ...
 
 
+class _SingleConnDB:
+    """Adapts a raw connection to the :class:`_DB` protocol.
+
+    Used by :meth:`SceneIndexer.backfill` so all writes run on a single
+    connection inside one transaction instead of acquiring/releasing a
+    pooled connection per statement.
+    """
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn: object) -> None:
+        self._conn = conn
+
+    async def execute(self, sql: str, params: tuple = ()) -> None:
+        await self._conn.execute(sql, params)  # type: ignore[union-attr]
+
+
 def _excerpt(body: str) -> str:
     body = body.strip()
     if len(body) <= _BODY_EXCERPT_CHARS:
@@ -390,21 +407,46 @@ class SceneIndexer:
         Called once at startup so direct-edit-while-down deltas (e.g., the
         user edited an .md file outside the app) don't go unindexed. Also
         catches scenes the live subscription missed during a previous crash.
+
+        All writes run inside a single ``BEGIN IMMEDIATE`` transaction on one
+        pooled connection. This avoids the per-row write-lock churn that caused
+        ``SQLITE_BUSY`` / "database is locked" when background tasks (plugin
+        health, embedding worker) raced the startup scan.
         """
         campaigns_root = self._manager.data_root / "campaigns"
         if not campaigns_root.exists():
             return
+
+        acquire = getattr(self._db, "acquire", None)
+        if acquire is not None:
+            async with acquire() as conn:
+                await conn.execute("BEGIN IMMEDIATE")
+                try:
+                    db: _DB = _SingleConnDB(conn)
+                    await self._backfill_all(campaigns_root, db)
+                    await conn.execute("COMMIT")
+                except Exception:
+                    await conn.execute("ROLLBACK")
+                    raise
+        else:
+            await self._backfill_all(campaigns_root, self._db)
+
+    async def _backfill_all(
+        self, campaigns_root: Path, db: _DB
+    ) -> None:
         for campaign_dir in campaigns_root.iterdir():
             if not campaign_dir.is_dir():
                 continue
-            await self._backfill_branch(campaign_dir / "scenes")
+            await self._backfill_branch(campaign_dir / "scenes", db)
             branches_dir = campaign_dir / "branches"
             if branches_dir.exists():
                 for branch_dir in branches_dir.iterdir():
                     if branch_dir.is_dir():
-                        await self._backfill_branch(branch_dir / "scenes")
+                        await self._backfill_branch(branch_dir / "scenes", db)
 
-    async def _backfill_branch(self, scenes_dir_path: Path) -> None:
+    async def _backfill_branch(
+        self, scenes_dir_path: Path, db: _DB
+    ) -> None:
         if not scenes_dir_path.exists():
             return
         for yaml_path in sorted(scenes_dir_path.glob("*.yaml")):
@@ -414,8 +456,8 @@ class SceneIndexer:
                 logger.warning("backfill: failed to read sidecar %s", yaml_path)
                 continue
             md_path = yaml_path.with_suffix(".md")
-            await upsert_scene_row(self._db, scene=scene, file_path=md_path)
-            await delete_posts_for_scene(self._db, scene.id)
+            await upsert_scene_row(db, scene=scene, file_path=md_path)
+            await delete_posts_for_scene(db, scene.id)
             if not md_path.exists():
                 continue
             records = read_sidecar_post_records(yaml_path)
@@ -423,7 +465,7 @@ class SceneIndexer:
                 record = records.get(str(order))
                 post_id = record.id if record else f"{scene.id}#post-{order}"
                 await upsert_post_row(
-                    self._db,
+                    db,
                     post_id=post_id,
                     scene_id=scene.id,
                     campaign_id=scene.campaign_id,
