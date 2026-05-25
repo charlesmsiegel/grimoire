@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from grimoire.files.yaml_io import dump_yaml, load_yaml
 from grimoire.llm_gateway.routing import Route
@@ -84,9 +84,7 @@ class RouteManager:
             try:
                 tier = Tier(str(key))
             except ValueError:
-                logger.debug(
-                    "llm_gateway: unknown tier %r in %s; skipping", key, yaml_path
-                )
+                logger.debug("llm_gateway: unknown tier %r in %s; skipping", key, yaml_path)
                 continue
             if not isinstance(value, str) or not value:
                 continue
@@ -148,9 +146,7 @@ class RouteManager:
                 continue
             await self._warn_unknown_model(str(task), str(route), provider_kind=provider_kind)
 
-    async def _warn_unknown_model(
-        self, task: str, route: str, *, provider_kind: str
-    ) -> None:
+    async def _warn_unknown_model(self, task: str, route: str, *, provider_kind: str) -> None:
         try:
             parsed = Route.parse(route)
         except ValueError:
@@ -245,47 +241,3 @@ class RouteManager:
         tmp_path = yaml_path.with_suffix(".yaml.tmp")
         tmp_path.write_text(dump_yaml(data), encoding="utf-8")
         os.replace(tmp_path, yaml_path)
-
-    async def register_provider_defaults(self) -> None:
-        """Populate default_routes from configured plugins."""
-        async def _first_configured_for_kind(kind: str) -> tuple[str, Any] | None:
-            if kind == "llm":
-                providers = self._plugins.list_llm_providers()
-            elif kind == "embedding":
-                providers = self._plugins.list_embedding_providers()
-            else:
-                return None
-            for pid in providers:
-                if kind == "llm":
-                    p = self._plugins.get_llm_provider(pid)
-                else:
-                    p = self._plugins.get_embedding_provider(pid)
-                if p is None:
-                    continue
-                try:
-                    models = await p.list_models()
-                except Exception:
-                    continue
-                if models:
-                    return pid, models[0]
-            return None
-
-        result = await _first_configured_for_kind("llm")
-        if result is not None:
-            pid, model = result
-            default_route = f"{pid}.{model.id}"
-            if not self._router.has_any_default():
-                self._router.set_default_route(default_route)
-                logger.info(
-                    "llm_gateway: auto-registered default route %s", default_route
-                )
-
-        emb_result = await _first_configured_for_kind("embedding")
-        if emb_result is not None:
-            pid, model = emb_result
-            emb_route = f"{pid}.{model.id}"
-            if not self._router.has_embedding_default():
-                self._router.set_embedding_default(emb_route)
-                logger.info(
-                    "llm_gateway: auto-registered embedding default %s", emb_route
-                )

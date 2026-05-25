@@ -340,18 +340,12 @@ class CharacterSheetManager:
         if "/" in filename:
             filename = filename.rsplit("/", 1)[-1]
         target_dir = (
-            library_root(self._store.data_root)
-            / "worlds"
-            / world_id
-            / "characters"
-            / character_id
+            library_root(self._store.data_root) / "worlds" / world_id / "characters" / character_id
         )
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / filename
         target.write_bytes(payload)
-        return image.model_copy(
-            update={"path": relative_to_root(self._store.data_root, target)}
-        )
+        return image.model_copy(update={"path": relative_to_root(self._store.data_root, target)})
 
     async def _finalize_import(
         self,
@@ -690,9 +684,7 @@ def character_from_entity(ent: LibraryEntity) -> Character:
     return character_from_frontmatter(ent.frontmatter, ent.body, world_id=ent.world_id)
 
 
-def character_from_frontmatter(
-    frontmatter: dict, body: str, *, world_id: str | None
-) -> Character:
+def character_from_frontmatter(frontmatter: dict, body: str, *, world_id: str | None) -> Character:
     from grimoire.types.characters import CharacterRole
 
     fm: dict[str, Any] = dict(frontmatter or {})
@@ -703,9 +695,7 @@ def character_from_frontmatter(
     voice_data = fm.get("voice") or {}
     voice = VoiceAnchor(
         summary=str(voice_data.get("summary") or ""),
-        voice_register=str(
-            voice_data.get("register") or voice_data.get("voice_register") or ""
-        ),
+        voice_register=str(voice_data.get("register") or voice_data.get("voice_register") or ""),
         samples=[str(s) for s in (voice_data.get("samples") or [])],
         speech_patterns=[str(s) for s in (voice_data.get("speech_patterns") or [])],
         address_terms=dict(voice_data.get("address_terms") or {}),
@@ -727,9 +717,7 @@ def character_from_frontmatter(
         if isinstance(image_data, dict)
         else None
     )
-    images = [
-        _image_from_dict(img) for img in (fm.get("images") or []) if isinstance(img, dict)
-    ]
+    images = [_image_from_dict(img) for img in (fm.get("images") or []) if isinstance(img, dict)]
     structural = [
         StructuralRelationship(
             to_ref=str(r.get("to_ref") or ""),
@@ -761,9 +749,7 @@ def character_from_frontmatter(
 
 def frontmatter_from_payload(payload: CharacterData) -> dict:
     voice_dict = payload.voice.model_dump()
-    voice_dict["register"] = voice_dict.pop("voice_register", "") or voice_dict.pop(
-        "register", ""
-    )
+    voice_dict["register"] = voice_dict.pop("voice_register", "") or voice_dict.pop("register", "")
     fm: dict[str, Any] = {
         "id": payload.id,
         "name": payload.name,
