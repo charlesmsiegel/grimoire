@@ -1,8 +1,5 @@
 import { request } from "./request";
-import type { PluginManifest } from "./mechanics";
 import type { RescanReport } from "./mechanics";
-
-export type { PluginManifest };
 
 export type PluginKind =
   | "llm_provider"
@@ -15,6 +12,22 @@ export interface PluginConfig {
   values: Record<string, unknown>;
   secrets_set: Record<string, boolean>;
   configured: boolean;
+}
+
+export interface PluginManifest {
+  id: string;
+  name: string;
+  version: string;
+  api_version: string;
+  implements: PluginKind[];
+  classes: Record<string, string>;
+  config_schema: Record<string, unknown>;
+  requirements: string[];
+  author: string;
+  homepage: string;
+  description: string;
+  isolated_venv: boolean;
+  raw: Record<string, unknown>;
 }
 
 export interface PluginModelInfo {

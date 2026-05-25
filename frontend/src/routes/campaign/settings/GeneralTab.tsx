@@ -1,9 +1,9 @@
 import { useState } from "react";
 
 import { patchCampaign } from "../../../api/wizard";
+import { SaveIndicator } from "./SaveIndicator";
 import {
   type CampaignRecord,
-  SaveIndicator,
   errorMessage,
   useAutoSavedResource,
 } from "./shared";
