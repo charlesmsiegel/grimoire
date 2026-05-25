@@ -34,6 +34,7 @@ from grimoire.characters import CharactersService
 from grimoire.characters.integration import CharactersIntegration
 from grimoire.config import settings
 from grimoire.context.builder import ContextBuilderService
+from grimoire.context.inspector import ContextInspector
 from grimoire.continuity import (
     ContinuityConfig,
     ContinuityRegistry,
@@ -490,6 +491,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 metrics=obs.metrics(),
             )
         context_builder = container.context_builder
+
+        if container.context_inspector is None:
+            container.context_inspector = ContextInspector(
+                builder=context_builder,
+                store=container.state_store,
+                observability=obs,
+            )
 
         # Time engine: every dep is already constructed above.
         if container.time_engine is None:
