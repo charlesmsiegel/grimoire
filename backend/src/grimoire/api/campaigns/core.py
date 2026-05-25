@@ -17,7 +17,6 @@ from grimoire.api.deps import (
     StateStoreDep,
     WorldDep,
 )
-from grimoire.api.pagination import PaginationDep
 from grimoire.api.util import map_lookup_errors, to_payload
 from grimoire.state_store.paths import campaigns_root
 
@@ -39,16 +38,11 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[CampaignSummary])
-async def list_campaigns(
-    state_store: StateStoreDep,
-    pagination: PaginationDep,
-) -> Any:
+async def list_campaigns(state_store: StateStoreDep) -> Any:
     rows = await state_store.db.fetchall(
         "SELECT id, name, description, mechanics_module, style_guide_id, image_preset_id, "
         "created_at, last_played_at, forked_from_campaign_id, forked_at_post_id, "
-        "forked_at_turn_id, forked_image_handling FROM campaigns ORDER BY id "
-        "LIMIT ? OFFSET ?",
-        (pagination.limit, pagination.offset),
+        "forked_at_turn_id, forked_image_handling FROM campaigns ORDER BY id"
     )
     return [dict(row) for row in rows]
 
