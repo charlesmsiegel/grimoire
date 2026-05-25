@@ -5,25 +5,30 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
+class LLMUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+
 class LLMResponsePayload(BaseModel):
     task: str
     model: str
     campaign_id: str | None = None
-    input_tokens: int = 0
-    output_tokens: int = 0
+    usage: LLMUsage = LLMUsage()
 
 
 class DeltasAppliedPayload(BaseModel):
     turn_id: str
     campaign_id: str
     count: int
-    ids: list[int]
+    ids: list[str]
 
 
 class ImageReadyPayload(BaseModel):
-    job_id: str
     image_id: str
     campaign_id: str
+    cached: bool = False
 
 
 class TierResolvedPayload(BaseModel):
@@ -37,7 +42,7 @@ class TierResolvedPayload(BaseModel):
 class TurnUndonePayload(BaseModel):
     campaign_id: str
     turn_id: str
-    reversed_deltas: list[int]
+    reversed_deltas: list[str]
 
 
 class FactRecordedPayload(BaseModel):
@@ -51,10 +56,12 @@ class ContradictionDetectedPayload(BaseModel):
 
 
 class ProviderHealthChangedPayload(BaseModel):
-    provider_id: str
-    tier: str
-    level: str
+    target_id: str
+    kind: str = ""
+    old_level: str | None = None
+    new_level: str
     message: str
+    checked_at: str | None = None
 
 
 class LibraryIndexedPayload(BaseModel):
