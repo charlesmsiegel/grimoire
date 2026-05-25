@@ -1,0 +1,213 @@
+"""Campaign scene routes."""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+
+from grimoire.api.deps import LibraryDep, ScenesDep, StateStoreDep
+from grimoire.api.util import map_lookup_errors, to_payload
+
+from .helpers import _require_scene_owned, _seed_greeting_first_post
+from .schemas import SceneSummary, SceneUpdatePayload
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+@router.get("/{campaign_id}/scenes", response_model=list[SceneSummary])
+async def list_scenes(campaign_id: str, scenes: ScenesDep) -> Any:
+    try:
+        return to_payload(await scenes.list_scenes(campaign_id))
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.get("/{campaign_id}/scenes/{scene_id}")
+async def get_scene(
+    campaign_id: str,
+    scene_id: str,
+    scenes: ScenesDep,
+) -> Any:
+    try:
+        scene = await _require_scene_owned(scenes, campaign_id, scene_id)
+        body = await scenes.load_scene_body(scene_id)
+        posts = await scenes.get_posts(scene_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {
+        "scene": to_payload(scene),
+        "body": body,
+        "posts": to_payload(posts),
+    }
+
+
+@router.patch("/{campaign_id}/scenes/{scene_id}")
+async def update_scene(
+    campaign_id: str,
+    scene_id: str,
+    payload: SceneUpdatePayload,
+    scenes: ScenesDep,
+    state_store: StateStoreDep,
+) -> Any:
+    from grimoire.scenes.narrator_mode import (
+        RESPONSE_MODES,
+        effective_response_mode,
+        normalize_response_mode,
+    )
+
+    try:
+        scene = await _require_scene_owned(scenes, campaign_id, scene_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+    touched_narrator = False
+    new_mode: str | None = scene.narrator_response_mode
+
+    if payload.clear_narrator_response_mode:
+        new_mode = None
+        touched_narrator = True
+    elif payload.narrator_response_mode is not None:
+        normalized = normalize_response_mode(payload.narrator_response_mode)
+        if normalized is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"narrator_response_mode must be one of {list(RESPONSE_MODES)} "
+                    f"or null, got {payload.narrator_response_mode!r}"
+                ),
+            )
+        new_mode = normalized
+        touched_narrator = True
+
+    if touched_narrator:
+        try:
+            scene = await scenes.set_narrator_response_mode(scene_id, new_mode)
+        except Exception as exc:
+            raise map_lookup_errors(exc) from exc
+
+    row = await state_store.db.fetchone("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
+    effective = effective_response_mode(
+        scene_override=scene.narrator_response_mode,
+        campaign_row=dict(row) if row else None,
+    )
+    return {
+        "scene": to_payload(scene),
+        "narrator_response_mode": {
+            "scene_override": scene.narrator_response_mode,
+            "effective": effective,
+        },
+    }
+
+
+@router.post("/{campaign_id}/scenes/{scene_id}/end")
+async def end_scene(
+    campaign_id: str,
+    scene_id: str,
+    scenes: ScenesDep,
+) -> Any:
+    try:
+        await _require_scene_owned(scenes, campaign_id, scene_id)
+        return to_payload(await scenes.close_scene(scene_id, closed_at_turn="manual"))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.post("/{campaign_id}/scenes/seed", status_code=201)
+async def seed_first_scene(
+    campaign_id: str,
+    state_store: StateStoreDep,
+    library: LibraryDep,
+    scenes: ScenesDep,
+) -> Any:
+    from grimoire.scenes.types import SceneInit
+
+    row = await state_store.db.fetchone("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"campaign {campaign_id!r} not found")
+    camp = dict(row)
+
+    existing = await scenes.list_scenes(campaign_id)
+    if existing:
+        return {"scene": to_payload(existing[0]), "created": False}
+
+    greeting_id = camp.get("greeting_id")
+    if not greeting_id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"campaign {campaign_id!r} has no greeting_id; cannot seed an opening scene",
+        )
+
+    composition = await library.get_composition(campaign_id)
+    world_refs = getattr(composition, "worlds", []) or []
+
+    greeting = None
+    world_id = None
+    for ref in world_refs:
+        world_id = getattr(ref, "world_id", None) or ref.get("world_id")  # type: ignore[union-attr]
+        if not world_id:
+            continue
+        try:
+            greeting = await library.get_greeting(world_id, greeting_id)
+            break
+        except Exception:
+            continue
+    if greeting is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"greeting {greeting_id!r} not found in any world on campaign {campaign_id!r}",
+        )
+
+    pc_rows = await state_store.list_pcs(campaign_id)
+    pc_refs = [r["character_ref"] for r in pc_rows if r.get("character_ref")]
+
+    in_game_start: datetime | None = None
+    starting_time = getattr(greeting, "starting_time", None)
+    if isinstance(starting_time, str) and starting_time:
+        try:
+            in_game_start = datetime.fromisoformat(starting_time)
+        except ValueError:
+            in_game_start = None
+
+    init = SceneInit(
+        campaign_id=campaign_id,
+        branch_id="main",
+        title=greeting.name or "Opening",
+        location_ref=greeting.starting_location,
+        in_game_start=in_game_start,
+        present_character_refs=list(greeting.present_characters or []),
+        present_pc_refs=pc_refs,
+        pov_character_ref=greeting.pov_character,
+        greeting_id=greeting.id,
+        mood=greeting.mood,
+        tags=list(greeting.tags or []),
+    )
+    try:
+        scene = await scenes.start_scene(init)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    try:
+        await _seed_greeting_first_post(
+            scenes=scenes,
+            scene=scene,
+            greeting=greeting,
+            state_store=state_store,
+            library=library,
+            world_id=world_id,
+        )
+    except Exception:
+        logger.warning(
+            "greeting first-post append failed; scene 1 exists with empty body",
+            exc_info=True,
+        )
+    return {"scene": to_payload(scene), "created": True}

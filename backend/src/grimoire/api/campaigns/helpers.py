@@ -211,22 +211,3 @@ async def _require_review_owned(state_store: Any, campaign_id: str, review_id: s
             status_code=404,
             detail=f"review item {review_id!r} not found in campaign {campaign_id!r}",
         )
-
-
-def _map_retcon_error(exc: Exception) -> HTTPException:
-    """Translate retcon-specific errors before falling back to the generic map."""
-    from grimoire.orchestrator.errors import (
-        RetconBatchClosedError,
-        RetconBatchNotFoundError,
-        RetconInFlightError,
-    )
-
-    from grimoire.api.util import map_lookup_errors
-
-    if isinstance(exc, RetconInFlightError):
-        return HTTPException(status_code=409, detail=str(exc))
-    if isinstance(exc, RetconBatchNotFoundError):
-        return HTTPException(status_code=404, detail=str(exc))
-    if isinstance(exc, RetconBatchClosedError):
-        return HTTPException(status_code=409, detail=str(exc))
-    return map_lookup_errors(exc)
