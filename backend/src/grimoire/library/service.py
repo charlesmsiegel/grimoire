@@ -146,7 +146,7 @@ def _world_meta_from_row(row: dict) -> WorldMeta:
         id=fm.get("id") or row.get("asset_id") or "",
         name=fm.get("name") or row.get("name") or row.get("asset_id") or "",
         description=fm.get("description") or "",
-        tags=list(fm.get("tags") or row.get("tags") or []),
+        tags=[str(t) for t in (fm.get("tags") or row.get("tags") or [])],
         genre=fm.get("genre") or "",
         calendar=fm.get("calendar") or {},
         calendar_ids=list(fm.get("calendar_ids") or []),
@@ -170,7 +170,7 @@ def _greeting_from_row(row: dict) -> Greeting:
         pov_character=fm.get("pov_character"),
         mood=fm.get("mood") or "",
         body=row.get("body") or "",
-        tags=list(fm.get("tags") or row.get("tags") or []),
+        tags=[str(t) for t in (fm.get("tags") or row.get("tags") or [])],
     )
 
 
