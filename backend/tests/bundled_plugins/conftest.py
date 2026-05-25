@@ -80,6 +80,11 @@ def llamacpp_module() -> object:
 
 
 @pytest.fixture
+def embed_llamacpp_module() -> object:
+    return _import_plugin("embed-llamacpp")
+
+
+@pytest.fixture
 def openrouter_module() -> object:
     return _import_plugin("llm-openrouter")
 
