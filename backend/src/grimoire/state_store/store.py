@@ -1504,7 +1504,7 @@ class StateStore:
                 raise StateStoreError("campaign-sqlite delta missing target_table")
             captured_before = await _capture_current_row(conn, target_table, after)
             await upsert_row(conn, table=target_table, values=after)
-        elif target_scope in ("library", "campaign-file"):
+        elif target_scope in ("library", "campaign-file", "campaign-local"):
             pass
         else:
             raise StateStoreError(f"unknown target_scope {target_scope!r}; use file APIs for files")
