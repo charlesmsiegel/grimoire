@@ -31,6 +31,7 @@ _TASK_TIER: dict[str, Tier] = {
     "auxiliary.continue_as": Tier.HEAVY,
     "auxiliary.brainstorm": Tier.HEAVY,
     "world.atmosphere": Tier.HEAVY,
+    "scene_first_post": Tier.HEAVY,
     # Light — classification + mechanical transforms
     "drift_check": Tier.LIGHT,
     "scene_break_classifier": Tier.LIGHT,
@@ -39,6 +40,8 @@ _TASK_TIER: dict[str, Tier] = {
     "auxiliary.edit_prose": Tier.LIGHT,
     "world.location_generator": Tier.LIGHT,
     "extractor": Tier.LIGHT,
+    "scene_suggest": Tier.LIGHT,
+    "scene_preview": Tier.LIGHT,
     # Embedding
     "library.embed": Tier.EMBEDDING,
 }
