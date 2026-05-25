@@ -10,16 +10,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 from grimoire import events
 from grimoire.event_bus import Event, EventBus
-from grimoire.files.yaml_io import dump_yaml, load_yaml
 from grimoire.llm_gateway.cache import EmbeddingCache
 from grimoire.llm_gateway.config import GatewayConfig
 from grimoire.llm_gateway.errors import (

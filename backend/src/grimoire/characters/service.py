@@ -39,7 +39,7 @@ from grimoire.types.characters import (
     ResolvedCharacter,
     VoiceAnchor,
 )
-from grimoire.types.common import CampaignId, CharacterRef, EntityKind, PostId, Scope
+from grimoire.types.common import CampaignId, CharacterRef, PostId, Scope
 from grimoire.types.composition import LibraryEntity, ResolutionLayer, ResolutionSource
 from grimoire.types.mechanics import Capability
 from grimoire.types.scene import Post, Scene
@@ -48,17 +48,14 @@ from grimoire.util import new_id, now_iso, slugify_id
 
 from .config import CharactersConfig
 from .drift import (
-    CallableDriftChecker,
     DriftChecker,
     DriftEventSink,
-    HeuristicDriftChecker,
     LLMCallable,
 )
 from .drift_service import CharacterDriftService
 from .errors import (
     CharacterNotFoundError,
     CharactersError,
-    PromotionError,
 )
 from .ingest import LLMEnrichCallable
 from .promoter import CharacterPromoter
