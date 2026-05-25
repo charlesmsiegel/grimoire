@@ -574,7 +574,10 @@ async def start_background_workers(
         queue=queues.summary,
         bus=container.event_bus,
     )
-    body_summarizer.start()
+    if library_cfg.indexing.summarize_on_index:
+        body_summarizer.start()
+    else:
+        log.info("body summarizer disabled (summarize_on_index=false)")
     container.body_summarizer = body_summarizer
     lifecycle.register_async("body_summarizer", body_summarizer)
 

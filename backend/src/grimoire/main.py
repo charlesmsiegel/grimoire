@@ -640,7 +640,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             queue=file_watcher.summary_queue,
             bus=container.event_bus,
         )
-        body_summarizer.start()
+        if library_cfg.indexing.summarize_on_index:
+            body_summarizer.start()
+        else:
+            log.info("body summarizer disabled (summarize_on_index=false)")
         container.body_summarizer = body_summarizer
 
         retention_sweeper = RetentionSweeper(
