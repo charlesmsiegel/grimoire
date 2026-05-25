@@ -93,6 +93,19 @@ cleanup() {
     # (common with vite's worker on Windows).
     kill_port "$BACKEND_PORT" "backend port"
     kill_port "$FRONTEND_PORT" "frontend port"
+    # Checkpoint the SQLite WAL so the next startup sees a clean lock state.
+    local _db="${GRIMOIRE_DATABASE_PATH:-${HOME}/.grimoire/campaigns.sqlite}"
+    if [ -f "$_db" ]; then
+        python3 -c "
+import sqlite3, sys
+try:
+    conn = sqlite3.connect(sys.argv[1])
+    conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    conn.close()
+except Exception:
+    pass
+" "$_db" 2>/dev/null || true
+    fi
     rm -f "$STATE_FILE" 2>/dev/null || true
     wait 2>/dev/null || true
 }

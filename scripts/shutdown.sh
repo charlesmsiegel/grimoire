@@ -82,6 +82,30 @@ for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
     done < <(pids_on_port "$port")
 done
 
+# 4. Checkpoint the SQLite WAL so the next startup sees a clean lock state.
+# A hard kill or crash can leave -wal/-shm files that trigger "database is
+# locked" on the next boot. Checkpointing flushes the WAL into the main DB
+# and removes those files. Best effort — skip if the DB doesn't exist or
+# Python can't open it.
+_checkpoint_wal() {
+    local db_path="$1"
+    [ -f "$db_path" ] || return 0
+    echo "==> Checkpointing WAL: $db_path"
+    python3 -c "
+import sqlite3, sys
+try:
+    conn = sqlite3.connect(sys.argv[1])
+    conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    conn.close()
+except Exception as e:
+    print(f'   warning: WAL checkpoint skipped: {e}', file=sys.stderr)
+" "$db_path" 2>&1 || true
+}
+
+# Try the default DB path (~/.grimoire/campaigns.sqlite) and the env override.
+_default_db="${GRIMOIRE_DATABASE_PATH:-${HOME}/.grimoire/campaigns.sqlite}"
+_checkpoint_wal "$_default_db"
+
 rm -f "$STATE_FILE" 2>/dev/null || true
 
 echo "==> Done. Ports $BACKEND_PORT and $FRONTEND_PORT are clear."
