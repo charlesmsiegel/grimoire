@@ -29,6 +29,7 @@ from grimoire.llm_gateway.errors import (
 )
 from grimoire.llm_gateway.request_log import LLMRequestLog, request_hash
 from grimoire.llm_gateway.retry import resolve_retry_exceptions, run_with_retries
+from grimoire.llm_gateway.route_manager import RouteManager
 from grimoire.llm_gateway.routing import Route, RouteResolver
 from grimoire.llm_gateway.tiers import Tier
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
@@ -98,6 +99,13 @@ class LLMGatewayService:
             self._config.retry.retry_on
         )
         self._metrics: MetricsRegistryProtocol = metrics
+        self._route_mgr = RouteManager(
+            router=self._router,
+            plugins=self._plugins,
+            data_root=self._data_root,
+            imagegen_routes=self._imagegen_routes,
+            loaded_campaigns=self._loaded_campaigns,
+        )
 
     def _metrics_labels(self, task: str, request: Any) -> dict[str, Any]:
         """Best-effort labels for the metric row. Producers should never
@@ -1464,280 +1472,31 @@ class LLMGatewayService:
         self._health_sub_id = self._health_monitor.subscribe(_on_health)
 
     # ------------------------------------------------------------------ #
-    # Campaign routing helpers
+    # Campaign routing helpers (delegated to RouteManager)
     # ------------------------------------------------------------------ #
 
     def _campaign_yaml_path(self, campaign_id: CampaignId) -> Path | None:
-        """Return the campaign.yaml path for *campaign_id*, or None if no data_root."""
-        if self._data_root is None:
-            return None
-        return self._data_root / "campaigns" / campaign_id / "campaign.yaml"
+        return self._route_mgr.campaign_yaml_path(campaign_id)
 
     async def _load_campaign_routing(self, campaign_id: CampaignId) -> None:
-        """Lazily read routing blocks from campaign.yaml and apply them.
-
-        Recognises four top-level blocks:
-          * ``model_routing`` — applied to the LLM resolver.
-          * ``embedding_routing`` — applied to the same resolver; task name
-            uniqueness keeps it disjoint from LLM entries. Entries here
-            override anything with the same task name in ``model_routing``.
-          * ``imagegen_routing`` — stored in ``_imagegen_routes`` and
-            consulted by ImageGenService via :meth:`imagegen_route`. The
-            resolver here only knows LLM/embedding kinds, so a parallel
-            dict holds these.
-          * ``model_tiers`` — a flat dict mapping tier names ("heavy",
-            "light", "embedding") to ``provider.model`` routes. Applied
-            to the resolver's tier dict; used as a fallback between
-            per-task overrides and app defaults.
-
-        Always marks the campaign as loaded — even on failure — so we don't
-        re-attempt on every subsequent call.
-        """
-        self._loaded_campaigns.add(campaign_id)
-        yaml_path = self._campaign_yaml_path(campaign_id)
-        if yaml_path is None or not yaml_path.is_file():
-            return
-        try:
-            raw = load_yaml(yaml_path)
-        except Exception:
-            logger.warning(
-                "llm_gateway: failed to parse %s; campaign routing not loaded",
-                yaml_path,
-            )
-            return
-        if not isinstance(raw, dict):
-            return
-
-        await self._apply_routing_block(
-            raw.get("model_routing"),
-            campaign_id,
-            yaml_path,
-            block_name="model_routing",
-            provider_kind="llm",
-        )
-        await self._apply_routing_block(
-            raw.get("embedding_routing"),
-            campaign_id,
-            yaml_path,
-            block_name="embedding_routing",
-            provider_kind="embedding",
-        )
-        await self._apply_imagegen_routing(raw.get("imagegen_routing"), campaign_id, yaml_path)
-        await self._apply_tier_routing(raw.get("model_tiers"), campaign_id, yaml_path)
-
-    async def _apply_tier_routing(
-        self,
-        block: object,
-        campaign_id: CampaignId,
-        yaml_path: Path,
-    ) -> None:
-        """Read the ``model_tiers`` block and populate the resolver.
-
-        Block shape: ``{"heavy": "provider.model", "light": "...",
-        "embedding": "..."}``. Unknown keys are ignored with a debug log;
-        malformed route strings are skipped with a warning. The campaign
-        keeps any per-task overrides loaded earlier.
-
-        Async to match the sibling ``_apply_*_routing`` helpers, even
-        though no I/O happens here today — future tier-validation work
-        (e.g. checking provider availability) may need to await.
-        """
-        if not isinstance(block, dict):
-            return
-        for key, value in block.items():
-            try:
-                tier = Tier(str(key))
-            except ValueError:
-                logger.debug(
-                    "llm_gateway: unknown tier %r in %s; skipping",
-                    key,
-                    yaml_path,
-                )
-                continue
-            if not isinstance(value, str) or not value:
-                continue
-            try:
-                self._router.set_tier_route(campaign_id, tier, value)
-            except ValueError as exc:
-                logger.warning(
-                    "llm_gateway: bad route %r for tier %s in %s: %s",
-                    value,
-                    tier.value,
-                    yaml_path,
-                    exc,
-                )
-
-    async def _apply_imagegen_routing(
-        self,
-        routing: object,
-        campaign_id: CampaignId,
-        yaml_path: Path,
-    ) -> None:
-        """Validate and store ``imagegen_routing`` entries for later lookup."""
-        if not isinstance(routing, dict):
-            return
-        bucket = self._imagegen_routes.setdefault(campaign_id, {})
-        for task, route in routing.items():
-            try:
-                Route.parse(str(route))
-            except ValueError:
-                logger.warning(
-                    "llm_gateway: skipping bad imagegen_routing entry in %s — "
-                    "task=%r route=%r is not a valid 'provider.model' string",
-                    yaml_path,
-                    task,
-                    route,
-                )
-                continue
-            bucket[str(task)] = str(route)
-            await self._warn_unknown_model(str(task), str(route), provider_kind="imagegen")
-
-    async def _apply_routing_block(
-        self,
-        routing: object,
-        campaign_id: CampaignId,
-        yaml_path: Path,
-        *,
-        block_name: str,
-        provider_kind: str,
-    ) -> None:
-        """Validate and apply a routing block to the resolver."""
-        if not isinstance(routing, dict):
-            return
-        for task, route in routing.items():
-            try:
-                self._router.set_route(str(task), str(route), campaign_id)
-            except ValueError:
-                logger.warning(
-                    "llm_gateway: skipping bad %s entry in %s — "
-                    "task=%r route=%r is not a valid 'provider.model' string",
-                    block_name,
-                    yaml_path,
-                    task,
-                    route,
-                )
-                continue
-            # Cross-check: if the referenced provider is loaded, warn when the
-            # model id isn't in its advertised list. Never block on a failed
-            # list_models() — providers commonly raise when unconfigured.
-            await self._warn_unknown_model(str(task), str(route), provider_kind=provider_kind)
-
-    async def _warn_unknown_model(self, task: str, route: str, *, provider_kind: str) -> None:
-        """Emit a warning if route.model is not advertised by the loaded provider."""
-        try:
-            parsed = Route.parse(route)
-        except ValueError:
-            return
-        if provider_kind == "llm":
-            provider = self._plugins.get_llm_provider(parsed.provider_id)
-        elif provider_kind == "embedding":
-            provider = self._plugins.get_embedding_provider(parsed.provider_id)
-        elif provider_kind == "imagegen":
-            getter = getattr(self._plugins, "get_imagegen_backend", None)
-            provider = getter(parsed.provider_id) if getter is not None else None
-        else:
-            return
-        if provider is None:
-            return
-        list_models = getattr(provider, "list_models", None)
-        if list_models is None:
-            return
-        try:
-            models = await list_models()
-        except Exception:
-            # Providers commonly raise when unconfigured; skip silently.
-            return
-        try:
-            known_ids = {m.id for m in models}
-        except Exception:
-            return
-        if parsed.model not in known_ids:
-            logger.warning(
-                "llm_gateway: route task=%r references model %r on provider %r "
-                "which is not in its advertised list (kind=%s); applying anyway",
-                task,
-                parsed.model,
-                parsed.provider_id,
-                provider_kind,
-            )
-
-    _BLOCK_FOR_KIND: ClassVar[dict[str, str]] = {
-        "llm": "model_routing",
-        "embedding": "embedding_routing",
-        "imagegen": "imagegen_routing",
-    }
+        return await self._route_mgr.load_campaign_routing(campaign_id)
 
     def _persist_campaign_route(
-        self,
-        campaign_id: CampaignId,
-        task: str,
-        route: str,
-        *,
-        kind: str = "llm",
+        self, campaign_id: CampaignId, task: str, route: str, *, kind: str = "llm"
     ) -> None:
-        """Synchronously write a route into the right block of campaign.yaml.
-
-        Unknown ``kind`` falls back to ``model_routing`` (back-compat).
-        """
-        block = self._BLOCK_FOR_KIND.get(kind, "model_routing")
-        data = self._read_campaign_yaml_for_write(campaign_id)
-        if data is None:
-            return
-        if block not in data or not isinstance(data[block], dict):
-            data[block] = {}
-        data[block][task] = route
-        self._atomic_write_campaign_yaml(campaign_id, data)
+        return self._route_mgr.persist_campaign_route(campaign_id, task, route, kind=kind)
 
     def _delete_campaign_route(
-        self,
-        campaign_id: CampaignId,
-        task: str,
-        *,
-        kind: str = "llm",
+        self, campaign_id: CampaignId, task: str, *, kind: str = "llm"
     ) -> None:
-        """Remove ``task`` from the block and rewrite the file."""
-        block = self._BLOCK_FOR_KIND.get(kind, "model_routing")
-        data = self._read_campaign_yaml_for_write(campaign_id)
-        if data is None:
-            return
-        existing = data.get(block)
-        if not isinstance(existing, dict) or task not in existing:
-            return
-        existing.pop(task, None)
-        if not existing:
-            data.pop(block, None)
-        self._atomic_write_campaign_yaml(campaign_id, data)
+        return self._route_mgr.delete_campaign_route(campaign_id, task, kind=kind)
 
     def _read_campaign_yaml_for_write(self, campaign_id: CampaignId) -> dict | None:
-        """Read campaign.yaml into a dict for in-place editing.
-
-        Returns ``None`` when there is no ``data_root`` to write to. Creates
-        the parent directory as a side effect.
-        """
-        yaml_path = self._campaign_yaml_path(campaign_id)
-        if yaml_path is None:
-            return None
-        yaml_path.parent.mkdir(parents=True, exist_ok=True)
-        if not yaml_path.is_file():
-            return {}
-        try:
-            raw = load_yaml(yaml_path)
-        except Exception:
-            logger.warning(
-                "llm_gateway: could not read %s for route persistence; "
-                "existing content may be overwritten",
-                yaml_path,
-            )
-            return {}
-        return dict(raw) if isinstance(raw, dict) else {}
+        return self._route_mgr._read_campaign_yaml_for_write(campaign_id)
 
     def _atomic_write_campaign_yaml(self, campaign_id: CampaignId, data: dict) -> None:
-        yaml_path = self._campaign_yaml_path(campaign_id)
-        if yaml_path is None:
-            return
-        tmp_path = yaml_path.with_suffix(".yaml.tmp")
-        tmp_path.write_text(dump_yaml(data), encoding="utf-8")
-        os.replace(tmp_path, yaml_path)
+        return self._route_mgr._atomic_write_campaign_yaml(campaign_id, data)
+
 
     # ------------------------------------------------------------------ #
     # Internals
@@ -1760,4 +1519,5 @@ async def _anext(iterator: AsyncIterator[CompletionChunk]) -> CompletionChunk:
     return await iterator.__anext__()
 
 
-__all__ = ["LLMGatewayService"]
+# Dead code from old routing implementation removed; now in route_manager.py.
+
