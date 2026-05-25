@@ -25,8 +25,6 @@ from grimoire.types.observability import LogEvent, LogLevel
 
 logger = logging.getLogger(__name__)
 
-IDLE_TIMEOUT_SECONDS = 300
-
 router = APIRouter()
 
 
@@ -42,13 +40,7 @@ async def campaign_stream(websocket: WebSocket, campaign_id: str) -> None:
     try:
         while True:
             try:
-                await asyncio.wait_for(
-                    websocket.receive_text(),
-                    timeout=IDLE_TIMEOUT_SECONDS,
-                )
-            except TimeoutError:
-                await websocket.close(code=1000)
-                break
+                await websocket.receive_text()
             except WebSocketDisconnect:
                 break
     finally:
