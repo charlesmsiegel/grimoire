@@ -21,36 +21,35 @@ passes the concrete services from :mod:`grimoire.library`,
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
-import re
-from collections.abc import Iterable
 from typing import Any
 
 from grimoire.context.archive import ArchiveRetriever
+from grimoire.context.assembler import (
+    PromptAssembler,
+    _hash_messages,
+    _resolve_runtime_macros,
+    render_mechanics,
+    render_recent_posts,
+)
 from grimoire.context.cast import CastResolver
 from grimoire.context.config import ContextBuilderConfig
 from grimoire.context.continuity_context import ContinuityContextResolver
 from grimoire.context.world_context import WorldContextResolver
-from grimoire.context.errors import LockInOverflowError
-from grimoire.context.tokens import TokenEstimator, cheap_estimator, estimate_tokens
-from grimoire.context.types import BuiltContext, ContextBuildRequest, PinSet, TierItem, make_source_id
+from grimoire.context.tokens import TokenEstimator, cheap_estimator
+from grimoire.context.types import BuiltContext, PinSet, TierItem
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
-from grimoire.templates import render as render_template
 from grimoire.types.common import CampaignId, TurnId
 from grimoire.types.composition import Composition
 from grimoire.types.context import (
     AssembledPrompt,
     BudgetEstimate,
     ContextSource,
-    ToolDeclarationSpec,
 )
 from grimoire.types.extraction_modes import ExtractionMode
 from grimoire.types.inclusion_reasons import InclusionReason
 from grimoire.types.llm import Message, MessageRole, ModelParams
 from grimoire.types.mechanics import MechanicsResult
-from grimoire.types.state import ContextTier
 
 logger = logging.getLogger(__name__)
 
@@ -59,20 +58,6 @@ logger = logging.getLogger(__name__)
 # panel exposes this same default via :class:`_InspectorConfig` so writes
 # from the UI line up with reads from the builder.
 DEFAULT_BRANCH_SUFFIX = "main"
-
-
-def _resolve_runtime_macros(messages: list[Message], active_pc_name: str) -> list[Message]:
-    """Substitute ``{{user}}`` with the active PC's name (or ``"the player"``).
-
-    Applied at the end of :meth:`ContextBuilderService._assemble` so card
-    imports can preserve ``{{user}}`` literally at ingest and resolve it
-    here against the runtime PC. Pure string replace; idempotent.
-    """
-    pc_name = active_pc_name.strip() if active_pc_name else ""
-    pc_name = pc_name or "the player"
-    return [
-        m.model_copy(update={"content": m.content.replace("{{user}}", pc_name)}) for m in messages
-    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -144,6 +129,10 @@ class ContextBuilderService:
             scenes=scenes,
             config=self._config,
         )
+        self._assembler = PromptAssembler(
+            config=self._config,
+            estimator=self._estimator,
+        )
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -206,8 +195,8 @@ class ContextBuilderService:
             turn_id=turn_id,
             pins=pins,
         )
-        prompt = await self._assemble(ctx, player_input)
-        return self._apply_extractor_mode(
+        prompt = await self._assembler.assemble(ctx, player_input)
+        return self._assembler.apply_extractor_mode(
             prompt, extractor_mode=extractor_mode, auxiliary_task=auxiliary_task
         )
 
@@ -232,7 +221,7 @@ class ContextBuilderService:
             turn_id=turn_id,
             pins=pins,
         )
-        assembled = await self._assemble(ctx, player_input)
+        assembled = await self._assembler.assemble(ctx, player_input)
         return BudgetEstimate(
             total_budget=self._config.total_budget,
             reserve_for_response=self._config.reserve_for_response,
@@ -417,7 +406,7 @@ class ContextBuilderService:
         )
 
         # Mechanics block (lock-in)
-        mechanics_block = self._render_mechanics(mechanics_results)
+        mechanics_block = render_mechanics(mechanics_results)
 
         # Apply exclude pins and mark pinned items before assembly.
         def _filter_items(items: list[TierItem]) -> list[TierItem]:
@@ -454,7 +443,7 @@ class ContextBuilderService:
             sources.append(item.source)
 
         # Recent posts as text (last N)
-        recent_posts_text = self._render_recent_posts(recent_posts)
+        recent_posts_text = render_recent_posts(recent_posts)
 
         return BuiltContext(
             composition=composition,
@@ -505,27 +494,6 @@ class ContextBuilderService:
             return ""
         return "Worlds in play: " + "; ".join(names)
 
-    # -- mechanics ------------------------------------------------------ #
-
-    def _render_mechanics(self, results: list[MechanicsResult]) -> str:
-        if not results:
-            return ""
-        lines = ["Mechanical results for this turn (treat as authoritative; do not contradict):"]
-        for r in results:
-            roll = r.roll
-            res = r.result
-            actor = roll.actor_ref or "?"
-            target = f" vs {roll.target_ref}" if roll.target_ref else ""
-            outcome = res.outcome or ("success" if res.successes > 0 else "failure")
-            lines.append(
-                f"- {actor} attempted {roll.kind}{target} (pool {roll.pool}). "
-                f"Result: {res.successes} successes ({outcome})."
-            )
-            if r.summary:
-                lines.append(f"  {r.summary}")
-        lines.append("The narrative should reflect these outcomes.")
-        return "\n".join(lines)
-
     # -- posts ---------------------------------------------------------- #
 
     async def _recent_posts(self, scene: Any) -> list[Any]:
@@ -540,135 +508,9 @@ class ContextBuilderService:
         except Exception:
             return []
 
-    def _render_recent_posts(self, posts: list[Any]) -> str:
-        if not posts:
-            return ""
-        rendered: list[str] = []
-        for post in posts:
-            label = getattr(post, "author_label", None)
-            if callable(label):
-                label = label()
-            if not label:
-                label = "narrator"
-            body = (getattr(post, "body", "") or "").strip()
-            rendered.append(f"{label}: {body}")
-        return "\n\n".join(rendered)
-
-    def _mentions_in_posts(self, posts: list[Any]) -> set[str]:
-        """Best-effort mention extraction: any token that looks like a ref."""
-        mentioned: set[str] = set()
-        for post in posts:
-            body = getattr(post, "body", "") or ""
-            for tok in body.split():
-                if tok.startswith(("library:", "campaign:")):
-                    mentioned.add(tok.strip(".,;:!?"))
-        return mentioned
-
     # ------------------------------------------------------------------ #
-    # Internals — assembly + budgeting
+    # Auxiliary build path
     # ------------------------------------------------------------------ #
-
-    async def _assemble(self, ctx: BuiltContext, player_input: str) -> AssembledPrompt:
-        messages: list[Message] = []
-        budget_used: dict[ContextTier, int] = {t: 0 for t in ContextTier}
-
-        # System block — never compressed, never dropped
-        system_text = await self._system_block(ctx)
-        if system_text:
-            messages.append(
-                Message(
-                    role=MessageRole.SYSTEM,
-                    content=system_text,
-                    metadata={"tier": "system"},
-                )
-            )
-
-        # Lock-in: scene header + active PC + commitments + mechanics + last 2 posts verbatim
-        lock_in_text = await self._lock_in_block(ctx)
-        lock_in_tokens = await self._tokens(lock_in_text)
-        lock_budget = self._config.tiers[ContextTier.LOCK_IN].max_tokens
-        if lock_in_tokens > lock_budget:
-            raise LockInOverflowError(used=lock_in_tokens, budget=lock_budget)
-        if lock_in_text:
-            messages.append(
-                Message(
-                    role=MessageRole.SYSTEM,
-                    content=lock_in_text,
-                    metadata={"tier": ContextTier.LOCK_IN.value},
-                )
-            )
-            budget_used[ContextTier.LOCK_IN] = lock_in_tokens
-
-        # Spotlight + Background tiers
-        budget_used[ContextTier.SPOTLIGHT] = await self._pack_tier(
-            ctx.spotlight_items,
-            ContextTier.SPOTLIGHT,
-            messages,
-            label="Spotlight",
-        )
-        budget_used[ContextTier.BACKGROUND] = await self._pack_tier(
-            ctx.background_items,
-            ContextTier.BACKGROUND,
-            messages,
-            label="Background",
-        )
-        budget_used[ContextTier.ARCHIVE] = await self._pack_tier(
-            ctx.archive_items,
-            ContextTier.ARCHIVE,
-            messages,
-            label="Archive",
-        )
-
-        # Recent posts beyond the lock-in's verbatim window
-        verbatim = self._config.lock_in_verbatim_posts
-        if verbatim > 0 and ctx.recent_posts_text:
-            # The text rendered for lock-in already contains the last ``verbatim``
-            # posts; here we add the older ones up to ``recent_posts_n``.
-            older = self._render_older_recent(ctx, verbatim)
-            if older:
-                older_tokens = await self._tokens(older)
-                if older_tokens <= self._config.recent_posts_budget:
-                    messages.append(
-                        Message(
-                            role=MessageRole.SYSTEM,
-                            content=older,
-                            metadata={"tier": "recent-posts"},
-                        )
-                    )
-
-        # Player input
-        if player_input:
-            messages.append(
-                Message(
-                    role=MessageRole.USER,
-                    content=player_input,
-                    metadata={"tier": "player-input"},
-                )
-            )
-
-        if ctx.extra:
-            messages.append(
-                Message(role=MessageRole.USER, content=ctx.extra, metadata={"tier": "extra"})
-            )
-
-        messages = _resolve_runtime_macros(messages, ctx.active_pc_name)
-
-        params = ModelParams(
-            temperature=self._config.default_temperature,
-            max_tokens=self._config.default_max_tokens,
-        )
-        sources = list(ctx.sources)
-        summary = self._summary(ctx, budget_used)
-        composition_snapshot = self._composition_snapshot(ctx.composition)
-        return AssembledPrompt(
-            messages=messages,
-            params=params,
-            budget_used=budget_used,
-            sources=sources,
-            summary=summary,
-            composition_snapshot=composition_snapshot,
-            messages_hash=_hash_messages(messages),
-        )
 
     async def _build_auxiliary(
         self,
@@ -701,18 +543,18 @@ class ContextBuilderService:
         if active_pc_ref and not (task.extra_params or {}).get("active_pc_ref"):
             task.extra_params = {**(task.extra_params or {}), "active_pc_ref": active_pc_ref}
 
-        scene_header = self._render_scene_header(scene) if budget.include_scene_header else ""
+        scene_header = self._cast.render_scene_header(scene) if budget.include_scene_header else ""
 
         active_pc_card = ""
         if budget.include_active_pc_card:
-            active_pc_card, _ = await self._active_pc_card(active_pc_ref, campaign_id)
+            active_pc_card, _ = await self._cast.active_pc_card(active_pc_ref, campaign_id)
 
         voice_refs = resolve_voice_targets(task, scene)
         voice_lines: list[str] = []
         for ref in voice_refs:
             if not ref:
                 continue
-            anchor = await self._voice_anchor(ref, campaign_id)
+            anchor = await self._cast._voice_anchor(ref, campaign_id)
             if anchor:
                 voice_lines.append(f"# Voice anchor — {ref}\n{anchor}")
 
@@ -722,7 +564,7 @@ class ContextBuilderService:
                 recent = await self._scenes.recent_posts(scene.id, n=budget.recent_posts_count)
             except Exception:
                 recent = []
-            recent_posts_text = self._render_recent_posts(list(recent or []))
+            recent_posts_text = render_recent_posts(list(recent or []))
 
         pc_name = self._aux_display_name(active_pc_ref) or (active_pc_ref or "")
         target_name = self._aux_display_name(task.target_character_ref) or (
@@ -788,139 +630,7 @@ class ContextBuilderService:
         except Exception:
             return ref
 
-    def _apply_extractor_mode(
-        self,
-        prompt: AssembledPrompt,
-        *,
-        extractor_mode: ExtractionMode,
-        auxiliary_task: object | None,
-    ) -> AssembledPrompt:
-        """Append tracker instructions or attach tool declarations per mode.
-
-        Auxiliary tasks (`auxiliary_task` non-None, or `NONE` mode) get
-        neither the tracker nor the tool declarations — they don't
-        produce state and the extractor is skipped entirely upstream.
-        """
-        if auxiliary_task is not None or extractor_mode == ExtractionMode.NONE:
-            return prompt
-        if extractor_mode == ExtractionMode.TOGETHER:
-            instruction = self._tracker_instruction_text()
-            new_messages = list(prompt.messages)
-            new_messages.append(Message(role=MessageRole.SYSTEM, content=instruction))
-            return prompt.model_copy(update={"messages": new_messages})
-        if extractor_mode == ExtractionMode.TOOL_USE:
-            from grimoire.extractor.tool_use import ALL_TOOLS
-
-            tools = [
-                ToolDeclarationSpec(
-                    name=t.name, description=t.description, parameters=dict(t.schema)
-                )
-                for t in ALL_TOOLS
-            ]
-            return prompt.model_copy(update={"tools": tools})
-        return prompt
-
-    def _tracker_instruction_text(self) -> str:
-        from grimoire.extractor.together import DELIMITER_CLOSE, DELIMITER_OPEN
-
-        return (
-            "After your prose, emit a JSON tracker block delimited by "
-            f"{DELIMITER_OPEN} and {DELIMITER_CLOSE}. The JSON object must "
-            "have the keys: facts (list of {text, confidence?, about?, tags?}), "
-            "character_updates (list of {character_id, field, after, before?, "
-            "confidence?}). Optional keys: location_updates, faction_updates, "
-            "commitments_added, commitments_resolved, new_entities, advance_time, "
-            "change_location. Position the tracker after the prose; do not "
-            "interleave it with narrative text."
-        )
-
-    async def _system_block(self, ctx: BuiltContext) -> str:
-        return render_template(
-            "context_system_block",
-            style_text=ctx.style_text,
-            content_boundaries=ctx.content_boundaries,
-            system_meta=ctx.system_meta,
-            voice_corrective=ctx.voice_corrective,
-        ).strip()
-
-    async def _lock_in_block(self, ctx: BuiltContext) -> str:
-        return render_template(
-            "context_lock_in_block",
-            scene_header=ctx.scene_header,
-            active_pc_card=ctx.active_pc_card,
-            commitments_block=ctx.commitments_block,
-            mechanics_block=ctx.mechanics_block,
-            verbatim_posts=self._lock_in_verbatim_posts(ctx),
-        ).strip()
-
-    def _lock_in_verbatim_posts(self, ctx: BuiltContext) -> str:
-        # ctx.recent_posts_text is all rendered posts; we just slice the tail.
-        if not ctx.recent_posts_text:
-            return ""
-        all_posts = ctx.recent_posts_text.split("\n\n")
-        tail = all_posts[-self._config.lock_in_verbatim_posts :]
-        return "\n\n".join(tail)
-
-    def _render_older_recent(self, ctx: BuiltContext, verbatim: int) -> str:
-        if not ctx.recent_posts_text:
-            return ""
-        all_posts = ctx.recent_posts_text.split("\n\n")
-        if len(all_posts) <= verbatim:
-            return ""
-        older = all_posts[: len(all_posts) - verbatim]
-        if not older:
-            return ""
-        return render_template("context_recent_older_block", posts=older)
-
-    async def _pack_tier(
-        self,
-        items: list[TierItem],
-        tier: ContextTier,
-        messages: list[Message],
-        *,
-        label: str,
-    ) -> int:
-        budget = self._config.tiers[tier].max_tokens
-        if not items or budget <= 0:
-            return 0
-        # Pinned items pack first and are exempt from budget truncation —
-        # they survive when ``used`` is over budget. Non-pinned items
-        # then pack high-priority first; drop the rest when over budget.
-        pinned_items = [it for it in items if it.pinned]
-        normal_items = sorted(
-            (it for it in items if not it.pinned),
-            key=lambda it: -it.priority,
-        )
-        used = 0
-        packed: list[str] = []
-        for item in pinned_items:
-            cost = await self._tokens(item.text)
-            packed.append(item.text)
-            item.source.tokens = cost
-            used += cost
-        for item in normal_items:
-            cost = await self._tokens(item.text)
-            if used + cost > budget:
-                continue
-            packed.append(item.text)
-            item.source.tokens = cost
-            used += cost
-        if not packed:
-            return 0
-        content = render_template("context_tier_block", label=label, items=packed)
-        messages.append(
-            Message(
-                role=MessageRole.SYSTEM,
-                content=content,
-                metadata={"tier": tier.value},
-            )
-        )
-        return used
-
     # -- helpers -------------------------------------------------------- #
-
-    async def _tokens(self, text: str) -> int:
-        return await estimate_tokens(text, self._estimator)
 
     def _make_estimator(self) -> TokenEstimator:
         gateway = self._gateway
@@ -943,35 +653,5 @@ class ContextBuilderService:
         except Exception as exc:
             logger.debug("context builder: %s failed: %s", getattr(fn, "__name__", fn), exc)
             return None
-
-    def _summary(self, ctx: BuiltContext, budget_used: dict[ContextTier, int]) -> str:
-        parts: list[str] = []
-        for tier in ContextTier:
-            parts.append(f"{tier.value}={budget_used.get(tier, 0)}")
-        return f"Context Builder turn budget: {' '.join(parts)} (sources={len(ctx.sources)})"
-
-    def _composition_snapshot(self, composition: Composition | None) -> dict:
-        if composition is None:
-            return {}
-        return json.loads(composition.model_dump_json())
-
-
-# --------------------------------------------------------------------------- #
-# Helpers
-# --------------------------------------------------------------------------- #
-
-
-_make_source_id = make_source_id
-
-
-def _hash_messages(messages: list[Message]) -> str:
-    h = hashlib.sha256()
-    for msg in messages:
-        h.update(msg.role.encode("utf-8"))
-        h.update(b"\x00")
-        h.update(msg.content.encode("utf-8"))
-        h.update(b"\x01")
-    return h.hexdigest()
-
 
 __all__ = ["ContextBuilderService"]
