@@ -1495,7 +1495,6 @@ class LLMGatewayService:
     def _atomic_write_campaign_yaml(self, campaign_id: CampaignId, data: dict) -> None:
         return self._route_mgr._atomic_write_campaign_yaml(campaign_id, data)
 
-
     # ------------------------------------------------------------------ #
     # Internals
     # ------------------------------------------------------------------ #
@@ -1518,4 +1517,3 @@ async def _anext(iterator: AsyncIterator[CompletionChunk]) -> CompletionChunk:
 
 
 # Dead code from old routing implementation removed; now in route_manager.py.
-

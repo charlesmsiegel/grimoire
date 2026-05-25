@@ -123,9 +123,7 @@ class CharacterPromoter:
                     proposal.target_library_id,
                 )
             except Exception as exc:
-                raise PromotionError(
-                    f"sheet migration failed for {character_id!r}: {exc}"
-                ) from exc
+                raise PromotionError(f"sheet migration failed for {character_id!r}: {exc}") from exc
 
         if delete_emergent:
             from grimoire.state_store.paths import emergent_path

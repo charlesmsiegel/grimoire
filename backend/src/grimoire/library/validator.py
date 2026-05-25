@@ -216,9 +216,7 @@ class LibraryValidator:
 
         warnings: list[str] = []
 
-        restored_id = await self._collision_suffix(
-            world_id, EntityKind.LORE, original_source_id
-        )
+        restored_id = await self._collision_suffix(world_id, EntityKind.LORE, original_source_id)
         snapshot_fm = dict(snapshot.get("frontmatter") or {})
         snapshot_fm["id"] = restored_id
         snapshot_body = snapshot.get("body") or ""
@@ -249,8 +247,7 @@ class LibraryValidator:
             )
             if deps:
                 warnings.append(
-                    f"target was referenced by {len(deps)} campaign(s); "
-                    "those refs are now dangling"
+                    f"target was referenced by {len(deps)} campaign(s); those refs are now dangling"
                 )
         except Exception:
             pass

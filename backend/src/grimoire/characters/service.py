@@ -795,7 +795,9 @@ class CharactersService:
         target_character_id: str | None = None,
     ) -> PromotionProposal:
         return await self._promoter.propose_promotion(
-            campaign_id, character_id, target_world_id,
+            campaign_id,
+            character_id,
+            target_world_id,
             target_character_id=target_character_id,
         )
 

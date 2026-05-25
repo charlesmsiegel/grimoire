@@ -735,8 +735,13 @@ class LibraryService:
     # ------------------------------------------------------------------ #
 
     async def promote_to_library(
-        self, campaign_id: str, entity_kind: EntityKind | str,
-        campaign_entity_id: str, target_world_id: str, *, source: str = "user",
+        self,
+        campaign_id: str,
+        entity_kind: EntityKind | str,
+        campaign_entity_id: str,
+        target_world_id: str,
+        *,
+        source: str = "user",
     ) -> str:
         return await self._composition.promote_to_library(
             campaign_id, entity_kind, campaign_entity_id, target_world_id, source=source
@@ -749,8 +754,13 @@ class LibraryService:
         return await self._composition._rekey_embeddings_after_promotion(**kwargs)
 
     async def demote(
-        self, world_id: str, kind: EntityKind | str, entity_id: str,
-        *, copy_down_to: list[str] | None = None, source: str = "user",
+        self,
+        world_id: str,
+        kind: EntityKind | str,
+        entity_id: str,
+        *,
+        copy_down_to: list[str] | None = None,
+        source: str = "user",
     ) -> list[CampaignRef]:
         return await self._composition.demote(
             world_id, kind, entity_id, copy_down_to=copy_down_to, source=source
@@ -787,9 +797,7 @@ class LibraryService:
     ) -> dict[str, Any]:
         return await self._scanner.world_diff(world_id, from_version, to_version)
 
-    async def preview_upgrade_world_ref(
-        self, campaign_id: str, world_id: str
-    ) -> UpgradePreview:
+    async def preview_upgrade_world_ref(self, campaign_id: str, world_id: str) -> UpgradePreview:
         return await self._scanner.preview_upgrade_world_ref(campaign_id, world_id)
 
     async def upgrade_world_ref(self, campaign_id: str, world_id: str) -> UpgradeReport:
@@ -811,7 +819,6 @@ class LibraryService:
         self, campaign_id: str, kind: EntityKind | str
     ) -> list[LibraryEntity]:
         return await self._composition.list_for_composition(campaign_id, kind)
-
 
 
 # ---------------------------------------------------------------------------

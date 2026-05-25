@@ -65,10 +65,7 @@ class CharacterDriftService:
             DriftInput(character=character, recent_posts=posts, window=window)
         )
 
-        if (
-            self._drift_event_sink is not None
-            and report.drift_score >= self._config.threshold
-        ):
+        if self._drift_event_sink is not None and report.drift_score >= self._config.threshold:
             event = DriftEvent(
                 character_ref=ref,
                 campaign_id=campaign_id,

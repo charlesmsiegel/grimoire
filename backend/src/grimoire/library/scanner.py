@@ -87,9 +87,7 @@ class LibraryScanner:
             (campaign_id, world_id),
         )
         if camp_row is None:
-            raise LibraryNotFoundError(
-                f"campaign {campaign_id!r} does not bind world {world_id!r}"
-            )
+            raise LibraryNotFoundError(f"campaign {campaign_id!r} does not bind world {world_id!r}")
         from_version = int(camp_row["bound_at_version"] or 0)
         branch_id = f"{campaign_id}:main"
 
@@ -161,9 +159,7 @@ class LibraryScanner:
             (campaign_id, world_id),
         )
         if before_max is None:
-            raise LibraryNotFoundError(
-                f"campaign {campaign_id!r} does not bind world {world_id!r}"
-            )
+            raise LibraryNotFoundError(f"campaign {campaign_id!r} does not bind world {world_id!r}")
         from_version = int(before_max["bound_at_version"] or 0)
 
         report = await self._store.upgrade_world_ref(campaign_id=campaign_id, world_id=world_id)
@@ -222,7 +218,5 @@ class LibraryScanner:
             world_id=world_id,
         )
         if data is None:
-            raise LibraryNotFoundError(
-                f"cannot resolve {entity_id!r} for campaign {campaign_id!r}"
-            )
+            raise LibraryNotFoundError(f"cannot resolve {entity_id!r} for campaign {campaign_id!r}")
         return _build_resolved(target_kind, world_id, asset_id, data)
