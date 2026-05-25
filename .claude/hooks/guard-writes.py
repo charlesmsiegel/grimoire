@@ -49,6 +49,13 @@ def main() -> None:
     if os.path.normcase(abs_path).startswith(memory_root + os.sep):
         return
 
+    # Superpowers brainstorming companion writes HTML mockups into
+    # .superpowers/brainstorm/ — these are gitignored ephemeral files,
+    # not project source, so always allow.
+    superpowers_marker = os.sep + ".superpowers" + os.sep
+    if superpowers_marker in os.path.normcase(abs_path):
+        return
+
     try:
         cwd_repo_root = subprocess.check_output(
             ["git", "rev-parse", "--show-toplevel"],
