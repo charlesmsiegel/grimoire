@@ -68,15 +68,19 @@ async def test_suggest_returns_ledger_plus_generated(
     generated = [
         {"summary": "Bandits on the road.", "proposed_location": "South Road", "proposed_cast": ["alistair"]},
         {"summary": "A letter arrives.", "proposed_location": "Camp", "proposed_cast": ["mirella"]},
+        {"summary": "A storm rolls in.", "proposed_location": "Plains", "proposed_cast": ["alistair"]},
     ]
     gateway = _mock_gateway(generated)
     engine = SceneSuggestionEngine(ledger=ledger, gateway=gateway)
     result = await engine.suggest(_ctx())
 
     assert len(result["ledger_picks"]) == 2
-    assert len(result["generated"]) >= 2
+    # 5 total - 2 ledger = 3 generated
+    assert len(result["generated"]) == 3
     assert result["generated"][0]["summary"] == "Bandits on the road."
     gateway.complete.assert_called_once()
+    prompt_text = gateway.complete.call_args[0][1].messages[0].content
+    assert "Generate 3 scene suggestions" in prompt_text
 
 
 async def test_suggest_caps_ledger_at_3(ledger: SceneLedger) -> None:
@@ -112,14 +116,21 @@ async def test_suggest_handles_malformed_llm_response(ledger: SceneLedger) -> No
     assert result["generated"] == []
 
 
-async def test_suggest_empty_ledger_still_generates(ledger: SceneLedger) -> None:
+async def test_suggest_empty_ledger_generates_5(ledger: SceneLedger) -> None:
     generated = [
         {"summary": "A.", "proposed_location": "X", "proposed_cast": []},
         {"summary": "B.", "proposed_location": "Y", "proposed_cast": []},
+        {"summary": "C.", "proposed_location": "Z", "proposed_cast": []},
+        {"summary": "D.", "proposed_location": "W", "proposed_cast": []},
+        {"summary": "E.", "proposed_location": "V", "proposed_cast": []},
     ]
     gateway = _mock_gateway(generated)
     engine = SceneSuggestionEngine(ledger=ledger, gateway=gateway)
     result = await engine.suggest(_ctx())
 
     assert len(result["ledger_picks"]) == 0
-    assert len(result["generated"]) == 2
+    assert len(result["generated"]) == 5
+    # Verify prompt asked for 5
+    call_args = gateway.complete.call_args
+    prompt_text = call_args[0][1].messages[0].content
+    assert "Generate 5 scene suggestions" in prompt_text

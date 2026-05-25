@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_LEDGER_PICKS = 3
 _MIN_GENERATED = 2
+_TOTAL_SUGGESTIONS = 5
 
 _SUGGEST_SYSTEM = (
     "You are a narrative assistant for a tabletop RPG campaign. Given the "
@@ -46,6 +47,18 @@ class SceneSuggestionEngine:
     async def suggest(self, ctx: SuggestionContext) -> dict:
         active = await self._ledger.list_active(ctx.campaign_id)
         ledger_picks = active[:_MAX_LEDGER_PICKS]
+
+        num_to_generate = max(_MIN_GENERATED, _TOTAL_SUGGESTIONS - len(ledger_picks))
+        ctx = SuggestionContext(
+            campaign_id=ctx.campaign_id,
+            recent_summaries=ctx.recent_summaries,
+            open_threads=ctx.open_threads,
+            active_pcs=ctx.active_pcs,
+            last_location=ctx.last_location,
+            in_game_time=ctx.in_game_time,
+            unused_greeting_names=ctx.unused_greeting_names,
+            num_to_generate=num_to_generate,
+        )
 
         request = CompletionRequest(
             model="default",
