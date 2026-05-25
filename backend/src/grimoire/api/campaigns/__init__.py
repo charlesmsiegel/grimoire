@@ -9,6 +9,7 @@ from .entities import router as entities_router
 from .export import router as export_router
 from .fork import router as fork_router
 from .images import router as images_router
+from .new_scene import router as new_scene_router
 from .pcs import router as pcs_router
 from .retcon import router as retcon_router
 from .reviews import router as reviews_router
@@ -33,6 +34,7 @@ router.include_router(scenes_router, prefix=_PREFIX, tags=_TAGS)
 router.include_router(entities_router, prefix=_PREFIX, tags=_TAGS)
 router.include_router(sheets_router, prefix=_PREFIX, tags=_TAGS)
 router.include_router(continuity_router, prefix=_PREFIX, tags=_TAGS)
+router.include_router(new_scene_router, prefix=_PREFIX, tags=_TAGS)
 router.include_router(images_router, prefix=_PREFIX, tags=_TAGS)
 router.include_router(export_router, prefix=_PREFIX, tags=_TAGS)
 router.include_router(reviews_router, prefix=_PREFIX, tags=_TAGS)
