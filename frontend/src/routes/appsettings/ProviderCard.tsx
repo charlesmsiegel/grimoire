@@ -188,7 +188,7 @@ export function ProviderCard({
               pluginId={activePlugin.id}
               label={slot.label}
               description={slot.sublabel}
-              value={stripProviderPrefix(defaults[slot.key])}
+              value={stripProviderPrefix(defaults[slot.key] ?? null)}
               onChange={(next) =>
                 onDefaultChange(slot.key, next || null, activePlugin.id)
               }
