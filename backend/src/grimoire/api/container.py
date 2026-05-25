@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         ImageGenService,
     )
     from grimoire.library import LibraryService
+    from grimoire.lifecycle import LifecycleManager
     from grimoire.llm_gateway.gateway import LLMGatewayService
     from grimoire.mechanics import MechanicsService
     from grimoire.observability.service import ObservabilityService
@@ -64,6 +65,7 @@ class ServiceContainer:
     db: Database | None = None
     event_bus: EventBus | None = None
     stream: StreamManager | None = None
+    lifecycle: LifecycleManager | None = None
 
     # Core domain services
     library: LibraryService | None = None
