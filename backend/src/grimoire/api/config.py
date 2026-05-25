@@ -182,4 +182,50 @@ async def set_llm_defaults(payload: LLMDefaultsPayload) -> Any:
     return data["llm_defaults"]
 
 
+def _state_store_yaml_path() -> Path:
+    return config_module.settings.data_root / "config" / "state_store.yaml"
+
+
+def _read_state_store_yaml() -> dict[str, Any]:
+    path = _state_store_yaml_path()
+    if not path.exists():
+        return {}
+    try:
+        raw = load_yaml(path)
+    except Exception:
+        logger.warning("state_store.yaml read failed; treating as empty", exc_info=True)
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+class LibrarySettingsPatch(BaseModel):
+    embed_on_index: bool | None = None
+
+
+@router.get("/state-store/library")
+async def get_library_settings() -> Any:
+    raw = _read_state_store_yaml()
+    lib = raw.get("library") if isinstance(raw.get("library"), dict) else {}
+    return {"embed_on_index": bool(lib.get("embed_on_index", True))}
+
+
+@router.patch("/state-store/library")
+async def patch_library_settings(payload: LibrarySettingsPatch) -> Any:
+    raw = _read_state_store_yaml()
+    lib = raw.get("library") if isinstance(raw.get("library"), dict) else {}
+    if payload.embed_on_index is not None:
+        lib["embed_on_index"] = payload.embed_on_index
+    raw["library"] = lib
+    try:
+        path = _state_store_yaml_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_yaml(path, raw)
+    except Exception as exc:
+        logger.exception("state_store.yaml write failed")
+        raise HTTPException(
+            status_code=500, detail=f"failed to persist state_store.yaml: {exc}"
+        ) from exc
+    return {"embed_on_index": bool(lib.get("embed_on_index", True))}
+
+
 __all__ = ["router"]
