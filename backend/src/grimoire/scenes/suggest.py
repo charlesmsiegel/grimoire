@@ -60,26 +60,27 @@ class SceneSuggestionEngine:
             num_to_generate=num_to_generate,
         )
 
-        request = CompletionRequest(
-            model="default",
-            messages=[
-                Message(role=MessageRole.USER, content=self._build_prompt(ctx)),
-            ],
-            system=_SUGGEST_SYSTEM,
-            max_tokens=1024,
-            temperature=1.0,
-        )
-        response = await self._gateway.complete(
-            "scene_suggest", request, campaign_id=ctx.campaign_id
-        )
-
+        generated: list[dict] = []
         try:
-            generated = json.loads(response.text)
-            if not isinstance(generated, list):
-                generated = []
+            request = CompletionRequest(
+                model="default",
+                messages=[
+                    Message(role=MessageRole.USER, content=self._build_prompt(ctx)),
+                ],
+                system=_SUGGEST_SYSTEM,
+                max_tokens=1024,
+                temperature=1.0,
+            )
+            response = await self._gateway.complete(
+                "scene_suggest", request, campaign_id=ctx.campaign_id
+            )
+            parsed = json.loads(response.text)
+            if isinstance(parsed, list):
+                generated = parsed
         except (json.JSONDecodeError, TypeError):
-            logger.warning("Failed to parse suggestion response: %s", response.text[:200])
-            generated = []
+            logger.warning("Failed to parse suggestion response")
+        except Exception:
+            logger.warning("LLM suggestion generation failed", exc_info=True)
 
         return {
             "ledger_picks": [
