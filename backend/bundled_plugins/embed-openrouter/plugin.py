@@ -106,13 +106,24 @@ class OpenRouterEmbeddingProvider:
         payload: dict[str, Any] = {"model": self.model_id, "input": texts}
         if self._configured_dimensions is not None:
             payload["dimensions"] = self._configured_dimensions
+        if _needs_input_type(self.model_id):
+            payload["input_type"] = "search_document"
         response = await client.post("/embeddings", json=payload)
         if response.status_code >= 400:
             raise RuntimeError(
                 f"embed-openrouter: request failed ({response.status_code}): {response.text}"
             )
         data = response.json()
+        if data.get("error"):
+            raise RuntimeError(
+                f"embed-openrouter: API error: {data['error']}"
+            )
         rows = data.get("data") or []
+        if not rows:
+            raise RuntimeError(
+                f"embed-openrouter: model {self.model_id!r} returned no embeddings "
+                f"for {len(texts)} inputs"
+            )
         vectors: list[list[float]] = []
         for entry in rows:
             embedding = entry.get("embedding") or []
@@ -257,6 +268,12 @@ class OpenRouterEmbeddingProvider:
                 verify=_verify(),
             )
             return self._client
+
+
+def _needs_input_type(model_id: str) -> bool:
+    """Cohere and Voyage embedding models require ``input_type``."""
+    prefix = model_id.split("/")[0].lower() if "/" in model_id else ""
+    return prefix in ("cohere", "voyage")
 
 
 def _is_embedding_model(row: dict[str, Any]) -> bool:
