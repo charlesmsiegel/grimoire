@@ -6,6 +6,7 @@ import { errorMessage, useAppConfig } from "./shared";
 
 interface LibrarySettings {
   embed_on_index: boolean;
+  summarize_on_index: boolean;
 }
 
 function useLibrarySettings() {
@@ -86,10 +87,20 @@ export function LibraryTab() {
           embedding API calls. Takes effect on next restart.
         </small>
       </label>
-      <p className="wizard-meta">
-        Persisted to <code>data/config/app.yaml</code> and{" "}
-        <code>data/config/state_store.yaml</code>. Changes save automatically.
-      </p>
+      <label className="wizard-toggle">
+        <input
+          type="checkbox"
+          checked={lib.data?.summarize_on_index ?? true}
+          onChange={(e) => lib.patch({ summarize_on_index: e.target.checked })}
+          disabled={!lib.data}
+        />
+        <span>Enable auto-summarization</span>
+        <small>
+          Summarize library entities via LLM for background-tier context injection.
+          Disable to stop LLM calls for summarization. Takes effect on next restart.
+        </small>
+      </label>
+      <p className="wizard-meta">Changes save automatically and take effect on next restart.</p>
       <ConfigSaveIndicator status={status} error={error ?? lib.error} />
     </div>
   );

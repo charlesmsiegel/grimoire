@@ -182,50 +182,72 @@ async def set_llm_defaults(payload: LLMDefaultsPayload) -> Any:
     return data["llm_defaults"]
 
 
-def _state_store_yaml_path() -> Path:
-    return config_module.settings.data_root / "config" / "state_store.yaml"
+def _yaml_path(name: str) -> Path:
+    return config_module.settings.data_root / "config" / name
 
 
-def _read_state_store_yaml() -> dict[str, Any]:
-    path = _state_store_yaml_path()
+def _read_yaml_safe(name: str) -> dict[str, Any]:
+    path = _yaml_path(name)
     if not path.exists():
         return {}
     try:
         raw = load_yaml(path)
     except Exception:
-        logger.warning("state_store.yaml read failed; treating as empty", exc_info=True)
+        logger.warning("%s read failed; treating as empty", name, exc_info=True)
         return {}
     return raw if isinstance(raw, dict) else {}
 
 
+def _write_yaml_safe(name: str, data: dict[str, Any]) -> None:
+    path = _yaml_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_yaml(path, data)
+
+
 class LibrarySettingsPatch(BaseModel):
     embed_on_index: bool | None = None
+    summarize_on_index: bool | None = None
 
 
 @router.get("/state-store/library")
 async def get_library_settings() -> Any:
-    raw = _read_state_store_yaml()
-    lib = raw.get("library") if isinstance(raw.get("library"), dict) else {}
-    return {"embed_on_index": bool(lib.get("embed_on_index", True))}
+    ss = _read_yaml_safe("state_store.yaml")
+    ss_lib = ss.get("library") if isinstance(ss.get("library"), dict) else {}
+    lib = _read_yaml_safe("library.yaml")
+    idx = lib.get("indexing") if isinstance(lib.get("indexing"), dict) else {}
+    return {
+        "embed_on_index": bool(ss_lib.get("embed_on_index", True)),
+        "summarize_on_index": bool(idx.get("summarize_on_index", True)),
+    }
 
 
 @router.patch("/state-store/library")
 async def patch_library_settings(payload: LibrarySettingsPatch) -> Any:
-    raw = _read_state_store_yaml()
-    lib = raw.get("library") if isinstance(raw.get("library"), dict) else {}
     if payload.embed_on_index is not None:
-        lib["embed_on_index"] = payload.embed_on_index
-    raw["library"] = lib
-    try:
-        path = _state_store_yaml_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        write_yaml(path, raw)
-    except Exception as exc:
-        logger.exception("state_store.yaml write failed")
-        raise HTTPException(
-            status_code=500, detail=f"failed to persist state_store.yaml: {exc}"
-        ) from exc
-    return {"embed_on_index": bool(lib.get("embed_on_index", True))}
+        ss = _read_yaml_safe("state_store.yaml")
+        ss_lib = ss.get("library") if isinstance(ss.get("library"), dict) else {}
+        ss_lib["embed_on_index"] = payload.embed_on_index
+        ss["library"] = ss_lib
+        try:
+            _write_yaml_safe("state_store.yaml", ss)
+        except Exception as exc:
+            logger.exception("state_store.yaml write failed")
+            raise HTTPException(
+                status_code=500, detail=f"failed to persist: {exc}"
+            ) from exc
+    if payload.summarize_on_index is not None:
+        lib = _read_yaml_safe("library.yaml")
+        idx = lib.get("indexing") if isinstance(lib.get("indexing"), dict) else {}
+        idx["summarize_on_index"] = payload.summarize_on_index
+        lib["indexing"] = idx
+        try:
+            _write_yaml_safe("library.yaml", lib)
+        except Exception as exc:
+            logger.exception("library.yaml write failed")
+            raise HTTPException(
+                status_code=500, detail=f"failed to persist: {exc}"
+            ) from exc
+    return await get_library_settings()
 
 
 __all__ = ["router"]
