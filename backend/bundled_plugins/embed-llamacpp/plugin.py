@@ -30,14 +30,9 @@ def _ensure_llama_cpp_importable(plugin: Any) -> None:
         extra = getattr(plugin, "_plugin_sys_path", None)
         if not extra:
             raise
-        inserted = extra not in sys.path
-        if inserted:
+        if extra not in sys.path:
             sys.path.insert(0, extra)
-        try:
-            import llama_cpp  # noqa: F401
-        finally:
-            if inserted and extra in sys.path:
-                sys.path.remove(extra)
+        import llama_cpp  # noqa: F401
 
 
 class LlamaCppEmbeddingProvider:
@@ -71,7 +66,6 @@ class LlamaCppEmbeddingProvider:
             return []
         llama = self._get_llama()
         loop = asyncio.get_running_loop()
-
         def _embed() -> Any:
             with self._inference_lock:
                 return llama.embed(texts)
