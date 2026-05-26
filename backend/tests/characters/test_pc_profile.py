@@ -118,3 +118,88 @@ def test_first_write_no_revision(tmp_path: Path) -> None:
     write_pc_profile(tmp_path, "camp-1", "alistair", profile)
     revisions = list_pc_profile_revisions(tmp_path, "camp-1", "alistair")
     assert len(revisions) == 0
+
+
+# ---------------------------------------------------------------------------
+# Card rendering — render_full_pc
+# ---------------------------------------------------------------------------
+
+from grimoire.characters.views import render_full_pc
+from grimoire.types.characters import Character, CharacterRole, VoiceAnchor
+from grimoire.types.mechanics import Capability
+
+
+def _make_character(
+    description: str = "A Tremere elder.",
+    body: str = "",
+) -> Character:
+    return Character(
+        id="alistair",
+        name="Alistair",
+        role=CharacterRole.PC,
+        tags=["vampire", "tremere"],
+        voice=VoiceAnchor(summary="Crisp and formal."),
+        description=description,
+        body=body,
+    )
+
+
+def test_render_full_pc_with_profile_and_capabilities() -> None:
+    char = _make_character(description="A Tremere elder.")
+    profile = PCProfile(
+        character_ref="library:worlds/wod/characters/alistair",
+        goals=["Find the lost artifact", "Protect the chantry"],
+        player_notes="Lean into the mentor archetype.",
+        description="Campaign-specific backstory details.",
+    )
+    capabilities = [
+        Capability(id="wod.dominate.2", name="Dominate", kind="discipline", description="Mental domination"),
+        Capability(id="wod.auspex.1", name="Auspex", kind="discipline", description="Heightened senses"),
+    ]
+    result = render_full_pc(char, profile=profile, capabilities=capabilities)
+    assert "# Alistair" in result
+    assert "A Tremere elder." in result
+    assert "## Campaign Context" in result
+    assert "Campaign-specific backstory details." in result
+    assert "## Goals" in result
+    assert "- Find the lost artifact" in result
+    assert "- Protect the chantry" in result
+    assert "## Capabilities" in result
+    assert "Dominate" in result
+    assert "Auspex" in result
+    assert "## Voice" in result
+    assert "## Player Notes" in result
+    assert "Lean into the mentor archetype." in result
+
+
+def test_render_full_pc_empty_library_desc_uses_profile_as_primary() -> None:
+    char = _make_character(description="", body="")
+    profile = PCProfile(
+        character_ref="library:worlds/wod/characters/alistair",
+        description="This is the primary description from the profile.",
+    )
+    result = render_full_pc(char, profile=profile, capabilities=[])
+    assert "This is the primary description from the profile." in result
+    assert "## Campaign Context" not in result
+
+
+def test_render_full_pc_no_profile_no_capabilities() -> None:
+    char = _make_character(description="A Tremere elder.")
+    result = render_full_pc(char, profile=None, capabilities=[])
+    assert "# Alistair" in result
+    assert "A Tremere elder." in result
+    assert "## Campaign Context" not in result
+    assert "## Goals" not in result
+    assert "## Capabilities" not in result
+    assert "## Player Notes" not in result
+
+
+def test_render_full_pc_profile_with_no_content() -> None:
+    char = _make_character(description="A Tremere elder.")
+    profile = PCProfile(
+        character_ref="library:worlds/wod/characters/alistair",
+    )
+    result = render_full_pc(char, profile=profile, capabilities=[])
+    assert "## Campaign Context" not in result
+    assert "## Goals" not in result
+    assert "## Player Notes" not in result
