@@ -26,6 +26,7 @@ def _ensure_llama_cpp_importable(plugin: Any) -> None:
     """Make sure ``llama_cpp`` is importable, restoring the plugin venv path if needed."""
     try:
         import llama_cpp as _llama_cpp  # presence check
+
         del _llama_cpp
     except ImportError:
         extra = getattr(plugin, "_plugin_sys_path", None)
@@ -34,6 +35,7 @@ def _ensure_llama_cpp_importable(plugin: Any) -> None:
         if extra not in sys.path:
             sys.path.insert(0, extra)
         import llama_cpp as _llama_cpp  # retry after path fix
+
         del _llama_cpp
 
 
@@ -68,6 +70,7 @@ class LlamaCppEmbeddingProvider:
             return []
         llama = self._get_llama()
         loop = asyncio.get_running_loop()
+
         def _embed() -> Any:
             with self._inference_lock:
                 return llama.embed(texts)

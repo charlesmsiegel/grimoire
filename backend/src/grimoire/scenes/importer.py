@@ -166,7 +166,10 @@ async def run_import_pipeline(
     except Exception:
         logger.warning("import: thread detection failed", exc_info=True)
     yield ImportProgress(
-        step="threads", current=tick, total=total, detail="Thread detection complete",
+        step="threads",
+        current=tick,
+        total=total,
+        detail="Thread detection complete",
     )
 
     tick += 1
