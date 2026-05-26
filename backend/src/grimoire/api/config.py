@@ -324,10 +324,7 @@ async def browse_files(
     glob: str = "*.gguf",
 ) -> BrowseFilesResponse:
     """List files and directories for a server-side file picker."""
-    if directory:
-        base = Path(directory).resolve()
-    else:
-        base = Path.home()
+    base = Path(directory).resolve() if directory else Path.home()
 
     if not base.is_dir():
         raise HTTPException(status_code=400, detail=f"Not a directory: {base}")
@@ -341,8 +338,8 @@ async def browse_files(
                 entries.append({"name": child.name, "path": str(child), "is_dir": True})
             elif child.match(glob):
                 entries.append({"name": child.name, "path": str(child), "is_dir": False})
-    except PermissionError:
-        raise HTTPException(status_code=403, detail=f"Permission denied: {base}")
+    except PermissionError as err:
+        raise HTTPException(status_code=403, detail=f"Permission denied: {base}") from err
 
     return BrowseFilesResponse(parent=str(base.parent), entries=entries)
 
@@ -358,7 +355,7 @@ async def gguf_introspect(path: str) -> Any:
     try:
         return introspect(resolved)
     except GGUFError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 __all__ = ["router"]
