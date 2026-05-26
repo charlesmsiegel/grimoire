@@ -65,21 +65,25 @@ class SceneLedger:
         )
         return [dict(r) for r in rows]
 
-    async def get(self, item_id: str) -> dict | None:
+    async def get(self, campaign_id: str, item_id: str) -> dict | None:
         row = await self._db.fetchone(
-            "SELECT * FROM scene_ledger WHERE id = ?",
-            (item_id,),
+            "SELECT * FROM scene_ledger WHERE id = ? AND campaign_id = ?",
+            (item_id, campaign_id),
         )
         return dict(row) if row else None
 
-    async def set_status(self, item_id: str, status: str) -> None:
+    async def set_status(self, campaign_id: str, item_id: str, status: str) -> None:
         await self._db.execute(
-            "UPDATE scene_ledger SET status = ? WHERE id = ?",
-            (status, item_id),
+            "UPDATE scene_ledger SET status = ? WHERE id = ? AND campaign_id = ?",
+            (status, item_id, campaign_id),
         )
 
-    async def mark_used(self, item_id: str, scene_id: str) -> None:
+    async def mark_used(self, campaign_id: str, item_id: str, scene_id: str) -> None:
         await self._db.execute(
-            "UPDATE scene_ledger SET status = 'used', used_in_scene_id = ? WHERE id = ?",
-            (scene_id, item_id),
+            """
+            UPDATE scene_ledger
+            SET status = 'used', used_in_scene_id = ?
+            WHERE id = ? AND campaign_id = ?
+            """,
+            (scene_id, item_id, campaign_id),
         )

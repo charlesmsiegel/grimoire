@@ -35,7 +35,12 @@ export function ScenePreviewPanel({
     setCreating(true);
     dispatch({ type: "creating-scene" });
     try {
-      const unchosen: GeneratedSuggestion[] = suggestions?.generated ?? [];
+      // Exclude the chosen suggestion from unchosen backfill (issue #2)
+      const allGenerated = suggestions?.generated ?? [];
+      const chosenSummary = preview.title;
+      const unchosen = allGenerated.filter(
+        (g) => g.summary !== chosenSummary,
+      );
 
       await newSceneApi.start(campaignId, {
         ...preview,
@@ -44,6 +49,9 @@ export function ScenePreviewPanel({
         unchosen_generated: unchosen,
       });
       await onSceneCreated();
+    } catch {
+      // Restore to preview so user can retry (issue #7)
+      dispatch({ type: "preview-loaded", preview });
     } finally {
       setCreating(false);
     }

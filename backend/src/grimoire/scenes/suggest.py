@@ -100,6 +100,7 @@ class SceneSuggestionEngine:
                     "proposed_cast": g.get("proposed_cast", []),
                 }
                 for g in generated
+                if isinstance(g, dict)
             ],
         }
 
