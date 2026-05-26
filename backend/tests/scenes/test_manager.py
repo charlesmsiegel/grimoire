@@ -839,7 +839,7 @@ async def test_generate_summary_closed_no_force_returns_existing(tmp_path: Path)
     refreshed = await manager.get_scene(scene.id)
     existing_summary = refreshed.final_summary
 
-    summary, beats = await manager.generate_summary(scene.id)
+    summary, _beats = await manager.generate_summary(scene.id)
     assert summary == existing_summary
     assert called is False
 

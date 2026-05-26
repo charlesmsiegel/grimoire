@@ -203,6 +203,6 @@ async def test_adaptive_summarizer_fallback_context_window() -> None:
     summarize = make_adaptive_summarizer(gateway)
     scene = _scene()
     posts = [_post(1, "hello")]
-    summary, beats = await summarize(scene, posts)
+    summary, _beats = await summarize(scene, posts)
     assert summary == "Summarized."
     assert len(gateway.calls) == 1  # fell back to 100k, small post fits in single pass
