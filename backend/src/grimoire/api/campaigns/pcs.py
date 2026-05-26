@@ -10,7 +10,7 @@ from fastapi import APIRouter, Body
 from grimoire.api.deps import CharactersDep, ScenesDep
 from grimoire.api.util import map_lookup_errors, to_payload
 
-from .schemas import AddPCPayload
+from .schemas import AddPCPayload, PCProfilePayload
 
 logger = logging.getLogger(__name__)
 
@@ -89,3 +89,75 @@ async def set_current_scene_for_pc(
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return {"ok": True}
+
+
+@router.get("/{campaign_id}/pcs/{character_ref:path}/profile")
+async def get_pc_profile(
+    campaign_id: str,
+    character_ref: str,
+    characters: CharactersDep,
+) -> Any:
+    try:
+        profile = await characters.get_pc_profile(campaign_id, character_ref)
+        if profile is None:
+            return {"description": "", "goals": [], "player_notes": "", "character_ref": character_ref}
+        return to_payload(profile)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.put("/{campaign_id}/pcs/{character_ref:path}/profile")
+async def save_pc_profile(
+    campaign_id: str,
+    character_ref: str,
+    payload: PCProfilePayload,
+    characters: CharactersDep,
+) -> Any:
+    from grimoire.characters.pc_profile import PCProfile
+
+    try:
+        profile = PCProfile(
+            character_ref=character_ref,
+            goals=payload.goals,
+            player_notes=payload.player_notes,
+            description=payload.description,
+        )
+        await characters.save_pc_profile(campaign_id, character_ref, profile)
+        return to_payload(profile)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.get("/{campaign_id}/pcs/{character_ref:path}/profile/revisions")
+async def list_pc_profile_revisions(
+    campaign_id: str,
+    character_ref: str,
+    characters: CharactersDep,
+) -> Any:
+    try:
+        revisions = await characters.list_pc_profile_revisions(campaign_id, character_ref)
+        return to_payload(revisions)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.get("/{campaign_id}/pcs/{character_ref:path}/profile/revisions/{timestamp}")
+async def get_pc_profile_revision(
+    campaign_id: str,
+    character_ref: str,
+    timestamp: str,
+    characters: CharactersDep,
+) -> Any:
+    from fastapi import HTTPException
+
+    try:
+        revision = await characters.get_pc_profile_revision(
+            campaign_id, character_ref, timestamp
+        )
+        if revision is None:
+            raise HTTPException(status_code=404, detail="Revision not found")
+        return to_payload(revision)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
