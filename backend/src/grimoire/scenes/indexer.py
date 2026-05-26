@@ -431,9 +431,7 @@ class SceneIndexer:
         else:
             await self._backfill_all(campaigns_root, self._db)
 
-    async def _backfill_all(
-        self, campaigns_root: Path, db: _DB
-    ) -> None:
+    async def _backfill_all(self, campaigns_root: Path, db: _DB) -> None:
         for campaign_dir in campaigns_root.iterdir():
             if not campaign_dir.is_dir():
                 continue
@@ -444,9 +442,7 @@ class SceneIndexer:
                     if branch_dir.is_dir():
                         await self._backfill_branch(branch_dir / "scenes", db)
 
-    async def _backfill_branch(
-        self, scenes_dir_path: Path, db: _DB
-    ) -> None:
+    async def _backfill_branch(self, scenes_dir_path: Path, db: _DB) -> None:
         if not scenes_dir_path.exists():
             return
         for yaml_path in sorted(scenes_dir_path.glob("*.yaml")):
