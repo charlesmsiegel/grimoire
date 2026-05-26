@@ -219,6 +219,13 @@ export function ImportSceneDialog({ campaignId, onClose, onImported }: Props) {
               onClick={() => {
                 setPhase("pick");
                 setPreview(null);
+                setTitle("");
+                setLocationRef("");
+                setInGameStart("");
+                setMood("");
+                setTags("");
+                setPcRefs("");
+                setNpcRefs("");
               }}
             >
               Back

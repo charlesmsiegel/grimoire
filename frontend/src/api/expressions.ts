@@ -59,6 +59,7 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 const notFoundCache = new Map<string, number>();
 const CACHE_TTL_MS = 60_000;
+const NOT_FOUND_TTL_MS = 30_000;
 
 function cacheKey(campaignId: string, characterId: string, turnId?: string | null): string {
   return `${campaignId}::${characterId}::${turnId ?? ""}`;
@@ -69,8 +70,9 @@ export function invalidateExpression(
   characterId: string,
   turnId?: string | null,
 ): void {
-  cache.delete(cacheKey(campaignId, characterId, turnId));
-  notFoundCache.delete(`${campaignId}::${characterId}`);
+  const key = cacheKey(campaignId, characterId, turnId);
+  cache.delete(key);
+  notFoundCache.delete(key);
 }
 
 export function useExpression(
@@ -95,9 +97,9 @@ export function useExpression(
       setState({ data: cached.data, loading: false, error: null });
       return;
     }
-    const charKey = `${campaignId}::${characterId}`;
-    const notFoundAt = notFoundCache.get(charKey);
-    if (notFoundAt && notFoundAt > Date.now() - CACHE_TTL_MS) {
+    const nfKey = cacheKey(campaignId, characterId, turnId);
+    const nfExpiry = notFoundCache.get(nfKey);
+    if (nfExpiry !== undefined && nfExpiry > Date.now()) {
       setState({ data: null, loading: false, error: null });
       return;
     }
@@ -112,7 +114,7 @@ export function useExpression(
       .catch((err: unknown) => {
         if (!active) return;
         if (err && typeof err === "object" && "status" in err && (err as { status: number }).status === 404) {
-          notFoundCache.set(charKey, Date.now());
+          notFoundCache.set(nfKey, Date.now() + NOT_FOUND_TTL_MS);
         }
         setState({ data: null, loading: false, error: err instanceof Error ? err : new Error(String(err)) });
       });
