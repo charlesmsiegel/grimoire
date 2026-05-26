@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from grimoire.scenes.importer import ImportParseResult, parse_import_source
+from grimoire.scenes.importer import parse_import_source
 
 
 def test_parse_import_source_md_only(tmp_path: Path) -> None:
