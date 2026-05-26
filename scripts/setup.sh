@@ -140,7 +140,7 @@ PLIST
         cat > "$DESKTOP_FILE" <<DESKTOP
 [Desktop Entry]
 Name=Grimoire
-Exec=$REPO_ROOT/scripts/run.sh
+Exec="$REPO_ROOT/scripts/run.sh"
 Icon=$REPO_ROOT/assets/icons/grimoire-256.png
 Terminal=true
 Type=Application
