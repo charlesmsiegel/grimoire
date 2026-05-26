@@ -674,6 +674,43 @@ class CharactersService:
         )
 
     # ------------------------------------------------------------------ #
+    # PC profiles (campaign-scoped overlay)
+    # ------------------------------------------------------------------ #
+
+    async def get_pc_profile(
+        self, campaign_id: CampaignId, ref: CharacterRef
+    ) -> "PCProfile | None":
+        from .pc_profile import PCProfile as _PCProfile, read_pc_profile as _read
+
+        asset_id = _asset_id_for_ref(ref)
+        return _read(self.store.data_root, campaign_id, asset_id)
+
+    async def save_pc_profile(
+        self, campaign_id: CampaignId, ref: CharacterRef, profile: "PCProfile"
+    ) -> None:
+        from .pc_profile import write_pc_profile as _write
+
+        asset_id = _asset_id_for_ref(ref)
+        _write(self.store.data_root, campaign_id, asset_id, profile)
+        self._cache.view_invalidate(ref, campaign_id)
+
+    async def list_pc_profile_revisions(
+        self, campaign_id: CampaignId, ref: CharacterRef
+    ) -> list:
+        from .pc_profile import list_pc_profile_revisions as _list_revs
+
+        asset_id = _asset_id_for_ref(ref)
+        return _list_revs(self.store.data_root, campaign_id, asset_id)
+
+    async def get_pc_profile_revision(
+        self, campaign_id: CampaignId, ref: CharacterRef, timestamp: str
+    ) -> "PCProfileRevision | None":
+        from .pc_profile import read_pc_profile_revision as _read_rev
+
+        asset_id = _asset_id_for_ref(ref)
+        return _read_rev(self.store.data_root, campaign_id, asset_id, timestamp)
+
+    # ------------------------------------------------------------------ #
     # Relationships (campaign-scoped)
     # ------------------------------------------------------------------ #
 

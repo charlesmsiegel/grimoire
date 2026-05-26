@@ -310,3 +310,56 @@ async def test_get_full_card_includes_profile(
     assert "- Find the artifact" in card
     assert "## Player Notes" in card
     assert "Keep it dark." in card
+
+
+# ---------------------------------------------------------------------------
+# Service CRUD methods
+# ---------------------------------------------------------------------------
+
+
+async def test_service_get_pc_profile(
+    characters_svc: CharactersService, store_for_service: StateStore
+) -> None:
+    ref = await _setup_character_with_profile(store_for_service, characters_svc)
+    profile = await characters_svc.get_pc_profile("camp-1", ref)
+    assert profile is not None
+    assert profile.goals == ["Find the artifact"]
+    assert profile.player_notes == "Keep it dark."
+
+
+async def test_service_save_pc_profile(
+    characters_svc: CharactersService, store_for_service: StateStore
+) -> None:
+    ref = await _setup_character_with_profile(store_for_service, characters_svc)
+    new_profile = PCProfile(
+        character_ref=ref,
+        goals=["New goal"],
+        player_notes="Updated notes.",
+        description="Updated description.",
+    )
+    await characters_svc.save_pc_profile("camp-1", ref, new_profile)
+    loaded = await characters_svc.get_pc_profile("camp-1", ref)
+    assert loaded is not None
+    assert loaded.goals == ["New goal"]
+
+
+async def test_service_list_revisions(
+    characters_svc: CharactersService, store_for_service: StateStore
+) -> None:
+    ref = await _setup_character_with_profile(store_for_service, characters_svc)
+    new_profile = PCProfile(
+        character_ref=ref,
+        goals=["Updated goal"],
+        description="V2.",
+    )
+    await characters_svc.save_pc_profile("camp-1", ref, new_profile)
+    revisions = await characters_svc.list_pc_profile_revisions("camp-1", ref)
+    assert len(revisions) >= 1
+
+
+async def test_service_get_profile_missing_returns_none(
+    characters_svc: CharactersService, store_for_service: StateStore
+) -> None:
+    await store_for_service.upsert_campaign(campaign_id="camp-empty", name="Empty")
+    profile = await characters_svc.get_pc_profile("camp-empty", "library:worlds/wod/characters/nobody")
+    assert profile is None
