@@ -85,3 +85,51 @@ def test_preview_endpoint_not_found() -> None:
         json={"path": "/nonexistent/scene.md"},
     )
     assert resp.status_code == 400
+
+
+# --- Pipeline tests ---
+
+from unittest.mock import AsyncMock, MagicMock
+
+from grimoire.scenes.importer import ImportProgress, run_import_pipeline
+
+
+@pytest.mark.asyncio
+async def test_run_import_pipeline_progress_events(tmp_path: Path) -> None:
+    """Verify the pipeline yields the right progress steps."""
+    md = tmp_path / "scene.md"
+    md.write_text(
+        "## Post 1 — narrator\n\nHello.\n\n"
+        "## Post 2 — pc:alice\n\nHi.\n",
+        encoding="utf-8",
+    )
+    scene_manager = AsyncMock()
+    scene_mock = MagicMock()
+    scene_mock.id = "camp:0001-test"
+    scene_mock.campaign_id = "camp"
+    scene_mock.branch_id = "main"
+    scene_manager.start_scene.return_value = scene_mock
+    scene_manager.detect_threads.return_value = []
+    scene_manager.generate_summary.return_value = ("Summary", ["beat1"])
+
+    events: list[ImportProgress] = []
+    async for progress in run_import_pipeline(
+        scene_manager=scene_manager,
+        extractor=None,
+        delta_applier=None,
+        md_path=md,
+        campaign_id="camp",
+        title="Test",
+        metadata={},
+    ):
+        events.append(progress)
+
+    steps = [e.step for e in events]
+    assert "copy" in steps
+    assert "index" in steps
+    assert steps.count("extract") == 2
+    assert "threads" in steps
+    assert "summarize" in steps
+    assert "done" in steps
+    assert scene_manager.start_scene.called
+    assert scene_manager.append_post.call_count == 2
