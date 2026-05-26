@@ -49,15 +49,21 @@ if (-not $pythonOk) {
 }
 
 # Node 20+
+$nodeInstalled = $false
 if (-not (Test-Cmd "node")) {
     Request-Install "Node.js 20+" "winget install OpenJS.NodeJS.LTS --accept-package-agreements" "https://nodejs.org"
+    $nodeInstalled = $true
 } else {
     $nodeVer = & node --version 2>&1
     if ($nodeVer -match "v(\d+)" -and [int]$Matches[1] -ge 20) {
         Write-Host "  Node $($Matches[1])" -ForegroundColor Green
     } else {
         Request-Install "Node.js 20+" "winget install OpenJS.NodeJS.LTS --accept-package-agreements" "https://nodejs.org"
+        $nodeInstalled = $true
     }
+}
+if ($nodeInstalled) {
+    $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
 }
 
 # uv

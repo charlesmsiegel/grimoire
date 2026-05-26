@@ -21,26 +21,19 @@ request_install() {
     fi
 }
 
-linux_install_cmd() {
-    local apt_cmd="$1" dnf_cmd="$2"
-    if command -v apt-get &>/dev/null; then
-        echo "$apt_cmd"
-    elif command -v dnf &>/dev/null; then
-        echo "$dnf_cmd"
-    elif command -v pacman &>/dev/null; then
-        echo "sudo pacman -S --noconfirm ${dnf_cmd##* }"
-    else
-        echo ""
-    fi
-}
-
 platform_install() {
-    local name="$1" brew_cmd="$2" apt_cmd="$3" url="$4" dnf_cmd="${5:-}"
+    local name="$1" brew_cmd="$2" apt_cmd="$3" url="$4" dnf_cmd="${5:-}" pacman_cmd="${6:-}"
     case "$OS" in
         Darwin) request_install "$name" "$brew_cmd" "$url" ;;
         *)
-            local cmd
-            cmd=$(linux_install_cmd "$apt_cmd" "${dnf_cmd:-$apt_cmd}")
+            local cmd=""
+            if command -v apt-get &>/dev/null; then
+                cmd="$apt_cmd"
+            elif command -v dnf &>/dev/null; then
+                cmd="${dnf_cmd:-$apt_cmd}"
+            elif command -v pacman &>/dev/null; then
+                cmd="${pacman_cmd:-}"
+            fi
             if [ -z "$cmd" ]; then
                 echo "  No supported package manager found. Install $name manually: $url"
                 exit 1
@@ -56,7 +49,7 @@ echo "Checking prerequisites..."
 if ! command -v python3 &>/dev/null; then
     platform_install "Python 3.12+" "brew install python@3.12" \
         "sudo add-apt-repository -y ppa:deadsnakes/ppa && sudo apt-get update && sudo apt-get install -y python3.12 python3.12-venv" \
-        "https://python.org" "sudo dnf install -y python3.12"
+        "https://python.org" "sudo dnf install -y python3.12" "sudo pacman -S --noconfirm python"
 else
     py_ver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
     py_major=${py_ver%%.*}
@@ -65,7 +58,7 @@ else
         echo "  Python $py_ver found, but 3.12+ required."
         platform_install "Python 3.12+" "brew install python@3.12" \
         "sudo add-apt-repository -y ppa:deadsnakes/ppa && sudo apt-get update && sudo apt-get install -y python3.12 python3.12-venv" \
-        "https://python.org" "sudo dnf install -y python3.12"
+        "https://python.org" "sudo dnf install -y python3.12" "sudo pacman -S --noconfirm python"
     else
         echo "  Python $py_ver"
     fi
@@ -75,14 +68,14 @@ fi
 if ! command -v node &>/dev/null; then
     platform_install "Node.js 20+" "brew install node@20" \
         "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs" \
-        "https://nodejs.org" "sudo dnf install -y nodejs20"
+        "https://nodejs.org" "sudo dnf install -y nodejs20" "sudo pacman -S --noconfirm nodejs-lts-iron"
 else
     node_major=$(node --version | sed 's/v\([0-9]*\).*/\1/')
     if [ "$node_major" -lt 20 ]; then
         echo "  Node $node_major found, but 20+ required."
         platform_install "Node.js 20+" "brew install node@20" \
         "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs" \
-        "https://nodejs.org" "sudo dnf install -y nodejs20"
+        "https://nodejs.org" "sudo dnf install -y nodejs20" "sudo pacman -S --noconfirm nodejs-lts-iron"
     else
         echo "  Node $node_major"
     fi

@@ -34,15 +34,15 @@ if (Test-Path $stateFile) {
     if ($state["BACKEND_PORT"]) { $backendPort = $state["BACKEND_PORT"] }
     if ($state["FRONTEND_PORT"]) { $frontendPort = $state["FRONTEND_PORT"] }
     foreach ($key in @("BACKEND_PID", "FRONTEND_PID")) {
-        $pid = $state[$key]
-        if ($pid) {
+        $procId = $state[$key]
+        if ($procId) {
             try {
-                $proc = Get-Process -Id ([int]$pid) -ErrorAction Stop
-                Write-Host "  Stopping $key ($($proc.ProcessName), PID $pid)..."
-                Stop-GrimoireProcessTree ([int]$pid)
+                $proc = Get-Process -Id ([int]$procId) -ErrorAction Stop
+                Write-Host "  Stopping $key ($($proc.ProcessName), PID $procId)..."
+                Stop-GrimoireProcessTree ([int]$procId)
                 $killed++
             } catch {
-                Write-Host "  $key (PID $pid) already stopped."
+                Write-Host "  $key (PID $procId) already stopped."
             }
         }
     }
