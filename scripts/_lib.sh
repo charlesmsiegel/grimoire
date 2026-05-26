@@ -157,13 +157,15 @@ pids_using_path() {
 # on Windows (WinError 87). No-op on other platforms.
 kill_orphaned_uvicorn_workers() {
     [ "$PLATFORM" = "windows" ] || return 0
-    command -v powershell.exe >/dev/null 2>&1 || return 0
     local pids
-    pids="$(powershell.exe -NoProfile -Command "
-        Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" |
-          Where-Object { \$_.CommandLine -match 'multiprocessing.spawn' } |
-          Select-Object -ExpandProperty ProcessId
-    " 2>/dev/null | tr -d '\r' || true)"
+    pids="$(tasklist /FI "IMAGENAME eq python.exe" /FO CSV /NH 2>/dev/null \
+        | grep -i "python" \
+        | while IFS=, read -r _name pid _rest; do
+            pid="${pid//\"/}"
+            [ -z "$pid" ] && continue
+            wmic process where "ProcessId=$pid" get CommandLine 2>/dev/null \
+                | grep -q "multiprocessing.spawn" && echo "$pid"
+        done || true)"
     local pid
     for pid in $pids; do
         [ -z "$pid" ] && continue

@@ -66,9 +66,10 @@ PNPM=($pnpm_cmd)
 
 if [ "$KILL_STALE" = "1" ]; then
     echo "==> Clearing any stale grimoire processes on ports $BACKEND_PORT / $FRONTEND_PORT"
-    kill_port "$BACKEND_PORT" "backend port"
-    kill_port "$FRONTEND_PORT" "frontend port"
-    kill_orphaned_uvicorn_workers
+    kill_port "$BACKEND_PORT" "backend port" &
+    kill_port "$FRONTEND_PORT" "frontend port" &
+    kill_orphaned_uvicorn_workers &
+    wait
 fi
 
 backend_pid=""
@@ -129,8 +130,8 @@ echo "==> Starting backend on http://${BACKEND_HOST}:${BACKEND_PORT}"
 backend_pid=$!
 
 echo "==> Waiting for backend to be ready…"
-if ! wait_for_url "http://${BACKEND_HOST}:${BACKEND_PORT}/api/setup/status" 30; then
-    echo "warning: backend did not respond within 30s; starting frontend anyway" >&2
+if ! wait_for_url "http://${BACKEND_HOST}:${BACKEND_PORT}/api/setup/status" 10; then
+    echo "warning: backend did not respond within 10s; starting frontend anyway" >&2
 fi
 
 echo "==> Starting frontend (vite dev server) on $FRONTEND_URL"
