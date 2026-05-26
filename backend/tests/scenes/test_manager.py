@@ -771,3 +771,113 @@ async def test_narrator_response_mode_rejects_unknown_value(tmp_path: Path) -> N
     # Unknown values normalize to None rather than being persisted as garbage.
     updated = await manager.set_narrator_response_mode(scene.id, "round-robin")
     assert updated.narrator_response_mode is None
+
+
+# -- generate_summary tests ---------------------------------------------------
+
+
+async def test_generate_summary_open_scene(tmp_path: Path) -> None:
+    called = {}
+
+    async def fake_adaptive(scene, posts):
+        called["scene_id"] = scene.id
+        called["post_count"] = len(posts)
+        return "Generated summary.", ["Beat 1"]
+
+    manager, _ = _manager(tmp_path)
+    manager.set_adaptive_summarizer(fake_adaptive)
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    await manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="opening", is_player=False),
+    )
+    summary, beats = await manager.generate_summary(scene.id)
+    assert summary == "Generated summary."
+    assert beats == ["Beat 1"]
+    assert called["post_count"] == 1
+    refreshed = await manager.get_scene(scene.id)
+    assert refreshed.running_summary == "Generated summary."
+    assert refreshed.key_beats == ["Beat 1"]
+
+
+async def test_generate_summary_closed_scene(tmp_path: Path) -> None:
+    async def fake_adaptive(scene, posts):
+        return "Final.", ["Beat A"]
+
+    manager, _ = _manager(tmp_path)
+    manager.set_adaptive_summarizer(fake_adaptive)
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    await manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="line", is_player=False),
+    )
+    await manager.close_scene(scene.id, closed_at_turn="t1")
+    summary, beats = await manager.generate_summary(scene.id, force=True)
+    assert summary == "Final."
+    assert beats == ["Beat A"]
+    refreshed = await manager.get_scene(scene.id)
+    assert refreshed.final_summary == "Final."
+    assert refreshed.key_beats == ["Beat A"]
+
+
+async def test_generate_summary_closed_no_force_returns_existing(tmp_path: Path) -> None:
+    called = False
+
+    async def fake_adaptive(scene, posts):
+        nonlocal called
+        called = True
+        return "Should not be used.", []
+
+    manager, _ = _manager(tmp_path)
+    manager.set_adaptive_summarizer(fake_adaptive)
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    await manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="line", is_player=False),
+    )
+    await manager.close_scene(scene.id, closed_at_turn="t1")
+    refreshed = await manager.get_scene(scene.id)
+    existing_summary = refreshed.final_summary
+
+    summary, beats = await manager.generate_summary(scene.id)
+    assert summary == existing_summary
+    assert called is False
+
+
+async def test_generate_summary_closed_force_regenerates(tmp_path: Path) -> None:
+    called = False
+
+    async def fake_adaptive(scene, posts):
+        nonlocal called
+        called = True
+        return "Regenerated.", ["New beat"]
+
+    manager, _ = _manager(tmp_path)
+    manager.set_adaptive_summarizer(fake_adaptive)
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    await manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="line", is_player=False),
+    )
+    await manager.close_scene(scene.id, closed_at_turn="t1")
+    summary, beats = await manager.generate_summary(scene.id, force=True)
+    assert summary == "Regenerated."
+    assert beats == ["New beat"]
+    assert called is True
+
+
+async def test_generate_summary_no_posts(tmp_path: Path) -> None:
+    called = False
+
+    async def fake_adaptive(scene, posts):
+        nonlocal called
+        called = True
+        return "Should not reach.", []
+
+    manager, _ = _manager(tmp_path)
+    manager.set_adaptive_summarizer(fake_adaptive)
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    summary, beats = await manager.generate_summary(scene.id)
+    assert summary == ""
+    assert beats == []
+    assert called is False

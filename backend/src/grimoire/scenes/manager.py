@@ -69,6 +69,7 @@ from grimoire.scenes.types import (
 
 Summarizer = Callable[[str | None, list[Post]], Awaitable[str]]
 FinalSummarizer = Callable[[Scene, list[Post]], Awaitable[tuple[str, list[str]]]]
+AdaptiveSummarizer = Callable[[Scene, list[Post]], Awaitable[tuple[str, list[str]]]]
 ThreadDetector = Callable[[Scene, list[Post]], Awaitable[list[tuple[Thread, str]]]]
 SceneBreakClassifier = Callable[[Scene | None, str, list[Post]], Awaitable[SceneBreakDecision]]
 
@@ -152,6 +153,7 @@ class SceneManager:
         self.event_bus: EventBus = event_bus or _NullEventBus()
         self._summarizer = summarizer
         self._final_summarizer = final_summarizer
+        self._adaptive_summarizer: AdaptiveSummarizer | None = None
         self._thread_detector = thread_detector
         self._scene_break_classifier = scene_break_classifier
         self._clock = clock
@@ -188,6 +190,9 @@ class SceneManager:
 
     def set_final_summarizer(self, summarizer: FinalSummarizer | None) -> None:
         self._final_summarizer = summarizer
+
+    def set_adaptive_summarizer(self, summarizer: AdaptiveSummarizer | None) -> None:
+        self._adaptive_summarizer = summarizer
 
     def set_metrics(self, metrics: MetricsRegistryProtocol) -> None:
         self._metrics = metrics
@@ -597,6 +602,36 @@ class SceneManager:
             last = posts[-1].body.split("\n", 1)[0]
             base = f"{first} … {last}"
         return base, []
+
+    async def generate_summary(
+        self,
+        scene_id: str,
+        *,
+        force: bool = False,
+    ) -> tuple[str, list[str]]:
+        """Generate a summary on demand for any scene (open or closed)."""
+        async with self._lock_for(scene_id):
+            scene = await self.get_scene(scene_id)
+
+            if scene.closed and scene.final_summary and not force:
+                return scene.final_summary, list(scene.key_beats)
+
+            posts = await self.get_posts(scene_id)
+            if not posts:
+                return "", []
+
+            if self._adaptive_summarizer is not None:
+                summary, key_beats = await self._adaptive_summarizer(scene, posts)
+            else:
+                summary, key_beats = await self._final_summary(scene, posts)
+
+            if scene.closed:
+                scene.final_summary = summary
+            else:
+                scene.running_summary = summary
+            scene.key_beats = list(key_beats)
+            self._write_sidecar(scene)
+            return summary, key_beats
 
     # -- Posts -----------------------------------------------------------
 
