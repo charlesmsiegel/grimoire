@@ -66,6 +66,7 @@ class LlamaCppEmbeddingProvider:
             return []
         llama = self._get_llama()
         loop = asyncio.get_running_loop()
+
         def _embed() -> Any:
             with self._inference_lock:
                 return llama.embed(texts)
