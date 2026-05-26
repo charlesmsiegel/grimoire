@@ -205,7 +205,7 @@ class LLMGatewayService:
         self._pricing_cache[key] = info
         return info
 
-    async def get_model_info(self, provider_id: str, model: str) -> "ModelInfo | None":
+    async def get_model_info(self, provider_id: str, model: str) -> ModelInfo | None:
         """Public accessor for model metadata (context window, pricing, etc.)."""
         return await self._get_pricing(provider_id, model)
 
