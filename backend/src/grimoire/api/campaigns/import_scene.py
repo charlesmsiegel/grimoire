@@ -35,7 +35,10 @@ async def preview_import(
     campaign_id: str,
     body: ImportPreviewRequest,
 ) -> ImportPreviewResponse:
-    md_path = Path(body.path).resolve()
+    try:
+        md_path = Path(body.path).resolve()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {exc}") from exc
     if not md_path.is_file():
         raise HTTPException(status_code=400, detail=f"Not a file: {body.path}")
     try:
@@ -75,7 +78,10 @@ async def import_scene(
     body: ImportRequest,
     scenes: ScenesDep,
 ) -> StreamingResponse:
-    md_path = Path(body.path).resolve()
+    try:
+        md_path = Path(body.path).resolve()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {exc}") from exc
     if not md_path.is_file():
         raise HTTPException(status_code=400, detail=f"Not a file: {body.path}")
 
