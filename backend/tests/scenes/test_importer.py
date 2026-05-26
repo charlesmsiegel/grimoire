@@ -58,8 +58,7 @@ def _make_test_app():
 def test_preview_endpoint(tmp_path: Path) -> None:
     md = tmp_path / "0002-tavern.md"
     md.write_text(
-        "## Post 1 — narrator\n\nRain falls.\n\n"
-        "## Post 2 — pc:beatrice\n\nI enter.\n",
+        "## Post 1 — narrator\n\nRain falls.\n\n## Post 2 — pc:beatrice\n\nI enter.\n",
         encoding="utf-8",
     )
     yaml = tmp_path / "0002-tavern.yaml"
@@ -91,8 +90,7 @@ async def test_run_import_pipeline_progress_events(tmp_path: Path) -> None:
     """Verify the pipeline yields the right progress steps."""
     md = tmp_path / "scene.md"
     md.write_text(
-        "## Post 1 — narrator\n\nHello.\n\n"
-        "## Post 2 — pc:alice\n\nHi.\n",
+        "## Post 1 — narrator\n\nHello.\n\n## Post 2 — pc:alice\n\nHi.\n",
         encoding="utf-8",
     )
     scene_manager = AsyncMock()
