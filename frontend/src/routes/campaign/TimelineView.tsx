@@ -14,6 +14,7 @@ import { viewsApi } from "../../api/views";
 import type { SceneSummary, Thread } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { Loading } from "./common";
+import { ImportSceneDialog } from "./ImportSceneDialog";
 
 export function TimelineView() {
   const { campaignId = "" } = useParams();
@@ -24,6 +25,7 @@ export function TimelineView() {
   const [moodFilter, setMoodFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "open" | "closed">("all");
   const [selected, setSelected] = useState<string | null>(null);
+  const [showImport, setShowImport] = useState(false);
 
   const jumpToScene = (sceneId: string) => {
     // ``?scene=`` is read by usePlayState (spec frontend §9). Keeping it in
@@ -74,6 +76,13 @@ export function TimelineView() {
                     <option value="closed">Closed</option>
                   </select>
                 </label>
+                <button
+                  type="button"
+                  className="import-scene-btn"
+                  onClick={() => setShowImport(true)}
+                >
+                  Import Scene
+                </button>
               </div>
 
               <ol className="timeline">
@@ -109,6 +118,16 @@ export function TimelineView() {
 
               {selectedScene && (
                 <SceneDetail scene={selectedScene} onJump={() => jumpToScene(selectedScene.id)} />
+              )}
+              {showImport && (
+                <ImportSceneDialog
+                  campaignId={campaignId}
+                  onClose={() => setShowImport(false)}
+                  onImported={() => {
+                    setShowImport(false);
+                    state.reload();
+                  }}
+                />
               )}
             </div>
           );
