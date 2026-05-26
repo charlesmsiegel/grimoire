@@ -290,10 +290,10 @@ def make_adaptive_summarizer(
             response = await gateway.complete(task, request)
         except Exception as exc:
             logger.warning("adaptive final summary LLM call failed: %s", exc)
-            return _trivial_summary(scene, posts), []
+            return running or _trivial_summary(scene, posts), []
         text = getattr(response, "text", None)
         if not isinstance(text, str) or not text.strip():
-            return _trivial_summary(scene, posts), []
+            return running or _trivial_summary(scene, posts), []
         parsed = _extract_json(text)
         if parsed is None:
             return text.strip(), []

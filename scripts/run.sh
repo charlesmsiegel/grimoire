@@ -71,9 +71,9 @@ export GRIMOIRE_BACKEND_HOST="$BACKEND_HOST"
 export GRIMOIRE_BACKEND_PORT="$BACKEND_PORT"
 export GRIMOIRE_FRONTEND_PORT="$FRONTEND_PORT"
 
-UV_ARGS="run --directory $BACKEND_DIR uvicorn grimoire.main:app --host $BACKEND_HOST --port $BACKEND_PORT"
-[ "$RELOAD" = "1" ] && UV_ARGS="$UV_ARGS --reload"
-uv $UV_ARGS &
+UV_ARGS=(run --directory "$BACKEND_DIR" uvicorn grimoire.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT")
+[ "$RELOAD" = "1" ] && UV_ARGS+=(--reload)
+uv "${UV_ARGS[@]}" &
 BACKEND_PID=$!
 
 cat > "$STATE_FILE" <<EOF
@@ -97,7 +97,7 @@ if [ "$elapsed" -ge 30 ]; then
 fi
 echo "Backend ready."
 
-(cd "$FRONTEND_DIR" && pnpm dev --port "$FRONTEND_PORT" --host "$FRONTEND_HOST") &
+(cd "$FRONTEND_DIR" && pnpm dev --port "$FRONTEND_PORT" --host "$FRONTEND_HOST" --strictPort) &
 FRONTEND_PID=$!
 
 cat > "$STATE_FILE" <<EOF
@@ -109,9 +109,10 @@ EOF
 
 if [ "$OPEN_BROWSER" = "1" ]; then
     sleep 2
+    URL="http://${FRONTEND_HOST}:${FRONTEND_PORT}"
     case "$(uname -s)" in
-        Darwin) open "http://localhost:$FRONTEND_PORT" ;;
-        *) xdg-open "http://localhost:$FRONTEND_PORT" 2>/dev/null || true ;;
+        Darwin) open "$URL" ;;
+        *) xdg-open "$URL" 2>/dev/null || true ;;
     esac
 fi
 

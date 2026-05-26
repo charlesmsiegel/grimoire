@@ -65,7 +65,7 @@ try {
     $backend = Start-Process -FilePath "uv" -ArgumentList $uvArgs -PassThru -NoNewWindow
 
     @("BACKEND_PID=$($backend.Id)", "BACKEND_PORT=$backendPort", "FRONTEND_PORT=$frontendPort") |
-        Set-Content $stateFile -Encoding utf8
+        Set-Content $stateFile -Encoding ASCII
 
     Write-Host "Waiting for backend on port $backendPort..."
     $elapsed = 0
@@ -83,7 +83,7 @@ try {
     $frontend = Start-Process -FilePath "cmd.exe" -ArgumentList "/c pnpm dev --port $frontendPort --host $frontendHost" -WorkingDirectory $frontendDir -PassThru -NoNewWindow
 
     @("BACKEND_PID=$($backend.Id)", "FRONTEND_PID=$($frontend.Id)", "BACKEND_PORT=$backendPort", "FRONTEND_PORT=$frontendPort") |
-        Set-Content $stateFile -Encoding utf8
+        Set-Content $stateFile -Encoding ASCII
 
     if ($openBrowser) {
         Start-Sleep -Seconds 2
