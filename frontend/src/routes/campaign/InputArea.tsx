@@ -135,7 +135,7 @@ export function InputArea({
       aria-label="Compose post"
     >
       <div className="input-meta">
-        <PCSwitcher pcs={pcs} activePcRef={activePcRef} onChange={onChangePC} />
+        <PCSwitcher pcs={pcs} activePcRef={activePcRef} onChange={onChangePC} campaignId={campaignId} />
         {isMultiPC && (
           <span className="input-multi-hint" aria-live="polite">
             Multi-PC scene — posts queue locally, click Advance to call the narrator.
