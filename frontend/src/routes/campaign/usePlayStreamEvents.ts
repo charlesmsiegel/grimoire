@@ -1,6 +1,7 @@
 import { type Dispatch, type MutableRefObject, useCallback } from "react";
 
 import type { ApiPost } from "../../api/campaign";
+import { campaignApi } from "../../api/campaign";
 import { setPcExpression } from "../../api/expressions";
 import { useCampaignEvent } from "../../state/useCampaignEvent";
 import type { WSMessage } from "../../ws/client";
@@ -44,7 +45,20 @@ export function usePlayStreamEvents(
           const turn_id = typeof message.turn_id === "string" ? message.turn_id : null;
           if (!turn_id) return;
           dispatch({ type: "stream-end", turn_id, post: null });
-          void refresh();
+          if (cur.scene) {
+            void campaignApi
+              .getPostsPaginated(campaignId, cur.scene.id, { limit: 50 })
+              .then((result) => {
+                const lastOrder = cur.posts[cur.posts.length - 1]?.order_in_scene ?? 0;
+                const newPosts = result.posts.filter((p) => p.order_in_scene > lastOrder);
+                for (const p of newPosts) {
+                  dispatch({ type: "append-post", post: p });
+                }
+              })
+              .catch(() => void refresh());
+          } else {
+            void refresh();
+          }
           return;
         }
         case "post_appended":

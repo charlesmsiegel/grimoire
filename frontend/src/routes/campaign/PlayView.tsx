@@ -32,6 +32,17 @@ interface Props {
 
 export function PlayView({ campaignId }: Props) {
   const play = usePlayState(campaignId);
+
+  const loadMorePosts = useCallback(async () => {
+    const firstOrder = play.state.posts[0]?.order_in_scene;
+    if (!play.state.scene || firstOrder === undefined) return;
+    const result = await campaignApi.getPostsPaginated(campaignId, play.state.scene.id, {
+      limit: 50,
+      before: firstOrder,
+    });
+    play.dispatch({ type: "prepend-posts", posts: result.posts, hasMore: result.has_more });
+  }, [campaignId, play.state.scene, play.state.posts, play.dispatch]);
+
   const [commitments, setCommitments] = useState<OpenCommitment[]>([]);
   const [campaign, setCampaign] = useState<CampaignSummary | null>(null);
   const [busy, setBusy] = useState(false);
@@ -234,6 +245,8 @@ export function PlayView({ campaignId }: Props) {
               images={play.state.images}
               campaignId={campaignId}
               scene={play.state.scene}
+              hasMorePosts={play.state.hasMorePosts}
+              onLoadMore={loadMorePosts}
             />
           )}
           {play.state.mode !== "play" ? null : <InputArea

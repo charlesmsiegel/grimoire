@@ -25,6 +25,7 @@ export interface PlayState {
   advanceReason: string;
   images: Record<string, SceneImage>;
   driftWarnings: Record<string, { score: number; suppressed: boolean }>;
+  hasMorePosts: boolean;
   mode: "play" | "suggesting" | "picking" | "previewing" | "creating";
   suggestions: SuggestResponse | null;
   preview: PreviewResponse | null;
@@ -54,7 +55,8 @@ export type PlayAction =
   | { type: "suggestions-loaded"; suggestions: SuggestResponse }
   | { type: "preview-loaded"; preview: PreviewResponse }
   | { type: "back-to-picking" }
-  | { type: "creating-scene" };
+  | { type: "creating-scene" }
+  | { type: "prepend-posts"; posts: ApiPost[]; hasMore: boolean };
 
 export const initialPlayState: PlayState = {
   pcs: [],
@@ -68,6 +70,7 @@ export const initialPlayState: PlayState = {
   advanceReason: "",
   images: {},
   driftWarnings: {},
+  hasMorePosts: true,
   mode: "play",
   suggestions: null,
   preview: null,
@@ -192,5 +195,14 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
       return { ...state, mode: "picking", preview: null };
     case "creating-scene":
       return { ...state, mode: "creating" };
+    case "prepend-posts": {
+      const existingIds = new Set(state.posts.map((p) => p.id));
+      const novel = action.posts.filter((p) => !existingIds.has(p.id));
+      return {
+        ...state,
+        posts: [...novel, ...state.posts],
+        hasMorePosts: action.hasMore,
+      };
+    }
   }
 }
