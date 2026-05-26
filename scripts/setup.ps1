@@ -63,6 +63,11 @@ if (-not (Test-Cmd "node")) {
 # uv
 if (-not (Test-Cmd "uv")) {
     Request-Install "uv" "irm https://astral.sh/uv/install.ps1 | iex" "https://docs.astral.sh/uv/"
+    $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
+    if (-not (Test-Cmd "uv")) {
+        Write-Host "  uv was installed but is not on PATH. Please restart your shell and re-run setup." -ForegroundColor Red
+        exit 1
+    }
 } else { Write-Host "  uv" -ForegroundColor Green }
 
 # pnpm

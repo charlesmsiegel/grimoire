@@ -31,6 +31,8 @@ if (Test-Path $stateFile) {
         $key, $val = $_ -split '=', 2
         $state[$key] = $val
     }
+    if ($state["BACKEND_PORT"]) { $backendPort = $state["BACKEND_PORT"] }
+    if ($state["FRONTEND_PORT"]) { $frontendPort = $state["FRONTEND_PORT"] }
     foreach ($key in @("BACKEND_PID", "FRONTEND_PID")) {
         $pid = $state[$key]
         if ($pid) {

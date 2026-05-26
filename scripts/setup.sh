@@ -62,6 +62,11 @@ fi
 # uv
 if ! command -v uv &>/dev/null; then
     request_install "uv" "curl -LsSf https://astral.sh/uv/install.sh | sh" "https://docs.astral.sh/uv/"
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    if ! command -v uv &>/dev/null; then
+        echo "  uv was installed but is not on PATH. Please restart your shell and re-run setup."
+        exit 1
+    fi
 else
     echo "  uv"
 fi
