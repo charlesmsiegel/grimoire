@@ -125,6 +125,6 @@ def introspect(path: str | Path) -> dict[str, Any]:
         "context_length": meta.get(ctx_key) if ctx_key else None,
         "embedding_length": meta.get(embed_key) if embed_key else None,
         "has_chat_template": has_chat_template,
-        "file_type": meta.get("general.file_type") or None,
-        "quantization_version": meta.get("general.quantization_version") or None,
+        "file_type": meta.get("general.file_type"),
+        "quantization_version": meta.get("general.quantization_version"),
     }

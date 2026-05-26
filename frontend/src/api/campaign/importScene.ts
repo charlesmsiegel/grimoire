@@ -18,6 +18,7 @@ export interface ImportRequest {
   title: string;
   location_ref?: string | null;
   in_game_start?: string | null;
+  in_game_end?: string | null;
   mood?: string | null;
   tags?: string[];
   present_character_refs?: string[];
@@ -50,7 +51,8 @@ export const importSceneApi = {
     });
     if (!res.ok) {
       const detail = await res.json().catch(() => ({}));
-      throw new ApiError(res.status, detail.detail ?? "Import failed");
+      const msg = detail.detail ?? "Import failed";
+      throw new ApiError(res.status, msg, msg);
     }
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
@@ -77,7 +79,8 @@ export const importSceneApi = {
         }
         if (type === "error") {
           void reader.cancel();
-          throw new ApiError(500, JSON.parse(data).detail ?? "Import pipeline error");
+          const errMsg = JSON.parse(data).detail ?? "Import pipeline error";
+          throw new ApiError(500, errMsg, errMsg);
         }
       }
     }

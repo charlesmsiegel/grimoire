@@ -16,6 +16,7 @@ are visible without leaking into other plugins' import resolution.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -180,7 +181,8 @@ def load_plugin(
                 )
                 continue
             if extra_sys_path is not None:
-                instance._plugin_sys_path = str(extra_sys_path)
+                with contextlib.suppress(AttributeError):
+                    instance._plugin_sys_path = str(extra_sys_path)
             instances.append(LoadedInstance(kind=kind, instance=instance))
 
     return LoadResult(
