@@ -85,18 +85,19 @@ async def discover_campaigns(
     for child in sorted(root.iterdir()):
         if not child.is_dir() or child.name.startswith("."):
             continue
+        yaml_path = child / "campaign.yaml"
+        if not yaml_path.is_file():
+            continue
         campaign_id = child.name
         if campaign_id in existing:
             continue
-        yaml_path = child / "campaign.yaml"
         raw: dict = {}
-        if yaml_path.is_file():
-            try:
-                loaded = load_yaml(yaml_path)
-                if isinstance(loaded, dict):
-                    raw = loaded
-            except Exception:
-                pass
+        try:
+            loaded = load_yaml(yaml_path)
+            if isinstance(loaded, dict):
+                raw = loaded
+        except Exception:
+            pass
         name = str(raw.get("name") or campaign_id)
         description = raw.get("description")
         await state_store.upsert_campaign(
