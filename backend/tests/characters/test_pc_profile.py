@@ -28,7 +28,6 @@ from grimoire.types.characters import (
 )
 from grimoire.types.mechanics import Capability
 
-
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
