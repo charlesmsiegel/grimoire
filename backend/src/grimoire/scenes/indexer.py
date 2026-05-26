@@ -201,6 +201,7 @@ async def upsert_post_row(
     order_in_scene: int,
     author_kind: AuthorKind | str,
     author_pc_ref: str | None,
+    author_npc_ref: str | None = None,
     body: str,
     is_player: bool,
     created_at: object | None,
@@ -218,10 +219,10 @@ async def upsert_post_row(
         """
         INSERT INTO posts (
             id, scene_id, campaign_id, branch_id, turn_id, order_in_scene,
-            author_kind, author_pc_ref, body, body_excerpt, body_hash,
+            author_kind, author_pc_ref, author_npc_ref, body, body_excerpt, body_hash,
             is_player, created_at, retconned_from
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
         ON CONFLICT(id) DO UPDATE SET
             scene_id = excluded.scene_id,
             campaign_id = excluded.campaign_id,
@@ -230,6 +231,7 @@ async def upsert_post_row(
             order_in_scene = excluded.order_in_scene,
             author_kind = excluded.author_kind,
             author_pc_ref = excluded.author_pc_ref,
+            author_npc_ref = excluded.author_npc_ref,
             body = excluded.body,
             body_excerpt = excluded.body_excerpt,
             body_hash = excluded.body_hash,
@@ -245,6 +247,7 @@ async def upsert_post_row(
             order_in_scene,
             _author_kind_str(author_kind),
             author_pc_ref,
+            author_npc_ref,
             body,
             body_excerpt,
             body_hash,
@@ -334,6 +337,7 @@ class SceneIndexer:
                 order_in_scene=target.order_in_scene,
                 author_kind=target.author_kind,
                 author_pc_ref=target.author_pc_ref,
+                author_npc_ref=target.author_npc_ref,
                 body=target.body,
                 is_player=target.is_player,
                 created_at=target.created_at,
@@ -378,6 +382,7 @@ class SceneIndexer:
                     order_in_scene=p.order_in_scene,
                     author_kind=p.author_kind,
                     author_pc_ref=p.author_pc_ref,
+                    author_npc_ref=p.author_npc_ref,
                     body=p.body,
                     is_player=p.is_player,
                     created_at=p.created_at,
@@ -396,6 +401,7 @@ class SceneIndexer:
                     order_in_scene=p.order_in_scene,
                     author_kind=p.author_kind,
                     author_pc_ref=p.author_pc_ref,
+                    author_npc_ref=p.author_npc_ref,
                     body=p.body,
                     is_player=p.is_player,
                     created_at=p.created_at,
@@ -454,7 +460,7 @@ class SceneIndexer:
             if not md_path.exists():
                 continue
             records = read_sidecar_post_records(yaml_path)
-            for order, kind, pc_ref, _npc_ref, body in read_posts(md_path, scene.id):
+            for order, kind, pc_ref, npc_ref, body in read_posts(md_path, scene.id):
                 record = records.get(str(order))
                 post_id = record.id if record else f"{scene.id}#post-{order}"
                 await upsert_post_row(
@@ -467,6 +473,7 @@ class SceneIndexer:
                     order_in_scene=order,
                     author_kind=kind,
                     author_pc_ref=pc_ref,
+                    author_npc_ref=npc_ref,
                     body=body,
                     is_player=record.is_player if record else False,
                     created_at=record.created_at if record else None,

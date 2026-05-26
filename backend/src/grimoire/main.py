@@ -148,39 +148,45 @@ def _seed_defaults(data_root: Path) -> None:
         log.info("seeded default %s", rel)
 
 
-async def _background_reconcile(container: ServiceContainer) -> None:
+async def _background_reconcile(container: ServiceContainer, *, scan_library: bool = True) -> None:
     """Run backfill + scan_now in the background after the server starts serving."""
     await asyncio.sleep(1.0)
+    errors: list[str] = []
     try:
         scene_indexer = container.scene_indexer
         if scene_indexer is not None:
             try:
                 await scene_indexer.backfill()
-            except Exception:
+            except Exception as exc:
                 log.exception("background scene indexer backfill failed")
+                errors.append(f"backfill: {exc}")
 
-        file_watcher = container.file_watcher
-        if file_watcher is not None:
-            try:
-                await file_watcher.scan_now()
-            except Exception:
-                log.exception("background library scan failed")
+        if scan_library:
+            file_watcher = container.file_watcher
+            if file_watcher is not None:
+                try:
+                    await file_watcher.scan_now()
+                except Exception as exc:
+                    log.exception("background library scan failed")
+                    errors.append(f"scan: {exc}")
 
-        if (
-            container.state_store_config is not None
-            and container.state_store_config.library.embed_on_index
-            and file_watcher is not None
-        ):
-            try:
-                await reenqueue_missing_embeddings(
-                    container.state_store, file_watcher.embedding_queue
-                )
-            except Exception:
-                log.exception("reenqueue_missing_embeddings failed")
+            if (
+                container.state_store_config is not None
+                and container.state_store_config.library.embed_on_index
+                and file_watcher is not None
+            ):
+                try:
+                    await reenqueue_missing_embeddings(
+                        container.state_store, file_watcher.embedding_queue
+                    )
+                except Exception as exc:
+                    log.exception("reenqueue_missing_embeddings failed")
+                    errors.append(f"reenqueue: {exc}")
 
         container.sync_status = "ready"
-        container.sync_error = None
-        log.info("background reconciliation complete")
+        container.sync_error = "; ".join(errors) if errors else None
+        suffix = f" with errors: {errors}" if errors else ""
+        log.info("background reconciliation complete%s", suffix)
     except Exception as exc:
         log.exception("background reconciliation failed")
         container.sync_status = "ready"
@@ -706,14 +712,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.container = container
 
         _bg_task: asyncio.Task | None = None
-        if library_cfg.scan_on_startup:
-            if _prewired:
-                await _background_reconcile(container)
-            else:
-                _bg_task = asyncio.create_task(
-                    _background_reconcile(container),
-                    name="background-reconcile",
-                )
+        _scan_library = library_cfg.scan_on_startup
+        if _prewired:
+            await _background_reconcile(container, scan_library=_scan_library)
+        else:
+            _bg_task = asyncio.create_task(
+                _background_reconcile(container, scan_library=_scan_library),
+                name="background-reconcile",
+            )
     except Exception:
         # Tear down anything we managed to construct before re-raising,
         # otherwise the connection pool stays open and any partially-built

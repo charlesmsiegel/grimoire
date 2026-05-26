@@ -49,6 +49,7 @@ export function usePlayDataLoader(
       const targetScene = explicitScene ?? pcScene ?? fallback;
       let scene = null;
       let posts: ApiPost[] = [];
+      let hasMorePosts = false;
       if (targetScene) {
         const detail = await campaignApi.getScene(campaignId, targetScene.id);
         scene = detail.scene;
@@ -56,8 +57,9 @@ export function usePlayDataLoader(
           limit: 50,
         });
         posts = paginated.posts;
+        hasMorePosts = paginated.has_more;
       }
-      dispatch({ type: "loaded", pcs, activePcRef, scene, posts });
+      dispatch({ type: "loaded", pcs, activePcRef, scene, posts, hasMorePosts });
     } catch (e) {
       dispatch({ type: "error", message: e instanceof Error ? e.message : String(e) });
     }

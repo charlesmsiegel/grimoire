@@ -117,7 +117,7 @@ async def get_scene_posts(
 ) -> Any:
     try:
         await _require_scene_owned(scenes, campaign_id, scene_id)
-        clamped = min(limit, 200)
+        clamped = max(1, min(limit, 200))
         posts = await scenes.get_posts_paginated(
             scene_id,
             limit=clamped,

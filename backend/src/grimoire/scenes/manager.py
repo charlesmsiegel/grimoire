@@ -751,7 +751,7 @@ class SceneManager:
                 order_in_scene=r["order_in_scene"],
                 author_kind=r["author_kind"],
                 author_pc_ref=r["author_pc_ref"],
-                author_npc_ref=None,
+                author_npc_ref=r["author_npc_ref"],
                 body=r["body"],
                 is_player=bool(r["is_player"]),
                 created_at=r["created_at"] or "",
