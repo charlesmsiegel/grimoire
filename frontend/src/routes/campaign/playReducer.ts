@@ -98,9 +98,15 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
       const newSceneId = action.scene?.id ?? null;
       const oldSceneId = state.scene?.id ?? null;
       if (newSceneId && newSceneId === oldSceneId) {
-        const maxNewOrder = Math.max(0, ...action.posts.map((p) => p.order_in_scene));
+        const snapshotIds = new Set(action.posts.map((p) => p.id));
+        const minNewOrder = action.posts.length > 0
+          ? Math.min(...action.posts.map((p) => p.order_in_scene))
+          : 0;
         const extra = state.posts.filter(
-          (p) => p.scene_id === newSceneId && p.order_in_scene > maxNewOrder,
+          (p) =>
+            p.scene_id === newSceneId &&
+            !snapshotIds.has(p.id) &&
+            p.order_in_scene >= minNewOrder,
         );
         if (extra.length > 0) posts = [...action.posts, ...extra];
       }
