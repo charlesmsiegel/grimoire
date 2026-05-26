@@ -184,7 +184,164 @@ def _trivial_summary(scene: Scene, posts: list[Post]) -> str:
     return f"{first} … {last}"
 
 
+_FALLBACK_CONTEXT_WINDOW = 100_000
+
+
+class _AdaptiveGateway(Protocol):
+    async def complete(
+        self,
+        task: str,
+        request: CompletionRequest,
+        campaign_id: str | None = None,
+        *,
+        turn_id: str | None = None,
+    ) -> object: ...
+
+    def resolve_route(self, task: str, campaign_id: str | None = None) -> object: ...
+
+    async def get_model_info(self, provider_id: str, model: str) -> object | None: ...
+
+
+def make_adaptive_summarizer(
+    gateway: _AdaptiveGateway,
+    *,
+    task: str = _DEFAULT_TASK,
+    max_tokens: int = _DEFAULT_MAX_TOKENS,
+    model: str = "default",
+    max_key_beats: int = 5,
+):
+    """Build a summarizer that adapts between single-pass and windowed mode.
+
+    When the total post tokens fit in half the model's context window, uses
+    the single-pass final summarizer. Otherwise, processes posts in windows
+    using a rolling summary, then produces the final summary from the
+    accumulated context.
+    """
+
+    async def _get_context_window() -> int:
+        try:
+            route = gateway.resolve_route(task)
+            info = await gateway.get_model_info(route.provider_id, route.model)
+            if info is not None:
+                cw = getattr(info, "context_window", 0) or 0
+                if cw > 0:
+                    return cw
+        except Exception:
+            pass
+        return _FALLBACK_CONTEXT_WINDOW
+
+    async def _rolling_pass(previous: str | None, posts: list[Post]) -> str:
+        if not posts:
+            return previous or ""
+        system = (
+            "You are a tight-prose scene summarizer for a tabletop RPG companion. "
+            "Maintain a rolling summary that captures the most important narrative "
+            "developments so far. Aim for 3-5 short sentences. No bullet lists."
+        )
+        previous_block = (previous or "(no prior summary)").strip()
+        user = (
+            f"Previous running summary:\n{previous_block}\n\n"
+            f"Recent posts:\n{_post_window(posts, n=len(posts))}\n\n"
+            "Return only the updated running summary."
+        )
+        request = CompletionRequest(
+            model=model,
+            messages=[Message(role=MessageRole.USER, content=user)],
+            system=system,
+            max_tokens=max_tokens,
+            temperature=0.4,
+        )
+        try:
+            response = await gateway.complete(task, request)
+        except Exception as exc:
+            logger.warning("adaptive rolling summary LLM call failed: %s", exc)
+            return previous or ""
+        text = getattr(response, "text", None)
+        if not isinstance(text, str) or not text.strip():
+            return previous or ""
+        return text.strip()
+
+    async def _final_pass(
+        scene: Scene, posts: list[Post], running: str | None
+    ) -> tuple[str, list[str]]:
+        if not posts:
+            return running or scene.running_summary or "", []
+        system = (
+            "You are a scene close-out summarizer for a tabletop RPG companion. "
+            "Given the full post history, return a short final summary plus a "
+            f"list of {max_key_beats} or fewer key beats that drove the scene. "
+            "Respond with a JSON object ONLY, no prose, no markdown fences."
+        )
+        running_block = (running or scene.running_summary or "(none)").strip()
+        user = (
+            f"Scene title: {scene.title or scene.slug}\n"
+            f"Running summary so far: {running_block}\n\n"
+            f"Full scene posts:\n{_post_window(posts, n=len(posts))}\n\n"
+            'Return JSON of the form: {"summary": "...", "key_beats": ["...", "..."]}'
+        )
+        request = CompletionRequest(
+            model=model,
+            messages=[Message(role=MessageRole.USER, content=user)],
+            system=system,
+            max_tokens=max_tokens,
+            temperature=0.3,
+        )
+        try:
+            response = await gateway.complete(task, request)
+        except Exception as exc:
+            logger.warning("adaptive final summary LLM call failed: %s", exc)
+            return _trivial_summary(scene, posts), []
+        text = getattr(response, "text", None)
+        if not isinstance(text, str) or not text.strip():
+            return _trivial_summary(scene, posts), []
+        parsed = _extract_json(text)
+        if parsed is None:
+            return text.strip(), []
+        summary = str(parsed.get("summary") or "").strip()
+        beats_raw = parsed.get("key_beats") or []
+        beats = [str(b).strip() for b in beats_raw if isinstance(b, (str, int))]
+        beats = [b for b in beats if b][:max_key_beats]
+        if not summary:
+            summary = _trivial_summary(scene, posts)
+        return summary, beats
+
+    async def _adaptive(scene: Scene, posts: list[Post]) -> tuple[str, list[str]]:
+        if not posts:
+            return scene.running_summary or "", []
+
+        context_window = await _get_context_window()
+        total_chars = sum(len(p.body) for p in posts)
+        total_tokens_est = total_chars // 4
+        budget = context_window // 2
+
+        if total_tokens_est <= budget:
+            return await _final_pass(scene, posts, scene.running_summary)
+
+        window_chars = budget * 4
+        running = scene.running_summary
+        windows: list[list[Post]] = []
+        current_window: list[Post] = []
+        current_chars = 0
+        for p in posts:
+            if current_chars + len(p.body) > window_chars and current_window:
+                windows.append(current_window)
+                current_window = []
+                current_chars = 0
+            current_window.append(p)
+            current_chars += len(p.body)
+        if current_window:
+            windows.append(current_window)
+
+        for window in windows[:-1]:
+            running = await _rolling_pass(running, window)
+
+        return await _final_pass(scene, windows[-1], running)
+
+    return _adaptive
+
+
 __all__ = [
+    "make_adaptive_summarizer",
     "make_default_final_summarizer",
     "make_default_running_summarizer",
 ]
