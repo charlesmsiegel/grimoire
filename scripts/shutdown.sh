@@ -19,6 +19,7 @@ port_pids() {
     lsof -ti :"$1" 2>/dev/null || ss -tlnp "sport = :$1" 2>/dev/null | grep -oP 'pid=\K\d+' || true
 }
 
+killed=0
 if [ -f "$STATE_FILE" ]; then
     echo "Found state file, stopping recorded processes..."
     while IFS='=' read -r key val; do
@@ -30,16 +31,20 @@ if [ -f "$STATE_FILE" ]; then
                     kill "$val" 2>/dev/null || true
                     sleep 1
                     kill -9 "$val" 2>/dev/null || true
+                    killed=$((killed + 1))
                 else
                     echo "  $key (PID $val) already stopped."
                 fi
                 ;;
         esac
     done < "$STATE_FILE"
-    checkpoint_wal
     rm -f "$STATE_FILE"
-    echo "Grimoire stopped."
-    exit 0
+    if [ "$killed" -gt 0 ]; then
+        checkpoint_wal
+        echo "Grimoire stopped."
+        exit 0
+    fi
+    echo "Recorded PIDs were stale, scanning ports..."
 fi
 
 echo "No state file found. Scanning ports $BACKEND_PORT and $FRONTEND_PORT..."

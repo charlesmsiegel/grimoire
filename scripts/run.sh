@@ -116,4 +116,6 @@ if [ "$OPEN_BROWSER" = "1" ]; then
 fi
 
 echo "Grimoire running. Press Ctrl+C to stop."
-wait
+while kill -0 "$BACKEND_PID" 2>/dev/null && kill -0 "$FRONTEND_PID" 2>/dev/null; do
+    sleep 1
+done
