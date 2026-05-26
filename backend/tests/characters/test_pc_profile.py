@@ -4,7 +4,35 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from grimoire.characters import CharactersService
+from grimoire.characters.pc_profile import (
+    PCProfile,
+    PCProfileRevision,
+    read_pc_profile,
+    write_pc_profile,
+    list_pc_profile_revisions,
+    read_pc_profile_revision,
+)
+from grimoire.characters.views import render_full_pc
+from grimoire.library import LibraryService
+from grimoire.mechanics import MechanicsConfig, MechanicsService
+from grimoire.state_store import StateStore
 from grimoire.state_store.paths import pc_profile_path, pc_profile_revisions_dir
+from grimoire.storage import Database, apply_migrations
+from grimoire.types.characters import (
+    Character,
+    CharacterData,
+    CharacterRole,
+    VoiceAnchor,
+)
+from grimoire.types.mechanics import Capability
+
+
+# ---------------------------------------------------------------------------
+# Path helpers
+# ---------------------------------------------------------------------------
 
 
 def test_pc_profile_path(tmp_path: Path) -> None:
@@ -20,15 +48,6 @@ def test_pc_profile_revisions_dir(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # PCProfile model and I/O
 # ---------------------------------------------------------------------------
-
-from grimoire.characters.pc_profile import (
-    PCProfile,
-    PCProfileRevision,
-    read_pc_profile,
-    write_pc_profile,
-    list_pc_profile_revisions,
-    read_pc_profile_revision,
-)
 
 
 def test_pc_profile_defaults() -> None:
@@ -124,10 +143,6 @@ def test_first_write_no_revision(tmp_path: Path) -> None:
 # Card rendering — render_full_pc
 # ---------------------------------------------------------------------------
 
-from grimoire.characters.views import render_full_pc
-from grimoire.types.characters import Character, CharacterRole, VoiceAnchor
-from grimoire.types.mechanics import Capability
-
 
 def _make_character(
     description: str = "A Tremere elder.",
@@ -153,8 +168,14 @@ def test_render_full_pc_with_profile_and_capabilities() -> None:
         description="Campaign-specific backstory details.",
     )
     capabilities = [
-        Capability(id="wod.dominate.2", name="Dominate", kind="discipline", description="Mental domination"),
-        Capability(id="wod.auspex.1", name="Auspex", kind="discipline", description="Heightened senses"),
+        Capability(
+            id="wod.dominate.2", name="Dominate",
+            kind="discipline", description="Mental domination",
+        ),
+        Capability(
+            id="wod.auspex.1", name="Auspex",
+            kind="discipline", description="Heightened senses",
+        ),
     ]
     result = render_full_pc(char, profile=profile, capabilities=capabilities)
     assert "# Alistair" in result
@@ -196,7 +217,10 @@ def test_render_full_pc_no_profile_no_capabilities() -> None:
 
 def test_render_full_pc_section_ordering() -> None:
     """Verify the rendered card follows the spec ordering."""
-    char = _make_character(description="Library desc.", body="# Background\nBackstory here.")
+    char = _make_character(
+        description="Library desc.",
+        body="# Background\nBackstory here.",
+    )
     profile = PCProfile(
         character_ref="library:worlds/wod/characters/alistair",
         goals=["Goal A"],
@@ -231,16 +255,6 @@ def test_render_full_pc_profile_with_no_content() -> None:
 # Integration: get_full_card with profile
 # ---------------------------------------------------------------------------
 
-import pytest
-
-from grimoire.characters import CharactersService
-from grimoire.characters.pc_profile import write_pc_profile
-from grimoire.library import LibraryService
-from grimoire.mechanics import MechanicsConfig, MechanicsService
-from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
-from grimoire.types.characters import CharacterData
-
 
 @pytest.fixture
 async def store_for_service(tmp_path: Path):
@@ -257,11 +271,16 @@ async def store_for_service(tmp_path: Path):
 
 
 @pytest.fixture
-async def characters_svc(store_for_service: StateStore, tmp_path: Path) -> CharactersService:
+async def characters_svc(
+    store_for_service: StateStore, tmp_path: Path,
+) -> CharactersService:
     library = LibraryService(store_for_service)
     mech_root = tmp_path / "mechanics"
     mech_root.mkdir()
-    mechanics = MechanicsService(config=MechanicsConfig(root=mech_root), state_store=store_for_service)
+    mechanics = MechanicsService(
+        config=MechanicsConfig(root=mech_root),
+        state_store=store_for_service,
+    )
     return CharactersService(library, mechanics)
 
 
@@ -276,7 +295,8 @@ async def _setup_character_with_profile(
     )
     await store.upsert_campaign(campaign_id="camp-1", name="Test Campaign")
     await store.upsert_world_ref(
-        campaign_id="camp-1", world_id="wod", priority=1, include=None, track_latest=True
+        campaign_id="camp-1", world_id="wod", priority=1,
+        include=None, track_latest=True,
     )
     data = CharacterData(
         id="alistair",
@@ -360,6 +380,9 @@ async def test_service_list_revisions(
 async def test_service_get_profile_missing_returns_none(
     characters_svc: CharactersService, store_for_service: StateStore
 ) -> None:
-    await store_for_service.upsert_campaign(campaign_id="camp-empty", name="Empty")
-    profile = await characters_svc.get_pc_profile("camp-empty", "library:worlds/wod/characters/nobody")
+    await store_for_service.upsert_campaign(
+        campaign_id="camp-empty", name="Empty",
+    )
+    ref = "library:worlds/wod/characters/nobody"
+    profile = await characters_svc.get_pc_profile("camp-empty", ref)
     assert profile is None

@@ -100,7 +100,10 @@ async def get_pc_profile(
     try:
         profile = await characters.get_pc_profile(campaign_id, character_ref)
         if profile is None:
-            return {"description": "", "goals": [], "player_notes": "", "character_ref": character_ref}
+            return {
+                "description": "", "goals": [],
+                "player_notes": "", "character_ref": character_ref,
+            }
         return to_payload(profile)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc

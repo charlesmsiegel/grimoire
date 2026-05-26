@@ -67,7 +67,14 @@ from .sheet_manager import (
     character_from_frontmatter,
     frontmatter_from_payload,
 )
-from .pc_profile import read_pc_profile
+from .pc_profile import (
+    PCProfile,
+    PCProfileRevision,
+    list_pc_profile_revisions as _list_profile_revisions,
+    read_pc_profile,
+    read_pc_profile_revision as _read_profile_revision,
+    write_pc_profile,
+)
 from .view_cache import CharacterViewCache
 from .views import (
     render_capsule,
@@ -679,36 +686,32 @@ class CharactersService:
 
     async def get_pc_profile(
         self, campaign_id: CampaignId, ref: CharacterRef
-    ) -> "PCProfile | None":
-        from .pc_profile import PCProfile as _PCProfile, read_pc_profile as _read
-
+    ) -> PCProfile | None:
         asset_id = _asset_id_for_ref(ref)
-        return _read(self.store.data_root, campaign_id, asset_id)
+        return read_pc_profile(self.store.data_root, campaign_id, asset_id)
 
     async def save_pc_profile(
-        self, campaign_id: CampaignId, ref: CharacterRef, profile: "PCProfile"
+        self, campaign_id: CampaignId, ref: CharacterRef, profile: PCProfile
     ) -> None:
-        from .pc_profile import write_pc_profile as _write
-
         asset_id = _asset_id_for_ref(ref)
-        _write(self.store.data_root, campaign_id, asset_id, profile)
+        write_pc_profile(self.store.data_root, campaign_id, asset_id, profile)
         self._cache.view_invalidate(ref, campaign_id)
 
     async def list_pc_profile_revisions(
         self, campaign_id: CampaignId, ref: CharacterRef
-    ) -> list:
-        from .pc_profile import list_pc_profile_revisions as _list_revs
-
+    ) -> list[PCProfileRevision]:
         asset_id = _asset_id_for_ref(ref)
-        return _list_revs(self.store.data_root, campaign_id, asset_id)
+        return _list_profile_revisions(
+            self.store.data_root, campaign_id, asset_id,
+        )
 
     async def get_pc_profile_revision(
         self, campaign_id: CampaignId, ref: CharacterRef, timestamp: str
-    ) -> "PCProfileRevision | None":
-        from .pc_profile import read_pc_profile_revision as _read_rev
-
+    ) -> PCProfileRevision | None:
         asset_id = _asset_id_for_ref(ref)
-        return _read_rev(self.store.data_root, campaign_id, asset_id, timestamp)
+        return _read_profile_revision(
+            self.store.data_root, campaign_id, asset_id, timestamp,
+        )
 
     # ------------------------------------------------------------------ #
     # Relationships (campaign-scoped)
