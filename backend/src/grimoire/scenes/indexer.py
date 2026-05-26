@@ -408,39 +408,38 @@ class SceneIndexer:
         user edited an .md file outside the app) don't go unindexed. Also
         catches scenes the live subscription missed during a previous crash.
 
-        All writes run inside a single ``BEGIN IMMEDIATE`` transaction on one
-        pooled connection. This avoids the per-row write-lock churn that caused
-        ``SQLITE_BUSY`` / "database is locked" when background tasks (plugin
-        health, embedding worker) raced the startup scan.
+        Writes are batched per-campaign so the write lock is released between
+        campaigns, avoiding SQLITE_BUSY for concurrent writers (health
+        monitor, embedding worker).
         """
         campaigns_root = self._manager.data_root / "campaigns"
         if not campaigns_root.exists():
             return
 
         acquire = getattr(self._db, "acquire", None)
-        if acquire is not None:
-            async with acquire() as conn:
-                await conn.execute("BEGIN IMMEDIATE")
-                try:
-                    db: _DB = _SingleConnDB(conn)
-                    await self._backfill_all(campaigns_root, db)
-                    await conn.execute("COMMIT")
-                except Exception:
-                    await conn.execute("ROLLBACK")
-                    raise
-        else:
-            await self._backfill_all(campaigns_root, self._db)
-
-    async def _backfill_all(self, campaigns_root: Path, db: _DB) -> None:
         for campaign_dir in campaigns_root.iterdir():
             if not campaign_dir.is_dir():
                 continue
-            await self._backfill_branch(campaign_dir / "scenes", db)
+            branches = [campaign_dir / "scenes"]
             branches_dir = campaign_dir / "branches"
             if branches_dir.exists():
-                for branch_dir in branches_dir.iterdir():
-                    if branch_dir.is_dir():
-                        await self._backfill_branch(branch_dir / "scenes", db)
+                branches.extend(
+                    b / "scenes" for b in branches_dir.iterdir() if b.is_dir()
+                )
+            if acquire is not None:
+                async with acquire() as conn:
+                    await conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        db: _DB = _SingleConnDB(conn)
+                        for scenes_dir_path in branches:
+                            await self._backfill_branch(scenes_dir_path, db)
+                        await conn.execute("COMMIT")
+                    except Exception:
+                        await conn.execute("ROLLBACK")
+                        raise
+            else:
+                for scenes_dir_path in branches:
+                    await self._backfill_branch(scenes_dir_path, self._db)
 
     async def _backfill_branch(self, scenes_dir_path: Path, db: _DB) -> None:
         if not scenes_dir_path.exists():

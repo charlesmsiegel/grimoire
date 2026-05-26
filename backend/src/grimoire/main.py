@@ -150,7 +150,7 @@ def _seed_defaults(data_root: Path) -> None:
 
 async def _background_reconcile(container: ServiceContainer) -> None:
     """Run backfill + scan_now in the background after the server starts serving."""
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(1.0)
     try:
         scene_indexer = container.scene_indexer
         if scene_indexer is not None:
