@@ -65,7 +65,8 @@ export const importSceneApi = {
       for (const part of parts) {
         const eventMatch = part.match(/^event:\s*(\w+)\ndata:\s*(.+)$/s);
         if (!eventMatch) continue;
-        const [, type, data] = eventMatch;
+        const type = eventMatch[1]!;
+        const data = eventMatch[2]!;
         if (type === "progress") {
           onProgress(JSON.parse(data));
         }
@@ -76,8 +77,7 @@ export const importSceneApi = {
         }
         if (type === "error") {
           void reader.cancel();
-          const err = JSON.parse(data);
-          throw new ApiError(500, err.detail ?? "Import pipeline error");
+          throw new ApiError(500, JSON.parse(data).detail ?? "Import pipeline error");
         }
       }
     }

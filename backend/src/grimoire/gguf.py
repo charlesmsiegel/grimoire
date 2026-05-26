@@ -42,10 +42,6 @@ _SCALAR_FMT: dict[int, str] = {
 }
 
 
-_MAX_STRING_LENGTH = 10 * 1024 * 1024  # 10 MB
-_MAX_ARRAY_COUNT = 1_000_000
-
-
 class GGUFError(Exception):
     pass
 
@@ -58,10 +54,14 @@ def _read(f: Any, fmt: str) -> Any:
     return struct.unpack(fmt, data)[0]
 
 
+_MAX_STRING_BYTES = 100 * 1024 * 1024  # 100 MiB
+_MAX_ARRAY_ELEMENTS = 1_000_000
+
+
 def _read_string(f: Any) -> str:
     length = _read(f, "<Q")
-    if length > _MAX_STRING_LENGTH:
-        raise GGUFError(f"string length {length} exceeds limit ({_MAX_STRING_LENGTH})")
+    if length > _MAX_STRING_BYTES:
+        raise GGUFError(f"string length {length} exceeds safety cap")
     data = f.read(length)
     if len(data) < length:
         raise GGUFError("unexpected end of file reading string")
@@ -74,8 +74,8 @@ def _read_value(f: Any, vtype: int) -> Any:
     if vtype == _ARRAY:
         elem_type = _read(f, "<I")
         count = _read(f, "<Q")
-        if count > _MAX_ARRAY_COUNT:
-            raise GGUFError(f"array count {count} exceeds limit ({_MAX_ARRAY_COUNT})")
+        if count > _MAX_ARRAY_ELEMENTS:
+            raise GGUFError(f"array count {count} exceeds safety cap")
         return [_read_value(f, elem_type) for _ in range(count)]
     fmt = _SCALAR_FMT.get(vtype)
     if fmt is None:

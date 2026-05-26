@@ -87,17 +87,22 @@ async def run_import_pipeline(
     """Run the full import pipeline, yielding progress events."""
     parsed = parse_import_source(md_path)
     n_posts = parsed.post_count
+    if n_posts == 0:
+        raise ValueError("No posts found — file must use grimoire format: ## Post N — author")
     # copy, N appends, threads, summarize, embed, done
     total = n_posts + 5
 
     from grimoire.scenes.storage import slugify
 
-    in_game_start = metadata.get("in_game_start")
-    if isinstance(in_game_start, str):
-        try:
-            in_game_start = datetime.fromisoformat(in_game_start)
-        except ValueError:
-            in_game_start = None
+    def _parse_dt(raw: Any) -> datetime | None:
+        if isinstance(raw, datetime):
+            return raw
+        if isinstance(raw, str):
+            try:
+                return datetime.fromisoformat(raw)
+            except ValueError:
+                return None
+        return None
 
     init = SceneInit(
         campaign_id=campaign_id,
@@ -105,13 +110,17 @@ async def run_import_pipeline(
         title=title,
         slug=slugify(title),
         location_ref=metadata.get("location_ref"),
-        in_game_start=in_game_start,
+        in_game_start=_parse_dt(metadata.get("in_game_start")),
         present_character_refs=metadata.get("present_character_refs", []),
         present_pc_refs=metadata.get("present_pc_refs", []),
         mood=metadata.get("mood"),
         tags=metadata.get("tags", []),
     )
     scene = await scene_manager.start_scene(init)
+
+    in_game_end = _parse_dt(metadata.get("in_game_end"))
+    if in_game_end is not None:
+        scene.in_game_end = in_game_end
 
     tick = 1
     yield ImportProgress(step="copy", current=tick, total=total, detail="Scene created")
@@ -127,11 +136,11 @@ async def run_import_pipeline(
     now = datetime.now(UTC)
     posts: list[Post] = []
     try:
-        for i, (order, kind, pc_ref, npc_ref, body) in enumerate(parsed.posts):
+        for i, (_order, kind, pc_ref, npc_ref, body) in enumerate(parsed.posts):
             post = Post(
                 id=uuid.uuid4().hex,
                 scene_id=scene.id,
-                order_in_scene=order,
+                order_in_scene=i + 1,
                 author_kind=kind,
                 body=body,
                 is_player=(kind == AuthorKind.PC),
