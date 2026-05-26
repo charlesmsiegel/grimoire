@@ -2,7 +2,6 @@ import { type Dispatch, useCallback, useState } from "react";
 
 import { newSceneApi } from "../../api/campaign/newScene";
 import type {
-  GeneratedSuggestion,
   PreviewResponse,
   SuggestResponse,
 } from "../../api/campaign/types";
