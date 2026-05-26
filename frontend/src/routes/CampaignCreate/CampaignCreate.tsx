@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError } from "../../api/client";
+import { pcProfileApi } from "../../api/campaign";
 import {
   type CampaignCreateInput,
   type CharacterSummary,
@@ -265,6 +266,23 @@ export function CampaignCreate() {
           // Surface PC add errors but don't unwind the campaign — the user can
           // fix in the per-campaign view.
           console.warn(`Failed to add PC ${pc.character_ref}: ${errorMessage(err)}`);
+        }
+      }
+      for (const pc of draft.pcs) {
+        const hasProfile =
+          pc.profileDescription.trim() ||
+          pc.profileGoals.some((g) => g.trim()) ||
+          pc.profilePlayerNotes.trim();
+        if (hasProfile) {
+          try {
+            await pcProfileApi.save(draft.id, pc.character_ref, {
+              description: pc.profileDescription,
+              goals: pc.profileGoals.filter((g) => g.trim()),
+              player_notes: pc.profilePlayerNotes,
+            });
+          } catch (err) {
+            console.warn(`Failed to save profile for ${pc.character_ref}: ${errorMessage(err)}`);
+          }
         }
       }
       if (draft.greetingId) {

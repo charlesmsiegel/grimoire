@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { CharacterSummary } from "../../api/wizard";
+import { PCProfileFields, type ProfileFieldValues } from "./PCProfileFields";
 import type { DraftPC, WizardDraft } from "./types";
 
 interface Props {
@@ -26,6 +27,9 @@ export function StepPCs({ draft, update, candidates, loading, error }: Props) {
       name: character.name ?? character.id,
       owner: "local",
       origin: "library",
+      profileDescription: "",
+      profileGoals: [],
+      profilePlayerNotes: "",
     };
     update({ pcs: [...draft.pcs, pc] });
   };
@@ -37,7 +41,18 @@ export function StepPCs({ draft, update, candidates, loading, error }: Props) {
     const ref = `emergent/${slug}`;
     if (draft.pcs.find((p) => p.character_ref === ref)) return;
     update({
-      pcs: [...draft.pcs, { character_ref: ref, name: trimmed, owner: "local", origin: "new" }],
+      pcs: [
+        ...draft.pcs,
+        {
+          character_ref: ref,
+          name: trimmed,
+          owner: "local",
+          origin: "new",
+          profileDescription: "",
+          profileGoals: [],
+          profilePlayerNotes: "",
+        },
+      ],
     });
     setNewName("");
   };
@@ -66,6 +81,27 @@ export function StepPCs({ draft, update, candidates, loading, error }: Props) {
               <button type="button" onClick={() => removePC(pc.character_ref)}>
                 Remove
               </button>
+              <PCProfileFields
+                values={{
+                  description: pc.profileDescription,
+                  goals: pc.profileGoals,
+                  playerNotes: pc.profilePlayerNotes,
+                }}
+                onChange={(vals: ProfileFieldValues) => {
+                  const updatedPCs = draft.pcs.map((p) =>
+                    p.character_ref === pc.character_ref
+                      ? {
+                          ...p,
+                          profileDescription: vals.description,
+                          profileGoals: vals.goals,
+                          profilePlayerNotes: vals.playerNotes,
+                        }
+                      : p,
+                  );
+                  update({ pcs: updatedPCs });
+                }}
+                defaultExpanded={pc.origin === "new"}
+              />
             </li>
           ))}
         </ul>
