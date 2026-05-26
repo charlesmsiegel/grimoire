@@ -15,6 +15,9 @@ export interface DraftPC {
   name: string;
   owner: string;
   origin: "library" | "new";
+  profileDescription: string;
+  profileGoals: string[];
+  profilePlayerNotes: string;
 }
 
 export type StyleGuideMode = "library" | "inline" | "none";
