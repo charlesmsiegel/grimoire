@@ -88,6 +88,12 @@ class AddPCPayload(BaseModel):
     owner: str = "local"
 
 
+class PCProfilePayload(BaseModel):
+    description: str = ""
+    goals: list[str] = Field(default_factory=list)
+    player_notes: str = ""
+
+
 class SubmitTurnPayload(BaseModel):
     pc_ref: str
     text: str
