@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
-from grimoire.scenes.importer import parse_import_source
+import pytest
+from starlette.testclient import TestClient
+
+from grimoire.api.campaigns.import_scene import router as import_router
+from grimoire.scenes.importer import ImportProgress, parse_import_source, run_import_pipeline
 
 
 def test_parse_import_source_md_only(tmp_path: Path) -> None:
@@ -42,15 +47,9 @@ def test_parse_import_source_bad_format(tmp_path: Path) -> None:
     assert result.post_count == 0
 
 
-# --- Preview endpoint tests ---
-
-from starlette.testclient import TestClient
-
-from grimoire.api.campaigns.import_scene import router as import_router
-
-
 def _make_test_app():
     from fastapi import FastAPI
+
     app = FastAPI()
     app.include_router(import_router, prefix="/campaigns")
     return app
@@ -85,13 +84,6 @@ def test_preview_endpoint_not_found() -> None:
         json={"path": "/nonexistent/scene.md"},
     )
     assert resp.status_code == 400
-
-
-# --- Pipeline tests ---
-
-from unittest.mock import AsyncMock, MagicMock
-
-from grimoire.scenes.importer import ImportProgress, run_import_pipeline
 
 
 @pytest.mark.asyncio
