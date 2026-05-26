@@ -82,10 +82,21 @@ BACKEND_PORT=$BACKEND_PORT
 FRONTEND_PORT=$FRONTEND_PORT
 EOF
 
+health_check() {
+    local url="http://${BACKEND_HOST}:${BACKEND_PORT}/api/health"
+    if command -v curl &>/dev/null; then
+        curl -sf "$url" >/dev/null 2>&1
+    elif command -v wget &>/dev/null; then
+        wget -qO /dev/null "$url" 2>/dev/null
+    else
+        python3 -c "import urllib.request; urllib.request.urlopen('$url')" 2>/dev/null
+    fi
+}
+
 echo "Waiting for backend on port $BACKEND_PORT..."
 elapsed=0
 while [ "$elapsed" -lt 30 ]; do
-    if curl -sf "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health" >/dev/null 2>&1; then
+    if health_check; then
         break
     fi
     sleep 1
