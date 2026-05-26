@@ -115,6 +115,8 @@ class ServiceContainer:
     state_store_config: StateStoreConfig | None = None
     mechanics_rescan_error: str | None = None
     plugins_rescan_error: str | None = None
+    sync_status: str = "syncing"
+    sync_error: str | None = None
 
     # Lazy-init services (previously in extras dict)
     expressions: ExpressionStateService | None = None
