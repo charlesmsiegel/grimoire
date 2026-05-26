@@ -17,6 +17,7 @@ DB_PATH="${GRIMOIRE_DATABASE_PATH:-$DATA_ROOT/campaigns.sqlite}"
 
 BACKEND_PID=""
 FRONTEND_PID=""
+OWNS_STATE_FILE=0
 
 cleanup() {
     echo ""
@@ -36,7 +37,7 @@ cleanup() {
         echo "Checkpointing SQLite WAL..."
         python3 -c "import sqlite3; c=sqlite3.connect('$DB_PATH'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()" 2>/dev/null || true
     fi
-    rm -f "$STATE_FILE"
+    [ "$OWNS_STATE_FILE" -eq 1 ] && rm -f "$STATE_FILE"
     echo "Grimoire stopped."
 }
 trap cleanup EXIT
@@ -76,6 +77,7 @@ UV_ARGS=(run --directory "$BACKEND_DIR" uvicorn grimoire.main:app --host "$BACKE
 uv "${UV_ARGS[@]}" &
 BACKEND_PID=$!
 
+OWNS_STATE_FILE=1
 cat > "$STATE_FILE" <<EOF
 BACKEND_PID=$BACKEND_PID
 BACKEND_PORT=$BACKEND_PORT
