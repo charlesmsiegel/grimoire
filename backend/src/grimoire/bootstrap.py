@@ -290,6 +290,7 @@ async def build_llm_services(
     from grimoire.observability.replayer import TurnReplayerService
     from grimoire.observability.service import ObservabilityService
     from grimoire.scenes.default_summarizers import (
+        make_adaptive_summarizer,
         make_default_final_summarizer,
         make_default_running_summarizer,
     )
@@ -383,6 +384,14 @@ async def build_llm_services(
     if getattr(container.scenes, "_final_summarizer", None) is None:
         container.scenes.set_final_summarizer(
             make_default_final_summarizer(
+                llm_gateway,
+                max_tokens=container.scenes.config.running_summary.max_tokens,
+                model=container.scenes.config.running_summary.model or "default",
+            )
+        )
+    if getattr(container.scenes, "_adaptive_summarizer", None) is None:
+        container.scenes.set_adaptive_summarizer(
+            make_adaptive_summarizer(
                 llm_gateway,
                 max_tokens=container.scenes.config.running_summary.max_tokens,
                 model=container.scenes.config.running_summary.model or "default",
