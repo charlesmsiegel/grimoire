@@ -159,6 +159,7 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
         ...state,
         scene: action.scene,
         posts: action.posts,
+        hasMorePosts: true,
         advanceEnabled: action.scene.present_pc_refs.length >= 2,
         advanceReason: "",
         mode: "play",
