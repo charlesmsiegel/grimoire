@@ -44,9 +44,14 @@ def _ensure_llama_cpp_importable(plugin: Any) -> None:
         extra = getattr(plugin, "_plugin_sys_path", None)
         if not extra:
             raise
-        if extra not in sys.path:
+        inserted = extra not in sys.path
+        if inserted:
             sys.path.insert(0, extra)
-        import llama_cpp  # noqa: F401
+        try:
+            import llama_cpp  # noqa: F401
+        finally:
+            if inserted and extra in sys.path:
+                sys.path.remove(extra)
 
 
 class LlamaCppLLMProvider:
