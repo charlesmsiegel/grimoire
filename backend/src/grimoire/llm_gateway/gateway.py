@@ -339,6 +339,7 @@ class LLMGatewayService:
         "main",
         "library.summarize",
         "extractor",
+        "scene_summary",
         "scene_suggest",
         "scene_preview",
         "scene_first_post",

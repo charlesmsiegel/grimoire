@@ -115,8 +115,6 @@ async def test_run_import_pipeline_progress_events(tmp_path: Path) -> None:
     events: list[ImportProgress] = []
     async for progress in run_import_pipeline(
         scene_manager=scene_manager,
-        extractor=None,
-        delta_applier=None,
         md_path=md,
         campaign_id="camp",
         title="Test",
@@ -126,8 +124,7 @@ async def test_run_import_pipeline_progress_events(tmp_path: Path) -> None:
 
     steps = [e.step for e in events]
     assert "copy" in steps
-    assert "index" in steps
-    assert steps.count("extract") == 2
+    assert steps.count("append") == 2
     assert "threads" in steps
     assert "summarize" in steps
     assert "done" in steps
