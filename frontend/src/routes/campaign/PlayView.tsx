@@ -160,6 +160,7 @@ export function PlayView({ campaignId }: Props) {
           pcs={play.state.pcs}
           activePcRef={play.state.activePcRef}
           onChange={(ref) => void play.setActivePC(ref)}
+          campaignId={campaignId}
         />
         <div className="play-right-toggle" role="tablist" aria-label="Right pane">
           <button
