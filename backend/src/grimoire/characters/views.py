@@ -9,7 +9,9 @@ Context Builder asks for different depths at different tiers:
 
 from __future__ import annotations
 
+from grimoire.characters.pc_profile import PCProfile
 from grimoire.types.characters import Character, VoiceAnchor
+from grimoire.types.mechanics import Capability
 
 
 def render_full(character: Character, *, seed: int | None = None) -> str:
@@ -31,6 +33,68 @@ def render_full(character: Character, *, seed: int | None = None) -> str:
         parts.append("")
         parts.append("## Voice")
         parts.append(voice)
+    return "\n".join(parts).strip()
+
+
+def render_full_pc(
+    character: Character,
+    *,
+    profile: PCProfile | None = None,
+    capabilities: list[Capability] | None = None,
+    seed: int | None = None,
+) -> str:
+    parts: list[str] = [f"# {character.name}"]
+    if character.aliases:
+        parts.append(f"_aliases:_ {', '.join(character.aliases)}")
+    if character.age:
+        parts.append(f"_age:_ {character.age}")
+    if character.tags:
+        parts.append(f"_tags:_ {', '.join(character.tags)}")
+
+    lib_has_desc = bool(character.description and character.description.strip())
+
+    if lib_has_desc:
+        parts.append("")
+        parts.append(character.description)
+    elif profile and profile.description.strip():
+        parts.append("")
+        parts.append(profile.description.strip())
+
+    if character.body:
+        parts.append("")
+        parts.append(character.body)
+
+    if profile and profile.description.strip() and lib_has_desc:
+        parts.append("")
+        parts.append("## Campaign Context")
+        parts.append(profile.description.strip())
+
+    if profile and profile.goals:
+        parts.append("")
+        parts.append("## Goals")
+        for goal in profile.goals:
+            parts.append(f"- {goal}")
+
+    if capabilities:
+        parts.append("")
+        parts.append("## Capabilities")
+        for cap in capabilities:
+            line = f"- **{cap.name}** ({cap.kind})"
+            if cap.description:
+                line += f": {cap.description}"
+            parts.append(line)
+
+    voice = _render_voice(character.voice, seed=seed)
+    if voice:
+        parts.append("")
+        parts.append("## Voice")
+        parts.append(voice)
+
+    if profile and profile.player_notes.strip():
+        parts.append("")
+        parts.append("## Player Notes")
+        parts.append(profile.player_notes.strip())
+
     return "\n".join(parts).strip()
 
 
