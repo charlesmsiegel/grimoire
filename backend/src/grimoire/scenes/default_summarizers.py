@@ -335,7 +335,7 @@ def make_adaptive_summarizer(
         for window in windows[:-1]:
             running = await _rolling_pass(running, window)
 
-        return await _final_pass(scene, windows[-1], running)
+        return await _final_pass(scene, posts, running)
 
     return _adaptive
 
