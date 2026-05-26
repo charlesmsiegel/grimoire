@@ -95,7 +95,6 @@ async def get_scene(
         scene = await _require_scene_owned(scenes, campaign_id, scene_id)
         await _reconcile_emergent_pcs(campaign_id, scene, characters, state_store)
         body = await scenes.load_scene_body(scene_id)
-        posts = await scenes.get_posts(scene_id)
     except HTTPException:
         raise
     except Exception as exc:
@@ -103,7 +102,35 @@ async def get_scene(
     return {
         "scene": to_payload(scene),
         "body": body,
+        "posts": [],
+    }
+
+
+@router.get("/{campaign_id}/scenes/{scene_id}/posts")
+async def get_scene_posts(
+    campaign_id: str,
+    scene_id: str,
+    scenes: ScenesDep,
+    container: ContainerDep,
+    limit: int = 50,
+    before: int | None = None,
+) -> Any:
+    try:
+        await _require_scene_owned(scenes, campaign_id, scene_id)
+        clamped = min(limit, 200)
+        posts = await scenes.get_posts_paginated(
+            scene_id,
+            limit=clamped,
+            before=before,
+            db=container.db,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {
         "posts": to_payload(posts),
+        "has_more": len(posts) == clamped,
     }
 
 
