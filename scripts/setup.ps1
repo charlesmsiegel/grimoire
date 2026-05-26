@@ -34,10 +34,17 @@ function Assert-MinVersion($name, $actual, $minMajor, $minMinor) {
 
 Write-Host "Checking prerequisites..."
 
-# Python 3.12+
-if (-not (Test-Cmd "python")) {
-    Request-Install "Python 3.12+" "winget install Python.Python.3.12 --accept-package-agreements" "https://python.org"
-} elseif (-not (Assert-MinVersion "Python" (& python --version 2>&1) 3 12)) {
+# Python 3.12+ — check py launcher first (handles multiple installs), then python
+$pythonOk = $false
+if (Test-Cmd "py") {
+    $pyVer = & py -3 --version 2>&1
+    $pythonOk = Assert-MinVersion "Python (py launcher)" "$pyVer" 3 12
+}
+if (-not $pythonOk -and (Test-Cmd "python")) {
+    $pyVer = & python --version 2>&1
+    $pythonOk = Assert-MinVersion "Python" "$pyVer" 3 12
+}
+if (-not $pythonOk) {
     Request-Install "Python 3.12+" "winget install Python.Python.3.12 --accept-package-agreements" "https://python.org"
 }
 

@@ -18,7 +18,8 @@ function Invoke-WalCheckpoint {
     if ((Test-Path $dbPath) -and (Test-Path "$dbPath-wal")) {
         Write-Host "Checkpointing SQLite WAL..."
         $pyCmd = "import sqlite3; c=sqlite3.connect(r'$dbPath'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"
-        & python -c $pyCmd 2>$null
+        $pyExe = if (Get-Command py -ErrorAction SilentlyContinue) { "py" } else { "python" }
+        & $pyExe -c $pyCmd 2>$null
     }
 }
 
