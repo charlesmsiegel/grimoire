@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { ApiError } from "../api/client";
 import {
   deleteCampaign,
+  discoverCampaigns,
   fetchCampaigns,
   rescanCampaigns,
   type CampaignSummaryPayload,
@@ -113,6 +114,7 @@ export function CampaignsView() {
     setRefreshing(true);
     setRefreshErr(null);
     try {
+      await discoverCampaigns();
       await rescanCampaigns();
       await reload();
     } catch (err) {
@@ -165,6 +167,7 @@ export function CampaignsView() {
     let cancelled = false;
     void (async () => {
       try {
+        await discoverCampaigns().catch(() => {});
         const rows = await fetchCampaigns();
         if (!cancelled) {
           dispatch({

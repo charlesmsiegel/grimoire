@@ -386,7 +386,9 @@ class LLMGatewayService:
                     continue
                 if not isinstance(cfg, dict):
                     continue
-                active_model = cfg.get("active_model")
+                active_model = cfg.get("active_model") or cfg.get("model_id")
+                if not active_model and cfg.get("model_path"):
+                    active_model = Path(str(cfg["model_path"])).name
                 if not isinstance(active_model, str) or not active_model:
                     continue
                 try:

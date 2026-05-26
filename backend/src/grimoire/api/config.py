@@ -216,8 +216,8 @@ async def get_library_settings() -> Any:
     lib = _read_yaml_safe("library.yaml")
     idx = lib.get("indexing") if isinstance(lib.get("indexing"), dict) else {}
     return {
-        "embed_on_index": bool(ss_lib.get("embed_on_index", True)),
-        "summarize_on_index": bool(idx.get("summarize_on_index", True)),
+        "embed_on_index": bool(ss_lib.get("embed_on_index", False)),
+        "summarize_on_index": bool(idx.get("summarize_on_index", False)),
     }
 
 
@@ -311,6 +311,54 @@ async def patch_imagegen_defaults(payload: ImagegenDefaultsPatch) -> Any:
             logger.exception("imagegen defaults write failed")
             raise HTTPException(status_code=500, detail=f"failed to persist: {exc}") from exc
     return await get_imagegen_defaults()
+
+
+class BrowseFilesResponse(BaseModel):
+    parent: str
+    entries: list[dict[str, Any]]
+
+
+@router.get("/browse-files")
+async def browse_files(
+    directory: str | None = None,
+    glob: str = "*.gguf",
+) -> BrowseFilesResponse:
+    """List files and directories for a server-side file picker."""
+    if directory:
+        base = Path(directory).resolve()
+    else:
+        base = Path.home()
+
+    if not base.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {base}")
+
+    entries: list[dict[str, Any]] = []
+    try:
+        for child in sorted(base.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            if child.name.startswith("."):
+                continue
+            if child.is_dir():
+                entries.append({"name": child.name, "path": str(child), "is_dir": True})
+            elif child.match(glob):
+                entries.append({"name": child.name, "path": str(child), "is_dir": False})
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"Permission denied: {base}")
+
+    return BrowseFilesResponse(parent=str(base.parent), entries=entries)
+
+
+@router.get("/gguf-introspect")
+async def gguf_introspect(path: str) -> Any:
+    """Read metadata from a GGUF file without loading the model."""
+    from grimoire.gguf import GGUFError, introspect
+
+    resolved = Path(path).resolve()
+    if not resolved.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {path}")
+    try:
+        return introspect(resolved)
+    except GGUFError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 __all__ = ["router"]

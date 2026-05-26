@@ -21,7 +21,7 @@ class DiscoveryConfig:
 
 @dataclass(frozen=True)
 class IsolationConfig:
-    per_plugin_venv: bool = False
+    per_plugin_venv: bool = True
     venv_root: Path | None = None
 
 

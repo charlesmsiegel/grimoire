@@ -3,6 +3,7 @@ import { Link, Route, Routes, useParams } from "react-router-dom";
 
 import { ApiError, type PluginKind, type PluginManifest, pluginsApi } from "../../api/library";
 import { useResource } from "../../api/useResource";
+import type { GGUFInfo } from "../../components/FilePathPicker";
 import { SchemaField } from "../../components/SchemaField";
 import { type JsonSchema, initialDraftFromSchema } from "../../components/schemaForm";
 import { AsyncBoundary } from "./AsyncBoundary";
@@ -213,6 +214,18 @@ function PluginConfigForm({ plugin }: { plugin: PluginManifest }) {
     setSaveErr(null);
   }, [properties]);
 
+  const handleGGUFIntrospect = useCallback(
+    (info: GGUFInfo) => {
+      setDraft((d) => {
+        const next = { ...d };
+        if (info.context_length != null && !d["n_ctx"]) next["n_ctx"] = info.context_length;
+        if (info.name && !d["model_id"]) next["model_id"] = info.name;
+        return next;
+      });
+    },
+    [],
+  );
+
   if (propertyKeys.length === 0) {
     return (
       <section>
@@ -248,6 +261,7 @@ function PluginConfigForm({ plugin }: { plugin: PluginManifest }) {
             required={required.has(key)}
             value={draft[key]}
             onChange={(v) => setDraft((d) => ({ ...d, [key]: v }))}
+            onFileIntrospect={handleGGUFIntrospect}
           />
         ))}
         <button type="submit" disabled={savingState === "saving"}>

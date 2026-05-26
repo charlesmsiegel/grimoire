@@ -9,6 +9,8 @@ description: |
   campaigns or routing cheaper tasks (extractor, drift checks) to a local
   model while keeping `main` on a cloud provider.
 
+isolated_venv: true
+
 implements:
   - llm_provider
 
@@ -20,6 +22,8 @@ config_schema:
   properties:
     model_path:
       type: string
+      format: file-path
+      x-glob: "*.gguf"
       title: Model path
       description: Absolute path to a GGUF model file on disk.
     n_ctx:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,19 @@ from grimoire.types.llm import ModelInfo
 
 DEFAULT_N_CTX = 2048
 DEFAULT_N_BATCH = 32
+
+
+def _ensure_llama_cpp_importable(plugin: Any) -> None:
+    """Make sure ``llama_cpp`` is importable, restoring the plugin venv path if needed."""
+    try:
+        import llama_cpp  # noqa: F401
+    except ImportError:
+        extra = getattr(plugin, "_plugin_sys_path", None)
+        if not extra:
+            raise
+        if extra not in sys.path:
+            sys.path.insert(0, extra)
+        import llama_cpp  # noqa: F401, F811
 
 
 class LlamaCppEmbeddingProvider:
@@ -41,6 +55,7 @@ class LlamaCppEmbeddingProvider:
         self.max_batch_size: int = self._n_batch
         self._llama: Any = None
         self._load_lock = threading.Lock()
+        self._inference_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     # EmbeddingProvider protocol
@@ -51,7 +66,11 @@ class LlamaCppEmbeddingProvider:
             return []
         llama = self._get_llama()
         loop = asyncio.get_running_loop()
-        raw = await loop.run_in_executor(None, lambda: llama.embed(texts))
+        def _embed() -> Any:
+            with self._inference_lock:
+                return llama.embed(texts)
+
+        raw = await loop.run_in_executor(None, _embed)
         vectors: list[list[float]] = []
         for row in raw:
             vec = [float(v) for v in row]
@@ -86,7 +105,7 @@ class LlamaCppEmbeddingProvider:
                 message=f"model file not found at {self._model_path}",
             )
         try:
-            import llama_cpp  # noqa: F401
+            _ensure_llama_cpp_importable(self)
         except ImportError:
             return HealthStatus(
                 level=HealthLevel.UNHEALTHY,
@@ -115,12 +134,9 @@ class LlamaCppEmbeddingProvider:
             raise RuntimeError("embed-llamacpp: model_path not configured")
         if not Path(self._model_path).exists():
             raise RuntimeError(f"embed-llamacpp: model file not found at {self._model_path}")
-        try:
-            from llama_cpp import Llama
-        except ImportError as exc:
-            raise RuntimeError(
-                "llama-cpp-python not installed; add it to the plugin's venv"
-            ) from exc
+        _ensure_llama_cpp_importable(self)
+        from llama_cpp import Llama
+
         with self._load_lock:
             if self._llama is None:
                 kwargs: dict[str, Any] = {

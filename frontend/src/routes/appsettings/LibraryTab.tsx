@@ -77,7 +77,7 @@ export function LibraryTab() {
       <label className="wizard-toggle">
         <input
           type="checkbox"
-          checked={lib.data?.embed_on_index ?? true}
+          checked={lib.data?.embed_on_index ?? false}
           onChange={(e) => lib.patch({ embed_on_index: e.target.checked })}
           disabled={!lib.data}
         />
@@ -90,7 +90,7 @@ export function LibraryTab() {
       <label className="wizard-toggle">
         <input
           type="checkbox"
-          checked={lib.data?.summarize_on_index ?? true}
+          checked={lib.data?.summarize_on_index ?? false}
           onChange={(e) => lib.patch({ summarize_on_index: e.target.checked })}
           disabled={!lib.data}
         />

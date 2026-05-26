@@ -6,7 +6,7 @@ import logging
 import shutil
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from grimoire.api.deps import (
     FileWatcherDep,
@@ -48,11 +48,80 @@ async def list_campaigns(state_store: StateStoreDep) -> Any:
 
 
 @router.post("/rescan")
-async def rescan_campaigns(file_watcher: FileWatcherDep) -> Any:
+async def rescan_campaigns(file_watcher: FileWatcherDep, request: Request) -> Any:
     try:
-        return await file_watcher.scan_now(scope="campaigns")
+        result = await file_watcher.scan_now(scope="campaigns")
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+    container = getattr(request.app.state, "container", None)
+    if container and getattr(container, "scene_indexer", None):
+        try:
+            await container.scene_indexer.backfill()
+        except Exception:
+            logger.warning("rescan: scene backfill failed", exc_info=True)
+    return result
+
+
+@router.post("/discover")
+async def discover_campaigns(
+    state_store: StateStoreDep,
+    file_watcher: FileWatcherDep,
+    request: Request,
+) -> Any:
+    """Scan data/campaigns/ for directories with a campaign.yaml and register
+    any that are missing from the database."""
+    from grimoire.files.yaml_io import load_yaml
+
+    root = campaigns_root(state_store.data_root)
+    if not root.is_dir():
+        return {"discovered": 0, "campaigns": []}
+
+    existing = {
+        row["id"]
+        for row in await state_store.db.fetchall("SELECT id FROM campaigns")
+    }
+
+    registered: list[str] = []
+    for child in sorted(root.iterdir()):
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        campaign_id = child.name
+        if campaign_id in existing:
+            continue
+        yaml_path = child / "campaign.yaml"
+        raw: dict = {}
+        if yaml_path.is_file():
+            try:
+                loaded = load_yaml(yaml_path)
+                if isinstance(loaded, dict):
+                    raw = loaded
+            except Exception:
+                pass
+        name = str(raw.get("name") or campaign_id)
+        description = raw.get("description")
+        await state_store.upsert_campaign(
+            campaign_id=campaign_id,
+            name=name,
+            description=str(description) if description else None,
+            mechanics_module=raw.get("mechanics_module") or raw.get("mechanics"),
+            style_guide_id=raw.get("style_guide_id"),
+        )
+        registered.append(campaign_id)
+        logger.info("discover: registered campaign %r from disk", campaign_id)
+
+    if registered:
+        try:
+            await file_watcher.scan_now(scope="campaigns")
+        except Exception:
+            logger.warning("discover: post-registration rescan failed", exc_info=True)
+        container = getattr(request.app.state, "container", None)
+        if container and getattr(container, "scene_indexer", None):
+            try:
+                await container.scene_indexer.backfill()
+            except Exception:
+                logger.warning("discover: scene backfill failed", exc_info=True)
+
+    return {"discovered": len(registered), "campaigns": registered}
 
 
 @router.post("", status_code=201)

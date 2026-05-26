@@ -22,14 +22,14 @@ _PINNING_DEFAULTS: frozenset[str] = frozenset({"pinned", "track_latest"})
 
 @dataclass(frozen=True, slots=True)
 class LibraryIndexingConfig:
-    embed_on_index: bool = True
+    embed_on_index: bool = False
     embedding_provider: str | None = None
     # Auto-summary into ``library_index.body_compressed`` (spec 18 §Indexing
     # + spec 02 §Background tier). When enabled, a SummaryJob is enqueued
     # for every library_entity / library_style_guide write whose body
     # length meets the threshold; an out-of-band worker drains the queue
     # and writes back via :meth:`StateStore.set_body_compressed`.
-    summarize_on_index: bool = True
+    summarize_on_index: bool = False
     summarize_min_body_length: int = 500
 
 
@@ -110,11 +110,11 @@ class LibraryConfig:
             watch=bool(raw.get("watch", True)),
             scan_on_startup=bool(raw.get("scan_on_startup", True)),
             indexing=LibraryIndexingConfig(
-                embed_on_index=bool(idx.get("embed_on_index", True)),
+                embed_on_index=bool(idx.get("embed_on_index", False)),
                 embedding_provider=(
                     str(idx["embedding_provider"]) if idx.get("embedding_provider") else None
                 ),
-                summarize_on_index=bool(idx.get("summarize_on_index", True)),
+                summarize_on_index=bool(idx.get("summarize_on_index", False)),
                 summarize_min_body_length=int(idx.get("summarize_min_body_length", 500)),
             ),
             version_pinning=LibraryVersionPinningConfig(

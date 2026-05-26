@@ -16,7 +16,7 @@ def test_default_config_matches_legacy_behavior() -> None:
     assert cfg.root is None
     assert cfg.watch is True
     assert cfg.scan_on_startup is True
-    assert cfg.indexing.embed_on_index is True
+    assert cfg.indexing.embed_on_index is False
     assert cfg.indexing.embedding_provider is None
     assert cfg.version_pinning.default == "pinned"
     assert cfg.version_pinning.snapshot_on_bind is True
