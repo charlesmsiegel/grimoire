@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import logging
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from starlette.responses import StreamingResponse
 
-from grimoire.scenes.importer import parse_import_source
+from grimoire.api.deps import ContainerDep, ScenesDep
+from grimoire.scenes.importer import parse_import_source, run_import_pipeline
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -48,3 +55,74 @@ async def preview_import(
         },
         sidecar=parsed.sidecar_metadata,
     )
+
+
+class ImportRequest(BaseModel):
+    path: str
+    title: str
+    location_ref: str | None = None
+    in_game_start: str | None = None
+    in_game_end: str | None = None
+    mood: str | None = None
+    tags: list[str] = []
+    present_character_refs: list[str] = []
+    present_pc_refs: list[str] = []
+
+
+@router.post("/{campaign_id}/scenes/import")
+async def import_scene(
+    campaign_id: str,
+    body: ImportRequest,
+    scenes: ScenesDep,
+    container: ContainerDep,
+) -> StreamingResponse:
+    md_path = Path(body.path).resolve()
+    if not md_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {body.path}")
+
+    extractor = getattr(container, "extractor", None)
+
+    delta_applier = None
+    if extractor is not None:
+        try:
+            from grimoire.extractor.config import ExtractorConfig
+            from grimoire.orchestrator.config import OrchestratorConfig
+            from grimoire.orchestrator.delta_applier import DeltaApplier
+
+            delta_applier = DeltaApplier(
+                state_store=container.state_store,
+                continuity=container.continuity,
+                extractor=extractor,
+                world=getattr(container, "world", None),
+                event_bus=container.event_bus,
+                gateway=container.llm_gateway,
+                extractor_config=ExtractorConfig(),
+                config=OrchestratorConfig(),
+                auto_disable=None,
+            )
+        except Exception:
+            logger.debug("import: could not build DeltaApplier, proceeding without", exc_info=True)
+
+    metadata = body.model_dump(exclude={"path", "title"})
+
+    async def event_stream():
+        scene_id = ""
+        try:
+            async for progress in run_import_pipeline(
+                scene_manager=scenes,
+                extractor=extractor,
+                delta_applier=delta_applier,
+                md_path=md_path,
+                campaign_id=campaign_id,
+                title=body.title,
+                metadata=metadata,
+            ):
+                yield f"event: progress\ndata: {json.dumps(asdict(progress))}\n\n"
+                if progress.step == "done":
+                    scene_id = progress.detail
+            yield f"event: result\ndata: {json.dumps({'scene_id': scene_id})}\n\n"
+        except Exception as exc:
+            logger.exception("import: pipeline failed")
+            yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
