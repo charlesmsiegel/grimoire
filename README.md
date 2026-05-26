@@ -74,40 +74,38 @@ All data lives on your machine at `~/.grimoire/`. No cloud storage, no analytics
 
 ## Quick Start
 
-### Prerequisites
-
-- **Python 3.12+** and [uv](https://docs.astral.sh/uv/)
-- **Node 20+** and [pnpm](https://pnpm.io/) (or just `corepack`, which ships with Node)
-- **Bash** — Linux/macOS have it natively; on Windows use Git Bash (bundled with [Git for Windows](https://git-scm.com/)) or WSL
-
 ### Install and Run
 
 ```sh
 git clone https://github.com/your-username/grimoire.git
 cd grimoire
 
-scripts/install.sh     # installs backend + frontend deps in parallel
-scripts/run.sh         # starts both servers and opens the browser
+# Windows
+scripts\setup.bat      # checks prerequisites, installs deps, creates desktop shortcut
+scripts\run.bat        # starts both servers and opens the browser
+scripts\shutdown.bat   # stops both and frees the ports
+
+# macOS / Linux
+./scripts/setup.sh     # checks prerequisites, installs deps, creates desktop shortcut
+./scripts/run.sh       # starts both servers and opens the browser
+./scripts/shutdown.sh  # stops both and frees the ports
 ```
+
+The setup script checks for prerequisites (Python 3.12+, Node 20+, uv, pnpm) and offers to install any that are missing. It also creates a desktop shortcut with the grimoire icon.
 
 That's it. Grimoire opens in your browser at `http://127.0.0.1:5173`.
 
-To stop:
-
-```sh
-scripts/shutdown.sh    # stops both servers and frees the ports
-```
-
 ### Run Options
 
+Configuration is via environment variables:
+
 ```sh
-scripts/run.sh --backend-port 9000 --frontend-port 5180   # custom ports
-scripts/run.sh --no-browser                                 # don't auto-open
-scripts/run.sh --reload                                     # backend autoreload
-scripts/run.sh -h                                           # full flag list
+GRIMOIRE_BACKEND_PORT=9000 GRIMOIRE_FRONTEND_PORT=5180 ./scripts/run.sh
+GRIMOIRE_OPEN_BROWSER=0 ./scripts/run.sh          # don't auto-open the browser
+GRIMOIRE_BACKEND_RELOAD=1 ./scripts/run.sh         # backend autoreload (uvicorn --reload)
 ```
 
-Ports also accept environment variables: `GRIMOIRE_BACKEND_PORT` / `GRIMOIRE_FRONTEND_PORT`.
+`scripts/shutdown.sh` picks ports up from the state file `run.sh` writes (`.grimoire-run.env`), so it works from any terminal.
 
 ### Manual Startup
 
