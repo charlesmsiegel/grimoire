@@ -80,14 +80,14 @@ try {
     if ($elapsed -ge 30) { throw "Backend failed to start within 30s" }
     Write-Host "Backend ready."
 
-    $frontend = Start-Process -FilePath "cmd.exe" -ArgumentList "/c pnpm dev --port $frontendPort --host $frontendHost" -WorkingDirectory $frontendDir -PassThru -NoNewWindow
+    $frontend = Start-Process -FilePath "cmd.exe" -ArgumentList "/c pnpm dev --port $frontendPort --host $frontendHost --strictPort" -WorkingDirectory $frontendDir -PassThru -NoNewWindow
 
     @("BACKEND_PID=$($backend.Id)", "FRONTEND_PID=$($frontend.Id)", "BACKEND_PORT=$backendPort", "FRONTEND_PORT=$frontendPort") |
         Set-Content $stateFile -Encoding ASCII
 
     if ($openBrowser) {
         Start-Sleep -Seconds 2
-        Start-Process "http://localhost:$frontendPort"
+        Start-Process "http://${frontendHost}:${frontendPort}"
     }
 
     Write-Host "Grimoire running. Press Ctrl+C to stop."

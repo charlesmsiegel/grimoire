@@ -24,6 +24,8 @@ if [ -f "$STATE_FILE" ]; then
     echo "Found state file, stopping recorded processes..."
     while IFS='=' read -r key val; do
         case "$key" in
+            BACKEND_PORT) BACKEND_PORT="$val" ;;
+            FRONTEND_PORT) FRONTEND_PORT="$val" ;;
             BACKEND_PID|FRONTEND_PID)
                 if [ -n "$val" ] && kill -0 "$val" 2>/dev/null; then
                     name=$(ps -p "$val" -o comm= 2>/dev/null || echo "unknown")
