@@ -35,9 +35,7 @@ class PCProfileRevision(BaseModel):
     description: str = ""
 
 
-def read_pc_profile(
-    data_root: Path, campaign_id: str, character_id: str
-) -> PCProfile | None:
+def read_pc_profile(data_root: Path, campaign_id: str, character_id: str) -> PCProfile | None:
     target = pc_profile_path(data_root, campaign_id, character_id)
     if not target.exists():
         return None

@@ -688,9 +688,7 @@ class CharactersService:
     # PC profiles (campaign-scoped overlay)
     # ------------------------------------------------------------------ #
 
-    async def get_pc_profile(
-        self, campaign_id: CampaignId, ref: CharacterRef
-    ) -> PCProfile | None:
+    async def get_pc_profile(self, campaign_id: CampaignId, ref: CharacterRef) -> PCProfile | None:
         asset_id = _asset_id_for_ref(ref)
         return read_pc_profile(self.store.data_root, campaign_id, asset_id)
 
@@ -706,7 +704,9 @@ class CharactersService:
     ) -> list[PCProfileRevision]:
         asset_id = _asset_id_for_ref(ref)
         return _list_profile_revisions(
-            self.store.data_root, campaign_id, asset_id,
+            self.store.data_root,
+            campaign_id,
+            asset_id,
         )
 
     async def get_pc_profile_revision(
@@ -714,7 +714,10 @@ class CharactersService:
     ) -> PCProfileRevision | None:
         asset_id = _asset_id_for_ref(ref)
         return _read_profile_revision(
-            self.store.data_root, campaign_id, asset_id, timestamp,
+            self.store.data_root,
+            campaign_id,
+            asset_id,
+            timestamp,
         )
 
     # ------------------------------------------------------------------ #

@@ -313,13 +313,7 @@ def pc_profile_path(
 ) -> Path:
     validate_path_component(campaign_id, name="campaign_id")
     validate_path_component(character_id, name="character_id")
-    return (
-        campaigns_root(data_root)
-        / campaign_id
-        / "characters"
-        / character_id
-        / "profile.md"
-    )
+    return campaigns_root(data_root) / campaign_id / "characters" / character_id / "profile.md"
 
 
 def pc_profile_revisions_dir(
@@ -329,13 +323,7 @@ def pc_profile_revisions_dir(
 ) -> Path:
     validate_path_component(campaign_id, name="campaign_id")
     validate_path_component(character_id, name="character_id")
-    return (
-        campaigns_root(data_root)
-        / campaign_id
-        / "characters"
-        / character_id
-        / "revisions"
-    )
+    return campaigns_root(data_root) / campaign_id / "characters" / character_id / "revisions"
 
 
 def content_path(

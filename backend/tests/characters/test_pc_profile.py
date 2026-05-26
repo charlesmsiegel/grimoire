@@ -119,9 +119,7 @@ def test_read_specific_revision(tmp_path: Path) -> None:
     revisions = list_pc_profile_revisions(tmp_path, "camp-1", "alistair")
     assert len(revisions) == 1
 
-    loaded = read_pc_profile_revision(
-        tmp_path, "camp-1", "alistair", revisions[0].timestamp
-    )
+    loaded = read_pc_profile_revision(tmp_path, "camp-1", "alistair", revisions[0].timestamp)
     assert loaded is not None
     assert loaded.description == "Version one."
 
@@ -167,12 +165,16 @@ def test_render_full_pc_with_profile_and_capabilities() -> None:
     )
     capabilities = [
         Capability(
-            id="wod.dominate.2", name="Dominate",
-            kind="discipline", description="Mental domination",
+            id="wod.dominate.2",
+            name="Dominate",
+            kind="discipline",
+            description="Mental domination",
         ),
         Capability(
-            id="wod.auspex.1", name="Auspex",
-            kind="discipline", description="Heightened senses",
+            id="wod.auspex.1",
+            name="Auspex",
+            kind="discipline",
+            description="Heightened senses",
         ),
     ]
     result = render_full_pc(char, profile=profile, capabilities=capabilities)
@@ -270,7 +272,8 @@ async def store_for_service(tmp_path: Path):
 
 @pytest.fixture
 async def characters_svc(
-    store_for_service: StateStore, tmp_path: Path,
+    store_for_service: StateStore,
+    tmp_path: Path,
 ) -> CharactersService:
     library = LibraryService(store_for_service)
     mech_root = tmp_path / "mechanics"
@@ -282,9 +285,7 @@ async def characters_svc(
     return CharactersService(library, mechanics)
 
 
-async def _setup_character_with_profile(
-    store: StateStore, characters: CharactersService
-) -> str:
+async def _setup_character_with_profile(store: StateStore, characters: CharactersService) -> str:
     await store.write_library_file(
         library_id="worlds/wod/world/wod",
         frontmatter={"id": "wod", "name": "WoD", "version": 1},
@@ -293,8 +294,11 @@ async def _setup_character_with_profile(
     )
     await store.upsert_campaign(campaign_id="camp-1", name="Test Campaign")
     await store.upsert_world_ref(
-        campaign_id="camp-1", world_id="wod", priority=1,
-        include=None, track_latest=True,
+        campaign_id="camp-1",
+        world_id="wod",
+        priority=1,
+        include=None,
+        track_latest=True,
     )
     data = CharacterData(
         id="alistair",
@@ -379,7 +383,8 @@ async def test_service_get_profile_missing_returns_none(
     characters_svc: CharactersService, store_for_service: StateStore
 ) -> None:
     await store_for_service.upsert_campaign(
-        campaign_id="camp-empty", name="Empty",
+        campaign_id="camp-empty",
+        name="Empty",
     )
     ref = "library:worlds/wod/characters/nobody"
     profile = await characters_svc.get_pc_profile("camp-empty", ref)
