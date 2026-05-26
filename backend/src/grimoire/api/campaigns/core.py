@@ -76,10 +76,7 @@ async def discover_campaigns(
     if not root.is_dir():
         return {"discovered": 0, "campaigns": []}
 
-    existing = {
-        row["id"]
-        for row in await state_store.db.fetchall("SELECT id FROM campaigns")
-    }
+    existing = {row["id"] for row in await state_store.db.fetchall("SELECT id FROM campaigns")}
 
     registered: list[str] = []
     for child in sorted(root.iterdir()):
