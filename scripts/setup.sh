@@ -48,12 +48,12 @@ fi
 
 # Node 20+
 if ! command -v node &>/dev/null; then
-    platform_install "Node.js 20+" "brew install node@20" "sudo apt install nodejs" "https://nodejs.org"
+    platform_install "Node.js 20+" "brew install node@20" "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs" "https://nodejs.org"
 else
     node_major=$(node --version | sed 's/v\([0-9]*\).*/\1/')
     if [ "$node_major" -lt 20 ]; then
         echo "  Node $node_major found, but 20+ required."
-        platform_install "Node.js 20+" "brew install node@20" "sudo apt install nodejs" "https://nodejs.org"
+        platform_install "Node.js 20+" "brew install node@20" "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs" "https://nodejs.org"
     else
         echo "  Node $node_major"
     fi

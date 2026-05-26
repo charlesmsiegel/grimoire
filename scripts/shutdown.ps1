@@ -23,6 +23,7 @@ function Invoke-WalCheckpoint {
     }
 }
 
+$killed = 0
 if (Test-Path $stateFile) {
     Write-Host "Found state file, stopping recorded processes..."
     $state = @{}
@@ -37,15 +38,19 @@ if (Test-Path $stateFile) {
                 $proc = Get-Process -Id ([int]$pid) -ErrorAction Stop
                 Write-Host "  Stopping $key ($($proc.ProcessName), PID $pid)..."
                 Stop-GrimoireProcessTree ([int]$pid)
+                $killed++
             } catch {
                 Write-Host "  $key (PID $pid) already stopped."
             }
         }
     }
-    Invoke-WalCheckpoint
     Remove-Item $stateFile
-    Write-Host "Grimoire stopped."
-    exit 0
+    if ($killed -gt 0) {
+        Invoke-WalCheckpoint
+        Write-Host "Grimoire stopped."
+        exit 0
+    }
+    Write-Host "Recorded PIDs were stale, scanning ports..."
 }
 
 Write-Host "No state file found. Scanning ports $backendPort and $frontendPort..."

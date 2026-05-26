@@ -59,7 +59,6 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 const notFoundCache = new Map<string, number>();
 const CACHE_TTL_MS = 60_000;
-const NOT_FOUND_TTL_MS = 30_000;
 
 function cacheKey(campaignId: string, characterId: string, turnId?: string | null): string {
   return `${campaignId}::${characterId}::${turnId ?? ""}`;
@@ -97,8 +96,8 @@ export function useExpression(
       return;
     }
     const charKey = `${campaignId}::${characterId}`;
-    const notFoundExpiry = notFoundCache.get(charKey);
-    if (notFoundExpiry !== undefined && notFoundExpiry > Date.now()) {
+    const notFoundAt = notFoundCache.get(charKey);
+    if (notFoundAt && notFoundAt > Date.now() - CACHE_TTL_MS) {
       setState({ data: null, loading: false, error: null });
       return;
     }
@@ -113,7 +112,7 @@ export function useExpression(
       .catch((err: unknown) => {
         if (!active) return;
         if (err && typeof err === "object" && "status" in err && (err as { status: number }).status === 404) {
-          notFoundCache.set(charKey, Date.now() + NOT_FOUND_TTL_MS);
+          notFoundCache.set(charKey, Date.now());
         }
         setState({ data: null, loading: false, error: err instanceof Error ? err : new Error(String(err)) });
       });
