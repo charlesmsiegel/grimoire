@@ -1,4 +1,5 @@
 """Tests for the SceneSuggestionEngine."""
+
 from __future__ import annotations
 
 import json
@@ -60,15 +61,25 @@ async def test_suggest_returns_ledger_plus_generated(
     ledger: SceneLedger,
 ) -> None:
     await ledger.add(
-        campaign_id="c1", summary="The harbor at dawn.",
-        source="greeting", greeting_id="gr-1",
+        campaign_id="c1",
+        summary="The harbor at dawn.",
+        source="greeting",
+        greeting_id="gr-1",
     )
     await ledger.add(campaign_id="c1", summary="A meeting with the Archon.", source="llm")
 
     generated = [
-        {"summary": "Bandits on the road.", "proposed_location": "South Road", "proposed_cast": ["alistair"]},
+        {
+            "summary": "Bandits on the road.",
+            "proposed_location": "South Road",
+            "proposed_cast": ["alistair"],
+        },
         {"summary": "A letter arrives.", "proposed_location": "Camp", "proposed_cast": ["mirella"]},
-        {"summary": "A storm rolls in.", "proposed_location": "Plains", "proposed_cast": ["alistair"]},
+        {
+            "summary": "A storm rolls in.",
+            "proposed_location": "Plains",
+            "proposed_cast": ["alistair"],
+        },
     ]
     gateway = _mock_gateway(generated)
     engine = SceneSuggestionEngine(ledger=ledger, gateway=gateway)
