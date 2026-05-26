@@ -85,9 +85,7 @@ async def test_post_row_stores_full_body(setup) -> None:
     post = new_post(author_kind=AuthorKind.NARRATOR, body=long_body, is_player=False)
     await manager.append_post(scene.id, post)
 
-    row = await db.fetchone(
-        "SELECT body FROM posts WHERE scene_id = ?", (scene.id,)
-    )
+    row = await db.fetchone("SELECT body FROM posts WHERE scene_id = ?", (scene.id,))
     assert row is not None
     assert row["body"] == long_body
 

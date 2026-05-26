@@ -423,9 +423,7 @@ class SceneIndexer:
             branches = [campaign_dir / "scenes"]
             branches_dir = campaign_dir / "branches"
             if branches_dir.exists():
-                branches.extend(
-                    b / "scenes" for b in branches_dir.iterdir() if b.is_dir()
-                )
+                branches.extend(b / "scenes" for b in branches_dir.iterdir() if b.is_dir())
             if acquire is not None:
                 async with acquire() as conn:
                     await conn.execute("BEGIN IMMEDIATE")
