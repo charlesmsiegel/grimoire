@@ -220,28 +220,19 @@ async def _get_campaign_summary_cadence(state_store: Any, campaign_id: str) -> i
 async def _set_campaign_summary_cadence(
     state_store: Any, campaign_id: str, value: int | None
 ) -> None:
-    import json as _json
-
-    row = await state_store.db.fetchone("SELECT config FROM campaigns WHERE id = ?", (campaign_id,))
-    raw = (row.get("config") if hasattr(row, "get") else row["config"]) if row else None
-    try:
-        data = _json.loads(raw) if raw else {}
-    except (TypeError, ValueError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    summaries = data.get("summaries")
-    if not isinstance(summaries, dict):
-        summaries = {}
-    if value is None:
-        summaries.pop("running_every_n_posts", None)
+    if value is not None:
+        await state_store.db.execute(
+            """UPDATE campaigns SET config = json_set(
+                   COALESCE(config, '{}'),
+                   '$.summaries.running_every_n_posts', ?
+               ) WHERE id = ?""",
+            (value, campaign_id),
+        )
     else:
-        summaries["running_every_n_posts"] = value
-    if summaries:
-        data["summaries"] = summaries
-    else:
-        data.pop("summaries", None)
-    await state_store.db.execute(
-        "UPDATE campaigns SET config = ? WHERE id = ?",
-        (_json.dumps(data), campaign_id),
-    )
+        await state_store.db.execute(
+            """UPDATE campaigns SET config = json_remove(
+                   COALESCE(config, '{}'),
+                   '$.summaries.running_every_n_posts'
+               ) WHERE id = ?""",
+            (campaign_id,),
+        )
