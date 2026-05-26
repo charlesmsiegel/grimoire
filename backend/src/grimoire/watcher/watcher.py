@@ -261,6 +261,27 @@ class FileWatcher:
     # Public processing API
     # ------------------------------------------------------------------ #
 
+    def _mtime_skip(self, path: Path, mtime_cache: dict[str, tuple[str, str]]) -> bool:
+        """Return True if the file's mtime matches the cached value — skip I/O."""
+        from grimoire.state_store.indexers import file_mtime_iso
+
+        try:
+            rel = str(path.relative_to(self.data_root))
+        except ValueError:
+            return False
+        cached = mtime_cache.get(rel)
+        if cached is None:
+            return False
+        cached_mtime_str, cached_hash = cached
+        try:
+            current_mtime_str = file_mtime_iso(path)
+        except OSError:
+            return False
+        if current_mtime_str == cached_mtime_str:
+            self._known_hashes[path] = cached_hash
+            return True
+        return False
+
     async def scan_now(self, *, scope: str = "all") -> dict[str, Any]:
         """Walk one or both roots and bring SQLite indexes in line with the filesystem.
 
@@ -290,24 +311,26 @@ class FileWatcher:
         library_files = 0
         campaign_files = 0
 
+        mtime_cache = await self.store.bulk_load_index_mtimes()
+
         if do_library:
             library_root = self.data_root / "library"
             if library_root.exists():
-                # Walk the tree off-loop so a deep library doesn't starve the
-                # event loop. Per-file I/O inside _reindex (_parse_file reads
-                # bytes) still runs on the loop, but the rglob walk is the
-                # dominant cost on large libraries.
                 paths = await asyncio.to_thread(lambda: list(_iter_files(library_root)))
                 for path in paths:
                     watched = classify_path(self.data_root, path)
                     if watched is None:
                         continue
+                    if self._mtime_skip(path, mtime_cache):
+                        library_files += 1
+                        if watched.library_id is not None and watched.scope == "library":
+                            seen_library.add(watched.library_id)
+                        await asyncio.sleep(0)
+                        continue
                     await self._reindex(watched, emit=False)
                     library_files += 1
                     if watched.library_id is not None and watched.scope == "library":
                         seen_library.add(watched.library_id)
-                    # Yield to the loop so concurrent HTTP requests aren't
-                    # starved during a large rescan.
                     await asyncio.sleep(0)
 
         if do_campaigns:
@@ -317,6 +340,13 @@ class FileWatcher:
                 for path in paths:
                     watched = classify_path(self.data_root, path)
                     if watched is None:
+                        continue
+                    if self._mtime_skip(path, mtime_cache):
+                        campaign_files += 1
+                        cid = watched.content_index_id
+                        if cid is not None:
+                            seen_content.add(cid)
+                        await asyncio.sleep(0)
                         continue
                     await self._reindex(watched, emit=False)
                     campaign_files += 1

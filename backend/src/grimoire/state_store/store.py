@@ -176,6 +176,19 @@ class StateStore:
             logger.warning("schema drift: %s", w)
         return warnings
 
+    async def bulk_load_index_mtimes(self) -> dict[str, tuple[str, str]]:
+        """Return {relative_path: (file_mtime, content_hash)} for all indexed rows."""
+        result: dict[str, tuple[str, str]] = {}
+        for row in await self.db.fetchall(
+            "SELECT path, file_mtime, content_hash FROM library_index"
+        ):
+            result[row["path"]] = (row["file_mtime"], row["content_hash"])
+        for row in await self.db.fetchall(
+            "SELECT path, file_mtime, content_hash FROM campaign_content_index"
+        ):
+            result[row["path"]] = (row["file_mtime"], row["content_hash"])
+        return result
+
     # ------------------------------------------------------------------
     # Connection helpers
     # ------------------------------------------------------------------
