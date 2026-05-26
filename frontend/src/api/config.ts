@@ -37,6 +37,7 @@ export interface BrowseEntry {
 }
 
 export interface BrowseFilesResponse {
+  directory: string;
   parent: string;
   entries: BrowseEntry[];
 }
