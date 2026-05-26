@@ -41,6 +41,7 @@ export function PlayView({ campaignId }: Props) {
       before: firstOrder,
     });
     play.dispatch({ type: "prepend-posts", posts: result.posts, hasMore: result.has_more });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId, play.state.scene, play.state.posts, play.dispatch]);
 
   const [commitments, setCommitments] = useState<OpenCommitment[]>([]);

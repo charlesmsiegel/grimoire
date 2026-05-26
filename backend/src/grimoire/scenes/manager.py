@@ -741,8 +741,7 @@ class SceneManager:
             )
         else:
             rows = await db.fetchall(
-                "SELECT * FROM posts WHERE scene_id = ? "
-                "ORDER BY order_in_scene DESC LIMIT ?",
+                "SELECT * FROM posts WHERE scene_id = ? ORDER BY order_in_scene DESC LIMIT ?",
                 (scene_id, limit),
             )
         return [
