@@ -12,10 +12,17 @@ interface Props {
   images: Record<string, SceneImage>;
   campaignId?: string;
   scene?: ApiScene | null;
+  hasMorePosts: boolean;
+  onLoadMore: () => void;
 }
 
-export function ScenePane({ posts, pcs, streaming, images, campaignId, scene }: Props) {
+export function ScenePane({
+  posts, pcs, streaming, images, campaignId, scene,
+  hasMorePosts, onLoadMore,
+}: Props) {
+  const topSentinelRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const loadingMoreRef = useRef(false);
   // rAF-coalesce scrolls so dozens of streamed tokens in a single frame
   // turn into one scroll, not dozens of queued animations. Also use
   // ``auto`` (instant) for streaming deltas — smooth animations stacked
@@ -32,6 +39,23 @@ export function ScenePane({ posts, pcs, streaming, images, campaignId, scene }: 
     });
     return () => cancelAnimationFrame(handle);
   }, [posts.length, streaming?.text.length]);
+
+  useEffect(() => {
+    const sentinel = topSentinelRef.current;
+    if (!sentinel || !hasMorePosts) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !loadingMoreRef.current) {
+          loadingMoreRef.current = true;
+          onLoadMore();
+          setTimeout(() => { loadingMoreRef.current = false; }, 300);
+        }
+      },
+      { threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMorePosts, onLoadMore]);
 
   const byPost: Record<string, SceneImage[]> = {};
   const orphans: SceneImage[] = [];
@@ -68,6 +92,7 @@ export function ScenePane({ posts, pcs, streaming, images, campaignId, scene }: 
 
   return (
     <section className="scene-pane" aria-label="Scene posts" aria-live="polite">
+      {hasMorePosts && <div ref={topSentinelRef} className="load-more-sentinel" />}
       {posts.length === 0 && !streaming && (
         <p className="scene-empty">No posts yet. Begin with a post below.</p>
       )}

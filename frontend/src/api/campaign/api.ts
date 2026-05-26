@@ -18,6 +18,7 @@ import type {
   MechanicsSwitchResult,
   NarratorResponseMode,
   OpenCommitment,
+  PaginatedPostsResponse,
   PCEntry,
   RegeneratePostResult,
   ReplayBatchView,
@@ -49,6 +50,16 @@ export const campaignApi = {
 
   getScene: (id: string, sceneId: string) =>
     api.get<SceneDetail>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}`),
+
+  getPostsPaginated: (
+    id: string,
+    sceneId: string,
+    params?: { limit?: number; before?: number },
+  ) =>
+    api.get<PaginatedPostsResponse>(
+      `/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}/posts`,
+      { query: params },
+    ),
 
   endScene: (id: string, sceneId: string) =>
     api.post<ApiScene>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}/end`),

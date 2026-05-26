@@ -1,6 +1,7 @@
 import { type Dispatch, useCallback, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 
+import type { ApiPost } from "../../api/campaign";
 import { campaignApi } from "../../api/campaign";
 import { markEnd, markStart } from "../../state/perf";
 import type { PlayAction, PlayState } from "./playReducer";
@@ -47,11 +48,14 @@ export function usePlayDataLoader(
       const fallback = scenes.find((s) => !s.closed) ?? scenes[scenes.length - 1] ?? null;
       const targetScene = explicitScene ?? pcScene ?? fallback;
       let scene = null;
-      let posts: Awaited<ReturnType<typeof campaignApi.getScene>>["posts"] = [];
+      let posts: ApiPost[] = [];
       if (targetScene) {
         const detail = await campaignApi.getScene(campaignId, targetScene.id);
         scene = detail.scene;
-        posts = detail.posts;
+        const paginated = await campaignApi.getPostsPaginated(campaignId, targetScene.id, {
+          limit: 50,
+        });
+        posts = paginated.posts;
       }
       dispatch({ type: "loaded", pcs, activePcRef, scene, posts });
     } catch (e) {

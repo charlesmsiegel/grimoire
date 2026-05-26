@@ -121,6 +121,11 @@ export interface SceneDetail {
   posts: ApiPost[];
 }
 
+export interface PaginatedPostsResponse {
+  posts: ApiPost[];
+  has_more: boolean;
+}
+
 export interface SubmitTurnResult {
   accepted: boolean;
   turn_id?: string | null;
