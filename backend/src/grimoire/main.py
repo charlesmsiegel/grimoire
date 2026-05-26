@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import shutil
@@ -147,9 +148,49 @@ def _seed_defaults(data_root: Path) -> None:
         log.info("seeded default %s", rel)
 
 
+async def _background_reconcile(container: ServiceContainer) -> None:
+    """Run backfill + scan_now in the background after the server starts serving."""
+    await asyncio.sleep(0.1)
+    try:
+        scene_indexer = container.scene_indexer
+        if scene_indexer is not None:
+            try:
+                await scene_indexer.backfill()
+            except Exception:
+                log.exception("background scene indexer backfill failed")
+
+        file_watcher = container.file_watcher
+        if file_watcher is not None:
+            try:
+                await file_watcher.scan_now()
+            except Exception:
+                log.exception("background library scan failed")
+
+        if (
+            container.state_store_config is not None
+            and container.state_store_config.library.embed_on_index
+            and file_watcher is not None
+        ):
+            try:
+                await reenqueue_missing_embeddings(
+                    container.state_store, file_watcher.embedding_queue
+                )
+            except Exception:
+                log.exception("reenqueue_missing_embeddings failed")
+
+        container.sync_status = "ready"
+        container.sync_error = None
+        log.info("background reconciliation complete")
+    except Exception as exc:
+        log.exception("background reconciliation failed")
+        container.sync_status = "ready"
+        container.sync_error = f"{type(exc).__name__}: {exc}"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     container: ServiceContainer | None = getattr(app.state, "container", None)
+    _prewired = container is not None
     # If the caller pre-wired a container with a state_store, reuse its db
     # so any already-attached services (transient_state, library, …) keep
     # pointing at the same connection pool. Otherwise opening a fresh db
@@ -292,10 +333,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 container.scenes, container.state_store.db, container.event_bus
             )
             scene_indexer.start()
-            try:
-                await scene_indexer.backfill()
-            except Exception:
-                log.exception("scene indexer backfill failed at startup")
             container.scene_indexer = scene_indexer
         if container.scene_ledger is None:
             from grimoire.scenes.ledger import SceneLedger
@@ -609,11 +646,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 config=library_cfg,
             )
             container.file_watcher = file_watcher
-            if library_cfg.scan_on_startup:
-                try:
-                    await file_watcher.scan_now()
-                except Exception:
-                    log.exception("initial library scan failed at startup")
 
         # State Store background workers — embedding drainer (§1), auto-backup
         # (§3), retention sweep (§4), body_compressed summarizer (§5). All
@@ -627,12 +659,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             config=state_store_config.library,
         )
         if state_store_config.library.embed_on_index:
-            try:
-                await reenqueue_missing_embeddings(
-                    container.state_store, file_watcher.embedding_queue
-                )
-            except Exception:
-                log.exception("reenqueue_missing_embeddings failed at startup")
             await embedding_worker.start()
         else:
             log.info("embedding worker disabled (embed_on_index=false)")
@@ -678,6 +704,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.mechanics_watcher = mechanics_watcher
 
         app.state.container = container
+
+        _bg_task: asyncio.Task | None = None
+        if library_cfg.scan_on_startup:
+            if _prewired:
+                await _background_reconcile(container)
+            else:
+                _bg_task = asyncio.create_task(
+                    _background_reconcile(container),
+                    name="background-reconcile",
+                )
     except Exception:
         # Tear down anything we managed to construct before re-raising,
         # otherwise the connection pool stays open and any partially-built
@@ -689,6 +725,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        if _bg_task is not None and not _bg_task.done():
+            _bg_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await _bg_task
         await _stop_mechanics_watcher(app)
         await _shutdown(container, db, close_db=owned_db)
 
