@@ -39,6 +39,7 @@ export type PlayAction =
       activePcRef: string | null;
       scene: ApiScene | null;
       posts: ApiPost[];
+      hasMorePosts?: boolean;
     }
   | { type: "error"; message: string }
   | { type: "set-active-pc"; ref: string }
@@ -97,9 +98,9 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
       const newSceneId = action.scene?.id ?? null;
       const oldSceneId = state.scene?.id ?? null;
       if (newSceneId && newSceneId === oldSceneId) {
-        const snapshotIds = new Set(action.posts.map((p) => p.id));
+        const maxNewOrder = Math.max(0, ...action.posts.map((p) => p.order_in_scene));
         const extra = state.posts.filter(
-          (p) => p.scene_id === newSceneId && !snapshotIds.has(p.id),
+          (p) => p.scene_id === newSceneId && p.order_in_scene > maxNewOrder,
         );
         if (extra.length > 0) posts = [...action.posts, ...extra];
       }
@@ -111,6 +112,7 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
         activePcRef: action.activePcRef,
         scene: action.scene,
         posts,
+        hasMorePosts: action.hasMorePosts ?? true,
         advanceEnabled: stickyDisabled ? false : presentCount >= 2,
         advanceReason: stickyDisabled ? state.advanceReason : "",
         mode: "play",
