@@ -12,7 +12,7 @@ from typing import Any
 
 from grimoire.files import load_yaml
 from grimoire.scenes.storage import PostTuple, parse_body
-from grimoire.scenes.types import AuthorKind, Post, SceneInit  # noqa: F401 (Post re-exported)
+from grimoire.scenes.types import AuthorKind, Post, SceneInit
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,8 @@ async def run_import_pipeline(
             await scene_manager.append_post(scene.id, post)
             posts.append(post)
             tick += 1
-            yield ImportProgress(step="append", current=tick, total=total, detail=f"Appended post {i + 1}/{n_posts}")
+            detail = f"Appended post {i + 1}/{n_posts}"
+            yield ImportProgress(step="append", current=tick, total=total, detail=detail)
     finally:
         if orig_cadence is not None and saved_n is not None:
             orig_cadence.running_summary_every_n_posts = saved_n
@@ -155,7 +156,9 @@ async def run_import_pipeline(
             await scene_manager.add_thread(scene.id, thread, kind)
     except Exception:
         logger.warning("import: thread detection failed", exc_info=True)
-    yield ImportProgress(step="threads", current=tick, total=total, detail="Thread detection complete")
+    yield ImportProgress(
+        step="threads", current=tick, total=total, detail="Thread detection complete",
+    )
 
     tick += 1
     try:
