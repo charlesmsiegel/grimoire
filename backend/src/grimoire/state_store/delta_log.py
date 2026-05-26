@@ -370,6 +370,7 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
         "order_in_scene",
         "author_kind",
         "author_pc_ref",
+        "body",
         "body_excerpt",
         "body_hash",
         "is_player",
