@@ -1,4 +1,5 @@
 """API routes for the new-scene workflow and Scene Ledger."""
+
 from __future__ import annotations
 
 import json
@@ -124,9 +125,7 @@ async def suggest_scenes(
         pass
 
     active_items = await ledger.list_active(campaign_id)
-    greeting_names = [
-        i["summary"] for i in active_items if i["source"] == "greeting"
-    ]
+    greeting_names = [i["summary"] for i in active_items if i["source"] == "greeting"]
 
     last_location = closed[-1].location_ref if closed else None
     last_time: str | None = None
@@ -183,8 +182,9 @@ async def preview_scene(
     prompt = (
         "Given this scene description for a TTRPG campaign, extract structured metadata.\n\n"
         f"Description: {description}\n\n"
-        "Return JSON with keys: title (short scene title), location_ref (place name or null), "
-        "in_game_start (time description or null), present_character_refs (list of character names)."
+        "Return JSON with keys: title (short scene title), "
+        "location_ref (place name or null), in_game_start (time "
+        "description or null), present_character_refs (list of names)."
     )
     request = CompletionRequest(
         model="default",
@@ -245,7 +245,9 @@ async def start_new_scene(
         greeting = None
         world_id = None
         for ref in world_refs:
-            wid = getattr(ref, "world_id", None) or (ref.get("world_id") if isinstance(ref, dict) else None)
+            wid = getattr(ref, "world_id", None) or (
+                ref.get("world_id") if isinstance(ref, dict) else None
+            )
             if not wid:
                 continue
             try:
@@ -280,9 +282,7 @@ async def start_new_scene(
             max_tokens=1024,
             temperature=0.9,
         )
-        response = await gateway.complete(
-            "scene_first_post", request, campaign_id=campaign_id
-        )
+        response = await gateway.complete("scene_first_post", request, campaign_id=campaign_id)
         post = new_post(
             author_kind=AuthorKind.NARRATOR,
             body=response.text.strip(),

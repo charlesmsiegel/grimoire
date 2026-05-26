@@ -1,4 +1,5 @@
 """Scene Ledger: per-campaign persistent store of scene ideas."""
+
 from __future__ import annotations
 
 import uuid

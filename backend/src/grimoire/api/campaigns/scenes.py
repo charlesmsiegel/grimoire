@@ -275,7 +275,9 @@ async def seed_first_scene(
     if ledger is not None:
         used_greeting_id = greeting.id if greeting else None
         for ref in world_refs:
-            wid = getattr(ref, "world_id", None) or (ref.get("world_id") if isinstance(ref, dict) else None)
+            wid = getattr(ref, "world_id", None) or (
+                ref.get("world_id") if isinstance(ref, dict) else None
+            )
             if not wid:
                 continue
             try:

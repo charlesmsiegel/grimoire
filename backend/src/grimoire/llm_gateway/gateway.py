@@ -332,8 +332,12 @@ class LLMGatewayService:
     # campaign YAML or env-var defaults — these are the ones the startup
     # wizard implicitly promises.
     _DEFAULT_LLM_TASKS: tuple[str, ...] = (
-        "main", "library.summarize", "extractor",
-        "scene_suggest", "scene_preview", "scene_first_post",
+        "main",
+        "library.summarize",
+        "extractor",
+        "scene_suggest",
+        "scene_preview",
+        "scene_first_post",
     )
     _DEFAULT_EMBEDDING_TASKS: tuple[str, ...] = ("library.embed",)
 
