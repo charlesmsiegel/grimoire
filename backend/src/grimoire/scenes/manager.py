@@ -722,6 +722,47 @@ class SceneManager:
         posts = await self.get_posts(scene_id)
         return [p for p in posts if p.order_in_scene > scene.last_advance_at_post]
 
+    async def get_posts_paginated(
+        self,
+        scene_id: str,
+        *,
+        limit: int = 50,
+        before: int | None = None,
+        db: Any = None,
+    ) -> list[Post]:
+        """Return posts from the SQLite index, paginated by order_in_scene."""
+        if db is None:
+            raise ValueError("db is required for paginated reads")
+        if before is not None:
+            rows = await db.fetchall(
+                "SELECT * FROM posts WHERE scene_id = ? AND order_in_scene < ? "
+                "ORDER BY order_in_scene DESC LIMIT ?",
+                (scene_id, before, limit),
+            )
+        else:
+            rows = await db.fetchall(
+                "SELECT * FROM posts WHERE scene_id = ? "
+                "ORDER BY order_in_scene DESC LIMIT ?",
+                (scene_id, limit),
+            )
+        return [
+            Post(
+                id=r["id"],
+                scene_id=r["scene_id"],
+                order_in_scene=r["order_in_scene"],
+                author_kind=r["author_kind"],
+                author_pc_ref=r["author_pc_ref"],
+                author_npc_ref=None,
+                body=r["body"],
+                is_player=bool(r["is_player"]),
+                created_at=r["created_at"] or "",
+                turn_id=r["turn_id"] or "",
+                alternates=[],
+                primary_alternate_id=None,
+            )
+            for r in reversed(rows)
+        ]
+
     async def recent_posts(self, scene_id: str, n: int = 10) -> list[Post]:
         posts = await self.get_posts(scene_id)
         if n <= 0:
