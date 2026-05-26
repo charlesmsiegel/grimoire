@@ -228,4 +228,4 @@ pnpm typecheck                   # tsc --noEmit
 
 ## License
 
-TBD — see [specs/00-overview.md](specs/00-overview.md) for discussion (MIT or Apache 2.0).
+TBD — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for discussion (MIT or Apache 2.0).
