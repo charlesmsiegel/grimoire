@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from grimoire.event_bus import Event, EventBus
+from grimoire.library.config import LibraryConfig, LibraryIndexingConfig
 from grimoire.state_store import StateStore
 from grimoire.storage import Database, apply_migrations
 from grimoire.watcher import FileWatcher
@@ -34,7 +35,8 @@ async def bus() -> EventBus:
 
 @pytest.fixture
 async def watcher(store: StateStore, bus: EventBus):
-    w = FileWatcher(data_root=store.data_root, store=store, bus=bus)
+    config = LibraryConfig(indexing=LibraryIndexingConfig(embed_on_index=True))
+    w = FileWatcher(data_root=store.data_root, store=store, bus=bus, config=config)
     yield w
     await w.stop()
 
