@@ -1,4 +1,5 @@
 """Scene suggestion engine: assembles context and generates ideas via LLM."""
+
 from __future__ import annotations
 
 import json
