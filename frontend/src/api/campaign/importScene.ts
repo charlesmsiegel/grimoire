@@ -79,8 +79,10 @@ export const importSceneApi = {
         }
         if (type === "error") {
           void reader.cancel();
-          const errMsg = JSON.parse(data).detail ?? "Import pipeline error";
-          throw new ApiError(500, errMsg, errMsg);
+          const errPayload = JSON.parse(data);
+          const errMsg = errPayload.detail ?? "Import pipeline error";
+          const errStatus = typeof errPayload.status === "number" ? errPayload.status : 500;
+          throw new ApiError(errStatus, errMsg, errMsg);
         }
       }
     }
