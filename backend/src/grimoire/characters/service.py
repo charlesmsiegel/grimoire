@@ -62,10 +62,14 @@ from .ingest import LLMEnrichCallable
 from .pc_profile import (
     PCProfile,
     PCProfileRevision,
-    list_pc_profile_revisions as _list_profile_revisions,
     read_pc_profile,
-    read_pc_profile_revision as _read_profile_revision,
     write_pc_profile,
+)
+from .pc_profile import (
+    list_pc_profile_revisions as _list_profile_revisions,
+)
+from .pc_profile import (
+    read_pc_profile_revision as _read_profile_revision,
 )
 from .promoter import CharacterPromoter
 from .protocols import SheetMigrator
