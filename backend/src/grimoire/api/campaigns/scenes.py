@@ -293,6 +293,6 @@ async def seed_first_scene(
                     proposed_location=g.starting_location,
                 )
                 if g.id == used_greeting_id:
-                    await ledger.mark_used(item_id, scene_id=scene.id)
+                    await ledger.mark_used(campaign_id, item_id, scene_id=scene.id)
 
     return {"scene": to_payload(scene), "created": True}

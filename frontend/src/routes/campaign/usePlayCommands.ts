@@ -60,6 +60,7 @@ export function usePlayCommands(
     const scene = stateRef.current.scene;
     if (!scene) return;
     await campaignApi.endScene(campaignId, scene.id);
+    await refresh();
     dispatch({ type: "start-new-scene" });
     try {
       const resp = await newSceneApi.suggest(campaignId);

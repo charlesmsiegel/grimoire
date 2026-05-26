@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter
@@ -87,7 +89,7 @@ async def update_ledger_item(
     body: LedgerStatusUpdate,
     ledger: SceneLedgerDep,
 ) -> dict[str, str]:
-    await ledger.set_status(item_id, body.status)
+    await ledger.set_status(campaign_id, item_id, body.status)
     return {"id": item_id, "status": body.status}
 
 
@@ -167,7 +169,7 @@ async def preview_scene(
     ledger_id: str | None = None
 
     if body.ledger_id:
-        item = await ledger.get(body.ledger_id)
+        item = await ledger.get(campaign_id, body.ledger_id)
         if item:
             description = item["summary"]
             greeting_id = greeting_id or item.get("greeting_id")
@@ -196,6 +198,8 @@ async def preview_scene(
 
     try:
         meta = json.loads(response.text)
+        if not isinstance(meta, dict):
+            meta = {}
     except (json.JSONDecodeError, TypeError):
         meta = {}
 
@@ -225,17 +229,10 @@ async def start_new_scene(
     from grimoire.scenes.types import AuthorKind, SceneInit
     from grimoire.types.llm import CompletionRequest, Message, MessageRole
 
-    init = SceneInit(
-        campaign_id=campaign_id,
-        title=body.title,
-        location_ref=body.location_ref,
-        greeting_id=body.greeting_id,
-        present_character_refs=body.present_character_refs,
-        present_pc_refs=body.present_pc_refs,
-    )
-    scene = await scenes.start_scene(init)
-
-    first_post = None
+    # Generate the first post BEFORE creating the scene so a failure
+    # doesn't leave an empty scene on disk (issue #9).
+    first_post_body: str | None = None
+    used_greeting = False
 
     if body.first_post_source == "greeting" and body.greeting_id:
         from grimoire.api.campaigns.helpers import _seed_greeting_first_post
@@ -257,24 +254,19 @@ async def start_new_scene(
             except Exception:
                 continue
         if greeting:
-            await _seed_greeting_first_post(
-                scenes=scenes,
-                scene=scene,
-                greeting=greeting,
-                state_store=state_store,
-                library=library,
-                world_id=world_id,
-            )
-            posts = await scenes.get_posts(scene.id)
-            first_post = posts[0] if posts else None
-    else:
+            used_greeting = True
+        # Fallback to generated if greeting not found (issue #6)
+
+    if not used_greeting:
         prompt = (
             "Write the opening narrator post for a TTRPG scene.\n\n"
             f"Title: {body.title}\n"
             f"Location: {body.location_ref or 'unspecified'}\n"
-            f"Present characters: {', '.join(body.present_character_refs) or 'unspecified'}\n\n"
-            "Write 2-3 paragraphs of atmospheric scene-setting in second person. "
-            "Do not include any metadata or headers — just the narrative text."
+            f"Present characters: "
+            f"{', '.join(body.present_character_refs) or 'unspecified'}\n\n"
+            "Write 2-3 paragraphs of atmospheric scene-setting in second "
+            "person. Do not include any metadata or headers — just the "
+            "narrative text."
         )
         request = CompletionRequest(
             model="default",
@@ -283,16 +275,49 @@ async def start_new_scene(
             temperature=0.9,
         )
         response = await gateway.complete("scene_first_post", request, campaign_id=campaign_id)
+        first_post_body = response.text.strip()
+
+    in_game_start: datetime | None = None
+    if body.in_game_start:
+        with contextlib.suppress(ValueError):
+            in_game_start = datetime.fromisoformat(body.in_game_start)
+
+    init = SceneInit(
+        campaign_id=campaign_id,
+        title=body.title,
+        location_ref=body.location_ref,
+        in_game_start=in_game_start,
+        greeting_id=body.greeting_id,
+        present_character_refs=body.present_character_refs,
+        present_pc_refs=body.present_pc_refs,
+    )
+    scene = await scenes.start_scene(init)
+
+    # Append the first post
+    first_post = None
+    if used_greeting and greeting:
+        await _seed_greeting_first_post(
+            scenes=scenes,
+            scene=scene,
+            greeting=greeting,
+            state_store=state_store,
+            library=library,
+            world_id=world_id,
+        )
+        posts = await scenes.get_posts(scene.id)
+        first_post = posts[0] if posts else None
+    elif first_post_body:
         post = new_post(
             author_kind=AuthorKind.NARRATOR,
-            body=response.text.strip(),
+            body=first_post_body,
             is_player=False,
         )
         await scenes.append_post(scene.id, post)
         first_post = post
 
+    # Mark ledger item used (issue #3: scoped by campaign_id)
     if body.ledger_id:
-        await ledger.mark_used(body.ledger_id, scene_id=scene.id)
+        await ledger.mark_used(campaign_id, body.ledger_id, scene_id=scene.id)
 
     for suggestion in body.unchosen_generated:
         summary = suggestion.get("summary", "")

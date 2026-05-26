@@ -57,10 +57,10 @@ async def test_dismiss_and_restore(ledger: SceneLedger) -> None:
         summary="Encounter in the forest.",
         source="llm",
     )
-    await ledger.set_status(item_id, "dismissed")
+    await ledger.set_status("c1", item_id, "dismissed")
     assert len(await ledger.list_active("c1")) == 0
 
-    await ledger.set_status(item_id, "active")
+    await ledger.set_status("c1", item_id, "active")
     assert len(await ledger.list_active("c1")) == 1
 
 
@@ -71,7 +71,7 @@ async def test_mark_used(ledger: SceneLedger) -> None:
         source="greeting",
         greeting_id="gr-tavern",
     )
-    await ledger.mark_used(item_id, scene_id="scene-001")
+    await ledger.mark_used("c1", item_id, scene_id="scene-001")
     items = await ledger.list_all("c1")
     used = [i for i in items if i["status"] == "used"]
     assert len(used) == 1
@@ -82,8 +82,8 @@ async def test_list_all_returns_every_status(ledger: SceneLedger) -> None:
     id1 = await ledger.add(campaign_id="c1", summary="A", source="llm")
     await ledger.add(campaign_id="c1", summary="B", source="llm")
     id3 = await ledger.add(campaign_id="c1", summary="C", source="llm")
-    await ledger.set_status(id1, "dismissed")
-    await ledger.mark_used(id3, scene_id="s1")
+    await ledger.set_status("c1", id1, "dismissed")
+    await ledger.mark_used("c1", id3, scene_id="s1")
     items = await ledger.list_all("c1")
     assert len(items) == 3
 
@@ -114,10 +114,10 @@ async def test_campaign_isolation(ledger: SceneLedger) -> None:
 
 async def test_get_returns_item(ledger: SceneLedger) -> None:
     item_id = await ledger.add(campaign_id="c1", summary="Test", source="llm")
-    item = await ledger.get(item_id)
+    item = await ledger.get("c1", item_id)
     assert item is not None
     assert item["summary"] == "Test"
 
 
 async def test_get_returns_none_for_missing(ledger: SceneLedger) -> None:
-    assert await ledger.get("nonexistent") is None
+    assert await ledger.get("c1", "nonexistent") is None
