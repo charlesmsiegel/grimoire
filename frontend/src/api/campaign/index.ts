@@ -1,4 +1,6 @@
 export { campaignApi } from "./api";
+export { pcProfileApi } from "./pcProfile";
+export type { PCProfilePayload, PCProfileRevision } from "./pcProfile";
 export type {
   PCEntry,
   ApiAlternate,
