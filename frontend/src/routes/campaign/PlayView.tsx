@@ -236,7 +236,7 @@ export function PlayView({ campaignId }: Props) {
               scene={play.state.scene}
             />
           )}
-          <InputArea
+          {play.state.mode !== "play" ? null : <InputArea
             campaignId={campaignId}
             scene={play.state.scene}
             pcs={play.state.pcs}
@@ -249,7 +249,7 @@ export function PlayView({ campaignId }: Props) {
             advanceEnabled={play.state.advanceEnabled}
             advanceReason={play.state.advanceReason}
             busy={busy}
-          />
+          />}
         </div>
         {rightView === "hud" ? (
           <SideHud campaignId={campaignId} />

@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from grimoire.api.deps import (
@@ -32,6 +32,9 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
+_VALID_LEDGER_STATUSES = ("active", "dismissed")
+
+
 class LedgerStatusUpdate(BaseModel):
     status: str
 
@@ -52,6 +55,7 @@ class PreviewResponse(BaseModel):
     greeting_id: str | None = None
     first_post_source: str
     ledger_id: str | None = None
+    original_summary: str | None = None
 
 
 class StartRequest(BaseModel):
@@ -89,6 +93,14 @@ async def update_ledger_item(
     body: LedgerStatusUpdate,
     ledger: SceneLedgerDep,
 ) -> dict[str, str]:
+    if body.status not in _VALID_LEDGER_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"status must be one of {list(_VALID_LEDGER_STATUSES)}",
+        )
+    item = await ledger.get(campaign_id, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="ledger item not found")
     await ledger.set_status(campaign_id, item_id, body.status)
     return {"id": item_id, "status": body.status}
 
@@ -185,8 +197,9 @@ async def preview_scene(
         "Given this scene description for a TTRPG campaign, extract structured metadata.\n\n"
         f"Description: {description}\n\n"
         "Return JSON with keys: title (short scene title), "
-        "location_ref (place name or null), in_game_start (time "
-        "description or null), present_character_refs (list of names)."
+        "location_ref (place name or null), in_game_start (ISO 8601 "
+        "datetime string or null), present_character_refs (list of "
+        "character name strings)."
     )
     request = CompletionRequest(
         model="default",
@@ -203,15 +216,23 @@ async def preview_scene(
     except (json.JSONDecodeError, TypeError):
         meta = {}
 
+    raw_chars = meta.get("present_character_refs", [])
+    if isinstance(raw_chars, str):
+        raw_chars = [raw_chars]
+    elif not isinstance(raw_chars, list):
+        raw_chars = []
+    char_refs = [str(c) for c in raw_chars if c]
+
     return PreviewResponse(
         title=meta.get("title", description[:50]),
         location_ref=meta.get("location_ref"),
         in_game_start=meta.get("in_game_start"),
-        present_character_refs=meta.get("present_character_refs", []),
+        present_character_refs=char_refs,
         present_pc_refs=active_pc_refs,
         greeting_id=greeting_id,
         first_post_source=first_post_source,
         ledger_id=ledger_id,
+        original_summary=description,
     )
 
 

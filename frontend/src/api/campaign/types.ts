@@ -322,6 +322,7 @@ export interface PreviewResponse {
   greeting_id: string | null;
   first_post_source: "greeting" | "adapted_greeting" | "generated";
   ledger_id: string | null;
+  original_summary: string | null;
 }
 
 export interface LedgerEntry {

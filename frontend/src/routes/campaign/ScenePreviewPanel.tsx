@@ -34,12 +34,11 @@ export function ScenePreviewPanel({
     setCreating(true);
     dispatch({ type: "creating-scene" });
     try {
-      // Exclude the chosen suggestion from unchosen backfill (issue #2)
       const allGenerated = suggestions?.generated ?? [];
-      const chosenSummary = preview.title;
-      const unchosen = allGenerated.filter(
-        (g) => g.summary !== chosenSummary,
-      );
+      const originalSummary = preview.original_summary;
+      const unchosen = originalSummary
+        ? allGenerated.filter((g) => g.summary !== originalSummary)
+        : allGenerated;
 
       await newSceneApi.start(campaignId, {
         ...preview,
