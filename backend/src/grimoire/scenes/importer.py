@@ -44,8 +44,14 @@ def parse_import_source(md_path: Path) -> ImportParseResult:
             sidecar_meta = {
                 k: raw[k]
                 for k in (
-                    "title", "location_ref", "in_game_start", "in_game_end",
-                    "mood", "tags", "present_character_refs", "present_pc_refs",
+                    "title",
+                    "location_ref",
+                    "in_game_start",
+                    "in_game_end",
+                    "mood",
+                    "tags",
+                    "present_character_refs",
+                    "present_pc_refs",
                 )
                 if k in raw
             }

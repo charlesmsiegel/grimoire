@@ -50,12 +50,14 @@ def _bool(v: bool) -> tuple[int, bytes]:
 
 
 def test_read_metadata_basic(tmp_path: Path) -> None:
-    data = make_gguf({
-        "general.architecture": _string("llama"),
-        "general.name": _string("Test Model"),
-        "llama.context_length": _uint32(4096),
-        "llama.embedding_length": _uint32(2048),
-    })
+    data = make_gguf(
+        {
+            "general.architecture": _string("llama"),
+            "general.name": _string("Test Model"),
+            "llama.context_length": _uint32(4096),
+            "llama.embedding_length": _uint32(2048),
+        }
+    )
     path = tmp_path / "test.gguf"
     path.write_bytes(data)
 
@@ -67,13 +69,15 @@ def test_read_metadata_basic(tmp_path: Path) -> None:
 
 
 def test_introspect(tmp_path: Path) -> None:
-    data = make_gguf({
-        "general.architecture": _string("llama"),
-        "general.name": _string("My GGUF Model"),
-        "llama.context_length": _uint32(8192),
-        "llama.embedding_length": _uint32(4096),
-        "tokenizer.chat_template": _string("{% for msg in messages %}...{% endfor %}"),
-    })
+    data = make_gguf(
+        {
+            "general.architecture": _string("llama"),
+            "general.name": _string("My GGUF Model"),
+            "llama.context_length": _uint32(8192),
+            "llama.embedding_length": _uint32(4096),
+            "tokenizer.chat_template": _string("{% for msg in messages %}...{% endfor %}"),
+        }
+    )
     path = tmp_path / "model.gguf"
     path.write_bytes(data)
 
@@ -86,11 +90,13 @@ def test_introspect(tmp_path: Path) -> None:
 
 
 def test_introspect_no_chat_template(tmp_path: Path) -> None:
-    data = make_gguf({
-        "general.architecture": _string("bert"),
-        "bert.context_length": _uint32(512),
-        "bert.embedding_length": _uint32(768),
-    })
+    data = make_gguf(
+        {
+            "general.architecture": _string("bert"),
+            "bert.context_length": _uint32(512),
+            "bert.embedding_length": _uint32(768),
+        }
+    )
     path = tmp_path / "embed.gguf"
     path.write_bytes(data)
 
