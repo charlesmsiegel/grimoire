@@ -9,11 +9,10 @@ import pytest
 from grimoire.characters import CharactersService
 from grimoire.characters.pc_profile import (
     PCProfile,
-    PCProfileRevision,
-    read_pc_profile,
-    write_pc_profile,
     list_pc_profile_revisions,
+    read_pc_profile,
     read_pc_profile_revision,
+    write_pc_profile,
 )
 from grimoire.characters.views import render_full_pc
 from grimoire.library import LibraryService

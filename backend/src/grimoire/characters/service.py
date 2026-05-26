@@ -59,14 +59,6 @@ from .errors import (
     CharactersError,
 )
 from .ingest import LLMEnrichCallable
-from .promoter import CharacterPromoter
-from .protocols import SheetMigrator
-from .sheet_manager import (
-    CharacterSheetManager,
-    character_from_entity,
-    character_from_frontmatter,
-    frontmatter_from_payload,
-)
 from .pc_profile import (
     PCProfile,
     PCProfileRevision,
@@ -74,6 +66,14 @@ from .pc_profile import (
     read_pc_profile,
     read_pc_profile_revision as _read_profile_revision,
     write_pc_profile,
+)
+from .promoter import CharacterPromoter
+from .protocols import SheetMigrator
+from .sheet_manager import (
+    CharacterSheetManager,
+    character_from_entity,
+    character_from_frontmatter,
+    frontmatter_from_payload,
 )
 from .view_cache import CharacterViewCache
 from .views import (
