@@ -20,6 +20,27 @@ export interface ImagegenDefaults {
   backend: string | null;
 }
 
+export interface GGUFInfo {
+  architecture: string | null;
+  name: string | null;
+  context_length: number | null;
+  embedding_length: number | null;
+  has_chat_template: boolean;
+  file_type: number | null;
+  quantization_version: number | null;
+}
+
+export interface BrowseEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+}
+
+export interface BrowseFilesResponse {
+  parent: string;
+  entries: BrowseEntry[];
+}
+
 export const configApi = {
   getLLMDefaults: () => api.get<LLMDefaults>("/api/config/llm-defaults"),
 
@@ -37,4 +58,12 @@ export const configApi = {
 
   patchImagegenDefaults: (body: Partial<ImagegenDefaults>) =>
     api.patch<ImagegenDefaults>("/api/config/imagegen-defaults", body),
+
+  browseFiles: (directory?: string, glob?: string) =>
+    api.get<BrowseFilesResponse>("/api/config/browse-files", {
+      query: { directory: directory || undefined, glob: glob || undefined },
+    }),
+
+  ggufIntrospect: (path: string) =>
+    api.get<GGUFInfo>("/api/config/gguf-introspect", { query: { path } }),
 };

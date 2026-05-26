@@ -179,6 +179,8 @@ def load_plugin(
                     f"for kind '{kind.value}': {joined}"
                 )
                 continue
+            if extra_sys_path is not None:
+                instance._plugin_sys_path = str(extra_sys_path)
             instances.append(LoadedInstance(kind=kind, instance=instance))
 
     return LoadResult(

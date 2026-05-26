@@ -13,7 +13,7 @@
  * default model. "Skip" is always available.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError } from "../../api/client";
@@ -24,6 +24,7 @@ import {
   pluginsApi,
 } from "../../api/library";
 import { setupApi } from "../../api/setup";
+import type { GGUFInfo } from "../../components/FilePathPicker";
 import { PluginModelPicker } from "../../components/PluginModelPicker";
 import { SchemaField } from "../../components/SchemaField";
 import { type JsonSchema, initialDraftFromSchema } from "../../components/schemaForm";
@@ -516,6 +517,18 @@ function ProviderConfigCard({ manifest }: { manifest: PluginManifest }) {
     }
   }
 
+  const handleGGUFIntrospect = useCallback(
+    (info: GGUFInfo) => {
+      setDraft((d) => {
+        const next = { ...d };
+        if (info.context_length != null && !d["n_ctx"]) next["n_ctx"] = info.context_length;
+        if (info.name && !d["model_id"]) next["model_id"] = info.name;
+        return next;
+      });
+    },
+    [],
+  );
+
   if (propertyKeys.length === 0) {
     return (
       <div className="startup-provider-config">
@@ -557,6 +570,7 @@ function ProviderConfigCard({ manifest }: { manifest: PluginManifest }) {
               required={required.has(key)}
               value={draft[key]}
               onChange={(v) => setDraft((d) => ({ ...d, [key]: v }))}
+              onFileIntrospect={handleGGUFIntrospect}
             />
           ))}
         <div className="startup-provider-form-actions">

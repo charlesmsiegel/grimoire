@@ -7,6 +7,7 @@
  * {@link PluginModelPicker} for catalog-aware model selection.
  */
 
+import { FilePathPicker, type GGUFInfo } from "./FilePathPicker";
 import { PluginModelPicker } from "./PluginModelPicker";
 import type { JsonSchema } from "./schemaForm";
 
@@ -17,13 +18,36 @@ interface Props {
   required: boolean;
   value: unknown;
   onChange: (v: unknown) => void;
+  onFileIntrospect?: (info: GGUFInfo) => void;
 }
 
-export function SchemaField({ pluginId, name, schema, required, value, onChange }: Props) {
+export function SchemaField({
+  pluginId,
+  name,
+  schema,
+  required,
+  value,
+  onChange,
+  onFileIntrospect,
+}: Props) {
   const type = Array.isArray(schema.type) ? schema.type[0] : (schema.type ?? "string");
   const label = schema.title ?? name;
   const placeholder = schema.description ?? "";
   const isSecret = schema.format === "password" || /secret|token|key/i.test(name);
+
+  if (schema.format === "file-path") {
+    return (
+      <FilePathPicker
+        label={label}
+        description={schema.description}
+        required={required}
+        value={typeof value === "string" ? value : ""}
+        glob={typeof schema["x-glob"] === "string" ? schema["x-glob"] : undefined}
+        onChange={(v) => onChange(v)}
+        onIntrospect={onFileIntrospect}
+      />
+    );
+  }
 
   if (schema["x-source"] === "models") {
     return (

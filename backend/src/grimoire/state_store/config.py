@@ -68,7 +68,7 @@ def _parse_duration(value: Any, *, field_name: str) -> int | None:
 class LibrarySectionConfig:
     watch: bool = True
     scan_on_startup: bool = True
-    embed_on_index: bool = True
+    embed_on_index: bool = False
     embedding_batch_size: int = 50
     embedding_provider: str | None = None
 

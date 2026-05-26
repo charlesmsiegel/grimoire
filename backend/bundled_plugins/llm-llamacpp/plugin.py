@@ -14,6 +14,7 @@ through an asyncio queue.
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -33,6 +34,19 @@ from grimoire.types.llm import (
 
 def _role(role: Any) -> str:
     return role.value if hasattr(role, "value") else str(role)
+
+
+def _ensure_llama_cpp_importable(plugin: Any) -> None:
+    """Make sure ``llama_cpp`` is importable, restoring the plugin venv path if needed."""
+    try:
+        import llama_cpp  # noqa: F401
+    except ImportError:
+        extra = getattr(plugin, "_plugin_sys_path", None)
+        if not extra:
+            raise
+        if extra not in sys.path:
+            sys.path.insert(0, extra)
+        import llama_cpp  # noqa: F401, F811
 
 
 class LlamaCppLLMProvider:
@@ -59,9 +73,7 @@ class LlamaCppLLMProvider:
         )
         self._llama: Any = None
         self._load_lock = threading.Lock()
-        # Reflect the configured context size in the published capabilities so
-        # the Gateway's budget planner sees a real number even before the
-        # model is loaded.
+        self._inference_lock = threading.Lock()
         self.capabilities = ProviderCapabilities(
             streaming=True,
             tools=False,
@@ -81,12 +93,9 @@ class LlamaCppLLMProvider:
             raise RuntimeError("llamacpp provider: model_path not configured")
         if not Path(self._model_path).exists():
             raise RuntimeError(f"llamacpp provider: model file not found at {self._model_path}")
-        try:
-            from llama_cpp import Llama
-        except ImportError as exc:  # pragma: no cover - exercised by integration
-            raise RuntimeError(
-                "llama-cpp-python not installed; add it to the plugin's venv"
-            ) from exc
+        _ensure_llama_cpp_importable(self)
+        from llama_cpp import Llama
+
         with self._load_lock:
             if self._llama is None:
                 kwargs: dict[str, Any] = {
@@ -112,13 +121,17 @@ class LlamaCppLLMProvider:
         llama = self._get_llama()
         prompt = self._to_prompt(request)
         start = time.monotonic()
-        out = await asyncio.to_thread(
-            llama,
-            prompt,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
-            stop=list(request.stop_sequences) or None,
-        )
+
+        def _run() -> Any:
+            with self._inference_lock:
+                return llama(
+                    prompt,
+                    max_tokens=request.max_tokens,
+                    temperature=request.temperature,
+                    stop=list(request.stop_sequences) or None,
+                )
+
+        out = await asyncio.to_thread(_run)
         elapsed_ms = int((time.monotonic() - start) * 1000)
         choice = (out.get("choices") or [{}])[0]
         usage_d = out.get("usage") or {}
@@ -153,21 +166,22 @@ class LlamaCppLLMProvider:
         sentinel = object()
 
         def _produce() -> None:
-            try:
-                for piece in llama(
-                    prompt,
-                    max_tokens=request.max_tokens,
-                    temperature=request.temperature,
-                    stop=list(request.stop_sequences) or None,
-                    stream=True,
-                ):
-                    text = (piece.get("choices") or [{}])[0].get("text", "")
-                    if text:
-                        loop.call_soon_threadsafe(queue.put_nowait, text)
-            except Exception as exc:  # pragma: no cover - surfaces in tests via integration
-                loop.call_soon_threadsafe(queue.put_nowait, exc)
-            finally:
-                loop.call_soon_threadsafe(queue.put_nowait, sentinel)
+            with self._inference_lock:
+                try:
+                    for piece in llama(
+                        prompt,
+                        max_tokens=request.max_tokens,
+                        temperature=request.temperature,
+                        stop=list(request.stop_sequences) or None,
+                        stream=True,
+                    ):
+                        text = (piece.get("choices") or [{}])[0].get("text", "")
+                        if text:
+                            loop.call_soon_threadsafe(queue.put_nowait, text)
+                except Exception as exc:  # pragma: no cover - surfaces in tests via integration
+                    loop.call_soon_threadsafe(queue.put_nowait, exc)
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, sentinel)
 
         threading.Thread(target=_produce, daemon=True).start()
 
@@ -199,7 +213,11 @@ class LlamaCppLLMProvider:
         except Exception:
             return max(1, len(text) // 4)
         try:
-            tokens = await asyncio.to_thread(llama.tokenize, text.encode("utf-8"))
+            def _tokenize() -> list:
+                with self._inference_lock:
+                    return llama.tokenize(text.encode("utf-8"))
+
+            tokens = await asyncio.to_thread(_tokenize)
             return len(tokens)
         except Exception:  # pragma: no cover - defensive
             return max(1, len(text) // 4)
@@ -219,7 +237,7 @@ class LlamaCppLLMProvider:
                 message=f"model file not found at {self._model_path}",
             )
         try:
-            import llama_cpp  # noqa: F401
+            _ensure_llama_cpp_importable(self)
         except ImportError:
             return HealthStatus(
                 level=HealthLevel.UNHEALTHY,
@@ -238,9 +256,6 @@ class LlamaCppLLMProvider:
     # ------------------------------------------------------------------ #
 
     def _to_prompt(self, request: CompletionRequest) -> str:
-        # A minimal chat template that works for most instruct-tuned models;
-        # users who need a specific template should set `chat_format` and the
-        # llama-cpp-python library handles formatting itself.
         parts: list[str] = []
         if request.system:
             parts.append(f"<|system|>\n{request.system}\n")

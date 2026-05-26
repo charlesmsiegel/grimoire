@@ -9,6 +9,8 @@ description: |
   Runs entirely offline with no API calls. Supports any GGUF embedding
   model (nomic-embed, BGE, E5, etc.) and offloads to GPU when configured.
 
+isolated_venv: true
+
 implements:
   - embedding_provider
 
@@ -20,6 +22,8 @@ config_schema:
   properties:
     model_path:
       type: string
+      format: file-path
+      x-glob: "*.gguf"
       title: Model path
       description: Absolute path to a GGUF embedding model file on disk.
     n_ctx:

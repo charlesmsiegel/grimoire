@@ -225,6 +225,15 @@ export async function rescanCampaigns(): Promise<CampaignsRescanReport> {
   return api.post<CampaignsRescanReport>("/api/campaigns/rescan");
 }
 
+export interface DiscoverResult {
+  discovered: number;
+  campaigns: string[];
+}
+
+export async function discoverCampaigns(): Promise<DiscoverResult> {
+  return api.post<DiscoverResult>("/api/campaigns/discover");
+}
+
 export async function createCampaign(input: CampaignCreateInput): Promise<CampaignSummaryPayload> {
   return api.post<CampaignSummaryPayload>("/api/campaigns", input);
 }
