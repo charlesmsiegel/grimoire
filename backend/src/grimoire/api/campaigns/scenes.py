@@ -194,6 +194,23 @@ async def update_scene(
     }
 
 
+@router.post("/{campaign_id}/scenes/{scene_id}/summarize")
+async def summarize_scene(
+    campaign_id: str,
+    scene_id: str,
+    scenes: ScenesDep,
+    force: bool = False,
+) -> Any:
+    try:
+        await _require_scene_owned(scenes, campaign_id, scene_id)
+        summary, key_beats = await scenes.generate_summary(scene_id, force=force)
+        return {"summary": summary, "key_beats": key_beats}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
 @router.post("/{campaign_id}/scenes/{scene_id}/end")
 async def end_scene(
     campaign_id: str,
