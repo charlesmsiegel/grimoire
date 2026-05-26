@@ -218,10 +218,10 @@ async def upsert_post_row(
         """
         INSERT INTO posts (
             id, scene_id, campaign_id, branch_id, turn_id, order_in_scene,
-            author_kind, author_pc_ref, body_excerpt, body_hash,
+            author_kind, author_pc_ref, body, body_excerpt, body_hash,
             is_player, created_at, retconned_from
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
         ON CONFLICT(id) DO UPDATE SET
             scene_id = excluded.scene_id,
             campaign_id = excluded.campaign_id,
@@ -230,6 +230,7 @@ async def upsert_post_row(
             order_in_scene = excluded.order_in_scene,
             author_kind = excluded.author_kind,
             author_pc_ref = excluded.author_pc_ref,
+            body = excluded.body,
             body_excerpt = excluded.body_excerpt,
             body_hash = excluded.body_hash,
             is_player = excluded.is_player,
@@ -244,12 +245,11 @@ async def upsert_post_row(
             order_in_scene,
             _author_kind_str(author_kind),
             author_pc_ref,
+            body,
             body_excerpt,
             body_hash,
             1 if is_player else 0,
             created_at_str,
-            # retconned_from intentionally left null — Orchestrator retcon
-            # would set it via a follow-up update once that path exists.
         ),
     )
 

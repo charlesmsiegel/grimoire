@@ -78,6 +78,20 @@ async def test_post_append_creates_post_row(setup) -> None:
     assert int(scene_row["post_count"]) == 1
 
 
+async def test_post_row_stores_full_body(setup) -> None:
+    manager, _, db = setup
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    long_body = "A" * 500
+    post = new_post(author_kind=AuthorKind.NARRATOR, body=long_body, is_player=False)
+    await manager.append_post(scene.id, post)
+
+    row = await db.fetchone(
+        "SELECT body FROM posts WHERE scene_id = ?", (scene.id,)
+    )
+    assert row is not None
+    assert row["body"] == long_body
+
+
 async def test_post_delete_renumbers_index(setup) -> None:
     manager, _, db = setup
     scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
