@@ -101,8 +101,10 @@ async def get_pc_profile(
         profile = await characters.get_pc_profile(campaign_id, character_ref)
         if profile is None:
             return {
-                "description": "", "goals": [],
-                "player_notes": "", "character_ref": character_ref,
+                "description": "",
+                "goals": [],
+                "player_notes": "",
+                "character_ref": character_ref,
             }
         return to_payload(profile)
     except Exception as exc:
@@ -154,9 +156,7 @@ async def get_pc_profile_revision(
     from fastapi import HTTPException
 
     try:
-        revision = await characters.get_pc_profile_revision(
-            campaign_id, character_ref, timestamp
-        )
+        revision = await characters.get_pc_profile_revision(campaign_id, character_ref, timestamp)
         if revision is None:
             raise HTTPException(status_code=404, detail="Revision not found")
         return to_payload(revision)

@@ -213,6 +213,7 @@ class LlamaCppLLMProvider:
         except Exception:
             return max(1, len(text) // 4)
         try:
+
             def _tokenize() -> list:
                 with self._inference_lock:
                     return llama.tokenize(text.encode("utf-8"))
