@@ -314,6 +314,7 @@ async def patch_imagegen_defaults(payload: ImagegenDefaultsPatch) -> Any:
 
 
 class BrowseFilesResponse(BaseModel):
+    directory: str
     parent: str
     entries: list[dict[str, Any]]
 
@@ -341,7 +342,7 @@ async def browse_files(
     except PermissionError as err:
         raise HTTPException(status_code=403, detail=f"Permission denied: {base}") from err
 
-    return BrowseFilesResponse(parent=str(base.parent), entries=entries)
+    return BrowseFilesResponse(directory=str(base), parent=str(base.parent), entries=entries)
 
 
 @router.get("/gguf-introspect")

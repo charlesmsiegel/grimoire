@@ -38,7 +38,7 @@ export function FilePathPicker({
       setError(null);
       try {
         const res = await configApi.browseFiles(dir, glob);
-        setDirectory(dir ?? res.parent);
+        setDirectory(res.directory);
         setParent(res.parent);
         setEntries(res.entries);
       } catch (err) {
