@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from grimoire.files import load_yaml
-from grimoire.scenes.storage import PostTuple, parse_body
+from grimoire.scenes.storage import PostTuple, parse_body, scene_paths, write_sidecar
 from grimoire.scenes.types import AuthorKind, Post, SceneInit
 
 logger = logging.getLogger(__name__)
@@ -121,17 +121,23 @@ async def run_import_pipeline(
     in_game_end = _parse_dt(metadata.get("in_game_end"))
     if in_game_end is not None:
         scene.in_game_end = in_game_end
+        _, yaml_path = scene_paths(scene_manager.data_root, scene)
+        write_sidecar(yaml_path, scene)
 
     tick = 1
     yield ImportProgress(step="copy", current=tick, total=total, detail="Scene created")
 
-    # Suppress per-post running-summary events during bulk append — they
-    # fire an LLM call on every Nth post and slow the import to a crawl.
-    orig_cadence = getattr(scene_manager, "config", None)
-    saved_n: int | None = None
-    if orig_cadence is not None:
-        saved_n = orig_cadence.running_summary_every_n_posts
-        orig_cadence.running_summary_every_n_posts = 0
+    # Suppress per-post running-summary events during bulk append by
+    # writing a campaign-level cadence override of 0 (disabled). This is
+    # scoped to the campaign and does not affect other scenes/campaigns.
+    state_store = getattr(scene_manager, "_state_store", None)
+    saved_cadence: int | None = None
+    if state_store is not None:
+        try:
+            saved_cadence = await _get_campaign_summary_cadence(state_store, campaign_id)
+            await _set_campaign_summary_cadence(state_store, campaign_id, 0)
+        except Exception:
+            logger.debug("import: could not suppress summary cadence", exc_info=True)
 
     now = datetime.now(UTC)
     posts: list[Post] = []
@@ -155,8 +161,11 @@ async def run_import_pipeline(
             detail = f"Appended post {i + 1}/{n_posts}"
             yield ImportProgress(step="append", current=tick, total=total, detail=detail)
     finally:
-        if orig_cadence is not None and saved_n is not None:
-            orig_cadence.running_summary_every_n_posts = saved_n
+        if state_store is not None:
+            try:
+                await _set_campaign_summary_cadence(state_store, campaign_id, saved_cadence)
+            except Exception:
+                logger.debug("import: could not restore summary cadence", exc_info=True)
 
     tick += 1
     try:
@@ -173,14 +182,66 @@ async def run_import_pipeline(
     )
 
     tick += 1
+    summary_detail = "Summary generated"
     try:
         await scene_manager.generate_summary(scene.id, force=True)
     except Exception:
         logger.warning("import: summarization failed", exc_info=True)
-    yield ImportProgress(step="summarize", current=tick, total=total, detail="Summary generated")
+        summary_detail = "Summary skipped (no model configured)"
+    yield ImportProgress(step="summarize", current=tick, total=total, detail=summary_detail)
 
     tick += 1
     yield ImportProgress(step="embed", current=tick, total=total, detail="Embedding enqueued")
 
     tick += 1
     yield ImportProgress(step="done", current=tick, total=total, detail=scene.id)
+
+
+async def _get_campaign_summary_cadence(state_store: Any, campaign_id: str) -> int | None:
+    import json as _json
+
+    row = await state_store.db.fetchone("SELECT config FROM campaigns WHERE id = ?", (campaign_id,))
+    if not row:
+        return None
+    raw = row.get("config") if hasattr(row, "get") else row["config"]
+    if not raw:
+        return None
+    try:
+        data = _json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    block = data.get("summaries") if isinstance(data, dict) else None
+    if not isinstance(block, dict):
+        return None
+    n = block.get("running_every_n_posts")
+    return int(n) if isinstance(n, int) else None
+
+
+async def _set_campaign_summary_cadence(
+    state_store: Any, campaign_id: str, value: int | None
+) -> None:
+    import json as _json
+
+    row = await state_store.db.fetchone("SELECT config FROM campaigns WHERE id = ?", (campaign_id,))
+    raw = (row.get("config") if hasattr(row, "get") else row["config"]) if row else None
+    try:
+        data = _json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    summaries = data.get("summaries")
+    if not isinstance(summaries, dict):
+        summaries = {}
+    if value is None:
+        summaries.pop("running_every_n_posts", None)
+    else:
+        summaries["running_every_n_posts"] = value
+    if summaries:
+        data["summaries"] = summaries
+    else:
+        data.pop("summaries", None)
+    await state_store.db.execute(
+        "UPDATE campaigns SET config = ? WHERE id = ?",
+        (_json.dumps(data), campaign_id),
+    )
