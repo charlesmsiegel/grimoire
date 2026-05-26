@@ -89,7 +89,32 @@ function useCostTotals(campaignId: string | null): CostState {
   return totals;
 }
 
+function useSyncStatus(): "syncing" | "ready" {
+  const [status, setStatus] = useState<"syncing" | "ready">("ready");
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const resp = await fetch("/api/health");
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!cancelled) setStatus(data.sync_status ?? "ready");
+      } catch {
+        // Ignore fetch errors
+      }
+    };
+    void check();
+    return () => { cancelled = true; };
+  }, []);
+
+  useCampaignEvent("library_indexed", () => setStatus("ready"));
+
+  return status;
+}
+
 export function StatusBar({ wsStatus }: StatusBarProps) {
+  const syncStatus = useSyncStatus();
   const state = useAppState();
   const { mode, resolved, cycle } = useTheme();
   const active = state.campaigns.find((c) => c.id === state.activeCampaignId) ?? null;
@@ -105,6 +130,11 @@ export function StatusBar({ wsStatus }: StatusBarProps) {
         <span className="dot" aria-hidden />
         {statusLabel(wsStatus)}
       </span>
+      {syncStatus === "syncing" && (
+        <span className="status-item" data-status="syncing">
+          syncing library…
+        </span>
+      )}
       <span className="status-item">campaign: {active?.name ?? "—"}</span>
       <span className="status-item">model: {modelLabel ?? "—"}</span>
       <span className="status-item">
