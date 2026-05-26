@@ -56,7 +56,7 @@ export const importSceneApi = {
     const decoder = new TextDecoder();
     let buf = "";
     let sceneId = "";
-    for (;;) {
+    outer: for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
@@ -71,8 +71,11 @@ export const importSceneApi = {
         }
         if (type === "result") {
           sceneId = JSON.parse(data).scene_id;
+          void reader.cancel();
+          break outer;
         }
         if (type === "error") {
+          void reader.cancel();
           const err = JSON.parse(data);
           throw new ApiError(500, err.detail ?? "Import pipeline error");
         }

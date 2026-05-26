@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
-from grimoire.api.deps import ContainerDep, ScenesDep
+from grimoire.api.deps import ScenesDep
 from grimoire.scenes.importer import parse_import_source, run_import_pipeline
 
 logger = logging.getLogger(__name__)
@@ -74,34 +74,10 @@ async def import_scene(
     campaign_id: str,
     body: ImportRequest,
     scenes: ScenesDep,
-    container: ContainerDep,
 ) -> StreamingResponse:
     md_path = Path(body.path).resolve()
     if not md_path.is_file():
         raise HTTPException(status_code=400, detail=f"Not a file: {body.path}")
-
-    extractor = getattr(container, "extractor", None)
-
-    delta_applier = None
-    if extractor is not None:
-        try:
-            from grimoire.extractor.config import ExtractorConfig
-            from grimoire.orchestrator.config import OrchestratorConfig
-            from grimoire.orchestrator.delta_applier import DeltaApplier
-
-            delta_applier = DeltaApplier(
-                state_store=container.state_store,
-                continuity=container.continuity,
-                extractor=extractor,
-                world=getattr(container, "world", None),
-                event_bus=container.event_bus,
-                gateway=container.llm_gateway,
-                extractor_config=ExtractorConfig(),
-                config=OrchestratorConfig(),
-                auto_disable=None,
-            )
-        except Exception:
-            logger.debug("import: could not build DeltaApplier, proceeding without", exc_info=True)
 
     metadata = body.model_dump(exclude={"path", "title"})
 
@@ -110,8 +86,6 @@ async def import_scene(
         try:
             async for progress in run_import_pipeline(
                 scene_manager=scenes,
-                extractor=extractor,
-                delta_applier=delta_applier,
                 md_path=md_path,
                 campaign_id=campaign_id,
                 title=body.title,

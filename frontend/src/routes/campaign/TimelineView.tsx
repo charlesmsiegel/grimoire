@@ -37,7 +37,24 @@ export function TimelineView() {
     <section className="route campaign-timeline" aria-labelledby="timeline-heading">
       <header className="route-header">
         <h2 id="timeline-heading">Timeline</h2>
+        <button
+          type="button"
+          className="import-scene-btn"
+          onClick={() => setShowImport(true)}
+        >
+          Import Scene
+        </button>
       </header>
+      {showImport && (
+        <ImportSceneDialog
+          campaignId={campaignId}
+          onClose={() => setShowImport(false)}
+          onImported={() => {
+            setShowImport(false);
+            state.reload();
+          }}
+        />
+      )}
       <Loading state={state} emptyMessage="No scenes recorded yet.">
         {(scenes) => {
           const moods = collectMoods(scenes);
@@ -76,13 +93,6 @@ export function TimelineView() {
                     <option value="closed">Closed</option>
                   </select>
                 </label>
-                <button
-                  type="button"
-                  className="import-scene-btn"
-                  onClick={() => setShowImport(true)}
-                >
-                  Import Scene
-                </button>
               </div>
 
               <ol className="timeline">
@@ -118,16 +128,6 @@ export function TimelineView() {
 
               {selectedScene && (
                 <SceneDetail scene={selectedScene} onJump={() => jumpToScene(selectedScene.id)} />
-              )}
-              {showImport && (
-                <ImportSceneDialog
-                  campaignId={campaignId}
-                  onClose={() => setShowImport(false)}
-                  onImported={() => {
-                    setShowImport(false);
-                    state.reload();
-                  }}
-                />
               )}
             </div>
           );

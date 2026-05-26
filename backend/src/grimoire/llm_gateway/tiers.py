@@ -25,6 +25,7 @@ class Tier(StrEnum):
 _TASK_TIER: dict[str, Tier] = {
     # Heavy — generative work
     "main": Tier.HEAVY,
+    "scene_summary": Tier.HEAVY,
     "scenes.running_summary": Tier.HEAVY,
     "scenes.final_summary": Tier.HEAVY,
     "auxiliary.rewrite_post": Tier.HEAVY,

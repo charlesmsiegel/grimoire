@@ -12,7 +12,7 @@ from typing import Any
 
 from grimoire.files import load_yaml
 from grimoire.scenes.storage import PostTuple, parse_body
-from grimoire.scenes.types import AuthorKind, Post, SceneInit
+from grimoire.scenes.types import AuthorKind, Post, SceneInit  # noqa: F401 (Post re-exported)
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +79,6 @@ class ImportProgress:
 async def run_import_pipeline(
     *,
     scene_manager: Any,
-    extractor: Any | None,
-    delta_applier: Any | None,
     md_path: Path,
     campaign_id: str,
     title: str,
@@ -89,7 +87,8 @@ async def run_import_pipeline(
     """Run the full import pipeline, yielding progress events."""
     parsed = parse_import_source(md_path)
     n_posts = parsed.post_count
-    total = n_posts + 6  # copy, index, N extracts, threads, summarize, embed, done
+    # copy, N appends, threads, summarize, embed, done
+    total = n_posts + 5
 
     from grimoire.scenes.storage import slugify
 
@@ -117,51 +116,37 @@ async def run_import_pipeline(
     tick = 1
     yield ImportProgress(step="copy", current=tick, total=total, detail="Scene created")
 
+    # Suppress per-post running-summary events during bulk append — they
+    # fire an LLM call on every Nth post and slow the import to a crawl.
+    orig_cadence = getattr(scene_manager, "config", None)
+    saved_n: int | None = None
+    if orig_cadence is not None:
+        saved_n = orig_cadence.running_summary_every_n_posts
+        orig_cadence.running_summary_every_n_posts = 0
+
     now = datetime.now(UTC)
     posts: list[Post] = []
-    for order, kind, pc_ref, npc_ref, body in parsed.posts:
-        post = Post(
-            id=uuid.uuid4().hex,
-            scene_id=scene.id,
-            order_in_scene=order,
-            author_kind=kind,
-            body=body,
-            is_player=(kind == AuthorKind.PC),
-            created_at=now,
-            turn_id=uuid.uuid4().hex,
-            author_pc_ref=pc_ref,
-            author_npc_ref=npc_ref,
-        )
-        await scene_manager.append_post(scene.id, post)
-        posts.append(post)
-
-    tick += 1
-    yield ImportProgress(step="index", current=tick, total=total, detail=f"Indexed {n_posts} posts")
-
-    for i, post in enumerate(posts):
-        tick += 1
-        if extractor is not None:
-            try:
-                result = await extractor.extract_from_user_text(
-                    user_text=post.body,
-                    scene=scene,
-                    campaign_id=campaign_id,
-                    player_pc_ref=post.author_pc_ref,
-                    turn_id=post.turn_id,
-                )
-                if delta_applier is not None and result and result.deltas:
-                    try:
-                        await delta_applier.apply_routing(
-                            campaign_id=campaign_id,
-                            branch_id="main",
-                            turn_id=post.turn_id,
-                            extraction=result,
-                        )
-                    except Exception:
-                        logger.warning("import: delta routing failed for post %d", i + 1, exc_info=True)
-            except Exception:
-                logger.warning("import: extraction failed for post %d", i + 1, exc_info=True)
-        yield ImportProgress(step="extract", current=tick, total=total, detail=f"Extracted post {i + 1}/{n_posts}")
+    try:
+        for i, (order, kind, pc_ref, npc_ref, body) in enumerate(parsed.posts):
+            post = Post(
+                id=uuid.uuid4().hex,
+                scene_id=scene.id,
+                order_in_scene=order,
+                author_kind=kind,
+                body=body,
+                is_player=(kind == AuthorKind.PC),
+                created_at=now,
+                turn_id=uuid.uuid4().hex,
+                author_pc_ref=pc_ref,
+                author_npc_ref=npc_ref,
+            )
+            await scene_manager.append_post(scene.id, post)
+            posts.append(post)
+            tick += 1
+            yield ImportProgress(step="append", current=tick, total=total, detail=f"Appended post {i + 1}/{n_posts}")
+    finally:
+        if orig_cadence is not None and saved_n is not None:
+            orig_cadence.running_summary_every_n_posts = saved_n
 
     tick += 1
     try:
