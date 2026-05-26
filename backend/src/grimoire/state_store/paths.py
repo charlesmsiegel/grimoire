@@ -306,6 +306,38 @@ def sheet_path(
     )
 
 
+def pc_profile_path(
+    data_root: Path,
+    campaign_id: str,
+    character_id: str,
+) -> Path:
+    validate_path_component(campaign_id, name="campaign_id")
+    validate_path_component(character_id, name="character_id")
+    return (
+        campaigns_root(data_root)
+        / campaign_id
+        / "characters"
+        / character_id
+        / "profile.md"
+    )
+
+
+def pc_profile_revisions_dir(
+    data_root: Path,
+    campaign_id: str,
+    character_id: str,
+) -> Path:
+    validate_path_component(campaign_id, name="campaign_id")
+    validate_path_component(character_id, name="character_id")
+    return (
+        campaigns_root(data_root)
+        / campaign_id
+        / "characters"
+        / character_id
+        / "revisions"
+    )
+
+
 def content_path(
     data_root: Path,
     campaign_id: str,
