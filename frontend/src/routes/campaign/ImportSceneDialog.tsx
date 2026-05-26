@@ -25,6 +25,7 @@ export function ImportSceneDialog({ campaignId, onClose, onImported }: Props) {
   const [title, setTitle] = useState("");
   const [locationRef, setLocationRef] = useState("");
   const [inGameStart, setInGameStart] = useState("");
+  const [inGameEnd, setInGameEnd] = useState("");
   const [mood, setMood] = useState("");
   const [tags, setTags] = useState("");
   const [pcRefs, setPcRefs] = useState("");
@@ -47,6 +48,7 @@ export function ImportSceneDialog({ campaignId, onClose, onImported }: Props) {
           if (typeof s.title === "string") setTitle(s.title);
           if (typeof s.location_ref === "string") setLocationRef(s.location_ref);
           if (typeof s.in_game_start === "string") setInGameStart(s.in_game_start);
+          if (typeof s.in_game_end === "string") setInGameEnd(s.in_game_end);
           if (typeof s.mood === "string") setMood(s.mood);
           if (Array.isArray(s.tags)) setTags((s.tags as string[]).join(", "));
           if (Array.isArray(s.present_pc_refs))
@@ -99,6 +101,7 @@ export function ImportSceneDialog({ campaignId, onClose, onImported }: Props) {
           title,
           location_ref: locationRef || null,
           in_game_start: inGameStart || null,
+          in_game_end: inGameEnd || null,
           mood: mood || null,
           tags: splitRefs(tags),
           present_character_refs: [...allPcRefs, ...allNpcRefs],
@@ -222,6 +225,7 @@ export function ImportSceneDialog({ campaignId, onClose, onImported }: Props) {
                 setTitle("");
                 setLocationRef("");
                 setInGameStart("");
+                setInGameEnd("");
                 setMood("");
                 setTags("");
                 setPcRefs("");
