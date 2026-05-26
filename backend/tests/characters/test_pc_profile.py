@@ -194,6 +194,28 @@ def test_render_full_pc_no_profile_no_capabilities() -> None:
     assert "## Player Notes" not in result
 
 
+def test_render_full_pc_section_ordering() -> None:
+    """Verify the rendered card follows the spec ordering."""
+    char = _make_character(description="Library desc.", body="# Background\nBackstory here.")
+    profile = PCProfile(
+        character_ref="library:worlds/wod/characters/alistair",
+        goals=["Goal A"],
+        player_notes="Meta notes.",
+        description="Campaign context.",
+    )
+    capabilities = [
+        Capability(id="wod.dominate.2", name="Dominate", kind="discipline"),
+    ]
+    result = render_full_pc(char, profile=profile, capabilities=capabilities)
+    desc_pos = result.index("Library desc.")
+    ctx_pos = result.index("## Campaign Context")
+    goals_pos = result.index("## Goals")
+    cap_pos = result.index("## Capabilities")
+    voice_pos = result.index("## Voice")
+    notes_pos = result.index("## Player Notes")
+    assert desc_pos < ctx_pos < goals_pos < cap_pos < voice_pos < notes_pos
+
+
 def test_render_full_pc_profile_with_no_content() -> None:
     char = _make_character(description="A Tremere elder.")
     profile = PCProfile(
@@ -203,3 +225,88 @@ def test_render_full_pc_profile_with_no_content() -> None:
     assert "## Campaign Context" not in result
     assert "## Goals" not in result
     assert "## Player Notes" not in result
+
+
+# ---------------------------------------------------------------------------
+# Integration: get_full_card with profile
+# ---------------------------------------------------------------------------
+
+import pytest
+
+from grimoire.characters import CharactersService
+from grimoire.characters.pc_profile import write_pc_profile
+from grimoire.library import LibraryService
+from grimoire.mechanics import MechanicsConfig, MechanicsService
+from grimoire.state_store import StateStore
+from grimoire.storage import Database, apply_migrations
+from grimoire.types.characters import CharacterData
+
+
+@pytest.fixture
+async def store_for_service(tmp_path: Path):
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    db = Database(tmp_path / "campaigns.sqlite", pool_size=2)
+    await db.connect()
+    await apply_migrations(db)
+    s = StateStore(db, data_root)
+    try:
+        yield s
+    finally:
+        await db.close()
+
+
+@pytest.fixture
+async def characters_svc(store_for_service: StateStore, tmp_path: Path) -> CharactersService:
+    library = LibraryService(store_for_service)
+    mech_root = tmp_path / "mechanics"
+    mech_root.mkdir()
+    mechanics = MechanicsService(config=MechanicsConfig(root=mech_root), state_store=store_for_service)
+    return CharactersService(library, mechanics)
+
+
+async def _setup_character_with_profile(
+    store: StateStore, characters: CharactersService
+) -> str:
+    await store.write_library_file(
+        library_id="worlds/wod/world/wod",
+        frontmatter={"id": "wod", "name": "WoD", "version": 1},
+        body="",
+        source="test",
+    )
+    await store.upsert_campaign(campaign_id="camp-1", name="Test Campaign")
+    await store.upsert_world_ref(
+        campaign_id="camp-1", world_id="wod", priority=1, include=None, track_latest=True
+    )
+    data = CharacterData(
+        id="alistair",
+        name="Alistair",
+        role=CharacterRole.PC,
+        description="A Tremere elder.",
+        voice=VoiceAnchor(summary="Formal."),
+    )
+    await characters.create("wod", data)
+    ref = "library:worlds/wod/characters/alistair"
+    await characters.add_pc("camp-1", ref, "Alistair", "local")
+
+    profile = PCProfile(
+        character_ref=ref,
+        goals=["Find the artifact"],
+        player_notes="Keep it dark.",
+        description="Campaign-specific context.",
+    )
+    write_pc_profile(store.data_root, "camp-1", "alistair", profile)
+    return ref
+
+
+async def test_get_full_card_includes_profile(
+    characters_svc: CharactersService, store_for_service: StateStore
+) -> None:
+    ref = await _setup_character_with_profile(store_for_service, characters_svc)
+    card = await characters_svc.get_full_card(ref, "camp-1")
+    assert "## Campaign Context" in card
+    assert "Campaign-specific context." in card
+    assert "## Goals" in card
+    assert "- Find the artifact" in card
+    assert "## Player Notes" in card
+    assert "Keep it dark." in card

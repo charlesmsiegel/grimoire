@@ -67,11 +67,13 @@ from .sheet_manager import (
     character_from_frontmatter,
     frontmatter_from_payload,
 )
+from .pc_profile import read_pc_profile
 from .view_cache import CharacterViewCache
 from .views import (
     render_capsule,
     render_compressed,
     render_full,
+    render_full_pc,
     render_voice_only,
 )
 
@@ -306,7 +308,18 @@ class CharactersService:
         if cached is not None:
             return cached
         resolved = await self.resolve(ref, campaign_id)
-        rendered = render_full(resolved.character, seed=seed)
+        if resolved.character.role == CharacterRole.PC:
+            asset_id = _asset_id_for_ref(ref)
+            profile = read_pc_profile(self.store.data_root, campaign_id, asset_id)
+            capabilities = await self.capabilities_of(ref, campaign_id)
+            rendered = render_full_pc(
+                resolved.character,
+                profile=profile,
+                capabilities=capabilities or None,
+                seed=seed,
+            )
+        else:
+            rendered = render_full(resolved.character, seed=seed)
         self._cache.view_set(ref, campaign_id, "full", seed, rendered)
         return rendered
 
