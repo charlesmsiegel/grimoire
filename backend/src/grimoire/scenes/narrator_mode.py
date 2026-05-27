@@ -1,11 +1,13 @@
 """Narrator response mode: campaign default + per-scene override.
 
-Two values are supported:
+Three values are supported:
 
 - ``"all_at_once"`` — the narrator emits one combined response covering
   every present character in a single post.
-- ``"per_character"`` — the narrator emits a separate response per
-  present character.
+- ``"per_character"`` — the narrator emits a single LLM response using
+  XML character tags, parsed into separate per-character posts.
+- ``"per_character_multi_call"`` — the orchestrator makes one LLM call
+  per character in a speaker loop, with player interject control.
 
 The setting lives on the campaign (in the ``campaigns.config`` JSON column
 under the ``narrator`` namespace) and may be overridden per-scene (in the
@@ -21,8 +23,9 @@ from typing import Any
 
 ALL_AT_ONCE = "all_at_once"
 PER_CHARACTER = "per_character"
+PER_CHARACTER_MULTI_CALL = "per_character_multi_call"
 DEFAULT_RESPONSE_MODE = ALL_AT_ONCE
-RESPONSE_MODES: tuple[str, ...] = (ALL_AT_ONCE, PER_CHARACTER)
+RESPONSE_MODES: tuple[str, ...] = (ALL_AT_ONCE, PER_CHARACTER, PER_CHARACTER_MULTI_CALL)
 
 
 def normalize_response_mode(value: Any) -> str | None:
