@@ -17,8 +17,13 @@ interface Props {
 }
 
 export function ScenePane({
-  posts, pcs, streaming, images, campaignId, scene,
-  hasMorePosts, onLoadMore,
+  posts,
+  pcs,
+  streaming,
+  images,
+  campaignId,
+  hasMorePosts,
+  onLoadMore,
 }: Props) {
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -48,7 +53,9 @@ export function ScenePane({
         if (entries[0]?.isIntersecting && !loadingMoreRef.current) {
           loadingMoreRef.current = true;
           onLoadMore();
-          setTimeout(() => { loadingMoreRef.current = false; }, 300);
+          setTimeout(() => {
+            loadingMoreRef.current = false;
+          }, 300);
         }
       },
       { threshold: 0.1 },
@@ -76,20 +83,6 @@ export function ScenePane({
       latestModelPostId = p.id;
     }
   }
-  // Per-post: count of model posts that follow it in this scene. Drives the
-  // retcon fork-nudge threshold (≥ 5).
-  const subsequentByPost: Record<string, number> = {};
-  let modelTotal = 0;
-  for (const p of posts) {
-    if (p.author_kind !== "pc" && !p.is_player) modelTotal += 1;
-  }
-  let modelSeen = 0;
-  for (const p of posts) {
-    const isModel = p.author_kind !== "pc" && !p.is_player;
-    subsequentByPost[p.id] = isModel ? modelTotal - modelSeen - 1 : modelTotal - modelSeen;
-    if (isModel) modelSeen += 1;
-  }
-
   return (
     <section className="scene-pane" aria-label="Scene posts" aria-live="polite">
       {hasMorePosts && <div ref={topSentinelRef} className="load-more-sentinel" />}
@@ -104,8 +97,6 @@ export function ScenePane({
           images={byPost[post.id] ?? []}
           isLatestModelPost={post.id === latestModelPostId}
           campaignId={campaignId}
-          subsequentModelPostCount={subsequentByPost[post.id] ?? 0}
-          presentCharacterRefs={scene?.present_character_refs ?? []}
         />
       ))}
       {streaming && (
