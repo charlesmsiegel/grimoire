@@ -26,7 +26,23 @@ export function StepStartingScene({
   error,
   castByWorld,
 }: Props) {
-  const selectedGreeting = greetings.find((g) => g.id === draft.greetingId) ?? null;
+  const pcRoleTagUnion = useMemo(() => {
+    const tags = new Set<string>();
+    for (const pc of draft.pcs) {
+      for (const t of pc.role_tags) tags.add(t);
+    }
+    return tags;
+  }, [draft.pcs]);
+
+  const filteredGreetings = useMemo(() => {
+    return greetings.filter((g) => {
+      if (!g.role_tags || g.role_tags.length === 0) return true;
+      if (pcRoleTagUnion.size === 0) return false;
+      return g.role_tags.some((t) => pcRoleTagUnion.has(t));
+    });
+  }, [greetings, pcRoleTagUnion]);
+
+  const selectedGreeting = filteredGreetings.find((g) => g.id === draft.greetingId) ?? null;
 
   const candidates = useMemo<CastCandidate[]>(() => {
     // Refs are worldId-qualified so a character "protagonist" can coexist
@@ -70,7 +86,7 @@ export function StepStartingScene({
           value={draft.greetingId ?? ""}
           onChange={(e) => {
             const id = e.target.value || null;
-            const greeting = greetings.find((g) => g.id === id);
+            const greeting = filteredGreetings.find((g) => g.id === id);
             update({
               greetingId: id,
               startingLocation: greeting?.starting_location ?? draft.startingLocation,
@@ -79,9 +95,10 @@ export function StepStartingScene({
           }}
         >
           <option value="">— blank start —</option>
-          {greetings.map((g) => (
+          {filteredGreetings.map((g) => (
             <option key={g.id} value={g.id}>
               {g.name ?? g.id}
+              {g.role_tags.length > 0 ? ` [${g.role_tags.join(", ")}]` : ""}
             </option>
           ))}
         </select>

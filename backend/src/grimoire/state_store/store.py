@@ -1253,7 +1253,10 @@ class StateStore:
         character_ref: str,
         display_name: str,
         owner: str = "local",
+        role_tags: list[str] | None = None,
     ) -> None:
+        import json as _json
+
         # First PC in the campaign becomes active; subsequent PCs are added
         # inactive so at most one row per campaign has active=1. set_active_pc
         # is the only place that flips the bit afterwards.
@@ -1262,17 +1265,27 @@ class StateStore:
             (campaign_id,),
         )
         active_default = 0 if row else 1
+        tags_json = _json.dumps(role_tags or [])
         await self.db.execute(
             """
             INSERT INTO campaign_pcs (
-              campaign_id, character_ref, display_name, owner, active, added_at
+              campaign_id, character_ref, display_name, owner, active, added_at, role_tags
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(campaign_id, character_ref) DO UPDATE SET
               display_name = excluded.display_name,
-              owner = excluded.owner
+              owner = excluded.owner,
+              role_tags = excluded.role_tags
             """,
-            (campaign_id, character_ref, display_name, owner, active_default, now_iso()),
+            (
+                campaign_id,
+                character_ref,
+                display_name,
+                owner,
+                active_default,
+                now_iso(),
+                tags_json,
+            ),
         )
 
     async def remove_pc(self, *, campaign_id: str, character_ref: str) -> None:

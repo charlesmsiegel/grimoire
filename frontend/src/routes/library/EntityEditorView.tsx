@@ -393,6 +393,7 @@ function greetingToForm(g: Greeting): GreetingFormValue {
   return {
     name: g.name ?? "",
     tagsText: (g.tags ?? []).join(", "),
+    roleTagsText: (g.role_tags ?? []).join(", "),
     body: g.body ?? "",
     presentCharacters: g.present_characters ?? [],
     povCharacter: g.pov_character ?? "",

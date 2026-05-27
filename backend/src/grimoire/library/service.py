@@ -155,6 +155,7 @@ def _world_meta_from_row(row: dict) -> WorldMeta:
         atmosphere=fm.get("atmosphere") or {},
         defaults=fm.get("defaults") or {},
         version=int(fm.get("version") or row.get("version") or 0),
+        pc_role_tags=[str(t) for t in (fm.get("pc_role_tags") or [])],
     )
 
 
@@ -171,6 +172,7 @@ def _greeting_from_row(row: dict) -> Greeting:
         mood=fm.get("mood") or "",
         body=row.get("body") or "",
         tags=[str(t) for t in (fm.get("tags") or row.get("tags") or [])],
+        role_tags=[str(t) for t in (fm.get("role_tags") or [])],
     )
 
 

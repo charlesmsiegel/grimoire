@@ -43,6 +43,7 @@ class WorldMeta(BaseModel):
     name: str
     description: str = ""
     tags: list[str] = Field(default_factory=list)
+    pc_role_tags: list[str] = Field(default_factory=list)
     genre: str = ""
     # Legacy inline calendar (kept as fallback). New worlds should use
     # `calendar_ids` to attach first-class Calendar entities instead.
@@ -90,6 +91,7 @@ class Greeting(BaseModel):
     mood: str = ""
     body: str = ""
     tags: list[str] = Field(default_factory=list)
+    role_tags: list[str] = Field(default_factory=list)
 
 
 class ResolutionLayer(StrEnum):

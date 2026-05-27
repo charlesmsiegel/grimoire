@@ -80,6 +80,18 @@ export function GreetingFormFields({ worldId, value, onChange, hideName = false 
         />
       </label>
       <label>
+        <span>Role tags</span>
+        <input
+          value={value.roleTagsText}
+          onChange={(e) => patch("roleTagsText", e.target.value)}
+          placeholder="comma, separated — match PCs to this greeting"
+        />
+        <small>
+          Functional tags that link this greeting to PCs with matching role tags. Leave empty for a
+          universal greeting.
+        </small>
+      </label>
+      <label>
         <span>Body</span>
         <textarea
           required

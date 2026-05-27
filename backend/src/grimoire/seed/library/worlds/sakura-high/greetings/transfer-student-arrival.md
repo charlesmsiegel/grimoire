@@ -2,6 +2,7 @@
 id: transfer-student-arrival
 name: "Transfer Student Arrival"
 tags: [introduction, opening, no-violence, romance]
+role_tags: [transfer-student]
 starting_location: classroom-2-b
 starting_time: "2025-04-15T08:32:00"
 present_characters:

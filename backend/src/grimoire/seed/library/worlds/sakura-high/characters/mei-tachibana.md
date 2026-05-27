@@ -5,6 +5,7 @@ role: pc
 aliases: ["Tachibana-san", "Mei"]
 age: "16"
 tags: [pc, second-year, transfer-student, class-2-b]
+role_tags: [new-girl]
 
 voice:
   summary: "Direct, dryly funny, surprisingly tender. Says the awkward thing on purpose to skip the small talk."

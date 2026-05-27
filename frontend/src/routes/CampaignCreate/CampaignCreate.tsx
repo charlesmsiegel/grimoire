@@ -261,6 +261,7 @@ export function CampaignCreate() {
             character_ref: pc.character_ref,
             name: pc.name,
             owner: pc.owner,
+            role_tags: pc.role_tags,
           });
         } catch (err) {
           // Surface PC add errors but don't unwind the campaign — the user can
@@ -358,6 +359,7 @@ export function CampaignCreate() {
           candidates={castByWorld}
           loading={castLoading}
           error={castError}
+          worlds={worlds.data}
         />
       )}
       {step === 4 && (
