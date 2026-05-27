@@ -25,6 +25,7 @@ from grimoire.llm_gateway.config import (
     EmbeddingCacheConfig,
     GatewayConfig,
     ObservabilityConfig,
+    PricingOverride,
 )
 from grimoire.types.llm import RetryPolicy, TimeoutPolicy
 
@@ -81,6 +82,11 @@ class _ObservabilitySettings(BaseModel):
         )
 
 
+class _PricingOverrideSettings(BaseModel):
+    input_cost_per_1k: float
+    output_cost_per_1k: float
+
+
 class GatewaySettings(BaseModel):
     """Pydantic representation of the ``llm_gateway:`` settings block.
 
@@ -94,6 +100,7 @@ class GatewaySettings(BaseModel):
     timeout: _TimeoutSettings = _TimeoutSettings()
     embedding_cache: _EmbeddingCacheSettings = _EmbeddingCacheSettings()
     observability: _ObservabilitySettings = _ObservabilitySettings()
+    pricing_overrides: dict[str, _PricingOverrideSettings] = {}
 
     model_config = {"populate_by_name": True}
 
@@ -106,4 +113,11 @@ class GatewaySettings(BaseModel):
             timeout=self.timeout.to_policy(),
             embedding_cache=self.embedding_cache.to_dataclass(),
             observability=self.observability.to_dataclass(),
+            pricing_overrides={
+                model: PricingOverride(
+                    input_cost_per_1k=p.input_cost_per_1k,
+                    output_cost_per_1k=p.output_cost_per_1k,
+                )
+                for model, p in self.pricing_overrides.items()
+            },
         )
