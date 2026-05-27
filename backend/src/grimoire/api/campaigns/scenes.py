@@ -226,6 +226,21 @@ async def end_scene(
         raise map_lookup_errors(exc) from exc
 
 
+@router.delete("/{campaign_id}/scenes/{scene_id}", status_code=204)
+async def delete_scene(
+    campaign_id: str,
+    scene_id: str,
+    scenes: ScenesDep,
+) -> None:
+    try:
+        await _require_scene_owned(scenes, campaign_id, scene_id)
+        await scenes.delete_scene(scene_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
 @router.post("/{campaign_id}/scenes/seed", status_code=201)
 async def seed_first_scene(
     campaign_id: str,

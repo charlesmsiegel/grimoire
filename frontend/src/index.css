@@ -1945,6 +1945,11 @@ pre {
   padding: 0.35rem 0.6rem;
 }
 
+.side-actions .danger-btn {
+  color: var(--red, #e53e3e);
+  border-color: var(--red, #e53e3e);
+}
+
 /* ----- "What changed?" debug panel (issue #351) ----- */
 
 .what-changed-turn {

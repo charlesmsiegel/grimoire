@@ -22,6 +22,7 @@ class SceneEvent:
 
 SCENE_STARTED = "scene_started"
 SCENE_ENDED = "scene_ended"
+SCENE_DELETED = "scene_deleted"
 POST_APPENDED = "post_appended"
 PC_POST_APPENDED = "pc_post_appended"
 ADVANCE_REQUESTED = "advance_requested"
