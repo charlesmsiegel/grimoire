@@ -232,7 +232,9 @@ class HudService:
                 if scene_cid and scene_cid != campaign_id:
                     log.warning(
                         "scene %s belongs to %s, not %s — ignoring override",
-                        scene_id, scene_cid, campaign_id,
+                        scene_id,
+                        scene_cid,
+                        campaign_id,
                     )
                 else:
                     return scene
