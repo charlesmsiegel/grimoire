@@ -29,6 +29,7 @@ interface PreservedSummary {
 export function CampaignView() {
   const { campaignId } = useParams();
   const [campaignName, setCampaignName] = useState<string | null>(null);
+  const [navCollapsed, setNavCollapsed] = useState(false);
 
   const prevIdRef = useRef<string | undefined>(undefined);
   if (campaignId && prevIdRef.current !== campaignId) {
@@ -60,21 +61,34 @@ export function CampaignView() {
   return (
     <section className="campaign-view" aria-labelledby="campaign-heading">
       <header className="campaign-header">
-        <h2 id="campaign-heading">{campaignName ?? campaignId}</h2>
-        <nav className="campaign-subnav" aria-label="Campaign sections">
-          {subSections.map((s) => (
-            <NavLink
-              key={s.to || "play"}
-              to={s.to}
-              end={s.end}
-              className={({ isActive }) =>
-                isActive ? "campaign-subnav-link active" : "campaign-subnav-link"
-              }
-            >
-              {s.label}
-            </NavLink>
-          ))}
-        </nav>
+        <button
+          type="button"
+          className="campaign-header-toggle"
+          onClick={() => setNavCollapsed((c) => !c)}
+          aria-expanded={!navCollapsed}
+          aria-controls="campaign-subnav"
+        >
+          <h2 id="campaign-heading">{campaignName ?? campaignId}</h2>
+          <span className="campaign-header-chevron" aria-hidden>
+            {navCollapsed ? "▸" : "▾"}
+          </span>
+        </button>
+        {!navCollapsed && (
+          <nav id="campaign-subnav" className="campaign-subnav" aria-label="Campaign sections">
+            {subSections.map((s) => (
+              <NavLink
+                key={s.to || "play"}
+                to={s.to}
+                end={s.end}
+                className={({ isActive }) =>
+                  isActive ? "campaign-subnav-link active" : "campaign-subnav-link"
+                }
+              >
+                {s.label}
+              </NavLink>
+            ))}
+          </nav>
+        )}
       </header>
       <PreservedSheetsBanner campaignId={campaignId} />
       <div className="campaign-body">

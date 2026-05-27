@@ -43,6 +43,7 @@ export function PlayView({ campaignId }: Props) {
   const [draft, setDraft] = useState("");
   const [timeDigest, setTimeDigest] = useState<TimeAdvanceResult | null>(null);
   const [ledgerOpen, setLedgerOpen] = useState(false);
+  const [hudCollapsed, setHudCollapsed] = useState(false);
 
 
 
@@ -128,7 +129,7 @@ export function PlayView({ campaignId }: Props) {
         </div>
       )}
 
-      <div className="play-layout">
+      <div className={`play-layout${hudCollapsed ? " play-layout-collapsed" : ""}`}>
         <div className="play-main">
           <SceneHeader scene={play.state.scene} />
           {play.state.mode === "picking" && play.state.suggestions ? (
@@ -180,26 +181,39 @@ export function PlayView({ campaignId }: Props) {
             />
           )}
         </div>
-        <SideHud
-          campaignId={campaignId}
-          sceneId={play.state.scene?.id ?? null}
-          scene={play.state.scene}
-          pcs={play.state.pcs}
-          actions={{
-            onRegenerate: () => void runAction(() => play.regenerate()),
-            onUndo: () => void runAction(() => play.undo()),
-            onEndScene: () => void runAction(() => play.endScene()),
-            onDeleteScene: () => void runAction(() => play.deleteScene()),
-            onNewScene: () => void runAction(() => play.newScene()),
-            onOpenLedger: () => setLedgerOpen(true),
-            onSkipTime: handleSkipTime,
-            onManualFact: handleManualFact,
-            busy,
-          }}
-          playerInput={draft}
-          pcRef={play.state.activePcRef}
-          latestNarratorTurnId={latestNarratorTurnId}
-        />
+        <div className="play-hud-col">
+          <button
+            type="button"
+            className="hud-collapse-toggle"
+            onClick={() => setHudCollapsed((c) => !c)}
+            aria-label={hudCollapsed ? "Expand HUD" : "Collapse HUD"}
+            title={hudCollapsed ? "Expand HUD" : "Collapse HUD"}
+          >
+            {hudCollapsed ? "◂" : "▸"}
+          </button>
+          {!hudCollapsed && (
+            <SideHud
+              campaignId={campaignId}
+              sceneId={play.state.scene?.id ?? null}
+              scene={play.state.scene}
+              pcs={play.state.pcs}
+              actions={{
+                onRegenerate: () => void runAction(() => play.regenerate()),
+                onUndo: () => void runAction(() => play.undo()),
+                onEndScene: () => void runAction(() => play.endScene()),
+                onDeleteScene: () => void runAction(() => play.deleteScene()),
+                onNewScene: () => void runAction(() => play.newScene()),
+                onOpenLedger: () => setLedgerOpen(true),
+                onSkipTime: handleSkipTime,
+                onManualFact: handleManualFact,
+                busy,
+              }}
+              playerInput={draft}
+              pcRef={play.state.activePcRef}
+              latestNarratorTurnId={latestNarratorTurnId}
+            />
+          )}
+        </div>
       </div>
       <SceneLedgerDialog
         campaignId={campaignId}
