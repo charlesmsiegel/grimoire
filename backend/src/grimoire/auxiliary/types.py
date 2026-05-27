@@ -61,6 +61,7 @@ class AuxiliaryTask:
     steering_hint: str | None = None
     target_language: str | None = None
     extra_params: dict[str, Any] = field(default_factory=dict)
+    turn_id: str | None = None
 
 
 @dataclass

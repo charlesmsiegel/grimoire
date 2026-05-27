@@ -102,6 +102,7 @@ async def run_auxiliary_task(
             route_task,
             request,
             campaign_id=campaign_id,
+            turn_id=task.turn_id,
         )
         async for chunk in stream:
             delta = getattr(chunk, "delta", "")
