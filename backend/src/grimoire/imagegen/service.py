@@ -1224,6 +1224,9 @@ class ImageGenService:
                         "image_id": existing_image_id,
                         "campaign_id": job.campaign_id,
                         "cached": True,
+                        "cost_usd": 0.0,
+                        "model": "",
+                        "backend": "",
                     },
                 )
                 return cached
@@ -1271,6 +1274,9 @@ class ImageGenService:
                 "scene_id": job.scene_id,
                 "post_id": job.post_id,
                 "cached": False,
+                "cost_usd": result.cost_usd,
+                "model": result.model,
+                "backend": result.backend,
             },
         )
         return result
