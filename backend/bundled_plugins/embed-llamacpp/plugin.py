@@ -32,11 +32,16 @@ def _ensure_llama_cpp_importable(plugin: Any) -> None:
         extra = getattr(plugin, "_plugin_sys_path", None)
         if not extra:
             raise
-        if extra not in sys.path:
+        added = extra not in sys.path
+        if added:
             sys.path.insert(0, extra)
-        import llama_cpp as _llama_cpp  # retry after path fix
+        try:
+            import llama_cpp as _llama_cpp  # retry after path fix
 
-        del _llama_cpp
+            del _llama_cpp
+        finally:
+            if added:
+                sys.path.remove(extra)
 
 
 class LlamaCppEmbeddingProvider:
