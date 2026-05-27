@@ -82,6 +82,7 @@ class ObservabilityService:
 
         self._cost_subscription: Subscription | None = None
         self._embed_subscription: Subscription | None = None
+        self._imagegen_subscription: Subscription | None = None
         self._health_subscription: SubscriptionId | None = None
 
     async def start(self) -> None:
@@ -96,6 +97,10 @@ class ObservabilityService:
         if self._event_bus is not None and self._embed_subscription is None:
             self._embed_subscription = self._event_bus.subscribe(
                 "embedding_response_received", self._on_llm_response
+            )
+        if self._event_bus is not None and self._imagegen_subscription is None:
+            self._imagegen_subscription = self._event_bus.subscribe(
+                "image_ready", self._on_image_ready
             )
         if self._event_bus is not None and self._health_subscription is None:
             # §12 Frontend Health panel: republish each probe result onto the
@@ -113,6 +118,9 @@ class ObservabilityService:
         if self._embed_subscription is not None:
             self._embed_subscription.unsubscribe()
             self._embed_subscription = None
+        if self._imagegen_subscription is not None:
+            self._imagegen_subscription.unsubscribe()
+            self._imagegen_subscription = None
         if self._health_subscription is not None:
             self.health_monitor.unsubscribe(self._health_subscription)
             self._health_subscription = None
@@ -158,6 +166,28 @@ class ObservabilityService:
             await self.costs_tracker.record(call)
         except Exception:
             logger.exception("failed to record cost from llm_response_received")
+
+    async def _on_image_ready(self, event: Event) -> None:
+        try:
+            payload = event.payload or {}
+            if payload.get("cached"):
+                return
+            call = LLMCallRecord(
+                id=uuid.uuid4().hex,
+                task="imagegen",
+                provider_id=str(payload.get("backend") or ""),
+                model=str(payload.get("model") or ""),
+                input_tokens=0,
+                output_tokens=0,
+                cost_usd=float(payload.get("cost_usd") or 0.0),
+                latency_ms=0,
+                finish_reason="complete",
+                campaign_id=payload.get("campaign_id"),
+                turn_id=None,
+            )
+            await self.costs_tracker.record(call)
+        except Exception:
+            logger.exception("failed to record cost from image_ready")
 
     # ------------------------------------------------------------------ #
     # Observability protocol
