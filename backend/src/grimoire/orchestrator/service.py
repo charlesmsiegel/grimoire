@@ -353,6 +353,43 @@ class OrchestratorService:
             reason=decision.reason,
         )
 
+    async def submit_direction(
+        self,
+        campaign_id: CampaignId,
+        scene_id: SceneId,
+        text: str | None = None,
+    ) -> SubmitResult:
+        await self._require_campaign(campaign_id)
+
+        scene = await self._scenes.get_scene(scene_id)
+        if scene.present_pc_refs:
+            raise OrchestratorError(
+                f"scene {scene_id!r} is not a PC-absent scene; use submit_post instead"
+            )
+
+        player_input = text or ""
+
+        if player_input:
+            post = self._new_post(
+                author_kind=SceneAuthorKind.SYSTEM,
+                body=player_input,
+                is_player=True,
+            )
+            await self._scenes.append_post(scene.id, post)
+
+        turn_id = await self._run_turn(
+            campaign_id=campaign_id,
+            scene_id=scene.id,
+            player_input=player_input,
+            triggering_pc=None,
+        )
+        return SubmitResult(
+            accepted=True,
+            turn_id=turn_id,
+            auto_responding=True,
+            reason="direction",
+        )
+
     async def advance(self, campaign_id: CampaignId, scene_id: SceneId) -> AdvanceResult:
         await self._require_campaign(campaign_id)
         adv = await self._scenes.on_advance_requested(scene_id)
@@ -1259,7 +1296,7 @@ class OrchestratorService:
         turn_id: TurnId,
         active: _ActiveTurn | None = None,
     ) -> SceneId:
-        if not player_input or triggering_pc is None:
+        if not player_input:
             return scene_id
         try:
             decision = await self._scenes.is_scene_break(scene_id, player_input)
