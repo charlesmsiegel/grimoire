@@ -22,7 +22,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from grimoire.context.builder import DEFAULT_BRANCH_SUFFIX, ContextBuilderService
+from grimoire.context.builder import ContextBuilderService
 from grimoire.types.common import CampaignId, TurnId
 from grimoire.types.context import AssembledPrompt, ContextSource
 from grimoire.types.inclusion_reasons import InclusionReason
@@ -112,14 +112,12 @@ class PinTarget(BaseModel):
 class _InspectorConfig:
     max_handles: int = 50
     handle_ttl_seconds: int = 900
-    default_branch_suffix: str = DEFAULT_BRANCH_SUFFIX
 
 
 @dataclass
 class _CachedPreview:
     prompt: AssembledPrompt
     campaign_id: str
-    branch_id: str
     created_at: float = field(default_factory=time.time)
 
 
@@ -149,21 +147,17 @@ class ContextInspector:
         campaign_id: CampaignId,
         player_input: str,
         session_id: str,
-        branch_id: str | None = None,
         pc_ref: str | None = None,
     ) -> tuple[str, PreviewSummary]:
-        bid = branch_id or f"{campaign_id}:{self.config.default_branch_suffix}"
         prompt = await self.builder.build(
             player_input=player_input,
             campaign_id=campaign_id,
-            branch_id=bid,
             pc_ref=pc_ref,
         )
         handle = self._make_handle()
         self._handles[(session_id, handle)] = _CachedPreview(
             prompt=prompt,
             campaign_id=campaign_id,
-            branch_id=bid,
         )
         self._evict_old()
         return handle, self._make_summary(handle, prompt)

@@ -144,7 +144,6 @@ class RetconCoordinator:
         try:
             snapshot = StateSnapshot(
                 campaign_id=scene_file.campaign_id,
-                branch_id=scene_file.branch_id,
                 scene_id=scene_file.id,
             )
             pyd_scene = _pydantic_scene(scene_file)
@@ -162,7 +161,6 @@ class RetconCoordinator:
                     delta=delta,
                     source="retcon",
                     turn_id=post.turn_id,
-                    branch_id=scene_file.branch_id,
                     campaign_id=scene_file.campaign_id,
                 )
                 new_delta_ids.append(did)

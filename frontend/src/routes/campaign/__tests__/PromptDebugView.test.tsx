@@ -29,7 +29,6 @@ describe("PromptDebugView", () => {
       {
         turn_id: "t_new",
         campaign_id: "c1",
-        branch_id: "main",
         scene_id: "s1",
         started_at: "2026-05-20T10:00:00Z",
         completed_at: "2026-05-20T10:00:02Z",
@@ -97,7 +96,6 @@ describe("PromptDebugView", () => {
       {
         turn_id: "t_b",
         campaign_id: "c1",
-        branch_id: "main",
         scene_id: "s1",
         started_at: "2026-05-20T10:00:02Z",
         completed_at: null,
@@ -109,7 +107,6 @@ describe("PromptDebugView", () => {
       {
         turn_id: "t_a",
         campaign_id: "c1",
-        branch_id: "main",
         scene_id: "s1",
         started_at: "2026-05-20T10:00:01Z",
         completed_at: null,

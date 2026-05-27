@@ -197,7 +197,6 @@ export interface PromptDiff {
 export interface TurnAuditSummary {
   turn_id: string;
   campaign_id: string;
-  branch_id: string;
   scene_id: string;
   started_at: string;
   completed_at: string | null;

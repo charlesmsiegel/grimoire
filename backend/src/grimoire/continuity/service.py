@@ -109,7 +109,6 @@ class ContinuityService(Continuity):
         config: ContinuityConfig | None = None,
         event_bus: EventBus | None = None,
         campaign_id: str | None = None,
-        branch_id: str | None = None,
     ) -> None:
         self._store = store or InMemoryContinuityStore()
         self._config = config or ContinuityConfig()
@@ -120,7 +119,6 @@ class ContinuityService(Continuity):
         self._judge = judge or StubContradictionJudge()
         self._event_bus = event_bus
         self._campaign_id = campaign_id
-        self._branch_id = branch_id
 
     # ------------------------------------------------------------------
     # Event emission
@@ -134,8 +132,6 @@ class ContinuityService(Continuity):
         body = dict(payload)
         if self._campaign_id is not None and "campaign_id" not in body:
             body["campaign_id"] = self._campaign_id
-        if self._branch_id is not None and "branch_id" not in body:
-            body["branch_id"] = self._branch_id
         try:
             await self._event_bus.emit(Event(type=event_type, payload=body))
         except Exception:

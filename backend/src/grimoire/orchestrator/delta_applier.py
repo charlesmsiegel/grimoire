@@ -126,7 +126,6 @@ class DeltaApplier:
     ) -> ExtractionResult | None:
         snapshot = StateSnapshot(
             campaign_id=campaign_id,
-            branch_id=scene.branch_id,
             scene_id=scene.id,
         )
         pyd_scene = _pydantic_scene(scene)
@@ -193,7 +192,6 @@ class DeltaApplier:
         self,
         *,
         campaign_id: CampaignId,
-        branch_id: str,
         turn_id: TurnId,
         extraction: ExtractionResult,
     ) -> tuple[list[str], list[str]]:
@@ -226,7 +224,6 @@ class DeltaApplier:
                     handled = await self._apply_continuity_delta(
                         delta=delta,
                         campaign_id=campaign_id,
-                        branch_id=branch_id,
                         turn_id=turn_id,
                     )
                     if handled:
@@ -235,7 +232,6 @@ class DeltaApplier:
                     delta=delta,
                     source=delta.source or "extractor",
                     turn_id=turn_id,
-                    branch_id=branch_id,
                     campaign_id=campaign_id,
                 )
                 applied_ids.append(did)
@@ -302,13 +298,12 @@ class DeltaApplier:
         *,
         delta: Any,
         campaign_id: CampaignId,
-        branch_id: str,
         turn_id: TurnId,
     ) -> bool:
         from grimoire.continuity.registry import resolve_continuity
         from grimoire.continuity.service import ContinuityService
 
-        service = resolve_continuity(self._continuity, campaign_id, branch_id=branch_id)
+        service = resolve_continuity(self._continuity, campaign_id)
         if service is None:
             return False
 

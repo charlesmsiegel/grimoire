@@ -1,4 +1,4 @@
-"""ForkCoordinator — branch and campaign forking for the orchestrator."""
+"""ForkCoordinator — campaign forking for the orchestrator."""
 
 from __future__ import annotations
 
@@ -20,14 +20,14 @@ from grimoire.orchestrator.errors import (
 from grimoire.orchestrator.fork_images import fork_image_files
 from grimoire.scenes.manager import SceneManager
 from grimoire.state_store.fork import bulk_copy, fingerprint, replay_to_turn
-from grimoire.types.common import CampaignId, TurnId
-from grimoire.types.orchestrator import ForkCampaignResult, ForkResult
+from grimoire.types.common import CampaignId
+from grimoire.types.orchestrator import ForkCampaignResult
 
 logger = logging.getLogger(__name__)
 
 
 class ForkCoordinator:
-    """Manages branch forking, campaign forking, lineage, and pending fork queues."""
+    """Manages campaign forking, lineage, and pending fork queues."""
 
     def __init__(
         self,
@@ -56,31 +56,6 @@ class ForkCoordinator:
     def _is_streaming(self, campaign_id: str) -> bool:
         state = self._host._campaigns.get(campaign_id)
         return state is not None and state.active is not None
-
-    async def fork(
-        self,
-        campaign_id: CampaignId,
-        from_turn_id: TurnId,
-        label: str,
-    ) -> ForkResult:
-        await self._require_campaign(campaign_id)
-        parent_branch = f"{campaign_id}:main"
-        new_branch_id = await self._store.fork_branch(
-            campaign_id=campaign_id,
-            parent_branch_id=parent_branch,
-            new_label=label,
-            at_turn_id=from_turn_id,
-        )
-        with contextlib.suppress(FileExistsError):
-            await self._scenes.fork_scenes_for_branch(
-                campaign_id, new_branch_id, from_branch_id="main"
-            )
-        return ForkResult(
-            new_branch_id=new_branch_id,
-            from_turn_id=from_turn_id,
-            label=label,
-            created_at=self._clock(),
-        )
 
     async def fork_campaign(
         self,

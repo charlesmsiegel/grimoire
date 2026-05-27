@@ -15,7 +15,6 @@ interface Args {
   campaignId: string;
   playerInput: string;
   sessionId: string;
-  branchId?: string;
   pcRef?: string;
   debounceMs?: number;
   enabled?: boolean;
@@ -32,7 +31,6 @@ export function useLivePreview({
   campaignId,
   playerInput,
   sessionId,
-  branchId,
   pcRef,
   debounceMs = 500,
   enabled = true,
@@ -58,11 +56,11 @@ export function useLivePreview({
     inspectorApi
       .preview(
         campaignId,
-        { playerInput, sessionId, branchId, pcRef },
+        { playerInput, sessionId, pcRef },
         controller.signal,
       )
       .then((res) => {
-        if (myId !== counterRef.current) return; // newer in-flight wins
+        if (myId !== counterRef.current) return;
         setState({
           handle: res.handle,
           summary: res.summary,
@@ -76,7 +74,7 @@ export function useLivePreview({
         const msg = err instanceof Error ? err.message : String(err);
         setState((s) => ({ ...s, loading: false, error: msg }));
       });
-  }, [campaignId, playerInput, sessionId, branchId, pcRef, enabled]);
+  }, [campaignId, playerInput, sessionId, pcRef, enabled]);
 
   useEffect(() => {
     if (!enabled) return;

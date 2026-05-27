@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -42,7 +41,6 @@ from grimoire.scenes.events import (
     SceneEvent,
 )
 from grimoire.scenes.storage import (
-    _from_safe_segment,
     append_post_to_body,
     content_hash,
     next_ordinal,
@@ -185,8 +183,8 @@ class SceneManager:
         # Hash of the .md file as we last wrote it. Used by reindex_from_disk
         # to detect concurrent external edits (last-write-wins + warning).
         self._known_body_hashes: dict[str, str] = {}
-        # active scene per (campaign_id, branch_id) and per-PC current scene
-        self._active_scene: dict[tuple[str, str], str] = {}
+        # active scene per campaign_id and per-PC current scene
+        self._active_scene: dict[str, str] = {}
         self._pc_current_scene: dict[tuple[str, str], str] = {}  # (campaign_id, pc_ref) -> scene_id
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -217,10 +215,9 @@ class SceneManager:
             self._locks[scene_id] = lock
         return lock
 
-    def _scene_id(self, campaign_id: str, branch_id: str, ordinal: int, slug: str) -> str:
-        prefix = "" if branch_id == "main" else f"{branch_id}:"
+    def _scene_id(self, campaign_id: str, ordinal: int, slug: str) -> str:
         base = scene_basename(ordinal, slug, self.config.files.scene_naming_pattern)
-        return f"{prefix}{campaign_id}:{base}"
+        return f"{campaign_id}:{base}"
 
     def _should_emit_running_summary(
         self,
@@ -327,7 +324,6 @@ class SceneManager:
         merged: dict[str, object] = {
             "campaign_id": scene.campaign_id,
             "scene_id": scene.id,
-            "branch_id": scene.branch_id,
             **payload,
         }
         if type_ == SCENE_ENDED:
@@ -386,8 +382,8 @@ class SceneManager:
 
     # -- CRUD / read-only ------------------------------------------------
 
-    async def list_scenes(self, campaign_id: str, branch_id: str = "main") -> list[Scene]:
-        directory = scenes_dir(self.data_root, campaign_id, branch_id)
+    async def list_scenes(self, campaign_id: str) -> list[Scene]:
+        directory = scenes_dir(self.data_root, campaign_id)
         if not directory.exists():
             return []
         scenes: list[Scene] = []
@@ -397,32 +393,21 @@ class SceneManager:
         return scenes
 
     async def get_scene(self, scene_id: str) -> Scene:
-        for (campaign_id, branch_id), active_id in list(self._active_scene.items()):
+        for campaign_id, active_id in list(self._active_scene.items()):
             if active_id == scene_id:
-                for scene in await self.list_scenes(campaign_id, branch_id):
+                for scene in await self.list_scenes(campaign_id):
                     if scene.id == scene_id:
                         return scene
-        # Fallback: search every (campaign, branch) directory.
+        # Fallback: search every campaign directory.
         campaigns_root = self.data_root / "campaigns"
         if campaigns_root.exists():
             for campaign_dir in campaigns_root.iterdir():
                 if not campaign_dir.is_dir():
                     continue
-                for branch_id in self._known_branches(campaign_dir):
-                    for scene in await self.list_scenes(campaign_dir.name, branch_id):
-                        if scene.id == scene_id:
-                            return scene
+                for scene in await self.list_scenes(campaign_dir.name):
+                    if scene.id == scene_id:
+                        return scene
         raise KeyError(f"scene not found: {scene_id}")
-
-    @staticmethod
-    def _known_branches(campaign_dir: Path) -> list[str]:
-        branches = ["main"]
-        branches_dir = campaign_dir / "branches"
-        if branches_dir.exists():
-            branches.extend(
-                sorted(_from_safe_segment(p.name) for p in branches_dir.iterdir() if p.is_dir())
-            )
-        return branches
 
     async def get_scene_file_path(self, scene_id: str) -> Path:
         scene = await self.get_scene(scene_id)
@@ -438,19 +423,19 @@ class SceneManager:
     # -- Active scene tracking ------------------------------------------
 
     async def active_scene_for_campaign(
-        self, campaign_id: str, branch_id: str = "main"
+        self, campaign_id: str
     ) -> Scene | None:
-        scene_id = self._active_scene.get((campaign_id, branch_id))
+        scene_id = self._active_scene.get(campaign_id)
         if scene_id:
             try:
                 return await self.get_scene(scene_id)
             except KeyError:
-                self._active_scene.pop((campaign_id, branch_id), None)
+                self._active_scene.pop(campaign_id, None)
         # Fallback: latest unclosed scene by ordinal.
-        scenes = await self.list_scenes(campaign_id, branch_id)
+        scenes = await self.list_scenes(campaign_id)
         for scene in reversed(scenes):
             if not scene.closed:
-                self._active_scene[(campaign_id, branch_id)] = scene.id
+                self._active_scene[campaign_id] = scene.id
                 return scene
         return None
 
@@ -473,12 +458,11 @@ class SceneManager:
     async def start_scene(self, init: SceneInit) -> Scene:
         title = init.title or (init.location_ref or "scene").replace("-", " ").title()
         slug = init.slug or slugify(title)
-        ordinal = next_ordinal(self.data_root, init.campaign_id, init.branch_id)
-        scene_id = self._scene_id(init.campaign_id, init.branch_id, ordinal, slug)
+        ordinal = next_ordinal(self.data_root, init.campaign_id)
+        scene_id = self._scene_id(init.campaign_id, ordinal, slug)
         scene = Scene(
             id=scene_id,
             campaign_id=init.campaign_id,
-            branch_id=init.branch_id,
             ordinal=ordinal,
             slug=slug,
             title=title,
@@ -503,7 +487,7 @@ class SceneManager:
         self._write_sidecar(scene)
         self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
 
-        self._active_scene[(scene.campaign_id, scene.branch_id)] = scene.id
+        self._active_scene[scene.campaign_id] = scene.id
         for pc_ref in scene.present_pc_refs:
             self._pc_current_scene[(scene.campaign_id, pc_ref)] = scene.id
 
@@ -598,8 +582,8 @@ class SceneManager:
                 threads_unresolved=[t.text for t in unresolved],
                 closed_at_turn=closed_at_turn,
             )
-            if self._active_scene.get((scene.campaign_id, scene.branch_id)) == scene.id:
-                self._active_scene.pop((scene.campaign_id, scene.branch_id), None)
+            if self._active_scene.get(scene.campaign_id) == scene.id:
+                self._active_scene.pop(scene.campaign_id, None)
             return report
 
     async def delete_scene(self, scene_id: str) -> None:
@@ -615,9 +599,8 @@ class SceneManager:
         self._post_records.pop(scene_id, None)
         self._records_hydrated.discard(scene_id)
         self._known_body_hashes.pop(scene_id, None)
-        key = (scene.campaign_id, scene.branch_id)
-        if self._active_scene.get(key) == scene_id:
-            self._active_scene.pop(key, None)
+        if self._active_scene.get(scene.campaign_id) == scene_id:
+            self._active_scene.pop(scene.campaign_id, None)
         for pc_key, sid in list(self._pc_current_scene.items()):
             if sid == scene_id:
                 self._pc_current_scene.pop(pc_key, None)
@@ -1370,39 +1353,6 @@ class SceneManager:
                 heading_pattern=self.config.files.post_heading_pattern,
             )
             self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
-
-    # -- Fork (copy-on-write) -------------------------------------------
-
-    async def fork_scenes_for_branch(
-        self,
-        campaign_id: str,
-        new_branch_id: str,
-        *,
-        from_branch_id: str = "main",
-    ) -> list[Scene]:
-        if new_branch_id == from_branch_id:
-            raise ValueError("cannot fork onto the same branch")
-        source_dir = scenes_dir(self.data_root, campaign_id, from_branch_id)
-        target_dir = scenes_dir(self.data_root, campaign_id, new_branch_id)
-        if target_dir.exists():
-            raise FileExistsError(f"branch already exists: {target_dir}")
-        target_dir.parent.mkdir(parents=True, exist_ok=True)
-        if source_dir.exists():
-            shutil.copytree(source_dir, target_dir)
-        else:
-            target_dir.mkdir(parents=True)
-        # Rewrite sidecars to set the new branch_id and id prefix; carry the
-        # `posts:` block over so post identity (and therefore retcon by id)
-        # survives the fork.
-        new_scenes: list[Scene] = []
-        for yaml_path in sorted(target_dir.glob("*.yaml")):
-            scene = read_sidecar(yaml_path)
-            scene.branch_id = new_branch_id
-            scene.id = self._scene_id(campaign_id, new_branch_id, scene.ordinal, scene.slug)
-            records = read_sidecar_post_records(yaml_path)
-            write_sidecar(yaml_path, scene, post_records=records)
-            new_scenes.append(scene)
-        return new_scenes
 
     # -- File-watcher hook ----------------------------------------------
 

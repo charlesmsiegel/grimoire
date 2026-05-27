@@ -126,10 +126,6 @@ async def _default_faction_leader_actions(_payload: dict[str, Any]) -> list[str]
 # ---------------------------------------------------------------------------
 
 
-def _branch_for(campaign_id: str, branch_id: str | None) -> str:
-    return branch_id or f"{campaign_id}:main"
-
-
 def _parse_dt(value: Any) -> datetime | None:
     if value is None or value == "":
         return None
@@ -242,7 +238,6 @@ def _quantize(moment: datetime, precision: TimePrecision) -> datetime:
 @dataclass(frozen=True)
 class _CheckpointTokenData:
     campaign_id: str
-    branch_id: str
     from_iso: str
     to_iso: str
     duration_iso: str
@@ -310,14 +305,11 @@ class TimeEngineService:
     async def current(
         self,
         campaign_id: CampaignId,
-        *,
-        branch_id: str | None = None,
     ) -> InGameTime | None:
         """Return the current in-game time, or ``None`` if never set."""
-        branch = _branch_for(campaign_id, branch_id)
         row = await self._store.db.fetchone(
-            "SELECT current_in_game_time FROM calendar WHERE branch_id = ?",
-            (branch,),
+            "SELECT current_in_game_time FROM calendar WHERE campaign_id = ?",
+            (campaign_id,),
         )
         if row is None:
             return None
@@ -330,8 +322,6 @@ class TimeEngineService:
         self,
         campaign_id: CampaignId,
         when: InGameTime,
-        *,
-        branch_id: str | None = None,
     ) -> None:
         """Overwrite the campaign's clock without running ticks.
 
@@ -339,16 +329,14 @@ class TimeEngineService:
         :meth:`advance` / :meth:`skip_to`, which both go through this method
         after running the rest of the pipeline.
         """
-        branch = _branch_for(campaign_id, branch_id)
         await self._store.db.execute(
             """
-            INSERT INTO calendar (campaign_id, branch_id, current_in_game_time)
-            VALUES (?, ?, ?)
-            ON CONFLICT(branch_id) DO UPDATE SET
-              campaign_id = excluded.campaign_id,
+            INSERT INTO calendar (campaign_id, current_in_game_time)
+            VALUES (?, ?)
+            ON CONFLICT(campaign_id) DO UPDATE SET
               current_in_game_time = excluded.current_in_game_time
             """,
-            (campaign_id, branch, when.moment.isoformat()),
+            (campaign_id, when.moment.isoformat()),
         )
 
     async def calendar(self, campaign_id: CampaignId) -> WorldCalendar:
@@ -359,18 +347,16 @@ class TimeEngineService:
     # Scheduled events
     # ------------------------------------------------------------------ #
 
-    async def schedule_event(
-        self, event: ScheduledEvent, *, branch_id: str | None = None
-    ) -> EventId:
+    async def schedule_event(self, event: ScheduledEvent) -> EventId:
         """Persist a scheduled event. Returns the (possibly generated) id."""
         eid = event.id or new_id("evt")
         await self._store.db.execute(
             """
             INSERT INTO scheduled_events (
-              id, campaign_id, branch_id, at, kind, label, payload,
+              id, campaign_id, at, kind, label, payload,
               triggered, triggered_at, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
             ON CONFLICT(id) DO UPDATE SET
               at = excluded.at,
               kind = excluded.kind,
@@ -381,7 +367,6 @@ class TimeEngineService:
             (
                 eid,
                 event.campaign_id,
-                _branch_for(event.campaign_id, branch_id),
                 event.at.moment.isoformat(),
                 event.kind,
                 event.label,
@@ -402,16 +387,13 @@ class TimeEngineService:
         self,
         campaign_id: CampaignId,
         within: Duration | None = None,
-        *,
-        branch_id: str | None = None,
     ) -> list[ScheduledEvent]:
         """List pending events within ``within`` of the current time.
 
         With ``within=None`` returns every future, non-triggered event for
         the campaign.
         """
-        branch = _branch_for(campaign_id, branch_id)
-        current = await self.current(campaign_id, branch_id=branch)
+        current = await self.current(campaign_id)
         upper: str | None = None
         if within is not None and current is not None:
             upper = (current.moment + within.delta).isoformat()
@@ -420,21 +402,21 @@ class TimeEngineService:
             rows = await self._store.db.fetchall(
                 """
                 SELECT * FROM scheduled_events
-                WHERE campaign_id = ? AND branch_id = ? AND triggered = 0
+                WHERE campaign_id = ? AND triggered = 0
                 ORDER BY at ASC
                 """,
-                (campaign_id, branch),
+                (campaign_id,),
             )
         else:
             lower = (current.moment.isoformat()) if current is not None else "0001-01-01T00:00:00"
             rows = await self._store.db.fetchall(
                 """
                 SELECT * FROM scheduled_events
-                WHERE campaign_id = ? AND branch_id = ? AND triggered = 0
+                WHERE campaign_id = ? AND triggered = 0
                   AND at >= ? AND at <= ?
                 ORDER BY at ASC
                 """,
-                (campaign_id, branch, lower, upper),
+                (campaign_id, lower, upper),
             )
         return [_scheduled_event_from_row(r) for r in rows]
 
@@ -449,7 +431,6 @@ class TimeEngineService:
         reason: TimeAdvanceReason,
         *,
         scene_id: str | None = None,
-        branch_id: str | None = None,
         from_time: InGameTime | None = None,
         activity_ref: str | None = None,
         checkpoint_token: str | None = None,
@@ -460,7 +441,6 @@ class TimeEngineService:
                 duration,
                 reason,
                 scene_id=scene_id,
-                branch_id=branch_id,
                 from_time=from_time,
                 activity_ref=activity_ref,
                 checkpoint_token=checkpoint_token,
@@ -473,7 +453,6 @@ class TimeEngineService:
         reason: TimeAdvanceReason,
         *,
         scene_id: str | None = None,
-        branch_id: str | None = None,
         from_time: InGameTime | None = None,
         activity_ref: str | None = None,
         checkpoint_token: str | None = None,
@@ -492,8 +471,7 @@ class TimeEngineService:
         diverge ``CheckpointTokenError`` is raised. The token is consumed
         on use.
         """
-        branch = _branch_for(campaign_id, branch_id)
-        start = from_time or await self.current(campaign_id, branch_id=branch)
+        start = from_time or await self.current(campaign_id)
         if start is None:
             raise TimeNotSetError(
                 f"campaign {campaign_id!r} has no in-game time yet; "
@@ -516,7 +494,6 @@ class TimeEngineService:
             self._consume_checkpoint_token(
                 checkpoint_token,
                 campaign_id=campaign_id,
-                branch_id=branch,
                 from_iso=start_q.moment.isoformat(),
                 to_iso=to.moment.isoformat(),
                 duration_iso=effective_duration.iso8601,
@@ -526,7 +503,6 @@ class TimeEngineService:
             )
         return await self._run_pipeline(
             campaign_id=campaign_id,
-            branch_id=branch,
             scene_id=scene_id,
             reason=reason,
             from_time=start_q,
@@ -542,14 +518,12 @@ class TimeEngineService:
         reason: TimeAdvanceReason,
         *,
         scene_id: str | None = None,
-        branch_id: str | None = None,
         from_time: InGameTime | None = None,
         activity_ref: str | None = None,
         checkpoint_token: str | None = None,
     ) -> TimeAdvanceResult:
         """Advance to ``target`` (which must be strictly later than now)."""
-        branch = _branch_for(campaign_id, branch_id)
-        start = from_time or await self.current(campaign_id, branch_id=branch)
+        start = from_time or await self.current(campaign_id)
         if start is None:
             raise TimeNotSetError(
                 f"campaign {campaign_id!r} has no in-game time yet; "
@@ -581,7 +555,6 @@ class TimeEngineService:
             self._consume_checkpoint_token(
                 checkpoint_token,
                 campaign_id=campaign_id,
-                branch_id=branch,
                 from_iso=start_q.moment.isoformat(),
                 to_iso=target_q.moment.isoformat(),
                 duration_iso=duration.iso8601,
@@ -591,7 +564,6 @@ class TimeEngineService:
             )
         return await self._run_pipeline(
             campaign_id=campaign_id,
-            branch_id=branch,
             scene_id=scene_id,
             reason=reason,
             from_time=start_q,
@@ -611,7 +583,6 @@ class TimeEngineService:
         reason: TimeAdvanceReason,
         *,
         scene_id: str | None = None,
-        branch_id: str | None = None,
         from_time: InGameTime | None = None,
         activity_ref: str | None = None,
     ) -> CheckpointSuggestion:
@@ -623,8 +594,7 @@ class TimeEngineService:
         we emit ``time_advance_checkpoint_suggested`` so the Frontend can
         prompt for a state-store fork.
         """
-        branch = _branch_for(campaign_id, branch_id)
-        start = from_time or await self.current(campaign_id, branch_id=branch)
+        start = from_time or await self.current(campaign_id)
         if start is None:
             raise TimeNotSetError(
                 f"campaign {campaign_id!r} has no in-game time yet; "
@@ -644,7 +614,6 @@ class TimeEngineService:
         token = new_id("ckpt")
         self._checkpoints.tokens[token] = _CheckpointTokenData(
             campaign_id=campaign_id,
-            branch_id=branch,
             from_iso=start_q.moment.isoformat(),
             to_iso=to.moment.isoformat(),
             duration_iso=effective_duration.iso8601,
@@ -657,7 +626,6 @@ class TimeEngineService:
                 events.TIME_ADVANCE_CHECKPOINT_SUGGESTED,
                 {
                     "campaign_id": campaign_id,
-                    "branch_id": branch,
                     "scene_id": scene_id,
                     "token": token,
                     "from": start_q.moment.isoformat(),

@@ -35,7 +35,6 @@ class WorldContextResolver:
         *,
         scene: Any,
         campaign_id: CampaignId,
-        branch_id: str | None,
     ) -> tuple[list[TierItem], list[TierItem]]:
         spotlight: list[TierItem] = []
         background: list[TierItem] = []
@@ -80,7 +79,6 @@ class WorldContextResolver:
                         location_id,
                         getattr(scene, "in_game_start", None),
                         campaign_id,
-                        branch_id=branch_id,
                     )
                 except Exception:
                     weather = None
@@ -162,7 +160,6 @@ class WorldContextResolver:
         *,
         scene: Any,
         campaign_id: CampaignId,
-        branch_id: str | None,
     ) -> list[TierItem]:
         if self._world is None:
             return []
@@ -175,12 +172,7 @@ class WorldContextResolver:
         items: list[TierItem] = []
         for ref in faction_refs[: self._config.faction_state_limit]:
             try:
-                state = await getter(ref, campaign_id, branch_id=branch_id)
-            except TypeError:
-                try:
-                    state = await getter(ref, campaign_id)
-                except Exception:
-                    continue
+                state = await getter(ref, campaign_id)
             except Exception:
                 continue
             if state is None:
@@ -235,7 +227,6 @@ class WorldContextResolver:
         *,
         scene: Any,
         campaign_id: CampaignId,
-        branch_id: str | None,
     ) -> list[TierItem]:
         if self._world is None and self._time_engine is None:
             return []
@@ -243,12 +234,7 @@ class WorldContextResolver:
         when = None
         if self._time_engine is not None:
             try:
-                when = await self._time_engine.current(campaign_id, branch_id=branch_id)
-            except TypeError:
-                try:
-                    when = await self._time_engine.current(campaign_id)
-                except Exception:
-                    when = None
+                when = await self._time_engine.current(campaign_id)
             except Exception:
                 when = None
         if when is None and scene is not None:
@@ -261,14 +247,7 @@ class WorldContextResolver:
         upcoming: list[Any] = []
         if self._time_engine is not None:
             try:
-                upcoming = list(
-                    await self._time_engine.upcoming_events(campaign_id, branch_id=branch_id)
-                )
-            except TypeError:
-                try:
-                    upcoming = list(await self._time_engine.upcoming_events(campaign_id))
-                except Exception:
-                    upcoming = []
+                upcoming = list(await self._time_engine.upcoming_events(campaign_id))
             except Exception:
                 upcoming = []
 

@@ -47,18 +47,12 @@ class ContinuityContextResolver:
     async def current_in_game_time(
         self,
         campaign_id: CampaignId,
-        branch_id: str | None,
         scene: Any,
     ) -> Any | None:
         when = None
         if self._time_engine is not None:
             try:
-                when = await self._time_engine.current(campaign_id, branch_id=branch_id)
-            except TypeError:
-                try:
-                    when = await self._time_engine.current(campaign_id)
-                except Exception:
-                    when = None
+                when = await self._time_engine.current(campaign_id)
             except Exception:
                 when = None
         if when is None and scene is not None:
@@ -270,7 +264,6 @@ class ContinuityContextResolver:
         active_pc_ref: str | None,
         scene: Any,
         campaign_id: CampaignId,
-        branch_id: str | None,
     ) -> list[TierItem]:
         if not active_pc_ref or scene is None:
             return []
@@ -283,12 +276,7 @@ class ContinuityContextResolver:
             if other == active_pc_ref:
                 continue
             try:
-                history = await getter(active_pc_ref, other, campaign_id, branch_id=branch_id)
-            except TypeError:
-                try:
-                    history = await getter(active_pc_ref, other, campaign_id)
-                except Exception:
-                    history = []
+                history = await getter(active_pc_ref, other, campaign_id)
             except Exception:
                 history = []
             if not history:

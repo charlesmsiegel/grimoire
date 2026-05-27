@@ -81,7 +81,6 @@ export interface PinTarget {
 export interface PinRow {
   id: string;
   campaign_id: string;
-  branch_id: string;
   kind: "pin" | "exclude";
   target_kind: "source" | "entity";
   target_source_id: string | null;
@@ -98,7 +97,6 @@ export interface PinRow {
 interface PreviewArgs {
   playerInput: string;
   sessionId: string;
-  branchId?: string;
   pcRef?: string;
 }
 
@@ -107,7 +105,6 @@ interface PinArgs {
   kind: "pin" | "exclude";
   ttlTurns?: number | null;
   createdAtTurnId?: string | null;
-  branchId?: string | null;
 }
 
 function base(campaignId: string) {
@@ -119,7 +116,6 @@ export const inspectorApi = {
     return api.post(`${base(campaignId)}/preview`, {
       player_input: args.playerInput,
       session_id: args.sessionId,
-      branch_id: args.branchId ?? null,
       pc_ref: args.pcRef ?? null,
     }, { signal });
   },
@@ -144,7 +140,6 @@ export const inspectorApi = {
       kind: args.kind,
       ttl_turns: args.ttlTurns ?? null,
       created_at_turn_id: args.createdAtTurnId ?? null,
-      branch_id: args.branchId ?? null,
     });
   },
 
@@ -152,10 +147,8 @@ export const inspectorApi = {
     return api.delete(`${base(campaignId)}/pins/${encodeURIComponent(pinId)}`);
   },
 
-  listPins(campaignId: string, branchId?: string): Promise<PinRow[]> {
-    return api.get(`${base(campaignId)}/pins`, {
-      query: { branch_id: branchId ?? null },
-    });
+  listPins(campaignId: string): Promise<PinRow[]> {
+    return api.get(`${base(campaignId)}/pins`);
   },
 
   diff(

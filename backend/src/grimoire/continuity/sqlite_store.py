@@ -2,8 +2,8 @@
 
 Binds to the `facts`, `commitments`, `knowledge_state` and
 `contradiction_reports` tables defined by the State Store migrations. A
-single store instance is scoped to one (campaign_id, branch_id) pair so
-multi-tenant queries always have a where clause.
+single store instance is scoped to one campaign_id so multi-tenant
+queries always have a where clause.
 
 This complements the in-memory store in :mod:`grimoire.continuity.store`:
 the in-memory version is used by unit tests and as a fall-back; this
@@ -70,7 +70,7 @@ def _ingame_from_str(raw: object) -> InGameTime | None:
     return InGameTime(day_count=int(data.get("day_count", 0)), label=str(data.get("label", "")))
 
 
-def _fact_to_row(fact: Fact, campaign_id: str, branch_id: str) -> dict:
+def _fact_to_row(fact: Fact, campaign_id: str) -> dict:
     about_payload = {
         "character_ids": list(fact.about.character_ids),
         "location_ids": list(fact.about.location_ids),
@@ -81,7 +81,6 @@ def _fact_to_row(fact: Fact, campaign_id: str, branch_id: str) -> dict:
     return {
         "id": fact.id,
         "campaign_id": campaign_id,
-        "branch_id": branch_id,
         "text": fact.text,
         "established_in_post": fact.established_in_post,
         "in_game_when": _ingame_to_str(fact.established_at_in_game),
@@ -156,7 +155,7 @@ def _fact_from_row(row: dict) -> Fact:
     )
 
 
-def _commitment_to_row(c: Commitment, campaign_id: str, branch_id: str) -> dict:
+def _commitment_to_row(c: Commitment, campaign_id: str) -> dict:
     extra = {
         "weight": int(c.weight),
         "last_activity_at": _ingame_to_str(c.last_activity_at),
@@ -167,7 +166,6 @@ def _commitment_to_row(c: Commitment, campaign_id: str, branch_id: str) -> dict:
     return {
         "id": c.id,
         "campaign_id": campaign_id,
-        "branch_id": branch_id,
         "kind": c.kind.value if isinstance(c.kind, CommitmentKind) else c.kind,
         "text": c.text,
         "from_character_ref": c.from_id,
@@ -225,12 +223,11 @@ def _commitment_from_row(row: dict) -> Commitment:
     )
 
 
-def _knowledge_to_row(entry: KnowledgeEntry, campaign_id: str, branch_id: str) -> dict:
+def _knowledge_to_row(entry: KnowledgeEntry, campaign_id: str) -> dict:
     return {
         "fact_id": entry.fact_id,
         "character_ref": entry.character_id,
         "campaign_id": campaign_id,
-        "branch_id": branch_id,
         "knows": 1 if entry.knows else 0,
         "learned_in_post": entry.learned_in_post,
         "source": entry.source,
@@ -250,40 +247,34 @@ def _knowledge_from_row(row: dict) -> KnowledgeEntry:
 class SqliteContinuityStore(ContinuityStore):
     """Continuity persistence backed by SQLite via :class:`Database`.
 
-    Each instance is bound to one (campaign_id, branch_id) pair so every
-    read and write naturally scopes to that timeline.
+    Each instance is bound to one campaign_id so every read and write
+    naturally scopes to that campaign.
     """
 
-    def __init__(self, db: Database, *, campaign_id: str, branch_id: str) -> None:
+    def __init__(self, db: Database, *, campaign_id: str) -> None:
         self._db = db
         self._campaign_id = campaign_id
-        self._branch_id = branch_id
 
     @property
     def campaign_id(self) -> str:
         return self._campaign_id
-
-    @property
-    def branch_id(self) -> str:
-        return self._branch_id
 
     # ------------------------------------------------------------------
     # Facts
     # ------------------------------------------------------------------
 
     async def put_fact(self, fact: Fact) -> None:
-        row = _fact_to_row(fact, self._campaign_id, self._branch_id)
+        row = _fact_to_row(fact, self._campaign_id)
         await self._db.execute(
             """
             INSERT INTO facts (
-              id, campaign_id, branch_id, text, established_in_post, in_game_when,
+              id, campaign_id, text, established_in_post, in_game_when,
               about, source, speaker_ref, confidence, keywords, retired,
               retired_in_post, contradicts, tags
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               campaign_id = excluded.campaign_id,
-              branch_id = excluded.branch_id,
               text = excluded.text,
               established_in_post = excluded.established_in_post,
               in_game_when = excluded.in_game_when,
@@ -300,7 +291,6 @@ class SqliteContinuityStore(ContinuityStore):
             (
                 row["id"],
                 row["campaign_id"],
-                row["branch_id"],
                 row["text"],
                 row["established_in_post"],
                 row["in_game_when"],
@@ -320,9 +310,9 @@ class SqliteContinuityStore(ContinuityStore):
         row = await self._db.fetchone(
             """
             SELECT * FROM facts
-            WHERE id = ? AND campaign_id = ? AND branch_id = ?
+            WHERE id = ? AND campaign_id = ?
             """,
-            (fact_id, self._campaign_id, self._branch_id),
+            (fact_id, self._campaign_id),
         )
         if row is None:
             return None
@@ -333,17 +323,17 @@ class SqliteContinuityStore(ContinuityStore):
             rows = await self._db.fetchall(
                 """
                 SELECT * FROM facts
-                WHERE campaign_id = ? AND branch_id = ?
+                WHERE campaign_id = ?
                 """,
-                (self._campaign_id, self._branch_id),
+                (self._campaign_id,),
             )
         else:
             rows = await self._db.fetchall(
                 """
                 SELECT * FROM facts
-                WHERE campaign_id = ? AND branch_id = ? AND retired = 0
+                WHERE campaign_id = ? AND retired = 0
                 """,
-                (self._campaign_id, self._branch_id),
+                (self._campaign_id,),
             )
         return [_fact_from_row(dict(row)) for row in rows]
 
@@ -352,18 +342,17 @@ class SqliteContinuityStore(ContinuityStore):
     # ------------------------------------------------------------------
 
     async def put_commitment(self, commitment: Commitment) -> None:
-        row = _commitment_to_row(commitment, self._campaign_id, self._branch_id)
+        row = _commitment_to_row(commitment, self._campaign_id)
         await self._db.execute(
             """
             INSERT INTO commitments (
-              id, campaign_id, branch_id, kind, text, from_character_ref,
+              id, campaign_id, kind, text, from_character_ref,
               to_character_ref, due_by, status, weight, created_in_post,
               in_game_created_at, resolved_in_post, tags, related_fact_ids
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               campaign_id = excluded.campaign_id,
-              branch_id = excluded.branch_id,
               kind = excluded.kind,
               text = excluded.text,
               from_character_ref = excluded.from_character_ref,
@@ -380,7 +369,6 @@ class SqliteContinuityStore(ContinuityStore):
             (
                 row["id"],
                 row["campaign_id"],
-                row["branch_id"],
                 row["kind"],
                 row["text"],
                 row["from_character_ref"],
@@ -400,9 +388,9 @@ class SqliteContinuityStore(ContinuityStore):
         row = await self._db.fetchone(
             """
             SELECT * FROM commitments
-            WHERE id = ? AND campaign_id = ? AND branch_id = ?
+            WHERE id = ? AND campaign_id = ?
             """,
-            (cid, self._campaign_id, self._branch_id),
+            (cid, self._campaign_id),
         )
         if row is None:
             return None
@@ -415,9 +403,9 @@ class SqliteContinuityStore(ContinuityStore):
             rows = await self._db.fetchall(
                 """
                 SELECT * FROM commitments
-                WHERE campaign_id = ? AND branch_id = ?
+                WHERE campaign_id = ?
                 """,
-                (self._campaign_id, self._branch_id),
+                (self._campaign_id,),
             )
         else:
             values = [s.value if isinstance(s, CommitmentStatus) else s for s in statuses]
@@ -427,9 +415,9 @@ class SqliteContinuityStore(ContinuityStore):
             rows = await self._db.fetchall(
                 f"""
                 SELECT * FROM commitments
-                WHERE campaign_id = ? AND branch_id = ? AND status IN ({placeholders})
+                WHERE campaign_id = ? AND status IN ({placeholders})
                 """,
-                (self._campaign_id, self._branch_id, *values),
+                (self._campaign_id, *values),
             )
         return [_commitment_from_row(dict(row)) for row in rows]
 
@@ -438,15 +426,15 @@ class SqliteContinuityStore(ContinuityStore):
     # ------------------------------------------------------------------
 
     async def put_knowledge(self, entry: KnowledgeEntry) -> None:
-        row = _knowledge_to_row(entry, self._campaign_id, self._branch_id)
+        row = _knowledge_to_row(entry, self._campaign_id)
         await self._db.execute(
             """
             INSERT INTO knowledge_state (
-              fact_id, character_ref, campaign_id, branch_id, knows,
+              fact_id, character_ref, campaign_id, knows,
               learned_in_post, source
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(fact_id, character_ref, branch_id) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(fact_id, character_ref) DO UPDATE SET
               campaign_id = excluded.campaign_id,
               knows = excluded.knows,
               learned_in_post = excluded.learned_in_post,
@@ -456,7 +444,6 @@ class SqliteContinuityStore(ContinuityStore):
                 row["fact_id"],
                 row["character_ref"],
                 row["campaign_id"],
-                row["branch_id"],
                 row["knows"],
                 row["learned_in_post"],
                 row["source"],
@@ -467,9 +454,9 @@ class SqliteContinuityStore(ContinuityStore):
         row = await self._db.fetchone(
             """
             SELECT * FROM knowledge_state
-            WHERE fact_id = ? AND character_ref = ? AND branch_id = ?
+            WHERE fact_id = ? AND character_ref = ? AND campaign_id = ?
             """,
-            (fact_id, character_id, self._branch_id),
+            (fact_id, character_id, self._campaign_id),
         )
         if row is None:
             return None
@@ -479,9 +466,9 @@ class SqliteContinuityStore(ContinuityStore):
         rows = await self._db.fetchall(
             """
             SELECT * FROM knowledge_state
-            WHERE character_ref = ? AND branch_id = ?
+            WHERE character_ref = ? AND campaign_id = ?
             """,
-            (character_id, self._branch_id),
+            (character_id, self._campaign_id),
         )
         return [_knowledge_from_row(dict(row)) for row in rows]
 
@@ -500,15 +487,14 @@ class SqliteContinuityStore(ContinuityStore):
             await self._db.execute(
                 """
                 INSERT INTO contradiction_reports (
-                  id, campaign_id, branch_id, candidate_fact, conflicts,
+                  id, campaign_id, candidate_fact, conflicts,
                   resolved, resolution, created_at, resolved_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     report.id,
                     self._campaign_id,
-                    self._branch_id,
                     _dumps(candidate_payload),
                     _dumps(conflicts_payload),
                     1 if report.resolved else 0,
@@ -544,9 +530,9 @@ class SqliteContinuityStore(ContinuityStore):
         row = await self._db.fetchone(
             """
             SELECT * FROM contradiction_reports
-            WHERE id = ? AND campaign_id = ? AND branch_id = ?
+            WHERE id = ? AND campaign_id = ?
             """,
-            (report_id, self._campaign_id, self._branch_id),
+            (report_id, self._campaign_id),
         )
         if row is None:
             return None
@@ -567,8 +553,8 @@ class SqliteContinuityStore(ContinuityStore):
         resolved: bool | None = None,
         limit: int = 50,
     ) -> list[ContradictionReport]:
-        where = ["campaign_id = ?", "branch_id = ?"]
-        params: list[object] = [self._campaign_id, self._branch_id]
+        where = ["campaign_id = ?"]
+        params: list[object] = [self._campaign_id]
         if resolved is True:
             where.append("resolved = 1")
         elif resolved is False:

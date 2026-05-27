@@ -1,12 +1,12 @@
-"""Per-(campaign, branch) factory for :class:`ContinuityService`.
+"""Per-campaign factory for :class:`ContinuityService`.
 
 The shipped design (`2026-05-12-continuity-design.md`) used one shared
 ``ContinuityService`` for the whole process, which forced API routes to
 over-fetch and filter by ``campaign_id`` client-side. The registry hands
-out one ``ContinuityService`` per ``(campaign_id, branch_id)`` pair,
-constructing a :class:`SqliteContinuityStore` and matching
+out one ``ContinuityService`` per ``campaign_id``, constructing a
+:class:`SqliteContinuityStore` and matching
 :class:`HybridFactSearchIndex` lazily on first use so reads and writes
-naturally scope to one timeline.
+naturally scope to one campaign.
 
 Services that previously took a single ``Continuity`` (Time Engine,
 Context Builder, Export, Orchestrator) now take the registry and resolve
@@ -32,12 +32,8 @@ from grimoire.event_bus import EventBus
 from grimoire.storage import Database
 
 
-def _default_branch(campaign_id: str, branch_id: str | None) -> str:
-    return branch_id or f"{campaign_id}:main"
-
-
 class ContinuityRegistry:
-    """Lazy per-(campaign, branch) factory of :class:`ContinuityService`."""
+    """Lazy per-campaign factory of :class:`ContinuityService`."""
 
     def __init__(
         self,
@@ -48,8 +44,8 @@ class ContinuityRegistry:
         judge_gateway: Any | None = None,
         judge_request_factory: Callable[[str, str], Any] | None = None,
         event_bus: EventBus | None = None,
-        store_factory: Callable[[str, str], ContinuityStore] | None = None,
-        search_factory: Callable[[ContinuityStore, str, str], FactSearchIndex] | None = None,
+        store_factory: Callable[[str], ContinuityStore] | None = None,
+        search_factory: Callable[[ContinuityStore, str], FactSearchIndex] | None = None,
     ) -> None:
         self._db = db
         self._config = config or ContinuityConfig()
@@ -59,7 +55,7 @@ class ContinuityRegistry:
         self._event_bus = event_bus
         self._store_factory = store_factory
         self._search_factory = search_factory
-        self._services: dict[tuple[str, str], ContinuityService] = {}
+        self._services: dict[str, ContinuityService] = {}
 
     def set_embedder(self, embedder: QueryEmbedder | None) -> None:
         self._embedder = embedder
@@ -83,17 +79,13 @@ class ContinuityRegistry:
     def for_campaign(
         self,
         campaign_id: str,
-        *,
-        branch_id: str | None = None,
     ) -> ContinuityService:
-        branch = _default_branch(campaign_id, branch_id)
-        key = (campaign_id, branch)
-        existing = self._services.get(key)
+        existing = self._services.get(campaign_id)
         if existing is not None:
             return existing
 
-        store = self._build_store(campaign_id, branch)
-        search = self._build_search(store, campaign_id, branch)
+        store = self._build_store(campaign_id)
+        search = self._build_search(store, campaign_id)
         judge: ContradictionJudge | None = self._build_judge()
 
         service = ContinuityService(
@@ -103,9 +95,8 @@ class ContinuityRegistry:
             config=self._config,
             event_bus=self._event_bus,
             campaign_id=campaign_id,
-            branch_id=branch,
         )
-        self._services[key] = service
+        self._services[campaign_id] = service
         return service
 
     def cached_services(self) -> list[ContinuityService]:
@@ -115,27 +106,24 @@ class ContinuityRegistry:
     # Internals
     # ------------------------------------------------------------------
 
-    def _build_store(self, campaign_id: str, branch: str) -> ContinuityStore:
+    def _build_store(self, campaign_id: str) -> ContinuityStore:
         if self._store_factory is not None:
-            return self._store_factory(campaign_id, branch)
+            return self._store_factory(campaign_id)
         if self._db is None:
             raise RuntimeError(
                 "ContinuityRegistry requires a Database when no store_factory is supplied"
             )
-        return SqliteContinuityStore(self._db, campaign_id=campaign_id, branch_id=branch)
+        return SqliteContinuityStore(self._db, campaign_id=campaign_id)
 
-    def _build_search(
-        self, store: ContinuityStore, campaign_id: str, branch: str
-    ) -> FactSearchIndex | None:
+    def _build_search(self, store: ContinuityStore, campaign_id: str) -> FactSearchIndex | None:
         if self._search_factory is not None:
-            return self._search_factory(store, campaign_id, branch)
+            return self._search_factory(store, campaign_id)
         if self._db is None:
             return None
         return HybridFactSearchIndex(
             store,
             self._db,
             campaign_id=campaign_id,
-            branch_id=branch,
             embedder=self._embedder,
         )
 
@@ -169,7 +157,7 @@ class ContinuityRegistryExportAdapter:
         return await service.all_commitments()
 
 
-def resolve_continuity(target: Any, campaign_id: str, *, branch_id: str | None = None) -> Any:
+def resolve_continuity(target: Any, campaign_id: str) -> Any:
     """Return a per-campaign ``Continuity`` from either a registry or a
     plain service.
 
@@ -184,9 +172,7 @@ def resolve_continuity(target: Any, campaign_id: str, *, branch_id: str | None =
         return None
     for_campaign = getattr(target, "for_campaign", None)
     if callable(for_campaign):
-        if branch_id is None:
-            return for_campaign(campaign_id)
-        return for_campaign(campaign_id, branch_id=branch_id)
+        return for_campaign(campaign_id)
     return target
 
 
