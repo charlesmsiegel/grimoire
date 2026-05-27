@@ -1,27 +1,27 @@
-/**
- * SideHud — campaign dashboard pane that lives to the right of the scene.
- *
- * Renders widgets in the order returned by ``GET /hud`` (the server has
- * already applied the user's ordering + visibility filters via
- * ``hud.yaml``). Each widget gets a render-hint component; the WS bridge
- * in ``useHud`` triggers per-widget refresh in the background.
- *
- * Layout is pure CSS — the parent already provides the flex column slot.
- * On narrow viewports the parent stacks the HUD under the scene pane.
- */
+import { useMemo } from "react";
 
 import type { WidgetSnapshot } from "../../../api/hud";
 import { AuxInflightBadge } from "./AuxInflightBadge";
-import { useHud } from "./useHud";
+import { useHud, type HudWidgetState } from "./useHud";
 import { BannerWidget } from "./widgets/BannerWidget";
 import { BlockWidget } from "./widgets/BlockWidget";
 import { ChipListWidget } from "./widgets/ChipListWidget";
 import { CompositeWidget } from "./widgets/CompositeWidget";
 import { RowWidget } from "./widgets/RowWidget";
+import { primaryScalar } from "./widgets/widget-common";
 
 interface Props {
   campaignId: string;
+  sceneId: string | null;
 }
+
+const SCENE_SETTING_IDS = new Set([
+  "core.in-game-date",
+  "core.in-game-time",
+  "core.weather",
+  "core.temperature",
+  "core.location",
+]);
 
 const RENDER_FALLBACK = "block";
 
@@ -46,8 +46,42 @@ function renderWidget(
   }
 }
 
-export function SideHud({ campaignId }: Props) {
-  const hud = useHud(campaignId);
+function SceneSettingBlock({ widgets }: { widgets: HudWidgetState[] }) {
+  const entries = widgets
+    .filter((w) => w.snapshot.status === "ok")
+    .map((w) => ({
+      id: w.snapshot.id,
+      label: w.snapshot.title ?? w.snapshot.id,
+      value: primaryScalar(w.snapshot.data),
+    }))
+    .filter((e) => e.value !== null);
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="scene-setting-block" aria-label="Scene setting">
+      {entries.map((e) => (
+        <div key={e.id} className="scene-setting-entry">
+          <span className="scene-setting-label">{e.label}</span>
+          <span className="scene-setting-value">{e.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function SideHud({ campaignId, sceneId }: Props) {
+  const hud = useHud(campaignId, sceneId);
+
+  const { sceneSetting, rest } = useMemo(() => {
+    const s: HudWidgetState[] = [];
+    const r: HudWidgetState[] = [];
+    for (const w of hud.widgets) {
+      if (SCENE_SETTING_IDS.has(w.snapshot.id)) s.push(w);
+      else r.push(w);
+    }
+    return { sceneSetting: s, rest: r };
+  }, [hud.widgets]);
 
   if (hud.loading && hud.widgets.length === 0) {
     return (
@@ -70,33 +104,34 @@ export function SideHud({ campaignId }: Props) {
 
   return (
     <aside className="side-hud" aria-label="Scene HUD">
-      <header className="side-hud-header">
-        <h2>Dashboard</h2>
+      <div className="side-hud-toolbar">
         <AuxInflightBadge campaignId={campaignId} />
         <button
           type="button"
-          className="side-hud-refresh"
+          className="side-hud-refresh icon-btn"
           onClick={hud.refresh}
           aria-label="Refresh HUD"
+          title="Refresh HUD"
         >
-          Refresh
+          ↻
         </button>
-      </header>
-      {hud.widgets.length === 0 ? (
+      </div>
+      <SceneSettingBlock widgets={sceneSetting} />
+      {rest.length === 0 && sceneSetting.length === 0 ? (
         <p className="side-hud-empty">No widgets configured.</p>
       ) : (
-        <ul className="side-hud-widgets">
-          {hud.widgets.map((w) => (
-            <li key={w.snapshot.id} className="side-hud-widget-slot">
-              {renderWidget(
-                // Surface the stale flag we track client-side via the snapshot,
-                // so widget components only need to read snapshot.stale.
-                w.stale ? { ...w.snapshot, stale: true } : w.snapshot,
-                () => hud.refreshWidget(w.snapshot.id),
-              )}
-            </li>
-          ))}
-        </ul>
+        rest.length > 0 && (
+          <ul className="side-hud-widgets">
+            {rest.map((w) => (
+              <li key={w.snapshot.id} className="side-hud-widget-slot">
+                {renderWidget(
+                  w.stale ? { ...w.snapshot, stale: true } : w.snapshot,
+                  () => hud.refreshWidget(w.snapshot.id),
+                )}
+              </li>
+            ))}
+          </ul>
+        )
       )}
     </aside>
   );

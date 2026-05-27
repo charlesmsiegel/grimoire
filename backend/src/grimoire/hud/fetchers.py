@@ -354,18 +354,30 @@ def register_default_fetchers(
     hud.register_fetcher("core.review-queue", _empty_fetcher_with({"count": 0}))
     hud.register_fetcher("core.active-threads", _empty_fetcher_with({"items": []}))
 
-    # The HudService also needs a current_scene hook so the aggregator
-    # can pass the scene into fetchers' ``scene`` arg.
-    if scenes is not None and hud.current_scene is None:
+    # The HudService also needs scene hooks so the aggregator can pass the
+    # scene into fetchers' ``scene`` arg.
+    if scenes is not None:
+        if hud.current_scene is None:
 
-        async def _current_scene(campaign_id: str) -> Any:
-            try:
-                return await scenes.active_scene_for_campaign(campaign_id)
-            except Exception as e:
-                log.debug("active_scene_for_campaign failed for %s: %s", campaign_id, e)
-                return None
+            async def _current_scene(campaign_id: str) -> Any:
+                try:
+                    return await scenes.active_scene_for_campaign(campaign_id)
+                except Exception as e:
+                    log.debug("active_scene_for_campaign failed for %s: %s", campaign_id, e)
+                    return None
 
-        hud.current_scene = _current_scene
+            hud.current_scene = _current_scene
+
+        if hud.get_scene is None:
+
+            async def _get_scene(scene_id: str) -> Any:
+                try:
+                    return await scenes.get_scene(scene_id)
+                except Exception as e:
+                    log.debug("get_scene(%s) failed: %s", scene_id, e)
+                    return None
+
+            hud.get_scene = _get_scene
 
 
 __all__ = ["register_default_fetchers"]

@@ -57,6 +57,7 @@ from grimoire.types.world import (
     LoreEntry,
     Monster,
     MonsterCategory,
+    Month,
     Season,
     SelectiveLogic,
     Weather,
@@ -72,6 +73,29 @@ from .location_generator import generate_location_frontmatter
 from .weather import generate_weather
 
 logger = logging.getLogger(__name__)
+
+
+_DEFAULT_CALENDAR_ID = "gregorian"
+
+
+def _seed_from_builtin(cal: WorldCalendar, calendar_id: str) -> WorldCalendar:
+    """Populate empty months/weekday_names from a builtin calendar engine."""
+    from grimoire.world.calendars.base import WEEKDAY_NAMES, DateParts
+    from grimoire.world.calendars.gregorian import MONTH_DAYS
+    from grimoire.world.calendars.registry import BUILTIN_CALENDARS, engine_for
+
+    builtin = BUILTIN_CALENDARS.get(calendar_id)
+    if builtin is None:
+        return cal
+    engine = engine_for(builtin)
+    months: list[Month] = []
+    for m in range(1, 13):
+        name = engine.month_name(DateParts(year=2000, month=m, day=1))
+        days = MONTH_DAYS[m - 1] if m <= len(MONTH_DAYS) else 30
+        months.append(Month(name=name, days=days))
+    weekdays = cal.week_day_names if cal.week_day_names else list(WEEKDAY_NAMES)
+    return cal.model_copy(update={"months": months, "week_day_names": weekdays})
+
 
 # World-internal entity kinds World owns CRUD for.
 _OWNED_KINDS: frozenset[str] = frozenset(
@@ -789,7 +813,10 @@ class WorldService:
 
     async def calendar_for(self, world_id: str) -> WorldCalendar:
         meta = await self.library.get_world(world_id)
-        return parse_calendar(world_id, meta.calendar)
+        cal = parse_calendar(world_id, meta.calendar)
+        if not cal.months:
+            cal = _seed_from_builtin(cal, meta.display_calendar_id or _DEFAULT_CALENDAR_ID)
+        return cal
 
     async def calendar_for_campaign(self, campaign_id: CampaignId) -> WorldCalendar:
         """The calendar for ``campaign_id`` honouring multi-world policy.

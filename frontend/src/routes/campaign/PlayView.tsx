@@ -271,7 +271,7 @@ export function PlayView({ campaignId }: Props) {
           )}
         </div>
         {rightView === "hud" ? (
-          <SideHud campaignId={campaignId} />
+          <SideHud campaignId={campaignId} sceneId={play.state.scene?.id ?? null} />
         ) : rightView === "side" ? (
           <SidePanel
             campaignId={campaignId}

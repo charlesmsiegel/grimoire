@@ -73,6 +73,8 @@ class HudService:
     eval_context_builder: Callable[[str, Any], Awaitable[EvaluationContext]] | None = None
     # Optional hook for the current scene given a campaign id.
     current_scene: Callable[[str], Awaitable[Any]] | None = None
+    # Optional hook for fetching a specific scene by id.
+    get_scene: Callable[[str], Awaitable[Any]] | None = None
 
     def register_fetcher(self, widget_id: str, fn: WidgetFetcher) -> None:
         self.fetchers[widget_id] = fn
@@ -93,9 +95,10 @@ class HudService:
         *,
         observer: Any = None,
         only: list[str] | None = None,
+        scene_id: str | None = None,
     ) -> AggregateResult:
         """Read every visible widget in parallel and return a snapshot."""
-        scene = await self._scene(campaign_id)
+        scene = await self._scene(campaign_id, scene_id=scene_id)
         ctx = await self._context(campaign_id, scene)
         widgets = await self._collect_widgets(campaign_id)
         config = self.config_service.load(campaign_id)
@@ -220,7 +223,13 @@ class HudService:
                 render_hint=render_hint,
             )
 
-    async def _scene(self, campaign_id: str) -> Any:
+    async def _scene(self, campaign_id: str, *, scene_id: str | None = None) -> Any:
+        if scene_id and self.get_scene is not None:
+            try:
+                return await self.get_scene(scene_id)
+            except Exception as e:
+                log.warning("get_scene(%s) failed: %s", scene_id, e)
+                return None
         if self.current_scene is None:
             return None
         try:

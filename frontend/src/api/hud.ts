@@ -76,8 +76,15 @@ const base = (campaignId: string) =>
   `/api/campaigns/${encodeURIComponent(campaignId)}/hud`;
 
 export const hudApi = {
-  aggregate(campaignId: string, signal?: AbortSignal): Promise<AggregateResult> {
-    return api.get<AggregateResult>(base(campaignId), { signal });
+  aggregate(
+    campaignId: string,
+    signal?: AbortSignal,
+    sceneId?: string | null,
+  ): Promise<AggregateResult> {
+    const url = sceneId
+      ? `${base(campaignId)}?scene_id=${encodeURIComponent(sceneId)}`
+      : base(campaignId);
+    return api.get<AggregateResult>(url, { signal });
   },
   widget(
     campaignId: string,

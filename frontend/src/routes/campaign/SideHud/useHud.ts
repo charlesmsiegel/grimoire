@@ -47,7 +47,7 @@ function collectRefreshEvents(descriptors: HudWidget[]): string[] {
   return [...seen].sort();
 }
 
-export function useHud(campaignId: string): HudState & {
+export function useHud(campaignId: string, activeSceneId?: string | null): HudState & {
   refresh: () => void;
   refreshWidget: (widgetId: string) => void;
 } {
@@ -64,7 +64,7 @@ export function useHud(campaignId: string): HudState & {
     async (signal?: AbortSignal) => {
       try {
         const [agg, available] = await Promise.all([
-          hudApi.aggregate(campaignId, signal),
+          hudApi.aggregate(campaignId, signal, activeSceneId),
           // Tolerate available() failing — we still render with degraded
           // refresh wiring (no per-event mapping).
           hudApi.available(campaignId, signal).catch(() => [] as HudWidget[]),
@@ -91,7 +91,7 @@ export function useHud(campaignId: string): HudState & {
         if (!signal?.aborted) setLoading(false);
       }
     },
-    [campaignId],
+    [campaignId, activeSceneId],
   );
 
   const refreshWidget = useCallback(
