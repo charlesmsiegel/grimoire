@@ -63,7 +63,6 @@ from grimoire.types.mechanics import (
 )
 from grimoire.types.orchestrator import (
     ForkCampaignResult,
-    ForkResult,
     RegeneratePostResult,
     RegenerateResult,
     ReplayBatchStateView,
@@ -586,9 +585,6 @@ class OrchestratorService:
     # Fork (delegated to ForkCoordinator)
     # ------------------------------------------------------------------ #
 
-    async def fork(self, campaign_id: CampaignId, from_turn_id: TurnId, label: str) -> ForkResult:
-        return await self._fork.fork(campaign_id, from_turn_id, label)
-
     async def fork_campaign(self, **kw: Any) -> ForkCampaignResult:
         return await self._fork.fork_campaign(**kw)
 
@@ -824,15 +820,11 @@ class OrchestratorService:
         caller leaves the per-campaign lock held so ``resolve_pre_roll`` can
         pick up where this left off). Returns ``False`` for normal completion.
         """
-        # Resolve the branch id up-front so turn_started carries it; the
-        # scene break path may swap scene_id but the branch is stable.
-        initial_scene = await self._scenes.get_scene(scene_id)
         await self._emit_turn_event(
             events.TURN_STARTED,
             turn_id,
             campaign_id,
             scene_id,
-            branch_id=initial_scene.branch_id,
             player_input=player_input,
             options={"pc_ref": triggering_pc},
         )
@@ -942,8 +934,6 @@ class OrchestratorService:
         triggering_pc = active.triggering_pc
 
         active.stage = "context_build"
-        scene_obj_for_cache = await self._scenes.get_scene(scene_id)
-        branch_id_for_cache = getattr(scene_obj_for_cache, "branch_id", None)
         composition_hash = await self._composition_hash(campaign_id)
         # Decide the extraction mode for this turn before assembling the
         # prompt so the Context Builder can attach tracker instructions or
@@ -954,7 +944,7 @@ class OrchestratorService:
             player_input=player_input,
             composition_hash=composition_hash,
             scene_id=scene_id,
-            branch_id=branch_id_for_cache,
+            branch_id=None,
             pc_ref=triggering_pc,
         )
         cached = self._context_cache.get(cache_key) if reuse_prompt_cache else None
@@ -1059,7 +1049,6 @@ class OrchestratorService:
         if extraction is not None:
             applied_ids, queued_ids = await self._delta.apply_routing(
                 campaign_id=campaign_id,
-                branch_id=scene_obj.branch_id,
                 turn_id=turn_id,
                 extraction=extraction,
             )
@@ -1083,7 +1072,6 @@ class OrchestratorService:
                 proposals=list(extraction.transient_updates),
                 transient_state=self._transient_state,
                 source_post_id=turn_id,
-                branch_id=scene_obj.branch_id,
                 continuity=self._continuity,
             )
             if ts_summary.writes or ts_summary.conflicts:
@@ -1121,7 +1109,6 @@ class OrchestratorService:
             turn_id,
             campaign_id,
             scene_id,
-            branch_id=scene_obj.branch_id,
             time_advances=time_advance_durations,
         )
 

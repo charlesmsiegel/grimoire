@@ -62,7 +62,6 @@ def _pydantic_scene(scene: SceneFileScene) -> PydanticScene:
     return PydanticScene(
         id=scene.id,
         campaign_id=scene.campaign_id,
-        branch_id=scene.branch_id,
         ordinal=scene.ordinal,
         slug=scene.slug,
         file_path="",

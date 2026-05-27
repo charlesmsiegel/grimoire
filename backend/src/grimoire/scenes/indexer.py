@@ -129,17 +129,16 @@ async def upsert_scene_row(
     await db.execute(
         """
         INSERT INTO scenes (
-            id, campaign_id, branch_id, ordinal, slug, file_path,
+            id, campaign_id, ordinal, slug, file_path,
             location_ref, in_game_start, in_game_end, pov_character_ref,
             present_character_refs, present_pc_refs,
             summary, running_summary, key_beats, tags, emotional_arc,
             post_count, threads_introduced, threads_paid_off,
             title, greeting_id, closed, closed_at_turn
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             campaign_id = excluded.campaign_id,
-            branch_id = excluded.branch_id,
             ordinal = excluded.ordinal,
             slug = excluded.slug,
             file_path = excluded.file_path,
@@ -165,7 +164,6 @@ async def upsert_scene_row(
         (
             scene.id,
             scene.campaign_id,
-            scene.branch_id,
             scene.ordinal,
             scene.slug,
             str(file_path),
@@ -197,7 +195,6 @@ async def upsert_post_row(
     post_id: str,
     scene_id: str,
     campaign_id: str,
-    branch_id: str,
     turn_id: str | None,
     order_in_scene: int,
     author_kind: AuthorKind | str,
@@ -219,15 +216,14 @@ async def upsert_post_row(
     await db.execute(
         """
         INSERT INTO posts (
-            id, scene_id, campaign_id, branch_id, turn_id, order_in_scene,
+            id, scene_id, campaign_id, turn_id, order_in_scene,
             author_kind, author_pc_ref, author_npc_ref, body, body_excerpt, body_hash,
             is_player, created_at, retconned_from
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
         ON CONFLICT(id) DO UPDATE SET
             scene_id = excluded.scene_id,
             campaign_id = excluded.campaign_id,
-            branch_id = excluded.branch_id,
             turn_id = excluded.turn_id,
             order_in_scene = excluded.order_in_scene,
             author_kind = excluded.author_kind,
@@ -243,7 +239,6 @@ async def upsert_post_row(
             post_id,
             scene_id,
             campaign_id,
-            branch_id,
             turn_id,
             order_in_scene,
             _author_kind_str(author_kind),
@@ -340,7 +335,6 @@ class SceneIndexer:
                 post_id=target.id,
                 scene_id=scene.id,
                 campaign_id=scene.campaign_id,
-                branch_id=scene.branch_id,
                 turn_id=target.turn_id or None,
                 order_in_scene=target.order_in_scene,
                 author_kind=target.author_kind,
@@ -365,7 +359,6 @@ class SceneIndexer:
                 post_id=target.id,
                 scene_id=scene.id,
                 campaign_id=scene.campaign_id,
-                branch_id=scene.branch_id,
                 turn_id=target.turn_id or None,
                 order_in_scene=target.order_in_scene,
                 author_kind=target.author_kind,
@@ -385,7 +378,7 @@ class SceneIndexer:
                     post_id=p.id,
                     scene_id=scene.id,
                     campaign_id=scene.campaign_id,
-                    branch_id=scene.branch_id,
+    
                     turn_id=p.turn_id or None,
                     order_in_scene=p.order_in_scene,
                     author_kind=p.author_kind,
@@ -404,7 +397,7 @@ class SceneIndexer:
                     post_id=p.id,
                     scene_id=scene.id,
                     campaign_id=scene.campaign_id,
-                    branch_id=scene.branch_id,
+    
                     turn_id=p.turn_id or None,
                     order_in_scene=p.order_in_scene,
                     author_kind=p.author_kind,
@@ -476,7 +469,7 @@ class SceneIndexer:
                     post_id=post_id,
                     scene_id=scene.id,
                     campaign_id=scene.campaign_id,
-                    branch_id=scene.branch_id,
+    
                     turn_id=(record.turn_id if record else None) or None,
                     order_in_scene=order,
                     author_kind=kind,

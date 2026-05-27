@@ -48,8 +48,8 @@ class HybridFactSearchIndex(FactSearchIndex):
         materialise facts by id.
     db:
         The grimoire `Database` connection pool.
-    campaign_id, branch_id:
-        Scope the searches to one timeline.
+    campaign_id:
+        Scope the searches to one campaign.
     embedder:
         Optional. If provided, query embeddings are obtained from this
         seam and a vector pass is run; otherwise the search is keyword-only.
@@ -67,7 +67,6 @@ class HybridFactSearchIndex(FactSearchIndex):
         db,
         *,
         campaign_id: str,
-        branch_id: str,
         embedder: QueryEmbedder | None = None,
         embed_task: str = "extractor",
         rrf_k: int = 60,
@@ -75,7 +74,6 @@ class HybridFactSearchIndex(FactSearchIndex):
         self._store = store
         self._db = db
         self._campaign_id = campaign_id
-        self._branch_id = branch_id
         self._embedder = embedder
         self._embed_task = embed_task
         self._rrf_k = rrf_k
@@ -125,9 +123,8 @@ class HybridFactSearchIndex(FactSearchIndex):
         where = [
             "facts_fts MATCH ?",
             "facts.campaign_id = ?",
-            "facts.branch_id = ?",
         ]
-        params: list[object] = [sanitised, self._campaign_id, self._branch_id]
+        params: list[object] = [sanitised, self._campaign_id]
         if not include_retired:
             where.append("facts.retired = 0")
         sql = (
@@ -161,9 +158,8 @@ class HybridFactSearchIndex(FactSearchIndex):
             "embeddings.source_kind = 'fact'",
             "(embeddings.campaign_id = ? OR embeddings.campaign_id IS NULL)",
             "embeddings.vector IS NOT NULL",
-            "facts.branch_id = ?",
         ]
-        params: list[object] = [self._campaign_id, self._branch_id]
+        params: list[object] = [self._campaign_id]
         if not include_retired:
             where.append("facts.retired = 0")
         sql = (

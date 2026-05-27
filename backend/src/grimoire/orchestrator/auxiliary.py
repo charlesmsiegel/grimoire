@@ -50,7 +50,6 @@ class AuxiliaryCoordinator:
         campaign_id: CampaignId,
         task: Any,
         on_token: Callable[[str], Awaitable[None]] | None = None,
-        branch_id: str | None = None,
     ) -> Any:
         from grimoire.orchestrator.auxiliary_runner import run_auxiliary_task as _run
 
@@ -60,7 +59,6 @@ class AuxiliaryCoordinator:
             campaign_id=campaign_id,
             task=task,
             on_token=on_token,
-            branch_id=branch_id,
         )
 
     def discard_auxiliary(self, result_id: str) -> bool:
@@ -217,7 +215,6 @@ class AuxiliaryCoordinator:
         if not post_id:
             raise OrchestratorError("rewrite_post auxiliary missing target_post_id")
         scene, post = await self._host._alternates.find_scene_and_post(post_id)
-        branch_id = scene.branch_id or "main"
         new_alt_id = f"a_{uuid.uuid4().hex[:16]}"
         new_ds_id = f"ds_{uuid.uuid4().hex[:16]}"
 

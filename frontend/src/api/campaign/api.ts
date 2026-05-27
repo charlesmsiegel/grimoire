@@ -216,12 +216,6 @@ export const campaignApi = {
       `/api/campaigns/${enc(campaignId)}/retcon/replay/${enc(batchId)}/cancel`,
     ),
 
-  forkBranch: (campaignId: string, fromTurnId: string, label: string) =>
-    api.post<{ new_branch_id: string; from_turn_id: string; label: string; created_at: string }>(
-      `/api/campaigns/${enc(campaignId)}/branches`,
-      { from_turn_id: fromTurnId, label },
-    ),
-
   undo: (id: string, count = 1) =>
     api.post<{ turns_undone: string[] }>(`/api/campaigns/${enc(id)}/turns/undo`, { count }),
 

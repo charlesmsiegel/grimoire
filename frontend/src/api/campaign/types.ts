@@ -95,7 +95,6 @@ export type NarratorResponseMode = "all_at_once" | "per_character";
 export interface ApiScene {
   id: string;
   campaign_id: string;
-  branch_id: string;
   ordinal: number;
   slug: string;
   title: string;

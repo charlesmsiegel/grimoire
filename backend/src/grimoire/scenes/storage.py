@@ -1,7 +1,6 @@
 """Markdown + YAML sidecar storage for scenes.
 
-Two files per scene under ``data/campaigns/<campaign_id>/scenes/`` (or per
-``branch_id`` when not ``main``)::
+Two files per scene under ``data/campaigns/<campaign_id>/scenes/``::
 
     0001-elysium-opening.md       # prose, posts in order
     0001-elysium-opening.yaml     # metadata sidecar
@@ -53,33 +52,8 @@ def slugify(text: str) -> str:
     return _base_slugify(text, fallback="scene")
 
 
-def _safe_branch_segment(branch_id: str) -> str:
-    """Return a filesystem-safe directory name for *branch_id*.
-
-    Windows forbids ``:`` in path components, but branch IDs use the convention
-    ``<campaign>:<label>``.  We encode ``:`` as ``__`` so the on-disk layout
-    remains portable.  Use :func:`_from_safe_segment` to reverse the mapping
-    when reading directory names back as branch IDs.
-    """
-    return branch_id.replace(":", "__")
-
-
-def _from_safe_segment(dir_name: str) -> str:
-    """Reverse :func:`_safe_branch_segment` — convert a directory name back to a branch ID."""
-    return dir_name.replace("__", ":")
-
-
-def scenes_dir(data_root: Path, campaign_id: str, branch_id: str = "main") -> Path:
-    if branch_id == "main":
-        return data_root / "campaigns" / campaign_id / "scenes"
-    return (
-        data_root
-        / "campaigns"
-        / campaign_id
-        / "branches"
-        / _safe_branch_segment(branch_id)
-        / "scenes"
-    )
+def scenes_dir(data_root: Path, campaign_id: str) -> Path:
+    return data_root / "campaigns" / campaign_id / "scenes"
 
 
 def scene_basename(
@@ -96,13 +70,13 @@ def scene_paths(
     *,
     naming_pattern: str = DEFAULT_SCENE_NAMING_PATTERN,
 ) -> tuple[Path, Path]:
-    directory = scenes_dir(data_root, scene.campaign_id, scene.branch_id)
+    directory = scenes_dir(data_root, scene.campaign_id)
     base = scene_basename(scene.ordinal, scene.slug, naming_pattern)
     return directory / f"{base}.md", directory / f"{base}.yaml"
 
 
-def next_ordinal(data_root: Path, campaign_id: str, branch_id: str = "main") -> int:
-    directory = scenes_dir(data_root, campaign_id, branch_id)
+def next_ordinal(data_root: Path, campaign_id: str) -> int:
+    directory = scenes_dir(data_root, campaign_id)
     if not directory.exists():
         return 1
     highest = 0
@@ -246,7 +220,6 @@ def _scene_to_yaml(scene: Scene, post_records: dict | None = None) -> dict:
     data = {
         "id": scene.id,
         "campaign_id": scene.campaign_id,
-        "branch_id": scene.branch_id,
         "ordinal": scene.ordinal,
         "slug": scene.slug,
         "title": scene.title,
@@ -286,7 +259,6 @@ def _yaml_to_scene(data: dict) -> Scene:
     return Scene(
         id=data["id"],
         campaign_id=data["campaign_id"],
-        branch_id=data.get("branch_id", "main"),
         ordinal=int(data["ordinal"]),
         slug=data["slug"],
         title=data.get("title", data["slug"]),

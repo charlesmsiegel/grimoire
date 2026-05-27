@@ -81,7 +81,6 @@ class ContextBuildRequest:
     """Carries pre-parsed entities so providers avoid redundant lookups."""
 
     campaign_id: CampaignId
-    branch_id: str | None
     scene: Any
     active_pc_ref: str | None
     composition: Composition | None

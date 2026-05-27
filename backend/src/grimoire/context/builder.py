@@ -56,12 +56,6 @@ from grimoire.types.state import ContextTier
 logger = logging.getLogger(__name__)
 
 
-# Default branch suffix for callers that omit ``branch_id``. The Inspector
-# panel exposes this same default via :class:`_InspectorConfig` so writes
-# from the UI line up with reads from the builder.
-DEFAULT_BRANCH_SUFFIX = "main"
-
-
 # --------------------------------------------------------------------------- #
 # Service
 # --------------------------------------------------------------------------- #
@@ -147,7 +141,6 @@ class ContextBuilderService:
         mechanics_results: list[MechanicsResult] | None = None,
         extra: str | None = None,
         *,
-        branch_id: str | None = None,
         pc_ref: str | None = None,
         turn_id: TurnId | None = None,
         extractor_mode: ExtractionMode = ExtractionMode.SEPARATE,
@@ -159,7 +152,6 @@ class ContextBuilderService:
                 campaign_id,
                 mechanics_results,
                 extra,
-                branch_id=branch_id,
                 pc_ref=pc_ref,
                 turn_id=turn_id,
                 extractor_mode=extractor_mode,
@@ -173,7 +165,6 @@ class ContextBuilderService:
         mechanics_results: list[MechanicsResult] | None = None,
         extra: str | None = None,
         *,
-        branch_id: str | None = None,
         pc_ref: str | None = None,
         turn_id: TurnId | None = None,
         extractor_mode: ExtractionMode = ExtractionMode.SEPARATE,
@@ -183,16 +174,14 @@ class ContextBuilderService:
             return await self._build_auxiliary(
                 campaign_id=campaign_id,
                 task=auxiliary_task,
-                branch_id=branch_id,
                 pc_ref=pc_ref,
             )
-        pins = await self._load_pins(campaign_id, branch_id, turn_id)
+        pins = await self._load_pins(campaign_id, turn_id)
         ctx = await self._build_context(
             player_input=player_input,
             campaign_id=campaign_id,
             mechanics_results=mechanics_results or [],
             extra=extra,
-            branch_id=branch_id,
             pc_ref=pc_ref,
             turn_id=turn_id,
             pins=pins,
@@ -207,18 +196,16 @@ class ContextBuilderService:
         player_input: str,
         campaign_id: CampaignId,
         *,
-        branch_id: str | None = None,
         pc_ref: str | None = None,
         turn_id: TurnId | None = None,
     ) -> BudgetEstimate:
         """Dry-run the pipeline and report what each tier would consume."""
-        pins = await self._load_pins(campaign_id, branch_id, turn_id)
+        pins = await self._load_pins(campaign_id, turn_id)
         ctx = await self._build_context(
             player_input=player_input,
             campaign_id=campaign_id,
             mechanics_results=[],
             extra=None,
-            branch_id=branch_id,
             pc_ref=pc_ref,
             turn_id=turn_id,
             pins=pins,
@@ -238,7 +225,6 @@ class ContextBuilderService:
     async def _load_pins(
         self,
         campaign_id: CampaignId,
-        branch_id: str | None,
         turn_id: TurnId | None,
     ) -> PinSet:
         pins = PinSet()
@@ -247,11 +233,9 @@ class ContextBuilderService:
         lister = getattr(self._store, "list_active_context_pins", None)
         if lister is None:
             return pins
-        bid = branch_id or f"{campaign_id}:{DEFAULT_BRANCH_SUFFIX}"
         try:
             rows = await lister(
                 campaign_id=campaign_id,
-                branch_id=bid,
                 current_turn_id=turn_id,
             )
         except Exception as exc:
@@ -261,9 +245,8 @@ class ContextBuilderService:
             # turn can be retried (or the cause investigated) instead of
             # quietly sending suppressed entities to the LLM.
             logger.error(
-                "context-builder: list_active_context_pins failed for campaign=%s branch=%s: %s",
+                "context-builder: list_active_context_pins failed for campaign=%s: %s",
                 campaign_id,
-                bid,
                 exc,
             )
             raise
@@ -296,7 +279,6 @@ class ContextBuilderService:
         campaign_id: CampaignId,
         mechanics_results: list[MechanicsResult],
         extra: str | None,
-        branch_id: str | None,
         pc_ref: str | None,
         turn_id: TurnId | None = None,
         pins: PinSet | None = None,
@@ -310,7 +292,7 @@ class ContextBuilderService:
 
         # Step 1 — scene state
         scene = await self._safe_call(
-            self._scenes.active_scene_for_campaign, campaign_id, branch_id or "main"
+            self._scenes.active_scene_for_campaign, campaign_id
         )
         recent_posts = await self._recent_posts(scene)
         scene_header = self._cast.render_scene_header(scene)
@@ -389,23 +371,23 @@ class ContextBuilderService:
 
         # Step 3 — world
         world_spotlight, world_background = await self._world_ctx.resolve_world(
-            scene=scene, campaign_id=campaign_id, branch_id=branch_id
+            scene=scene, campaign_id=campaign_id
         )
         spotlight_items.extend(world_spotlight)
         background_items.extend(world_background)
         background_items.extend(
             await self._world_ctx.resolve_factions(
-                scene=scene, campaign_id=campaign_id, branch_id=branch_id
+                scene=scene, campaign_id=campaign_id
             )
         )
         background_items.extend(
             await self._world_ctx.resolve_calendar(
-                scene=scene, campaign_id=campaign_id, branch_id=branch_id
+                scene=scene, campaign_id=campaign_id
             )
         )
 
         # Step 4 — continuity
-        as_of = await self._continuity_ctx.current_in_game_time(campaign_id, branch_id, scene)
+        as_of = await self._continuity_ctx.current_in_game_time(campaign_id, scene)
         overdue_commitments = await self._continuity_ctx.overdue_commitments(campaign_id, as_of)
         stale_commitments_list = await self._continuity_ctx.stale_commitments(campaign_id)
         commitments_block, commitments_source = self._continuity_ctx.render_commitments_block(
@@ -424,7 +406,6 @@ class ContextBuilderService:
                 active_pc_ref=active_pc_ref,
                 scene=scene,
                 campaign_id=campaign_id,
-                branch_id=branch_id,
             )
         )
 
@@ -597,7 +578,6 @@ class ContextBuilderService:
         *,
         campaign_id: CampaignId,
         task: Any,
-        branch_id: str | None,
         pc_ref: str | None,
     ) -> AssembledPrompt:
         """Assemble an auxiliary-task prompt directly from a budget plan.
@@ -614,7 +594,7 @@ class ContextBuilderService:
         budget = budget_for(kind)
 
         scene = await self._safe_call(
-            self._scenes.active_scene_for_campaign, campaign_id, branch_id or "main"
+            self._scenes.active_scene_for_campaign, campaign_id
         )
 
         active_pc_ref = pc_ref

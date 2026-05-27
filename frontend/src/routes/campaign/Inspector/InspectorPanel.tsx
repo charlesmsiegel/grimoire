@@ -27,7 +27,6 @@ interface Props {
   campaignId: string;
   playerInput: string;
   sessionId: string;
-  branchId?: string;
   pcRef?: string | null;
   enabled?: boolean;
 }
@@ -38,7 +37,6 @@ export function InspectorPanel({
   campaignId,
   playerInput,
   sessionId,
-  branchId,
   pcRef,
   enabled = true,
 }: Props) {
@@ -46,7 +44,6 @@ export function InspectorPanel({
     campaignId,
     playerInput,
     sessionId,
-    branchId,
     pcRef: pcRef ?? undefined,
     enabled,
   });

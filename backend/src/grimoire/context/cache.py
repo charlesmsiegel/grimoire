@@ -7,9 +7,9 @@ regenerate logic. This module just provides the data structure and a
 deterministic key function.
 
 The key includes everything that can vary the resolved prompt at the
-orchestrator boundary: ``campaign_id``, ``branch_id``, ``scene_id``,
-``pc_ref``, and the player input. The composition hash is mixed in by
-the orchestrator when it knows the composition; tests can pass it as
+orchestrator boundary: ``campaign_id``, ``scene_id``, ``pc_ref``, and
+the player input. The composition hash is mixed in by the orchestrator
+when it knows the composition; tests can pass it as
 ``composition_hash=""`` to opt out.
 """
 
@@ -27,7 +27,6 @@ def make_cache_key(
     player_input: str,
     composition_hash: str,
     scene_id: str | None,
-    branch_id: str | None,
     pc_ref: str | None,
 ) -> str:
     """Deterministic SHA-256 over the regenerate-stable inputs."""
@@ -37,7 +36,6 @@ def make_cache_key(
         player_input,
         composition_hash or "",
         scene_id or "",
-        branch_id or "",
         pc_ref or "",
     ):
         h.update(part.encode("utf-8"))

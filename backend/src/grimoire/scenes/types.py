@@ -81,7 +81,6 @@ class SceneThreads:
 class Scene:
     id: str
     campaign_id: str
-    branch_id: str
     ordinal: int
     slug: str
     title: str
@@ -124,7 +123,6 @@ class Scene:
 @dataclass
 class SceneInit:
     campaign_id: str
-    branch_id: str = "main"
     title: str | None = None
     slug: str | None = None
     location_ref: str | None = None
@@ -171,7 +169,6 @@ class PostIndexRecord:
     post_id: str
     scene_id: str
     campaign_id: str
-    branch_id: str
     author: str
     body: str
     turn_id: str | None = None

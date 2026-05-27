@@ -7,7 +7,6 @@ function makeScene(id: string): ApiScene {
   return {
     id,
     campaign_id: "camp-1",
-    branch_id: "camp-1:main",
     ordinal: 1,
     slug: id,
     file_path: `scenes/${id}.md`,

@@ -50,7 +50,6 @@ function turn(
   return {
     turn_id: "turn-1",
     campaign_id: "camp-1",
-    branch_id: "main",
     scene_id: "scene-1",
     started_at: "2026-05-20T12:00:00Z",
     player_input: "I walk into the tavern.",

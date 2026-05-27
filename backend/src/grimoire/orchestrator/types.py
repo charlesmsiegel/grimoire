@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class ExtractionRequest:
     campaign_id: str
-    branch_id: str
     turn_id: str
     scene_id: str
     post_text: str
@@ -26,7 +25,6 @@ class ExtractionRequest:
 @dataclass(frozen=True)
 class DeltaApplyRequest:
     campaign_id: str
-    branch_id: str
     turn_id: str
     scene_id: str
     pc_ref: str | None
