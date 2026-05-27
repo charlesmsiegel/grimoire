@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 
 from grimoire.scenes.ledger import SceneLedger
@@ -62,11 +63,14 @@ class SceneSuggestionEngine:
         )
 
         generated: list[dict] = []
+        raw_response: str | None = None
         try:
+            prompt = self._build_prompt(ctx)
+            logger.info("scene_suggest prompt:\n%s", prompt)
             request = CompletionRequest(
                 model="default",
                 messages=[
-                    Message(role=MessageRole.USER, content=self._build_prompt(ctx)),
+                    Message(role=MessageRole.USER, content=prompt),
                 ],
                 system=_SUGGEST_SYSTEM,
                 max_tokens=1024,
@@ -75,11 +79,18 @@ class SceneSuggestionEngine:
             response = await self._gateway.complete(
                 "scene_suggest", request, campaign_id=ctx.campaign_id
             )
-            parsed = json.loads(response.text)
+            raw_response = response.text
+            logger.info("scene_suggest response:\n%s", raw_response[:2000])
+            cleaned = re.sub(r"^```(?:json)?\s*", "", raw_response.strip())
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+            parsed = json.loads(cleaned)
             if isinstance(parsed, list):
                 generated = parsed
         except (json.JSONDecodeError, TypeError):
-            logger.warning("Failed to parse suggestion response")
+            logger.warning(
+                "Failed to parse suggestion response:\n%s",
+                raw_response[:2000] if raw_response else "(no response)",
+            )
         except Exception:
             logger.warning("LLM suggestion generation failed", exc_info=True)
 

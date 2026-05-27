@@ -82,7 +82,7 @@ class _NullEventBus:
 @dataclass
 class RunningSummaryConfig:
     model: str | None = None
-    max_tokens: int = 512
+    max_tokens: int = 1024
 
 
 @dataclass
