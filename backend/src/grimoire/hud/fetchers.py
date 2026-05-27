@@ -37,6 +37,9 @@ def _character_ref_components(ref: str) -> tuple[str | None, str]:
         parts = rest.strip("/").split("/")
         asset = parts[-1] if parts else ""
         return None, asset
+    if ref.startswith("emergent/"):
+        parts = ref.split("/")
+        return None, parts[-1]
     if ref.startswith("library:"):
         _, _, path = ref.partition("library:")
         parts = path.strip("/").split("/")
@@ -65,16 +68,15 @@ async def _resolve_character_name(
         # Try emergent characters first (campaign-local).
         store = getattr(library, "store", None)
         if store is not None:
-            emergent_id = asset_id.removeprefix("emergent/")
             try:
-                doc = await store.get_emergent(campaign_id, "characters", emergent_id)
+                doc = await store.get_emergent(campaign_id, "characters", asset_id)
                 if doc is not None:
                     fm = doc.get("frontmatter") or {}
                     name = fm.get("name")
                     if name:
                         return str(name)
             except Exception as e:
-                log.debug("store.get_emergent failed for %s/%s: %s", campaign_id, emergent_id, e)
+                log.debug("store.get_emergent failed for %s/%s: %s", campaign_id, asset_id, e)
         # Then try each world in the composition.
         try:
             comp = await library.get_composition(campaign_id)
@@ -140,14 +142,13 @@ def _present_cast_fetcher(library: Any, extras: Any, hud_config: HudConfigServic
                 world_id, asset_id = _character_ref_components(str(ref))
             except Exception:
                 continue
-            bare_id = asset_id.removeprefix("emergent/")
             name = await _resolve_character_name(library, world_id, asset_id, campaign_id)
             pinned = await _pinned_extras_for_character(
-                extras, hud_config, campaign_id, world_id, bare_id
+                extras, hud_config, campaign_id, world_id, asset_id
             )
             chips.append(
                 {
-                    "character_id": bare_id,
+                    "character_id": asset_id,
                     "character_ref": str(ref),
                     "name": name,
                     "portrait_url": None,
@@ -204,6 +205,23 @@ def _recent_facts_fetcher(continuity: Any):
             log.debug("continuity.list_recent_facts failed: %s", e)
             return {"items": []}
         return {"items": [{"text": getattr(f, "text", str(f))} for f in facts]}
+
+    return fetch
+
+
+def _active_threads_fetcher():
+    async def fetch(_w: HudWidget, _c: str, scene: Any, _o: Any) -> dict[str, Any]:
+        if scene is None:
+            return {"items": []}
+        introduced = getattr(scene, "threads_introduced", None) or []
+        raw_paid = getattr(scene, "threads_paid_off", None) or []
+        paid_off = {getattr(t, "text", "") for t in raw_paid}
+        items = [
+            {"text": getattr(t, "text", str(t))}
+            for t in introduced
+            if getattr(t, "text", str(t)) not in paid_off
+        ]
+        return {"items": items}
 
     return fetch
 
@@ -385,7 +403,7 @@ def register_default_fetchers(
     hud.register_fetcher("core.scene-summary", _scene_summary_fetcher())
     hud.register_fetcher("core.drift-alerts", _empty_fetcher_with({"items": []}))
     hud.register_fetcher("core.review-queue", _empty_fetcher_with({"count": 0}))
-    hud.register_fetcher("core.active-threads", _empty_fetcher_with({"items": []}))
+    hud.register_fetcher("core.active-threads", _active_threads_fetcher())
 
     # The HudService also needs scene hooks so the aggregator can pass the
     # scene into fetchers' ``scene`` arg.

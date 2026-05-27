@@ -130,6 +130,7 @@ class HudService:
         widget_id: str,
         *,
         observer: Any = None,
+        scene_id: str | None = None,
     ) -> WidgetSnapshot:
         """Refresh exactly one widget; honors the per-widget timeout.
 
@@ -137,7 +138,7 @@ class HudService:
         hidden widget never reaches its fetcher — both the config's
         ``visible`` toggle and the widget's ``visible_when`` expression.
         """
-        scene = await self._scene(campaign_id)
+        scene = await self._scene(campaign_id, scene_id=scene_id)
         widget = next(
             (w for w in await self._collect_widgets(campaign_id) if w.id == widget_id),
             None,
@@ -226,10 +227,17 @@ class HudService:
     async def _scene(self, campaign_id: str, *, scene_id: str | None = None) -> Any:
         if scene_id and self.get_scene is not None:
             try:
-                return await self.get_scene(scene_id)
+                scene = await self.get_scene(scene_id)
+                scene_cid = getattr(scene, "campaign_id", None)
+                if scene_cid and scene_cid != campaign_id:
+                    log.warning(
+                        "scene %s belongs to %s, not %s — ignoring override",
+                        scene_id, scene_cid, campaign_id,
+                    )
+                else:
+                    return scene
             except Exception as e:
                 log.warning("get_scene(%s) failed: %s", scene_id, e)
-                return None
         if self.current_scene is None:
             return None
         try:

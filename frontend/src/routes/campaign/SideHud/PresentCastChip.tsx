@@ -8,7 +8,9 @@ interface Props {
 }
 
 export function PresentCastChip({ chip, campaignId }: Props) {
-  const castUrl = `/campaigns/${encodeURIComponent(campaignId)}/cast?character=${encodeURIComponent(chip.character_id)}`;
+  const params = new URLSearchParams({ character: chip.character_id });
+  if (chip.character_ref) params.set("ref", chip.character_ref);
+  const castUrl = `/campaigns/${encodeURIComponent(campaignId)}/cast?${params}`;
 
   return (
     <Link

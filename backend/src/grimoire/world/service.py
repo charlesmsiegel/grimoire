@@ -80,19 +80,38 @@ _DEFAULT_CALENDAR_ID = "gregorian"
 
 def _seed_from_builtin(cal: WorldCalendar, calendar_id: str) -> WorldCalendar:
     """Populate empty months/weekday_names from a builtin calendar engine."""
-    from grimoire.world.calendars.base import WEEKDAY_NAMES, DateParts
-    from grimoire.world.calendars.gregorian import MONTH_DAYS
+    from grimoire.world.calendars.base import WEEKDAY_NAMES
     from grimoire.world.calendars.registry import BUILTIN_CALENDARS, engine_for
 
     builtin = BUILTIN_CALENDARS.get(calendar_id)
     if builtin is None:
         return cal
     engine = engine_for(builtin)
+    ref_year = 2000
+    year_days = engine.year_length_days(ref_year)
+    start_jdn = engine.to_jdn(ref_year, 1, 1)
     months: list[Month] = []
-    for m in range(1, 13):
-        name = engine.month_name(DateParts(year=2000, month=m, day=1))
-        days = MONTH_DAYS[m - 1] if m <= len(MONTH_DAYS) else 30
+    seen_months: set[int] = set()
+    jdn = start_jdn
+    while jdn < start_jdn + year_days:
+        parts = engine.from_jdn(jdn)
+        if parts.month in seen_months:
+            jdn += 1
+            continue
+        seen_months.add(parts.month)
+        name = engine.month_name(parts)
+        next_m = parts.month + 1
+        try:
+            next_jdn = engine.to_jdn(ref_year, next_m, 1)
+        except Exception:
+            next_jdn = start_jdn + year_days
+        days = next_jdn - engine.to_jdn(ref_year, parts.month, 1)
+        if days <= 0:
+            days = 30
         months.append(Month(name=name, days=days))
+        jdn = next_jdn
+    if not months:
+        return cal
     weekdays = cal.week_day_names if cal.week_day_names else list(WEEKDAY_NAMES)
     return cal.model_copy(update={"months": months, "week_day_names": weekdays})
 
@@ -841,7 +860,10 @@ class WorldService:
             raw = meta.calendar if isinstance(meta.calendar, dict) else {}
             if not raw:
                 continue
-            ref_cals.append((ref.world_id, parse_calendar(ref.world_id, raw)))
+            cal = parse_calendar(ref.world_id, raw)
+            if not cal.months:
+                cal = _seed_from_builtin(cal, meta.display_calendar_id or _DEFAULT_CALENDAR_ID)
+            ref_cals.append((ref.world_id, cal))
 
         if not ref_cals:
             return await self.calendar_for(refs[0].world_id)

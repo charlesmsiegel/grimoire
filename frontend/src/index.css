@@ -6241,6 +6241,29 @@ button.primary:disabled {
   gap: 0.25rem var(--space-2);
 }
 
+.scene-setting-error {
+  color: var(--danger, #c33);
+}
+
+.scene-setting-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.25rem;
+  padding: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted, #888);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.scene-setting-retry:hover {
+  color: var(--fg, currentColor);
+}
+
 .scene-setting-badges {
   display: flex;
   flex-wrap: wrap;

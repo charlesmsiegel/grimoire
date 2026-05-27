@@ -169,11 +169,29 @@ function extractTextItems(data: unknown): string[] {
     .filter((s): s is string => s !== null);
 }
 
-function InfoListBlock({ widget }: { widget: HudWidgetState }) {
+function InfoListBlock({ widget, onRefresh }: { widget: HudWidgetState; onRefresh?: () => void }) {
   const { snapshot } = widget;
-  if (snapshot.status !== "ok") return null;
+  if (snapshot.status === "hidden") return null;
 
   const title = snapshot.title ?? snapshot.id;
+
+  if (snapshot.status !== "ok") {
+    return (
+      <div className="scene-setting-block" aria-label={title}>
+        <div className="scene-setting-entry">
+          <span className="scene-setting-label">{title}</span>
+          <span className="scene-setting-value scene-setting-error">
+            {snapshot.status === "timeout" ? "Timed out" : snapshot.error ?? "Error"}
+            {onRefresh && (
+              <button type="button" className="scene-setting-retry" onClick={onRefresh} title="Retry">
+                ↻
+              </button>
+            )}
+          </span>
+        </div>
+      </div>
+    );
+  }
   const rec = asRecord(snapshot.data);
   const text = rec ? asString(rec.text) : null;
   const count = rec ? asNumber(rec.count) : null;
@@ -390,18 +408,16 @@ function QuickActionsBlock({
 export function SideHud({ campaignId, sceneId, scene, pcs, actions, playerInput, pcRef, latestNarratorTurnId }: Props) {
   const hud = useHud(campaignId, sceneId);
 
-  const { sceneSetting, castWidget, coreWidgets, pluginWidgets } = useMemo(() => {
+  const { sceneSetting, castWidget, orderedWidgets } = useMemo(() => {
     const setting: HudWidgetState[] = [];
-    const core: HudWidgetState[] = [];
-    const plugin: HudWidgetState[] = [];
+    const rest: HudWidgetState[] = [];
     let cast: HudWidgetState | null = null;
     for (const w of hud.widgets) {
       if (SCENE_SETTING_IDS.has(w.snapshot.id)) setting.push(w);
       else if (w.snapshot.id === "core.present-cast") cast = w;
-      else if (CORE_WIDGET_IDS.has(w.snapshot.id)) core.push(w);
-      else plugin.push(w);
+      else rest.push(w);
     }
-    return { sceneSetting: setting, castWidget: cast, coreWidgets: core, pluginWidgets: plugin };
+    return { sceneSetting: setting, castWidget: cast, orderedWidgets: rest };
   }, [hud.widgets]);
 
   if (hud.loading && hud.widgets.length === 0) {
@@ -428,9 +444,23 @@ export function SideHud({ campaignId, sceneId, scene, pcs, actions, playerInput,
       <AuxInflightBadge campaignId={campaignId} />
       <SceneSettingBlock widgets={sceneSetting} />
       <CastBlock widget={castWidget} campaignId={campaignId} />
-      {coreWidgets.map((w) => (
-        <InfoListBlock key={w.snapshot.id} widget={w} />
-      ))}
+      {orderedWidgets.map((w) =>
+        CORE_WIDGET_IDS.has(w.snapshot.id) ? (
+          <InfoListBlock
+            key={w.snapshot.id}
+            widget={w}
+            onRefresh={() => hud.refreshWidget(w.snapshot.id)}
+          />
+        ) : (
+          <div key={w.snapshot.id} className="side-hud-widget-slot">
+            {renderWidget(
+              w.stale ? { ...w.snapshot, stale: true } : w.snapshot,
+              () => hud.refreshWidget(w.snapshot.id),
+              campaignId,
+            )}
+          </div>
+        ),
+      )}
       <MechanicsBlock campaignId={campaignId} pcs={pcs} />
       <QuickActionsBlock actions={actions} scene={scene} />
       <InspectorPanel
@@ -440,19 +470,6 @@ export function SideHud({ campaignId, sceneId, scene, pcs, actions, playerInput,
         pcRef={pcRef}
       />
       <WhatChangedPanel turnId={latestNarratorTurnId} />
-      {pluginWidgets.length > 0 && (
-        <ul className="side-hud-widgets">
-          {pluginWidgets.map((w) => (
-            <li key={w.snapshot.id} className="side-hud-widget-slot">
-              {renderWidget(
-                w.stale ? { ...w.snapshot, stale: true } : w.snapshot,
-                () => hud.refreshWidget(w.snapshot.id),
-                campaignId,
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
     </aside>
   );
 }

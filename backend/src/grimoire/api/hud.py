@@ -120,9 +120,11 @@ async def get_available_widgets(campaign_id: str, hud: HudDep) -> list[HudWidget
     "/{campaign_id}/hud/widgets/{widget_id:path}",
     response_model=WidgetSnapshot,
 )
-async def get_hud_widget(campaign_id: str, widget_id: str, hud: HudDep) -> WidgetSnapshot:
+async def get_hud_widget(
+    campaign_id: str, widget_id: str, hud: HudDep, scene_id: str | None = None
+) -> WidgetSnapshot:
     try:
-        return await hud.fetch_one(campaign_id, widget_id)
+        return await hud.fetch_one(campaign_id, widget_id, scene_id=scene_id)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
