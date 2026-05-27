@@ -447,6 +447,31 @@ class ContextBuilderService:
         # Recent posts as text (last N)
         recent_posts_text = render_recent_posts(recent_posts)
 
+        # Narrator response mode and NPC list for response format template
+        from grimoire.scenes.narrator_mode import effective_response_mode
+
+        campaign_row = None
+        if self._store is not None:
+            try:
+                campaign_row = await self._store.get_campaign(campaign_id)
+            except Exception:
+                pass
+        narrator_mode = effective_response_mode(
+            scene_override=getattr(scene, "narrator_response_mode", None),
+            campaign_row=campaign_row,
+        )
+
+        present_npcs: list[dict] = []
+        if scene is not None:
+            for ref in getattr(scene, "present_character_refs", []):
+                name = ref.rsplit("/", 1)[-1].replace("-", " ").title()
+                try:
+                    entity = await self._library.get_entity(ref)
+                    name = getattr(entity, "name", name)
+                except Exception:
+                    pass
+                present_npcs.append({"name": name, "ref": ref})
+
         return BuiltContext(
             composition=composition,
             style_text=style_text,
@@ -464,6 +489,8 @@ class ContextBuilderService:
             voice_corrective=voice_corrective,
             sources=sources,
             extra=extra,
+            narrator_response_mode=narrator_mode,
+            present_npcs=present_npcs,
         )
 
     # -- composition / system block ------------------------------------ #
