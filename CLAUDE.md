@@ -36,7 +36,7 @@ backend/
     plugins/             # Plugin lifecycle and loading
     observability/       # Audit, replay, metrics
     storage/             # SQLite database layer, migrations
-    hud/                 # Real-time info display protocol
+    hud/                 # HUD widget system (scene info, cast, context inspector, actions)
     expressions/         # Expression parsing/evaluation
     templates/           # Jinja2 template rendering
     auxiliary/           # Background LLM jobs (summarization, etc.)
