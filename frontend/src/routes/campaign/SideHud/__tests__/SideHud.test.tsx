@@ -47,7 +47,7 @@ function renderHud(aggregate: AggregateResult, available: HudWidget[] = []) {
   const socket = makeSocket();
   return render(
     <MemoryRouter>
-      <CampaignStreamContext.Provider value={socket}>
+      <CampaignStreamContext.Provider value={{ socket, status: "open", campaignId: "test" }}>
         <SideHud
           campaignId="test"
           sceneId="test:0001"
@@ -70,7 +70,7 @@ describe("SideHud", () => {
     const socket = makeSocket();
     render(
       <MemoryRouter>
-        <CampaignStreamContext.Provider value={socket}>
+        <CampaignStreamContext.Provider value={{ socket, status: "open", campaignId: "test" }}>
           <SideHud
             campaignId="test"
             sceneId={null}
