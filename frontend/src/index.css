@@ -1703,6 +1703,39 @@ pre {
   background: var(--gold);
 }
 
+.post-direction::before {
+  background: var(--fg-muted);
+  opacity: 0.5;
+}
+
+.post-direction .post-body {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.post-direction .post-author-kind {
+  font-style: italic;
+}
+
+.input-continue {
+  background: var(--bg-raised);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 0.25rem 0.75rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.input-continue:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.input-director-hint {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
 .post-streaming::before {
   background: linear-gradient(
     180deg,

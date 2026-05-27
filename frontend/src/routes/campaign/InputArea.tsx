@@ -16,6 +16,7 @@ interface Props {
   onChangePC: (ref: string) => void;
   onSubmit: (text: string, emotion?: string) => Promise<void>;
   onAdvance: () => Promise<void>;
+  onDirect: (text?: string) => Promise<void>;
   advanceEnabled: boolean;
   advanceReason: string;
   onNextSpeaker: () => Promise<void>;
@@ -34,6 +35,7 @@ export function InputArea({
   onChangePC,
   onSubmit,
   onAdvance,
+  onDirect,
   advanceEnabled,
   advanceReason,
   onNextSpeaker,
@@ -90,7 +92,10 @@ export function InputArea({
   );
 
   const isMultiPC = (scene?.present_pc_refs.length ?? 0) >= 2;
-  const canSubmit = !!activePcRef && text.trim().length > 0 && !submitting && !busy;
+  const isPcAbsent = (scene?.present_pc_refs.length ?? 0) === 0;
+  const canSubmit = isPcAbsent
+    ? text.trim().length > 0 && !submitting && !busy
+    : !!activePcRef && text.trim().length > 0 && !submitting && !busy;
   const showAdvance = isMultiPC;
 
   const submit = useCallback(async () => {
@@ -112,6 +117,29 @@ export function InputArea({
       setSubmitting(false);
     }
   }, [canSubmit, onSubmit, onTextChange, text, emotion]);
+
+  const directSubmit = useCallback(async () => {
+    if (submitting || busy) return;
+    setSubmitting(true);
+    const snapshot = text;
+    onTextChange("");
+    taRef.current?.focus();
+    try {
+      await onDirect(snapshot || undefined);
+    } finally {
+      setSubmitting(false);
+    }
+  }, [submitting, busy, onDirect, onTextChange, text]);
+
+  const directContinue = useCallback(async () => {
+    if (submitting || busy) return;
+    setSubmitting(true);
+    try {
+      await onDirect();
+    } finally {
+      setSubmitting(false);
+    }
+  }, [submitting, busy, onDirect]);
 
   const advance = useCallback(async () => {
     if (!advanceEnabled || advancing || busy) return;
@@ -148,12 +176,23 @@ export function InputArea({
       className="input-area"
       onSubmit={(e) => {
         e.preventDefault();
-        void submit();
+        if (isPcAbsent) {
+          void directSubmit();
+        } else {
+          void submit();
+        }
       }}
       aria-label="Compose post"
     >
       <div className="input-meta">
-        <PCSwitcher pcs={pcs} activePcRef={activePcRef} onChange={onChangePC} campaignId={campaignId} />
+        {!isPcAbsent && (
+          <PCSwitcher pcs={pcs} activePcRef={activePcRef} onChange={onChangePC} campaignId={campaignId} />
+        )}
+        {isPcAbsent && (
+          <span className="input-director-hint" aria-live="polite">
+            NPC-only scene — directing as narrator.
+          </span>
+        )}
         {isMultiPC && (
           <span className="input-multi-hint" aria-live="polite">
             Multi-PC scene — posts queue locally, click Advance to call the narrator.
@@ -166,30 +205,47 @@ export function InputArea({
         value={text}
         onChange={(e) => onTextChange(e.target.value)}
         onKeyDown={(e) => {
-          // Enter submits; Shift+Enter inserts a newline (default).
-          // Ctrl/Cmd+Enter also submits — preserved for muscle memory.
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            void submit();
+            if (isPcAbsent) {
+              void directSubmit();
+            } else {
+              void submit();
+            }
           }
         }}
         placeholder={
-          activePcRef
-            ? `Posting as ${pcs.find((p) => p.character_ref === activePcRef)?.name ?? activePcRef}`
-            : "Add a PC to begin posting."
+          isPcAbsent
+            ? "Direct the scene..."
+            : activePcRef
+              ? `Posting as ${pcs.find((p) => p.character_ref === activePcRef)?.name ?? activePcRef}`
+              : "Add a PC to begin posting."
         }
         rows={4}
         aria-label="Post body (Enter to submit, Shift+Enter for newline)"
       />
       <div className="input-actions">
-        <ExpressionPicker
-          value={emotion}
-          onChange={setEmotion}
-          disabled={submitting || busy}
-        />
+        {!isPcAbsent && (
+          <ExpressionPicker
+            value={emotion}
+            onChange={setEmotion}
+            disabled={submitting || busy}
+          />
+        )}
         <button type="submit" disabled={!canSubmit} className="input-submit">
-          {submitting ? "Submitting…" : "Submit"}
+          {submitting ? "Submitting…" : isPcAbsent ? "Direct" : "Submit"}
         </button>
+        {isPcAbsent && (
+          <button
+            type="button"
+            onClick={() => void directContinue()}
+            disabled={submitting || busy}
+            className="input-continue"
+            title="Continue the scene without specific direction"
+          >
+            {submitting ? "Continuing…" : "Continue"}
+          </button>
+        )}
         {showAdvance && (
           <button
             type="button"
@@ -212,24 +268,28 @@ export function InputArea({
             {requestingNext ? "Calling…" : "Next"}
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => void requestSuggestion()}
-          disabled={!activePcRef || suggesting || busy}
-          className="input-suggest"
-          title="Generate a draft post in the active PC's voice"
-        >
-          {suggesting ? "Drafting…" : "Suggest a post"}
-        </button>
-        <button
-          type="button"
-          onClick={() => setPolishInstr("")}
-          disabled={!text.trim() || polishing || busy}
-          className="input-polish"
-          title="Polish or rewrite the current draft"
-        >
-          {polishing ? "Polishing…" : "Polish"}
-        </button>
+        {!isPcAbsent && (
+          <>
+            <button
+              type="button"
+              onClick={() => void requestSuggestion()}
+              disabled={!activePcRef || suggesting || busy}
+              className="input-suggest"
+              title="Generate a draft post in the active PC's voice"
+            >
+              {suggesting ? "Drafting…" : "Suggest a post"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPolishInstr("")}
+              disabled={!text.trim() || polishing || busy}
+              className="input-polish"
+              title="Polish or rewrite the current draft"
+            >
+              {polishing ? "Polishing…" : "Polish"}
+            </button>
+          </>
+        )}
       </div>
       {polishInstr !== null && (
         <form
