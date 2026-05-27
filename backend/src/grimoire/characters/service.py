@@ -97,10 +97,6 @@ LLMCapsuleDrafter = Callable[[CharacterData], Awaitable[CapsuleDraft]]
 LLMVoiceAnchorDrafter = Callable[[Character, list[Post]], Awaitable[VoiceAnchor]]
 
 
-def _branch_for(campaign_id: str, branch_id: str | None) -> str:
-    return branch_id or f"{campaign_id}:main"
-
-
 class CharactersService:
     """Spec 08 implementation — facade delegating to collaborators."""
 
@@ -423,7 +419,6 @@ class CharactersService:
 
         pins = await self.store.list_tier_pins(
             campaign_id=target_campaign,
-            branch_id=_branch_for(target_campaign, None),
         )
         for ref in list(out.keys()):
             pin_value = pins.get(ref)
@@ -748,17 +743,15 @@ class CharactersService:
     # ------------------------------------------------------------------ #
 
     async def get_relationships(
-        self, ref: CharacterRef, campaign_id: CampaignId, *, branch_id: str | None = None
+        self, ref: CharacterRef, campaign_id: CampaignId
     ) -> list[dict]:
-        branch = _branch_for(campaign_id, branch_id)
         rows = await self.store.db.fetchall(
             """
             SELECT * FROM relationships
             WHERE campaign_id = ?
-              AND branch_id = ?
               AND (from_character_ref = ? OR to_character_ref = ?)
             """,
-            (campaign_id, branch, ref, ref),
+            (campaign_id, ref, ref),
         )
         return [_relationship_row_to_dict(r) for r in rows]
 

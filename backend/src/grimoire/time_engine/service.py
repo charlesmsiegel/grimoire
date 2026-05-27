@@ -1488,17 +1488,16 @@ class TimeEngineService:
         self,
         *,
         campaign_id: CampaignId,
-        branch_id: str,
         limit: int,
     ) -> list[str]:
         rows = await self._store.db.fetchall(
             """
             SELECT author_pc_ref FROM posts
-            WHERE campaign_id = ? AND branch_id = ?
+            WHERE campaign_id = ?
             ORDER BY created_at DESC, order_in_scene DESC
             LIMIT ?
             """,
-            (campaign_id, branch_id, limit),
+            (campaign_id, limit),
         )
         refs: list[str] = []
         seen: set[str] = set()
@@ -1645,7 +1644,6 @@ def _scheduled_event_from_row(row: Any, *, triggered: bool | None = None) -> Sch
 def _shared_commitment(
     c: Any,
     campaign_id: str,
-    branch_id: str,
     epoch: datetime | None,
     anchor: InGameTime,
 ) -> Any:
@@ -1678,7 +1676,6 @@ def _shared_commitment(
     return SharedCommitment(
         id=c.id,
         campaign_id=campaign_id,
-        branch_id=branch_id,
         kind=kind,
         text=c.text,
         created_in_post=c.created_in_post or None,

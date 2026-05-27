@@ -121,7 +121,6 @@ async def _promote_via_continuity(
     transient_state: TransientStateService,
     continuity: Any,
     campaign_id: str,
-    branch_id: str | None,
     source_post_id: str | None,
 ) -> bool:
     """Run the standard add_fact path + supersede the just-set row.
@@ -144,7 +143,6 @@ async def _promote_via_continuity(
     fact = Fact(
         id=f"f_{proposal.entity_id}_{proposal.field}_{source_post_id or 'unknown'}",
         campaign_id=campaign_id,
-        branch_id=branch_id or f"{campaign_id}:main",
         text=f"{proposal.entity_id} has {proposal.field}: {proposal.value}",
         established_in_post=source_post_id,
         established_at_in_game=None,
@@ -169,7 +167,6 @@ async def route_transient_updates(
     source_post_id: str | None,
     config: TransientStateConfig | None = None,
     review_enqueuer: ReviewEnqueuer | None = None,
-    branch_id: str | None = None,
     continuity: Any | None = None,
 ) -> RoutingSummary:
     """Dispatch each proposal to set / review-queue / discard.
@@ -192,7 +189,6 @@ async def route_transient_updates(
                 provenance=Provenance.EXTRACTOR_AUTO,
                 confidence=proposal.confidence,
                 source_post_id=source_post_id,
-                branch_id=branch_id,
             )
             summary.auto_applied += 1
             summary.writes.append(
@@ -207,7 +203,6 @@ async def route_transient_updates(
                 kind,
                 proposal.entity_id,
                 proposal.field,
-                branch_id=branch_id,
             )
             if current is not None and current.id != value.id:
                 summary.conflicts.append(
@@ -223,7 +218,6 @@ async def route_transient_updates(
                 transient_state=transient_state,
                 campaign_id=campaign_id,
                 cfg=cfg,
-                branch_id=branch_id,
             ):
                 promoted = await _promote_via_continuity(
                     proposal,
@@ -231,7 +225,6 @@ async def route_transient_updates(
                     transient_state=transient_state,
                     continuity=continuity,
                     campaign_id=campaign_id,
-                    branch_id=branch_id,
                     source_post_id=source_post_id,
                 )
                 if promoted:

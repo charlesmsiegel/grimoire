@@ -182,14 +182,12 @@ class TimeEngineSubscriber:
         if total is None:
             return
         scene_id = payload.get("scene_id")
-        branch_id = payload.get("branch_id")
         try:
             await self._engine.advance(
                 campaign_id,
                 total,
                 TimeAdvanceReason.SCENE_NARRATION,
                 scene_id=scene_id,
-                branch_id=branch_id,
             )
         except Exception:
             logger.exception(
