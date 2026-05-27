@@ -36,6 +36,7 @@ describe("CharacterSprite", () => {
         characterId="beatrice"
         characterName="Beatrice"
         asOfTurn="t_1"
+        expressionsEnabled
       />,
     );
     const img = await screen.findByRole("img");
@@ -53,11 +54,10 @@ describe("CharacterSprite", () => {
         characterId="naked"
         characterName="Ralph"
         asOfTurn="t_1"
+        expressionsEnabled
       />,
     );
-    await waitFor(() =>
-      expect(screen.getByText("Ralph")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText("Ralph")).toBeInTheDocument());
     expect(screen.queryByRole("img")).toBeNull();
   });
 
@@ -67,8 +67,15 @@ describe("CharacterSprite", () => {
         campaignId=""
         characterId="beatrice"
         characterName="Beatrice"
+        expressionsEnabled
       />,
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fetch when expressions are disabled (default)", () => {
+    render(<CharacterSprite campaignId="cmp_1" characterId="beatrice" characterName="Beatrice" />);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByText("Beatrice")).toBeInTheDocument();
   });
 });

@@ -12,6 +12,7 @@ that would escape the library root.
 
 from __future__ import annotations
 
+import json as _json
 import logging
 from pathlib import Path
 from typing import Any
@@ -194,6 +195,20 @@ async def _vocabulary_extensions(container: Any) -> dict[str, list[str]]:
     return out
 
 
+async def _is_expression_enabled(state_store: Any, campaign_id: str, character_id: str) -> bool:
+    """Check whether expressions are enabled for this character in this campaign."""
+    row = await state_store.db.fetchone("SELECT config FROM campaigns WHERE id = ?", (campaign_id,))
+    if row is None:
+        return False
+    try:
+        cfg = _json.loads(row["config"] or "{}")
+    except (TypeError, ValueError):
+        return False
+    block = cfg.get("expressions") or {}
+    enabled = block.get("enabled_characters") or []
+    return character_id in enabled
+
+
 @router.get(
     "/campaigns/{campaign_id}/characters/{character_id}/expression",
     response_model=ExpressionResponse,
@@ -206,6 +221,8 @@ async def get_expression(
     container: ContainerDep,
     as_of_turn: str | None = None,
 ) -> ExpressionResponse:
+    if not await _is_expression_enabled(state_store, campaign_id, character_id):
+        return ExpressionResponse(emotion="neutral", sprite_url=None, fallback_used=True)
     service = _get_expression_service(request)
     resolved = await _resolve_world_for_character(state_store, campaign_id, character_id)
     if resolved is None:

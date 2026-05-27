@@ -17,6 +17,7 @@ from .helpers import (
 )
 from .schemas import (
     AdvancedSettingsPayload,
+    ExpressionsSettingsPayload,
     GenerationSettingsPayload,
     ImageGenSettingsPayload,
     IntegratedDeltasPayload,
@@ -334,3 +335,28 @@ async def set_campaign_narrator(
     cfg["narrator"] = {"response_mode": mode}
     await _write_campaign_config(state_store, campaign_id, cfg)
     return cfg["narrator"]
+
+
+@router.get("/{campaign_id}/expressions")
+async def get_expressions_settings(
+    campaign_id: str,
+    state_store: StateStoreDep,
+) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    block = cfg.get("expressions") or {}
+    chars = block.get("enabled_characters") or []
+    return {"enabled_characters": [c for c in chars if isinstance(c, str)]}
+
+
+@router.put("/{campaign_id}/expressions")
+async def set_expressions_settings(
+    campaign_id: str,
+    payload: ExpressionsSettingsPayload,
+    state_store: StateStoreDep,
+) -> Any:
+    row = await _require_campaign_row(state_store, campaign_id)
+    cfg = _load_campaign_config(row)
+    cfg["expressions"] = {"enabled_characters": list(payload.enabled_characters)}
+    await _write_campaign_config(state_store, campaign_id, cfg)
+    return {"enabled_characters": list(payload.enabled_characters)}

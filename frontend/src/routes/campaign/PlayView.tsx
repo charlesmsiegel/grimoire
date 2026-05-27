@@ -1,16 +1,13 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import {
-  campaignApi,
-  type TimeAdvanceResult,
-} from "../../api/campaign";
+import { campaignApi, type TimeAdvanceResult } from "../../api/campaign";
+import { fetchExpressionsConfig } from "../../api/expressions";
 
 import { SceneLedgerDialog } from "./SceneLedgerDialog";
 import { ScenePreviewPanel } from "./ScenePreviewPanel";
 import { SceneSuggestionView } from "./SceneSuggestionView";
 import { DriftBanner } from "./DriftBanner";
 import { InputArea } from "./InputArea";
-
 
 import { PreRollConfirmation } from "./PreRollConfirmation";
 import { SceneBreakPrompt } from "./SceneBreakPrompt";
@@ -45,7 +42,20 @@ export function PlayView({ campaignId }: Props) {
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [hudCollapsed, setHudCollapsed] = useState(false);
 
-
+  const [expressionsEnabledList, setExpressionsEnabledList] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchExpressionsConfig(campaignId).then((cfg) => {
+      if (!cancelled) setExpressionsEnabledList(cfg.enabled_characters);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [campaignId]);
+  const expressionsEnabledCharacters = useMemo(
+    () => new Set(expressionsEnabledList),
+    [expressionsEnabledList],
+  );
 
   const runAction = useCallback(async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -148,7 +158,9 @@ export function PlayView({ campaignId }: Props) {
             />
           ) : play.state.mode === "suggesting" || play.state.mode === "creating" ? (
             <div className="play-loading-scene">
-              <p>{play.state.mode === "creating" ? "Creating scene..." : "Loading suggestions..."}</p>
+              <p>
+                {play.state.mode === "creating" ? "Creating scene..." : "Loading suggestions..."}
+              </p>
             </div>
           ) : (
             <ScenePane
@@ -160,6 +172,7 @@ export function PlayView({ campaignId }: Props) {
               scene={play.state.scene}
               hasMorePosts={play.state.hasMorePosts}
               onLoadMore={loadMorePosts}
+              expressionsEnabledCharacters={expressionsEnabledCharacters}
             />
           )}
           {play.state.mode !== "play" ? null : play.state.scene?.closed ? (

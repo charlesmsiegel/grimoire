@@ -15,6 +15,7 @@ interface Props {
   characterName: string;
   asOfTurn?: string | null;
   size?: "sm" | "md";
+  expressionsEnabled?: boolean;
 }
 
 export function CharacterSprite({
@@ -23,8 +24,9 @@ export function CharacterSprite({
   characterName,
   asOfTurn,
   size = "md",
+  expressionsEnabled = false,
 }: Props) {
-  const { data, loading } = useExpression(campaignId, characterId, asOfTurn);
+  const { data, loading } = useExpression(campaignId, characterId, asOfTurn, expressionsEnabled);
 
   const className = `character-sprite character-sprite-${size}`;
 

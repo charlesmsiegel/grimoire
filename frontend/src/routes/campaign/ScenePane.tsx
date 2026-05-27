@@ -14,6 +14,7 @@ interface Props {
   scene?: ApiScene | null;
   hasMorePosts: boolean;
   onLoadMore: () => void;
+  expressionsEnabledCharacters?: ReadonlySet<string>;
 }
 
 export function ScenePane({
@@ -25,6 +26,7 @@ export function ScenePane({
   scene,
   hasMorePosts,
   onLoadMore,
+  expressionsEnabledCharacters,
 }: Props) {
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -99,6 +101,7 @@ export function ScenePane({
           isLatestModelPost={post.id === latestModelPostId}
           campaignId={campaignId}
           presentCharacterRefs={scene?.present_character_refs ?? []}
+          expressionsEnabledCharacters={expressionsEnabledCharacters}
         />
       ))}
       {streaming && (

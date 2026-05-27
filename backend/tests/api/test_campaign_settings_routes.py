@@ -527,3 +527,56 @@ def test_new_campaign_defaults_integrated_deltas_true(settings_client) -> None:
 
     resp = settings_client.get("/api/campaigns/new-camp/integrated-deltas")
     assert resp.json()["enabled"] is True
+
+
+# ---------------------------------------------------------------------------
+# expressions toggle (issue #474)
+# ---------------------------------------------------------------------------
+
+
+def test_expressions_default_empty(settings_client) -> None:
+    resp = settings_client.get("/api/campaigns/camp-1/expressions")
+    assert resp.status_code == 200
+    assert resp.json() == {"enabled_characters": []}
+
+
+def test_expressions_round_trip(settings_client) -> None:
+    resp = settings_client.put(
+        "/api/campaigns/camp-1/expressions",
+        json={"enabled_characters": ["beatrice", "ralph"]},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"enabled_characters": ["beatrice", "ralph"]}
+
+    resp = settings_client.get("/api/campaigns/camp-1/expressions")
+    assert set(resp.json()["enabled_characters"]) == {"beatrice", "ralph"}
+
+
+def test_expressions_overwrite(settings_client) -> None:
+    settings_client.put(
+        "/api/campaigns/camp-1/expressions",
+        json={"enabled_characters": ["beatrice", "ralph"]},
+    )
+    resp = settings_client.put(
+        "/api/campaigns/camp-1/expressions",
+        json={"enabled_characters": ["ralph"]},
+    )
+    assert resp.json()["enabled_characters"] == ["ralph"]
+
+
+def test_expressions_does_not_clobber_other_settings(settings_client) -> None:
+    settings_client.put(
+        "/api/campaigns/camp-1/integrated-deltas",
+        json={"enabled": True},
+    )
+    settings_client.put(
+        "/api/campaigns/camp-1/expressions",
+        json={"enabled_characters": ["beatrice"]},
+    )
+    resp = settings_client.get("/api/campaigns/camp-1/integrated-deltas")
+    assert resp.json()["enabled"] is True
+
+
+def test_expressions_unknown_campaign_404(settings_client) -> None:
+    resp = settings_client.get("/api/campaigns/missing/expressions")
+    assert resp.status_code == 404

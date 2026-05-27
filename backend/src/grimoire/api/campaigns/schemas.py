@@ -280,5 +280,9 @@ class EditAndRegeneratePayload(BaseModel):
     keep_seed: bool = False
 
 
+class ExpressionsSettingsPayload(BaseModel):
+    enabled_characters: list[str] = Field(default_factory=list)
+
+
 class SetTagsPayload(BaseModel):
     tags: list[str] = Field(default_factory=list)
