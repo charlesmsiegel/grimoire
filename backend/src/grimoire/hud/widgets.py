@@ -66,7 +66,7 @@ CORE_WIDGETS: list[HudWidget] = [
     ),
     HudWidget(
         id="core.present-cast",
-        title="Present cast",
+        title="Cast",
         scope=WidgetScope.SCENE,
         read=WidgetRead(endpoint="/scenes/{sid}/present-cast"),
         render_hint=RenderHint.CHIP_LIST.value,

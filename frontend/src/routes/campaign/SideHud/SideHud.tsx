@@ -2,6 +2,8 @@ import { useMemo } from "react";
 
 import type { WidgetSnapshot } from "../../../api/hud";
 import { AuxInflightBadge } from "./AuxInflightBadge";
+import { PresentCastChip } from "./PresentCastChip";
+import { parsePresentCast } from "./presentCastShape";
 import { useHud, type HudWidgetState } from "./useHud";
 import { BannerWidget } from "./widgets/BannerWidget";
 import { BlockWidget } from "./widgets/BlockWidget";
@@ -23,11 +25,14 @@ const SCENE_SETTING_IDS = new Set([
   "core.location",
 ]);
 
+const PRESENT_CAST_ID = "core.present-cast";
+
 const RENDER_FALLBACK = "block";
 
 function renderWidget(
   snapshot: WidgetSnapshot,
   onRefresh: () => void,
+  campaignId: string,
 ): React.ReactNode {
   const hint = (snapshot.render_hint ?? RENDER_FALLBACK).toLowerCase();
   const key = snapshot.id;
@@ -35,7 +40,14 @@ function renderWidget(
     case "row":
       return <RowWidget key={key} snapshot={snapshot} onRefresh={onRefresh} />;
     case "chip-list":
-      return <ChipListWidget key={key} snapshot={snapshot} onRefresh={onRefresh} />;
+      return (
+        <ChipListWidget
+          key={key}
+          snapshot={snapshot}
+          campaignId={campaignId}
+          onRefresh={onRefresh}
+        />
+      );
     case "banner":
       return <BannerWidget key={key} snapshot={snapshot} onRefresh={onRefresh} />;
     case "composite":
@@ -70,17 +82,44 @@ function SceneSettingBlock({ widgets }: { widgets: HudWidgetState[] }) {
   );
 }
 
+function CastBlock({
+  widget,
+  campaignId,
+}: {
+  widget: HudWidgetState | null;
+  campaignId: string;
+}) {
+  if (!widget || widget.snapshot.status !== "ok") return null;
+  const chips = parsePresentCast(widget.snapshot.data);
+  if (chips.length === 0) return null;
+
+  return (
+    <div className="scene-setting-block" aria-label="Cast">
+      <div className="scene-setting-entry scene-setting-entry-full">
+        <span className="scene-setting-label">Cast</span>
+        <span className="scene-setting-badges">
+          {chips.map((chip) => (
+            <PresentCastChip key={chip.character_id} chip={chip} campaignId={campaignId} />
+          ))}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function SideHud({ campaignId, sceneId }: Props) {
   const hud = useHud(campaignId, sceneId);
 
-  const { sceneSetting, rest } = useMemo(() => {
+  const { sceneSetting, castWidget, rest } = useMemo(() => {
     const s: HudWidgetState[] = [];
     const r: HudWidgetState[] = [];
+    let cast: HudWidgetState | null = null;
     for (const w of hud.widgets) {
       if (SCENE_SETTING_IDS.has(w.snapshot.id)) s.push(w);
+      else if (w.snapshot.id === PRESENT_CAST_ID) cast = w;
       else r.push(w);
     }
-    return { sceneSetting: s, rest: r };
+    return { sceneSetting: s, castWidget: cast, rest: r };
   }, [hud.widgets]);
 
   if (hud.loading && hud.widgets.length === 0) {
@@ -104,34 +143,21 @@ export function SideHud({ campaignId, sceneId }: Props) {
 
   return (
     <aside className="side-hud" aria-label="Scene HUD">
-      <div className="side-hud-toolbar">
-        <AuxInflightBadge campaignId={campaignId} />
-        <button
-          type="button"
-          className="side-hud-refresh icon-btn"
-          onClick={hud.refresh}
-          aria-label="Refresh HUD"
-          title="Refresh HUD"
-        >
-          ↻
-        </button>
-      </div>
+      <AuxInflightBadge campaignId={campaignId} />
       <SceneSettingBlock widgets={sceneSetting} />
-      {rest.length === 0 && sceneSetting.length === 0 ? (
-        <p className="side-hud-empty">No widgets configured.</p>
-      ) : (
-        rest.length > 0 && (
-          <ul className="side-hud-widgets">
-            {rest.map((w) => (
-              <li key={w.snapshot.id} className="side-hud-widget-slot">
-                {renderWidget(
-                  w.stale ? { ...w.snapshot, stale: true } : w.snapshot,
-                  () => hud.refreshWidget(w.snapshot.id),
-                )}
-              </li>
-            ))}
-          </ul>
-        )
+      <CastBlock widget={castWidget} campaignId={campaignId} />
+      {rest.length > 0 && (
+        <ul className="side-hud-widgets">
+          {rest.map((w) => (
+            <li key={w.snapshot.id} className="side-hud-widget-slot">
+              {renderWidget(
+                w.stale ? { ...w.snapshot, stale: true } : w.snapshot,
+                () => hud.refreshWidget(w.snapshot.id),
+                campaignId,
+              )}
+            </li>
+          ))}
+        </ul>
       )}
     </aside>
   );
