@@ -126,7 +126,6 @@ class MechanicsConformance:
     async def _time_tick(self, adapter: Any) -> None:
         ctx = TickContext(
             campaign_id="probe",
-            branch_id="probe:main",
             duration=Duration(iso8601="PT1H"),
         )
         deltas = adapter.time_tick("character:probe", {}, ctx.duration, ctx)
@@ -137,7 +136,6 @@ class MechanicsConformance:
         scene = Scene(
             id="probe-scene",
             campaign_id="probe-campaign",
-            branch_id="probe-campaign:main",
             ordinal=1,
             slug="probe",
             file_path="probe.md",

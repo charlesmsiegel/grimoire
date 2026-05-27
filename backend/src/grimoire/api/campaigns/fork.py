@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from grimoire.api.deps import OrchestratorDep
 from grimoire.api.util import map_lookup_errors, to_payload
 
-from .schemas import BranchForkPayload, ForkPayload
+from .schemas import ForkPayload
 
 router = APIRouter()
 
@@ -75,16 +75,3 @@ async def get_lineage_ancestors(
         return await orchestrator.get_lineage_ancestors(campaign_id)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
-
-
-@router.post("/{campaign_id}/branches", status_code=201)
-async def fork_branch(
-    campaign_id: str,
-    payload: BranchForkPayload,
-    orchestrator: OrchestratorDep,
-) -> Any:
-    try:
-        result = await orchestrator.fork(campaign_id, payload.from_turn_id, payload.label)
-    except Exception as exc:
-        raise map_lookup_errors(exc) from exc
-    return to_payload(result)

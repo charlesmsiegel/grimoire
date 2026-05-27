@@ -73,7 +73,6 @@ class TurnAuditor:
         self._buffers[turn_id] = {
             "turn_id": turn_id,
             "campaign_id": _str(event.payload.get("campaign_id")),
-            "branch_id": "main",
             "scene_id": _str(event.payload.get("scene_id")),
             "started_at": _ts(event.timestamp),
             "player_input": _str(event.payload.get("player_input")),
@@ -221,7 +220,6 @@ class TurnAuditor:
             buf = {
                 "turn_id": turn_id,
                 "campaign_id": _str(event.payload.get("campaign_id")),
-                "branch_id": "main",
                 "scene_id": _str(event.payload.get("scene_id")),
                 "started_at": _ts(event.timestamp),
             }

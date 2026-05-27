@@ -742,9 +742,7 @@ class CharactersService:
     # Relationships (campaign-scoped)
     # ------------------------------------------------------------------ #
 
-    async def get_relationships(
-        self, ref: CharacterRef, campaign_id: CampaignId
-    ) -> list[dict]:
+    async def get_relationships(self, ref: CharacterRef, campaign_id: CampaignId) -> list[dict]:
         rows = await self.store.db.fetchall(
             """
             SELECT * FROM relationships
@@ -1010,9 +1008,7 @@ class CharactersService:
         ref: CharacterRef,
         campaign_id: CampaignId,
     ) -> CharacterState:
-        row = await self.store.resolve_character_state(
-            character_ref=ref, campaign_id=campaign_id
-        )
+        row = await self.store.resolve_character_state(character_ref=ref, campaign_id=campaign_id)
         if row is None:
             return CharacterState(
                 character_ref=ref,

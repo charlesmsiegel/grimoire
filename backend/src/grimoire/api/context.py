@@ -47,7 +47,6 @@ InspectorDep = Annotated[ContextInspector, Depends(_get_inspector)]
 class PreviewBody(BaseModel):
     player_input: str = ""
     session_id: str
-    branch_id: str | None = None
     pc_ref: str | None = None
 
 
@@ -69,7 +68,6 @@ class PinBody(BaseModel):
     kind: str = Field(default="pin", pattern="^(pin|exclude)$")
     ttl_turns: int | None = None
     created_at_turn_id: str | None = None
-    branch_id: str | None = None
     actor: str = "user"
 
 
@@ -94,7 +92,6 @@ async def post_preview(
         campaign_id=campaign_id,
         player_input=body.player_input,
         session_id=body.session_id,
-        branch_id=body.branch_id,
         pc_ref=body.pc_ref,
     )
     return {"handle": handle, "summary": summary.model_dump(mode="json")}
@@ -140,7 +137,6 @@ async def post_pin(
             pin_id = await inspector.pin(
                 campaign_id=campaign_id,
                 target=target,
-                branch_id=body.branch_id,
                 ttl_turns=body.ttl_turns,
                 created_at_turn_id=body.created_at_turn_id,
                 actor=body.actor,
@@ -149,7 +145,6 @@ async def post_pin(
             pin_id = await inspector.exclude(
                 campaign_id=campaign_id,
                 target=target,
-                branch_id=body.branch_id,
                 ttl_turns=body.ttl_turns,
                 created_at_turn_id=body.created_at_turn_id,
                 actor=body.actor,
@@ -179,12 +174,10 @@ async def delete_pin(
 async def list_pins(
     campaign_id: str,
     inspector: InspectorDep,
-    branch_id: str | None = None,
     current_turn_id: str | None = None,
 ) -> Any:
     return await inspector.list_pins(
         campaign_id=campaign_id,
-        branch_id=branch_id,
         current_turn_id=current_turn_id,
     )
 

@@ -182,13 +182,6 @@ class ReplayBatchStateView(BaseModel):
     cancelled_at_post_id: str | None = None
 
 
-class ForkResult(BaseModel):
-    new_branch_id: str
-    from_turn_id: TurnId
-    label: str
-    created_at: datetime
-
-
 class ForkCampaignResult(BaseModel):
     new_campaign_id: str
     new_name: str

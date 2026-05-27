@@ -349,7 +349,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             container.scene_ledger = SceneLedger(db)
         if container.continuity is None:
             # The registry hands out one ContinuityService per
-            # (campaign_id, branch_id) backed by SqliteContinuityStore so
+            # campaign_id backed by SqliteContinuityStore so
             # facts survive restart. HybridFactSearchIndex + (when the
             # gateway is available) LLMContradictionJudge are wired in
             # below once the gateway is constructed.

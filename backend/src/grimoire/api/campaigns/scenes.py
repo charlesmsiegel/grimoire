@@ -357,7 +357,6 @@ async def seed_first_scene(
 
     init = SceneInit(
         campaign_id=campaign_id,
-        branch_id="main",
         title=greeting.name or "Opening",
         location_ref=greeting.starting_location,
         in_game_start=in_game_start,

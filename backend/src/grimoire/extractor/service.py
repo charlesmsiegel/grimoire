@@ -418,7 +418,6 @@ class ExtractorService:
         tracker_deltas = project_tracker_to_deltas(
             parsed,
             campaign_id=campaign_id,
-            scene_branch_id=getattr(scene, "branch_id", None),
             source=self._source + ":together",
         )
         tracker_candidates = project_tracker_to_candidates(parsed)
@@ -476,7 +475,6 @@ class ExtractorService:
         tool_deltas, tool_candidates = project_tool_calls(
             tool_calls,
             campaign_id=campaign_id,
-            scene_branch_id=getattr(scene, "branch_id", None),
         )
         sanity = await self._run_sanity_layer(
             text=response_text,
@@ -640,7 +638,6 @@ class ExtractorService:
                 config=self._config,
                 source=self._source,
                 scene_location_ref=getattr(scene, "location_ref", None) if scene else None,
-                scene_branch_id=getattr(scene, "branch_id", None) if scene else None,
             )
         )
 

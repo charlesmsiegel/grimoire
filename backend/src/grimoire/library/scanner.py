@@ -89,8 +89,6 @@ class LibraryScanner:
         if camp_row is None:
             raise LibraryNotFoundError(f"campaign {campaign_id!r} does not bind world {world_id!r}")
         from_version = int(camp_row["bound_at_version"] or 0)
-        branch_id = f"{campaign_id}:main"
-
         live_rows = await self._store.list_library_in_world(world_id)
         live_by_id = {row["id"]: row for row in live_rows}
 
@@ -100,9 +98,9 @@ class LibraryScanner:
                    s.frontmatter AS frontmatter, s.body AS body
             FROM library_snapshots s
             JOIN library_index i ON i.id = s.library_id
-            WHERE s.campaign_id = ? AND s.branch_id = ? AND i.world_id = ?
+            WHERE s.campaign_id = ? AND i.world_id = ?
             """,
-            (campaign_id, branch_id, world_id),
+            (campaign_id, world_id),
         )
         snap_by_id = {row["library_id"]: row for row in snap_rows}
 
@@ -185,12 +183,9 @@ class LibraryScanner:
 
         target_kind, world_id, asset_id, is_emergent_only = _parse_resolve_ref(entity_id)
 
-        branch_id = f"{campaign_id}:main"
-
         if is_emergent_only:
             data = await self._store.resolve_entity(
                 campaign_id=campaign_id,
-                branch_id=branch_id,
                 kind=target_kind,
                 asset_id=asset_id,
                 world_id=None,
@@ -212,7 +207,6 @@ class LibraryScanner:
 
         data = await self._store.resolve_entity(
             campaign_id=campaign_id,
-            branch_id=branch_id,
             kind=target_kind,
             asset_id=asset_id,
             world_id=world_id,

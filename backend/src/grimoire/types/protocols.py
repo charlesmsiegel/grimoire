@@ -25,7 +25,6 @@ from .characters import (
     ResolvedCharacter,
 )
 from .common import (
-    BranchId,
     CampaignId,
     CharacterRef,
     CommitmentId,
@@ -114,7 +113,6 @@ from .observability import (
 from .orchestrator import (
     Event,
     EventType,
-    ForkResult,
     RegenerateResult,
     RetconResult,
     SubmitResult,
@@ -497,7 +495,7 @@ class StateStore(Protocol):
     # Campaign content reads
     async def get_scene_file(self, scene_id: SceneId) -> SceneFile: ...
     async def get_scene_metadata(self, scene_id: SceneId) -> dict: ...
-    async def list_scenes(self, campaign_id: CampaignId, branch_id: BranchId) -> list[Scene]: ...
+    async def list_scenes(self, campaign_id: CampaignId) -> list[Scene]: ...
 
     async def get_emergent(self, campaign_id: CampaignId, kind: str, id: str) -> dict | None: ...
     async def list_emergent(self, campaign_id: CampaignId, kind: str) -> list[dict]: ...
@@ -517,14 +515,12 @@ class StateStore(Protocol):
         self,
         character_ref: CharacterRef,
         campaign_id: CampaignId,
-        branch_id: BranchId,
     ) -> ResolvedCharacter: ...
 
     async def resolve_location(
         self,
         location_ref: LocationRef,
         campaign_id: CampaignId,
-        branch_id: BranchId,
     ) -> ResolvedLocation: ...
 
     async def resolve_entity(
@@ -532,7 +528,6 @@ class StateStore(Protocol):
         kind: str,
         ref: str,
         campaign_id: CampaignId,
-        branch_id: BranchId,
     ) -> ResolvedEntity: ...
 
     async def list_for_campaign(
@@ -642,7 +637,7 @@ class StateStore(Protocol):
     async def upsert_character_state(self, state: CharacterState, source: str) -> None: ...
     async def upsert_location_state(self, state: LocationState, source: str) -> None: ...
     async def upsert_faction_state(self, state: FactionState, source: str) -> None: ...
-    async def advance_time(self, to: datetime, branch_id: BranchId, source: str) -> None: ...
+    async def advance_time(self, to: datetime, campaign_id: CampaignId, source: str) -> None: ...
 
     # Composition
     async def upsert_world_ref(
@@ -813,7 +808,6 @@ class Characters(Protocol):
         self,
         ref: CharacterRef,
         campaign_id: CampaignId,
-        branch_id: BranchId,
         state: CharacterState,
         source: str,
     ) -> None: ...
@@ -876,14 +870,12 @@ class Characters(Protocol):
 
 @runtime_checkable
 class SceneManager(Protocol):
-    async def list_scenes(self, campaign_id: CampaignId, branch_id: BranchId) -> list[Scene]: ...
+    async def list_scenes(self, campaign_id: CampaignId) -> list[Scene]: ...
     async def get_scene(self, scene_id: SceneId) -> Scene: ...
     async def get_scene_file_path(self, scene_id: SceneId) -> Path: ...
     async def load_scene_body(self, scene_id: SceneId) -> str: ...
 
-    async def active_scene_for_campaign(
-        self, campaign_id: CampaignId, branch_id: BranchId
-    ) -> Scene | None: ...
+    async def active_scene_for_campaign(self, campaign_id: CampaignId) -> Scene | None: ...
     async def active_scene_for_pc(
         self, campaign_id: CampaignId, pc_ref: CharacterRef
     ) -> Scene | None: ...
@@ -911,10 +903,6 @@ class SceneManager(Protocol):
 
     async def edit_post(self, post_id: PostId, new_body: str, source: str) -> None: ...
     async def delete_post(self, post_id: PostId, source: str) -> None: ...
-
-    async def fork_scenes_for_branch(
-        self, campaign_id: CampaignId, branch_id: BranchId
-    ) -> None: ...
 
 
 # --------------------------------------------------------------------------- #
@@ -1214,12 +1202,6 @@ class Orchestrator(Protocol):
 
     async def undo_turn(self, campaign_id: CampaignId, count: int = 1) -> UndoResult: ...
     async def retcon_post(self, post_id: PostId, new_text: str) -> RetconResult: ...
-    async def fork(
-        self,
-        campaign_id: CampaignId,
-        from_turn_id: TurnId,
-        label: str,
-    ) -> ForkResult: ...
 
     async def turn_in_progress(self, campaign_id: CampaignId) -> TurnStatus | None: ...
     async def queue_length(self, campaign_id: CampaignId) -> int: ...

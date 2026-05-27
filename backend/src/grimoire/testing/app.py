@@ -304,7 +304,6 @@ class _StubContextBuilder:
         *,
         pc_ref: str | None = None,
         extra: str | None = None,
-        branch_id: str | None = None,
         turn_id: str | None = None,
         extractor_mode: Any = None,
         auxiliary_task: Any | None = None,
