@@ -42,12 +42,24 @@ async def test_record_then_total_aggregates_cost(db) -> None:
     assert total.call_count == 2
 
 
-async def test_record_skips_none_cost(db) -> None:
+async def test_record_writes_even_with_zero_cost(db) -> None:
     tracker = CostTrackerService(db)
-    await tracker.record(_call(cost=None))
+    await tracker.record(_call(cost=0.0))
     total = await tracker.total(campaign_id="c1")
     assert total.total_usd == 0.0
-    assert total.call_count == 0
+    assert total.call_count == 1
+
+
+async def test_record_stores_tokens_in_cost_records(db) -> None:
+    tracker = CostTrackerService(db)
+    await tracker.record(_call(cost=0.05, turn="t1"))
+    row = await db.fetchone(
+        "SELECT input_tokens, output_tokens FROM cost_records WHERE turn_id = ?",
+        ("t1",),
+    )
+    assert row is not None
+    assert row["input_tokens"] == 100
+    assert row["output_tokens"] == 50
 
 
 async def test_total_filters_by_task_and_model(db) -> None:
