@@ -145,23 +145,15 @@ async def keyword_search_facts(
     *,
     query: str,
     campaign_id: str | None = None,
-    branch_id: str | None = None,
     include_retired: bool = False,
     top_k: int = 5,
 ) -> list[SearchHit]:
-    """FTS5 search across ``facts``.
-
-    Returns matches in increasing rank order (best first). The score is the
-    negated BM25 rank so larger numbers mean better matches.
-    """
+    """FTS5 search across ``facts``."""
     where: list[str] = ["facts_fts MATCH ?"]
     params: list[object] = [query]
     if campaign_id is not None:
         where.append("facts.campaign_id = ?")
         params.append(campaign_id)
-    if branch_id is not None:
-        where.append("facts.branch_id = ?")
-        params.append(branch_id)
     if not include_retired:
         where.append("facts.retired = 0")
     sql = (

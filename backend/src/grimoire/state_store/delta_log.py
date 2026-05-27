@@ -35,7 +35,6 @@ class DeltaRecord:
 
     id: str
     campaign_id: str | None
-    branch_id: str | None
     turn_id: str | None
     source: str | None
     kind: str | None
@@ -61,7 +60,6 @@ class DeltaRecord:
         return cls(
             id=row["id"],
             campaign_id=row["campaign_id"],
-            branch_id=row["branch_id"],
             turn_id=row["turn_id"],
             source=row["source"],
             kind=row["kind"],
@@ -83,7 +81,6 @@ async def insert_delta(
     conn: aiosqlite.Connection,
     *,
     campaign_id: str | None,
-    branch_id: str | None,
     turn_id: str | None,
     source: str,
     kind: str,
@@ -101,17 +98,16 @@ async def insert_delta(
     await conn.execute(
         """
         INSERT INTO deltas (
-          id, campaign_id, branch_id, turn_id, source, kind,
+          id, campaign_id, turn_id, source, kind,
           target_scope, target_table, target_path, target_id,
           before, after, confidence, applied_at, reversed_at, notes,
           delta_set_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
         """,
         (
             delta_id,
             campaign_id,
-            branch_id,
             turn_id,
             source,
             kind,
@@ -225,7 +221,6 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
     "character_state": [
         "character_ref",
         "campaign_id",
-        "branch_id",
         "location_ref",
         "emotional_state",
         "physical_state",
@@ -243,7 +238,6 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
     "location_state": [
         "location_ref",
         "campaign_id",
-        "branch_id",
         "weather",
         "time_of_day",
         "occupants",
@@ -254,14 +248,12 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
     "faction_state": [
         "faction_ref",
         "campaign_id",
-        "branch_id",
         "state",
         "updated_at_turn",
     ],
     "facts": [
         "id",
         "campaign_id",
-        "branch_id",
         "text",
         "established_in_post",
         "in_game_when",
@@ -278,7 +270,6 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
     "commitments": [
         "id",
         "campaign_id",
-        "branch_id",
         "kind",
         "text",
         "from_character_ref",
@@ -295,7 +286,6 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
     "relationships": [
         "id",
         "campaign_id",
-        "branch_id",
         "from_character_ref",
         "to_character_ref",
         "types",
@@ -307,20 +297,17 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
         "fact_id",
         "character_ref",
         "campaign_id",
-        "branch_id",
         "knows",
         "learned_in_post",
         "source",
     ],
     "calendar": [
         "campaign_id",
-        "branch_id",
         "current_in_game_time",
     ],
     "images": [
         "id",
         "campaign_id",
-        "branch_id",
         "scene_id",
         "post_id",
         "file_path",
@@ -338,7 +325,6 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
     "scenes": [
         "id",
         "campaign_id",
-        "branch_id",
         "ordinal",
         "slug",
         "file_path",
@@ -365,7 +351,6 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
         "id",
         "scene_id",
         "campaign_id",
-        "branch_id",
         "turn_id",
         "order_in_scene",
         "author_kind",
@@ -382,14 +367,14 @@ _TABLE_COLUMNS: dict[str, list[str]] = {
 
 
 _PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
-    "character_state": ("character_ref", "branch_id"),
-    "location_state": ("location_ref", "branch_id"),
-    "faction_state": ("faction_ref", "branch_id"),
+    "character_state": ("character_ref", "campaign_id"),
+    "location_state": ("location_ref", "campaign_id"),
+    "faction_state": ("faction_ref", "campaign_id"),
     "facts": ("id",),
     "commitments": ("id",),
     "relationships": ("id",),
-    "knowledge_state": ("fact_id", "character_ref", "branch_id"),
-    "calendar": ("branch_id",),
+    "knowledge_state": ("fact_id", "character_ref"),
+    "calendar": ("campaign_id",),
     "images": ("id",),
     "scenes": ("id",),
     "posts": ("id",),

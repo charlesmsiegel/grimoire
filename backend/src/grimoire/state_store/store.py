@@ -9,7 +9,6 @@ two halves stay coherent.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Iterable
@@ -275,7 +274,6 @@ class StateStore:
                 delta_id = await insert_delta(
                     conn,
                     campaign_id=campaign_id,
-                    branch_id=None,
                     turn_id=turn_id,
                     source=source,
                     kind="library_file_write",
@@ -340,7 +338,6 @@ class StateStore:
                 delta_id = await insert_delta(
                     conn,
                     campaign_id=campaign_id,
-                    branch_id=None,
                     turn_id=None,
                     source=source,
                     kind="library_file_delete",
@@ -405,7 +402,6 @@ class StateStore:
             await insert_delta(
                 conn,
                 campaign_id=campaign_id,
-                branch_id=None,
                 turn_id=turn_id,
                 source=source,
                 kind="override_write",
@@ -448,7 +444,6 @@ class StateStore:
             await insert_delta(
                 conn,
                 campaign_id=campaign_id,
-                branch_id=None,
                 turn_id=turn_id,
                 source=source,
                 kind="override_delete",
@@ -492,7 +487,6 @@ class StateStore:
             await insert_delta(
                 conn,
                 campaign_id=campaign_id,
-                branch_id=None,
                 turn_id=turn_id,
                 source=source,
                 kind="emergent_delete",
@@ -541,7 +535,6 @@ class StateStore:
             await insert_delta(
                 conn,
                 campaign_id=campaign_id,
-                branch_id=None,
                 turn_id=turn_id,
                 source=source,
                 kind="emergent_create" if before_payload is None else "emergent_update",
@@ -589,7 +582,6 @@ class StateStore:
             await insert_delta(
                 conn,
                 campaign_id=campaign_id,
-                branch_id=None,
                 turn_id=turn_id,
                 source=source,
                 kind="sheet_update",
@@ -638,7 +630,6 @@ class StateStore:
             await insert_delta(
                 conn,
                 campaign_id=campaign_id,
-                branch_id=None,
                 turn_id=turn_id,
                 source=source,
                 kind="content_update",
@@ -721,7 +712,6 @@ class StateStore:
             await insert_delta(
                 conn,
                 campaign_id=campaign_id,
-                branch_id=metadata.get("branch_id"),
                 turn_id=turn_id,
                 source=source,
                 kind="image_metadata_write",
@@ -856,26 +846,15 @@ class StateStore:
         suffix = f".{mechanics_id}.yaml"
         return {p.name[: -len(suffix)] for p in sheets_dir.iterdir() if p.name.endswith(suffix)}
 
-    async def list_scenes(self, campaign_id: str, branch_id: str | None = None) -> list[dict]:
+    async def list_scenes(self, campaign_id: str) -> list[dict]:
         async with self._metrics.measure("state_store", "query"):
-            return await self._list_scenes_inner(campaign_id, branch_id)
+            return await self._list_scenes_inner(campaign_id)
 
-    async def _list_scenes_inner(
-        self, campaign_id: str, branch_id: str | None = None
-    ) -> list[dict]:
-        if branch_id is None:
-            rows = await self.db.fetchall(
-                "SELECT * FROM scenes WHERE campaign_id = ? ORDER BY ordinal",
-                (campaign_id,),
-            )
-        else:
-            rows = await self.db.fetchall(
-                """
-                SELECT * FROM scenes WHERE campaign_id = ? AND branch_id = ?
-                ORDER BY ordinal
-                """,
-                (campaign_id, branch_id),
-            )
+    async def _list_scenes_inner(self, campaign_id: str) -> list[dict]:
+        rows = await self.db.fetchall(
+            "SELECT * FROM scenes WHERE campaign_id = ? ORDER BY ordinal",
+            (campaign_id,),
+        )
         return [_scene_row_to_dict(row) for row in rows]
 
     async def get_scene_metadata(self, scene_id: str) -> dict | None:
@@ -922,16 +901,11 @@ class StateStore:
         self,
         *,
         campaign_id: str,
-        branch_id: str,
         kind: str,
         asset_id: str,
         world_id: str | None = None,
     ) -> dict | None:
-        """Cascade: campaign override → snapshot (pinned) / live index → None.
-
-        ``world_id=None`` means try campaign emergent first (the entity is
-        campaign-local). Pinned vs live is determined per world ref.
-        """
+        """Cascade: campaign override → snapshot (pinned) / live index → None."""
         if world_id is None:
             emergent = await self.get_emergent(campaign_id, kind, asset_id)
             if emergent is not None:
@@ -948,16 +922,11 @@ class StateStore:
         if override is not None:
             base = await self._resolve_world_base(
                 campaign_id=campaign_id,
-                branch_id=branch_id,
                 world_id=world_id,
                 library_id=library_id,
             )
             merged = dict(base or {})
             merged_fm = dict(merged.get("frontmatter") or {})
-            # Narrative extras (frontmatter['extras']) need a key-by-key
-            # merge so an override on one key doesn't drop unrelated
-            # library keys. None entries in the override are "override-
-            # null" tombstones that delete the cascaded library value.
             base_extras = dict(merged_fm.get("extras") or {})
             override_extras = override.get("extras")
             merged_fm.update(override)
@@ -979,7 +948,6 @@ class StateStore:
 
         return await self._resolve_world_base(
             campaign_id=campaign_id,
-            branch_id=branch_id,
             world_id=world_id,
             library_id=library_id,
         )
@@ -988,7 +956,6 @@ class StateStore:
         self,
         *,
         campaign_id: str,
-        branch_id: str,
         world_id: str,
         library_id: str,
     ) -> dict | None:
@@ -1003,25 +970,13 @@ class StateStore:
         prefer_snapshot = bool(ref_row and not int(ref_row["track_latest"]))
 
         if prefer_snapshot:
-            # Walk the branch chain (child → parent → ... → main) so a forked
-            # branch reads its parent's snapshot row. Without this, a fork
-            # made when ``track_latest=False`` would have no snapshot rows of
-            # its own and fall back to the live index — picking up library
-            # upgrades that happened on main after the fork, which defeats
-            # the pinning semantics. See §3 of the library remaining-design.
-            chain = await self.branch_chain(branch_id)
-            placeholders = ",".join("?" * len(chain))
             snap = await self.db.fetchone(
-                f"""
-                SELECT branch_id, version, frontmatter, body FROM library_snapshots
+                """
+                SELECT version, frontmatter, body FROM library_snapshots
                 WHERE campaign_id = ? AND library_id = ?
-                  AND branch_id IN ({placeholders})
-                ORDER BY CASE branch_id
-                  {" ".join(f"WHEN ? THEN {i}" for i in range(len(chain)))}
-                END ASC
                 LIMIT 1
                 """,
-                (campaign_id, library_id, *chain, *chain),
+                (campaign_id, library_id),
             )
             if snap is not None:
                 return {
@@ -1097,15 +1052,6 @@ class StateStore:
                 now_iso(),
                 _json_dumps(config) if config is not None else None,
             ),
-        )
-        # Ensure 'main' branch exists.
-        await self.db.execute(
-            """
-            INSERT OR IGNORE INTO branches (id, campaign_id, parent_branch_id,
-              forked_from_turn_id, label, rng_seed, created_at)
-            VALUES (?, ?, NULL, NULL, 'main', ?, ?)
-            """,
-            (f"{campaign_id}:main", campaign_id, _seed_for("main"), now_iso()),
         )
 
     async def record_mechanics_switch(
@@ -1192,7 +1138,6 @@ class StateStore:
                 await write_snapshots_for_world(
                     conn,
                     campaign_id=campaign_id,
-                    branch_id=f"{campaign_id}:main",
                     world_id=world_id,
                     include=list(include) if include else None,
                 )
@@ -1200,7 +1145,6 @@ class StateStore:
                 await remove_snapshots_for_world(
                     conn,
                     campaign_id=campaign_id,
-                    branch_id=f"{campaign_id}:main",
                     world_id=world_id,
                 )
 
@@ -1232,7 +1176,6 @@ class StateStore:
             diff = await upgrade_snapshots(
                 conn,
                 campaign_id=campaign_id,
-                branch_id=f"{campaign_id}:main",
                 world_id=world_id,
                 include=include,
             )
@@ -1366,123 +1309,20 @@ class StateStore:
             for row in rows
         ]
 
-    # ------------------------------------------------------------------
-    # Branches and fork
-    # ------------------------------------------------------------------
-
-    async def fork_branch(
-        self,
-        *,
-        campaign_id: str,
-        parent_branch_id: str,
-        new_label: str,
-        at_turn_id: str | None = None,
-    ) -> str:
-        """Create a new branch row that points at ``parent_branch_id``.
-
-        Reads against the new branch fall back to the parent for rows the
-        new branch hasn't yet written. Snapshot rows are shared.
-        """
-        new_id = f"{campaign_id}:{new_label}"
-        async with self._txn() as conn:
-            cur = await conn.execute("SELECT id FROM branches WHERE id = ?", (parent_branch_id,))
-            if (await cur.fetchone()) is None:
-                await cur.close()
-                raise NotFoundError(f"parent branch {parent_branch_id!r} not found")
-            await cur.close()
-            await conn.execute(
-                """
-                INSERT INTO branches (
-                  id, campaign_id, parent_branch_id, forked_from_turn_id, label,
-                  rng_seed, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    new_id,
-                    campaign_id,
-                    parent_branch_id,
-                    at_turn_id,
-                    new_label,
-                    _seed_for(new_label),
-                    now_iso(),
-                ),
-            )
-        return new_id
-
-    async def branch_chain(self, branch_id: str) -> list[str]:
-        """Return ``[branch_id, parent, grandparent, ...]`` for CoW reads."""
-        chain: list[str] = []
-        current: str | None = branch_id
-        while current is not None:
-            chain.append(current)
-            row = await self.db.fetchone(
-                "SELECT parent_branch_id FROM branches WHERE id = ?", (current,)
-            )
-            if row is None:
-                break
-            current = row["parent_branch_id"]
-        return chain
-
-    async def resolve_character_state(
-        self,
-        *,
-        character_ref: str,
-        branch_id: str,
-    ) -> dict | None:
-        """CoW read: walk parents until a matching row is found."""
-        for bid in await self.branch_chain(branch_id):
-            row = await self.db.fetchone(
-                """
-                SELECT * FROM character_state
-                WHERE character_ref = ? AND branch_id = ?
-                """,
-                (character_ref, bid),
-            )
-            if row is not None:
-                return _character_state_row_to_dict(row)
-        return None
-
     async def list_tier_pins(
         self,
         *,
         campaign_id: str,
-        branch_id: str,
     ) -> dict[str, str]:
-        """Return ``{character_ref: tier_pin}`` across the branch chain.
-
-        CoW semantics: the topmost branch's value wins. Only characters with
-        a non-null ``tier_pin`` appear in the result. Intended for callers
-        that need pins for many characters at once (e.g. the Characters
-        service's tier computation) so they avoid one query per character.
-
-        .. warning::
-
-           The ``WHERE tier_pin IS NOT NULL`` filter assumes no caller ever
-           writes an explicit ``NULL`` ``tier_pin`` on a child branch while
-           an ancestor branch has one set. Today this holds because there
-           is no "unpin" API and ``_load_state`` always carries the parent
-           value forward when CoW'ing a row. If an unpin path is ever
-           added, this batch reader will silently disagree with the
-           single-row :meth:`resolve_character_state` reader, which honors
-           the topmost row regardless of NULL. Adjust the query (e.g. fetch
-           all rows and let ``NULL`` evict an ancestor's value) before
-           introducing such an API.
-        """
-        seen: dict[str, str] = {}
-        for bid in await self.branch_chain(branch_id):
-            rows = await self.db.fetchall(
-                """
-                SELECT character_ref, tier_pin FROM character_state
-                WHERE campaign_id = ? AND branch_id = ? AND tier_pin IS NOT NULL
-                """,
-                (campaign_id, bid),
-            )
-            for row in rows:
-                ref = row["character_ref"]
-                if ref not in seen:
-                    seen[ref] = row["tier_pin"]
-        return seen
+        """Return ``{character_ref: tier_pin}`` for the campaign."""
+        rows = await self.db.fetchall(
+            """
+            SELECT character_ref, tier_pin FROM character_state
+            WHERE campaign_id = ? AND tier_pin IS NOT NULL
+            """,
+            (campaign_id,),
+        )
+        return {row["character_ref"]: row["tier_pin"] for row in rows}
 
     # ------------------------------------------------------------------
     # Delta log
@@ -1494,25 +1334,16 @@ class StateStore:
         delta: dict | Any,
         source: str | None = None,
         turn_id: str | None = None,
-        branch_id: str | None = None,
         campaign_id: str | None = None,
         delta_set_id: str | None = None,
     ) -> str:
-        """Apply a delta to the SQLite layer and record it in ``deltas``.
-
-        Accepts either a ``StateDelta`` pydantic model (from
-        ``grimoire.types.state``) or a plain dict with the same keys. The
-        store reads ``target_table``, ``target_id``, ``after`` and uses
-        ``before`` (or auto-captures it from the current row) so reversal can
-        restore the previous state.
-        """
+        """Apply a delta to the SQLite layer and record it in ``deltas``."""
         async with self._txn() as conn:
             return await self._apply_delta_on_conn(
                 conn,
                 delta=delta,
                 source=source,
                 turn_id=turn_id,
-                branch_id=branch_id,
                 campaign_id=campaign_id,
                 delta_set_id=delta_set_id,
             )
@@ -1524,7 +1355,6 @@ class StateStore:
         delta: dict | Any,
         source: str | None = None,
         turn_id: str | None = None,
-        branch_id: str | None = None,
         campaign_id: str | None = None,
         delta_set_id: str | None = None,
     ) -> str:
@@ -1551,7 +1381,6 @@ class StateStore:
         delta_id = await insert_delta(
             conn,
             campaign_id=campaign_id or payload.get("campaign_id"),
-            branch_id=branch_id or payload.get("branch_id"),
             turn_id=turn_id or payload.get("turn_id"),
             source=source or payload.get("source") or "unknown",
             kind=kind,
@@ -1652,15 +1481,10 @@ class StateStore:
         deltas: list[Any],
         delta_set_id: str,
         campaign_id: str | None,
-        branch_id: str | None,
         turn_id: str | None,
         source: str,
     ) -> list[DeltaRecord]:
-        """Apply every delta atomically, tagging each with ``delta_set_id``.
-
-        On any failure, the entire batch rolls back. Returns the materialized
-        :class:`DeltaRecord`s in insertion order.
-        """
+        """Apply every delta atomically, tagging each with ``delta_set_id``."""
         records: list[DeltaRecord] = []
         async with self._txn() as conn:
             for d in deltas:
@@ -1669,7 +1493,6 @@ class StateStore:
                     delta=d,
                     source=source,
                     turn_id=turn_id,
-                    branch_id=branch_id,
                     campaign_id=campaign_id,
                     delta_set_id=delta_set_id,
                 )
@@ -1682,22 +1505,18 @@ class StateStore:
         delta_set_id: str,
         *,
         campaign_id: str,
-        branch_id: str,
     ) -> list[DeltaRecord]:
-        """LIFO-reverse every non-reversed delta tagged with ``delta_set_id``.
-
-        Atomic — if any reversal fails, the whole batch rolls back.
-        """
+        """LIFO-reverse every non-reversed delta tagged with ``delta_set_id``."""
         reversed_records: list[DeltaRecord] = []
         async with self._txn() as conn:
             cur = await conn.execute(
                 """
                 SELECT * FROM deltas
-                WHERE campaign_id = ? AND branch_id = ?
+                WHERE campaign_id = ?
                   AND delta_set_id = ? AND reversed_at IS NULL
                 ORDER BY applied_at DESC, rowid DESC
                 """,
-                (campaign_id, branch_id, delta_set_id),
+                (campaign_id, delta_set_id),
             )
             rows = await cur.fetchall()
             await cur.close()
@@ -1712,27 +1531,18 @@ class StateStore:
         *,
         delta_set_id: str,
         campaign_id: str,
-        branch_id: str,
     ) -> int:
-        """Re-apply every previously-reversed delta in a set (oldest first).
-
-        Walks the rows where ``reversed_at IS NOT NULL`` for the set and
-        re-upserts the ``after`` payload into the target table, then clears
-        ``reversed_at``. Used by :meth:`swap_delta_set` when the apply side is
-        a delta set already present in the DB (just rewound).
-
-        Returns the number of rows reactivated.
-        """
+        """Re-apply every previously-reversed delta in a set (oldest first)."""
         count = 0
         async with self._txn() as conn:
             cur = await conn.execute(
                 """
                 SELECT * FROM deltas
-                WHERE campaign_id = ? AND branch_id = ?
+                WHERE campaign_id = ?
                   AND delta_set_id = ? AND reversed_at IS NOT NULL
                 ORDER BY applied_at ASC, rowid ASC
                 """,
-                (campaign_id, branch_id, delta_set_id),
+                (campaign_id, delta_set_id),
             )
             rows = await cur.fetchall()
             await cur.close()
@@ -1742,9 +1552,6 @@ class StateStore:
                     after = rec.after or {}
                     if after:
                         await upsert_row(conn, table=rec.target_table, values=after)
-                # file deltas: their target file should already reflect the
-                # after-state if it was never overwritten in the interim; we
-                # only flip the reversed_at flag for now.
                 await conn.execute(
                     "UPDATE deltas SET reversed_at = NULL WHERE id = ?",
                     (rec.id,),
@@ -1759,37 +1566,21 @@ class StateStore:
         apply_deltas: list[Any] | None,
         apply_set_id: str,
         campaign_id: str,
-        branch_id: str,
         turn_id: str | None,
         source: str,
     ) -> SwapResult:
-        """Atomic rewind of one set followed by application of another.
-
-        Two modes:
-
-        * **Fresh apply:** ``apply_deltas`` is a non-empty list — every delta
-          is inserted with ``apply_set_id``. This is what ``regenerate_post``
-          uses (the apply set is new).
-        * **Re-activate:** ``apply_deltas`` is ``None`` or empty — the apply
-          set is assumed to already exist in the ``deltas`` table in a
-          reversed state, and reversal flags are cleared. This is what
-          ``switch_primary_alternate`` uses for swap-between-existing.
-
-        Both phases happen in a single transaction. On apply failure the
-        rewind is rolled back too, so the prior primary remains intact.
-        """
+        """Atomic rewind of one set followed by application of another."""
         rewound: list[DeltaRecord] = []
         applied: list[DeltaRecord] = []
         async with self._txn() as conn:
-            # Phase 1: rewind the current set (LIFO).
             cur = await conn.execute(
                 """
                 SELECT id FROM deltas
-                WHERE campaign_id = ? AND branch_id = ?
+                WHERE campaign_id = ?
                   AND delta_set_id = ? AND reversed_at IS NULL
                 ORDER BY applied_at DESC, rowid DESC
                 """,
-                (campaign_id, branch_id, rewind_set_id),
+                (campaign_id, rewind_set_id),
             )
             rewind_rows = await cur.fetchall()
             await cur.close()
@@ -1797,7 +1588,6 @@ class StateStore:
                 await self._reverse_delta_on_conn(conn, row["id"])
                 rewound.append(await get_delta(conn, row["id"]))
 
-            # Phase 2: apply.
             if apply_deltas:
                 for d in apply_deltas:
                     delta_id = await self._apply_delta_on_conn(
@@ -1805,22 +1595,19 @@ class StateStore:
                         delta=d,
                         source=source,
                         turn_id=turn_id,
-                        branch_id=branch_id,
                         campaign_id=campaign_id,
                         delta_set_id=apply_set_id,
                     )
                     applied.append(await get_delta(conn, delta_id))
             else:
-                # Re-activate an existing set: re-upsert after-payloads and
-                # clear reversed_at.
                 cur = await conn.execute(
                     """
                     SELECT * FROM deltas
-                    WHERE campaign_id = ? AND branch_id = ?
+                    WHERE campaign_id = ?
                       AND delta_set_id = ? AND reversed_at IS NOT NULL
                     ORDER BY applied_at ASC, rowid ASC
                     """,
-                    (campaign_id, branch_id, apply_set_id),
+                    (campaign_id, apply_set_id),
                 )
                 rows = await cur.fetchall()
                 await cur.close()
@@ -1841,7 +1628,6 @@ class StateStore:
         self,
         *,
         campaign_id: str,
-        branch_id: str,
         post_id: str,
         delta_set_id: str,
     ) -> None:
@@ -1850,26 +1636,25 @@ class StateStore:
             await conn.execute(
                 """
                 INSERT OR REPLACE INTO current_alternate_delta_sets
-                  (campaign_id, branch_id, post_id, delta_set_id, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                  (campaign_id, post_id, delta_set_id, updated_at)
+                VALUES (?, ?, ?, ?)
                 """,
-                (campaign_id, branch_id, post_id, delta_set_id, now_iso()),
+                (campaign_id, post_id, delta_set_id, now_iso()),
             )
 
     async def clear_current_alternate_delta_set(
         self,
         *,
         campaign_id: str,
-        branch_id: str,
         post_id: str,
     ) -> None:
         async with self._txn() as conn:
             await conn.execute(
                 """
                 DELETE FROM current_alternate_delta_sets
-                WHERE campaign_id = ? AND branch_id = ? AND post_id = ?
+                WHERE campaign_id = ? AND post_id = ?
                 """,
-                (campaign_id, branch_id, post_id),
+                (campaign_id, post_id),
             )
 
     async def current_delta_set_for(
@@ -1877,20 +1662,17 @@ class StateStore:
         *,
         post_id: str | None,
         campaign_id: str,
-        branch_id: str,
         set_id: str | None = None,
     ) -> str | None:
-        """Look up the primary delta set for ``post_id`` (or echo back
-        ``set_id`` if it's the recorded primary for any post on the branch).
-        """
+        """Look up the primary delta set for ``post_id``."""
         async with self.db.acquire() as conn:
             if post_id is not None:
                 cur = await conn.execute(
                     """
                     SELECT delta_set_id FROM current_alternate_delta_sets
-                    WHERE campaign_id = ? AND branch_id = ? AND post_id = ?
+                    WHERE campaign_id = ? AND post_id = ?
                     """,
-                    (campaign_id, branch_id, post_id),
+                    (campaign_id, post_id),
                 )
                 row = await cur.fetchone()
                 await cur.close()
@@ -1900,10 +1682,10 @@ class StateStore:
             cur = await conn.execute(
                 """
                 SELECT delta_set_id FROM current_alternate_delta_sets
-                WHERE campaign_id = ? AND branch_id = ? AND delta_set_id = ?
+                WHERE campaign_id = ? AND delta_set_id = ?
                 LIMIT 1
                 """,
-                (campaign_id, branch_id, set_id),
+                (campaign_id, set_id),
             )
             row = await cur.fetchone()
             await cur.close()
@@ -1922,7 +1704,6 @@ class StateStore:
             delta_id = await insert_delta(
                 conn,
                 campaign_id=campaign_id or payload.get("campaign_id"),
-                branch_id=payload.get("branch_id"),
                 turn_id=payload.get("turn_id"),
                 source=source or payload.get("source") or "unknown",
                 kind=payload.get("kind") or "other",
@@ -2067,7 +1848,6 @@ class StateStore:
         *,
         query: str,
         campaign_id: str | None = None,
-        branch_id: str | None = None,
         kinds: Iterable[str] = ("fact",),
         top_k: int = 5,
         include_retired: bool = False,
@@ -2081,7 +1861,6 @@ class StateStore:
                         conn,
                         query=query,
                         campaign_id=campaign_id,
-                        branch_id=branch_id,
                         include_retired=include_retired,
                         top_k=top_k,
                     )
@@ -2115,7 +1894,6 @@ class StateStore:
         self,
         *,
         campaign_id: str,
-        branch_id: str,
         kind: str,
         target_source_id: str | None = None,
         target_entity_kind: str | None = None,
@@ -2125,14 +1903,7 @@ class StateStore:
         created_by: str = "user",
         pin_id: str | None = None,
     ) -> str:
-        """Insert a context pin/exclude row.
-
-        TTL is stored as an integer turn count alongside
-        ``created_at_turn_id``. Expiry is resolved at read time by counting
-        turns elapsed between ``created_at_turn_id`` and the current turn id
-        using ``turn_audits.created_at`` ordering — turn ids themselves are
-        random hex and not lexicographically comparable.
-        """
+        """Insert a context pin/exclude row."""
         if kind not in ("pin", "exclude"):
             raise ValueError(f"context pin kind must be 'pin' or 'exclude', got {kind!r}")
         target_kind = "source" if target_source_id else "entity"
@@ -2144,16 +1915,15 @@ class StateStore:
         await self.db.execute(
             """
             INSERT INTO context_pins (
-                id, campaign_id, branch_id, kind, target_kind,
+                id, campaign_id, kind, target_kind,
                 target_source_id, target_entity_kind, target_entity_id,
                 created_at, created_by, created_at_turn_id, ttl_turns
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 pid,
                 campaign_id,
-                branch_id,
                 kind,
                 target_kind,
                 target_source_id,
@@ -2171,24 +1941,19 @@ class StateStore:
         self,
         *,
         campaign_id: str,
-        branch_id: str,
         current_turn_id: str | None = None,
     ) -> list[dict]:
-        """Return every active pin/exclude for the (campaign, branch) tuple.
+        """Return every active pin/exclude for the campaign.
 
-        Active = ``cleared_at IS NULL`` AND TTL not exhausted. TTL is
-        exhausted when the number of canonical turns recorded in
-        ``turn_audits`` between ``created_at_turn_id`` (exclusive) and
-        ``current_turn_id`` (inclusive) is >= ``ttl_turns``. Rows with
-        ``ttl_turns IS NULL`` never expire.
+        Active = ``cleared_at IS NULL`` AND TTL not exhausted.
         """
         rows = await self.db.fetchall(
             """
             SELECT * FROM context_pins
-            WHERE campaign_id = ? AND branch_id = ? AND cleared_at IS NULL
+            WHERE campaign_id = ? AND cleared_at IS NULL
             ORDER BY created_at
             """,
-            (campaign_id, branch_id),
+            (campaign_id,),
         )
         out: list[dict] = []
         for row in rows:
@@ -2198,7 +1963,6 @@ class StateStore:
                 continue
             elapsed = await self._turns_elapsed(
                 campaign_id=campaign_id,
-                branch_id=branch_id,
                 from_turn_id=row["created_at_turn_id"],
                 to_turn_id=current_turn_id,
             )
@@ -2210,11 +1974,10 @@ class StateStore:
         self,
         *,
         campaign_id: str,
-        branch_id: str,
         from_turn_id: str,
         to_turn_id: str,
     ) -> int | None:
-        """Count canonical turns between two turn ids on the same branch.
+        """Count canonical turns between two turn ids.
 
         Uses ``turn_audits.created_at`` ordering. Returns ``None`` when
         either turn id is unknown to the audit table (caller treats this
@@ -2224,10 +1987,10 @@ class StateStore:
         rows = await self.db.fetchall(
             """
             SELECT turn_id, created_at FROM turn_audits
-            WHERE campaign_id = ? AND branch_id = ?
+            WHERE campaign_id = ?
               AND turn_id IN (?, ?)
             """,
-            (campaign_id, branch_id, from_turn_id, to_turn_id),
+            (campaign_id, from_turn_id, to_turn_id),
         )
         by_id = {row["turn_id"]: row["created_at"] for row in rows}
         if from_turn_id not in by_id or to_turn_id not in by_id:
@@ -2239,10 +2002,10 @@ class StateStore:
         count_row = await self.db.fetchone(
             """
             SELECT COUNT(*) AS n FROM turn_audits
-            WHERE campaign_id = ? AND branch_id = ?
+            WHERE campaign_id = ?
               AND created_at > ? AND created_at <= ?
             """,
-            (campaign_id, branch_id, start, end),
+            (campaign_id, start, end),
         )
         return int(count_row["n"]) if count_row else 0
 
@@ -2302,7 +2065,6 @@ def _scene_row_to_dict(row: aiosqlite.Row) -> dict:
     return {
         "id": row["id"],
         "campaign_id": row["campaign_id"],
-        "branch_id": row["branch_id"],
         "ordinal": int(row["ordinal"]),
         "slug": row["slug"],
         "file_path": row["file_path"],
@@ -2326,7 +2088,6 @@ def _character_state_row_to_dict(row: aiosqlite.Row) -> dict:
     return {
         "character_ref": row["character_ref"],
         "campaign_id": row["campaign_id"],
-        "branch_id": row["branch_id"],
         "location_ref": row["location_ref"],
         "emotional_state": row["emotional_state"],
         "physical_state": row["physical_state"],
@@ -2422,15 +2183,3 @@ def _content_kind_from_id(composite_id: str) -> str:
     if len(parts) >= 3 and parts[0] == "campaigns":
         return parts[2].rstrip("s") if parts[2].endswith("s") else parts[2]
     return "unknown"
-
-
-def _seed_for(label: str) -> int:
-    """Stable deterministic seed from a label; sqlite stores INTEGER.
-
-    Python's builtin ``hash()`` is salted per process (PYTHONHASHSEED), so the
-    same label produces a different value on each restart — breaking the
-    "deterministic replay across restarts" guarantee for branch RNG seeding.
-    Use a fixed-output hash (SHA-256, truncated to 31 bits) instead.
-    """
-    digest = hashlib.sha256(label.encode("utf-8")).digest()
-    return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF

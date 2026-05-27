@@ -5,11 +5,6 @@ campaign id into a new campaign id, optionally filtered by a turn cutoff.
 It also produces a deterministic fingerprint of a campaign's state for
 the safety-net check on fork-from-earlier.
 
-The branch-level fork in :mod:`grimoire.state_store.store` is a separate,
-complementary mechanism (it creates a copy-on-write branch inside the
-same campaign). This module creates a brand-new campaign id with its own
-directory.
-
 Most ids in this schema (post.id, scene.id, delta.id, image.id, etc.)
 are globally unique strings rather than ``(campaign_id, local_id)``
 composites, so copying a row verbatim with just ``campaign_id`` rewritten
@@ -40,8 +35,6 @@ from grimoire.storage import Database
 #
 # Column rewrite kinds:
 #   "campaign"  — replace with ``new_campaign_id``
-#   "branch"    — rewrite ``<orig>:label`` → ``<new>:label`` (or
-#                 the bare campaign id → the new id for branches.id)
 #   "id"        — prefix the value with a fork token so the new row's
 #                 PK / FK is unique to the fork
 #   "ref"       — same as "id" but the column may also hold non-id values
@@ -56,15 +49,6 @@ TableSpec = dict[str, object]
 
 
 CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
-    {
-        "table": "branches",
-        "cutoff_col": None,
-        "rewrites": {
-            "id": "branch",
-            "campaign_id": "campaign",
-            "parent_branch_id": "branch",
-        },
-    },
     {
         "table": "campaign_world_refs",
         "cutoff_col": None,
@@ -86,7 +70,6 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
         "rewrites": {
             "id": "id",
             "campaign_id": "campaign",
-            "branch_id": "branch",
             "closed_at_turn": "ref",
         },
     },
@@ -97,7 +80,6 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
             "id": "id",
             "scene_id": "id",
             "campaign_id": "campaign",
-            "branch_id": "branch",
             "turn_id": "ref",
             "retconned_from": "ref",
         },
@@ -108,7 +90,6 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
         "rewrites": {
             "id": "id",
             "campaign_id": "campaign",
-            "branch_id": "branch",
             "established_in_post": "id",
             "retired_in_post": "id",
         },
@@ -119,7 +100,6 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
         "rewrites": {
             "id": "id",
             "campaign_id": "campaign",
-            "branch_id": "branch",
             "created_in_post": "id",
             "resolved_in_post": "id",
         },
@@ -130,7 +110,6 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
         "rewrites": {
             "id": "id",
             "campaign_id": "campaign",
-            "branch_id": "branch",
             "updated_at_turn": "ref",
         },
     },
@@ -140,24 +119,19 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
         "rewrites": {
             "fact_id": "id",
             "campaign_id": "campaign",
-            "branch_id": "branch",
             "learned_in_post": "id",
         },
     },
     {
         "table": "calendar",
         "cutoff_col": None,
-        "rewrites": {
-            "campaign_id": "campaign",
-            "branch_id": "branch",
-        },
+        "rewrites": {"campaign_id": "campaign"},
     },
     {
         "table": "character_state",
         "cutoff_col": None,
         "rewrites": {
             "campaign_id": "campaign",
-            "branch_id": "branch",
             "current_scene_id": "id",
             "last_screen_time_turn": "ref",
             "updated_at_turn": "ref",
@@ -168,7 +142,6 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
         "cutoff_col": None,
         "rewrites": {
             "campaign_id": "campaign",
-            "branch_id": "branch",
             "updated_at_turn": "ref",
         },
     },
@@ -177,7 +150,6 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
         "cutoff_col": None,
         "rewrites": {
             "campaign_id": "campaign",
-            "branch_id": "branch",
             "updated_at_turn": "ref",
         },
     },
@@ -187,7 +159,6 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
         "rewrites": {
             "id": "id",
             "campaign_id": "campaign",
-            "branch_id": "branch",
             "scene_id": "id",
             "post_id": "id",
         },
@@ -198,7 +169,6 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
         "rewrites": {
             "id": "id",
             "campaign_id": "campaign",
-            "branch_id": "branch",
             "turn_id": "ref",
         },
     },
@@ -226,7 +196,6 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
         "rewrites": {
             "turn_id": "ref",
             "campaign_id": "campaign",
-            "branch_id": "branch",
             "scene_id": "id",
         },
     },
@@ -236,7 +205,6 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
         "rewrites": {
             "id": "id",
             "campaign_id": "campaign",
-            "branch_id": "branch",
         },
     },
     {
@@ -245,7 +213,6 @@ CAMPAIGN_SCOPED_TABLES: list[TableSpec] = [
         "rewrites": {
             "id": "id",
             "campaign_id": "campaign",
-            "branch_id": "branch",
         },
     },
 ]
@@ -313,17 +280,6 @@ def _rewrite_ref(value: object, prefix: str) -> object:
     return prefix + value
 
 
-def _rewrite_branch(value: object, original: str, new: str) -> object:
-    if not isinstance(value, str) or not value:
-        return value
-    sep = f"{original}:"
-    if value == original:
-        return new
-    if value.startswith(sep):
-        return new + value[len(original) :]
-    return value
-
-
 async def _table_exists(conn: aiosqlite.Connection, table: str) -> bool:
     cur = await conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
@@ -353,9 +309,8 @@ async def bulk_copy(
     Runs as a single transaction. When ``cutoff_iso`` is provided, rows
     in tables with a filter column are only copied when the cutoff
     column is ``<= cutoff_iso``. Newly inserted rows have their
-    ``campaign_id`` rewritten to ``new``, branch ids rewritten to use
-    ``new`` as the campaign prefix, and TEXT id columns prefixed with
-    ``new::`` so PKs and FKs stay consistent inside the fork.
+    ``campaign_id`` rewritten to ``new`` and TEXT id columns prefixed
+    with ``new::`` so PKs and FKs stay consistent inside the fork.
     """
     rows_per_table: dict[str, int] = {}
     prefix = fork_prefix(new)
@@ -398,8 +353,6 @@ async def bulk_copy(
                         kind = rewrites.get(col)
                         if kind == "campaign":
                             v = new
-                        elif kind == "branch":
-                            v = _rewrite_branch(v, original, new)
                         elif kind == "id":
                             v = _rewrite_id(v, prefix)
                         elif kind == "ref":
@@ -426,7 +379,6 @@ async def bulk_copy(
 FINGERPRINT_TABLES: tuple[str, ...] = (
     "campaign_world_refs",
     "campaign_pcs",
-    "branches",
     "scenes",
     "posts",
     "facts",
@@ -444,9 +396,7 @@ FINGERPRINT_TABLES: tuple[str, ...] = (
 _FINGERPRINT_EXCLUDED_COLS = frozenset(
     {
         "campaign_id",
-        "branch_id",
         "id",
-        "parent_branch_id",
         "scene_id",
         "post_id",
         "established_in_post",
