@@ -16,7 +16,7 @@ from typing import Any
 
 from grimoire.files.frontmatter import parse_frontmatter
 from grimoire.files.yaml_io import load_yaml
-from grimoire.scenes.storage import _safe_branch_segment, read_posts, read_sidecar
+from grimoire.scenes.storage import read_posts, read_sidecar
 from grimoire.scenes.types import Scene
 
 
@@ -67,7 +67,6 @@ class ImageRecord:
 @dataclass(slots=True)
 class FsCampaignSnapshot:
     campaign_id: str
-    branch_id: str
     campaign_yaml: dict[str, Any]
     scenes: list[SceneRecord]
     characters: list[CharacterCard]
@@ -97,11 +96,8 @@ _ENTITY_DIRS: dict[str, str] = {
 }
 
 
-def _scenes_dir(data_root: Path, campaign_id: str, branch_id: str) -> Path:
-    base = data_root / "campaigns" / campaign_id
-    if branch_id == "main":
-        return base / "scenes"
-    return base / "branches" / _safe_branch_segment(branch_id) / "scenes"
+def _scenes_dir(data_root: Path, campaign_id: str) -> Path:
+    return data_root / "campaigns" / campaign_id / "scenes"
 
 
 def _read_campaign_yaml(data_root: Path, campaign_id: str) -> dict[str, Any]:
@@ -115,8 +111,8 @@ def _read_campaign_yaml(data_root: Path, campaign_id: str) -> dict[str, Any]:
     return dict(raw) if isinstance(raw, dict) else {}
 
 
-def _load_scenes(data_root: Path, campaign_id: str, branch_id: str) -> list[SceneRecord]:
-    directory = _scenes_dir(data_root, campaign_id, branch_id)
+def _load_scenes(data_root: Path, campaign_id: str) -> list[SceneRecord]:
+    directory = _scenes_dir(data_root, campaign_id)
     if not directory.is_dir():
         return []
     records: list[SceneRecord] = []
@@ -240,7 +236,6 @@ def _load_images(data_root: Path, campaign_id: str) -> list[ImageRecord]:
 def load_fs_snapshot(
     data_root: Path,
     campaign_id: str,
-    branch_id: str = "main",
 ) -> FsCampaignSnapshot:
     """Walk ``data/campaigns/<id>/`` and return a structured snapshot.
 
@@ -250,9 +245,8 @@ def load_fs_snapshot(
     data_root = Path(data_root)
     return FsCampaignSnapshot(
         campaign_id=campaign_id,
-        branch_id=branch_id,
         campaign_yaml=_read_campaign_yaml(data_root, campaign_id),
-        scenes=_load_scenes(data_root, campaign_id, branch_id),
+        scenes=_load_scenes(data_root, campaign_id),
         characters=[
             c
             for c in _load_kind(data_root, campaign_id, "characters")

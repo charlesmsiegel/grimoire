@@ -53,7 +53,6 @@ class TransientResetTriggers:
         campaign_id = payload.get("campaign_id")
         if not campaign_id:
             return
-        branch_id = payload.get("branch_id")
         location_ref = payload.get("location_ref")
         scene_id = payload.get("scene_id")
         character_refs = list(payload.get("present_character_refs") or [])
@@ -66,7 +65,6 @@ class TransientResetTriggers:
                     EntityKind.CHARACTER,
                     ref,
                     field=field,
-                    branch_id=branch_id,
                     reason="scene_ended",
                 )
 
@@ -77,7 +75,6 @@ class TransientResetTriggers:
                     EntityKind.LOCATION,
                     location_ref,
                     field=field,
-                    branch_id=branch_id,
                     reason="scene_ended",
                 )
 
@@ -88,7 +85,6 @@ class TransientResetTriggers:
                     EntityKind.SCENE,
                     scene_id,
                     field=field,
-                    branch_id=branch_id,
                     reason="scene_ended",
                 )
 
@@ -100,7 +96,6 @@ class TransientResetTriggers:
         elapsed = int(payload.get("elapsed_seconds") or 0)
         if elapsed < self.time_skip_threshold_seconds:
             return
-        branch_id = payload.get("branch_id")
         character_refs = list(payload.get("character_refs") or [])
         reset_fields = DEFAULT_TIME_SKIP_RESET_FIELDS.get(EntityKind.CHARACTER, frozenset())
         for ref in character_refs:
@@ -110,7 +105,6 @@ class TransientResetTriggers:
                     EntityKind.CHARACTER,
                     ref,
                     field=field,
-                    branch_id=branch_id,
                     reason="time_skip",
                 )
 

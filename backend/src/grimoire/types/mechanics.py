@@ -120,7 +120,6 @@ class TickContext(BaseModel):
     """Context passed to `MechanicsModule.time_tick`."""
 
     campaign_id: str
-    branch_id: str
     duration: Duration
     extras: Json = Field(default_factory=dict)
 

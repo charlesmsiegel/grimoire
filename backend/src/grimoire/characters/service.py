@@ -762,20 +762,18 @@ class CharactersService:
         campaign_id: CampaignId,
         delta: dict,
         *,
-        branch_id: str | None = None,
         types: list[str] | None = None,
         turn_id: str | None = None,
         in_post: PostId | None = None,
         summary: str | None = None,
     ) -> dict:
-        branch = _branch_for(campaign_id, branch_id)
         existing = await self.store.db.fetchone(
             """
             SELECT * FROM relationships
-            WHERE campaign_id = ? AND branch_id = ?
+            WHERE campaign_id = ?
               AND from_character_ref = ? AND to_character_ref = ?
             """,
-            (campaign_id, branch, from_ref, to_ref),
+            (campaign_id, from_ref, to_ref),
         )
         if existing is None:
             state = RelationshipState()
@@ -813,10 +811,10 @@ class CharactersService:
         await self.store.db.execute(
             """
             INSERT INTO relationships (
-              id, campaign_id, branch_id, from_character_ref, to_character_ref,
+              id, campaign_id, from_character_ref, to_character_ref,
               types, state, updated_at_turn, history
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               types = excluded.types,
               state = excluded.state,
@@ -826,7 +824,6 @@ class CharactersService:
             (
                 row_id,
                 campaign_id,
-                branch,
                 from_ref,
                 to_ref,
                 json.dumps(existing_types),
@@ -838,7 +835,6 @@ class CharactersService:
         return {
             "id": row_id,
             "campaign_id": campaign_id,
-            "branch_id": branch,
             "from_ref": from_ref,
             "to_ref": to_ref,
             "types": existing_types,
@@ -851,17 +847,14 @@ class CharactersService:
         from_ref: CharacterRef,
         to_ref: CharacterRef,
         campaign_id: CampaignId,
-        *,
-        branch_id: str | None = None,
     ) -> list[dict]:
-        branch = _branch_for(campaign_id, branch_id)
         row = await self.store.db.fetchone(
             """
             SELECT history FROM relationships
-            WHERE campaign_id = ? AND branch_id = ?
+            WHERE campaign_id = ?
               AND from_character_ref = ? AND to_character_ref = ?
             """,
-            (campaign_id, branch, from_ref, to_ref),
+            (campaign_id, from_ref, to_ref),
         )
         if row is None:
             return []
@@ -1016,20 +1009,18 @@ class CharactersService:
         asset_id: str,
         ref: CharacterRef,
         campaign_id: CampaignId,
-        branch_id: str | None = None,
     ) -> CharacterState:
-        branch = _branch_for(campaign_id, branch_id)
-        row = await self.store.resolve_character_state(character_ref=ref, branch_id=branch)
+        row = await self.store.resolve_character_state(
+            character_ref=ref, campaign_id=campaign_id
+        )
         if row is None:
             return CharacterState(
                 character_ref=ref,
                 campaign_id=campaign_id,
-                branch_id=branch,
             )
         return CharacterState(
             character_ref=row["character_ref"],
             campaign_id=row["campaign_id"],
-            branch_id=row["branch_id"],
             location_ref=row.get("location_ref"),
             emotional_state=row.get("emotional_state") or "",
             physical_state=row.get("physical_state") or "",
@@ -1057,11 +1048,9 @@ class CharactersService:
         turn_id: str | None = None,
         record_in_delta_log: bool = True,
     ) -> None:
-        branch = state.branch_id or _branch_for(campaign_id, None)
         after = {
             "character_ref": ref,
             "campaign_id": campaign_id,
-            "branch_id": branch,
             "location_ref": state.location_ref,
             "emotional_state": state.emotional_state,
             "physical_state": state.physical_state,
@@ -1091,7 +1080,6 @@ class CharactersService:
                 delta=delta,
                 source=source,
                 turn_id=turn_id,
-                branch_id=branch,
                 campaign_id=campaign_id,
             )
             return
@@ -1099,15 +1087,14 @@ class CharactersService:
         await self.store.db.execute(
             """
             INSERT INTO character_state (
-              character_ref, campaign_id, branch_id, location_ref,
+              character_ref, campaign_id, location_ref,
               emotional_state, physical_state, immediate_intent,
               knowledge_state, last_action, last_screen_time_turn,
               visible_to_pc, drift_score, tier_pin, current_scene_id,
               updated_at_turn, appearances_since_last_drift_check
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(character_ref, branch_id) DO UPDATE SET
-              campaign_id = excluded.campaign_id,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(character_ref, campaign_id) DO UPDATE SET
               location_ref = excluded.location_ref,
               emotional_state = excluded.emotional_state,
               physical_state = excluded.physical_state,
@@ -1125,7 +1112,6 @@ class CharactersService:
             (
                 after["character_ref"],
                 after["campaign_id"],
-                after["branch_id"],
                 after["location_ref"],
                 after["emotional_state"],
                 after["physical_state"],
@@ -1313,7 +1299,6 @@ def _relationship_row_to_dict(row: Any) -> dict:
     return {
         "id": row["id"],
         "campaign_id": row["campaign_id"],
-        "branch_id": row["branch_id"],
         "from_ref": row["from_character_ref"],
         "to_ref": row["to_character_ref"],
         "types": types,

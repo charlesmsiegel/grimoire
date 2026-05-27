@@ -156,7 +156,7 @@ class ReplayResult(BaseModel):
     turn_id: TurnId
     new_response_text: str
     delta_diff: list[Json] = Field(default_factory=list)
-    forked_branch_id: str | None = None
+    forked_campaign_id: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
