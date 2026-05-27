@@ -33,9 +33,9 @@ export function CastView() {
   const [tagFilter, setTagFilter] = useState("");
   const [searchFilter, setSearchFilter] = useState("");
   const [searchParams] = useSearchParams();
-  const [selectedId, setSelectedId] = useState<string | null>(
-    searchParams.get("character"),
-  );
+  const initialCharacter = searchParams.get("character");
+  const initialRef = searchParams.get("ref");
+  const [selectedId, setSelectedId] = useState<string | null>(initialCharacter);
 
   return (
     <section className="route campaign-cast" aria-labelledby="cast-heading">
@@ -47,7 +47,18 @@ export function CastView() {
           const roles = collectRoles(rows);
           const filtered = applyFilters(rows, sourceFilter, roleFilter, tagFilter, searchFilter);
           const selected =
-            filtered.find((r) => r.character.id === selectedId) ?? filtered[0] ?? null;
+            (initialRef
+              ? filtered.find((r) => {
+                  const ref =
+                    r.character.world_id !== null
+                      ? `library:worlds/${r.character.world_id}/characters/${r.character.id}`
+                      : `campaign:emergent/character/${r.character.id}`;
+                  return ref === initialRef;
+                })
+              : undefined) ??
+            filtered.find((r) => r.character.id === selectedId) ??
+            filtered[0] ??
+            null;
           return (
             <div className="cast-layout">
               <aside className="cast-list" aria-label="Character list">

@@ -97,7 +97,7 @@ export function useHud(campaignId: string, activeSceneId?: string | null): HudSt
   const refreshWidget = useCallback(
     async (widgetId: string) => {
       try {
-        const snap = await hudApi.widget(campaignId, widgetId);
+        const snap = await hudApi.widget(campaignId, widgetId, undefined, activeSceneId);
         setWidgets((prev) => {
           const idx = prev.findIndex((w) => w.snapshot.id === widgetId);
           const existing = idx === -1 ? undefined : prev[idx];
@@ -115,7 +115,7 @@ export function useHud(campaignId: string, activeSceneId?: string | null): HudSt
         // Leave the existing snapshot; staleness will surface on its own.
       }
     },
-    [campaignId],
+    [campaignId, activeSceneId],
   );
 
   useEffect(() => {

@@ -90,10 +90,12 @@ export const hudApi = {
     campaignId: string,
     widgetId: string,
     signal?: AbortSignal,
+    sceneId?: string | null,
   ): Promise<WidgetSnapshot> {
-    return api.get<WidgetSnapshot>(
-      `${base(campaignId)}/widgets/${encodeURIComponent(widgetId)}`,
-      { signal },
+    const url = sceneId
+      ? `${base(campaignId)}/widgets/${encodeURIComponent(widgetId)}?scene_id=${encodeURIComponent(sceneId)}`
+      : `${base(campaignId)}/widgets/${encodeURIComponent(widgetId)}`;
+    return api.get<WidgetSnapshot>(url, { signal },
     );
   },
   available(campaignId: string, signal?: AbortSignal): Promise<HudWidget[]> {

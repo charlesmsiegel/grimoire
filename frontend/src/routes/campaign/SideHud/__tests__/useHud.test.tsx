@@ -147,8 +147,8 @@ describe("useHud", () => {
     await waitFor(() =>
       expect(screen.getByTestId("widget-core.weather")).toHaveTextContent("Snow"),
     );
-    expect(widgetSpy).toHaveBeenCalledWith("c1", "core.weather");
-    expect(widgetSpy).not.toHaveBeenCalledWith("c1", "core.in-game-date");
+    expect(widgetSpy).toHaveBeenCalledWith("c1", "core.weather", undefined, undefined);
+    expect(widgetSpy).not.toHaveBeenCalledWith("c1", "core.in-game-date", undefined, undefined);
   });
 
   it("surfaces an error when the aggregate fetch fails", async () => {
