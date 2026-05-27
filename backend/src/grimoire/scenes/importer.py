@@ -129,6 +129,13 @@ async def run_import_pipeline(
 
     scene = await scene_manager.start_scene(init)
 
+    # Guard against importing a file that lives in the destination directory.
+    naming = getattr(getattr(scene_manager, "config", None), "files", None)
+    _pattern = getattr(naming, "scene_naming_pattern", None) or "{ordinal:04d}-{slug}"
+    dest_md, _ = scene_paths(scene_manager.data_root, scene, naming_pattern=_pattern)
+    if dest_md.resolve() == md_path.resolve():
+        raise ValueError(f"Source file is already in the campaign scenes directory: {md_path}")
+
     # Restore active scene state — import should not change what's "current".
     if prev_active is not None:
         scene_manager._active_scene[active_key] = prev_active
