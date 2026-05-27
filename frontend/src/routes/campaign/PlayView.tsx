@@ -251,20 +251,24 @@ export function PlayView({ campaignId }: Props) {
               onLoadMore={loadMorePosts}
             />
           )}
-          {play.state.mode !== "play" ? null : <InputArea
-            campaignId={campaignId}
-            scene={play.state.scene}
-            pcs={play.state.pcs}
-            activePcRef={play.state.activePcRef}
-            text={draft}
-            onTextChange={setDraft}
-            onChangePC={(ref) => void play.setActivePC(ref)}
-            onSubmit={(text, emotion) => runAction(() => play.submit(text, emotion))}
-            onAdvance={() => runAction(() => play.advance())}
-            advanceEnabled={play.state.advanceEnabled}
-            advanceReason={play.state.advanceReason}
-            busy={busy}
-          />}
+          {play.state.mode !== "play" ? null : play.state.scene?.closed ? (
+            <p className="input-area-closed">This scene is closed. No new posts can be added.</p>
+          ) : (
+            <InputArea
+              campaignId={campaignId}
+              scene={play.state.scene}
+              pcs={play.state.pcs}
+              activePcRef={play.state.activePcRef}
+              text={draft}
+              onTextChange={setDraft}
+              onChangePC={(ref) => void play.setActivePC(ref)}
+              onSubmit={(text, emotion) => runAction(() => play.submit(text, emotion))}
+              onAdvance={() => runAction(() => play.advance())}
+              advanceEnabled={play.state.advanceEnabled}
+              advanceReason={play.state.advanceReason}
+              busy={busy}
+            />
+          )}
         </div>
         {rightView === "hud" ? (
           <SideHud campaignId={campaignId} />
