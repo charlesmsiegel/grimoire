@@ -104,6 +104,12 @@ export const campaignApi = {
       scene_id: sceneId,
     }),
 
+  submitDirection: (id: string, sceneId: string, text?: string) =>
+    api.post<SubmitTurnResult>(`/api/campaigns/${enc(id)}/turns/direct`, {
+      scene_id: sceneId,
+      ...(text ? { text } : {}),
+    }),
+
   regenerate: (id: string) => api.post<unknown>(`/api/campaigns/${enc(id)}/turns/regenerate`),
 
   regeneratePost: (

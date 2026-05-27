@@ -47,6 +47,15 @@ export function usePlayCommands(
     await campaignApi.advance(campaignId, scene.id);
   }, [campaignId, stateRef]);
 
+  const direct = useCallback(
+    async (text?: string) => {
+      const scene = stateRef.current.scene;
+      if (!scene) return;
+      await campaignApi.submitDirection(campaignId, scene.id, text || undefined);
+    },
+    [campaignId, stateRef],
+  );
+
   const regenerate = useCallback(async () => {
     await campaignApi.regenerate(campaignId);
   }, [campaignId]);
@@ -112,6 +121,7 @@ export function usePlayCommands(
     setActivePC,
     submit,
     advance,
+    direct,
     regenerate,
     undo,
     endScene,

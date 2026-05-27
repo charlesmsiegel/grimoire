@@ -26,6 +26,7 @@ const AUTHOR_LABELS: Record<ApiPost["author_kind"], string> = {
 };
 
 function authorName(post: ApiPost, pcs: PCEntry[]): string {
+  if (post.author_kind === "system" && post.is_player) return "Direction";
   if (post.author_pc_ref) {
     const pc = pcs.find((p) => p.character_ref === post.author_pc_ref);
     return pc?.name ?? post.author_pc_ref;
@@ -54,6 +55,7 @@ export function PostItem({
   expressionsEnabledCharacters,
 }: Props) {
   const name = authorName(post, pcs);
+  const isDirection = post.author_kind === "system" && post.is_player;
   const alternates = useMemo(() => post.alternates ?? [], [post.alternates]);
   const initialCursor = useMemo(
     () => primaryCursor(alternates, post.primary_alternate_id),
@@ -187,7 +189,10 @@ export function PostItem({
   }
 
   return (
-    <article className={`post post-${post.author_kind}`} aria-label={`Post by ${name}`}>
+    <article
+      className={`post ${isDirection ? "post-direction" : `post-${post.author_kind}`}`}
+      aria-label={isDirection ? "Direction" : `Post by ${name}`}
+    >
       <header className="post-header">
         {showSprite && speakerAssetId && campaignId && (
           <CharacterSprite

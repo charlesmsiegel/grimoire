@@ -188,6 +188,7 @@ export function PlayView({ campaignId }: Props) {
               onChangePC={(ref) => void play.setActivePC(ref)}
               onSubmit={(text, emotion) => runAction(() => play.submit(text, emotion))}
               onAdvance={() => runAction(() => play.advance())}
+              onDirect={(text) => runAction(() => play.direct(text))}
               advanceEnabled={play.state.advanceEnabled}
               advanceReason={play.state.advanceReason}
               onNextSpeaker={async () => {
