@@ -15,7 +15,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .common import (
-    BranchId,
     CampaignId,
     CharacterRef,
     FactionRef,
@@ -216,7 +215,6 @@ class FactionStateData(BaseModel):
 
     faction_ref: FactionRef
     campaign_id: CampaignId
-    branch_id: BranchId
     goals: list[FactionGoal] = Field(default_factory=list)
     resources: Json = Field(default_factory=dict)
     current_focus: str = ""
@@ -283,7 +281,6 @@ class LocationStateData(BaseModel):
 
     location_ref: LocationRef
     campaign_id: CampaignId
-    branch_id: BranchId
     weather: Weather | None = None
     time_of_day: str = ""
     occupants: list[CharacterRef] = Field(default_factory=list)

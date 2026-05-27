@@ -9,7 +9,6 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from .common import (
-    BranchId,
     CampaignId,
     CharacterRef,
     InGameTime,
@@ -57,7 +56,6 @@ class SceneThreads(BaseModel):
 class Scene(BaseModel):
     id: SceneId
     campaign_id: CampaignId
-    branch_id: BranchId
     ordinal: int
     slug: str
     file_path: str
@@ -98,7 +96,6 @@ class SceneInit(BaseModel):
     """Inputs for opening a new scene."""
 
     campaign_id: CampaignId
-    branch_id: BranchId
     title: str = ""
     slug: str = ""
     location_ref: str | None = None

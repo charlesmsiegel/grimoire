@@ -82,7 +82,6 @@ FactionRef = str
 ItemRef = str
 MonsterRef = str
 CampaignId = str
-BranchId = str
 TurnId = str
 PostId = str
 SceneId = str

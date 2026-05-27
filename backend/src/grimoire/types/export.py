@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from .common import BranchId, CampaignId, InGameTime, Json
+from .common import CampaignId, InGameTime, Json
 
 
 class ExportCapabilities(BaseModel):
@@ -17,7 +17,6 @@ class ExportCapabilities(BaseModel):
 
 
 class ExportSelection(BaseModel):
-    branch_id: BranchId
     scene_ids: list[str] | None = None
     date_range: tuple[InGameTime, InGameTime] | None = None
     arcs: list[str] | None = None  # tag-convention: scenes with tag "arc:<id>"

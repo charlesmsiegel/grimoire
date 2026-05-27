@@ -14,7 +14,6 @@ from typing import Protocol, runtime_checkable
 from grimoire.scenes.types import Post, Scene
 from grimoire.types.characters import Character
 from grimoire.types.common import (
-    BranchId,
     CampaignId,
     CharacterRef,
     LocationRef,
@@ -30,9 +29,7 @@ from grimoire.types.imagegen import ImageMetadata
 
 @runtime_checkable
 class SceneSource(Protocol):
-    async def list_scenes(
-        self, campaign_id: CampaignId, branch_id: BranchId = "main"
-    ) -> list[Scene]: ...
+    async def list_scenes(self, campaign_id: CampaignId) -> list[Scene]: ...
 
     async def get_posts(self, scene_id: str) -> list[Post]: ...
 

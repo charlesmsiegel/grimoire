@@ -8,7 +8,6 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from .common import (
-    BranchId,
     CampaignId,
     CharacterRef,
     FactionRef,
@@ -74,7 +73,6 @@ class AppliedDelta(BaseModel):
     id: str
     delta: StateDelta
     campaign_id: CampaignId | None
-    branch_id: BranchId | None
     turn_id: TurnId | None
     applied_at: datetime
     reversed_at: datetime | None = None
@@ -107,7 +105,6 @@ class ContextTier(StrEnum):
 class CharacterState(BaseModel):
     character_ref: CharacterRef
     campaign_id: CampaignId
-    branch_id: BranchId
     location_ref: LocationRef | None = None
     emotional_state: str = ""
     physical_state: str = ""
@@ -126,7 +123,6 @@ class CharacterState(BaseModel):
 class LocationState(BaseModel):
     location_ref: LocationRef
     campaign_id: CampaignId
-    branch_id: BranchId
     weather: Json = Field(default_factory=dict)
     time_of_day: str = ""
     occupants: list[CharacterRef] = Field(default_factory=list)
@@ -138,7 +134,6 @@ class LocationState(BaseModel):
 class FactionState(BaseModel):
     faction_ref: FactionRef
     campaign_id: CampaignId
-    branch_id: BranchId
     state: Json = Field(default_factory=dict)
     updated_at_turn: TurnId | None = None
 
@@ -147,7 +142,6 @@ class StateSnapshot(BaseModel):
     """A compact view of relevant state at one point. Used by the Extractor."""
 
     campaign_id: CampaignId
-    branch_id: BranchId
     scene_id: str | None
     character_states: list[CharacterState] = Field(default_factory=list)
     location_states: list[LocationState] = Field(default_factory=list)

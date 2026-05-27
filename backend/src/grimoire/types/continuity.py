@@ -7,7 +7,6 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from .common import (
-    BranchId,
     CampaignId,
     CharacterRef,
     CommitmentId,
@@ -44,7 +43,6 @@ class FactSubject(BaseModel):
 class Fact(BaseModel):
     id: FactId
     campaign_id: CampaignId
-    branch_id: BranchId
     text: str
     established_in_post: PostId | None
     established_at_in_game: InGameTime | None
@@ -80,7 +78,6 @@ class CommitmentStatus(StrEnum):
 class Commitment(BaseModel):
     id: CommitmentId
     campaign_id: CampaignId
-    branch_id: BranchId
     kind: CommitmentKind
     text: str
     created_in_post: PostId | None
