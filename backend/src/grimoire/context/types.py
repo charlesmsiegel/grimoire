@@ -72,6 +72,8 @@ class BuiltContext:
     present_npcs: list[dict] = field(default_factory=list)
     multi_call_character_name: str = ""
     multi_call_character_ref: str = ""
+    pc_absent: bool = False
+    scene_mode: str = ""
 
 
 @dataclass(frozen=True)
