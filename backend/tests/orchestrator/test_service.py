@@ -458,3 +458,82 @@ async def test_regenerate_replays_last_turn(
     posts = await scene_manager.get_posts(scene.id)
     assert posts[0].body == "I knock."
     assert posts[-1].body == "She knocks back."
+
+
+# --------------------------------------------------------------------------- #
+# PC-absent scene direction
+# --------------------------------------------------------------------------- #
+
+
+async def _seed_pc_absent(
+    scene_manager: SceneManager,
+    fake_store: FakeStateStore,
+    *,
+    campaign_id: str = "c1",
+):
+    fake_store.db.campaigns.add(campaign_id)
+    fake_store.db.pcs[campaign_id] = set()
+    scene = await scene_manager.start_scene(
+        SceneInit(
+            campaign_id=campaign_id,
+            title="NPC Meeting",
+            present_pc_refs=[],
+            present_character_refs=["npc-winifred", "npc-drake"],
+        )
+    )
+    return scene
+
+
+async def test_submit_direction_runs_turn(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    scene = await _seed_pc_absent(scene_manager, fake_store)
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    result = await orch.submit_direction("c1", scene.id, text="winifred confronts Drake")
+    assert result.accepted is True
+    assert result.turn_id is not None
+    assert result.auto_responding is True
+    assert fake_context_builder.calls[0]["player_input"] == "winifred confronts Drake"
+
+
+async def test_submit_direction_continue_with_empty_text(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    scene = await _seed_pc_absent(scene_manager, fake_store)
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    result = await orch.submit_direction("c1", scene.id)
+    assert result.accepted is True
+    assert result.turn_id is not None
+    assert fake_context_builder.calls[0]["player_input"] == ""
+
+
+async def test_submit_direction_rejects_pc_present_scene(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    scene = await _seed(scene_manager, fake_store)
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    from grimoire.orchestrator.errors import OrchestratorError
+
+    with pytest.raises(OrchestratorError, match="not a PC-absent scene"):
+        await orch.submit_direction("c1", scene.id, text="Direct something")
