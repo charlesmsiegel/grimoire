@@ -220,6 +220,17 @@ describe("PostItem regenerate", () => {
     expect(await screen.findByText("server error")).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Alternates" })).toBeNull();
   });
+
+  it("guided regenerate form stays open on API failure", async () => {
+    vi.spyOn(campaignApi, "regeneratePost").mockRejectedValue(new Error("server error"));
+    render(<PostItem post={makePost()} pcs={PCS} images={[]} isLatestModelPost campaignId="c1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Guided regenerate" }));
+    const input = screen.getByLabelText("Guided regenerate hint");
+    fireEvent.change(input, { target: { value: "Include a dragon" } });
+    fireEvent.submit(input.closest("form")!);
+    await waitFor(() => expect(screen.getByText("server error")).toBeInTheDocument());
+    expect(screen.getByLabelText("Guided regenerate hint")).toBeInTheDocument();
+  });
 });
 
 describe("PostItem continue", () => {
