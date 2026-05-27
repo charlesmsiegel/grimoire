@@ -97,9 +97,6 @@ class TransientStateService:
         self.config = config or TransientStateConfig()
         self.privacy_resolver = privacy_resolver
 
-    def _default_branch(self, campaign_id: str) -> str:
-        return f"{campaign_id}:main"
-
     async def get(
         self,
         campaign_id: str,
@@ -107,19 +104,17 @@ class TransientStateService:
         entity_id: str,
         field: str | None = None,
         *,
-        branch_id: str | None = None,
         for_observer: ObserverKind | None = None,
     ) -> TransientValue | dict[str, TransientValue] | None:
-        branch = branch_id or self._default_branch(campaign_id)
         table = _TABLE[entity_kind]
         now_iso = _now().isoformat()
         if field is None:
             rows = await self.store.db.fetchall(
                 f"SELECT * FROM {table} "
-                "WHERE campaign_id=? AND branch_id=? AND entity_id=? "
+                "WHERE campaign_id=? AND entity_id=? "
                 "AND superseded_by IS NULL "
                 "AND (expires_at IS NULL OR expires_at > ?)",
-                (campaign_id, branch, entity_id, now_iso),
+                (campaign_id, entity_id, now_iso),
             )
             bundle = {r["field"]: _row_to_value(r) for r in rows}
             if for_observer is not None:
@@ -134,10 +129,10 @@ class TransientStateService:
             return bundle
         row = await self.store.db.fetchone(
             f"SELECT * FROM {table} "
-            "WHERE campaign_id=? AND branch_id=? AND entity_id=? AND field=? "
+            "WHERE campaign_id=? AND entity_id=? AND field=? "
             "AND superseded_by IS NULL "
             "AND (expires_at IS NULL OR expires_at > ?)",
-            (campaign_id, branch, entity_id, field, now_iso),
+            (campaign_id, entity_id, field, now_iso),
         )
         if row is None:
             return None
@@ -161,21 +156,19 @@ class TransientStateService:
         entity_ids: Sequence[str],
         fields: Sequence[str] | None = None,
         *,
-        branch_id: str | None = None,
         for_observer: ObserverKind | None = None,
     ) -> dict[str, dict[str, TransientValue]]:
         if not entity_ids:
             return {}
-        branch = branch_id or self._default_branch(campaign_id)
         table = _TABLE[entity_kind]
         id_placeholders = ",".join("?" * len(entity_ids))
         sql = (
             f"SELECT * FROM {table} "
-            f"WHERE campaign_id=? AND branch_id=? AND entity_id IN ({id_placeholders}) "
+            f"WHERE campaign_id=? AND entity_id IN ({id_placeholders}) "
             "AND superseded_by IS NULL "
             "AND (expires_at IS NULL OR expires_at > ?)"
         )
-        params: list[Any] = [campaign_id, branch, *entity_ids, _now().isoformat()]
+        params: list[Any] = [campaign_id, *entity_ids, _now().isoformat()]
         if fields:
             field_placeholders = ",".join("?" * len(fields))
             sql += f" AND field IN ({field_placeholders})"
@@ -209,11 +202,9 @@ class TransientStateService:
         provenance: Provenance | _ProvenanceMechanics,
         confidence: float = 1.0,
         source_post_id: str | None = None,
-        branch_id: str | None = None,
         in_game_at: datetime | None = None,
         expires_at: datetime | None = None,
     ) -> TransientValue:
-        branch = branch_id or self._default_branch(campaign_id)
         table = _TABLE[entity_kind]
         provenance_str = provenance.value if hasattr(provenance, "value") else str(provenance)
         async with self.store.db.acquire() as conn:
@@ -221,20 +212,19 @@ class TransientStateService:
             try:
                 async with conn.execute(
                     f"SELECT * FROM {table} "
-                    "WHERE campaign_id=? AND branch_id=? AND entity_id=? AND field=? "
+                    "WHERE campaign_id=? AND entity_id=? AND field=? "
                     "AND superseded_by IS NULL",
-                    (campaign_id, branch, entity_id, field),
+                    (campaign_id, entity_id, field),
                 ) as cursor:
                     current = await cursor.fetchone()
                 cursor = await conn.execute(
                     f"INSERT INTO {table} "
-                    "(campaign_id, branch_id, entity_id, field, value, provenance, "
+                    "(campaign_id, entity_id, field, value, provenance, "
                     " source_post_id, confidence, created_at, expires_at, "
                     " superseded_by, in_game_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
                     (
                         campaign_id,
-                        branch,
                         entity_id,
                         field,
                         json.dumps(value),
@@ -278,27 +268,25 @@ class TransientStateService:
         entity_id: str,
         field: str | None = None,
         *,
-        branch_id: str | None = None,
         reason: str = "user:reset",
     ) -> None:
-        branch = branch_id or self._default_branch(campaign_id)
         table = _TABLE[entity_kind]
         now_iso = _now().isoformat()
         if field is None:
             await self.store.db.execute(
                 f"UPDATE {table} SET expires_at=? "
-                "WHERE campaign_id=? AND branch_id=? AND entity_id=? "
+                "WHERE campaign_id=? AND entity_id=? "
                 "AND superseded_by IS NULL "
                 "AND (expires_at IS NULL OR expires_at > ?)",
-                (now_iso, campaign_id, branch, entity_id, now_iso),
+                (now_iso, campaign_id, entity_id, now_iso),
             )
         else:
             await self.store.db.execute(
                 f"UPDATE {table} SET expires_at=? "
-                "WHERE campaign_id=? AND branch_id=? AND entity_id=? AND field=? "
+                "WHERE campaign_id=? AND entity_id=? AND field=? "
                 "AND superseded_by IS NULL "
                 "AND (expires_at IS NULL OR expires_at > ?)",
-                (now_iso, campaign_id, branch, entity_id, field, now_iso),
+                (now_iso, campaign_id, entity_id, field, now_iso),
             )
 
     async def history(
@@ -308,16 +296,13 @@ class TransientStateService:
         entity_id: str,
         field: str,
         limit: int = 20,
-        *,
-        branch_id: str | None = None,
     ) -> list[TransientValue]:
-        branch = branch_id or self._default_branch(campaign_id)
         table = _TABLE[entity_kind]
         rows = await self.store.db.fetchall(
             f"SELECT * FROM {table} "
-            "WHERE campaign_id=? AND branch_id=? AND entity_id=? AND field=? "
+            "WHERE campaign_id=? AND entity_id=? AND field=? "
             "ORDER BY id DESC LIMIT ?",
-            (campaign_id, branch, entity_id, field, limit),
+            (campaign_id, entity_id, field, limit),
         )
         return [_row_to_value(r) for r in rows]
 
@@ -325,7 +310,6 @@ class TransientStateService:
         self,
         campaign_id: str,
         *,
-        branch_id: str | None = None,
         within_posts: int | None = None,
     ) -> list[TransientConflict]:
         """List unresolved conflicts (extractor write lost to a user write).
@@ -336,7 +320,6 @@ class TransientStateService:
         losing rows in descending insert order — full post-counter integration
         is deferred (see plan B2).
         """
-        branch = branch_id or self._default_branch(campaign_id)
         window = within_posts if within_posts is not None else self.config.conflict_window_posts
         conflicts: list[TransientConflict] = []
         for table in _TABLE.values():
@@ -353,12 +336,12 @@ class TransientStateService:
                 "winner.expires_at AS w_exp, winner.in_game_at AS w_iga "
                 f"FROM {table} loser "
                 f"JOIN {table} winner ON loser.superseded_by = winner.id "
-                "WHERE loser.campaign_id=? AND loser.branch_id=? "
+                "WHERE loser.campaign_id=? "
                 "AND loser.provenance LIKE 'extractor:%' "
                 "AND winner.provenance LIKE 'user:%' "
                 "ORDER BY loser.id DESC"
             )
-            rows = await self.store.db.fetchall(sql, (campaign_id, branch))
+            rows = await self.store.db.fetchall(sql, (campaign_id,))
             seen_post_ids: list[str] = []
             for r in rows:
                 if window is not None and window >= 0:
@@ -405,7 +388,6 @@ class TransientStateService:
         *,
         evidence: str,
         turn_id: str,
-        branch_id: str | None = None,
         continuity: Any | None = None,
     ) -> tuple[str, int]:
         """Promote a transient row into a canonical Continuity fact.
@@ -414,7 +396,7 @@ class TransientStateService:
         expired (cleared) so subsequent reads pick up the Continuity fact
         as the source of truth.
         """
-        current = await self.get(campaign_id, entity_kind, entity_id, field, branch_id=branch_id)
+        current = await self.get(campaign_id, entity_kind, entity_id, field)
         if current is None:
             raise ValueError(
                 f"no current transient value for {entity_kind.value}/{entity_id}/{field}"
@@ -453,7 +435,6 @@ class TransientStateService:
             entity_kind,
             entity_id,
             field=field,
-            branch_id=branch_id,
             reason="promote_to_fact",
         )
         return fact_id, current.id

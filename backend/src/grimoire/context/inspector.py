@@ -232,7 +232,6 @@ class ContextInspector:
         *,
         campaign_id: CampaignId,
         target: PinTarget,
-        branch_id: str | None = None,
         ttl_turns: int | None = None,
         created_at_turn_id: str | None = None,
         actor: str = "user",
@@ -241,7 +240,6 @@ class ContextInspector:
             kind="pin",
             campaign_id=campaign_id,
             target=target,
-            branch_id=branch_id,
             ttl_turns=ttl_turns,
             created_at_turn_id=created_at_turn_id,
             actor=actor,
@@ -252,7 +250,6 @@ class ContextInspector:
         *,
         campaign_id: CampaignId,
         target: PinTarget,
-        branch_id: str | None = None,
         ttl_turns: int | None = None,
         created_at_turn_id: str | None = None,
         actor: str = "user",
@@ -261,7 +258,6 @@ class ContextInspector:
             kind="exclude",
             campaign_id=campaign_id,
             target=target,
-            branch_id=branch_id,
             ttl_turns=ttl_turns,
             created_at_turn_id=created_at_turn_id,
             actor=actor,
@@ -276,15 +272,12 @@ class ContextInspector:
         self,
         *,
         campaign_id: CampaignId,
-        branch_id: str | None = None,
         current_turn_id: str | None = None,
     ) -> list[dict]:
         if self.store is None:
             return []
-        bid = branch_id or f"{campaign_id}:{self.config.default_branch_suffix}"
         return await self.store.list_active_context_pins(
             campaign_id=campaign_id,
-            branch_id=bid,
             current_turn_id=current_turn_id,
         )
 
@@ -296,7 +289,6 @@ class ContextInspector:
         kind: str,
         campaign_id: CampaignId,
         target: PinTarget,
-        branch_id: str | None,
         ttl_turns: int | None,
         created_at_turn_id: str | None,
         actor: str,
@@ -305,10 +297,8 @@ class ContextInspector:
             raise RuntimeError("inspector has no state_store wired")
         if not target.source_id and not (target.entity_kind and target.entity_id):
             raise ValueError("pin/exclude target needs source_id or (entity_kind, entity_id)")
-        bid = branch_id or f"{campaign_id}:{self.config.default_branch_suffix}"
         return await self.store.write_context_pin(
             campaign_id=campaign_id,
-            branch_id=bid,
             kind=kind,
             target_source_id=target.source_id,
             target_entity_kind=target.entity_kind,

@@ -644,7 +644,6 @@ class TimeEngineService:
             reason=reason,
             threshold_exceeded=exceeded,
             scene_id=scene_id,
-            branch_id=branch,
             activity_ref=activity_ref,
         )
 
@@ -653,7 +652,6 @@ class TimeEngineService:
         token: str,
         *,
         campaign_id: str,
-        branch_id: str,
         from_iso: str,
         to_iso: str,
         duration_iso: str,
@@ -668,8 +666,6 @@ class TimeEngineService:
         mismatches = []
         if data.campaign_id != campaign_id:
             mismatches.append(("campaign_id", data.campaign_id, campaign_id))
-        if data.branch_id != branch_id:
-            mismatches.append(("branch_id", data.branch_id, branch_id))
         if data.from_iso != from_iso:
             mismatches.append(("from", data.from_iso, from_iso))
         if data.to_iso != to_iso:
@@ -720,7 +716,6 @@ class TimeEngineService:
         self,
         *,
         campaign_id: CampaignId,
-        branch_id: str,
         scene_id: str | None,
         reason: TimeAdvanceReason,
         from_time: InGameTime,
@@ -734,12 +729,11 @@ class TimeEngineService:
         # commitment as overdue.
         triggered = await self._fire_scheduled_events(
             campaign_id=campaign_id,
-            branch_id=branch_id,
             from_time=from_time,
             to_time=to_time,
         )
 
-        ticked = await self._significant_npcs(campaign_id=campaign_id, branch_id=branch_id)
+        ticked = await self._significant_npcs(campaign_id=campaign_id)
 
         # §2 Shared inter-NPC events pre-pass — seeded with the full
         # ticked-NPC list so the LLM (or stub) can produce coherent
@@ -764,7 +758,6 @@ class TimeEngineService:
 
         faction_summaries, faction_conflicts = await self._run_faction_ticks(
             campaign_id=campaign_id,
-            branch_id=branch_id,
             duration=duration,
         )
 
@@ -777,7 +770,6 @@ class TimeEngineService:
 
         mechanics_deltas = await self._run_mechanics_ticks(
             campaign_id=campaign_id,
-            branch_id=branch_id,
             duration=duration,
             present=ticked,
             activity_ref=activity_ref,
@@ -790,13 +782,11 @@ class TimeEngineService:
         )
 
         epoch = await self._epoch_for(campaign_id)
-        continuity_for_campaign = resolve_continuity(
-            self._continuity, campaign_id, branch_id=branch_id
-        )
+        continuity_for_campaign = resolve_continuity(self._continuity, campaign_id)
         aging = await continuity_for_campaign.age(_to_continuity_time(to_time, epoch))
         commit_anchor = to_time
 
-        await self.set_current(campaign_id, to_time, branch_id=branch_id)
+        await self.set_current(campaign_id, to_time)
 
         # §6 Scheduled-event pre-notice — emit ``scheduled_event_imminent``
         # for events that fall in the post-advance pre-notice window and
@@ -805,7 +795,6 @@ class TimeEngineService:
         # re-warn on subsequent advances.
         upcoming_warned = await self._fire_pre_notice_warnings(
             campaign_id=campaign_id,
-            branch_id=branch_id,
             from_time=to_time,
         )
 
@@ -846,11 +835,11 @@ class TimeEngineService:
         # (open too long with no resolution); `commitments_overdue` surfaces
         # commitments whose explicit `due_by` just passed.
         commitments_overdue = [
-            _shared_commitment(c, campaign_id, branch_id, epoch, commit_anchor)
+            _shared_commitment(c, campaign_id, epoch, commit_anchor)
             for c in aging.became_overdue
         ]
         commitments_due = [
-            _shared_commitment(c, campaign_id, branch_id, epoch, commit_anchor)
+            _shared_commitment(c, campaign_id, epoch, commit_anchor)
             for c in aging.became_stale
         ]
 
@@ -876,7 +865,6 @@ class TimeEngineService:
             events.TIME_ADVANCE,
             {
                 "campaign_id": campaign_id,
-                "branch_id": branch_id,
                 "scene_id": scene_id,
                 "reason": digest_payload["reason"],
                 "from": digest_payload["from"],
@@ -898,7 +886,6 @@ class TimeEngineService:
         self,
         *,
         campaign_id: CampaignId,
-        branch_id: str,
         from_time: InGameTime,
         to_time: InGameTime,
     ) -> list[ScheduledEvent]:
@@ -908,11 +895,11 @@ class TimeEngineService:
         rows = await self._store.db.fetchall(
             """
             SELECT * FROM scheduled_events
-            WHERE campaign_id = ? AND branch_id = ?
+            WHERE campaign_id = ?
               AND triggered = 0 AND at > ? AND at <= ?
             ORDER BY at ASC
             """,
-            (campaign_id, branch_id, lo.isoformat(), hi.isoformat()),
+            (campaign_id, lo.isoformat(), hi.isoformat()),
         )
         triggered: list[ScheduledEvent] = []
         ts = now_iso()
@@ -925,7 +912,7 @@ class TimeEngineService:
         return triggered
 
     async def _significant_npcs(
-        self, *, campaign_id: CampaignId, branch_id: str
+        self, *, campaign_id: CampaignId
     ) -> list[_PresentCharacter]:
         """Pick the NPCs that warrant an individual tick.
 
@@ -960,9 +947,7 @@ class TimeEngineService:
                 kept[ref] = ent
 
         if cfg.tick_with_open_commitment:
-            continuity_for_campaign = resolve_continuity(
-                self._continuity, campaign_id, branch_id=branch_id
-            )
+            continuity_for_campaign = resolve_continuity(self._continuity, campaign_id)
             opens = await continuity_for_campaign.open_commitments(
                 involving=[ref for ref in by_ref],
                 limit=200,
@@ -975,7 +960,6 @@ class TimeEngineService:
         if cfg.recent_post_window > 0:
             recent = await self._recent_post_author_refs(
                 campaign_id=campaign_id,
-                branch_id=branch_id,
                 limit=cfg.recent_post_window,
             )
             for ref in recent:
@@ -1069,7 +1053,6 @@ class TimeEngineService:
         self,
         *,
         campaign_id: CampaignId,
-        branch_id: str,
         duration: Duration,
     ) -> tuple[dict[str, FactionTickSummary], list[FactionConflict]]:
         # Faction ticks are intentionally coarse: spec calls for month-level
@@ -1079,9 +1062,9 @@ class TimeEngineService:
         rows = await self._store.db.fetchall(
             """
             SELECT * FROM faction_state
-            WHERE campaign_id = ? AND branch_id = ?
+            WHERE campaign_id = ?
             """,
-            (campaign_id, branch_id),
+            (campaign_id,),
         )
         out: dict[str, FactionTickSummary] = {}
         months = max(1, int(duration.delta.days // 30))
@@ -1175,9 +1158,9 @@ class TimeEngineService:
             await self._store.db.execute(
                 """
                 UPDATE faction_state SET state = ?
-                WHERE faction_ref = ? AND branch_id = ?
+                WHERE faction_ref = ? AND campaign_id = ?
                 """,
-                (json.dumps(state, default=str), faction_ref, branch_id),
+                (json.dumps(state, default=str), faction_ref, campaign_id),
             )
             out[faction_ref] = FactionTickSummary(
                 faction_id=faction_ref,
@@ -1269,7 +1252,6 @@ class TimeEngineService:
         self,
         *,
         campaign_id: CampaignId,
-        branch_id: str,
         duration: Duration,
         present: list[_PresentCharacter],
         activity_ref: str | None = None,
@@ -1291,7 +1273,6 @@ class TimeEngineService:
         context = (
             TickContext(
                 campaign_id=campaign_id,
-                branch_id=branch_id,
                 duration=duration,
                 extras={"activity_ref": activity_ref},
             )
@@ -1395,7 +1376,6 @@ class TimeEngineService:
         self,
         *,
         campaign_id: CampaignId,
-        branch_id: str,
         from_time: InGameTime,
     ) -> list[ScheduledEvent]:
         pre = self._config.scheduled_event_pre_notice
@@ -1406,12 +1386,12 @@ class TimeEngineService:
         rows = await self._store.db.fetchall(
             """
             SELECT * FROM scheduled_events
-            WHERE campaign_id = ? AND branch_id = ?
+            WHERE campaign_id = ?
               AND triggered = 0 AND at > ? AND at <= ?
               AND pre_notice_emitted_at IS NULL
             ORDER BY at ASC
             """,
-            (campaign_id, branch_id, lo, hi),
+            (campaign_id, lo, hi),
         )
         warned: list[ScheduledEvent] = []
         ts = now_iso()
@@ -1425,7 +1405,6 @@ class TimeEngineService:
                 events.SCHEDULED_EVENT_IMMINENT,
                 {
                     "campaign_id": campaign_id,
-                    "branch_id": branch_id,
                     "event_id": event.id,
                     "label": event.label,
                     "kind": event.kind,

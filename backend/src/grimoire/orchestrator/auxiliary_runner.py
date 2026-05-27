@@ -53,7 +53,6 @@ async def run_auxiliary_task(
     campaign_id: CampaignId,
     task: AuxiliaryTask,
     on_token: TokenCallback = None,
-    branch_id: str | None = None,
 ) -> AuxiliaryResult:
     """Execute one auxiliary task end-to-end.
 
@@ -70,7 +69,6 @@ async def run_auxiliary_task(
     prompt = await orchestrator._context.build(
         player_input=_synthesize_input(task),
         campaign_id=campaign_id,
-        branch_id=branch_id,
         extractor_mode=ExtractionMode.NONE,
         auxiliary_task=task,
     )
