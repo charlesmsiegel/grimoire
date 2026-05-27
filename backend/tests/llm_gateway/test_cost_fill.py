@@ -328,3 +328,63 @@ async def test_cost_appears_in_response_received_event(db, plugins) -> None:
     assert len(received_events) == 1
     expected = 1000 / 1000.0 * 0.01 + 500 / 1000.0 * 0.02
     assert received_events[0].payload["cost_estimate_usd"] == pytest.approx(expected)
+
+
+# --------------------------------------------------------------------------- #
+# Pricing overrides
+# --------------------------------------------------------------------------- #
+
+from grimoire.llm_gateway.config import PricingOverride
+
+
+async def test_pricing_override_used_when_provider_returns_none(db, plugins) -> None:
+    """Provider has no pricing; override supplies it."""
+    provider = FakeLLMProvider(
+        id="prov",
+        response_usage=TokenUsage(input_tokens=1000, output_tokens=500),
+        response_cost=None,
+        models=[
+            ModelInfo(id="model-a", name="Model A"),
+        ],
+    )
+    plugins.add_llm(provider)
+    config = _config(
+        pricing_overrides={
+            "model-a": PricingOverride(input_cost_per_1k=0.01, output_cost_per_1k=0.02)
+        }
+    )
+    gw = LLMGatewayService(plugins, db, config)
+
+    resp = await gw.complete("main", _request())
+
+    expected = 1000 / 1000.0 * 0.01 + 500 / 1000.0 * 0.02
+    assert resp.cost_estimate_usd == pytest.approx(expected)
+
+
+async def test_pricing_override_takes_precedence_over_provider(db, plugins) -> None:
+    """Override wins even when the provider reports pricing."""
+    provider = FakeLLMProvider(
+        id="prov",
+        response_usage=TokenUsage(input_tokens=1000, output_tokens=500),
+        response_cost=None,
+        models=[
+            ModelInfo(
+                id="model-a",
+                name="Model A",
+                input_cost_per_1k=999.0,
+                output_cost_per_1k=999.0,
+            ),
+        ],
+    )
+    plugins.add_llm(provider)
+    config = _config(
+        pricing_overrides={
+            "model-a": PricingOverride(input_cost_per_1k=0.01, output_cost_per_1k=0.02)
+        }
+    )
+    gw = LLMGatewayService(plugins, db, config)
+
+    resp = await gw.complete("main", _request())
+
+    expected = 1000 / 1000.0 * 0.01 + 500 / 1000.0 * 0.02
+    assert resp.cost_estimate_usd == pytest.approx(expected)

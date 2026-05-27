@@ -32,6 +32,12 @@ class ObservabilityConfig:
 
 
 @dataclass(frozen=True)
+class PricingOverride:
+    input_cost_per_1k: float
+    output_cost_per_1k: float
+
+
+@dataclass(frozen=True)
 class GatewayConfig:
     default_routes: dict[str, str] = field(default_factory=dict)
     fallback_routes: dict[str, str] = field(default_factory=dict)
@@ -39,3 +45,4 @@ class GatewayConfig:
     timeout: TimeoutPolicy = field(default_factory=TimeoutPolicy)
     embedding_cache: EmbeddingCacheConfig = field(default_factory=EmbeddingCacheConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
+    pricing_overrides: dict[str, PricingOverride] = field(default_factory=dict)

@@ -181,13 +181,25 @@ class LLMGatewayService:
     async def _get_pricing(self, provider_id: str, model: str) -> ModelInfo | None:
         """Return cached ModelInfo for (provider_id, model), or None if unavailable.
 
-        Calls provider.list_models() on the first miss and caches the result.
-        Exceptions from list_models() are swallowed; None is cached so we do not
-        re-attempt on every subsequent call.
+        Checks ``pricing_overrides`` first (keyed by model name); if found,
+        returns a synthetic ``ModelInfo`` with the override values. Otherwise
+        calls ``provider.list_models()`` on the first miss and caches the
+        result. Exceptions from ``list_models()`` are swallowed; ``None`` is
+        cached so we do not re-attempt on every subsequent call.
         """
         key = (provider_id, model)
         if key in self._pricing_cache:
             return self._pricing_cache[key]
+        override = self._config.pricing_overrides.get(model)
+        if override is not None:
+            info = ModelInfo(
+                id=model,
+                name=model,
+                input_cost_per_1k=override.input_cost_per_1k,
+                output_cost_per_1k=override.output_cost_per_1k,
+            )
+            self._pricing_cache[key] = info
+            return info
         provider = self._plugins.get_llm_provider(provider_id)
         if provider is None:
             self._pricing_cache[key] = None
