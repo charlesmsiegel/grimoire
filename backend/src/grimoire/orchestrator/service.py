@@ -54,6 +54,7 @@ from grimoire.scenes.types import AuthorKind as SceneAuthorKind
 from grimoire.scenes.types import Post as SceneFilePost
 from grimoire.scenes.types import SceneInit as SceneFileInit
 from grimoire.types.common import CampaignId, CharacterRef, PostId, SceneId, TurnId
+from grimoire.types.extraction import ExtractionResult
 from grimoire.types.llm import CompletionRequest
 from grimoire.types.mechanics import (
     MechanicsResult,
@@ -549,6 +550,21 @@ class OrchestratorService:
 
     async def get_lineage_ancestors(self, campaign_id: str) -> list[dict]:
         return await self._fork.get_lineage_ancestors(campaign_id)
+
+    async def route_analysis_deltas(
+        self,
+        campaign_id: CampaignId,
+        branch_id: str,
+        extraction: ExtractionResult,
+    ) -> tuple[list[str], list[str]]:
+        """Route deltas from a scene analysis through the standard pipeline."""
+        turn_id = f"analysis:{uuid.uuid4().hex[:12]}"
+        return await self._delta.apply_routing(
+            campaign_id=campaign_id,
+            branch_id=branch_id,
+            turn_id=turn_id,
+            extraction=extraction,
+        )
 
     # ------------------------------------------------------------------ #
     # Turn loop

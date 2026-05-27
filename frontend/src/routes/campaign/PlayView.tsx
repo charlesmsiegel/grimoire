@@ -221,6 +221,7 @@ export function PlayView({ campaignId }: Props) {
                 onRegenerate: () => void runAction(() => play.regenerate()),
                 onUndo: () => void runAction(() => play.undo()),
                 onEndScene: () => void runAction(() => play.endScene()),
+                onAnalyzeScene: () => void runAction(() => play.analyzeScene()),
                 onDeleteScene: () => void runAction(() => play.deleteScene()),
                 onNewScene: () => void runAction(() => play.newScene()),
                 onOpenLedger: () => setLedgerOpen(true),

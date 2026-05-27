@@ -28,6 +28,7 @@ export interface QuickActions {
   onRegenerate: () => void;
   onUndo: () => void;
   onEndScene: () => void;
+  onAnalyzeScene: () => void;
   onDeleteScene: () => void;
   onNewScene: () => void;
   onOpenLedger: () => void;
@@ -372,6 +373,13 @@ function QuickActionsBlock({
             disabled={actions.busy || !scene || scene.closed}
           >
             End scene
+          </button>
+          <button
+            type="button"
+            onClick={actions.onAnalyzeScene}
+            disabled={actions.busy || !scene}
+          >
+            Analyze scene
           </button>
           <button
             type="button"

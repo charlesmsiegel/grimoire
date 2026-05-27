@@ -24,6 +24,7 @@ import type {
   ReplayBatchView,
   RetconResultPayload,
   RollResolution,
+  SceneAnalysisResult,
   SceneBreakChoice,
   SceneDetail,
   SubmitTurnResult,
@@ -63,6 +64,13 @@ export const campaignApi = {
 
   endScene: (id: string, sceneId: string) =>
     api.post<ApiScene>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}/end`),
+
+  analyzeScene: (id: string, sceneId: string, force = false) =>
+    api.post<SceneAnalysisResult>(
+      `/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}/analyze`,
+      undefined,
+      { query: force ? { force: "true" } : undefined },
+    ),
 
   deleteScene: (id: string, sceneId: string) =>
     api.delete<void>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}`),
