@@ -17,6 +17,16 @@ class FakeOrchestrator:
         self.calls.append(("submit", campaign_id, pc_ref, text))
         return SubmitResult(accepted=True, turn_id="t_123", auto_responding=True, reason="ok")
 
+    async def submit_direction(
+        self, campaign_id: str, scene_id: str, text: str | None = None
+    ) -> Any:
+        from grimoire.types.orchestrator import SubmitResult
+
+        self.calls.append(("submit_direction", campaign_id, scene_id, text))
+        return SubmitResult(
+            accepted=True, turn_id="t_dir_1", auto_responding=True, reason="direction"
+        )
+
     async def regenerate_last(self, campaign_id: str) -> Any:
         from grimoire.types.orchestrator import RegenerateResult
 

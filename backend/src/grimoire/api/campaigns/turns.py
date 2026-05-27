@@ -14,6 +14,7 @@ from .schemas import (
     NextSpeakerPayload,
     ResolveProposalsPayload,
     ResolveSceneBreakPayload,
+    SubmitDirectionPayload,
     SubmitTurnPayload,
     UndoPayload,
 )
@@ -60,6 +61,21 @@ async def next_speaker(
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return {"accepted": True}
+
+
+@router.post("/{campaign_id}/turns/direct")
+async def submit_direction(
+    campaign_id: str,
+    payload: SubmitDirectionPayload,
+    orchestrator: OrchestratorDep,
+) -> Any:
+    try:
+        result = await orchestrator.submit_direction(
+            campaign_id, payload.scene_id, text=payload.text
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return to_payload(result)
 
 
 @router.post("/{campaign_id}/turns/regenerate")

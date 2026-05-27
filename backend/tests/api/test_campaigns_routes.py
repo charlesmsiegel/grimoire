@@ -35,6 +35,31 @@ def test_undo(client, container) -> None:
     assert len(response.json()["turns_undone"]) == 3
 
 
+def test_submit_direction_dispatches_to_orchestrator(client, container) -> None:
+    fake = FakeOrchestrator()
+    container.orchestrator = fake
+    response = client.post(
+        "/api/campaigns/c1/turns/direct",
+        json={"scene_id": "s1", "text": "winifred confronts Drake"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["turn_id"] == "t_dir_1"
+    assert body["auto_responding"] is True
+    assert fake.calls == [("submit_direction", "c1", "s1", "winifred confronts Drake")]
+
+
+def test_submit_direction_with_no_text(client, container) -> None:
+    fake = FakeOrchestrator()
+    container.orchestrator = fake
+    response = client.post(
+        "/api/campaigns/c1/turns/direct",
+        json={"scene_id": "s1"},
+    )
+    assert response.status_code == 200
+    assert fake.calls == [("submit_direction", "c1", "s1", None)]
+
+
 def test_fork_branch(client, container) -> None:
     container.orchestrator = FakeOrchestrator()
     response = client.post(
