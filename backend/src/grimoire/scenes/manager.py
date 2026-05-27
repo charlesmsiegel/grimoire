@@ -9,6 +9,7 @@ dependency injection once they exist.
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
 import uuid
 from collections.abc import Awaitable, Callable
@@ -67,6 +68,8 @@ from grimoire.scenes.types import (
     SceneThreads,
     Thread,
 )
+
+logger = logging.getLogger(__name__)
 
 Summarizer = Callable[[str | None, list[Post]], Awaitable[str]]
 FinalSummarizer = Callable[[Scene, list[Post]], Awaitable[tuple[str, list[str]]]]
