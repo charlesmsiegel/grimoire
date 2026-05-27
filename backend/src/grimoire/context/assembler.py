@@ -181,6 +181,7 @@ class PromptAssembler:
             content_boundaries=ctx.content_boundaries,
             system_meta=ctx.system_meta,
             voice_corrective=ctx.voice_corrective,
+            scene_mode=ctx.scene_mode,
         ).strip()
 
     async def _lock_in_block(self, ctx: BuiltContext) -> str:
