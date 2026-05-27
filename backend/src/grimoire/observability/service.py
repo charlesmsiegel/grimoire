@@ -81,6 +81,7 @@ class ObservabilityService:
             )
 
         self._cost_subscription: Subscription | None = None
+        self._embed_subscription: Subscription | None = None
         self._health_subscription: SubscriptionId | None = None
 
     async def start(self) -> None:
@@ -91,6 +92,10 @@ class ObservabilityService:
         if self._event_bus is not None and self._cost_subscription is None:
             self._cost_subscription = self._event_bus.subscribe(
                 "llm_response_received", self._on_llm_response
+            )
+        if self._event_bus is not None and self._embed_subscription is None:
+            self._embed_subscription = self._event_bus.subscribe(
+                "embedding_response_received", self._on_llm_response
             )
         if self._event_bus is not None and self._health_subscription is None:
             # §12 Frontend Health panel: republish each probe result onto the
@@ -105,6 +110,9 @@ class ObservabilityService:
         if self._cost_subscription is not None:
             self._cost_subscription.unsubscribe()
             self._cost_subscription = None
+        if self._embed_subscription is not None:
+            self._embed_subscription.unsubscribe()
+            self._embed_subscription = None
         if self._health_subscription is not None:
             self.health_monitor.unsubscribe(self._health_subscription)
             self._health_subscription = None

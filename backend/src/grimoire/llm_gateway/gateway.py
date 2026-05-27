@@ -1416,6 +1416,11 @@ class LLMGatewayService:
                     retry_override=self._retry_dict(retry),
                     timeout_override=self._timeout_dict(timeout),
                 )
+            embed_cost: float = 0.0
+            embed_input_tokens = max(1, sum(len(t) // 4 for t in missing))
+            info = await self._get_pricing(route.provider_id, model_id)
+            if info is not None and info.input_cost_per_1k is not None:
+                embed_cost = embed_input_tokens / 1000.0 * info.input_cost_per_1k
             await self._emit(
                 events.EMBEDDING_RESPONSE_RECEIVED,
                 {
@@ -1431,6 +1436,13 @@ class LLMGatewayService:
                     "dimensions": len(vectors[0]) if vectors else 0,
                     "retry_override": self._retry_dict(retry),
                     "timeout_override": self._timeout_dict(timeout),
+                    "usage": {
+                        "input_tokens": embed_input_tokens,
+                        "output_tokens": 0,
+                        "total_tokens": embed_input_tokens,
+                    },
+                    "cost_estimate_usd": embed_cost,
+                    "finish_reason": "complete",
                 },
             )
 
