@@ -1,5 +1,4 @@
 import type { ApiScene } from "../../api/campaign";
-import { SourceBadge } from "./SourceBadge";
 
 interface Props {
   scene: ApiScene | null;
@@ -29,7 +28,6 @@ export function SceneHeader({ scene }: Props) {
   }
 
   const time = formatTime(scene);
-  const cast = scene.present_character_refs;
 
   return (
     <header className="scene-header" aria-label="Scene context">
@@ -41,33 +39,10 @@ export function SceneHeader({ scene }: Props) {
         {scene.mood && <span className="scene-header-mood">mood: {scene.mood}</span>}
       </div>
       <dl className="scene-header-meta">
-        {scene.location_ref && (
-          <div className="scene-header-meta-item">
-            <dt>Location</dt>
-            <dd>
-              {scene.location_ref}
-              <SourceBadge source="library" />
-            </dd>
-          </div>
-        )}
         {time && (
           <div className="scene-header-meta-item">
             <dt>Time</dt>
             <dd>{time}</dd>
-          </div>
-        )}
-        {cast.length > 0 && (
-          <div className="scene-header-meta-item">
-            <dt>Present</dt>
-            <dd>
-              {cast.map((ref, idx) => (
-                <span key={ref} className="scene-header-cast">
-                  {idx > 0 && ", "}
-                  {ref}
-                  <SourceBadge source="library" />
-                </span>
-              ))}
-            </dd>
           </div>
         )}
       </dl>

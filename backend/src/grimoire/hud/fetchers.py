@@ -48,17 +48,49 @@ def _character_ref_components(ref: str) -> tuple[str | None, str]:
     return None, ref
 
 
-async def _resolve_character_name(library: Any, world_id: str | None, asset_id: str) -> str:
-    if library is None or world_id is None:
+async def _resolve_character_name(
+    library: Any, world_id: str | None, asset_id: str, campaign_id: str | None = None
+) -> str:
+    if library is None:
         return asset_id
-    try:
-        entity = await library.get_entity(world_id, "characters", asset_id)
-    except Exception as e:
-        log.debug("library.get_entity failed for %s/%s: %s", world_id, asset_id, e)
-        return asset_id
-    fm = getattr(entity, "frontmatter", {}) or {}
-    name = fm.get("name") or asset_id
-    return str(name)
+    if world_id is not None:
+        try:
+            entity = await library.get_entity(world_id, "characters", asset_id)
+            fm = getattr(entity, "frontmatter", {}) or {}
+            return str(fm.get("name") or asset_id)
+        except Exception as e:
+            log.debug("library.get_entity failed for %s/%s: %s", world_id, asset_id, e)
+            return asset_id
+    if campaign_id is not None:
+        # Try emergent characters first (campaign-local).
+        store = getattr(library, "store", None)
+        if store is not None:
+            emergent_id = asset_id.removeprefix("emergent/")
+            try:
+                doc = await store.get_emergent(campaign_id, "characters", emergent_id)
+                if doc is not None:
+                    fm = doc.get("frontmatter") or {}
+                    name = fm.get("name")
+                    if name:
+                        return str(name)
+            except Exception as e:
+                log.debug("store.get_emergent failed for %s/%s: %s", campaign_id, emergent_id, e)
+        # Then try each world in the composition.
+        try:
+            comp = await library.get_composition(campaign_id)
+            for ref in sorted(getattr(comp, "worlds", []), key=lambda r: getattr(r, "priority", 0)):
+                wid = getattr(ref, "world_id", None)
+                if not wid:
+                    continue
+                try:
+                    entity = await library.get_entity(wid, "characters", asset_id)
+                    fm = getattr(entity, "frontmatter", {}) or {}
+                    return str(fm.get("name") or asset_id)
+                except Exception:
+                    continue
+        except Exception as e:
+            log.debug("composition lookup failed for %s: %s", campaign_id, e)
+    return asset_id
 
 
 async def _pinned_extras_for_character(
@@ -108,13 +140,14 @@ def _present_cast_fetcher(library: Any, extras: Any, hud_config: HudConfigServic
                 world_id, asset_id = _character_ref_components(str(ref))
             except Exception:
                 continue
-            name = await _resolve_character_name(library, world_id, asset_id)
+            bare_id = asset_id.removeprefix("emergent/")
+            name = await _resolve_character_name(library, world_id, asset_id, campaign_id)
             pinned = await _pinned_extras_for_character(
-                extras, hud_config, campaign_id, world_id, asset_id
+                extras, hud_config, campaign_id, world_id, bare_id
             )
             chips.append(
                 {
-                    "character_id": asset_id,
+                    "character_id": bare_id,
                     "character_ref": str(ref),
                     "name": name,
                     "portrait_url": None,

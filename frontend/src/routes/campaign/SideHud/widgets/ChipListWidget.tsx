@@ -18,6 +18,7 @@ import {
 
 interface Props {
   snapshot: WidgetSnapshot;
+  campaignId?: string;
   onRefresh?: () => void;
 }
 
@@ -46,7 +47,7 @@ function extractGenericChips(data: unknown): GenericChip[] {
     .filter((x): x is GenericChip => x !== null);
 }
 
-export function ChipListWidget({ snapshot, onRefresh }: Props) {
+export function ChipListWidget({ snapshot, campaignId, onRefresh }: Props) {
   if (snapshot.status === "hidden") return null;
 
   const title = snapshot.title ?? snapshot.id;
@@ -60,8 +61,8 @@ export function ChipListWidget({ snapshot, onRefresh }: Props) {
     >
       <header className="hud-chip-list-header">
         <h3>{title}</h3>
-        {status && <span className="hud-chip-list-badge">{status}</span>}
-        {(snapshot.status !== "ok" || snapshot.stale) && onRefresh && (
+        {!isPresentCast && status && <span className="hud-chip-list-badge">{status}</span>}
+        {!isPresentCast && (snapshot.status !== "ok" || snapshot.stale) && onRefresh && (
           <button
             type="button"
             className="hud-chip-list-refresh"
@@ -72,16 +73,22 @@ export function ChipListWidget({ snapshot, onRefresh }: Props) {
           </button>
         )}
       </header>
-      <div className="hud-chip-list-body">{renderBody(snapshot, isPresentCast)}</div>
+      <div className="hud-chip-list-body">
+        {renderBody(snapshot, isPresentCast, campaignId)}
+      </div>
     </section>
   );
 }
 
-function renderBody(snapshot: WidgetSnapshot, isPresentCast: boolean): React.ReactNode {
+function renderBody(
+  snapshot: WidgetSnapshot,
+  isPresentCast: boolean,
+  campaignId?: string,
+): React.ReactNode {
   if (snapshot.status !== "ok") {
     return <p className="hud-chip-list-error">{errorMessage(snapshot)}</p>;
   }
-  if (isPresentCast) {
+  if (isPresentCast && campaignId) {
     const chips = parsePresentCast(snapshot.data);
     if (chips.length === 0) {
       return <p className="hud-chip-list-empty">No present characters.</p>;
@@ -90,7 +97,7 @@ function renderBody(snapshot: WidgetSnapshot, isPresentCast: boolean): React.Rea
       <ul className="hud-chip-list hud-present-cast-list">
         {chips.map((chip) => (
           <li key={chip.character_id}>
-            <PresentCastChip chip={chip} />
+            <PresentCastChip chip={chip} campaignId={campaignId} />
           </li>
         ))}
       </ul>

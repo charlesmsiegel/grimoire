@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api/client";
 import { viewsApi } from "../../api/views";
@@ -32,7 +32,10 @@ export function CastView() {
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [tagFilter, setTagFilter] = useState("");
   const [searchFilter, setSearchFilter] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchParams] = useSearchParams();
+  const [selectedId, setSelectedId] = useState<string | null>(
+    searchParams.get("character"),
+  );
 
   return (
     <section className="route campaign-cast" aria-labelledby="cast-heading">
