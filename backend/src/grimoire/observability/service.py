@@ -141,7 +141,7 @@ class ObservabilityService:
                 model=str(payload.get("model") or ""),
                 input_tokens=int(usage.get("input_tokens") or 0),
                 output_tokens=int(usage.get("output_tokens") or 0),
-                cost_usd=payload.get("cost_estimate_usd"),
+                cost_usd=payload.get("cost_estimate_usd") or 0.0,
                 latency_ms=int(payload.get("latency_ms") or 0),
                 finish_reason=str(payload.get("finish_reason") or ""),
                 campaign_id=payload.get("campaign_id"),
