@@ -20,6 +20,7 @@ const STREAM_EVENT_TYPES = [
   "image_ready",
   "drift_detected",
   "scene_file_changed",
+  "alternate_added",
 ] as const;
 
 export function usePlayStreamEvents(
@@ -93,6 +94,7 @@ export function usePlayStreamEvents(
         case "scene_started":
         case "scene_ended":
         case "scene_file_changed":
+        case "alternate_added":
           void refresh();
           return;
         case "advance_disabled": {
