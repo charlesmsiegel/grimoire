@@ -94,3 +94,20 @@ async def test_aux_failure_emits_error_event(orchestrator, seeded_state, fake_ga
         await orchestrator.run_auxiliary_task(campaign_id=seeded_state.campaign_id, task=task)
     types = [m[1]["type"] for m in ws.messages]
     assert "aux_error" in types
+
+
+async def test_aux_passes_turn_id_to_gateway(orchestrator, seeded_state, fake_gateway):
+    task = AuxiliaryTask(
+        kind=TaskKind.REWRITE_POST,
+        target_post_id="p_0001",
+        edit_instruction="make it darker",
+        turn_id="t_0001",
+    )
+    await orchestrator.run_auxiliary_task(campaign_id=seeded_state.campaign_id, task=task)
+    assert fake_gateway.seen_turn_ids[-1] == "t_0001"
+
+
+async def test_aux_turn_id_none_when_not_set(orchestrator, seeded_state, fake_gateway):
+    task = AuxiliaryTask(kind=TaskKind.BRAINSTORM, snippet="ideas")
+    await orchestrator.run_auxiliary_task(campaign_id=seeded_state.campaign_id, task=task)
+    assert fake_gateway.seen_turn_ids[-1] is None

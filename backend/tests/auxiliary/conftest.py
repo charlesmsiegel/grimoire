@@ -122,6 +122,7 @@ class FakeGateway:
     chunks: list[str] = field(default_factory=lambda: ["Hello", " ", "world."])
     seen_tasks: list[str] = field(default_factory=list)
     seen_requests: list[CompletionRequest] = field(default_factory=list)
+    seen_turn_ids: list[str | None] = field(default_factory=list)
     fail_after: int | None = None
     _router: FakeRouter = field(
         default_factory=lambda: FakeRouter(
@@ -155,6 +156,7 @@ class FakeGateway:
     ) -> AsyncIterator[CompletionChunk]:
         self.seen_tasks.append(task)
         self.seen_requests.append(request)
+        self.seen_turn_ids.append(turn_id)
         return self._gen()
 
 
