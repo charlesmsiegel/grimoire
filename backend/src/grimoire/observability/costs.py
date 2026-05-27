@@ -24,18 +24,18 @@ class CostTrackerService:
         self._db = db
 
     async def record(self, call: LLMCallRecord) -> None:
-        if call.cost_usd is None:
-            return
         await self._db.execute(
             "INSERT INTO cost_records "
-            "(campaign_id, turn_id, task, model, cost_usd, recorded_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(campaign_id, turn_id, task, model, cost_usd, input_tokens, output_tokens, recorded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 call.campaign_id,
                 call.turn_id,
                 call.task,
                 call.model,
-                float(call.cost_usd),
+                call.cost_usd,
+                call.input_tokens,
+                call.output_tokens,
                 datetime.now(UTC).isoformat(),
             ),
         )
