@@ -109,7 +109,6 @@ class CheckpointSuggestion(BaseModel):
     reason: TimeAdvanceReason
     threshold_exceeded: bool
     scene_id: str | None = None
-    branch_id: str | None = None
     activity_ref: str | None = None
 
 

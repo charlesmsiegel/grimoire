@@ -291,9 +291,7 @@ class ContextBuilderService:
         system_meta = await self._render_system_meta(composition)
 
         # Step 1 — scene state
-        scene = await self._safe_call(
-            self._scenes.active_scene_for_campaign, campaign_id
-        )
+        scene = await self._safe_call(self._scenes.active_scene_for_campaign, campaign_id)
         recent_posts = await self._recent_posts(scene)
         scene_header = self._cast.render_scene_header(scene)
 
@@ -376,14 +374,10 @@ class ContextBuilderService:
         spotlight_items.extend(world_spotlight)
         background_items.extend(world_background)
         background_items.extend(
-            await self._world_ctx.resolve_factions(
-                scene=scene, campaign_id=campaign_id
-            )
+            await self._world_ctx.resolve_factions(scene=scene, campaign_id=campaign_id)
         )
         background_items.extend(
-            await self._world_ctx.resolve_calendar(
-                scene=scene, campaign_id=campaign_id
-            )
+            await self._world_ctx.resolve_calendar(scene=scene, campaign_id=campaign_id)
         )
 
         # Step 4 — continuity
@@ -593,9 +587,7 @@ class ContextBuilderService:
         kind: TaskKind = task.kind
         budget = budget_for(kind)
 
-        scene = await self._safe_call(
-            self._scenes.active_scene_for_campaign, campaign_id
-        )
+        scene = await self._safe_call(self._scenes.active_scene_for_campaign, campaign_id)
 
         active_pc_ref = pc_ref
         if active_pc_ref is None:

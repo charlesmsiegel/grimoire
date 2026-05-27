@@ -107,7 +107,6 @@ def build_realistic_audit(turn_id: str) -> TurnAudit:
     return TurnAudit(
         turn_id=turn_id,
         campaign_id="bench_campaign",
-        branch_id="bench_campaign:main",
         started_at=datetime(2026, 5, 20, 12, 0, tzinfo=UTC),
         completed_at=datetime(2026, 5, 20, 12, 0, 5, tzinfo=UTC),
         duration_ms=5000,
@@ -138,7 +137,6 @@ def build_minimal_audit(turn_id: str) -> TurnAudit:
     return TurnAudit(
         turn_id=turn_id,
         campaign_id="bench_campaign",
-        branch_id="bench_campaign:main",
         started_at=datetime(2026, 5, 20, 12, 0, tzinfo=UTC),
     )
 
@@ -153,7 +151,7 @@ def build_log_event(turn_id: str, idx: int) -> LogEvent:
         payload={
             "message": f"step {idx} processed",
             "step": idx,
-            "branch_id": "bench_campaign:main",
+            "campaign_id": "bench_campaign",
         },
         duration_ms=12,
     )

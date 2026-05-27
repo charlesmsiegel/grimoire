@@ -916,8 +916,6 @@ class WorldService:
         location_id: str,
         when: InGameTime,
         campaign_id: CampaignId,
-        *,
-        branch_id: str | None = None,
     ) -> Weather:
         """Return procedural weather, honouring any campaign-local override.
 
@@ -925,10 +923,8 @@ class WorldService:
         result. A campaign-local override (stored on ``location_state.weather``)
         takes precedence when present.
         """
-        branch = branch_id or f"{campaign_id}:main"
         override = await self._get_weather_override(
             campaign_id=campaign_id,
-            branch_id=branch,
             location_ref=_location_ref(world_id, location_id),
         )
         if override is not None:
@@ -958,27 +954,23 @@ class WorldService:
         weather: Weather,
         campaign_id: CampaignId,
         *,
-        branch_id: str | None = None,
         source: str = "user",
     ) -> None:
         """Persist a campaign-local weather override on ``location_state``."""
-        branch = branch_id or f"{campaign_id}:main"
         payload = json.dumps({**weather.model_dump(), "source": "override"})
         await self.store.db.execute(
             """
             INSERT INTO location_state (
-              location_ref, campaign_id, branch_id, weather, occupants, transient_features,
+              location_ref, campaign_id, weather, occupants, transient_features,
               updated_at_turn
             )
-            VALUES (?, ?, ?, ?, '[]', '[]', NULL)
-            ON CONFLICT(location_ref, branch_id) DO UPDATE SET
-              campaign_id = excluded.campaign_id,
+            VALUES (?, ?, ?, '[]', '[]', NULL)
+            ON CONFLICT(location_ref, campaign_id) DO UPDATE SET
               weather = excluded.weather
             """,
             (
                 _location_ref(world_id, location_id),
                 campaign_id,
-                branch,
                 payload,
             ),
         )
@@ -1010,7 +1002,6 @@ class WorldService:
         after = getattr(delta, "after", None) or {}
         location_ref = getattr(delta, "target_id", None) or ""
         campaign_id = after.get("campaign_id") or ""
-        branch_id = after.get("branch_id") or f"{campaign_id}:main"
         weather_payload = after.get("weather") or {}
         weather = Weather.model_validate(weather_payload)
         # location_ref shape: 'library:worlds/<world_id>/locations/<asset_id>'.
@@ -1027,7 +1018,6 @@ class WorldService:
             location_id,
             weather,
             campaign_id,
-            branch_id=branch_id,
             source=delta.source or "extractor",
         )
 
@@ -1087,15 +1077,14 @@ class WorldService:
         self,
         *,
         campaign_id: CampaignId,
-        branch_id: str,
         location_ref: str,
     ) -> Weather | None:
         row = await self.store.db.fetchone(
             """
             SELECT weather FROM location_state
-            WHERE campaign_id = ? AND branch_id = ? AND location_ref = ?
+            WHERE campaign_id = ? AND location_ref = ?
             """,
-            (campaign_id, branch_id, location_ref),
+            (campaign_id, location_ref),
         )
         if row is None or not row["weather"]:
             return None
@@ -1118,19 +1107,15 @@ class WorldService:
         self,
         location_ref: str,
         campaign_id: CampaignId,
-        *,
-        branch_id: str | None = None,
     ) -> LocationStateData:
-        branch = branch_id or f"{campaign_id}:main"
         row = await self.store.db.fetchone(
-            "SELECT * FROM location_state WHERE location_ref = ? AND branch_id = ?",
-            (location_ref, branch),
+            "SELECT * FROM location_state WHERE location_ref = ? AND campaign_id = ?",
+            (location_ref, campaign_id),
         )
         if row is None:
             return LocationStateData(
                 location_ref=location_ref,
                 campaign_id=campaign_id,
-                branch_id=branch,
             )
         weather: Weather | None = None
         if row["weather"]:
@@ -1141,7 +1126,6 @@ class WorldService:
         return LocationStateData(
             location_ref=location_ref,
             campaign_id=campaign_id,
-            branch_id=branch,
             weather=weather,
             time_of_day=row["time_of_day"] or "",
             occupants=[
@@ -1166,14 +1150,12 @@ class WorldService:
         campaign_id: CampaignId,
         patch: dict,
         *,
-        branch_id: str | None = None,
         source: str = "user",
         turn_id: str | None = None,
     ) -> LocationStateData:
         from grimoire.types.state import DeltaKind, StateDelta
 
-        branch = branch_id or f"{campaign_id}:main"
-        current = await self.get_location_state(location_ref, campaign_id, branch_id=branch)
+        current = await self.get_location_state(location_ref, campaign_id)
         merged = current.model_dump()
         for k, v in (patch or {}).items():
             merged[k] = v
@@ -1190,7 +1172,6 @@ class WorldService:
         after = {
             "location_ref": location_ref,
             "campaign_id": campaign_id,
-            "branch_id": branch,
             "weather": weather_json,
             "time_of_day": merged.get("time_of_day") or "",
             "occupants": json.dumps(merged.get("occupants") or []),
@@ -1211,10 +1192,9 @@ class WorldService:
             delta=delta,
             source=source,
             turn_id=turn_id,
-            branch_id=branch,
             campaign_id=campaign_id,
         )
-        return await self.get_location_state(location_ref, campaign_id, branch_id=branch)
+        return await self.get_location_state(location_ref, campaign_id)
 
     # ------------------------------------------------------------------ #
     # Faction state (campaign-scoped, SQLite)
@@ -1224,21 +1204,18 @@ class WorldService:
         self,
         faction_ref: str,
         campaign_id: CampaignId,
-        branch_id: str | None = None,
     ) -> FactionStateData:
-        branch = branch_id or f"{campaign_id}:main"
         row = await self.store.db.fetchone(
             """
             SELECT * FROM faction_state
-            WHERE faction_ref = ? AND branch_id = ?
+            WHERE faction_ref = ? AND campaign_id = ?
             """,
-            (faction_ref, branch),
+            (faction_ref, campaign_id),
         )
         if row is None:
             return FactionStateData(
                 faction_ref=faction_ref,
                 campaign_id=campaign_id,
-                branch_id=branch,
             )
         return _faction_state_from_row(row)
 
@@ -1248,7 +1225,6 @@ class WorldService:
         campaign_id: CampaignId,
         patch: dict,
         *,
-        branch_id: str | None = None,
         source: str = "user",
         turn_id: str | None = None,
     ) -> FactionStateData:
@@ -1261,8 +1237,7 @@ class WorldService:
         """
         from grimoire.types.state import DeltaKind, StateDelta
 
-        branch = branch_id or f"{campaign_id}:main"
-        existing = await self.faction_state(faction_ref, campaign_id, branch_id=branch)
+        existing = await self.faction_state(faction_ref, campaign_id)
         merged = existing.model_dump()
         for k, v in (patch or {}).items():
             if k == "goals" and isinstance(v, list):
@@ -1279,7 +1254,6 @@ class WorldService:
         after = {
             "faction_ref": faction_ref,
             "campaign_id": campaign_id,
-            "branch_id": branch,
             "state": json.dumps(payload, sort_keys=True, default=str),
             "updated_at_turn": turn_id or now_iso(),
         }
@@ -1296,10 +1270,9 @@ class WorldService:
             delta=delta,
             source=source,
             turn_id=turn_id,
-            branch_id=branch,
             campaign_id=campaign_id,
         )
-        return await self.faction_state(faction_ref, campaign_id, branch_id=branch)
+        return await self.faction_state(faction_ref, campaign_id)
 
     # ------------------------------------------------------------------ #
     # Composition surfacing
@@ -1609,7 +1582,6 @@ def _faction_state_from_row(row: Any) -> FactionStateData:
     return FactionStateData(
         faction_ref=row["faction_ref"],
         campaign_id=row["campaign_id"],
-        branch_id=row["branch_id"],
         goals=goals,
         resources=dict(decoded.get("resources") or {}),
         current_focus=str(decoded.get("current_focus") or ""),

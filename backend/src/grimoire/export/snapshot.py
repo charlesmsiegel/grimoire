@@ -55,7 +55,6 @@ class ScenePart:
 @dataclass(slots=True)
 class CampaignSnapshot:
     campaign_id: CampaignId
-    branch_id: str
     selection: ExportSelection
     options: ExportOptions
 
@@ -208,11 +207,10 @@ async def build_snapshot(
     pc_names = await sources.pcs.pc_names(campaign_id)
     filter_ctx = _build_filter_context(selection, options, pc_names, filter_defaults)
 
-    all_scenes = await sources.scenes.list_scenes(campaign_id, selection.branch_id)
+    all_scenes = await sources.scenes.list_scenes(campaign_id)
     selected_ids = set(selection.scene_ids or [])
     snapshot = CampaignSnapshot(
         campaign_id=campaign_id,
-        branch_id=selection.branch_id,
         selection=selection,
         options=options,
         pc_names=pc_names,

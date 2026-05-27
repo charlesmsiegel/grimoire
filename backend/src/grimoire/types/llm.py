@@ -115,6 +115,5 @@ class LLMCallRecord(BaseModel):
     latency_ms: int
     finish_reason: str
     campaign_id: str | None = None
-    branch_id: str | None = None
     turn_id: str | None = None
     error: str | None = None
