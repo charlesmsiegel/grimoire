@@ -2,11 +2,8 @@
 
 A campaign that binds a world with ``track_latest = False`` materializes
 ``library_index`` rows into ``library_snapshots`` keyed by ``(campaign_id,
-branch_id, library_id)``. Reads on a pinned campaign consult snapshots first
-and fall back to the live index only as a safety net.
-
-Branch forks point at the same snapshot rows (no per-branch duplication) —
-the read layer falls back from child branch → parent branch → main.
+library_id)``. Reads on a pinned campaign consult snapshots first and fall
+back to the live index only as a safety net.
 """
 
 from __future__ import annotations
@@ -20,7 +17,6 @@ async def write_snapshots_for_world(
     conn: aiosqlite.Connection,
     *,
     campaign_id: str,
-    branch_id: str,
     world_id: str,
     include: list[str] | None = None,
 ) -> int:
@@ -52,10 +48,10 @@ async def write_snapshots_for_world(
         await conn.execute(
             """
             INSERT INTO library_snapshots (
-              campaign_id, branch_id, library_id, version, frontmatter, body, snapshot_at
+              campaign_id, library_id, version, frontmatter, body, snapshot_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(campaign_id, branch_id, library_id) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(campaign_id, library_id) DO UPDATE SET
               version = excluded.version,
               frontmatter = excluded.frontmatter,
               body = excluded.body,
@@ -63,7 +59,6 @@ async def write_snapshots_for_world(
             """,
             (
                 campaign_id,
-                branch_id,
                 row["id"],
                 int(row["version"]),
                 row["frontmatter"],
@@ -79,17 +74,16 @@ async def remove_snapshots_for_world(
     conn: aiosqlite.Connection,
     *,
     campaign_id: str,
-    branch_id: str,
     world_id: str,
 ) -> int:
     cur = await conn.execute(
         """
         DELETE FROM library_snapshots
-        WHERE campaign_id = ? AND branch_id = ? AND library_id IN (
+        WHERE campaign_id = ? AND library_id IN (
           SELECT id FROM library_index WHERE world_id = ?
         )
         """,
-        (campaign_id, branch_id, world_id),
+        (campaign_id, world_id),
     )
     return cur.rowcount or 0
 
@@ -98,21 +92,16 @@ async def upgrade_snapshots(
     conn: aiosqlite.Connection,
     *,
     campaign_id: str,
-    branch_id: str,
     world_id: str,
     include: list[str] | None = None,
 ) -> dict[str, dict]:
-    """Refresh snapshots from the current ``library_index``.
-
-    Returns a diff: ``{library_id: {"before": int, "after": int}}`` mapping
-    library ids whose snapshot version changed.
-    """
+    """Refresh snapshots from the current ``library_index``."""
     async with conn.execute(
         """
         SELECT library_id, version FROM library_snapshots
-        WHERE campaign_id = ? AND branch_id = ?
+        WHERE campaign_id = ?
         """,
-        (campaign_id, branch_id),
+        (campaign_id,),
     ) as cur:
         before_rows = await cur.fetchall()
     before = {row["library_id"]: int(row["version"]) for row in before_rows}
@@ -120,7 +109,6 @@ async def upgrade_snapshots(
     await write_snapshots_for_world(
         conn,
         campaign_id=campaign_id,
-        branch_id=branch_id,
         world_id=world_id,
         include=include,
     )
@@ -128,9 +116,9 @@ async def upgrade_snapshots(
     async with conn.execute(
         """
         SELECT library_id, version FROM library_snapshots
-        WHERE campaign_id = ? AND branch_id = ?
+        WHERE campaign_id = ?
         """,
-        (campaign_id, branch_id),
+        (campaign_id,),
     ) as cur:
         after_rows = await cur.fetchall()
     after = {row["library_id"]: int(row["version"]) for row in after_rows}

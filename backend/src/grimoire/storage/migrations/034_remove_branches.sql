@@ -552,5 +552,22 @@ CREATE INDEX ix_tss_supersedes
     ON transient_scene_state(superseded_by)
     WHERE superseded_by IS NOT NULL;
 
+-- ── library_snapshots ───────────────────────────────────
+CREATE TABLE library_snapshots_new (
+  campaign_id TEXT NOT NULL,
+  library_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  frontmatter TEXT NOT NULL,
+  body TEXT,
+  snapshot_at TEXT NOT NULL,
+  PRIMARY KEY (campaign_id, library_id)
+);
+INSERT INTO library_snapshots_new SELECT
+  campaign_id, library_id, version, frontmatter, body, snapshot_at
+FROM library_snapshots WHERE branch_id LIKE '%:main';
+DROP TABLE library_snapshots;
+ALTER TABLE library_snapshots_new RENAME TO library_snapshots;
+CREATE INDEX idx_libsnap_lib ON library_snapshots(library_id);
+
 -- ── Drop branches table ─────────────────────────────────
 DROP TABLE IF EXISTS branches;
