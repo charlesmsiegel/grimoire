@@ -135,14 +135,16 @@ export function PostItem({
   const speakerRef = post.author_pc_ref ?? post.author_npc_ref ?? null;
   const showSprite = !!campaignId && !!speakerRef && post.author_kind !== "system";
 
-  async function call(action: () => Promise<unknown>) {
-    if (busy) return;
+  async function call(action: () => Promise<unknown>): Promise<boolean> {
+    if (busy) return false;
     setBusy(true);
     setError(null);
     try {
       await action();
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "request failed");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -166,10 +168,10 @@ export function PostItem({
     );
   }
 
-  async function regenerate(steeringHint?: string) {
-    if (!canMutate) return;
+  async function regenerate(steeringHint?: string): Promise<boolean> {
+    if (!canMutate) return false;
     const opts = steeringHint?.trim() ? { steering_hint: steeringHint.trim() } : undefined;
-    await call(() => campaignApi.regeneratePost(campaignId!, post.scene_id, post.id, opts));
+    return call(() => campaignApi.regeneratePost(campaignId!, post.scene_id, post.id, opts));
   }
 
   return (
@@ -309,8 +311,9 @@ export function PostItem({
           onSubmit={(e) => {
             e.preventDefault();
             const hint = guidedHint;
-            setGuidedHint(null);
-            void regenerate(hint);
+            void regenerate(hint).then((ok) => {
+              if (ok) setGuidedHint(null);
+            });
           }}
         >
           <input
@@ -442,11 +445,14 @@ function CostLabel({ turnId }: { turnId: string }) {
       ([entry]) => {
         if (entry?.isIntersecting) {
           observer.disconnect();
-          observabilityApi.turnCosts(turnId).then((rows: TaskCostRow[]) => {
-            if (cancelled) return;
-            const sum = rows.reduce((acc, r) => acc + r.total_usd, 0);
-            if (sum > 0) setTotal(fmtUsd(sum));
-          });
+          observabilityApi
+            .turnCosts(turnId)
+            .then((rows: TaskCostRow[]) => {
+              if (cancelled) return;
+              const sum = rows.reduce((acc, r) => acc + r.total_usd, 0);
+              if (sum > 0) setTotal(fmtUsd(sum));
+            })
+            .catch(() => {});
         }
       },
       { threshold: 0 },
