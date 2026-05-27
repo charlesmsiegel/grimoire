@@ -65,33 +65,14 @@ async def _resolve_character_name(
             log.debug("library.get_entity failed for %s/%s: %s", world_id, asset_id, e)
             return asset_id
     if campaign_id is not None:
-        # Try emergent characters first (campaign-local).
-        store = getattr(library, "store", None)
-        if store is not None:
-            try:
-                doc = await store.get_emergent(campaign_id, "characters", asset_id)
-                if doc is not None:
-                    fm = doc.get("frontmatter") or {}
-                    name = fm.get("name")
-                    if name:
-                        return str(name)
-            except Exception as e:
-                log.debug("store.get_emergent failed for %s/%s: %s", campaign_id, asset_id, e)
-        # Then try each world in the composition.
         try:
-            comp = await library.get_composition(campaign_id)
-            for ref in sorted(getattr(comp, "worlds", []), key=lambda r: getattr(r, "priority", 0)):
-                wid = getattr(ref, "world_id", None)
-                if not wid:
-                    continue
-                try:
-                    entity = await library.get_entity(wid, "characters", asset_id)
-                    fm = getattr(entity, "frontmatter", {}) or {}
+            entities = await library.list_for_composition(campaign_id, "characters")
+            for e in entities:
+                if getattr(e, "asset_id", None) == asset_id:
+                    fm = getattr(e, "frontmatter", {}) or {}
                     return str(fm.get("name") or asset_id)
-                except Exception:
-                    continue
-        except Exception as e:
-            log.debug("composition lookup failed for %s: %s", campaign_id, e)
+        except Exception as exc:
+            log.debug("list_for_composition failed for %s: %s", campaign_id, exc)
     return asset_id
 
 
