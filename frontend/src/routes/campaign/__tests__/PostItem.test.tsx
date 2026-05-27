@@ -277,6 +277,35 @@ describe("PostItem continue", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(spy).toHaveBeenCalledWith("c1", "tavern-keeper", "p1"));
   });
+
+  it("shows character picker when multiple present characters and no author ref", async () => {
+    const spy = vi.spyOn(auxiliaryApi, "continueAs").mockResolvedValue({
+      id: "aux1",
+      kind: "continue_as",
+      text: "continued text",
+      completed_at: "2026-05-19T12:00:00Z",
+      model_used: "test-model",
+      tokens: 100,
+      pending_commit_action: "replace_post",
+      warnings: [],
+    });
+    render(
+      <PostItem
+        post={makePost()}
+        pcs={PCS}
+        images={[]}
+        isLatestModelPost
+        campaignId="c1"
+        presentCharacterRefs={["tavern-keeper", "guard-captain"]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    const select = screen.getByRole("combobox", { name: "Character to continue as" });
+    expect(select).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: "guard-captain" } });
+    fireEvent.submit(select.closest("form")!);
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("c1", "guard-captain", "p1"));
+  });
 });
 
 describe("PostItem cost in header", () => {

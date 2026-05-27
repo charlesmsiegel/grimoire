@@ -66,7 +66,9 @@ export function PostItem({
   const [auxResult, setAuxResult] = useState<AuxiliaryResult | null>(null);
   const [auxBusy, setAuxBusy] = useState(false);
   const [auxError, setAuxError] = useState<string | null>(null);
-  type AuxForm = { kind: "translate"; targetLanguage: string };
+  type AuxForm =
+    | { kind: "translate"; targetLanguage: string }
+    | { kind: "continue"; characterRef: string };
   const [auxForm, setAuxForm] = useState<AuxForm | null>(null);
   const [lastAuxAction, setLastAuxAction] = useState<(() => Promise<AuxiliaryResult>) | null>(null);
 
@@ -77,14 +79,18 @@ export function PostItem({
 
   const isModelPost = post.author_kind !== "pc" && !post.is_player;
   const showCost = isModelPost && !!post.turn_id;
-  const continueRef = post.author_npc_ref ?? post.author_pc_ref ?? presentCharacterRefs[0] ?? null;
+  const authorRef = post.author_npc_ref ?? post.author_pc_ref ?? null;
+  const continueCandidates = useMemo(() => {
+    if (authorRef) return [authorRef];
+    return presentCharacterRefs.length > 0 ? [...presentCharacterRefs] : [];
+  }, [authorRef, presentCharacterRefs]);
 
   const showStrip = alternates.length > 1;
   const current = alternates[cursor];
   const canMutate = isLatestModelPost && !!campaignId;
   const canEdit = !!campaignId;
   const canRegenerate = canMutate;
-  const canContinue = !!campaignId && isModelPost && !!continueRef;
+  const canContinue = !!campaignId && isModelPost && continueCandidates.length > 0;
   const displayBody = bodyOverride ?? post.body;
 
   async function saveEdit() {
@@ -117,9 +123,9 @@ export function PostItem({
     }
   }
 
-  async function runContinue() {
-    if (!campaignId || !continueRef) return;
-    const action = () => auxiliaryApi.continueAs(campaignId, continueRef, post.id);
+  async function runContinue(characterRef: string) {
+    if (!campaignId || !characterRef) return;
+    const action = () => auxiliaryApi.continueAs(campaignId, characterRef, post.id);
     setLastAuxAction(() => action);
     await runAux(action);
   }
@@ -286,7 +292,13 @@ export function PostItem({
               aria-label="Continue"
               title="Continue"
               disabled={auxBusy}
-              onClick={() => void runContinue()}
+              onClick={() => {
+                if (continueCandidates.length === 1) {
+                  void runContinue(continueCandidates[0]!);
+                } else {
+                  setAuxForm({ kind: "continue", characterRef: continueCandidates[0]! });
+                }
+              }}
             >
               ➤
             </button>
@@ -328,6 +340,33 @@ export function PostItem({
             {busy ? "Regenerating..." : "Regenerate"}
           </button>
           <button type="button" onClick={() => setGuidedHint(null)} disabled={busy}>
+            Cancel
+          </button>
+        </form>
+      )}
+      {auxForm?.kind === "continue" && campaignId && (
+        <form
+          className="post-continue-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void runContinue(auxForm.characterRef);
+          }}
+        >
+          <select
+            value={auxForm.characterRef}
+            onChange={(e) => setAuxForm({ ...auxForm, characterRef: e.target.value })}
+            aria-label="Character to continue as"
+          >
+            {continueCandidates.map((ref) => (
+              <option key={ref} value={ref}>
+                {pcs.find((p) => p.character_ref === ref)?.name ?? ref}
+              </option>
+            ))}
+          </select>
+          <button type="submit" disabled={auxBusy}>
+            {auxBusy ? "Continuing..." : "Continue"}
+          </button>
+          <button type="button" onClick={() => setAuxForm(null)} disabled={auxBusy}>
             Cancel
           </button>
         </form>
