@@ -1733,6 +1733,13 @@ pre {
   font-weight: 600;
 }
 
+.post-cost {
+  font-size: 0.68rem;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
 .post-time {
   margin-left: auto;
   font-size: 0.72rem;
@@ -1794,7 +1801,10 @@ pre {
   font-size: 0.95rem;
   line-height: 1;
   color: var(--text-muted, currentColor);
-  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .post-icon-btn:hover:not(:disabled) {
@@ -1833,6 +1843,22 @@ pre {
 .post-edit-actions {
   display: flex;
   gap: var(--space-2, 0.5rem);
+}
+
+.post-guided-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2, 0.5rem);
+  margin: var(--space-2, 0.5rem) 0;
+  align-items: center;
+}
+
+.post-guided-form input[type="text"] {
+  flex: 1 1 12rem;
+  font-size: 0.9rem;
+  padding: var(--space-1, 0.25rem) var(--space-2, 0.5rem);
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.15));
+  border-radius: var(--radius-sm, 0.25rem);
 }
 
 .streaming-pulse {

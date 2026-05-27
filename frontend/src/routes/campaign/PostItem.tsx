@@ -1,32 +1,19 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { auxiliaryApi, type AuxiliaryResult } from "../../api/auxiliary";
 import { CharacterSprite } from "../../components/CharacterSprite";
 import { Markdown } from "../../components/Markdown";
 import { campaignApi, type ApiAlternate, type ApiPost, type PCEntry } from "../../api/campaign";
 import { AuxPanel } from "./Auxiliary/AuxPanel";
-import { CostBreakdown } from "./CostBreakdown";
-import { RetconLauncher } from "./RetconLauncher";
+import { observabilityApi, type TaskCostRow } from "../../api/observability";
 import type { SceneImage } from "./usePlayState";
 
 interface Props {
   post: ApiPost;
   pcs: PCEntry[];
   images: SceneImage[];
-  /** True when this post is the latest model-authored post in its scene.
-   * Swipes (chevron prev/next, regenerate, pin) are only allowed there per the
-   * swipes-alternates design; otherwise the buttons are disabled and a tooltip
-   * directs the user to Retcon / Fork. */
   isLatestModelPost?: boolean;
-  /** Campaign id; required for alternate mutations and sprite resolution. Omit
-   * to render read-only without sprites. */
   campaignId?: string;
-  /** Number of model-authored posts that follow this one in the current scene.
-   * Threaded through to the retcon launcher so it can show the fork nudge
-   * when ≥ 5 (per 2026-05-19-retcon-design). */
-  subsequentModelPostCount?: number;
-  /** Scene's present character refs; powers the Continue-as character picker. */
-  presentCharacterRefs?: string[];
 }
 
 const AUTHOR_LABELS: Record<ApiPost["author_kind"], string> = {
@@ -51,15 +38,28 @@ function primaryCursor(alternates: ApiAlternate[], primaryId: string | null | un
   return i < 0 ? 0 : i;
 }
 
-export function PostItem({
-  post,
-  pcs,
-  images,
-  isLatestModelPost = false,
-  campaignId,
-  subsequentModelPostCount = 0,
-  presentCharacterRefs = [],
-}: Props) {
+function fmtUsd(value: number): string {
+  return `$${value.toFixed(4)}`;
+}
+
+function useTurnCost(turnId: string | undefined): string | null {
+  const [total, setTotal] = useState<string | null>(null);
+  useEffect(() => {
+    if (!turnId) return;
+    let cancelled = false;
+    observabilityApi.turnCosts(turnId).then((rows: TaskCostRow[]) => {
+      if (cancelled) return;
+      const sum = rows.reduce((acc, r) => acc + r.total_usd, 0);
+      if (sum > 0) setTotal(fmtUsd(sum));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [turnId]);
+  return total;
+}
+
+export function PostItem({ post, pcs, images, isLatestModelPost = false, campaignId }: Props) {
   const name = authorName(post, pcs);
   const alternates = useMemo(() => post.alternates ?? [], [post.alternates]);
   const initialCursor = useMemo(
@@ -69,44 +69,31 @@ export function PostItem({
   const [cursor, setCursor] = useState(initialCursor);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [retconOpen, setRetconOpen] = useState(false);
-  const [costOpen, setCostOpen] = useState(false);
-  const [rewriteInstr, setRewriteInstr] = useState<string | null>(null);
-  const [lastRewriteInstr, setLastRewriteInstr] = useState<string>("");
+
+  const [guidedHint, setGuidedHint] = useState<string | null>(null);
+
   const [auxResult, setAuxResult] = useState<AuxiliaryResult | null>(null);
   const [auxBusy, setAuxBusy] = useState(false);
   const [auxError, setAuxError] = useState<string | null>(null);
-  type AuxForm =
-    | { kind: "continue_as"; characterRef: string; steeringHint: string }
-    | { kind: "translate"; targetLanguage: string }
-    | { kind: "what_would_x_say"; characterRef: string; snippet: string };
+  type AuxForm = { kind: "translate"; targetLanguage: string };
   const [auxForm, setAuxForm] = useState<AuxForm | null>(null);
-  const [lastAuxAction, setLastAuxAction] = useState<(() => Promise<AuxiliaryResult>) | null>(
-    null,
-  );
+  const [lastAuxAction, setLastAuxAction] = useState<(() => Promise<AuxiliaryResult>) | null>(null);
+
   const [editDraft, setEditDraft] = useState<string | null>(null);
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
-  // Local body override so the edit takes effect immediately without
-  // waiting for a full scene refetch; cleared if the parent reloads.
   const [bodyOverride, setBodyOverride] = useState<string | null>(null);
 
-  const candidateRefs = useMemo(() => {
-    const initial = post.author_pc_ref ?? post.author_npc_ref ?? null;
-    const set = new Set<string>(presentCharacterRefs);
-    if (initial) set.add(initial);
-    return Array.from(set);
-  }, [presentCharacterRefs, post.author_npc_ref, post.author_pc_ref]);
-  const defaultCharacterRef = post.author_npc_ref ?? post.author_pc_ref ?? candidateRefs[0] ?? "";
-  function labelForRef(ref: string): string {
-    const pc = pcs.find((p) => p.character_ref === ref);
-    return pc?.name ?? ref;
-  }
+  const isModelPost = post.author_kind !== "pc" && !post.is_player;
+  const canShowCost = isModelPost && !!post.turn_id;
+  const costLabel = useTurnCost(canShowCost ? post.turn_id : undefined);
 
   const showStrip = alternates.length > 1;
   const current = alternates[cursor];
   const canMutate = isLatestModelPost && !!campaignId;
   const canEdit = !!campaignId;
+  const canRegenerate = canMutate;
+  const canContinue = !!campaignId && isModelPost && !!(post.author_npc_ref ?? post.author_pc_ref);
   const displayBody = bodyOverride ?? post.body;
 
   async function saveEdit() {
@@ -114,38 +101,13 @@ export function PostItem({
     setEditBusy(true);
     setEditError(null);
     try {
-      const updated = await campaignApi.editPostBody(
-        campaignId,
-        post.scene_id,
-        post.id,
-        editDraft,
-      );
+      const updated = await campaignApi.editPostBody(campaignId, post.scene_id, post.id, editDraft);
       setBodyOverride(updated.body);
       setEditDraft(null);
     } catch (e) {
       setEditError(e instanceof Error ? e.message : String(e));
     } finally {
       setEditBusy(false);
-    }
-  }
-  // Retcon is available on any model post (NOT gated to latest like swipes are).
-  const canRetcon = !!campaignId && post.author_kind !== "pc" && !post.is_player;
-  const canRewrite = canRetcon;
-  const canShowCost = canRetcon && !!post.turn_id;
-
-  async function runRewrite(instruction: string) {
-    if (!campaignId || !instruction.trim()) return;
-    setAuxBusy(true);
-    setAuxError(null);
-    setLastRewriteInstr(instruction);
-    try {
-      const result = await auxiliaryApi.rewritePost(campaignId, post.id, instruction);
-      setAuxResult(result);
-      setRewriteInstr(null);
-    } catch (e) {
-      setAuxError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setAuxBusy(false);
     }
   }
 
@@ -164,11 +126,11 @@ export function PostItem({
     }
   }
 
-  async function runContinueAs(characterRef: string, steeringHint: string) {
-    if (!campaignId || !characterRef) return;
-    const trimmedHint = steeringHint.trim() || undefined;
-    const action = () =>
-      auxiliaryApi.continueAs(campaignId, characterRef, post.id, trimmedHint);
+  async function runContinue() {
+    if (!campaignId) return;
+    const characterRef = post.author_npc_ref ?? post.author_pc_ref;
+    if (!characterRef) return;
+    const action = () => auxiliaryApi.continueAs(campaignId, characterRef, post.id);
     setLastAuxAction(() => action);
     await runAux(action);
   }
@@ -181,13 +143,6 @@ export function PostItem({
     await runAux(action);
   }
 
-  async function runWhatWouldXSay(characterRef: string, snippet: string) {
-    if (!campaignId || !characterRef || !snippet.trim()) return;
-    const trimmed = snippet.trim();
-    const action = () => auxiliaryApi.whatWouldXSay(campaignId, characterRef, trimmed);
-    setLastAuxAction(() => action);
-    await runAux(action);
-  }
   const speakerRef = post.author_pc_ref ?? post.author_npc_ref ?? null;
   const showSprite = !!campaignId && !!speakerRef && post.author_kind !== "system";
 
@@ -222,9 +177,10 @@ export function PostItem({
     );
   }
 
-  async function regenerate() {
+  async function regenerate(steeringHint?: string) {
     if (!canMutate) return;
-    await call(() => campaignApi.regeneratePost(campaignId!, post.scene_id, post.id));
+    const opts = steeringHint?.trim() ? { steering_hint: steeringHint.trim() } : undefined;
+    await call(() => campaignApi.regeneratePost(campaignId!, post.scene_id, post.id, opts));
   }
 
   return (
@@ -241,6 +197,11 @@ export function PostItem({
         )}
         <span className="post-author">{name}</span>
         <span className="post-author-kind">{AUTHOR_LABELS[post.author_kind]}</span>
+        {costLabel && (
+          <span className="post-cost" aria-label="Turn cost">
+            {costLabel}
+          </span>
+        )}
         <time className="post-time" dateTime={post.created_at}>
           {new Date(post.created_at).toLocaleTimeString()}
         </time>
@@ -265,7 +226,7 @@ export function PostItem({
           />
           <div className="post-edit-actions">
             <button type="submit" disabled={editBusy}>
-              {editBusy ? "Saving…" : "Save"}
+              {editBusy ? "Saving..." : "Save"}
             </button>
             <button
               type="button"
@@ -294,68 +255,51 @@ export function PostItem({
           ))}
         </ul>
       )}
-      {(canEdit || canRetcon || canRewrite || campaignId) && editDraft === null && (
+      {campaignId && editDraft === null && (
         <div className="post-actions post-actions-icons">
           {canEdit && (
             <button
               type="button"
               className="post-icon-btn post-edit"
-              aria-label="Edit post markdown"
+              aria-label="Edit post"
               title="Edit"
               onClick={() => setEditDraft(displayBody)}
             >
               ✎
             </button>
           )}
-          {canRetcon && (
+          {canRegenerate && (
             <button
               type="button"
-              className="post-icon-btn post-retcon"
-              aria-label="Retcon this post"
-              title="Retcon…"
-              onClick={() => setRetconOpen(true)}
+              className="post-icon-btn post-regenerate"
+              aria-label="Regenerate post"
+              title="Regenerate"
+              disabled={busy}
+              onClick={() => regenerate()}
             >
-              ⟲
+              🔄
             </button>
           )}
-          {canRewrite && (
+          {canRegenerate && (
             <button
               type="button"
-              className="post-icon-btn post-rewrite"
-              aria-label="Rewrite this post with an LLM"
-              title="Rewrite…"
-              onClick={() => setRewriteInstr("")}
+              className="post-icon-btn post-guided-regenerate"
+              aria-label="Guided regenerate"
+              title="Guided regenerate..."
+              disabled={busy}
+              onClick={() => setGuidedHint("")}
+            >
+              🎯
+            </button>
+          )}
+          {canContinue && (
+            <button
+              type="button"
+              className="post-icon-btn post-continue"
+              aria-label="Continue"
+              title="Continue"
               disabled={auxBusy}
-            >
-              ✨
-            </button>
-          )}
-          {canShowCost && (
-            <button
-              type="button"
-              className="post-icon-btn post-cost-toggle"
-              aria-label="Toggle cost breakdown"
-              title={costOpen ? "Hide cost" : "Show cost"}
-              aria-expanded={costOpen}
-              onClick={() => setCostOpen((v) => !v)}
-            >
-              ¢
-            </button>
-          )}
-          {campaignId && candidateRefs.length > 0 && (
-            <button
-              type="button"
-              className="post-icon-btn post-continue-as"
-              aria-label="Continue as a character"
-              title="Continue as…"
-              onClick={() =>
-                setAuxForm({
-                  kind: "continue_as",
-                  characterRef: defaultCharacterRef,
-                  steeringHint: "",
-                })
-              }
-              disabled={auxBusy}
+              onClick={() => void runContinue()}
             >
               ➤
             </button>
@@ -365,94 +309,35 @@ export function PostItem({
               type="button"
               className="post-icon-btn post-translate"
               aria-label="Translate this post"
-              title="Translate…"
+              title="Translate..."
               onClick={() => setAuxForm({ kind: "translate", targetLanguage: "" })}
               disabled={auxBusy}
             >
               🌐
             </button>
           )}
-          {campaignId && candidateRefs.length > 0 && (
-            <button
-              type="button"
-              className="post-icon-btn post-what-would-x-say"
-              aria-label="Ask what a character would say"
-              title="What would they say…"
-              onClick={() =>
-                setAuxForm({
-                  kind: "what_would_x_say",
-                  characterRef: defaultCharacterRef,
-                  snippet: "",
-                })
-              }
-              disabled={auxBusy}
-            >
-              💬
-            </button>
-          )}
         </div>
       )}
-      {rewriteInstr !== null && campaignId && (
+      {guidedHint !== null && campaignId && (
         <form
-          className="post-rewrite-form"
+          className="post-guided-form"
           onSubmit={(e) => {
             e.preventDefault();
-            void runRewrite(rewriteInstr);
+            void regenerate(guidedHint).then(() => setGuidedHint(null));
           }}
         >
           <input
             type="text"
-            value={rewriteInstr}
-            onChange={(e) => setRewriteInstr(e.target.value)}
-            placeholder="How should this be rewritten?"
-            aria-label="Rewrite instruction"
+            value={guidedHint}
+            onChange={(e) => setGuidedHint(e.target.value)}
+            placeholder="What should the response contain?"
+            aria-label="Guided regenerate hint"
             autoFocus
           />
-          <button type="submit" disabled={auxBusy || !rewriteInstr.trim()}>
-            {auxBusy ? "Drafting…" : "Draft"}
+          <button type="submit" disabled={busy || !guidedHint.trim()}>
+            {busy ? "Regenerating..." : "Regenerate"}
           </button>
-          <button type="button" onClick={() => setRewriteInstr(null)} disabled={auxBusy}>
-            Cancel
-          </button>
-        </form>
-      )}
-      {auxForm?.kind === "continue_as" && campaignId && (
-        <form
-          className="post-continue-as-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void runContinueAs(auxForm.characterRef, auxForm.steeringHint);
-          }}
-        >
-          <label>
-            Character
-            <select
-              value={auxForm.characterRef}
-              onChange={(e) =>
-                setAuxForm({ ...auxForm, characterRef: e.target.value })
-              }
-              aria-label="Character to continue as"
-            >
-              {candidateRefs.map((ref) => (
-                <option key={ref} value={ref}>
-                  {labelForRef(ref)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <input
-            type="text"
-            value={auxForm.steeringHint}
-            onChange={(e) =>
-              setAuxForm({ ...auxForm, steeringHint: e.target.value })
-            }
-            placeholder="Optional steering hint"
-            aria-label="Steering hint"
-          />
-          <button type="submit" disabled={auxBusy || !auxForm.characterRef}>
-            {auxBusy ? "Continuing…" : "Continue"}
-          </button>
-          <button type="button" onClick={() => setAuxForm(null)} disabled={auxBusy}>
+          <button type="button" onClick={() => setGuidedHint(null)} disabled={busy}>
             Cancel
           </button>
         </form>
@@ -468,9 +353,7 @@ export function PostItem({
           <input
             type="text"
             value={auxForm.targetLanguage}
-            onChange={(e) =>
-              setAuxForm({ ...auxForm, targetLanguage: e.target.value })
-            }
+            onChange={(e) => setAuxForm({ ...auxForm, targetLanguage: e.target.value })}
             placeholder="Target language (e.g. French)"
             aria-label="Target language"
             list={`translate-langs-${post.id}`}
@@ -485,49 +368,7 @@ export function PostItem({
             <option value="Plain English" />
           </datalist>
           <button type="submit" disabled={auxBusy || !auxForm.targetLanguage.trim()}>
-            {auxBusy ? "Translating…" : "Translate"}
-          </button>
-          <button type="button" onClick={() => setAuxForm(null)} disabled={auxBusy}>
-            Cancel
-          </button>
-        </form>
-      )}
-      {auxForm?.kind === "what_would_x_say" && campaignId && (
-        <form
-          className="post-what-would-x-say-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void runWhatWouldXSay(auxForm.characterRef, auxForm.snippet);
-          }}
-        >
-          <label>
-            Character
-            <select
-              value={auxForm.characterRef}
-              onChange={(e) =>
-                setAuxForm({ ...auxForm, characterRef: e.target.value })
-              }
-              aria-label="Character to ask"
-            >
-              {candidateRefs.map((ref) => (
-                <option key={ref} value={ref}>
-                  {labelForRef(ref)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <textarea
-            value={auxForm.snippet}
-            onChange={(e) => setAuxForm({ ...auxForm, snippet: e.target.value })}
-            placeholder="What's the situation or prompt?"
-            aria-label="Situation snippet"
-            rows={2}
-          />
-          <button
-            type="submit"
-            disabled={auxBusy || !auxForm.characterRef || !auxForm.snippet.trim()}
-          >
-            {auxBusy ? "Asking…" : "Ask"}
+            {auxBusy ? "Translating..." : "Translate"}
           </button>
           <button type="button" onClick={() => setAuxForm(null)} disabled={auxBusy}>
             Cancel
@@ -549,21 +390,8 @@ export function PostItem({
             setAuxResult(null);
             if (lastAuxAction) {
               void runAux(lastAuxAction);
-            } else if (lastRewriteInstr) {
-              void runRewrite(lastRewriteInstr);
             }
           }}
-        />
-      )}
-      {costOpen && canShowCost && <CostBreakdown turnId={post.turn_id} />}
-      {retconOpen && campaignId && (
-        <RetconLauncher
-          campaignId={campaignId}
-          postId={post.id}
-          turnId={post.turn_id}
-          originalText={post.body}
-          subsequentModelPostCount={subsequentModelPostCount}
-          onClose={() => setRetconOpen(false)}
         />
       )}
       {showStrip && (
@@ -599,19 +427,9 @@ export function PostItem({
           >
             {current?.pinned ? "📌" : "📍"}
           </button>
-          <button
-            type="button"
-            className="chevron-regenerate"
-            aria-label="Regenerate post"
-            disabled={!canMutate || busy}
-            onClick={regenerate}
-          >
-            🔄
-          </button>
           {!isLatestModelPost && (
             <span className="chevron-hint" role="note">
-              Switching alternates is only available on the latest post. Use Retcon to revise
-              earlier posts or Fork for a new timeline.
+              Switching alternates is only available on the latest post.
             </span>
           )}
           {error && (
