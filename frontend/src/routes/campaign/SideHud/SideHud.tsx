@@ -10,7 +10,13 @@ import { BlockWidget } from "./widgets/BlockWidget";
 import { ChipListWidget } from "./widgets/ChipListWidget";
 import { CompositeWidget } from "./widgets/CompositeWidget";
 import { RowWidget } from "./widgets/RowWidget";
-import { primaryScalar } from "./widgets/widget-common";
+import {
+  asArray,
+  asNumber,
+  asRecord,
+  asString,
+  primaryScalar,
+} from "./widgets/widget-common";
 
 interface Props {
   campaignId: string;
@@ -25,7 +31,16 @@ const SCENE_SETTING_IDS = new Set([
   "core.location",
 ]);
 
-const PRESENT_CAST_ID = "core.present-cast";
+const CORE_WIDGET_IDS = new Set([
+  ...SCENE_SETTING_IDS,
+  "core.present-cast",
+  "core.recent-events",
+  "core.active-commitments",
+  "core.scene-summary",
+  "core.review-queue",
+  "core.drift-alerts",
+  "core.active-threads",
+]);
 
 const RENDER_FALLBACK = "block";
 
@@ -57,6 +72,8 @@ function renderWidget(
       return <BlockWidget key={key} snapshot={snapshot} onRefresh={onRefresh} />;
   }
 }
+
+/* ---- Info-block components (shared style) ---- */
 
 function SceneSettingBlock({ widgets }: { widgets: HudWidgetState[] }) {
   const entries = widgets
@@ -107,19 +124,83 @@ function CastBlock({
   );
 }
 
+function extractTextItems(data: unknown): string[] {
+  const rec = asRecord(data);
+  const arr = asArray(rec?.items ?? data);
+  if (!arr) return [];
+  return arr
+    .map((item) => {
+      if (typeof item === "string") return item;
+      const r = asRecord(item);
+      if (!r) return null;
+      return (
+        asString(r.text) ??
+        asString(r.statement) ??
+        asString(r.label) ??
+        asString(r.summary) ??
+        asString(r.message) ??
+        null
+      );
+    })
+    .filter((s): s is string => s !== null);
+}
+
+function InfoListBlock({ widget }: { widget: HudWidgetState }) {
+  const { snapshot } = widget;
+  if (snapshot.status !== "ok") return null;
+
+  const title = snapshot.title ?? snapshot.id;
+  const rec = asRecord(snapshot.data);
+  const text = rec ? asString(rec.text) : null;
+  const count = rec ? asNumber(rec.count) : null;
+  const items = extractTextItems(snapshot.data);
+
+  const hasContent = text || items.length > 0 || (count !== null && count > 0);
+  if (!hasContent) return null;
+
+  return (
+    <div className="scene-setting-block" aria-label={title}>
+      {text ? (
+        <div className="scene-setting-entry scene-setting-entry-full">
+          <span className="scene-setting-label">{title}</span>
+          <span className="scene-setting-text">{text}</span>
+        </div>
+      ) : count !== null && items.length === 0 ? (
+        <div className="scene-setting-entry">
+          <span className="scene-setting-label">{title}</span>
+          <span className="scene-setting-value">{count}</span>
+        </div>
+      ) : (
+        <div className="scene-setting-entry scene-setting-entry-full">
+          <span className="scene-setting-label">{title}</span>
+          <ul className="scene-setting-list">
+            {items.map((item, i) => (
+              <li key={i}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---- Main component ---- */
+
 export function SideHud({ campaignId, sceneId }: Props) {
   const hud = useHud(campaignId, sceneId);
 
-  const { sceneSetting, castWidget, rest } = useMemo(() => {
-    const s: HudWidgetState[] = [];
-    const r: HudWidgetState[] = [];
+  const { sceneSetting, castWidget, coreWidgets, pluginWidgets } = useMemo(() => {
+    const setting: HudWidgetState[] = [];
+    const core: HudWidgetState[] = [];
+    const plugin: HudWidgetState[] = [];
     let cast: HudWidgetState | null = null;
     for (const w of hud.widgets) {
-      if (SCENE_SETTING_IDS.has(w.snapshot.id)) s.push(w);
-      else if (w.snapshot.id === PRESENT_CAST_ID) cast = w;
-      else r.push(w);
+      if (SCENE_SETTING_IDS.has(w.snapshot.id)) setting.push(w);
+      else if (w.snapshot.id === "core.present-cast") cast = w;
+      else if (CORE_WIDGET_IDS.has(w.snapshot.id)) core.push(w);
+      else plugin.push(w);
     }
-    return { sceneSetting: s, castWidget: cast, rest: r };
+    return { sceneSetting: setting, castWidget: cast, coreWidgets: core, pluginWidgets: plugin };
   }, [hud.widgets]);
 
   if (hud.loading && hud.widgets.length === 0) {
@@ -146,9 +227,12 @@ export function SideHud({ campaignId, sceneId }: Props) {
       <AuxInflightBadge campaignId={campaignId} />
       <SceneSettingBlock widgets={sceneSetting} />
       <CastBlock widget={castWidget} campaignId={campaignId} />
-      {rest.length > 0 && (
+      {coreWidgets.map((w) => (
+        <InfoListBlock key={w.snapshot.id} widget={w} />
+      ))}
+      {pluginWidgets.length > 0 && (
         <ul className="side-hud-widgets">
-          {rest.map((w) => (
+          {pluginWidgets.map((w) => (
             <li key={w.snapshot.id} className="side-hud-widget-slot">
               {renderWidget(
                 w.stale ? { ...w.snapshot, stale: true } : w.snapshot,
