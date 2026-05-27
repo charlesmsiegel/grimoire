@@ -1,0 +1,29 @@
+{#-
+  Response format instructions for per_character mode (single call).
+  Injected after the lock-in block when narrator_response_mode is "per_character".
+
+  Inputs:
+    present_npcs    list[dict] — each has "name" and "ref" keys
+-#}
+# Response format
+
+Structure your response as a sequence of character posts and optional narrator segments using XML tags. Each character post is wrapped in a `<character>` tag with the character's ref. Narrator prose (scene-setting, environmental description, transitions) uses a `<narrator>` tag.
+
+Characters present in this scene:
+{% for npc in present_npcs %}
+- {{ npc.name }} (ref: `{{ npc.ref }}`)
+{% endfor %}
+
+Rules:
+- Use `<character ref="...">` tags with the exact ref values listed above.
+- A character may appear multiple times if the scene calls for it.
+- Use `<narrator>` for environmental prose, transitions, or description not attributable to a character.
+- Write the prose inside each tag as normal narrative — dialogue, action, internal thought.
+- Do not nest tags or use any tags other than `<character>` and `<narrator>`.
+
+Example:
+<narrator>The gas lamps flicker as wind sweeps through the alley.</narrator>
+<character ref="{{ present_npcs[0].ref }}">{{ present_npcs[0].name }} reacts to the scene.</character>
+{%- if present_npcs | length > 1 %}
+<character ref="{{ present_npcs[1].ref }}">{{ present_npcs[1].name }} responds.</character>
+{%- endif %}
