@@ -8,6 +8,7 @@
 export interface GreetingFormValue {
   name: string;
   tagsText: string;
+  roleTagsText: string;
   body: string;
   presentCharacters: string[];
   povCharacter: string;
@@ -19,6 +20,7 @@ export interface GreetingFormValue {
 export const emptyGreetingForm = (): GreetingFormValue => ({
   name: "",
   tagsText: "",
+  roleTagsText: "",
   body: "",
   presentCharacters: [],
   povCharacter: "",
@@ -42,12 +44,17 @@ export function greetingFormToPayload(
     .split(",")
     .map((t) => t.trim())
     .filter(Boolean);
+  const roleTags = value.roleTagsText
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
   const trimmedLocation = value.startingLocation.trim();
   const trimmedTime = value.startingTime.trim();
   const frontmatter: Record<string, unknown> = {
     id,
     name: value.name.trim(),
     tags,
+    role_tags: roleTags,
     present_characters: value.presentCharacters,
     pov_character: value.povCharacter || null,
     starting_location: trimmedLocation || null,

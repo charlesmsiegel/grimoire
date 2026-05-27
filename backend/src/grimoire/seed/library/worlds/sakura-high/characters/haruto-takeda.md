@@ -5,6 +5,7 @@ role: pc
 aliases: ["Takeda-kun", "Haruto"]
 age: "16"
 tags: [pc, second-year, transfer-student, class-2-b]
+role_tags: [transfer-student]
 
 voice:
   summary: "Polite, a little reserved, sharper than he lets on. Tries to deflect; gives himself away with small honesty."

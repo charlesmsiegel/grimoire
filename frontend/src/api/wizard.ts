@@ -26,6 +26,7 @@ export interface WorldSummary {
   name?: string;
   description?: string | null;
   current_version?: number;
+  pc_role_tags: string[];
 }
 
 export interface StyleGuideSummary {
@@ -62,6 +63,7 @@ export interface GreetingSummary {
   description?: string | null;
   starting_location?: string | null;
   starting_time?: string | null;
+  role_tags: string[];
 }
 
 export interface CharacterSummary {
@@ -69,6 +71,7 @@ export interface CharacterSummary {
   name?: string;
   role?: string | null;
   world_id?: string | null;
+  role_tags: string[];
 }
 
 export interface CampaignSummaryPayload {
@@ -119,6 +122,7 @@ function fromWorldMeta(s: WorldMeta): WorldSummary {
     name: s.name,
     description: s.description,
     current_version: s.version,
+    pc_role_tags: s.pc_role_tags ?? [],
   };
 }
 
@@ -137,15 +141,18 @@ function fromGreeting(g: Greeting): GreetingSummary {
     description: g.mood || null,
     starting_location: g.starting_location ?? null,
     starting_time: g.starting_time ?? null,
+    role_tags: g.role_tags ?? [],
   };
 }
 
 function fromCharacterEntity(e: LibraryEntity): CharacterSummary {
+  const rawTags = e.frontmatter?.role_tags;
   return {
     id: e.id,
     name: e.name,
     role: stringOrNull(e.frontmatter?.role),
     world_id: e.world_id,
+    role_tags: Array.isArray(rawTags) ? (rawTags as string[]) : [],
   };
 }
 
@@ -244,7 +251,7 @@ export async function deleteCampaign(campaignId: string): Promise<void> {
 
 export async function addCampaignPC(
   campaignId: string,
-  pc: { character_ref: string; name: string; owner?: string },
+  pc: { character_ref: string; name: string; owner?: string; role_tags?: string[] },
 ): Promise<unknown> {
   return api.post<unknown>(`/api/campaigns/${encodeURIComponent(campaignId)}/pcs`, pc);
 }

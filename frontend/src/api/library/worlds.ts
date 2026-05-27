@@ -34,6 +34,7 @@ export interface WorldMeta {
   name: string;
   description: string;
   tags: string[];
+  pc_role_tags: string[];
   genre: string;
   calendar: Record<string, unknown>;
   calendar_ids: string[];
@@ -73,6 +74,7 @@ export interface Greeting {
   mood: string;
   body: string;
   tags: string[];
+  role_tags: string[];
 }
 
 export interface ReclassificationSuggestion {

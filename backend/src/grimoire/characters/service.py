@@ -558,6 +558,8 @@ class CharactersService:
     # ------------------------------------------------------------------ #
 
     async def list_pcs(self, campaign_id: CampaignId) -> list[PCEntry]:
+        import json as _json
+
         rows = await self.store.list_pcs(campaign_id)
         active_ref = self._cache.seed_active_pc_from_rows(campaign_id, rows)
         out: list[PCEntry] = []
@@ -572,12 +574,15 @@ class CharactersService:
             except Exception:
                 pass
             last_played_at = _parse_iso_dt(row.get("last_played_at"))
+            raw_tags = row.get("role_tags") or "[]"
+            role_tags = _json.loads(raw_tags) if isinstance(raw_tags, str) else list(raw_tags)
             out.append(
                 PCEntry(
                     character_ref=char_ref,
                     name=row["display_name"],
                     owner=row["owner"],
                     active=active_ref == char_ref,
+                    role_tags=role_tags,
                     current_scene_id=current_scene_id,
                     current_location_ref=current_location_ref,
                     last_played_at=last_played_at,
@@ -591,12 +596,14 @@ class CharactersService:
         character_ref: CharacterRef,
         name: str,
         owner: str = "local",
+        role_tags: list[str] | None = None,
     ) -> PCEntry:
         await self.store.add_pc(
             campaign_id=campaign_id,
             character_ref=character_ref,
             display_name=name,
             owner=owner,
+            role_tags=role_tags,
         )
         if self._cache.get_active_pc(campaign_id) is None:
             self._cache.cache_active_pc(campaign_id, character_ref)
@@ -605,6 +612,7 @@ class CharactersService:
             name=name,
             owner=owner,
             active=self._cache.get_active_pc(campaign_id) == character_ref,
+            role_tags=role_tags or [],
         )
 
     async def remove_pc(self, campaign_id: CampaignId, character_ref: CharacterRef) -> None:

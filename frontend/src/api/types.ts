@@ -190,6 +190,7 @@ export interface WorldMeta {
   name: string;
   description: string;
   tags: string[];
+  pc_role_tags: string[];
   genre: string;
   version: number;
 }

@@ -86,6 +86,7 @@ class AddPCPayload(BaseModel):
     character_ref: str
     name: str
     owner: str = "local"
+    role_tags: list[str] = Field(default_factory=list)
 
 
 class PCProfilePayload(BaseModel):

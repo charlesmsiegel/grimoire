@@ -26,6 +26,7 @@ describe("WorldsListView delete", () => {
         name: "Sakura High",
         description: "",
         tags: [],
+        pc_role_tags: [],
         genre: "",
         calendar: {},
         calendar_ids: [],

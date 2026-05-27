@@ -15,6 +15,7 @@ export interface DraftPC {
   name: string;
   owner: string;
   origin: "library" | "new";
+  role_tags: string[];
   profileDescription: string;
   profileGoals: string[];
   profilePlayerNotes: string;

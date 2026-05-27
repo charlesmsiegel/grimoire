@@ -34,7 +34,11 @@ async def add_pc(
 ) -> Any:
     try:
         result = await characters.add_pc(
-            campaign_id, payload.character_ref, payload.name, payload.owner
+            campaign_id,
+            payload.character_ref,
+            payload.name,
+            payload.owner,
+            role_tags=payload.role_tags,
         )
         try:
             active = await scenes.active_scene_for_campaign(campaign_id)

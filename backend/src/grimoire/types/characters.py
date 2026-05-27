@@ -113,6 +113,7 @@ class Character(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     age: str | None = None
     tags: list[str] = Field(default_factory=list)
+    role_tags: list[str] = Field(default_factory=list)
     voice: VoiceAnchor = Field(default_factory=VoiceAnchor)
     image: ImagePromptTemplate | None = None
     images: list[CharacterImage] = Field(default_factory=list)
@@ -145,6 +146,7 @@ class CharacterData(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     age: str | None = None
     tags: list[str] = Field(default_factory=list)
+    role_tags: list[str] = Field(default_factory=list)
     voice: VoiceAnchor = Field(default_factory=VoiceAnchor)
     image: ImagePromptTemplate | None = None
     images: list[CharacterImage] = Field(default_factory=list)
@@ -176,6 +178,7 @@ class PCEntry(BaseModel):
     name: str
     owner: str  # 'local' in v1; account id in v2
     active: bool = True
+    role_tags: list[str] = Field(default_factory=list)
     # Rich switcher payload (frontend spec §8). All optional; the switcher
     # falls back to a bare label when these are missing.
     current_scene_id: str | None = None

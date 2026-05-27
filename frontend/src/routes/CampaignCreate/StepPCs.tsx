@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
-import type { CharacterSummary } from "../../api/wizard";
+import type { CharacterSummary, WorldSummary } from "../../api/wizard";
 import { PCProfileFields, type ProfileFieldValues } from "./PCProfileFields";
 import type { DraftPC, WizardDraft } from "./types";
 
@@ -10,10 +10,22 @@ interface Props {
   candidates: Map<string, CharacterSummary[]>; // by world id
   loading: boolean;
   error: string | null;
+  worlds: WorldSummary[];
 }
 
-export function StepPCs({ draft, update, candidates, loading, error }: Props) {
+export function StepPCs({ draft, update, candidates, loading, error, worlds }: Props) {
   const [newName, setNewName] = useState("");
+
+  const availableRoleTags = useMemo(() => {
+    const composedWorldIds = new Set(draft.worldRefs.map((r) => r.world_id));
+    const tags = new Set<string>();
+    for (const w of worlds) {
+      if (composedWorldIds.has(w.id)) {
+        for (const t of w.pc_role_tags ?? []) tags.add(t);
+      }
+    }
+    return [...tags].sort();
+  }, [worlds, draft.worldRefs]);
 
   const removePC = (ref: string) => {
     update({ pcs: draft.pcs.filter((p) => p.character_ref !== ref) });
@@ -27,6 +39,7 @@ export function StepPCs({ draft, update, candidates, loading, error }: Props) {
       name: character.name ?? character.id,
       owner: "local",
       origin: "library",
+      role_tags: character.role_tags ?? [],
       profileDescription: "",
       profileGoals: [],
       profilePlayerNotes: "",
@@ -48,6 +61,7 @@ export function StepPCs({ draft, update, candidates, loading, error }: Props) {
           name: trimmed,
           owner: "local",
           origin: "new",
+          role_tags: [],
           profileDescription: "",
           profileGoals: [],
           profilePlayerNotes: "",
@@ -55,6 +69,15 @@ export function StepPCs({ draft, update, candidates, loading, error }: Props) {
       ],
     });
     setNewName("");
+  };
+
+  const toggleRoleTag = (pcRef: string, tag: string) => {
+    const updatedPCs = draft.pcs.map((p) => {
+      if (p.character_ref !== pcRef) return p;
+      const has = p.role_tags.includes(tag);
+      return { ...p, role_tags: has ? p.role_tags.filter((t) => t !== tag) : [...p.role_tags, tag] };
+    });
+    update({ pcs: updatedPCs });
   };
 
   return (
@@ -81,6 +104,23 @@ export function StepPCs({ draft, update, candidates, loading, error }: Props) {
               <button type="button" onClick={() => removePC(pc.character_ref)}>
                 Remove
               </button>
+              {availableRoleTags.length > 0 && (
+                <div className="wizard-pc-role-tags">
+                  <small>Role tags:</small>
+                  <div className="wizard-role-tag-chips">
+                    {availableRoleTags.map((tag) => (
+                      <label key={tag} className="wizard-role-tag-chip">
+                        <input
+                          type="checkbox"
+                          checked={pc.role_tags.includes(tag)}
+                          onChange={() => toggleRoleTag(pc.character_ref, tag)}
+                        />
+                        <span>{tag}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
               <PCProfileFields
                 values={{
                   description: pc.profileDescription,
