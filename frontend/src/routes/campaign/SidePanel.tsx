@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
 
-import { campaignApi, type ApiScene, type NarratorResponseMode, type OpenCommitment, type PCEntry } from "../../api/campaign";
+import { campaignApi, type ApiScene, type NarratorResponseMode, type PCEntry } from "../../api/campaign";
 import { ApiError } from "../../api/client";
 import type { ResolvedCharacter } from "../../api/types";
 import { viewsApi } from "../../api/views";
 import { AuxBrainstormPanel } from "./Auxiliary/AuxBrainstormPanel";
-import { SourceBadge } from "./SourceBadge";
 
 interface QuickActions {
   onRegenerate: () => void;
@@ -23,7 +22,6 @@ interface Props {
   campaignId: string;
   scene: ApiScene | null;
   pcs: PCEntry[];
-  commitments: OpenCommitment[];
   actions: QuickActions;
 }
 
@@ -42,61 +40,9 @@ function capabilityChips(cap: Record<string, unknown>): CapabilityChip[] {
   return [{ kind, label }];
 }
 
-export function SidePanel({ campaignId, scene, pcs, commitments, actions }: Props) {
-  const present = scene?.present_character_refs ?? [];
-  const threads = scene?.threads_introduced ?? [];
-
+export function SidePanel({ campaignId, scene, pcs, actions }: Props) {
   return (
     <aside className="side-panel" aria-label="Scene side panel">
-      <section className="side-section">
-        <h3>Present cast</h3>
-        {present.length === 0 ? (
-          <p className="side-empty">No cast tracked yet.</p>
-        ) : (
-          <ul className="side-list">
-            {present.map((ref) => {
-              const pc = pcs.find((p) => p.character_ref === ref);
-              return (
-                <li key={ref}>
-                  {pc ? <strong>{pc.name}</strong> : <span>{ref}</span>}
-                  {/* A ref matched in the PC roster resolves from the
-                      library; one only mentioned in present_character_refs
-                      without a roster entry is an emergent NPC the model
-                      brought into the scene. */}
-                  <SourceBadge source={pc ? "library" : "emergent"} />
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-
-      <section className="side-section">
-        <h3>Active threads</h3>
-        {threads.length === 0 ? (
-          <p className="side-empty">No open threads.</p>
-        ) : (
-          <ul className="side-list">
-            {threads.map((t, idx) => (
-              <li key={`${idx}-${t.text}`}>{t.text}</li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="side-section">
-        <h3>Open commitments</h3>
-        {commitments.length === 0 ? (
-          <p className="side-empty">No open commitments.</p>
-        ) : (
-          <ul className="side-list">
-            {commitments.slice(0, 5).map((c) => (
-              <li key={c.id}>{c.text}</li>
-            ))}
-          </ul>
-        )}
-      </section>
-
       <CapabilitiesSection campaignId={campaignId} pcs={pcs} />
       <MechanicsSummarySection campaignId={campaignId} pcs={pcs} />
 

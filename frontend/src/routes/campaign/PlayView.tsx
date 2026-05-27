@@ -3,10 +3,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   campaignApi,
   type CampaignSummary,
-  type OpenCommitment,
+
   type TimeAdvanceResult,
 } from "../../api/campaign";
-import { useCampaignEvent } from "../../state/useCampaignEvent";
+
 import { SceneLedgerDialog } from "./SceneLedgerDialog";
 import { ScenePreviewPanel } from "./ScenePreviewPanel";
 import { SceneSuggestionView } from "./SceneSuggestionView";
@@ -44,7 +44,6 @@ export function PlayView({ campaignId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId, play.state.scene, play.state.posts, play.dispatch]);
 
-  const [commitments, setCommitments] = useState<OpenCommitment[]>([]);
   const [campaign, setCampaign] = useState<CampaignSummary | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -68,25 +67,7 @@ export function PlayView({ campaignId }: Props) {
     };
   }, [campaignId]);
 
-  const refreshCommitments = useCallback(async () => {
-    try {
-      const list = await campaignApi.listCommitments(campaignId);
-      setCommitments(list);
-    } catch {
-      // Silent: commitments are best-effort context.
-    }
-  }, [campaignId]);
 
-  useEffect(() => {
-    void refreshCommitments();
-  }, [refreshCommitments]);
-
-  useCampaignEvent(
-    ["commitment_created", "commitment_paid_off", "turn_complete"],
-    useCallback(() => {
-      void refreshCommitments();
-    }, [refreshCommitments]),
-  );
 
   const runAction = useCallback(async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -277,7 +258,7 @@ export function PlayView({ campaignId }: Props) {
             campaignId={campaignId}
             scene={play.state.scene}
             pcs={play.state.pcs}
-            commitments={commitments}
+
             actions={{
               onRegenerate: () => void runAction(() => play.regenerate()),
               onUndo: () => void runAction(() => play.undo()),
