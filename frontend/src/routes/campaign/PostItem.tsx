@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { auxiliaryApi, type AuxiliaryResult } from "../../api/auxiliary";
 import { CharacterSprite } from "../../components/CharacterSprite";
@@ -14,6 +14,7 @@ interface Props {
   images: SceneImage[];
   isLatestModelPost?: boolean;
   campaignId?: string;
+  presentCharacterRefs?: string[];
 }
 
 const AUTHOR_LABELS: Record<ApiPost["author_kind"], string> = {
@@ -42,24 +43,14 @@ function fmtUsd(value: number): string {
   return `$${value.toFixed(4)}`;
 }
 
-function useTurnCost(turnId: string | undefined): string | null {
-  const [total, setTotal] = useState<string | null>(null);
-  useEffect(() => {
-    if (!turnId) return;
-    let cancelled = false;
-    observabilityApi.turnCosts(turnId).then((rows: TaskCostRow[]) => {
-      if (cancelled) return;
-      const sum = rows.reduce((acc, r) => acc + r.total_usd, 0);
-      if (sum > 0) setTotal(fmtUsd(sum));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [turnId]);
-  return total;
-}
-
-export function PostItem({ post, pcs, images, isLatestModelPost = false, campaignId }: Props) {
+export function PostItem({
+  post,
+  pcs,
+  images,
+  isLatestModelPost = false,
+  campaignId,
+  presentCharacterRefs = [],
+}: Props) {
   const name = authorName(post, pcs);
   const alternates = useMemo(() => post.alternates ?? [], [post.alternates]);
   const initialCursor = useMemo(
@@ -85,15 +76,15 @@ export function PostItem({ post, pcs, images, isLatestModelPost = false, campaig
   const [bodyOverride, setBodyOverride] = useState<string | null>(null);
 
   const isModelPost = post.author_kind !== "pc" && !post.is_player;
-  const canShowCost = isModelPost && !!post.turn_id;
-  const costLabel = useTurnCost(canShowCost ? post.turn_id : undefined);
+  const showCost = isModelPost && !!post.turn_id;
+  const continueRef = post.author_npc_ref ?? post.author_pc_ref ?? presentCharacterRefs[0] ?? null;
 
   const showStrip = alternates.length > 1;
   const current = alternates[cursor];
   const canMutate = isLatestModelPost && !!campaignId;
   const canEdit = !!campaignId;
   const canRegenerate = canMutate;
-  const canContinue = !!campaignId && isModelPost && !!(post.author_npc_ref ?? post.author_pc_ref);
+  const canContinue = !!campaignId && isModelPost && !!continueRef;
   const displayBody = bodyOverride ?? post.body;
 
   async function saveEdit() {
@@ -127,10 +118,8 @@ export function PostItem({ post, pcs, images, isLatestModelPost = false, campaig
   }
 
   async function runContinue() {
-    if (!campaignId) return;
-    const characterRef = post.author_npc_ref ?? post.author_pc_ref;
-    if (!characterRef) return;
-    const action = () => auxiliaryApi.continueAs(campaignId, characterRef, post.id);
+    if (!campaignId || !continueRef) return;
+    const action = () => auxiliaryApi.continueAs(campaignId, continueRef, post.id);
     setLastAuxAction(() => action);
     await runAux(action);
   }
@@ -197,11 +186,7 @@ export function PostItem({ post, pcs, images, isLatestModelPost = false, campaig
         )}
         <span className="post-author">{name}</span>
         <span className="post-author-kind">{AUTHOR_LABELS[post.author_kind]}</span>
-        {costLabel && (
-          <span className="post-cost" aria-label="Turn cost">
-            {costLabel}
-          </span>
-        )}
+        {showCost && <CostLabel turnId={post.turn_id} />}
         <time className="post-time" dateTime={post.created_at}>
           {new Date(post.created_at).toLocaleTimeString()}
         </time>
@@ -323,7 +308,9 @@ export function PostItem({ post, pcs, images, isLatestModelPost = false, campaig
           className="post-guided-form"
           onSubmit={(e) => {
             e.preventDefault();
-            void regenerate(guidedHint).then(() => setGuidedHint(null));
+            const hint = guidedHint;
+            setGuidedHint(null);
+            void regenerate(hint);
           }}
         >
           <input
@@ -380,6 +367,11 @@ export function PostItem({ post, pcs, images, isLatestModelPost = false, campaig
           {auxError}
         </p>
       )}
+      {error && (
+        <p className="post-error" role="alert">
+          {error}
+        </p>
+      )}
       {auxResult && campaignId && (
         <AuxPanel
           campaignId={campaignId}
@@ -432,13 +424,46 @@ export function PostItem({ post, pcs, images, isLatestModelPost = false, campaig
               Switching alternates is only available on the latest post.
             </span>
           )}
-          {error && (
-            <span className="chevron-error" role="alert">
-              {error}
-            </span>
-          )}
         </div>
       )}
     </article>
+  );
+}
+
+function CostLabel({ turnId }: { turnId: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [total, setTotal] = useState<string | null>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let cancelled = false;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          observer.disconnect();
+          observabilityApi.turnCosts(turnId).then((rows: TaskCostRow[]) => {
+            if (cancelled) return;
+            const sum = rows.reduce((acc, r) => acc + r.total_usd, 0);
+            if (sum > 0) setTotal(fmtUsd(sum));
+          });
+        }
+      },
+      { threshold: 0 },
+    );
+    observer.observe(el);
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
+  }, [turnId]);
+
+  if (!total) {
+    return <span ref={ref} className="post-cost" />;
+  }
+  return (
+    <span ref={ref} className="post-cost" aria-label="Turn cost">
+      {total}
+    </span>
   );
 }

@@ -22,6 +22,7 @@ export function ScenePane({
   streaming,
   images,
   campaignId,
+  scene,
   hasMorePosts,
   onLoadMore,
 }: Props) {
@@ -97,6 +98,7 @@ export function ScenePane({
           images={byPost[post.id] ?? []}
           isLatestModelPost={post.id === latestModelPostId}
           campaignId={campaignId}
+          presentCharacterRefs={scene?.present_character_refs ?? []}
         />
       ))}
       {streaming && (
