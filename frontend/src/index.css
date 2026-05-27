@@ -417,12 +417,11 @@ pre {
 }
 
 .nav-brand-mark {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
+  object-fit: contain;
 }
 
 .nav-brand-text {
@@ -5386,6 +5385,13 @@ button.primary:disabled {
   gap: var(--space-6);
 }
 
+.home-hero-icon {
+  width: 80px;
+  height: 80px;
+  object-fit: contain;
+  margin-bottom: var(--space-3);
+}
+
 .home-hero h2 {
   font-family: var(--font-display);
   font-size: 2.4rem;
@@ -5533,6 +5539,13 @@ button.primary:disabled {
   flex-direction: column;
   gap: var(--space-4);
   min-height: 18rem;
+}
+
+.startup-welcome-icon {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  margin-bottom: var(--space-2);
 }
 
 .startup-welcome-list {
