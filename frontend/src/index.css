@@ -1987,38 +1987,46 @@ pre {
 
 .what-changed-filters {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  font-size: 0.8rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem var(--space-2);
+  font-size: 0.75rem;
 }
 
 .what-changed-filters label {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 0.25rem;
   color: var(--fg-muted);
+  white-space: nowrap;
 }
 
 .what-changed-filters input[type="range"] {
-  flex: 1;
+  width: 4rem;
+  height: 0.25rem;
 }
 
 .what-changed-filters input[type="search"] {
   flex: 1;
-  padding: 0.2rem 0.4rem;
-  font-size: 0.85rem;
+  min-width: 4rem;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.75rem;
+}
+
+.what-changed-source-filter {
+  flex: 1;
 }
 
 .what-changed-filter-value {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: var(--fg);
-  min-width: 2.5rem;
+  min-width: 1.5rem;
   text-align: right;
 }
 
 .what-changed-toggle {
-  font-size: 0.8rem;
+  font-size: 0.75rem;
 }
 
 .what-changed-count {

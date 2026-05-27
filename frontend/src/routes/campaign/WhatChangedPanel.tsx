@@ -69,15 +69,12 @@ export function WhatChangedPanel({ turnId }: Props) {
   }, [state.diff, minConfidence, sourceFilter, showQueued]);
 
   return (
-    <aside className="side-panel what-changed-panel" aria-label="What changed this turn">
-      <header className="side-section what-changed-header">
-        <h3>What changed?</h3>
-        <p className="what-changed-turn" aria-live="polite">
-          {turnId ? `Turn ${turnId}` : "No turn selected yet."}
-        </p>
+    <div className="scene-setting-block what-changed-panel" aria-label="What changed this turn">
+      <div className="scene-setting-entry scene-setting-entry-full">
+        <span className="scene-setting-label">What changed?</span>
         <div className="what-changed-filters">
           <label>
-            Min confidence
+            Conf
             <input
               type="range"
               min={0}
@@ -89,7 +86,17 @@ export function WhatChangedPanel({ turnId }: Props) {
             />
             <span className="what-changed-filter-value">{minConfidence.toFixed(2)}</span>
           </label>
-          <label>
+          <label className="what-changed-toggle">
+            <input
+              type="checkbox"
+              checked={showQueued}
+              onChange={(e) => setShowQueued(e.target.checked)}
+            />
+            Queued
+          </label>
+        </div>
+        <div className="what-changed-filters">
+          <label className="what-changed-source-filter">
             Source
             <input
               type="search"
@@ -99,19 +106,12 @@ export function WhatChangedPanel({ turnId }: Props) {
               aria-label="Filter by source"
             />
           </label>
-          <label className="what-changed-toggle">
-            <input
-              type="checkbox"
-              checked={showQueued}
-              onChange={(e) => setShowQueued(e.target.checked)}
-            />
-            Include queued for review
-          </label>
         </div>
-      </header>
-
-      <Body state={state} filtered={filtered} />
-    </aside>
+      </div>
+      <div className="scene-setting-entry scene-setting-entry-full">
+        <Body state={state} filtered={filtered} />
+      </div>
+    </div>
   );
 }
 
