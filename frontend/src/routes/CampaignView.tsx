@@ -29,6 +29,7 @@ interface PreservedSummary {
 export function CampaignView() {
   const { campaignId } = useParams();
   const [campaignName, setCampaignName] = useState<string | null>(null);
+  const [mechanicsModule, setMechanicsModule] = useState<string | null | undefined>(undefined);
   const [navCollapsed, setNavCollapsed] = useState(false);
 
   const prevIdRef = useRef<string | undefined>(undefined);
@@ -45,10 +46,18 @@ export function CampaignView() {
   useEffect(() => {
     if (!campaignId) return;
     let cancelled = false;
-    campaignApi.get(campaignId).then((c) => {
-      if (!cancelled) setCampaignName(c.name ?? null);
-    }).catch(() => {});
-    return () => { cancelled = true; };
+    campaignApi
+      .get(campaignId)
+      .then((c) => {
+        if (!cancelled) {
+          setCampaignName(c.name ?? null);
+          setMechanicsModule(c.mechanics_module ?? null);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [campaignId]);
 
   if (!campaignId) {
@@ -90,7 +99,7 @@ export function CampaignView() {
           </nav>
         )}
       </header>
-      <PreservedSheetsBanner campaignId={campaignId} />
+      <PreservedSheetsBanner campaignId={campaignId} mechanicsModule={mechanicsModule} />
       <div className="campaign-body">
         <Outlet />
       </div>
@@ -103,12 +112,23 @@ export function CampaignView() {
  * bound mechanics module are still on disk. The endpoint is best-effort —
  * if the backend hasn't implemented it yet, the banner silently stays
  * hidden so the rest of the campaign view keeps working.
+ *
+ * When `mechanicsModule` is `undefined` the parent campaign load hasn't
+ * finished yet; when it's `null` the campaign has no mechanics bound and
+ * there are no preserved sheets to check by definition, so skip the fetch.
  */
-function PreservedSheetsBanner({ campaignId }: { campaignId: string }) {
+export function PreservedSheetsBanner({
+  campaignId,
+  mechanicsModule,
+}: {
+  campaignId: string;
+  mechanicsModule: string | null | undefined;
+}) {
   const [summary, setSummary] = useState<PreservedSummary | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
+    if (!mechanicsModule) return;
     let cancelled = false;
     campaignApi
       .preservedSheets(campaignId)
@@ -123,7 +143,7 @@ function PreservedSheetsBanner({ campaignId }: { campaignId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [campaignId]);
+  }, [campaignId, mechanicsModule]);
 
   if (!summary || dismissed) return null;
   const orphans = summary.preserved.filter(
