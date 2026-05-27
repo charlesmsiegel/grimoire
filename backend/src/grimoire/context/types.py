@@ -68,6 +68,10 @@ class BuiltContext:
     voice_corrective: str = ""
     sources: list[ContextSource] = field(default_factory=list)
     extra: str | None = None
+    narrator_response_mode: str = "all_at_once"
+    present_npcs: list[dict] = field(default_factory=list)
+    multi_call_character_name: str = ""
+    multi_call_character_ref: str = ""
 
 
 @dataclass(frozen=True)

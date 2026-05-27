@@ -58,6 +58,16 @@ class PromptAssembler:
             )
             budget_used[ContextTier.LOCK_IN] = lock_in_tokens
 
+        response_fmt = self._response_format_block(ctx)
+        if response_fmt:
+            messages.append(
+                Message(
+                    role=MessageRole.SYSTEM,
+                    content=response_fmt,
+                    metadata={"tier": "response-format"},
+                )
+            )
+
         budget_used[ContextTier.SPOTLIGHT] = await self._pack_tier(
             ctx.spotlight_items,
             ContextTier.SPOTLIGHT,
@@ -182,6 +192,23 @@ class PromptAssembler:
             mechanics_block=ctx.mechanics_block,
             verbatim_posts=self._lock_in_verbatim_posts(ctx),
         ).strip()
+
+    def _response_format_block(self, ctx: BuiltContext) -> str:
+        from grimoire.scenes.narrator_mode import PER_CHARACTER, PER_CHARACTER_MULTI_CALL
+
+        if ctx.narrator_response_mode == PER_CHARACTER:
+            return render_template(
+                "context_response_format",
+                present_npcs=ctx.present_npcs,
+            ).strip()
+        if ctx.narrator_response_mode == PER_CHARACTER_MULTI_CALL:
+            return render_template(
+                "context_response_format",
+                variant="single_character",
+                character_name=ctx.multi_call_character_name,
+                character_ref=ctx.multi_call_character_ref,
+            ).strip()
+        return ""
 
     def _lock_in_verbatim_posts(self, ctx: BuiltContext) -> str:
         if not ctx.recent_posts_text:
