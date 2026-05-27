@@ -59,7 +59,7 @@ Grimoire ships with no built-in game rules. Instead, mechanics modules are exter
 
 ### Smart Context Assembly
 
-The Context Builder assembles each prompt from explicit inputs: relevant characters, active scene history, applicable lore, mechanical state, continuity facts, and style guide. Context is deterministic and budget-aware — you can inspect exactly what went into every prompt through the observability dashboard.
+The Context Builder assembles each prompt from explicit inputs: relevant characters, active scene history, applicable lore, mechanical state, continuity facts, and style guide. Context is deterministic and budget-aware — you can inspect exactly what went into every prompt through the HUD's built-in context inspector.
 
 ### Image Generation
 
