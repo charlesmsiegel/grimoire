@@ -1,6 +1,10 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import type { ApiScene, PCEntry } from "../../../api/campaign";
+import { ApiError } from "../../../api/client";
 import type { WidgetSnapshot } from "../../../api/hud";
+import type { ResolvedCharacter } from "../../../api/types";
+import { viewsApi } from "../../../api/views";
 import { AuxInflightBadge } from "./AuxInflightBadge";
 import { PresentCastChip } from "./PresentCastChip";
 import { parsePresentCast } from "./presentCastShape";
@@ -18,9 +22,24 @@ import {
   primaryScalar,
 } from "./widgets/widget-common";
 
+export interface QuickActions {
+  onRegenerate: () => void;
+  onUndo: () => void;
+  onEndScene: () => void;
+  onDeleteScene: () => void;
+  onNewScene: () => void;
+  onOpenLedger: () => void;
+  onSkipTime: () => void;
+  onManualFact: () => void;
+  busy: boolean;
+}
+
 interface Props {
   campaignId: string;
   sceneId: string | null;
+  scene: ApiScene | null;
+  pcs: PCEntry[];
+  actions: QuickActions;
 }
 
 const SCENE_SETTING_IDS = new Set([
@@ -184,9 +203,186 @@ function InfoListBlock({ widget }: { widget: HudWidgetState }) {
   );
 }
 
+/* ---- Mechanics ---- */
+
+const MECHANIC_KEYS = ["rolls", "slots", "pools", "resources", "tracks"] as const;
+
+function formatScalar(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "string") return value.length > 60 ? `${value.slice(0, 60)}…` : value;
+  if (Array.isArray(value)) return `[${value.length}]`;
+  return "{…}";
+}
+
+function useActivePcCharacters(
+  campaignId: string,
+  pcs: PCEntry[],
+): { rows: ResolvedCharacter[] } {
+  const [rows, setRows] = useState<ResolvedCharacter[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    if (pcs.length === 0) {
+      setRows([]);
+      return () => { cancelled = true; };
+    }
+    viewsApi
+      .listCharacters(campaignId)
+      .then((all) => {
+        if (cancelled) return;
+        const activeRefs = new Set(pcs.map((p) => p.character_ref));
+        setRows(
+          all.filter((c) => {
+            const ref =
+              c.character.world_id !== null
+                ? `library:worlds/${c.character.world_id}/characters/${c.character.id}`
+                : `campaign:emergent/character/${c.character.id}`;
+            return activeRefs.has(ref);
+          }),
+        );
+      })
+      .catch(() => { if (!cancelled) setRows([]); });
+    return () => { cancelled = true; };
+  }, [campaignId, pcs]);
+  return { rows };
+}
+
+function MechanicsBlock({ campaignId, pcs }: { campaignId: string; pcs: PCEntry[] }) {
+  const { rows } = useActivePcCharacters(campaignId, pcs);
+  const [sheets, setSheets] = useState<Record<string, Record<string, unknown> | null>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    if (rows.length === 0) {
+      setSheets({});
+      return () => { cancelled = true; };
+    }
+    Promise.all(
+      rows.map(async (row) => {
+        try {
+          const sheet = await viewsApi.getSheet(campaignId, "character", row.character.id);
+          return [row.character.id, sheet] as const;
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 404) {
+            return [row.character.id, null] as const;
+          }
+          return [row.character.id, null] as const;
+        }
+      }),
+    ).then((pairs) => {
+      if (cancelled) return;
+      const next: Record<string, Record<string, unknown> | null> = {};
+      for (const [id, sheet] of pairs) next[id] = sheet;
+      setSheets(next);
+    });
+    return () => { cancelled = true; };
+  }, [campaignId, rows]);
+
+  const sections = rows
+    .map((row) => {
+      const sheet = sheets[row.character.id];
+      if (!sheet) return null;
+      const entries: { key: string; value: string }[] = [];
+      for (const key of MECHANIC_KEYS) {
+        const raw = sheet[key];
+        if (raw === undefined || raw === null) continue;
+        if (typeof raw === "object" && !Array.isArray(raw)) {
+          for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+            entries.push({ key: `${key}.${k}`, value: formatScalar(v) });
+          }
+        } else {
+          entries.push({ key, value: formatScalar(raw) });
+        }
+      }
+      if (entries.length === 0) return null;
+      return { id: row.character.id, name: row.character.name, entries };
+    })
+    .filter(
+      (s): s is { id: string; name: string; entries: { key: string; value: string }[] } =>
+        s !== null,
+    );
+
+  if (sections.length === 0) return null;
+
+  return (
+    <div className="scene-setting-block" aria-label="Mechanics">
+      {sections.map((s) => (
+        <div key={s.id} className="scene-setting-entry scene-setting-entry-full">
+          <span className="scene-setting-label">{s.name}</span>
+          <div className="scene-setting-mechanics">
+            {s.entries.map((e, i) => (
+              <span key={i} className="scene-setting-mechanic-pair">
+                <span className="scene-setting-mechanic-key">{e.key}</span>{" "}
+                <span className="scene-setting-mechanic-val">{e.value}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---- Quick Actions ---- */
+
+function QuickActionsBlock({
+  actions,
+  scene,
+}: {
+  actions: QuickActions;
+  scene: ApiScene | null;
+}) {
+  return (
+    <div className="scene-setting-block" aria-label="Quick actions">
+      <div className="scene-setting-entry scene-setting-entry-full">
+        <span className="scene-setting-label">Actions</span>
+        <div className="hud-quick-actions">
+          <button type="button" onClick={actions.onRegenerate} disabled={actions.busy}>
+            Regenerate
+          </button>
+          <button type="button" onClick={actions.onUndo} disabled={actions.busy}>
+            Undo turn
+          </button>
+          <button
+            type="button"
+            onClick={actions.onEndScene}
+            disabled={actions.busy || !scene || scene.closed}
+          >
+            End scene
+          </button>
+          <button
+            type="button"
+            onClick={actions.onDeleteScene}
+            disabled={actions.busy || !scene}
+            className="danger-btn"
+          >
+            Delete scene
+          </button>
+          <button
+            type="button"
+            onClick={actions.onNewScene}
+            disabled={actions.busy || (scene != null && !scene.closed)}
+          >
+            New scene
+          </button>
+          <button type="button" onClick={actions.onOpenLedger} disabled={actions.busy}>
+            Scene ledger
+          </button>
+          <button type="button" onClick={actions.onSkipTime} disabled={actions.busy || !scene}>
+            Skip time
+          </button>
+          <button type="button" onClick={actions.onManualFact} disabled={actions.busy}>
+            Manual fact
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---- Main component ---- */
 
-export function SideHud({ campaignId, sceneId }: Props) {
+export function SideHud({ campaignId, sceneId, scene, pcs, actions }: Props) {
   const hud = useHud(campaignId, sceneId);
 
   const { sceneSetting, castWidget, coreWidgets, pluginWidgets } = useMemo(() => {
@@ -230,6 +426,8 @@ export function SideHud({ campaignId, sceneId }: Props) {
       {coreWidgets.map((w) => (
         <InfoListBlock key={w.snapshot.id} widget={w} />
       ))}
+      <MechanicsBlock campaignId={campaignId} pcs={pcs} />
+      <QuickActionsBlock actions={actions} scene={scene} />
       {pluginWidgets.length > 0 && (
         <ul className="side-hud-widgets">
           {pluginWidgets.map((w) => (
