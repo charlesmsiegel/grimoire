@@ -21,9 +21,6 @@ import { ScenePane } from "./ScenePane";
 import { SideHud } from "./SideHud/SideHud";
 import { TimeAdvanceDigest } from "./TimeAdvanceDigest";
 import { usePlayState } from "./usePlayState";
-import { WhatChangedPanel } from "./WhatChangedPanel";
-
-type RightView = "hud" | "debug";
 
 interface Props {
   campaignId: string;
@@ -47,7 +44,6 @@ export function PlayView({ campaignId }: Props) {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [rightView, setRightView] = useState<RightView>("hud");
   const [timeDigest, setTimeDigest] = useState<TimeAdvanceResult | null>(null);
   const [ledgerOpen, setLedgerOpen] = useState(false);
 
@@ -142,26 +138,6 @@ export function PlayView({ campaignId }: Props) {
           onChange={(ref) => void play.setActivePC(ref)}
           campaignId={campaignId}
         />
-        <div className="play-right-toggle" role="tablist" aria-label="Right pane">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={rightView === "hud"}
-            className={rightView === "hud" ? "is-active" : ""}
-            onClick={() => setRightView("hud")}
-          >
-            HUD
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={rightView === "debug"}
-            className={rightView === "debug" ? "is-active" : ""}
-            onClick={() => setRightView("debug")}
-          >
-            What changed?
-          </button>
-        </div>
       </div>
 
       <DriftBanner warnings={driftWarnings} onSuppress={play.suppressDrift} />
@@ -232,29 +208,26 @@ export function PlayView({ campaignId }: Props) {
             />
           )}
         </div>
-        {rightView === "hud" ? (
-          <SideHud
-            campaignId={campaignId}
-            sceneId={play.state.scene?.id ?? null}
-            scene={play.state.scene}
-            pcs={play.state.pcs}
-            actions={{
-              onRegenerate: () => void runAction(() => play.regenerate()),
-              onUndo: () => void runAction(() => play.undo()),
-              onEndScene: () => void runAction(() => play.endScene()),
-              onDeleteScene: () => void runAction(() => play.deleteScene()),
-              onNewScene: () => void runAction(() => play.newScene()),
-              onOpenLedger: () => setLedgerOpen(true),
-              onSkipTime: handleSkipTime,
-              onManualFact: handleManualFact,
-              busy,
-            }}
-            playerInput={draft}
-            pcRef={play.state.activePcRef}
-          />
-        ) : (
-          <WhatChangedPanel turnId={latestNarratorTurnId} />
-        )}
+        <SideHud
+          campaignId={campaignId}
+          sceneId={play.state.scene?.id ?? null}
+          scene={play.state.scene}
+          pcs={play.state.pcs}
+          actions={{
+            onRegenerate: () => void runAction(() => play.regenerate()),
+            onUndo: () => void runAction(() => play.undo()),
+            onEndScene: () => void runAction(() => play.endScene()),
+            onDeleteScene: () => void runAction(() => play.deleteScene()),
+            onNewScene: () => void runAction(() => play.newScene()),
+            onOpenLedger: () => setLedgerOpen(true),
+            onSkipTime: handleSkipTime,
+            onManualFact: handleManualFact,
+            busy,
+          }}
+          playerInput={draft}
+          pcRef={play.state.activePcRef}
+          latestNarratorTurnId={latestNarratorTurnId}
+        />
       </div>
       <SceneLedgerDialog
         campaignId={campaignId}
