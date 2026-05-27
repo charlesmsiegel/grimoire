@@ -15,6 +15,7 @@ interface Props {
   isLatestModelPost?: boolean;
   campaignId?: string;
   presentCharacterRefs?: string[];
+  expressionsEnabledCharacters?: ReadonlySet<string>;
 }
 
 const AUTHOR_LABELS: Record<ApiPost["author_kind"], string> = {
@@ -50,6 +51,7 @@ export function PostItem({
   isLatestModelPost = false,
   campaignId,
   presentCharacterRefs = [],
+  expressionsEnabledCharacters,
 }: Props) {
   const name = authorName(post, pcs);
   const alternates = useMemo(() => post.alternates ?? [], [post.alternates]);
@@ -190,6 +192,7 @@ export function PostItem({
             characterName={name}
             asOfTurn={post.turn_id}
             size="sm"
+            expressionsEnabled={expressionsEnabledCharacters?.has(speakerRef) ?? false}
           />
         )}
         <span className="post-author">{name}</span>

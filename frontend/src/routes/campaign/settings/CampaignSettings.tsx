@@ -12,9 +12,11 @@ import { GenerationTab } from "./GenerationTab";
 import { SummariesTab } from "./SummariesTab";
 import { StorageTab } from "./StorageTab";
 import { AdvancedTab } from "./AdvancedTab";
+import { ExpressionsTab } from "./ExpressionsTab";
 
 type Tab =
   | "general"
+  | "expressions"
   | "routing"
   | "imagegen"
   | "mechanics"
@@ -26,6 +28,7 @@ type Tab =
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "general", label: "General" },
+  { id: "expressions", label: "Expressions" },
   { id: "routing", label: "Model routing" },
   { id: "imagegen", label: "ImageGen" },
   { id: "mechanics", label: "Mechanics" },
@@ -104,6 +107,7 @@ export function CampaignSettings() {
           {tab === "general" && (
             <GeneralTab key={campaign.id} campaign={campaign} onUpdate={setCampaign} />
           )}
+          {tab === "expressions" && <ExpressionsTab key={campaignId} campaignId={campaignId} />}
           {tab === "routing" && <RoutingTab key={campaignId} campaignId={campaignId} />}
           {tab === "imagegen" && <ImageGenTab key={campaignId} campaignId={campaignId} />}
           {tab === "mechanics" && (

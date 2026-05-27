@@ -51,6 +51,24 @@ export async function fetchVocabulary(): Promise<ExpressionVocabulary> {
   return api.get<ExpressionVocabulary>("/api/expressions/vocabulary");
 }
 
+export interface ExpressionsConfig {
+  enabled_characters: string[];
+}
+
+export async function fetchExpressionsConfig(campaignId: string): Promise<ExpressionsConfig> {
+  return api.get<ExpressionsConfig>(`/api/campaigns/${encodeURIComponent(campaignId)}/expressions`);
+}
+
+export async function setExpressionsConfig(
+  campaignId: string,
+  config: ExpressionsConfig,
+): Promise<ExpressionsConfig> {
+  return api.put<ExpressionsConfig>(
+    `/api/campaigns/${encodeURIComponent(campaignId)}/expressions`,
+    config,
+  );
+}
+
 interface CacheEntry {
   data: ExpressionResponse;
   expiresAt: number;
@@ -79,6 +97,7 @@ export function useExpression(
   campaignId: string | null,
   characterId: string | null,
   turnId?: string | null,
+  enabled: boolean = false,
 ): { data: ExpressionResponse | null; loading: boolean; error: Error | null } {
   const [state, setState] = useState<{
     data: ExpressionResponse | null;
@@ -87,7 +106,7 @@ export function useExpression(
   }>({ data: null, loading: false, error: null });
 
   useEffect(() => {
-    if (!campaignId || !characterId) {
+    if (!campaignId || !characterId || !enabled) {
       setState({ data: null, loading: false, error: null });
       return;
     }
@@ -113,15 +132,24 @@ export function useExpression(
       })
       .catch((err: unknown) => {
         if (!active) return;
-        if (err && typeof err === "object" && "status" in err && (err as { status: number }).status === 404) {
+        if (
+          err &&
+          typeof err === "object" &&
+          "status" in err &&
+          (err as { status: number }).status === 404
+        ) {
           notFoundCache.set(nfKey, Date.now() + NOT_FOUND_TTL_MS);
         }
-        setState({ data: null, loading: false, error: err instanceof Error ? err : new Error(String(err)) });
+        setState({
+          data: null,
+          loading: false,
+          error: err instanceof Error ? err : new Error(String(err)),
+        });
       });
     return () => {
       active = false;
     };
-  }, [campaignId, characterId, turnId]);
+  }, [campaignId, characterId, turnId, enabled]);
 
   return state;
 }

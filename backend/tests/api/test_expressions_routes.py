@@ -60,6 +60,23 @@ def _seed_character_files(
     return card
 
 
+def _enable_expressions(
+    client: TestClient,
+    campaign_id: str,
+    characters: list[str],
+) -> None:
+    """Ensure the campaign exists and enable expressions for the given characters."""
+    client.post(
+        "/api/campaigns",
+        json={"id": campaign_id, "name": "Test", "composition": {"worlds": []}},
+    )
+    r = client.put(
+        f"/api/campaigns/{campaign_id}/expressions",
+        json={"enabled_characters": characters},
+    )
+    assert r.status_code == 200, r.text
+
+
 def _set_via_patch(
     client: TestClient,
     *,
@@ -99,6 +116,7 @@ def test_returns_neutral_when_no_state(tmp_path: Path, container: ServiceContain
     app = create_app()
     app.state.container = container
     with TestClient(app) as client:
+        _enable_expressions(client, "cmp_1", ["beatrice"])
         r = client.get("/api/campaigns/cmp_1/characters/beatrice/expression")
         assert r.status_code == 200, r.text
         body = r.json()
@@ -120,6 +138,7 @@ def test_returns_requested_sprite_when_present(tmp_path: Path, container: Servic
     app = create_app()
     app.state.container = container
     with TestClient(app) as client:
+        _enable_expressions(client, "cmp_1", ["beatrice"])
         _set_via_patch(
             client,
             campaign_id="cmp_1",
@@ -151,6 +170,7 @@ def test_falls_back_to_neutral_when_sprite_missing(
     app = create_app()
     app.state.container = container
     with TestClient(app) as client:
+        _enable_expressions(client, "cmp_1", ["beatrice"])
         _set_via_patch(
             client,
             campaign_id="cmp_1",
@@ -179,6 +199,7 @@ def test_falls_back_to_avatar_when_no_neutral(tmp_path: Path, container: Service
     app = create_app()
     app.state.container = container
     with TestClient(app) as client:
+        _enable_expressions(client, "cmp_1", ["ralph"])
         r = client.get("/api/campaigns/cmp_1/characters/ralph/expression")
         body = r.json()
         assert body["sprite_url"] is not None
@@ -201,6 +222,7 @@ def test_returns_null_sprite_when_nothing_available(
     app = create_app()
     app.state.container = container
     with TestClient(app) as client:
+        _enable_expressions(client, "cmp_1", ["naked"])
         r = client.get("/api/campaigns/cmp_1/characters/naked/expression")
         body = r.json()
         assert body["sprite_url"] is None
@@ -235,6 +257,7 @@ def test_as_of_turn_returns_historical(tmp_path: Path, container: ServiceContain
     app = create_app()
     app.state.container = container
     with TestClient(app) as client:
+        _enable_expressions(client, "cmp_1", ["beatrice"])
         _set_via_patch(
             client,
             campaign_id="cmp_1",
@@ -268,6 +291,7 @@ def test_patch_pc_expression_writes_state(tmp_path: Path, container: ServiceCont
     app = create_app()
     app.state.container = container
     with TestClient(app) as client:
+        _enable_expressions(client, "cmp_1", ["beatrice"])
         r = client.patch(
             "/api/campaigns/cmp_1/characters/beatrice/expression",
             json={"emotion": "determined", "post_id": "p_42", "turn_id": "t_42"},
@@ -291,6 +315,7 @@ def test_patch_rejects_unknown_emotion(tmp_path: Path, container: ServiceContain
     app = create_app()
     app.state.container = container
     with TestClient(app) as client:
+        _enable_expressions(client, "cmp_1", ["beatrice"])
         r = client.patch(
             "/api/campaigns/cmp_1/characters/beatrice/expression",
             json={"emotion": "ecstatic", "post_id": "p_1"},
@@ -309,3 +334,62 @@ def test_vocabulary_route(tmp_path: Path, container: ServiceContainer) -> None:
         assert "happy" in body["core"]
         assert "neutral" in body["core"]
         assert isinstance(body["extensions"], dict)
+
+
+# ---------------------------------------------------------------------------
+# expressions toggle (issue #474)
+# ---------------------------------------------------------------------------
+
+
+def test_disabled_character_returns_neutral_without_404(
+    tmp_path: Path, container: ServiceContainer
+) -> None:
+    """When expressions are not enabled for a character, GET returns neutral
+    immediately — no library lookup, no 404."""
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        _enable_expressions(client, "cmp_1", [])
+        r = client.get("/api/campaigns/cmp_1/characters/nonexistent/expression")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["emotion"] == "neutral"
+        assert body["sprite_url"] is None
+        assert body["fallback_used"] is True
+
+
+def test_enabled_character_resolves_sprite(tmp_path: Path, container: ServiceContainer) -> None:
+    """When expressions are enabled for a character, GET resolves sprites normally."""
+    _seed_character_files(
+        data_root=tmp_path,
+        world_id="w",
+        asset_id="beatrice",
+        sprites=("neutral", "happy"),
+    )
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        _enable_expressions(client, "cmp_1", ["beatrice"])
+        r = client.get("/api/campaigns/cmp_1/characters/beatrice/expression")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["sprite_url"] is not None
+        assert body["sprite_url"].endswith("/sprites/neutral.png")
+
+
+def test_default_off_prevents_404_flood(tmp_path: Path, container: ServiceContainer) -> None:
+    """Characters not in the library don't cause 404s when toggle is off (default)."""
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        _enable_expressions(client, "cmp_1", [])
+        for char in ("deleted-char", "old-npc", "missing-entity"):
+            r = client.get(f"/api/campaigns/cmp_1/characters/{char}/expression")
+            assert r.status_code == 200
+            assert r.json()["emotion"] == "neutral"
