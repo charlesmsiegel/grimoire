@@ -87,9 +87,12 @@ def _seed_from_builtin(cal: WorldCalendar, calendar_id: str) -> WorldCalendar:
     if builtin is None:
         return cal
     engine = engine_for(builtin)
-    ref_year = 2000
-    year_days = engine.year_length_days(ref_year)
-    start_jdn = engine.to_jdn(ref_year, 1, 1)
+    ref_year = 2024
+    try:
+        year_days = engine.year_length_days(ref_year)
+        start_jdn = engine.to_jdn(ref_year, 1, 1)
+    except Exception:
+        return cal
     months: list[Month] = []
     seen_months: set[int] = set()
     jdn = start_jdn
