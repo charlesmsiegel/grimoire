@@ -246,11 +246,7 @@ export function StartupWizard({ onClose, title = "Set up Grimoire" }: StartupWiz
               </button>
             ) : (
               <>
-                <button
-                  type="button"
-                  onClick={() => void finishAndExit()}
-                  disabled={finishing}
-                >
+                <button type="button" onClick={() => void finishAndExit()} disabled={finishing}>
                   {finishing ? "Saving…" : "Finish later"}
                 </button>
                 <button
@@ -273,19 +269,20 @@ export function StartupWizard({ onClose, title = "Set up Grimoire" }: StartupWiz
 function WelcomeStep() {
   return (
     <div className="wizard-step startup-welcome">
+      <img className="startup-welcome-icon" src="/grimoire-128.png" alt="" aria-hidden="true" />
       <h3>Welcome to Grimoire.</h3>
       <p>
-        Grimoire is a local-first RPG companion: it keeps your settings, characters, lore, and
-        play history on your machine, then uses a language model to help you run sessions. This
-        short setup wires the pieces it needs:
+        Grimoire is a local-first RPG companion: it keeps your settings, characters, lore, and play
+        history on your machine, then uses a language model to help you run sessions. This short
+        setup wires the pieces it needs:
       </p>
       <ol className="startup-welcome-list">
         <li>
           <strong>A language model</strong> — narration, NPCs, and summaries. Hosted or local.
         </li>
         <li>
-          <strong>An embedding model</strong> — used so prompts pull in the right lore.
-          Optional but recommended.
+          <strong>An embedding model</strong> — used so prompts pull in the right lore. Optional but
+          recommended.
         </li>
         <li>
           <strong>An image generator</strong> — optional; renders scene and character art.
@@ -295,8 +292,8 @@ function WelcomeStep() {
         </li>
       </ol>
       <p className="wizard-meta">
-        You can resume this wizard any time from <em>Settings → Providers → Run setup</em>.
-        Nothing leaves your machine except calls you explicitly point at hosted providers.
+        You can resume this wizard any time from <em>Settings → Providers → Run setup</em>. Nothing
+        leaves your machine except calls you explicitly point at hosted providers.
       </p>
     </div>
   );
@@ -307,20 +304,19 @@ function CampaignHandoffStep() {
     <div className="wizard-step startup-handoff">
       <h3>Ready to play.</h3>
       <p>
-        That's the substrate set up. Campaigns are where the work happens: you pick a setting
-        from your library, compose mechanics, add your party of player characters, and choose
-        an opening scene.
+        That's the substrate set up. Campaigns are where the work happens: you pick a setting from
+        your library, compose mechanics, add your party of player characters, and choose an opening
+        scene.
       </p>
       <p>
         The campaign creator is a separate, more detailed wizard. Choosing{" "}
-        <strong>Create my first campaign</strong> will mark setup complete and take you there
-        now. Choosing <strong>Finish later</strong> just marks setup complete — you can start
-        a campaign from <em>Campaigns → New campaign</em> whenever you're ready.
+        <strong>Create my first campaign</strong> will mark setup complete and take you there now.
+        Choosing <strong>Finish later</strong> just marks setup complete — you can start a campaign
+        from <em>Campaigns → New campaign</em> whenever you're ready.
       </p>
       <p className="wizard-meta">
-        Tip: the library ships with example settings (try{" "}
-        <code>~/.grimoire/library/settings</code>) so you have something to compose from on
-        day one.
+        Tip: the library ships with example settings (try <code>~/.grimoire/library/settings</code>)
+        so you have something to compose from on day one.
       </p>
     </div>
   );
@@ -517,17 +513,14 @@ function ProviderConfigCard({ manifest }: { manifest: PluginManifest }) {
     }
   }
 
-  const handleGGUFIntrospect = useCallback(
-    (info: GGUFInfo) => {
-      setDraft((d) => {
-        const next = { ...d };
-        if (info.context_length != null && !d["n_ctx"]) next["n_ctx"] = info.context_length;
-        if (info.name && !d["model_id"]) next["model_id"] = info.name;
-        return next;
-      });
-    },
-    [],
-  );
+  const handleGGUFIntrospect = useCallback((info: GGUFInfo) => {
+    setDraft((d) => {
+      const next = { ...d };
+      if (info.context_length != null && !d["n_ctx"]) next["n_ctx"] = info.context_length;
+      if (info.name && !d["model_id"]) next["model_id"] = info.name;
+      return next;
+    });
+  }, []);
 
   if (propertyKeys.length === 0) {
     return (
@@ -613,15 +606,8 @@ function ProviderConfigCard({ manifest }: { manifest: PluginManifest }) {
   );
 }
 
-function ProviderStatusBadge({
-  configured,
-  loading,
-}: {
-  configured: boolean;
-  loading: boolean;
-}) {
+function ProviderStatusBadge({ configured, loading }: { configured: boolean; loading: boolean }) {
   if (loading) return <span className="provider-status provider-status-idle">Checking…</span>;
-  if (configured)
-    return <span className="provider-status provider-status-ok">Connected</span>;
+  if (configured) return <span className="provider-status provider-status-ok">Connected</span>;
   return <span className="provider-status provider-status-idle">Not configured</span>;
 }

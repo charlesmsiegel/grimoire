@@ -1,6 +1,10 @@
-# Grimoire
+<p align="center">
+  <img src="assets/icons/grimoire-128.png" alt="Grimoire" width="96" />
+</p>
 
-**A local-first RPG campaign companion that keeps your stories coherent.**
+<h1 align="center">Grimoire</h1>
+
+<p align="center"><strong>A local-first RPG campaign companion that keeps your stories coherent.</strong></p>
 
 <!-- Uncomment badges once license is chosen and CI is public:
 ![License](https://img.shields.io/badge/license-TBD-blue)

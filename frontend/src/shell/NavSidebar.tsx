@@ -12,7 +12,12 @@ interface NavSection {
 const navSections: NavSection[] = [
   { label: "Library", to: "/library", description: "Worlds, style guides, plugins", icon: "L" },
   { label: "Campaigns", to: "/campaigns", description: "Active plays and creation", icon: "C" },
-  { label: "Observability", to: "/observability", description: "Metrics, health, errors", icon: "O" },
+  {
+    label: "Observability",
+    to: "/observability",
+    description: "Metrics, health, errors",
+    icon: "O",
+  },
   { label: "Health", to: "/health", description: "Provider probes and errors", icon: "H" },
   { label: "Settings", to: "/settings", description: "App-level configuration", icon: "S" },
 ];
@@ -32,13 +37,11 @@ export function NavSidebar({ collapsed, onToggle }: Props) {
           <NavLink
             to="/"
             end
-            className={({ isActive }) =>
-              isActive ? "nav-brand-link active" : "nav-brand-link"
-            }
+            className={({ isActive }) => (isActive ? "nav-brand-link active" : "nav-brand-link")}
             title={collapsed ? "Grimoire — home" : "Home"}
             aria-label="Grimoire — home"
           >
-            <span className="nav-brand-mark" aria-hidden="true" />
+            <img className="nav-brand-mark" src="/grimoire-32.png" alt="" aria-hidden="true" />
             <span className="nav-brand-text">Grimoire</span>
           </NavLink>
         </h1>
