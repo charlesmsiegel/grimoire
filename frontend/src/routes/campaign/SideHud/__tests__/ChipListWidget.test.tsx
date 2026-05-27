@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 import type { WidgetSnapshot } from "../../../../api/hud";
 import { ChipListWidget } from "../widgets/ChipListWidget";
@@ -8,45 +9,54 @@ function snap(overrides: Partial<WidgetSnapshot> = {}): WidgetSnapshot {
   return {
     id: "core.present-cast",
     status: "ok",
-    data: [
-      {
-        character_id: "winifred",
-        name: "winifred",
-        portrait_url: "/p/winifred.png",
-        mood: { emoji: "😟", label: "anxious" },
-        current_action: "scanning the dim hallway",
-        internal_thought: "Something feels off here.",
-        source: "library",
-        drift: { score: 0.6, threshold: 0.5 },
-      },
-      {
-        character_id: "alistair",
-        name: "Alistair",
-        mood: { emoji: "🙂", label: "calm" },
-        source: "emergent",
-      },
-    ],
+    data: {
+      chips: [
+        {
+          character_id: "winifred",
+          name: "winifred",
+          portrait_url: "/p/winifred.png",
+          source: "library",
+        },
+        {
+          character_id: "alistair",
+          name: "Alistair",
+          source: "emergent",
+        },
+      ],
+    },
     error: null,
     stale: false,
-    title: "Present cast",
+    title: "Cast",
     render_hint: "chip-list",
     ...overrides,
   };
 }
 
 describe("ChipListWidget — present cast", () => {
-  it("renders one chip per present character with mood + action", () => {
-    render(<ChipListWidget snapshot={snap()} />);
-    const winifred = screen.getByLabelText(/present cast: winifred/i);
-    expect(within(winifred).getByText(/anxious/i)).toBeInTheDocument();
-    expect(within(winifred).getByText(/scanning the dim hallway/i)).toBeInTheDocument();
-    expect(within(winifred).getByText(/something feels off/i)).toBeInTheDocument();
-    const alistair = screen.getByLabelText(/present cast: alistair/i);
-    expect(within(alistair).getByText(/calm/i)).toBeInTheDocument();
+  it("renders one chip per present character as a link", () => {
+    render(
+      <MemoryRouter>
+        <ChipListWidget snapshot={snap()} campaignId="test-campaign" />
+      </MemoryRouter>,
+    );
+    const winifred = screen.getByText("winifred");
+    expect(winifred.closest("a")).toHaveAttribute(
+      "href",
+      "/campaigns/test-campaign/cast?character=winifred",
+    );
+    const alistair = screen.getByText("Alistair");
+    expect(alistair.closest("a")).toHaveAttribute(
+      "href",
+      "/campaigns/test-campaign/cast?character=alistair",
+    );
   });
 
   it("renders the empty state when no chips present", () => {
-    render(<ChipListWidget snapshot={snap({ data: [] })} />);
+    render(
+      <MemoryRouter>
+        <ChipListWidget snapshot={snap({ data: { chips: [] } })} campaignId="test-campaign" />
+      </MemoryRouter>,
+    );
     expect(screen.getByText(/no present characters/i)).toBeInTheDocument();
   });
 
