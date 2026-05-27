@@ -192,6 +192,14 @@ async def run_import_pipeline(
                 await _set_campaign_summary_cadence(state_store, campaign_id, saved_cadence)
             except Exception:
                 logger.debug("import: could not restore summary cadence", exc_info=True)
+        # Re-restore active scene state — append_post re-sets _pc_current_scene
+        # on every PC post, undoing the earlier restore.
+        if prev_active is not None:
+            scene_manager._active_scene[active_key] = prev_active
+        else:
+            scene_manager._active_scene.pop(active_key, None)
+        for pc_key, prev_id in prev_pc_scenes.items():
+            scene_manager._pc_current_scene[pc_key] = prev_id
 
     tick += 1
     threads_detail = "Thread detection complete"
