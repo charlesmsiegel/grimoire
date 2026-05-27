@@ -35,7 +35,10 @@ class CastResolver:
     def render_scene_header(self, scene: Any) -> str:
         if scene is None:
             return "No active scene."
-        lines = [f"Scene: {getattr(scene, 'title', None) or getattr(scene, 'slug', '')}"]
+        title = getattr(scene, "title", None) or getattr(scene, "slug", "")
+        pc_absent = not (getattr(scene, "present_pc_refs", None) or [])
+        label = f"{title} (NPC-only)" if pc_absent else title
+        lines = [f"Scene: {label}"]
         if getattr(scene, "location_ref", None):
             lines.append(f"Location: {scene.location_ref}")
         igt = getattr(scene, "in_game_start", None)

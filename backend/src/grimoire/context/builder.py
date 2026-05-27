@@ -48,6 +48,7 @@ from grimoire.types.context import (
     ContextSource,
 )
 from grimoire.types.extraction_modes import ExtractionMode
+from grimoire.types.state import ContextTier
 from grimoire.types.inclusion_reasons import InclusionReason
 from grimoire.types.llm import Message, MessageRole, ModelParams
 from grimoire.types.mechanics import MechanicsResult
@@ -315,14 +316,38 @@ class ContextBuilderService:
         scene_header = self._cast.render_scene_header(scene)
 
         # Step 2 — cast
-        if pc_ref is None:
-            active_pc_ref = await self._safe_call(self._characters.active_pc, campaign_id)
+        present_chars = list(getattr(scene, "present_character_refs", []) or []) if scene else []
+        present_pcs = list(getattr(scene, "present_pc_refs", []) or []) if scene else []
+        pc_absent = bool(present_chars) and not present_pcs
+
+        if pc_absent:
+            scene_mode = (
+                "This is an NPC-only scene. The player is directing the scene but has "
+                "no character present. Write all characters freely — there are no PC "
+                "agency restrictions. The player's input is scene direction, not "
+                "character dialogue."
+            )
         else:
-            active_pc_ref = pc_ref
-        active_pc_card, active_pc_source = await self._cast.active_pc_card(
-            active_pc_ref, campaign_id
-        )
-        active_pc_name = await self._cast.active_pc_name(active_pc_ref, campaign_id)
+            scene_mode = (
+                "You are narrating a scene where the player acts through their character. "
+                "Never write the player character's dialogue, actions, or internal thoughts. "
+                "Stop at decision points and wait for the player."
+            )
+
+        if pc_absent:
+            active_pc_ref = None
+            active_pc_card = ""
+            active_pc_source = None
+            active_pc_name = ""
+        else:
+            if pc_ref is None:
+                active_pc_ref = await self._safe_call(self._characters.active_pc, campaign_id)
+            else:
+                active_pc_ref = pc_ref
+            active_pc_card, active_pc_source = await self._cast.active_pc_card(
+                active_pc_ref, campaign_id
+            )
+            active_pc_name = await self._cast.active_pc_name(active_pc_ref, campaign_id)
 
         # Open commitments are reused for both the lock-in commitments block
         # and the tier-recommendation hint (`commitments_targeting_pcs`).
@@ -339,6 +364,28 @@ class ContextBuilderService:
             recent_posts=recent_posts,
             commitments_targeting_pcs=commitments_targeting_pcs,
         )
+
+        if pc_absent and scene is not None:
+            present_set = set(getattr(scene, "present_pc_refs", []) or [])
+            absent_pc_refs = pc_refs - present_set
+            for ref in sorted(absent_pc_refs):
+                compressed = await self._cast._try_compressed_card(ref, campaign_id)
+                if compressed:
+                    background_items.append(
+                        TierItem(
+                            tier=ContextTier.BACKGROUND,
+                            section="absent_pc",
+                            text=compressed,
+                            priority=4,
+                            source=ContextSource(
+                                kind="character",
+                                scope="campaign-local",
+                                owner_id=campaign_id,
+                                tier=ContextTier.BACKGROUND,
+                                summary=f"absent-pc:{ref}",
+                            ),
+                        )
+                    )
 
         # Step 3 — world
         world_spotlight, world_background = await self._world_ctx.resolve_world(
@@ -493,6 +540,8 @@ class ContextBuilderService:
             extra=extra,
             narrator_response_mode=narrator_mode,
             present_npcs=present_npcs,
+            pc_absent=pc_absent,
+            scene_mode=scene_mode,
         )
 
     # -- composition / system block ------------------------------------ #

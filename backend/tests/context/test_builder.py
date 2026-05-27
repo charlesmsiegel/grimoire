@@ -86,6 +86,11 @@ class StubCharacters:
     async def active_pc(self, campaign_id: str) -> str | None:
         return self._active
 
+    async def list_pcs(self, campaign_id: str) -> list[Any]:
+        if self._active:
+            return [type("_PC", (), {"character_ref": self._active})()]
+        return []
+
     async def get_full_card(self, ref: str, campaign_id: str) -> str:
         return self._cards.get(ref, _Card()).full
 
@@ -321,7 +326,8 @@ async def test_present_characters_in_spotlight_only() -> None:
         present_character_refs=[
             "library:worlds/wod/characters/alistair",
             "library:worlds/wod/characters/winifred",
-        ]
+        ],
+        present_pc_refs=["library:worlds/wod/characters/alistair"],
     )
     scenes = StubScenes(scene=scene)
     builder = _builder(characters=chars, scenes=scenes)
@@ -907,7 +913,7 @@ async def test_relationship_deltas_in_background() -> None:
             ]
         },
     )
-    scene = _Scene(present_character_refs=[other])
+    scene = _Scene(present_character_refs=[pc, other], present_pc_refs=[pc])
     builder = _builder(characters=chars, scenes=StubScenes(scene=scene))
     prompt = await builder.build("scene", "camp")
     body = "\n".join(m.content for m in prompt.messages)
@@ -1147,3 +1153,84 @@ async def test_cache_module_round_trip() -> None:
         )
     assert cache.get(key) is None
     assert len(cache) == 3
+
+
+# --------------------------------------------------------------------------- #
+# PC-absent scene tests
+# --------------------------------------------------------------------------- #
+
+
+async def test_pc_absent_scene_skips_active_pc_card() -> None:
+    chars = StubCharacters(
+        cards={"library:worlds/wod/characters/alistair": _Card(full="# Alistair\nElder Tremere.")},
+        active="library:worlds/wod/characters/alistair",
+    )
+    scene = _Scene(
+        present_character_refs=["npc-winifred"],
+        present_pc_refs=[],
+    )
+    scenes = StubScenes(scene=scene)
+    builder = _builder(characters=chars, scenes=scenes)
+    prompt = await builder.build("scene begins", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "Elder Tremere" not in body
+    assert not any(
+        s.tier == ContextTier.LOCK_IN and s.kind == "character" for s in prompt.sources
+    )
+
+
+async def test_pc_absent_scene_includes_director_instruction() -> None:
+    scene = _Scene(
+        present_character_refs=["npc-winifred"],
+        present_pc_refs=[],
+    )
+    scenes = StubScenes(scene=scene)
+    builder = _builder(scenes=scenes)
+    prompt = await builder.build("the NPCs argue", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "NPC-only scene" in body
+
+
+async def test_pc_present_scene_includes_agency_instruction() -> None:
+    scene = _Scene(
+        present_character_refs=["pc-alistair", "npc-winifred"],
+        present_pc_refs=["pc-alistair"],
+    )
+    scenes = StubScenes(scene=scene)
+    builder = _builder(scenes=scenes)
+    prompt = await builder.build("I bow", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "Never write the player character" in body
+
+
+async def test_scene_header_labels_npc_only() -> None:
+    scene = _Scene(
+        title="Secret Meeting",
+        present_character_refs=["npc-winifred", "npc-drake"],
+        present_pc_refs=[],
+    )
+    scenes = StubScenes(scene=scene)
+    builder = _builder(scenes=scenes)
+    prompt = await builder.build("NPCs talk", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "(NPC-only)" in body
+
+
+async def test_pc_absent_scene_adds_absent_pc_background_cards() -> None:
+    chars = StubCharactersWithRecommend(
+        cards={
+            "pc-alistair": _Card(full="# Alistair\nFull", compressed="Alistair (compressed)"),
+            "npc-winifred": _Card(full="# winifred\nFull"),
+        },
+        active="pc-alistair",
+        pcs=["pc-alistair"],
+    )
+    scene = _Scene(
+        present_character_refs=["npc-winifred"],
+        present_pc_refs=[],
+    )
+    scenes = StubScenes(scene=scene)
+    builder = _builder(characters=chars, scenes=scenes)
+    prompt = await builder.build("the NPCs talk", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "Alistair (compressed)" in body
