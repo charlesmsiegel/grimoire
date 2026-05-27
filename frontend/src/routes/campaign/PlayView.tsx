@@ -19,12 +19,11 @@ import { SceneBreakPrompt } from "./SceneBreakPrompt";
 import { SceneHeader } from "./SceneHeader";
 import { ScenePane } from "./ScenePane";
 import { SideHud } from "./SideHud/SideHud";
-import { SidePanel } from "./SidePanel";
 import { TimeAdvanceDigest } from "./TimeAdvanceDigest";
 import { usePlayState } from "./usePlayState";
 import { WhatChangedPanel } from "./WhatChangedPanel";
 
-type RightView = "side" | "inspector" | "hud" | "debug";
+type RightView = "inspector" | "hud" | "debug";
 
 interface Props {
   campaignId: string;
@@ -156,15 +155,6 @@ export function PlayView({ campaignId }: Props) {
           <button
             type="button"
             role="tab"
-            aria-selected={rightView === "side"}
-            className={rightView === "side" ? "is-active" : ""}
-            onClick={() => setRightView("side")}
-          >
-            Side panel
-          </button>
-          <button
-            type="button"
-            role="tab"
             aria-selected={rightView === "inspector"}
             className={rightView === "inspector" ? "is-active" : ""}
             onClick={() => setRightView("inspector")}
@@ -252,13 +242,11 @@ export function PlayView({ campaignId }: Props) {
           )}
         </div>
         {rightView === "hud" ? (
-          <SideHud campaignId={campaignId} sceneId={play.state.scene?.id ?? null} />
-        ) : rightView === "side" ? (
-          <SidePanel
+          <SideHud
             campaignId={campaignId}
+            sceneId={play.state.scene?.id ?? null}
             scene={play.state.scene}
             pcs={play.state.pcs}
-
             actions={{
               onRegenerate: () => void runAction(() => play.regenerate()),
               onUndo: () => void runAction(() => play.undo()),
