@@ -81,7 +81,7 @@ afterEach(() => {
 describe("WhatChangedPanel", () => {
   it("shows an idle prompt when no turn id is selected", () => {
     render(<WhatChangedPanel turnId={null} />);
-    expect(screen.getByText(/no turn selected/i)).toBeInTheDocument();
+    expect(screen.getByText(/waiting for the first turn/i)).toBeInTheDocument();
   });
 
   it("renders applied + queued deltas grouped by kind", async () => {
@@ -138,7 +138,7 @@ describe("WhatChangedPanel", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: /Queued for review/i })).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByLabelText(/Include queued/i));
+    fireEvent.click(screen.getByRole("checkbox"));
     expect(screen.queryByRole("heading", { name: /Queued for review/i })).toBeNull();
   });
 
