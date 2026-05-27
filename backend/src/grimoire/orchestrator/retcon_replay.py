@@ -298,10 +298,8 @@ class RetconReplaySession:
         failure rather than corrupting batch state.
         """
         original_primary_ds: str | None = None
-        branch_id = "main"
         try:
-            scene, post = await self._orch._alternates.find_scene_and_post(post_id)
-            branch_id = scene.branch_id or "main"
+            _scene, post = await self._orch._alternates.find_scene_and_post(post_id)
             original_primary_ds = next(
                 (
                     a.delta_set_id
@@ -334,7 +332,6 @@ class RetconReplaySession:
             await self._orch._store.re_activate_delta_set(
                 delta_set_id=original_primary_ds,
                 campaign_id=state.campaign_id,
-                branch_id=branch_id,
             )
         except Exception:  # pragma: no cover - best effort
             logger.warning(
@@ -397,8 +394,7 @@ class RetconReplaySession:
         """All model-authored posts strictly after the edited one in temporal
         order: the rest of its scene, then every post in later scenes."""
         edited_scene, edited_post = await self._orch._alternates.find_scene_and_post(edited_post_id)
-        branch_id = edited_scene.branch_id or "main"
-        scenes = await self._orch._scenes.list_scenes(campaign_id, branch_id)
+        scenes = await self._orch._scenes.list_scenes(campaign_id)
         ordered: list[PostId] = []
         seen_edited_scene = False
         for scene in scenes:

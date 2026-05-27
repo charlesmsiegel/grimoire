@@ -112,7 +112,6 @@ class AlternatesManager:
                 pc_ref = prior.author_pc_ref
                 break
 
-        branch_id = scene.branch_id or "main"
         new_alt_id = f"a_{uuid.uuid4().hex[:16]}"
         new_ds_id = f"ds_{uuid.uuid4().hex[:16]}"
         applied = False
@@ -158,7 +157,6 @@ class AlternatesManager:
                     apply_deltas=deltas,
                     apply_set_id=new_ds_id,
                     campaign_id=campaign_id,
-                    branch_id=branch_id,
                     turn_id=post.turn_id,
                     source="orchestrator:regenerate",
                 )
@@ -167,7 +165,6 @@ class AlternatesManager:
                     deltas=deltas,
                     delta_set_id=new_ds_id,
                     campaign_id=campaign_id,
-                    branch_id=branch_id,
                     turn_id=post.turn_id,
                     source="orchestrator:regenerate",
                 )
@@ -189,7 +186,6 @@ class AlternatesManager:
 
             await self._store.set_current_alternate_delta_set(
                 campaign_id=campaign_id,
-                branch_id=branch_id,
                 post_id=post_id,
                 delta_set_id=new_ds_id,
             )
@@ -222,9 +218,7 @@ class AlternatesManager:
         except Exception:
             if applied:
                 try:
-                    await self._store.rewind_delta_set(
-                        new_ds_id, campaign_id=campaign_id, branch_id=branch_id
-                    )
+                    await self._store.rewind_delta_set(new_ds_id, campaign_id=campaign_id)
                 except Exception:
                     logger.warning(
                         "rollback of new delta set %s during regenerate_post failed",
@@ -236,7 +230,6 @@ class AlternatesManager:
                         await self._store.re_activate_delta_set(
                             delta_set_id=rewind_ds,
                             campaign_id=campaign_id,
-                            branch_id=branch_id,
                         )
                     except Exception:
                         logger.warning(
@@ -294,13 +287,11 @@ class AlternatesManager:
                 "delta_swap": False,
             }
 
-        branch_id = scene.branch_id or "main"
         await self._store.swap_delta_set(
             rewind_set_id=current.delta_set_id,
             apply_deltas=None,
             apply_set_id=target.delta_set_id,
             campaign_id=campaign_id,
-            branch_id=branch_id,
             turn_id=post.turn_id,
             source="orchestrator:switch-primary",
         )
@@ -308,7 +299,6 @@ class AlternatesManager:
         await self._scenes.rebuild_md_from_primaries(scene.id)
         await self._store.set_current_alternate_delta_set(
             campaign_id=campaign_id,
-            branch_id=branch_id,
             post_id=post_id,
             delta_set_id=target.delta_set_id,
         )
@@ -366,13 +356,11 @@ class AlternatesManager:
         target = next((a for a in post.alternates if a.id == alternate_id), None)
         if target is None:
             raise AlternateNotFoundError(post_id, alternate_id)
-        branch_id = scene.branch_id or "main"
         if target.delta_set_id:
             try:
                 await self._store.rewind_delta_set(
                     target.delta_set_id,
                     campaign_id=scene.campaign_id,
-                    branch_id=branch_id,
                 )
             except Exception as exc:
                 logger.warning(

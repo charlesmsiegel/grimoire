@@ -12,9 +12,8 @@ Lifecycle:
   ``post_deleted``, ``scene_file_changed``) and writes them through as
   ``INSERT OR REPLACE`` against ``scenes`` / ``posts``.
 * :meth:`SceneIndexer.backfill` walks ``data/campaigns/<id>/scenes/*.yaml``
-  (plus ``branches/*/scenes/...``) and reconciles every row with disk —
-  this catches direct-edit-while-down deltas the live subscription would
-  otherwise miss.
+  and reconciles every row with disk — this catches direct-edit-while-down
+  deltas the live subscription would otherwise miss.
 
 The indexer only depends on a small ``_DB`` protocol so tests can drop in an
 aiosqlite connection without standing up the full ``StateStore``.
@@ -378,7 +377,6 @@ class SceneIndexer:
                     post_id=p.id,
                     scene_id=scene.id,
                     campaign_id=scene.campaign_id,
-    
                     turn_id=p.turn_id or None,
                     order_in_scene=p.order_in_scene,
                     author_kind=p.author_kind,
@@ -397,7 +395,6 @@ class SceneIndexer:
                     post_id=p.id,
                     scene_id=scene.id,
                     campaign_id=scene.campaign_id,
-    
                     turn_id=p.turn_id or None,
                     order_in_scene=p.order_in_scene,
                     author_kind=p.author_kind,
@@ -427,26 +424,21 @@ class SceneIndexer:
         for campaign_dir in campaigns_root.iterdir():
             if not campaign_dir.is_dir():
                 continue
-            branches = [campaign_dir / "scenes"]
-            branches_dir = campaign_dir / "branches"
-            if branches_dir.exists():
-                branches.extend(b / "scenes" for b in branches_dir.iterdir() if b.is_dir())
+            scenes_dir_path = campaign_dir / "scenes"
             if acquire is not None:
                 async with acquire() as conn:
                     await conn.execute("BEGIN IMMEDIATE")
                     try:
                         db: _DB = _SingleConnDB(conn)
-                        for scenes_dir_path in branches:
-                            await self._backfill_branch(scenes_dir_path, db)
+                        await self._backfill_campaign(scenes_dir_path, db)
                         await conn.execute("COMMIT")
                     except Exception:
                         await conn.execute("ROLLBACK")
                         raise
             else:
-                for scenes_dir_path in branches:
-                    await self._backfill_branch(scenes_dir_path, self._db)
+                await self._backfill_campaign(scenes_dir_path, self._db)
 
-    async def _backfill_branch(self, scenes_dir_path: Path, db: _DB) -> None:
+    async def _backfill_campaign(self, scenes_dir_path: Path, db: _DB) -> None:
         if not scenes_dir_path.exists():
             return
         for yaml_path in sorted(scenes_dir_path.glob("*.yaml")):
@@ -469,7 +461,6 @@ class SceneIndexer:
                     post_id=post_id,
                     scene_id=scene.id,
                     campaign_id=scene.campaign_id,
-    
                     turn_id=(record.turn_id if record else None) or None,
                     order_in_scene=order,
                     author_kind=kind,

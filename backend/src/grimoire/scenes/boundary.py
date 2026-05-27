@@ -229,7 +229,6 @@ def detect_scene_break(
             reason="user_signal",
             proposed_new_scene=SceneInit(
                 campaign_id=scene.campaign_id if scene else "",
-                branch_id=scene.branch_id if scene else "main",
                 location_ref=proposed_location_ref or (scene.location_ref if scene else None),
                 in_game_start=now_in_game,
             ),
@@ -283,7 +282,6 @@ def detect_scene_break(
         reason=reason,
         proposed_new_scene=SceneInit(
             campaign_id=scene.campaign_id,
-            branch_id=scene.branch_id,
             location_ref=proposed_location_ref or scene.location_ref,
             in_game_start=now_in_game,
             present_character_refs=list(proposed_present_cast or scene.present_character_refs),

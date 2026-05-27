@@ -107,7 +107,6 @@ async def run_import_pipeline(
 
     init = SceneInit(
         campaign_id=campaign_id,
-        branch_id="main",
         title=title,
         slug=slugify(title),
         location_ref=metadata.get("location_ref"),
@@ -118,7 +117,7 @@ async def run_import_pipeline(
         tags=metadata.get("tags", []),
     )
     # Save active scene state so import doesn't redirect live play.
-    active_key = (campaign_id, "main")
+    active_key = campaign_id
     prev_active = getattr(scene_manager, "_active_scene", {}).get(active_key)
     prev_pc_scenes: dict[tuple[str, str], str] = {}
     pc_scene_map = getattr(scene_manager, "_pc_current_scene", {})

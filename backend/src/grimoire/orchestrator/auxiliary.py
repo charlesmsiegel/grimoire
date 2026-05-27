@@ -221,9 +221,7 @@ class AuxiliaryCoordinator:
         deltas: list[Any] = []
         try:
             pyd_scene = _pydantic_scene(scene)
-            snapshot = StateSnapshot(
-                campaign_id=campaign_id, branch_id=branch_id, scene_id=scene.id
-            )
+            snapshot = StateSnapshot(campaign_id=campaign_id, scene_id=scene.id)
             extraction = await self._extractor.extract(
                 text,
                 pyd_scene,
@@ -259,7 +257,6 @@ class AuxiliaryCoordinator:
                     deltas=deltas,
                     delta_set_id=new_ds_id,
                     campaign_id=campaign_id,
-                    branch_id=branch_id,
                     turn_id=post.turn_id,
                     source="orchestrator:aux-rewrite",
                 )

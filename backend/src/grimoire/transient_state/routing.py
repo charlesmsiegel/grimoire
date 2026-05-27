@@ -82,7 +82,6 @@ async def _should_promote(
     transient_state: TransientStateService,
     campaign_id: str,
     cfg: TransientStateConfig,
-    branch_id: str | None,
 ) -> bool:
     """True when the last N entries (including this proposal) carry the
     same value with distinct source_post_ids — the spec's reinforcement
@@ -99,7 +98,6 @@ async def _should_promote(
         proposal.entity_id,
         proposal.field,
         limit=needed * 2,
-        branch_id=branch_id,
     )
     matches = 0
     seen_posts: set[str] = set()

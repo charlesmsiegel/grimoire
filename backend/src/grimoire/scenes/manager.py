@@ -422,9 +422,7 @@ class SceneManager:
 
     # -- Active scene tracking ------------------------------------------
 
-    async def active_scene_for_campaign(
-        self, campaign_id: str
-    ) -> Scene | None:
+    async def active_scene_for_campaign(self, campaign_id: str) -> Scene | None:
         scene_id = self._active_scene.get(campaign_id)
         if scene_id:
             try:
