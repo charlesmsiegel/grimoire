@@ -28,12 +28,8 @@ interface PreservedSummary {
 
 export function CampaignView() {
   const { campaignId } = useParams();
+  const [campaignName, setCampaignName] = useState<string | null>(null);
 
-  // Spec 14 §Performance budgets: campaign switch < 300ms with library cached.
-  // We mark on every campaignId change; the first frame after the new value
-  // shows up in the DOM ends the measurement. This is a coarse approximation
-  // — it does not wait for nested async loads — but matches the budget which
-  // targets perceived layout, not data hydration.
   const prevIdRef = useRef<string | undefined>(undefined);
   if (campaignId && prevIdRef.current !== campaignId) {
     markStart("campaign:switch");
@@ -43,6 +39,15 @@ export function CampaignView() {
     if (campaignId) {
       markEnd("campaign:switch");
     }
+  }, [campaignId]);
+
+  useEffect(() => {
+    if (!campaignId) return;
+    let cancelled = false;
+    campaignApi.get(campaignId).then((c) => {
+      if (!cancelled) setCampaignName(c.name ?? null);
+    }).catch(() => {});
+    return () => { cancelled = true; };
   }, [campaignId]);
 
   if (!campaignId) {
@@ -55,7 +60,7 @@ export function CampaignView() {
   return (
     <section className="campaign-view" aria-labelledby="campaign-heading">
       <header className="campaign-header">
-        <h2 id="campaign-heading">Campaign: {campaignId}</h2>
+        <h2 id="campaign-heading">{campaignName ?? campaignId}</h2>
         <nav className="campaign-subnav" aria-label="Campaign sections">
           {subSections.map((s) => (
             <NavLink
