@@ -60,6 +60,7 @@ class GenerationResult(BaseModel):
     actual_params: Json = Field(default_factory=dict)
     duration_ms: int = 0
     error: str | None = None
+    cost_usd: float = 0.0
 
 
 class JobStatus(StrEnum):

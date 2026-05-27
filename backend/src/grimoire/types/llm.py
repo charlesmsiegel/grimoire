@@ -111,7 +111,7 @@ class LLMCallRecord(BaseModel):
     model: str
     input_tokens: int
     output_tokens: int
-    cost_usd: float | None
+    cost_usd: float = 0.0
     latency_ms: int
     finish_reason: str
     campaign_id: str | None = None
