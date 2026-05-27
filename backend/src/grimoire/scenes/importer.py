@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -121,7 +121,13 @@ async def run_import_pipeline(
     in_game_end = _parse_dt(metadata.get("in_game_end"))
     if in_game_end is not None:
         scene.in_game_end = in_game_end
-        _, yaml_path = scene_paths(scene_manager.data_root, scene)
+        naming = getattr(
+            getattr(scene_manager, "config", None),
+            "files",
+            None,
+        )
+        pattern = getattr(naming, "scene_naming_pattern", None) or "{ordinal:04d}-{slug}"
+        _, yaml_path = scene_paths(scene_manager.data_root, scene, naming_pattern=pattern)
         write_sidecar(yaml_path, scene)
 
     tick = 1
@@ -139,7 +145,7 @@ async def run_import_pipeline(
         except Exception:
             logger.debug("import: could not suppress summary cadence", exc_info=True)
 
-    now = datetime.now(UTC)
+    base_ts = datetime.now(UTC)
     posts: list[Post] = []
     try:
         for i, (_order, kind, pc_ref, npc_ref, body) in enumerate(parsed.posts):
@@ -150,7 +156,8 @@ async def run_import_pipeline(
                 author_kind=kind,
                 body=body,
                 is_player=(kind == AuthorKind.PC),
-                created_at=now,
+                created_at=base_ts
+                + timedelta(milliseconds=i),  # distinct per post for fork cutoffs
                 turn_id=uuid.uuid4().hex,
                 author_pc_ref=pc_ref,
                 author_npc_ref=npc_ref,
@@ -168,18 +175,15 @@ async def run_import_pipeline(
                 logger.debug("import: could not restore summary cadence", exc_info=True)
 
     tick += 1
+    threads_detail = "Thread detection complete"
     try:
         threads = await scene_manager.detect_threads(scene.id)
         for thread, kind in threads:
             await scene_manager.add_thread(scene.id, thread, kind)
     except Exception:
         logger.warning("import: thread detection failed", exc_info=True)
-    yield ImportProgress(
-        step="threads",
-        current=tick,
-        total=total,
-        detail="Thread detection complete",
-    )
+        threads_detail = "Thread detection skipped (no model configured)"
+    yield ImportProgress(step="threads", current=tick, total=total, detail=threads_detail)
 
     tick += 1
     summary_detail = "Summary generated"
