@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   campaignApi,
-  type CampaignSummary,
-
   type TimeAdvanceResult,
 } from "../../api/campaign";
 
@@ -13,7 +11,7 @@ import { SceneSuggestionView } from "./SceneSuggestionView";
 import { DriftBanner } from "./DriftBanner";
 import { InputArea } from "./InputArea";
 
-import { PCSwitcher } from "./PCSwitcher";
+
 import { PreRollConfirmation } from "./PreRollConfirmation";
 import { SceneBreakPrompt } from "./SceneBreakPrompt";
 import { SceneHeader } from "./SceneHeader";
@@ -40,27 +38,11 @@ export function PlayView({ campaignId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId, play.state.scene, play.state.posts, play.dispatch]);
 
-  const [campaign, setCampaign] = useState<CampaignSummary | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [timeDigest, setTimeDigest] = useState<TimeAdvanceResult | null>(null);
   const [ledgerOpen, setLedgerOpen] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    campaignApi
-      .get(campaignId)
-      .then((c) => {
-        if (!cancelled) setCampaign(c);
-      })
-      .catch(() => {
-        // Best-effort: a missing summary just falls back to the campaign id.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignId]);
 
 
 
@@ -130,16 +112,6 @@ export function PlayView({ campaignId }: Props) {
 
   return (
     <section className="play-view" aria-label="Campaign play view">
-      <div className="play-top-bar">
-        <h2 className="play-campaign">{campaign?.name ?? campaignId}</h2>
-        <PCSwitcher
-          pcs={play.state.pcs}
-          activePcRef={play.state.activePcRef}
-          onChange={(ref) => void play.setActivePC(ref)}
-          campaignId={campaignId}
-        />
-      </div>
-
       <DriftBanner warnings={driftWarnings} onSuppress={play.suppressDrift} />
 
       <TimeAdvanceDigest result={timeDigest} onDismiss={() => setTimeDigest(null)} />
