@@ -43,45 +43,37 @@ class CostTrackerService:
     async def total(
         self,
         campaign_id: CampaignId | None = None,
-        provider: str | None = None,
         model: str | None = None,
         task: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> CostTotal:
-        # We join against llm_requests to filter by provider and to pull
-        # token usage (cost_records doesn't store tokens directly).
         clauses: list[str] = []
         params: list[Any] = []
         if campaign_id:
-            clauses.append("cr.campaign_id = ?")
+            clauses.append("campaign_id = ?")
             params.append(campaign_id)
         if model:
-            clauses.append("cr.model = ?")
+            clauses.append("model = ?")
             params.append(model)
         if task:
-            clauses.append("cr.task = ?")
+            clauses.append("task = ?")
             params.append(task)
         if since is not None:
-            clauses.append("cr.recorded_at >= ?")
+            clauses.append("recorded_at >= ?")
             params.append(since.isoformat())
         if until is not None:
-            clauses.append("cr.recorded_at < ?")
+            clauses.append("recorded_at < ?")
             params.append(until.isoformat())
-        if provider:
-            clauses.append("lr.provider = ?")
-            params.append(provider)
 
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"""
             SELECT
-                COALESCE(SUM(cr.cost_usd), 0.0) AS total_usd,
-                COALESCE(SUM(lr.prompt_tokens), 0) AS input_tokens,
-                COALESCE(SUM(lr.completion_tokens), 0) AS output_tokens,
-                COUNT(cr.id) AS call_count
-            FROM cost_records cr
-            LEFT JOIN llm_requests lr
-                ON lr.turn_id = cr.turn_id AND lr.task = cr.task AND lr.model = cr.model
+                COALESCE(SUM(cost_usd), 0.0) AS total_usd,
+                COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                COUNT(id) AS call_count
+            FROM cost_records
             {where}
         """
         row = await self._db.fetchone(sql, tuple(params))
@@ -124,27 +116,16 @@ class CostTrackerService:
         return out
 
     async def by_turn(self, turn_id: str) -> dict[str, CostTotal]:
-        """Per-task cost breakdown for one turn.
-
-        Joins ``cost_records`` against ``llm_requests`` on
-        ``(turn_id, task, model)`` so each task's totals carry token counts
-        from the gateway's request log. Tasks with no matching
-        ``llm_requests`` row still get a cost total — tokens default to 0.
-        """
         rows = await self._db.fetchall(
             """
-            SELECT cr.task AS task,
-                   COALESCE(SUM(cr.cost_usd), 0.0) AS total_usd,
-                   COALESCE(SUM(lr.prompt_tokens), 0) AS input_tokens,
-                   COALESCE(SUM(lr.completion_tokens), 0) AS output_tokens,
-                   COUNT(cr.id) AS call_count
-            FROM cost_records cr
-            LEFT JOIN llm_requests lr
-                ON lr.turn_id = cr.turn_id
-                AND lr.task = cr.task
-                AND lr.model = cr.model
-            WHERE cr.turn_id = ?
-            GROUP BY cr.task
+            SELECT task,
+                   COALESCE(SUM(cost_usd), 0.0) AS total_usd,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                   COUNT(id) AS call_count
+            FROM cost_records
+            WHERE turn_id = ?
+            GROUP BY task
             """,
             (turn_id,),
         )
