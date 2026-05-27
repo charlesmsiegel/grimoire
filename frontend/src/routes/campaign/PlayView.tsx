@@ -12,7 +12,7 @@ import { ScenePreviewPanel } from "./ScenePreviewPanel";
 import { SceneSuggestionView } from "./SceneSuggestionView";
 import { DriftBanner } from "./DriftBanner";
 import { InputArea } from "./InputArea";
-import { InspectorPanel } from "./Inspector/InspectorPanel";
+
 import { PCSwitcher } from "./PCSwitcher";
 import { PreRollConfirmation } from "./PreRollConfirmation";
 import { SceneBreakPrompt } from "./SceneBreakPrompt";
@@ -23,7 +23,7 @@ import { TimeAdvanceDigest } from "./TimeAdvanceDigest";
 import { usePlayState } from "./usePlayState";
 import { WhatChangedPanel } from "./WhatChangedPanel";
 
-type RightView = "inspector" | "hud" | "debug";
+type RightView = "hud" | "debug";
 
 interface Props {
   campaignId: string;
@@ -155,15 +155,6 @@ export function PlayView({ campaignId }: Props) {
           <button
             type="button"
             role="tab"
-            aria-selected={rightView === "inspector"}
-            className={rightView === "inspector" ? "is-active" : ""}
-            onClick={() => setRightView("inspector")}
-          >
-            Inspector
-          </button>
-          <button
-            type="button"
-            role="tab"
             aria-selected={rightView === "debug"}
             className={rightView === "debug" ? "is-active" : ""}
             onClick={() => setRightView("debug")}
@@ -258,12 +249,7 @@ export function PlayView({ campaignId }: Props) {
               onManualFact: handleManualFact,
               busy,
             }}
-          />
-        ) : rightView === "inspector" ? (
-          <InspectorPanel
-            campaignId={campaignId}
             playerInput={draft}
-            sessionId={campaignId}
             pcRef={play.state.activePcRef}
           />
         ) : (
