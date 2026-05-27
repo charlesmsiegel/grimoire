@@ -116,6 +116,10 @@ class Scene:
     # the resolver that combines this with the campaign default.
     narrator_response_mode: str | None = None
 
+    @property
+    def pc_absent(self) -> bool:
+        return len(self.present_pc_refs) == 0
+
 
 @dataclass
 class SceneInit:

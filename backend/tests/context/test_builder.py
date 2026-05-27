@@ -171,6 +171,7 @@ class _Scene:
     in_game_start: Any = None
     mood: str = ""
     present_character_refs: list[str] = field(default_factory=list)
+    present_pc_refs: list[str] = field(default_factory=list)
     running_summary: str = ""
 
 
