@@ -96,9 +96,11 @@ def _to_config(p: HudConfigPayload) -> HudConfig:
 
 
 @router.get("/{campaign_id}/hud", response_model=AggregateResult)
-async def get_hud_aggregate(campaign_id: str, hud: HudDep) -> AggregateResult:
+async def get_hud_aggregate(
+    campaign_id: str, hud: HudDep, scene_id: str | None = None
+) -> AggregateResult:
     try:
-        return await hud.aggregate(campaign_id)
+        return await hud.aggregate(campaign_id, scene_id=scene_id)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 
