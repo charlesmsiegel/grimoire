@@ -6,6 +6,7 @@ import type { WidgetSnapshot } from "../../../api/hud";
 import type { ResolvedCharacter } from "../../../api/types";
 import { viewsApi } from "../../../api/views";
 import { InspectorPanel } from "../Inspector/InspectorPanel";
+import { WhatChangedPanel } from "../WhatChangedPanel";
 import { AuxInflightBadge } from "./AuxInflightBadge";
 import { PresentCastChip } from "./PresentCastChip";
 import { parsePresentCast } from "./presentCastShape";
@@ -43,6 +44,7 @@ interface Props {
   actions: QuickActions;
   playerInput: string;
   pcRef?: string | null;
+  latestNarratorTurnId: string | null;
 }
 
 const SCENE_SETTING_IDS = new Set([
@@ -385,7 +387,7 @@ function QuickActionsBlock({
 
 /* ---- Main component ---- */
 
-export function SideHud({ campaignId, sceneId, scene, pcs, actions, playerInput, pcRef }: Props) {
+export function SideHud({ campaignId, sceneId, scene, pcs, actions, playerInput, pcRef, latestNarratorTurnId }: Props) {
   const hud = useHud(campaignId, sceneId);
 
   const { sceneSetting, castWidget, coreWidgets, pluginWidgets } = useMemo(() => {
@@ -437,6 +439,7 @@ export function SideHud({ campaignId, sceneId, scene, pcs, actions, playerInput,
         sessionId={campaignId}
         pcRef={pcRef}
       />
+      <WhatChangedPanel turnId={latestNarratorTurnId} />
       {pluginWidgets.length > 0 && (
         <ul className="side-hud-widgets">
           {pluginWidgets.map((w) => (
