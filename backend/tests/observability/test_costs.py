@@ -126,45 +126,9 @@ async def test_by_turn_returns_cost_totals_by_task(db) -> None:
     assert by_turn["primary"].call_count == 2
     assert by_turn["extraction"].total_usd == 0.005
     assert by_turn["extraction"].call_count == 1
-    # No matching llm_requests rows — tokens default to 0.
-    assert by_turn["primary"].input_tokens == 0
-    assert by_turn["primary"].output_tokens == 0
-
-
-async def test_by_turn_pulls_tokens_from_llm_requests(db) -> None:
-    tracker = CostTrackerService(db)
-    await tracker.record(_call(cost=0.04, task="primary", model="m-1", turn="t9"))
-    await db.execute(
-        "INSERT INTO llm_requests ("
-        "id, campaign_id, turn_id, task, provider, model, "
-        "prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, "
-        "retries, fallback_used, request_hash, response_excerpt, error, created_at"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            "r1",
-            "c1",
-            "t9",
-            "primary",
-            "p",
-            "m-1",
-            250,
-            90,
-            340,
-            0.04,
-            100,
-            0,
-            0,
-            None,
-            None,
-            None,
-            datetime.now(UTC).isoformat(),
-        ),
-    )
-
-    by_turn = await tracker.by_turn("t9")
-    assert by_turn["primary"].input_tokens == 250
-    assert by_turn["primary"].output_tokens == 90
-    assert by_turn["primary"].call_count == 1
+    # Tokens come from cost_records directly — no llm_requests needed.
+    assert by_turn["primary"].input_tokens == 200  # 2 calls × 100 input tokens each
+    assert by_turn["primary"].output_tokens == 100  # 2 calls × 50 output tokens each
 
 
 async def test_by_turn_unknown_returns_empty(db) -> None:
