@@ -23,6 +23,7 @@ export interface PlayApi {
   regenerate: () => Promise<void>;
   undo: () => Promise<void>;
   endScene: () => Promise<void>;
+  analyzeScene: () => Promise<void>;
   deleteScene: () => Promise<void>;
   newScene: () => Promise<void>;
   refresh: () => Promise<void>;

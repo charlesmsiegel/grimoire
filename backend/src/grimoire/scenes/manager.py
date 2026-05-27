@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
+from grimoire.scenes.analysis import SceneAnalysisResult
 from grimoire.scenes.boundary import BoundaryConfig, detect_scene_break
 from grimoire.scenes.events import (
     ADVANCE_DISABLED,
@@ -76,6 +77,7 @@ FinalSummarizer = Callable[[Scene, list[Post]], Awaitable[tuple[str, list[str]]]
 AdaptiveSummarizer = Callable[[Scene, list[Post]], Awaitable[tuple[str, list[str]]]]
 ThreadDetector = Callable[[Scene, list[Post]], Awaitable[list[tuple[Thread, str]]]]
 SceneBreakClassifier = Callable[[Scene | None, str, list[Post]], Awaitable[SceneBreakDecision]]
+SceneAnalyzer = Callable[[Scene, list[Post], str], Awaitable[SceneAnalysisResult]]
 
 
 class _NullEventBus:
@@ -147,6 +149,7 @@ class SceneManager:
         final_summarizer: FinalSummarizer | None = None,
         thread_detector: ThreadDetector | None = None,
         scene_break_classifier: SceneBreakClassifier | None = None,
+        scene_analyzer: SceneAnalyzer | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         continuity: object | None = None,
         metrics: MetricsRegistryProtocol = NULL_METRICS,
@@ -160,6 +163,7 @@ class SceneManager:
         self._adaptive_summarizer: AdaptiveSummarizer | None = None
         self._thread_detector = thread_detector
         self._scene_break_classifier = scene_break_classifier
+        self._scene_analyzer = scene_analyzer
         self._clock = clock
         # §10 Continuity injection: when wired, ``start_scene`` calls
         # ``brief_for_scene`` and stuffs the result into the
@@ -197,6 +201,9 @@ class SceneManager:
 
     def set_adaptive_summarizer(self, summarizer: AdaptiveSummarizer | None) -> None:
         self._adaptive_summarizer = summarizer
+
+    def set_scene_analyzer(self, analyzer: SceneAnalyzer | None) -> None:
+        self._scene_analyzer = analyzer
 
     def set_metrics(self, metrics: MetricsRegistryProtocol) -> None:
         self._metrics = metrics
@@ -660,6 +667,41 @@ class SceneManager:
             scene.key_beats = list(key_beats)
             self._write_sidecar(scene)
             return summary, key_beats
+
+    async def analyze_scene(
+        self,
+        scene_id: str,
+        *,
+        force: bool = False,
+    ) -> SceneAnalysisResult:
+        """Run bundled scene analysis: summary + extraction in one LLM pass."""
+        if self._scene_analyzer is None:
+            raise RuntimeError("scene analyzer not configured")
+
+        async with self._lock_for(scene_id):
+            scene = await self.get_scene(scene_id)
+            posts = await self.get_posts(scene_id)
+            if not posts:
+                return SceneAnalysisResult()
+
+            result = await self._scene_analyzer(scene, posts, scene.campaign_id)
+
+            if result.summary:
+                if scene.closed:
+                    scene.final_summary = result.summary
+                else:
+                    scene.running_summary = result.summary
+                scene.key_beats = list(result.key_beats)
+
+            for thread in result.threads_introduced:
+                if thread not in scene.threads_introduced:
+                    scene.threads_introduced.append(thread)
+            for thread in result.threads_paid_off:
+                if thread not in scene.threads_paid_off:
+                    scene.threads_paid_off.append(thread)
+
+            self._write_sidecar(scene)
+            return result
 
     # -- Posts -----------------------------------------------------------
 

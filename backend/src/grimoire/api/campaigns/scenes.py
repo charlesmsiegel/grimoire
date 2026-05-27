@@ -8,7 +8,14 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from grimoire.api.deps import CharactersDep, ContainerDep, LibraryDep, ScenesDep, StateStoreDep
+from grimoire.api.deps import (
+    CharactersDep,
+    ContainerDep,
+    LibraryDep,
+    OrchestratorDep,
+    ScenesDep,
+    StateStoreDep,
+)
 from grimoire.api.util import map_lookup_errors, to_payload
 
 from .helpers import _require_scene_owned, _seed_greeting_first_post
@@ -207,6 +214,56 @@ async def summarize_scene(
         return {"summary": summary, "key_beats": key_beats}
     except HTTPException:
         raise
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.post("/{campaign_id}/scenes/{scene_id}/analyze")
+async def analyze_scene(
+    campaign_id: str,
+    scene_id: str,
+    scenes: ScenesDep,
+    orchestrator: OrchestratorDep,
+    force: bool = False,
+) -> Any:
+    try:
+        scene = await _require_scene_owned(scenes, campaign_id, scene_id)
+        result = await scenes.analyze_scene(scene_id, force=force)
+
+        applied_ids: list[str] = []
+        queued_ids: list[str] = []
+        if result.extraction.deltas or result.extraction.candidates:
+            applied_ids, queued_ids = await orchestrator.route_analysis_deltas(
+                campaign_id=campaign_id,
+                branch_id=scene.branch_id,
+                extraction=result.extraction,
+            )
+
+        return {
+            "summary": result.summary,
+            "key_beats": result.key_beats,
+            "threads_introduced": [
+                {"text": t.text, "at_post": t.introduced_at_post} for t in result.threads_introduced
+            ],
+            "threads_paid_off": [
+                {"text": t.text, "at_post": t.paid_off_at_post} for t in result.threads_paid_off
+            ],
+            "deltas_applied": len(applied_ids),
+            "deltas_queued": len(queued_ids),
+            "entity_candidates": [
+                {
+                    "kind": c.kind,
+                    "proposed_id": c.proposed_id,
+                    "proposed_name": c.proposed_name,
+                    "confidence": c.confidence,
+                }
+                for c in result.extraction.candidates
+            ],
+        }
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 

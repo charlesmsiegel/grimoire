@@ -289,6 +289,7 @@ async def build_llm_services(
     from grimoire.llm_gateway.gateway import LLMGatewayService
     from grimoire.observability.replayer import TurnReplayerService
     from grimoire.observability.service import ObservabilityService
+    from grimoire.scenes.analysis import make_adaptive_scene_analyzer
     from grimoire.scenes.default_summarizers import (
         make_adaptive_summarizer,
         make_default_final_summarizer,
@@ -397,6 +398,8 @@ async def build_llm_services(
                 model=container.scenes.config.running_summary.model or "default",
             )
         )
+    if getattr(container.scenes, "_scene_analyzer", None) is None:
+        container.scenes.set_scene_analyzer(make_adaptive_scene_analyzer(llm_gateway))
 
     if container.scene_summary_worker is None:
         worker = RunningSummaryWorker(container.scenes, container.event_bus)

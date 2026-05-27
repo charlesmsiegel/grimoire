@@ -115,6 +115,21 @@ export interface ApiScene {
   narrator_response_mode?: NarratorResponseMode | null;
 }
 
+export interface SceneAnalysisResult {
+  summary: string;
+  key_beats: string[];
+  threads_introduced: { text: string; at_post: number | null }[];
+  threads_paid_off: { text: string; at_post: number | null }[];
+  deltas_applied: number;
+  deltas_queued: number;
+  entity_candidates: {
+    kind: string;
+    proposed_id: string;
+    proposed_name: string;
+    confidence: number;
+  }[];
+}
+
 export interface SceneDetail {
   scene: ApiScene;
   body: string;

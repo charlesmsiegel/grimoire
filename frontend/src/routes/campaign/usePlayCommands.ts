@@ -70,6 +70,13 @@ export function usePlayCommands(
     }
   }, [campaignId, refresh, stateRef, dispatch]);
 
+  const analyzeScene = useCallback(async () => {
+    const scene = stateRef.current.scene;
+    if (!scene) return;
+    await campaignApi.analyzeScene(campaignId, scene.id);
+    await refresh();
+  }, [campaignId, refresh, stateRef]);
+
   const deleteScene = useCallback(async () => {
     const scene = stateRef.current.scene;
     if (!scene) return;
@@ -108,6 +115,7 @@ export function usePlayCommands(
     regenerate,
     undo,
     endScene,
+    analyzeScene,
     deleteScene,
     newScene,
     suppressDrift,

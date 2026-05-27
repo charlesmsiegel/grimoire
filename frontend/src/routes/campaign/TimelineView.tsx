@@ -125,6 +125,9 @@ export function TimelineView() {
                     expanded={expanded === scene.id}
                     onToggle={() => toggleExpand(scene.id)}
                     onJump={() => jumpToScene(scene.id)}
+                    onAnalyze={() =>
+                      campaignApi.analyzeScene(campaignId, scene.id).then(() => state.reload())
+                    }
                   />
                 ))}
                 {visible.length === 0 && (
@@ -162,12 +165,14 @@ function SceneCard({
   expanded,
   onToggle,
   onJump,
+  onAnalyze,
 }: {
   scene: SceneSummary;
   nameMap: Map<string, string>;
   expanded: boolean;
   onToggle: () => void;
   onJump: () => void;
+  onAnalyze: () => void;
 }) {
   const time = scene.in_game_start?.moment ?? "";
   const pcSet = new Set(scene.present_pc_refs);
@@ -221,9 +226,14 @@ function SceneCard({
           )}
           <ThreadList title="Introduced" threads={scene.threads_introduced} />
           <ThreadList title="Paid off" threads={scene.threads_paid_off} />
-          <button type="button" className="primary timeline-jump-btn" onClick={onJump}>
-            Jump to scene
-          </button>
+          <div className="timeline-detail-actions">
+            <button type="button" className="primary timeline-jump-btn" onClick={onJump}>
+              Jump to scene
+            </button>
+            <button type="button" className="timeline-analyze-btn" onClick={onAnalyze}>
+              Analyze scene
+            </button>
+          </div>
         </div>
       )}
     </li>

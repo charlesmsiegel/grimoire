@@ -12,6 +12,7 @@ export type {
   ReplayBatchView,
   NarratorResponseMode,
   ApiScene,
+  SceneAnalysisResult,
   SceneDetail,
   SubmitTurnResult,
   AdvanceTurnResult,

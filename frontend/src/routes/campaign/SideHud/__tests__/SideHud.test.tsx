@@ -33,6 +33,7 @@ const ACTIONS = {
   onRegenerate: vi.fn(),
   onUndo: vi.fn(),
   onEndScene: vi.fn(),
+  onAnalyzeScene: vi.fn(),
   onDeleteScene: vi.fn(),
   onNewScene: vi.fn(),
   onOpenLedger: vi.fn(),
