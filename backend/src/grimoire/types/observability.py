@@ -7,7 +7,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-from .common import BranchId, CampaignId, GenJobId, Json, TurnId
+from .common import CampaignId, GenJobId, Json, TurnId
 from .context import ContextSource
 from .extraction import ExtractionFlag
 from .mechanics import MechanicsResult, ProposedRoll
@@ -84,7 +84,6 @@ class ErrorRecord(BaseModel):
 class TurnAudit(BaseModel):
     turn_id: TurnId
     campaign_id: CampaignId
-    branch_id: BranchId
     started_at: datetime
     completed_at: datetime | None = None
     duration_ms: int | None = None
