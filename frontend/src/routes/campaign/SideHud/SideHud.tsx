@@ -5,6 +5,7 @@ import { ApiError } from "../../../api/client";
 import type { WidgetSnapshot } from "../../../api/hud";
 import type { ResolvedCharacter } from "../../../api/types";
 import { viewsApi } from "../../../api/views";
+import { InspectorPanel } from "../Inspector/InspectorPanel";
 import { AuxInflightBadge } from "./AuxInflightBadge";
 import { PresentCastChip } from "./PresentCastChip";
 import { parsePresentCast } from "./presentCastShape";
@@ -40,6 +41,8 @@ interface Props {
   scene: ApiScene | null;
   pcs: PCEntry[];
   actions: QuickActions;
+  playerInput: string;
+  pcRef?: string | null;
 }
 
 const SCENE_SETTING_IDS = new Set([
@@ -382,7 +385,7 @@ function QuickActionsBlock({
 
 /* ---- Main component ---- */
 
-export function SideHud({ campaignId, sceneId, scene, pcs, actions }: Props) {
+export function SideHud({ campaignId, sceneId, scene, pcs, actions, playerInput, pcRef }: Props) {
   const hud = useHud(campaignId, sceneId);
 
   const { sceneSetting, castWidget, coreWidgets, pluginWidgets } = useMemo(() => {
@@ -428,6 +431,12 @@ export function SideHud({ campaignId, sceneId, scene, pcs, actions }: Props) {
       ))}
       <MechanicsBlock campaignId={campaignId} pcs={pcs} />
       <QuickActionsBlock actions={actions} scene={scene} />
+      <InspectorPanel
+        campaignId={campaignId}
+        playerInput={playerInput}
+        sessionId={campaignId}
+        pcRef={pcRef}
+      />
       {pluginWidgets.length > 0 && (
         <ul className="side-hud-widgets">
           {pluginWidgets.map((w) => (

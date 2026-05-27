@@ -51,7 +51,7 @@ export function InspectorPanel({
     enabled,
   });
 
-  const [tab, setTab] = useState<Tab>("sources");
+  const [tab, setTab] = useState<Tab | null>(null);
   const [explanations, setExplanations] = useState<ContextSourceExplanation[]>([]);
   const [explainErr, setExplainErr] = useState<string | null>(null);
   const [diff, setDiff] = useState<ContextDiff | null>(null);
@@ -113,56 +113,71 @@ export function InspectorPanel({
 
   return (
     <aside className="inspector-panel" aria-label="Context inspector">
-      <header className="inspector-header">
-        <h3>Context Inspector</h3>
-        {live.loading && <span className="inspector-loading">…</span>}
-        {live.error && <span className="inspector-error">{live.error}</span>}
-      </header>
+      <div className="scene-setting-block" aria-label="Context inspector">
+        {live.error && <p className="inspector-error">{live.error}</p>}
 
-      <TokenBars summary={live.summary} loading={live.loading} />
+        <div className="scene-setting-entry scene-setting-entry-full">
+          <span className="scene-setting-label">
+            Tokens{live.loading ? " …" : ""}
+          </span>
+          <TokenBars summary={live.summary} loading={live.loading} />
+        </div>
 
-      <nav className="inspector-tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "sources"}
-          className={tab === "sources" ? "is-active" : ""}
-          onClick={() => setTab("sources")}
-        >
-          Sources ({explanations.length})
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "diff"}
-          className={tab === "diff" ? "is-active" : ""}
-          onClick={() => {
-            setTab("diff");
-            void computeDiff();
-          }}
-        >
-          Diff
-        </button>
-      </nav>
+        <div className="scene-setting-entry scene-setting-entry-full">
+          <nav className="inspector-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "sources"}
+              className={tab === "sources" ? "is-active" : ""}
+              onClick={() => setTab(tab === "sources" ? null : "sources")}
+            >
+              Sources ({explanations.length})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "diff"}
+              className={tab === "diff" ? "is-active" : ""}
+              onClick={() => {
+                if (tab === "diff") {
+                  setTab(null);
+                } else {
+                  setTab("diff");
+                  void computeDiff();
+                }
+              }}
+            >
+              Diff
+            </button>
+          </nav>
+        </div>
 
-      {tab === "sources" ? (
-        <>
-          {explainErr && <p className="inspector-error">{explainErr}</p>}
-          <SourceList
-            campaignId={campaignId}
-            sources={explanations}
-            onChanged={handleChanged}
-          />
-        </>
-      ) : (
-        <>
-          {diffErr && <p className="inspector-error">{diffErr}</p>}
-          <DiffView diff={diff} />
-          <button type="button" className="inspector-refresh" onClick={() => void computeDiff()}>
-            Refresh diff
-          </button>
-        </>
-      )}
+        {tab === "sources" && (
+          <div className="scene-setting-entry scene-setting-entry-full inspector-tab-body">
+            {explainErr && <p className="inspector-error">{explainErr}</p>}
+            <SourceList
+              campaignId={campaignId}
+              sources={explanations}
+              onChanged={handleChanged}
+            />
+          </div>
+        )}
+
+        {tab === "diff" && (
+          <div className="scene-setting-entry scene-setting-entry-full inspector-tab-body">
+            {diffErr && <p className="inspector-error">{diffErr}</p>}
+            <DiffView diff={diff} />
+            <button
+              type="button"
+              className="inspector-refresh"
+              onClick={() => void computeDiff()}
+            >
+              Refresh diff
+            </button>
+          </div>
+        )}
+      </div>
     </aside>
   );
 }
