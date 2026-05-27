@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
-from grimoire.api.deps import ScenesDep
+from grimoire.api.deps import ContainerDep, ScenesDep, StateStoreDep
 from grimoire.scenes.importer import parse_import_source, run_import_pipeline
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,12 @@ async def import_scene(
     campaign_id: str,
     body: ImportRequest,
     scenes: ScenesDep,
+    state_store: StateStoreDep,
+    container: ContainerDep,
 ) -> StreamingResponse:
+    row = await state_store.db.fetchone("SELECT id FROM campaigns WHERE id = ?", (campaign_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Campaign not found: {campaign_id}")
     try:
         md_path = Path(body.path).resolve()
     except (OSError, ValueError) as exc:
@@ -86,6 +91,7 @@ async def import_scene(
         raise HTTPException(status_code=400, detail=f"Not a file: {body.path}")
 
     metadata = body.model_dump(exclude={"path", "title"})
+    eq = getattr(getattr(container, "file_watcher", None), "embedding_queue", None)
 
     async def event_stream():
         scene_id = ""
@@ -96,6 +102,7 @@ async def import_scene(
                 campaign_id=campaign_id,
                 title=body.title,
                 metadata=metadata,
+                embedding_queue=eq,
             ):
                 yield f"event: progress\ndata: {json.dumps(asdict(progress))}\n\n"
                 if progress.step == "done":
