@@ -111,6 +111,11 @@ class NextSpeakerPayload(BaseModel):
     scene_id: str
 
 
+class SubmitDirectionPayload(BaseModel):
+    scene_id: str
+    text: str | None = None
+
+
 class RetconPayload(BaseModel):
     post_id: str
     new_text: str
