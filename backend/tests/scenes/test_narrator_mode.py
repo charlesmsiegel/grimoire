@@ -8,6 +8,7 @@ from grimoire.scenes.narrator_mode import (
     ALL_AT_ONCE,
     DEFAULT_RESPONSE_MODE,
     PER_CHARACTER,
+    PER_CHARACTER_MULTI_CALL,
     campaign_response_mode,
     effective_response_mode,
     normalize_response_mode,
@@ -56,3 +57,20 @@ def test_effective_response_mode_falls_back_to_default_when_both_unset() -> None
 def test_effective_response_mode_ignores_invalid_override() -> None:
     row = {"config": json.dumps({"narrator": {"response_mode": ALL_AT_ONCE}})}
     assert effective_response_mode(scene_override="garbage", campaign_row=row) == ALL_AT_ONCE
+
+
+def test_normalize_response_mode_accepts_multi_call() -> None:
+    assert normalize_response_mode(PER_CHARACTER_MULTI_CALL) == PER_CHARACTER_MULTI_CALL
+
+
+def test_campaign_response_mode_reads_multi_call() -> None:
+    row = {"config": json.dumps({"narrator": {"response_mode": PER_CHARACTER_MULTI_CALL}})}
+    assert campaign_response_mode(row) == PER_CHARACTER_MULTI_CALL
+
+
+def test_effective_response_mode_scene_override_multi_call() -> None:
+    row = {"config": json.dumps({"narrator": {"response_mode": ALL_AT_ONCE}})}
+    assert (
+        effective_response_mode(scene_override=PER_CHARACTER_MULTI_CALL, campaign_row=row)
+        == PER_CHARACTER_MULTI_CALL
+    )
