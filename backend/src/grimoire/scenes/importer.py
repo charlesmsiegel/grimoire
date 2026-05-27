@@ -83,6 +83,7 @@ async def run_import_pipeline(
     campaign_id: str,
     title: str,
     metadata: dict[str, Any],
+    embedding_queue: Any | None = None,
 ) -> AsyncIterator[ImportProgress]:
     """Run the full import pipeline, yielding progress events."""
     parsed = parse_import_source(md_path)
@@ -116,7 +117,25 @@ async def run_import_pipeline(
         mood=metadata.get("mood"),
         tags=metadata.get("tags", []),
     )
+    # Save active scene state so import doesn't redirect live play.
+    active_key = (campaign_id, "main")
+    prev_active = getattr(scene_manager, "_active_scene", {}).get(active_key)
+    prev_pc_scenes: dict[tuple[str, str], str] = {}
+    pc_scene_map = getattr(scene_manager, "_pc_current_scene", {})
+    for pc_ref in metadata.get("present_pc_refs", []):
+        pc_key = (campaign_id, pc_ref)
+        if pc_key in pc_scene_map:
+            prev_pc_scenes[pc_key] = pc_scene_map[pc_key]
+
     scene = await scene_manager.start_scene(init)
+
+    # Restore active scene state — import should not change what's "current".
+    if prev_active is not None:
+        scene_manager._active_scene[active_key] = prev_active
+    else:
+        scene_manager._active_scene.pop(active_key, None)
+    for pc_key, prev_id in prev_pc_scenes.items():
+        scene_manager._pc_current_scene[pc_key] = prev_id
 
     in_game_end = _parse_dt(metadata.get("in_game_end"))
     if in_game_end is not None:
@@ -195,7 +214,27 @@ async def run_import_pipeline(
     yield ImportProgress(step="summarize", current=tick, total=total, detail=summary_detail)
 
     tick += 1
-    yield ImportProgress(step="embed", current=tick, total=total, detail="Embedding enqueued")
+    embed_detail = "Embedding enqueued"
+    if embedding_queue is not None:
+        try:
+            from grimoire.watcher.watcher import EmbeddingJob
+
+            md_body = md_path.read_text(encoding="utf-8")
+            embedding_queue.enqueue(
+                EmbeddingJob(
+                    ref=scene.id,
+                    scope="campaign",
+                    source_kind="scene",
+                    text=f"{scene.title}\n\n{md_body}",
+                    campaign_id=campaign_id,
+                )
+            )
+        except Exception:
+            logger.warning("import: embedding enqueue failed", exc_info=True)
+            embed_detail = "Embedding skipped"
+    else:
+        embed_detail = "Embedding deferred (no queue available)"
+    yield ImportProgress(step="embed", current=tick, total=total, detail=embed_detail)
 
     tick += 1
     yield ImportProgress(step="done", current=tick, total=total, detail=scene.id)
