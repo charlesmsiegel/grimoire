@@ -7,9 +7,10 @@
  * and search by title or summary.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
+import { campaignApi } from "../../api/campaign";
 import { viewsApi } from "../../api/views";
 import type { SceneSummary, Thread } from "../../api/types";
 import { useApi } from "../../api/useApi";
@@ -20,18 +21,39 @@ export function TimelineView() {
   const { campaignId = "" } = useParams();
   const navigate = useNavigate();
   const state = useApi(useCallback(() => viewsApi.listScenes(campaignId), [campaignId]));
+  const charState = useApi(
+    useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]),
+  );
+  const pcState = useApi(
+    useCallback(() => campaignApi.listPCs(campaignId), [campaignId]),
+  );
+  const nameMap = useMemo(() => {
+    const m = new Map<string, string>();
+    if (charState.status === "ok") {
+      for (const rc of charState.data) {
+        m.set(rc.character.id, rc.character.name);
+        m.set(`emergent/${rc.character.id}`, rc.character.name);
+      }
+    }
+    if (pcState.status === "ok") {
+      for (const pc of pcState.data) {
+        m.set(pc.character_ref, pc.name);
+      }
+    }
+    return m;
+  }, [charState, pcState]);
 
   const [search, setSearch] = useState("");
   const [moodFilter, setMoodFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "open" | "closed">("all");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(false);
 
   const jumpToScene = (sceneId: string) => {
-    // ``?scene=`` is read by usePlayState (spec frontend §9). Keeping it in
-    // the URL means reload still lands on the same scene.
     navigate(`/campaigns/${encodeURIComponent(campaignId)}?scene=${encodeURIComponent(sceneId)}`);
   };
+
+  const toggleExpand = (id: string) => setExpanded((prev) => (prev === id ? null : id));
 
   return (
     <section className="route campaign-timeline" aria-labelledby="timeline-heading">
@@ -60,7 +82,6 @@ export function TimelineView() {
           const moods = collectMoods(scenes);
           const visible = filterScenes(scenes, search, moodFilter, statusFilter);
           const threadLinks = collectThreadLinks(visible);
-          const selectedScene = scenes.find((s) => s.id === selected) ?? null;
           return (
             <div className="timeline-layout">
               <div className="timeline-toolbar">
@@ -100,8 +121,10 @@ export function TimelineView() {
                   <SceneCard
                     key={scene.id}
                     scene={scene}
-                    active={selected === scene.id}
-                    onSelect={() => setSelected(scene.id)}
+                    nameMap={nameMap}
+                    expanded={expanded === scene.id}
+                    onToggle={() => toggleExpand(scene.id)}
+                    onJump={() => jumpToScene(scene.id)}
                   />
                 ))}
                 {visible.length === 0 && (
@@ -125,10 +148,6 @@ export function TimelineView() {
                   </ul>
                 </aside>
               )}
-
-              {selectedScene && (
-                <SceneDetail scene={selectedScene} onJump={() => jumpToScene(selectedScene.id)} />
-              )}
             </div>
           );
         }}
@@ -139,27 +158,44 @@ export function TimelineView() {
 
 function SceneCard({
   scene,
-  active,
-  onSelect,
+  nameMap,
+  expanded,
+  onToggle,
+  onJump,
 }: {
   scene: SceneSummary;
-  active: boolean;
-  onSelect: () => void;
+  nameMap: Map<string, string>;
+  expanded: boolean;
+  onToggle: () => void;
+  onJump: () => void;
 }) {
   const time = scene.in_game_start?.moment ?? "";
+  const pcSet = new Set(scene.present_pc_refs);
   return (
-    <li className={active ? "timeline-item active" : "timeline-item"}>
-      <button type="button" onClick={onSelect} className="timeline-card">
+    <li className={expanded ? "timeline-item active" : "timeline-item"}>
+      <button type="button" onClick={onToggle} className="timeline-card">
         <div className="timeline-card-head">
           <span className="ordinal">#{scene.ordinal}</span>
           <span className="title">{scene.title || scene.slug}</span>
           {scene.closed && <span className="badge">closed</span>}
+          <span className="timeline-card-post-count">
+            {scene.post_count} post{scene.post_count === 1 ? "" : "s"}
+          </span>
         </div>
         <div className="timeline-card-meta">
           {time && <time dateTime={time}>{formatTime(time)}</time>}
           {scene.location_ref && <span>· {scene.location_ref}</span>}
           {scene.mood && <span className={`mood mood-${slug(scene.mood)}`}>· {scene.mood}</span>}
         </div>
+        {scene.present_character_refs.length > 0 && (
+          <ul className="timeline-cast">
+            {scene.present_character_refs.map((ref) => (
+              <li key={ref} className={pcSet.has(ref) ? "cast-chip pc" : "cast-chip"}>
+                {nameMap.get(ref) ?? ref}
+              </li>
+            ))}
+          </ul>
+        )}
         {scene.summary && <p className="timeline-summary">{scene.summary}</p>}
         {scene.tags.length > 0 && (
           <ul className="tag-row">
@@ -171,38 +207,26 @@ function SceneCard({
           </ul>
         )}
       </button>
+      {expanded && (
+        <div className="timeline-detail">
+          {scene.key_beats.length > 0 && (
+            <div className="timeline-detail-section">
+              <h4>Key beats</h4>
+              <ul>
+                {scene.key_beats.map((b, i) => (
+                  <li key={i}>{b}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <ThreadList title="Introduced" threads={scene.threads_introduced} />
+          <ThreadList title="Paid off" threads={scene.threads_paid_off} />
+          <button type="button" className="primary timeline-jump-btn" onClick={onJump}>
+            Jump to scene
+          </button>
+        </div>
+      )}
     </li>
-  );
-}
-
-function SceneDetail({ scene, onJump }: { scene: SceneSummary; onJump: () => void }) {
-  return (
-    <section className="scene-detail" aria-label="Scene detail">
-      <header className="scene-detail-head">
-        <h3>
-          Scene {scene.ordinal}: {scene.title || scene.slug}
-        </h3>
-        <button type="button" className="primary" onClick={onJump}>
-          Jump to scene
-        </button>
-      </header>
-      {scene.summary && <p>{scene.summary}</p>}
-      {scene.key_beats.length > 0 && (
-        <>
-          <h4>Key beats</h4>
-          <ul>
-            {scene.key_beats.map((b, i) => (
-              <li key={i}>{b}</li>
-            ))}
-          </ul>
-        </>
-      )}
-      {scene.present_character_refs.length > 0 && (
-        <p className="muted">Present: {scene.present_character_refs.join(", ")}</p>
-      )}
-      <ThreadList title="Introduced" threads={scene.threads_introduced} />
-      <ThreadList title="Paid off" threads={scene.threads_paid_off} />
-    </section>
   );
 }
 

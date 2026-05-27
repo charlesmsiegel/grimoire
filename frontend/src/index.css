@@ -3813,6 +3813,7 @@ button.primary:disabled {
 
 .timeline-item.active .timeline-card {
   border-color: var(--accent);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
 
 .timeline-card {
@@ -3867,6 +3868,75 @@ button.primary:disabled {
   letter-spacing: 0.05em;
 }
 
+.timeline-card-post-count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-cast {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.cast-chip {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 0.05rem 0.55rem;
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+
+.cast-chip.pc {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.timeline-detail {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-subtle);
+  border-top: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  font-size: 0.875rem;
+}
+
+.timeline-detail h4 {
+  margin: 0 0 var(--space-1);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+}
+
+.timeline-detail ul {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-4);
+}
+
+.timeline-detail li {
+  margin-bottom: var(--space-1);
+}
+
+.timeline-jump-btn {
+  margin-top: var(--space-2);
+}
+
+.input-area-closed {
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+
 .timeline-summary {
   margin: 0;
   font-size: 0.9rem;
@@ -3911,14 +3981,6 @@ button.primary:disabled {
   flex-direction: column;
   gap: var(--space-1);
   font-size: 0.875rem;
-}
-
-.scene-detail {
-  background: var(--bg-elev);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
-  box-shadow: var(--shadow-xs);
 }
 
 /* ----- Mechanics ----- */
