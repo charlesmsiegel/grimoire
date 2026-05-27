@@ -1336,22 +1336,20 @@ class ImageGenService:
         }
         write_yaml(image_metadata_path(self.data_root, job.campaign_id, image_id), metadata_payload)
 
-        branch_id = f"{job.campaign_id}:main"
         params_json = json.dumps(result.actual_params, sort_keys=True, default=str)
         rel_png = str(png_path.relative_to(self.data_root))
         rel_thumb = str(thumb_path.relative_to(self.data_root))
         await self.store.db.execute(
             """
             INSERT OR REPLACE INTO images (
-              id, campaign_id, branch_id, scene_id, post_id, file_path,
+              id, campaign_id, scene_id, post_id, file_path,
               thumbnail_path, prompt, negative_prompt, params, backend, model,
               seed, created_at, user_starred, tags
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 image_id,
                 job.campaign_id,
-                branch_id,
                 job.scene_id,
                 job.post_id,
                 rel_png,

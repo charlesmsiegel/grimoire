@@ -718,8 +718,6 @@ class FileWatcher:
             payload["library_id"] = watched.library_id
         if watched.campaign_id is not None:
             payload["campaign_id"] = watched.campaign_id
-        if watched.branch_id is not None:
-            payload["branch_id"] = watched.branch_id
         if watched.world_id is not None:
             payload["world_id"] = watched.world_id
         if watched.entity_kind is not None:
@@ -955,12 +953,9 @@ def _iter_files(root: Path) -> Iterable[Path]:
 def _resolve_scene_id(watched: WatchedFile) -> str:
     """Build the Scene Manager's scene_id from a classified scene path.
 
-    Mirrors :meth:`grimoire.scenes.manager.SceneManager._scene_id` —
-    ``"{prefix}{campaign_id}:{basename}"`` where the prefix is empty for
-    ``main`` and ``"{branch_id}:"`` otherwise.
+    Mirrors :meth:`grimoire.scenes.manager.SceneManager._scene_id`.
     """
-    prefix = "" if (watched.branch_id or "main") == "main" else f"{watched.branch_id}:"
-    return f"{prefix}{watched.campaign_id}:{watched.scene_basename}"
+    return f"{watched.campaign_id}:{watched.scene_basename}"
 
 
 def _is_under(path: Path, root: Path) -> bool:

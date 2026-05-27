@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from grimoire import events
-from grimoire.scenes.storage import _from_safe_segment
 from grimoire.state_store.paths import DIR_TO_KIND
 
 # Map a watched-file ``kind`` to the bus event type the watcher emits.
@@ -41,7 +40,6 @@ class WatchedFile:
     path: Path
     library_id: str | None = None
     campaign_id: str | None = None
-    branch_id: str | None = None
     world_id: str | None = None
     entity_kind: str | None = None
     asset_id: str | None = None
@@ -235,11 +233,7 @@ def _classify_campaign(abs_path: Path, rel: Path) -> WatchedFile | None:
         )
 
     if sub == "scenes" and rest:
-        return _classify_scene(abs_path, campaign_id, "main", rest)
-
-    if sub == "branches" and len(rest) >= 3 and rest[1] == "scenes":
-        branch_id = _from_safe_segment(rest[0])
-        return _classify_scene(abs_path, campaign_id, branch_id, rest[2:])
+        return _classify_scene(abs_path, campaign_id, rest)
 
     if sub == "overrides" and len(rest) == 4 and rest[0] == "worlds":
         world_id = rest[1]
@@ -324,7 +318,6 @@ def _classify_campaign(abs_path: Path, rel: Path) -> WatchedFile | None:
 def _classify_scene(
     abs_path: Path,
     campaign_id: str,
-    branch_id: str,
     rest: tuple[str, ...],
 ) -> WatchedFile | None:
     if len(rest) != 1:
@@ -336,7 +329,6 @@ def _classify_scene(
             kind="scene_body",
             path=abs_path,
             campaign_id=campaign_id,
-            branch_id=branch_id,
             scene_basename=name[:-3],
         )
     if name.endswith(".yaml"):
@@ -345,7 +337,6 @@ def _classify_scene(
             kind="scene_sidecar",
             path=abs_path,
             campaign_id=campaign_id,
-            branch_id=branch_id,
             scene_basename=name[:-5],
         )
     return None

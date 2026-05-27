@@ -347,14 +347,13 @@ class MechanicsService:
         self,
         campaign_id: CampaignId,
         roll: Roll,
-        branch_id: str | None = None,
     ) -> RollResult:
-        """Resolve a roll with a seed derived from the branch's RNG seed."""
+        """Resolve a roll with a seed derived from the campaign's RNG seed."""
         module = await self.active_module(campaign_id)
         if module is None:
             return self._null.resolve_roll(roll, roll.seed)
-        branch_seed = await self._branch_seed(campaign_id, branch_id)
-        derived = derive_roll_seed(branch_seed, roll.seed, roll.id)
+        campaign_seed = await self._campaign_seed(campaign_id)
+        derived = derive_roll_seed(campaign_seed, roll.seed, roll.id)
         return module.resolve_roll(roll, derived)
 
     async def validate_narrated_event(
@@ -399,7 +398,6 @@ class MechanicsService:
         )
         ctx = context or TickContext(
             campaign_id=campaign_id,
-            branch_id=f"{campaign_id}:main",
             duration=duration,
         )
         return module.time_tick(entity_ref, sheet or {}, duration, ctx)
@@ -799,23 +797,21 @@ class MechanicsService:
     # Internals
     # ------------------------------------------------------------------
 
-    async def _branch_seed(
+    async def _campaign_seed(
         self,
         campaign_id: CampaignId,
-        branch_id: str | None,
     ) -> int:
         if not self._config.rng.per_branch_seed:
             return 0
-        target_id = branch_id or f"{campaign_id}:main"
         row = await self._state_store.db.fetchone(
-            "SELECT rng_seed FROM branches WHERE id = ?",
-            (target_id,),
+            "SELECT rng_seed FROM campaigns WHERE id = ?",
+            (campaign_id,),
         )
-        if row is None:
+        if row is None or row["rng_seed"] is None:
             # Built-in hash() is per-process randomized, which would
             # defeat replay determinism — derive the fallback from
             # SHA-256 instead.
-            digest = hashlib.sha256(target_id.encode("utf-8")).digest()
+            digest = hashlib.sha256(campaign_id.encode("utf-8")).digest()
             return int.from_bytes(digest[:8], "big") & 0x7FFFFFFFFFFFFFFF
         return int(row["rng_seed"])
 

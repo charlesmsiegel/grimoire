@@ -170,15 +170,14 @@ class AuditStore:
         await self._db.execute(
             """
             INSERT INTO turn_audits (
-                turn_id, campaign_id, branch_id, scene_id, pc_ref,
+                turn_id, campaign_id, scene_id, pc_ref,
                 composition, context_summary, prompt_messages, prompt_budget,
                 mechanics_results, llm_metadata, response_text,
                 extraction_summary, applied_delta_ids, queued_review_ids,
                 side_effects, errors, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(turn_id) DO UPDATE SET
                 campaign_id=excluded.campaign_id,
-                branch_id=excluded.branch_id,
                 scene_id=excluded.scene_id,
                 pc_ref=excluded.pc_ref,
                 composition=excluded.composition,
@@ -198,7 +197,6 @@ class AuditStore:
             (
                 audit.turn_id,
                 audit.campaign_id,
-                audit.branch_id,
                 audit.scene_id or None,
                 pc_ref or None,
                 composition,
@@ -268,7 +266,7 @@ class AuditStore:
             return []
         placeholders = ",".join("?" for _ in ids)
         rows = await self._db.fetchall(
-            f"SELECT id, campaign_id, branch_id, turn_id, source, kind, "
+            f"SELECT id, campaign_id, turn_id, source, kind, "
             f"target_scope, target_table, target_path, target_id, "
             f"before, after, confidence, applied_at, reversed_at, notes "
             f"FROM deltas WHERE id IN ({placeholders})",
@@ -402,7 +400,6 @@ class AuditStore:
             {
                 "turn_id": row["turn_id"],
                 "campaign_id": row["campaign_id"],
-                "branch_id": row["branch_id"],
                 "scene_id": row.get("scene_id") or "",
                 "started_at": llm.get("started_at") or row.get("created_at"),
                 "completed_at": llm.get("completed_at"),

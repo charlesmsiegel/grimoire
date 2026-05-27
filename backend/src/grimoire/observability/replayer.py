@@ -30,14 +30,13 @@ logger = logging.getLogger(__name__)
 
 
 class _BranchForker(Protocol):
-    async def fork_branch(
+    async def fork_campaign(
         self,
         *,
         campaign_id: str,
-        parent_branch_id: str,
-        new_label: str,
-        at_turn_id: str | None = None,
-    ) -> str: ...
+        new_campaign_id: str | None = None,
+        new_name: str | None = None,
+    ) -> Any: ...
 
 
 class _Completer(Protocol):
@@ -79,17 +78,16 @@ class TurnReplayerService:
             raise KeyError(f"unknown turn {turn_id!r}")
 
         warnings: list[str] = []
-        forked_branch_id: str | None = None
+        forked_campaign_id: str | None = None
         if opts.on_fork:
             if self._store is None:
                 warnings.append("no state_store provided; fork skipped")
             else:
-                forked_branch_id = await self._store.fork_branch(
+                result = await self._store.fork_campaign(
                     campaign_id=audit.campaign_id,
-                    parent_branch_id=audit.branch_id,
-                    new_label=f"replay-{turn_id[:8]}",
-                    at_turn_id=turn_id,
+                    new_name=f"replay-{turn_id[:8]}",
                 )
+                forked_campaign_id = getattr(result, "new_campaign_id", None)
 
         request = self._build_request(audit, opts.substitute)
         try:
@@ -104,7 +102,7 @@ class TurnReplayerService:
                 turn_id=turn_id,
                 new_response_text="",
                 delta_diff=[],
-                forked_branch_id=forked_branch_id,
+                forked_campaign_id=forked_campaign_id,
                 warnings=warnings,
             )
 
@@ -114,7 +112,7 @@ class TurnReplayerService:
             turn_id=turn_id,
             new_response_text=new_text,
             delta_diff=delta_diff,
-            forked_branch_id=forked_branch_id,
+            forked_campaign_id=forked_campaign_id,
             warnings=warnings,
         )
 

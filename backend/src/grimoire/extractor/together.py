@@ -114,7 +114,6 @@ def project_tracker_to_deltas(
     parsed: ParsedTracker,
     *,
     campaign_id: str,
-    scene_branch_id: str | None = None,
     source: str = "extractor:together",
 ) -> list[StateDelta]:
     """Map each tracker section into typed `StateDelta`s.
@@ -275,7 +274,6 @@ def project_tracker_to_deltas(
                     target_id=to_loc,
                     after={
                         "to_location": to_loc,
-                        "branch_id": scene_branch_id,
                     },
                     confidence=_confidence(parsed.change_location),
                     source=source,

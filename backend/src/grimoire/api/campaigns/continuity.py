@@ -132,7 +132,6 @@ async def time_advance(
                 target,
                 reason,
                 scene_id=payload.scene_id,
-                branch_id=payload.branch_id,
             )
         else:
             duration = Duration.model_validate(payload.duration or {"minutes": 0})
@@ -141,7 +140,6 @@ async def time_advance(
                 duration,
                 reason,
                 scene_id=payload.scene_id,
-                branch_id=payload.branch_id,
             )
     except Exception as exc:
         raise map_lookup_errors(exc) from exc

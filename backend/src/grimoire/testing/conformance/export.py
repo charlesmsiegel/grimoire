@@ -53,7 +53,7 @@ class ExportAdapterConformance:
             out = Path(tmp) / f"out.{(adapter.extensions or ['bin'])[0]}"
             result = await adapter.export(
                 self._campaign_id,
-                ExportSelection(branch_id=f"{self._campaign_id}:main"),
+                ExportSelection(),
                 ExportOptions(title="Probe"),
                 out,
             )
@@ -65,14 +65,13 @@ class ExportAdapterConformance:
             out = Path(tmp) / f"out.{(adapter.extensions or ['bin'])[0]}"
             full = await adapter.export(
                 self._campaign_id,
-                ExportSelection(branch_id=f"{self._campaign_id}:main"),
+                ExportSelection(),
                 ExportOptions(title="Full"),
                 out,
             )
             subset = await adapter.export(
                 self._campaign_id,
                 ExportSelection(
-                    branch_id=f"{self._campaign_id}:main",
                     scene_ids=[],
                 ),
                 ExportOptions(title="None"),
@@ -90,7 +89,6 @@ class ExportAdapterConformance:
             await adapter.export(
                 self._campaign_id,
                 ExportSelection(
-                    branch_id=f"{self._campaign_id}:main",
                     include_appendices=["cast"],
                 ),
                 ExportOptions(title="Probe"),

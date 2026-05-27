@@ -944,7 +944,6 @@ class OrchestratorService:
             player_input=player_input,
             composition_hash=composition_hash,
             scene_id=scene_id,
-            branch_id=None,
             pc_ref=triggering_pc,
         )
         cached = self._context_cache.get(cache_key) if reuse_prompt_cache else None

@@ -180,7 +180,6 @@ def project_tool_calls(
     calls: list[ToolCall],
     *,
     campaign_id: str,
-    scene_branch_id: str | None = None,
 ) -> tuple[list[StateDelta], list[EntityCandidate]]:
     """Project a stream of tool calls into deltas and entity candidates.
 
@@ -198,7 +197,7 @@ def project_tool_calls(
         elif call.name == ADVANCE_TIME_TOOL.name:
             delta = _advance_time(call, campaign_id=campaign_id)
         elif call.name == CHANGE_LOCATION_TOOL.name:
-            delta = _change_location(call, scene_branch_id=scene_branch_id)
+            delta = _change_location(call)
         elif call.name == CREATE_COMMITMENT_TOOL.name:
             delta = _create_commitment(call)
         elif call.name in (UPDATE_COMMITMENT_TOOL.name, CLOSE_THREAD_TOOL.name):
@@ -267,7 +266,7 @@ def _advance_time(call: ToolCall, *, campaign_id: str) -> StateDelta | None:
     )
 
 
-def _change_location(call: ToolCall, *, scene_branch_id: str | None) -> StateDelta | None:
+def _change_location(call: ToolCall) -> StateDelta | None:
     to_loc = call.args.get("to_location")
     if not isinstance(to_loc, str) or not to_loc:
         return None
@@ -275,7 +274,7 @@ def _change_location(call: ToolCall, *, scene_branch_id: str | None) -> StateDel
         kind=DeltaKind.SCENE_CHANGE,
         target_scope=Scope.CAMPAIGN_LOCAL,
         target_id=to_loc,
-        after={"to_location": to_loc, "branch_id": scene_branch_id},
+        after={"to_location": to_loc},
         confidence=_confidence(call.args),
         source=SOURCE,
     )

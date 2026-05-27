@@ -268,7 +268,6 @@ def _make_emergent_location_delta(
     evidence: str,
     confidence: float,
     campaign_id: CampaignId,
-    branch_id: str,
     source: str,
 ) -> StateDelta:
     slug = _slug(phrase)
@@ -280,7 +279,6 @@ def _make_emergent_location_delta(
         target_id=f"emergent:location:{slug}",
         after={
             "campaign_id": campaign_id,
-            "branch_id": branch_id,
             "kind": "location",
             "name": phrase.strip(),
             "evidence": evidence,
@@ -298,7 +296,6 @@ def _make_weather_override_delta(
     evidence: str,
     confidence: float,
     campaign_id: CampaignId,
-    branch_id: str,
     location_ref: str,
     source: str,
 ) -> StateDelta:
@@ -309,7 +306,6 @@ def _make_weather_override_delta(
         target_id=location_ref,
         after={
             "campaign_id": campaign_id,
-            "branch_id": branch_id,
             "weather": {"kind": weather_kind, "source": "override"},
         },
         confidence=confidence,
@@ -326,13 +322,12 @@ def extract_rule_based(
     config: ExtractorConfig,
     source: str = "extractor",
     scene_location_ref: str | None = None,
-    scene_branch_id: str | None = None,
 ) -> Iterable[StateDelta]:
     """Yield deltas pulled out by the rule-based strategy.
 
-    ``scene_location_ref`` + ``scene_branch_id``: when provided, enables
-    §5 weather-override detection. Without a known location ref we have
-    nowhere to attach the override, so the rule simply skips.
+    ``scene_location_ref``: when provided, enables §5 weather-override
+    detection. Without a known location ref we have nowhere to attach
+    the override, so the rule simply skips.
     """
     base = config.rule_based_base_confidence
 
@@ -425,7 +420,6 @@ def extract_rule_based(
 
     # §5 weather-override detection — only when we know which location to write to.
     if scene_location_ref:
-        branch = scene_branch_id or f"{campaign_id}:main"
         for pattern, weather_kind in _WEATHER_OVERRIDE_PATTERNS:
             match = pattern.search(text)
             if match is None:
@@ -435,7 +429,6 @@ def extract_rule_based(
                 evidence=match.group(0),
                 confidence=min(base, 0.85),
                 campaign_id=campaign_id,
-                branch_id=branch,
                 location_ref=scene_location_ref,
                 source=source,
             )
@@ -446,7 +439,6 @@ def extract_rule_based(
     # queue rather than auto-apply. The reviewer-approval path then
     # materializes via WorldService.apply_emergent_location_delta.
     seen_phrases: set[str] = set()
-    branch = scene_branch_id or f"{campaign_id}:main"
     for match in _ENTERING_LOCATION.finditer(text):
         phrase = match.group("phrase").strip().lower()
         if phrase in seen_phrases:
@@ -457,7 +449,6 @@ def extract_rule_based(
             evidence=match.group(0),
             confidence=min(base, 0.4),
             campaign_id=campaign_id,
-            branch_id=branch,
             source=source,
         )
 

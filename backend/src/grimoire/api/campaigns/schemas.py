@@ -134,11 +134,6 @@ class ForkPayload(BaseModel):
     make_active: bool = False
 
 
-class BranchForkPayload(BaseModel):
-    from_turn_id: str
-    label: str
-
-
 class CreateFactPayload(BaseModel):
     fact: dict[str, Any]
     source: str = "user"
@@ -149,7 +144,6 @@ class TimeAdvancePayload(BaseModel):
     target: str | None = None
     reason: str = "narrative"
     scene_id: str | None = None
-    branch_id: str | None = None
 
 
 class ImageGenPayload(BaseModel):

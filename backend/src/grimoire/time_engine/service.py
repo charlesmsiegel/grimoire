@@ -835,12 +835,10 @@ class TimeEngineService:
         # (open too long with no resolution); `commitments_overdue` surfaces
         # commitments whose explicit `due_by` just passed.
         commitments_overdue = [
-            _shared_commitment(c, campaign_id, epoch, commit_anchor)
-            for c in aging.became_overdue
+            _shared_commitment(c, campaign_id, epoch, commit_anchor) for c in aging.became_overdue
         ]
         commitments_due = [
-            _shared_commitment(c, campaign_id, epoch, commit_anchor)
-            for c in aging.became_stale
+            _shared_commitment(c, campaign_id, epoch, commit_anchor) for c in aging.became_stale
         ]
 
         result = TimeAdvanceResult(
@@ -911,9 +909,7 @@ class TimeEngineService:
             )
         return triggered
 
-    async def _significant_npcs(
-        self, *, campaign_id: CampaignId
-    ) -> list[_PresentCharacter]:
+    async def _significant_npcs(self, *, campaign_id: CampaignId) -> list[_PresentCharacter]:
         """Pick the NPCs that warrant an individual tick.
 
         Combines:
