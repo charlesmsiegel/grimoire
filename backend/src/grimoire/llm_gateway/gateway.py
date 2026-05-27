@@ -29,7 +29,7 @@ from grimoire.llm_gateway.request_log import LLMRequestLog, request_hash
 from grimoire.llm_gateway.retry import resolve_retry_exceptions, run_with_retries
 from grimoire.llm_gateway.route_manager import RouteManager
 from grimoire.llm_gateway.routing import Route, RouteResolver
-from grimoire.llm_gateway.tiers import Tier
+from grimoire.llm_gateway.tiers import Tier, tier_for_task
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.storage.db import Database
 from grimoire.types.common import CampaignId, HealthLevel, HealthStatus, TurnId
@@ -347,16 +347,16 @@ class LLMGatewayService:
     _DEFAULT_EMBEDDING_TASKS: tuple[str, ...] = ("library.embed",)
 
     async def register_provider_defaults(self) -> None:
-        """Populate ``default_routes`` from configured plugins.
+        """Populate ``default_routes`` from the user's saved preferences.
 
-        The startup wizard saves a plugin's API key + ``active_model`` but
-        never wires the plugin into the gateway's per-task routing table,
-        so a wizard-configured install still raises ``RouteNotFoundError``
-        on the first turn. This bridges the gap: for each kind, the first
-        plugin whose saved config passes its own schema is registered as
-        the default for the well-known tasks. Idempotent — a task that
-        already has a default (env var, campaign YAML, prior call) is
-        never overwritten.
+        Resolution order (highest priority first):
+
+        1. Per-task route already set (env var, campaign YAML, prior call).
+        2. ``app.yaml  llm_defaults`` — the heavy/light routes the user
+           chose in Settings → Providers.  Each task is mapped to its tier
+           via :func:`tier_for_task` and the corresponding route is used.
+        3. First-configured-plugin discovery (legacy fallback for fresh
+           installs that haven't touched Settings yet).
 
         Routes are keyed by *plugin id* (e.g. ``llm-openrouter``), not the
         provider instance's ``.id`` field, because that is what
@@ -366,6 +366,47 @@ class LLMGatewayService:
         """
         existing_defaults = self._router.routes_for(None)
 
+        # -- Step 1: read the user's saved tier preferences from app.yaml --
+        app_tier_routes = self._load_app_yaml_llm_defaults()
+        if app_tier_routes:
+            for task in self._DEFAULT_LLM_TASKS:
+                if existing_defaults.get(task) is not None:
+                    continue
+                tier = tier_for_task(task)
+                route_str = app_tier_routes.get(tier) if tier is not None else None
+                if route_str is None:
+                    route_str = app_tier_routes.get(Tier.HEAVY)
+                if route_str is None:
+                    continue
+                try:
+                    self._router.set_route(task, route_str)
+                except ValueError:
+                    logger.warning(
+                        "llm_gateway: app.yaml llm_defaults route %r invalid for "
+                        "task=%r — skipping",
+                        route_str,
+                        task,
+                    )
+
+        embed_route = self._load_app_yaml_embed_default()
+        if embed_route:
+            for task in self._DEFAULT_EMBEDDING_TASKS:
+                if existing_defaults.get(task) is not None:
+                    continue
+                try:
+                    self._router.set_route(task, embed_route)
+                except ValueError:
+                    logger.warning(
+                        "llm_gateway: app.yaml embedding_defaults route %r invalid "
+                        "for task=%r — skipping",
+                        embed_route,
+                        task,
+                    )
+
+        # Re-read after applying app.yaml routes.
+        existing_defaults = self._router.routes_for(None)
+
+        # -- Step 2: legacy discovery fallback for uncovered tasks ----------
         try:
             manifests = await self._plugins.list_installed()
         except Exception:
@@ -434,6 +475,62 @@ class LLMGatewayService:
                             plugin_id,
                             model,
                         )
+
+    def _load_app_yaml_llm_defaults(self) -> dict[Tier, str]:
+        """Read ``llm_defaults`` from ``app.yaml`` and return a tier→route map."""
+        if self._data_root is None:
+            return {}
+        path = self._data_root / "config" / "app.yaml"
+        if not path.is_file():
+            return {}
+        try:
+            from grimoire.files.yaml_io import load_yaml
+
+            raw = load_yaml(path)
+        except Exception:
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        block = raw.get("llm_defaults")
+        if not isinstance(block, dict):
+            return {}
+        result: dict[Tier, str] = {}
+        for key, tier in (("heavy", Tier.HEAVY), ("light", Tier.LIGHT)):
+            value = block.get(key)
+            if isinstance(value, str) and value:
+                try:
+                    Route.parse(value)
+                    result[tier] = value
+                except ValueError:
+                    pass
+        return result
+
+    def _load_app_yaml_embed_default(self) -> str | None:
+        """Read ``embedding_defaults.route`` from ``app.yaml``."""
+        if self._data_root is None:
+            return None
+        path = self._data_root / "config" / "app.yaml"
+        if not path.is_file():
+            return None
+        try:
+            from grimoire.files.yaml_io import load_yaml
+
+            raw = load_yaml(path)
+        except Exception:
+            return None
+        if not isinstance(raw, dict):
+            return None
+        block = raw.get("embedding_defaults")
+        if not isinstance(block, dict):
+            return None
+        value = block.get("route")
+        if isinstance(value, str) and value:
+            try:
+                Route.parse(value)
+                return value
+            except ValueError:
+                pass
+        return None
 
     # ------------------------------------------------------------------ #
     # Per-call override resolvers

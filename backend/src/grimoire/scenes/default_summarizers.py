@@ -36,7 +36,7 @@ class _Gateway(Protocol):
 
 
 _DEFAULT_TASK = "scene_summary"
-_DEFAULT_MAX_TOKENS = 512
+_DEFAULT_MAX_TOKENS = 1024
 
 
 def _post_window(posts: list[Post], n: int = 10) -> str:
