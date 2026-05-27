@@ -31,6 +31,7 @@ from grimoire.scenes.events import (
     POST_APPENDED,
     POST_DELETED,
     POST_EDITED,
+    SCENE_DELETED,
     SCENE_ENDED,
     SCENE_FILE_CHANGED,
     SCENE_STARTED,
@@ -288,6 +289,7 @@ class SceneIndexer:
         for event_type in (
             SCENE_STARTED,
             SCENE_ENDED,
+            SCENE_DELETED,
             POST_APPENDED,
             POST_EDITED,
             POST_DELETED,
@@ -310,6 +312,12 @@ class SceneIndexer:
 
     async def _dispatch(self, event: SceneEvent) -> None:
         scene_id = event.scene_id
+
+        if event.type == SCENE_DELETED:
+            await delete_posts_for_scene(self._db, scene_id)
+            await self._db.execute("DELETE FROM scenes WHERE id = ?", (scene_id,))
+            return
+
         scene = await self._manager.get_scene(scene_id)
         md_path, _ = scene_paths(
             self._manager.data_root,

@@ -278,6 +278,7 @@ export function PlayView({ campaignId }: Props) {
               onRegenerate: () => void runAction(() => play.regenerate()),
               onUndo: () => void runAction(() => play.undo()),
               onEndScene: () => void runAction(() => play.endScene()),
+              onDeleteScene: () => void runAction(() => play.deleteScene()),
               onNewScene: () => void runAction(() => play.newScene()),
               onOpenLedger: () => setLedgerOpen(true),
               onSkipTime: handleSkipTime,

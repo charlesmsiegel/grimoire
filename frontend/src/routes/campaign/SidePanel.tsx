@@ -11,6 +11,7 @@ interface QuickActions {
   onRegenerate: () => void;
   onUndo: () => void;
   onEndScene: () => void;
+  onDeleteScene: () => void;
   onNewScene: () => void;
   onOpenLedger: () => void;
   onSkipTime: () => void;
@@ -120,6 +121,14 @@ export function SidePanel({ campaignId, scene, pcs, commitments, actions }: Prop
             disabled={actions.busy || !scene || scene.closed}
           >
             End scene
+          </button>
+          <button
+            type="button"
+            onClick={actions.onDeleteScene}
+            disabled={actions.busy || !scene}
+            className="danger-btn"
+          >
+            Delete scene
           </button>
           <button
             type="button"

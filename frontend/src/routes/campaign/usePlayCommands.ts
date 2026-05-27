@@ -70,6 +70,20 @@ export function usePlayCommands(
     }
   }, [campaignId, refresh, stateRef, dispatch]);
 
+  const deleteScene = useCallback(async () => {
+    const scene = stateRef.current.scene;
+    if (!scene) return;
+    await campaignApi.deleteScene(campaignId, scene.id);
+    await refresh();
+    dispatch({ type: "start-new-scene" });
+    try {
+      const resp = await newSceneApi.suggest(campaignId);
+      dispatch({ type: "suggestions-loaded", suggestions: resp });
+    } catch {
+      await refresh();
+    }
+  }, [campaignId, refresh, stateRef, dispatch]);
+
   const newScene = useCallback(async () => {
     dispatch({ type: "start-new-scene" });
     try {
@@ -87,5 +101,15 @@ export function usePlayCommands(
     [dispatch],
   );
 
-  return { setActivePC, submit, advance, regenerate, undo, endScene, newScene, suppressDrift };
+  return {
+    setActivePC,
+    submit,
+    advance,
+    regenerate,
+    undo,
+    endScene,
+    deleteScene,
+    newScene,
+    suppressDrift,
+  };
 }

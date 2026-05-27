@@ -23,6 +23,7 @@ TURN_AUDIT_FRAGMENT = "turn_audit_fragment"
 # Scene lifecycle
 SCENE_STARTED = "scene_started"
 SCENE_ENDED = "scene_ended"
+SCENE_DELETED = "scene_deleted"
 SCENE_BREAK_SUGGESTED = "scene_break_suggested"
 POST_APPENDED = "post_appended"
 PC_POST_APPENDED = "pc_post_appended"

@@ -64,6 +64,9 @@ export const campaignApi = {
   endScene: (id: string, sceneId: string) =>
     api.post<ApiScene>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}/end`),
 
+  deleteScene: (id: string, sceneId: string) =>
+    api.delete<void>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}`),
+
   updateSceneNarratorMode: (
     id: string,
     sceneId: string,

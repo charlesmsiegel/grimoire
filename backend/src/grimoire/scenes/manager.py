@@ -29,6 +29,7 @@ from grimoire.scenes.events import (
     POST_EDITED,
     RUNNING_SUMMARY_DUE,
     RUNNING_SUMMARY_UPDATED,
+    SCENE_DELETED,
     SCENE_ENDED,
     SCENE_FILE_CHANGED,
     SCENE_STARTED,
@@ -590,6 +591,30 @@ class SceneManager:
             if self._active_scene.get((scene.campaign_id, scene.branch_id)) == scene.id:
                 self._active_scene.pop((scene.campaign_id, scene.branch_id), None)
             return report
+
+    async def delete_scene(self, scene_id: str) -> None:
+        """Permanently delete a scene: removes files, emits event for index cleanup."""
+        scene = await self.get_scene(scene_id)
+        md_path, yaml_path = self._scene_file_paths(scene)
+
+        if md_path.exists():
+            md_path.unlink()
+        if yaml_path.exists():
+            yaml_path.unlink()
+
+        self._post_records.pop(scene_id, None)
+        self._records_hydrated.discard(scene_id)
+        self._known_body_hashes.pop(scene_id, None)
+        key = (scene.campaign_id, scene.branch_id)
+        if self._active_scene.get(key) == scene_id:
+            self._active_scene.pop(key, None)
+        for pc_key, sid in list(self._pc_current_scene.items()):
+            if sid == scene_id:
+                self._pc_current_scene.pop(pc_key, None)
+        self._locks.pop(scene_id, None)
+
+        await self._emit(SCENE_DELETED, scene)
+        logger.info("deleted scene %s", scene_id)
 
     async def _final_summary(self, scene: Scene, posts: list[Post]) -> tuple[str, list[str]]:
         if self._final_summarizer is not None:
