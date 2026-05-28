@@ -71,8 +71,12 @@ export function RetconLauncher({
     setBusy(true);
     setError(null);
     try {
-      const label = `retcon-${Date.now()}`;
-      await campaignApi.forkBranch(campaignId, turnId, label);
+      const newId = `${campaignId}-retcon-${Date.now()}`;
+      await campaignApi.forkCampaign(campaignId, {
+        new_campaign_id: newId,
+        new_name: `Retcon from ${campaignId}`,
+        fork_at_post_id: turnId,
+      });
       // Stay on the source campaign; the design says "switch to the fork"
       // but that requires routing changes outside this PR's scope. Surface
       // the fork id to the user via the existing campaigns list.
