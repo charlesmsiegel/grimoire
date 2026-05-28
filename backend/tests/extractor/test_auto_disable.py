@@ -5,14 +5,14 @@ from __future__ import annotations
 import pytest
 
 from grimoire.extractor.auto_disable import AutoDisableState
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 
 
 @pytest.fixture
 async def db(tmp_path):
-    database = Database(tmp_path / "test.db")
+    database = Database(stamp_migrated_db(tmp_path / "test.db"))
     await database.connect()
-    await apply_migrations(database)
     try:
         yield database
     finally:

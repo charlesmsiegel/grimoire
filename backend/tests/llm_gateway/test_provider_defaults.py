@@ -12,7 +12,8 @@ import pytest
 
 from grimoire.llm_gateway.config import GatewayConfig
 from grimoire.llm_gateway.gateway import LLMGatewayService
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 
 from .conftest import FakeEmbeddingProvider, FakeLLMProvider, FakePlugins
 
@@ -55,9 +56,8 @@ class _ConfiguredPlugins(FakePlugins):
 
 @pytest.fixture
 async def empty_db(tmp_path: Path):
-    database = Database(tmp_path / "g.sqlite", pool_size=2)
+    database = Database(stamp_migrated_db(tmp_path / "g.sqlite"), pool_size=2)
     await database.connect()
-    await apply_migrations(database)
     try:
         yield database
     finally:

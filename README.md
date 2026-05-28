@@ -218,7 +218,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, branching, and PR guidelines.
 ```sh
 # Backend
 cd backend
-uv run pytest                    # all tests
+uv run pytest                    # all tests except perf benchmarks (opt-in via -m perf)
 uv run ruff check                # lint
 uv run ruff format --check       # format check
 

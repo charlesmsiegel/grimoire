@@ -21,7 +21,8 @@ from grimoire.api.extras import router as extras_router
 from grimoire.extras import ExtrasMirror, ExtrasService
 from grimoire.library import LibraryService
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.composition import Composition, WorldRef
 
 
@@ -29,9 +30,8 @@ from grimoire.types.composition import Composition, WorldRef
 async def client(tmp_path: Path):
     data_root = tmp_path / "data"
     data_root.mkdir(exist_ok=True)
-    db = Database(tmp_path / "test.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "test.sqlite"), pool_size=2)
     await db.connect()
-    await apply_migrations(db)
     store = StateStore(db=db, data_root=data_root)
     library = LibraryService(store)
     extras = ExtrasService(library=library, store=store, mirror=ExtrasMirror(db))

@@ -166,12 +166,13 @@ scripts/shutdown.sh         # stops both, frees ports
 
 # Backend
 cd backend
-uv run pytest                              # all tests
+uv run pytest                              # all tests except perf benchmarks
 uv run pytest -m conformance               # plugin contract tests
 uv run pytest -m integration               # cross-module tests
 uv run pytest -m frozen_campaign           # regression over frozen SQLite
 uv run pytest -m golden                    # golden-path with LLM fixtures
 uv run pytest -m scenario                  # end-to-end through HTTP API
+uv run pytest -m perf                      # perf benchmarks (opt-in; excluded by default)
 uv run ruff check                          # lint
 uv run ruff format --check                 # format check
 uv run ruff format                         # auto-format
@@ -291,7 +292,24 @@ Documentation that drifts from code is worse than no documentation.
 | `frozen_campaign` | Regression | Run against a frozen SQLite snapshot for stability |
 | `golden` | Golden-path | End-to-end with checked-in LLM response fixtures |
 | `scenario` | Full stack | User scenarios through the HTTP API |
-| `perf` | Performance | Regression benchmarks |
+| `perf` | Performance | Regression benchmarks (opt-in: excluded from the default run) |
+
+### Test database setup
+
+Tests that need SQLite go through `stamp_migrated_db(path)` (in
+`grimoire.testing.db_template`), which copies a once-per-process, fully-migrated
+template instead of replaying all migrations for every test. Stamp the path
+before constructing the `Database` — no `apply_migrations` call is needed:
+
+```python
+from grimoire.testing.db_template import stamp_migrated_db
+
+db = Database(stamp_migrated_db(tmp_path / "campaigns.sqlite"), pool_size=2)
+await db.connect()
+```
+
+Tests that exercise the migration machinery itself (or assert on schema
+structure) still build an empty DB and call `apply_migrations` directly.
 
 ### Frontend Tests
 

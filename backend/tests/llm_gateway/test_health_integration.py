@@ -22,7 +22,8 @@ import pytest
 from grimoire.event_bus import Event, EventBus
 from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.observability.health import HealthMonitorService
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.common import HealthLevel, HealthStatus
 from tests.llm_gateway.conftest import (
     FakeEmbeddingProvider,
@@ -37,9 +38,8 @@ from tests.llm_gateway.conftest import (
 
 @pytest.fixture
 async def db(tmp_path: Path) -> Database:
-    database = Database(tmp_path / "health_int.sqlite", pool_size=2)
+    database = Database(stamp_migrated_db(tmp_path / "health_int.sqlite"), pool_size=2)
     await database.connect()
-    await apply_migrations(database)
     try:
         yield database
     finally:

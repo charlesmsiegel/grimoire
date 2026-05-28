@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from grimoire.state_store.delta_log import _coerce_for_column, validate_table_columns
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 
 
 class TestCoerceForColumn:
@@ -42,9 +43,8 @@ class TestCoerceForColumn:
 class TestValidateTableColumns:
     @pytest.fixture
     async def db(self, tmp_path: Path):
-        db = Database(tmp_path / "test.sqlite", pool_size=1)
+        db = Database(stamp_migrated_db(tmp_path / "test.sqlite"), pool_size=1)
         await db.connect()
-        await apply_migrations(db)
         try:
             yield db
         finally:

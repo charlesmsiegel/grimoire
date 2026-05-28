@@ -21,7 +21,8 @@ from grimoire.characters import CharactersService
 from grimoire.library import LibraryService
 from grimoire.mechanics import MechanicsConfig, MechanicsService
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 
 
 def _make_chunk(kind: bytes, data: bytes) -> bytes:
@@ -43,9 +44,8 @@ def _png_with_card(card: dict) -> bytes:
 async def client(tmp_path: Path):
     data_root = tmp_path / "data"
     data_root.mkdir()
-    db = Database(tmp_path / "test.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "test.sqlite"), pool_size=2)
     await db.connect()
-    await apply_migrations(db)
     store = StateStore(db=db, data_root=data_root)
     library = LibraryService(store)
     mechanics = MechanicsService(

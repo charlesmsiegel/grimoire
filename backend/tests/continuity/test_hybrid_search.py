@@ -12,7 +12,8 @@ from grimoire.continuity import (
     SqliteContinuityStore,
 )
 from grimoire.state_store.search import serialize_vector
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from tests.continuity.conftest import make_fact
 
 
@@ -41,9 +42,8 @@ class _StaticEmbedder:
 
 @pytest.fixture
 async def db_with_facts(tmp_path: Path):
-    db = Database(tmp_path / "campaigns.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "campaigns.sqlite"), pool_size=2)
     await db.connect()
-    await apply_migrations(db)
     # FK targets
     for pid in ("post-1", "post-2", "post-3"):
         await db.execute(

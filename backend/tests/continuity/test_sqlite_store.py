@@ -19,15 +19,15 @@ from grimoire.continuity import (
     RetirementReason,
     SqliteContinuityStore,
 )
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from tests.continuity.conftest import make_fact
 
 
 @pytest.fixture
 async def sqlite_store(tmp_path: Path):
-    db = Database(tmp_path / "campaigns.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "campaigns.sqlite"), pool_size=2)
     await db.connect()
-    await apply_migrations(db)
     # Insert posts referenced by the test facts so the FK constraint passes.
     for pid in ("post-1", "post-2", "post-3", "post-9", "p2"):
         await db.execute(

@@ -12,14 +12,14 @@ import pytest
 
 from grimoire.observability.config import MetricsConfig
 from grimoire.observability.metrics import MetricsRegistry
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 
 
 @pytest.fixture
 async def db(tmp_path):
-    database = Database(tmp_path / "orch.db")
+    database = Database(stamp_migrated_db(tmp_path / "orch.db"))
     await database.connect()
-    await apply_migrations(database)
     try:
         yield database
     finally:

@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from grimoire.api.container import ServiceContainer
 from grimoire.main import create_app
+from grimoire.testing.db_template import stamp_migrated_db
 
 
 @pytest.fixture()
@@ -27,6 +28,9 @@ def container(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ServiceContain
     """
     monkeypatch.setenv("GRIMOIRE_DATA_ROOT", str(tmp_path))
     monkeypatch.setenv("GRIMOIRE_DATABASE_PATH", str(tmp_path / "test.sqlite"))
+    # Pre-stamp the fully-migrated schema so the lifespan's apply_migrations
+    # is a no-op instead of replaying every migration on each API test.
+    stamp_migrated_db(tmp_path / "test.sqlite")
     # Reload settings so the env vars take effect.
     from grimoire import config as config_module
 

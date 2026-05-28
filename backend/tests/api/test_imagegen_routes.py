@@ -17,7 +17,8 @@ from grimoire.imagegen import (
     InMemoryDiffusersBackend,
 )
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.composition import LibraryEntity
 
 
@@ -25,9 +26,8 @@ from grimoire.types.composition import LibraryEntity
 async def imagegen_service(tmp_path) -> AsyncIterator[ImageGenService]:
     data = tmp_path / "data"
     data.mkdir()
-    db = Database(tmp_path / "x.sqlite", pool_size=1)
+    db = Database(stamp_migrated_db(tmp_path / "x.sqlite"), pool_size=1)
     await db.connect()
-    await apply_migrations(db)
     s = StateStore(db, data)
     await s.upsert_campaign(campaign_id="camp-1", name="t")
     reg = BackendRegistry()

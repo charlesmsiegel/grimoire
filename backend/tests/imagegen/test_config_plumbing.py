@@ -12,15 +12,15 @@ from grimoire.imagegen import (
     InMemoryDiffusersBackend,
 )
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.imagegen import GenerationRequest
 
 
 @pytest.fixture
 async def store_with_campaign(tmp_path):
-    db = Database(tmp_path / "c.sqlite", pool_size=1)
+    db = Database(stamp_migrated_db(tmp_path / "c.sqlite"), pool_size=1)
     await db.connect()
-    await apply_migrations(db)
     data = tmp_path / "data"
     data.mkdir()
     s = StateStore(db, data)

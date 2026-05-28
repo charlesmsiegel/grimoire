@@ -9,7 +9,8 @@ from typing import Any
 
 import pytest
 
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.common import HealthLevel, HealthStatus
 from grimoire.types.llm import (
     CompletionChunk,
@@ -140,9 +141,8 @@ class FakePlugins:
 
 @pytest.fixture
 async def db(tmp_path: Path) -> Database:
-    database = Database(tmp_path / "gateway.sqlite", pool_size=2)
+    database = Database(stamp_migrated_db(tmp_path / "gateway.sqlite"), pool_size=2)
     await database.connect()
-    await apply_migrations(database)
     try:
         yield database
     finally:
