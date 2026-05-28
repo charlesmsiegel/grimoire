@@ -206,7 +206,8 @@ async def _is_expression_enabled(state_store: Any, campaign_id: str, character_i
         return False
     block = cfg.get("expressions") or {}
     enabled = block.get("enabled_characters") or []
-    return character_id in enabled
+    bare_id = character_id.rsplit("/", 1)[-1] if "/" in character_id else character_id
+    return bare_id in enabled
 
 
 @router.get(
