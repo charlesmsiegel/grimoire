@@ -13,7 +13,7 @@
 ## File Map
 
 ### Migration
-- Create: `backend/src/grimoire/storage/migrations/034_remove_branches.sql`
+- Create: `backend/src/grimoire/storage/migrations/036_remove_branches.sql`
 
 ### Types (remove BranchId)
 - Modify: `backend/src/grimoire/types/common.py` — remove `BranchId` type alias
@@ -59,14 +59,14 @@
 ## Task 1: Database Migration
 
 **Files:**
-- Create: `backend/src/grimoire/storage/migrations/034_remove_branches.sql`
+- Create: `backend/src/grimoire/storage/migrations/036_remove_branches.sql`
 
 This single migration recreates all 21 tables that have `branch_id` columns, copies data from old tables (only main-branch rows), drops old tables, renames new ones, and drops the `branches` table. SQLite doesn't support `ALTER TABLE DROP COLUMN` for columns in primary keys or indexes, so table recreation is the safe approach.
 
 - [ ] **Step 1: Write the migration file**
 
 ```sql
--- 034_remove_branches.sql
+-- 036_remove_branches.sql
 -- Remove branch_id from all tables; drop branches table.
 -- Copies only main-branch rows (branch_id LIKE '%:main').
 
@@ -626,12 +626,12 @@ DROP TABLE IF EXISTS branches;
 
 - [ ] **Step 2: Verify the migration file is syntactically correct**
 
-Run: `cd backend && uv run python -c "from pathlib import Path; sql = Path('src/grimoire/storage/migrations/034_remove_branches.sql').read_text(); print(f'Migration loaded: {len(sql)} chars, {sql.count(chr(59))} statements')"`
+Run: `cd backend && uv run python -c "from pathlib import Path; sql = Path('src/grimoire/storage/migrations/036_remove_branches.sql').read_text(); print(f'Migration loaded: {len(sql)} chars, {sql.count(chr(59))} statements')"`
 
 - [ ] **Step 3: Commit**
 
 ```
-git add backend/src/grimoire/storage/migrations/034_remove_branches.sql
+git add backend/src/grimoire/storage/migrations/036_remove_branches.sql
 git commit -m "feat: add migration 034 to remove branch_id from all tables"
 ```
 
