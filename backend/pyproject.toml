@@ -52,6 +52,11 @@ quote-style = "double"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+# Perf benchmarks are timing-sensitive regression checks with their own CI job
+# (backend-perf); running them on every local `pytest` is slow and pointless.
+# Skip them by default — run them explicitly with `uv run pytest -m perf`. A
+# command-line `-m` overrides this, so CI's layered `-m ...` jobs are unaffected.
+addopts = ["-m", "not perf"]
 markers = [
     "conformance: plugin conformance contract tests (spec 17 §L2)",
     "integration: cross-module integration tests (spec 17 §L3)",

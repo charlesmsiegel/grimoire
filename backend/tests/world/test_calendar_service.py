@@ -8,7 +8,8 @@ import pytest
 
 from grimoire.library import LibraryConflictError, LibraryNotFoundError, LibraryService
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.world.calendar_service import CalendarService
 
 
@@ -16,9 +17,8 @@ from grimoire.world.calendar_service import CalendarService
 async def calendar_svc(tmp_path: Path):
     data_root = tmp_path / "data"
     data_root.mkdir()
-    db = Database(tmp_path / "test.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "test.sqlite"), pool_size=2)
     await db.connect()
-    await apply_migrations(db)
     store = StateStore(db, data_root)
     library = LibraryService(store)
     try:

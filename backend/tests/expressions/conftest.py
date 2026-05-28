@@ -7,14 +7,14 @@ from pathlib import Path
 import pytest
 
 from grimoire.expressions.service import ExpressionStateService
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 
 
 @pytest.fixture
 async def db(tmp_path: Path):
-    database = Database(tmp_path / "expr.sqlite", pool_size=2)
+    database = Database(stamp_migrated_db(tmp_path / "expr.sqlite"), pool_size=2)
     await database.connect()
-    await apply_migrations(database)
     try:
         yield database
     finally:

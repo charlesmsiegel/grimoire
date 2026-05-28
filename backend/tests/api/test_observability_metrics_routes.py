@@ -13,14 +13,14 @@ from grimoire.main import create_app
 from grimoire.observability.config import MetricsConfig
 from grimoire.observability.metrics import MetricsRegistry
 from grimoire.observability.service import ObservabilityService
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 
 
 @pytest.fixture()
 async def container_with_obs(tmp_path: Path) -> Iterator[ServiceContainer]:
-    db = Database(tmp_path / "obs.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "obs.sqlite"), pool_size=2)
     await db.connect()
-    await apply_migrations(db)
     obs = ObservabilityService(db=db)
     # Force exhaustive sampling for hot paths too so the seeded rows always land.
     obs.metrics_registry = MetricsRegistry(

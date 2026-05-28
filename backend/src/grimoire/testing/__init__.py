@@ -40,6 +40,7 @@ from grimoire.testing.conformance import (
     LLMProviderConformance,
     MechanicsConformance,
 )
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.testing.fixtures import (
     CampaignFixture,
     LibraryCampaignFixture,
@@ -94,4 +95,5 @@ __all__ = [
     "TestingConfig",
     "seed_library_campaign_fixture",
     "sidecar_path",
+    "stamp_migrated_db",
 ]

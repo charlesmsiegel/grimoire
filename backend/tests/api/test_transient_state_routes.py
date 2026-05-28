@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 
 from grimoire.api.container import ServiceContainer
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.transient_state import TransientStateService
 from grimoire.transient_state.config import TransientStateConfig
 
@@ -19,9 +20,8 @@ from grimoire.transient_state.config import TransientStateConfig
 async def populated_container(container: ServiceContainer, tmp_path: Path) -> ServiceContainer:
     data_root = tmp_path / "data"
     data_root.mkdir(exist_ok=True)
-    db = Database(tmp_path / "transient.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "transient.sqlite"), pool_size=2)
     await db.connect()
-    await apply_migrations(db)
     store = StateStore(db, data_root)
     await store.upsert_campaign(campaign_id="c_test", name="t")
     container.state_store = store

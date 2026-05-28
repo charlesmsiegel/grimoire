@@ -14,7 +14,8 @@ from grimoire.llm_gateway.config import (
     ObservabilityConfig,
     PricingOverride,
 )
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.llm import (
     CompletionRequest,
     Message,
@@ -54,9 +55,8 @@ def _config(**overrides) -> GatewayConfig:
 
 @pytest.fixture
 async def db(tmp_path: Path) -> Database:
-    database = Database(tmp_path / "cost_fill.sqlite", pool_size=2)
+    database = Database(stamp_migrated_db(tmp_path / "cost_fill.sqlite"), pool_size=2)
     await database.connect()
-    await apply_migrations(database)
     try:
         yield database
     finally:

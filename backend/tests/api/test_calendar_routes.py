@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 from grimoire.api.container import ServiceContainer
 from grimoire.library import LibraryService
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.world.calendar_service import CalendarService
 
 
@@ -24,9 +25,8 @@ async def wired_container(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     data_root = tmp_path / "data"
     data_root.mkdir()
-    db = Database(tmp_path / "cal.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "cal.sqlite"), pool_size=2)
     await db.connect()
-    await apply_migrations(db)
     store = StateStore(db, data_root)
     library = LibraryService(store)
     calendar = CalendarService(library)

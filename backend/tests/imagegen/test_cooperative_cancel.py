@@ -9,7 +9,8 @@ import pytest
 from grimoire.event_bus import EventBus
 from grimoire.imagegen import BackendRegistry, ImageGenService
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.common import HealthLevel, HealthStatus
 from grimoire.types.imagegen import (
     BackendCapabilities,
@@ -49,9 +50,8 @@ async def slow_service(tmp_path):
     _SlowBackend.cancelled = False
     data = tmp_path / "data"
     data.mkdir()
-    db = Database(tmp_path / "x.sqlite", pool_size=1)
+    db = Database(stamp_migrated_db(tmp_path / "x.sqlite"), pool_size=1)
     await db.connect()
-    await apply_migrations(db)
     s = StateStore(db, data)
     await s.upsert_campaign(campaign_id="camp-1", name="t")
     reg = BackendRegistry()

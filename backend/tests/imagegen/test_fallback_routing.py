@@ -5,7 +5,8 @@ from __future__ import annotations
 from grimoire.event_bus import EventBus
 from grimoire.imagegen import BackendRegistry, ImageGenService, InMemoryDiffusersBackend
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.common import HealthLevel, HealthStatus
 from grimoire.types.imagegen import BackendCapabilities
 
@@ -25,9 +26,8 @@ class _UnhealthyBackend:
 async def test_queue_routes_to_fallback_when_active_is_unhealthy(tmp_path) -> None:
     data = tmp_path / "data"
     data.mkdir()
-    db = Database(tmp_path / "x.sqlite", pool_size=1)
+    db = Database(stamp_migrated_db(tmp_path / "x.sqlite"), pool_size=1)
     await db.connect()
-    await apply_migrations(db)
     s = StateStore(db, data)
     await s.upsert_campaign(campaign_id="camp-1", name="t")
     reg = BackendRegistry()
@@ -52,9 +52,8 @@ async def test_queue_routes_to_fallback_when_active_is_unhealthy(tmp_path) -> No
 async def test_warning_emitted_when_no_fallback_configured(tmp_path) -> None:
     data = tmp_path / "data"
     data.mkdir()
-    db = Database(tmp_path / "x.sqlite", pool_size=1)
+    db = Database(stamp_migrated_db(tmp_path / "x.sqlite"), pool_size=1)
     await db.connect()
-    await apply_migrations(db)
     s = StateStore(db, data)
     await s.upsert_campaign(campaign_id="camp-1", name="t")
     reg = BackendRegistry()

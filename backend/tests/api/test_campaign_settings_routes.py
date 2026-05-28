@@ -21,7 +21,8 @@ from grimoire.api.container import ServiceContainer
 from grimoire.llm_gateway.config import GatewayConfig
 from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.llm import RetryPolicy, TimeoutPolicy
 
 
@@ -46,9 +47,8 @@ class _NoOpPlugins:
 async def state_store(tmp_path) -> AsyncIterator[StateStore]:
     data = tmp_path / "data"
     data.mkdir()
-    db = Database(tmp_path / "settings.sqlite", pool_size=1)
+    db = Database(stamp_migrated_db(tmp_path / "settings.sqlite"), pool_size=1)
     await db.connect()
-    await apply_migrations(db)
     s = StateStore(db, data)
     await s.upsert_campaign(campaign_id="camp-1", name="Camp One")
     try:

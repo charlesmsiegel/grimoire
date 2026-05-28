@@ -15,7 +15,8 @@ import pytest
 
 from grimoire.export import ExportService, ExportServiceConfig
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.export import ExportOptions, ExportResult, ExportSelection
 
 from .conftest import make_sources
@@ -67,10 +68,9 @@ def _build_service(store: StateStore, tmp_path: Path) -> ExportService:
 async def test_persisted_history_round_trip(tmp_path: Path) -> None:
     data_root = tmp_path / "data"
     data_root.mkdir()
-    db = Database(tmp_path / "campaigns.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "campaigns.sqlite"), pool_size=2)
     await db.connect()
     try:
-        await apply_migrations(db)
         store = StateStore(db, data_root)
 
         service = _build_service(store, tmp_path)

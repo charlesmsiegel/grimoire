@@ -20,7 +20,8 @@ from grimoire.imagegen import BackendRegistry, ImageGenService, InMemoryDiffuser
 from grimoire.llm_gateway.config import GatewayConfig
 from grimoire.llm_gateway.gateway import LLMGatewayService
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.imagegen import BackendCapabilities, GenerationRequest
 from grimoire.types.llm import RetryPolicy, TimeoutPolicy
 
@@ -89,9 +90,8 @@ async def env(tmp_path: Path):
     """Build a wired (gateway + imagegen) environment in one place."""
     data = tmp_path / "data"
     data.mkdir()
-    db = Database(tmp_path / "db.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "db.sqlite"), pool_size=2)
     await db.connect()
-    await apply_migrations(db)
     store = StateStore(db, data)
     await store.upsert_campaign(campaign_id="camp-1", name="t")
 
@@ -230,9 +230,8 @@ async def test_no_gateway_means_task_is_silently_ignored(tmp_path) -> None:
     working."""
     data = tmp_path / "data"
     data.mkdir()
-    db = Database(tmp_path / "db.sqlite", pool_size=1)
+    db = Database(stamp_migrated_db(tmp_path / "db.sqlite"), pool_size=1)
     await db.connect()
-    await apply_migrations(db)
     store = StateStore(db, data)
     await store.upsert_campaign(campaign_id="camp-1", name="t")
     registry = BackendRegistry()
@@ -256,9 +255,8 @@ async def test_set_gateway_late_bind_works(tmp_path) -> None:
     """`set_gateway` after construction wires routing the same as the kwarg."""
     data = tmp_path / "data"
     data.mkdir()
-    db = Database(tmp_path / "db.sqlite", pool_size=1)
+    db = Database(stamp_migrated_db(tmp_path / "db.sqlite"), pool_size=1)
     await db.connect()
-    await apply_migrations(db)
     store = StateStore(db, data)
     await store.upsert_campaign(campaign_id="camp-1", name="t")
     registry = BackendRegistry()

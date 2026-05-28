@@ -9,7 +9,8 @@ import pytest
 from grimoire.event_bus import Event, EventBus
 from grimoire.library.config import LibraryConfig, LibraryIndexingConfig
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.watcher import FileWatcher
 
 
@@ -18,9 +19,8 @@ async def store(tmp_path: Path):
     data_root = tmp_path / "data"
     (data_root / "library").mkdir(parents=True)
     (data_root / "campaigns").mkdir(parents=True)
-    db = Database(tmp_path / "campaigns.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "campaigns.sqlite"), pool_size=2)
     await db.connect()
-    await apply_migrations(db)
     s = StateStore(db, data_root)
     try:
         yield s

@@ -14,7 +14,8 @@ from grimoire.continuity import (
 )
 from grimoire.continuity.types import Fact, FactSource, FactSubject, InGameTime
 from grimoire.event_bus import EventBus
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
+from grimoire.testing.db_template import stamp_migrated_db
 
 pytestmark = pytest.mark.asyncio
 
@@ -42,10 +43,9 @@ async def _seed_post(db: Database, *, post_id: str, campaign_id: str) -> None:
 
 
 async def test_for_campaign_caches_per_pair(tmp_path: Path) -> None:
-    db = Database(tmp_path / "g.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "g.sqlite"), pool_size=2)
     await db.connect()
     try:
-        await apply_migrations(db)
         registry = ContinuityRegistry(db=db)
         a1 = registry.for_campaign("camp-a")
         a2 = registry.for_campaign("camp-a")
@@ -57,10 +57,9 @@ async def test_for_campaign_caches_per_pair(tmp_path: Path) -> None:
 
 
 async def test_facts_isolated_per_campaign(tmp_path: Path) -> None:
-    db = Database(tmp_path / "g.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "g.sqlite"), pool_size=2)
     await db.connect()
     try:
-        await apply_migrations(db)
         await _seed_post(db, post_id="p-1", campaign_id="camp-a")
         await _seed_post(db, post_id="p-2", campaign_id="camp-b")
         registry = ContinuityRegistry(db=db)
@@ -81,10 +80,9 @@ async def test_facts_isolated_per_campaign(tmp_path: Path) -> None:
 
 
 async def test_event_bus_propagates(tmp_path: Path) -> None:
-    db = Database(tmp_path / "g.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "g.sqlite"), pool_size=2)
     await db.connect()
     try:
-        await apply_migrations(db)
         bus = EventBus()
         captured = []
 
@@ -122,10 +120,9 @@ async def test_store_factory_override() -> None:
 async def test_export_adapter_lists_facts_and_commitments(tmp_path: Path) -> None:
     from grimoire.continuity.types import Commitment, CommitmentKind
 
-    db = Database(tmp_path / "g.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "g.sqlite"), pool_size=2)
     await db.connect()
     try:
-        await apply_migrations(db)
         await _seed_post(db, post_id="p-1", campaign_id="camp-a")
         registry = ContinuityRegistry(db=db)
         adapter = ContinuityRegistryExportAdapter(registry)
