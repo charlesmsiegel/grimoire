@@ -141,7 +141,11 @@ export function PostItem({
   }
 
   const speakerRef = post.author_pc_ref ?? post.author_npc_ref ?? null;
-  const showSprite = !!campaignId && !!speakerRef && post.author_kind !== "system";
+  const speakerAssetId = speakerRef ? (speakerRef.split("/").pop() ?? speakerRef) : null;
+  const speakerExpressionsEnabled =
+    !!speakerAssetId && (expressionsEnabledCharacters?.has(speakerAssetId) ?? false);
+  const showSprite =
+    !!campaignId && !!speakerAssetId && post.author_kind !== "system" && speakerExpressionsEnabled;
 
   async function call(action: () => Promise<unknown>): Promise<boolean> {
     if (busy) return false;
@@ -185,16 +189,14 @@ export function PostItem({
   return (
     <article className={`post post-${post.author_kind}`} aria-label={`Post by ${name}`}>
       <header className="post-header">
-        {showSprite && speakerRef && campaignId && (
+        {showSprite && speakerAssetId && campaignId && (
           <CharacterSprite
             campaignId={campaignId}
-            characterId={speakerRef}
+            characterId={speakerAssetId}
             characterName={name}
             asOfTurn={post.turn_id}
             size="sm"
-            expressionsEnabled={
-              expressionsEnabledCharacters?.has(speakerRef.split("/").pop() ?? speakerRef) ?? false
-            }
+            expressionsEnabled
           />
         )}
         <span className="post-author">{name}</span>

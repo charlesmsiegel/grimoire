@@ -222,6 +222,11 @@ async def get_expression(
     container: ContainerDep,
     as_of_turn: str | None = None,
 ) -> ExpressionResponse:
+    try:
+        validate_path_component(campaign_id, name="campaign_id")
+        validate_path_component(character_id, name="character_id")
+    except InvalidRefError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not await _is_expression_enabled(state_store, campaign_id, character_id):
         return ExpressionResponse(emotion="neutral", sprite_url=None, fallback_used=True)
     service = _get_expression_service(request)
