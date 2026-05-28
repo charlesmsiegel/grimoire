@@ -23,6 +23,8 @@ export interface PlayState {
   streaming: PendingTurn | null;
   advanceEnabled: boolean;
   advanceReason: string;
+  nextSpeakerEnabled: boolean;
+  speakerRoundActive: boolean;
   images: Record<string, SceneImage>;
   driftWarnings: Record<string, { score: number; suppressed: boolean }>;
   hasMorePosts: boolean;
@@ -57,7 +59,9 @@ export type PlayAction =
   | { type: "preview-loaded"; preview: PreviewResponse }
   | { type: "back-to-picking" }
   | { type: "creating-scene" }
-  | { type: "prepend-posts"; posts: ApiPost[]; hasMore: boolean };
+  | { type: "prepend-posts"; posts: ApiPost[]; hasMore: boolean }
+  | { type: "set-next-speaker"; enabled: boolean }
+  | { type: "set-speaker-round"; active: boolean };
 
 export const initialPlayState: PlayState = {
   pcs: [],
@@ -69,6 +73,8 @@ export const initialPlayState: PlayState = {
   streaming: null,
   advanceEnabled: false,
   advanceReason: "",
+  nextSpeakerEnabled: false,
+  speakerRoundActive: false,
   images: {},
   driftWarnings: {},
   hasMorePosts: true,
@@ -213,5 +219,9 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
         hasMorePosts: action.hasMore,
       };
     }
+    case "set-next-speaker":
+      return { ...state, nextSpeakerEnabled: action.enabled };
+    case "set-speaker-round":
+      return { ...state, speakerRoundActive: action.active };
   }
 }
