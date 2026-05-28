@@ -21,6 +21,7 @@ const STREAM_EVENT_TYPES = [
   "drift_detected",
   "scene_file_changed",
   "alternate_added",
+  "speaker_round_waiting",
 ] as const;
 
 export function usePlayStreamEvents(
@@ -46,6 +47,8 @@ export function usePlayStreamEvents(
           const turn_id = typeof message.turn_id === "string" ? message.turn_id : null;
           if (!turn_id) return;
           dispatch({ type: "stream-end", turn_id, post: null });
+          dispatch({ type: "set-next-speaker", enabled: false });
+          dispatch({ type: "set-speaker-round", active: false });
           if (cur.scene) {
             void campaignApi
               .getPostsPaginated(campaignId, cur.scene.id, { limit: 50 })
@@ -121,6 +124,10 @@ export function usePlayStreamEvents(
           if (ref && score !== null) dispatch({ type: "drift", ref, score });
           return;
         }
+        case "speaker_round_waiting":
+          dispatch({ type: "set-next-speaker", enabled: true });
+          dispatch({ type: "set-speaker-round", active: true });
+          return;
       }
     },
     [refresh, campaignId, dispatch, stateRef, pendingExpressionRef],
