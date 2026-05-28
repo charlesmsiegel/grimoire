@@ -537,3 +537,41 @@ async def test_submit_direction_rejects_pc_present_scene(
 
     with pytest.raises(OrchestratorError, match="not a PC-absent scene"):
         await orch.submit_direction("c1", scene.id, text="Direct something")
+
+
+async def test_submit_direction_rejects_cross_campaign_scene(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    scene = await _seed_pc_absent(scene_manager, fake_store, campaign_id="c1")
+    fake_store.db.campaigns.add("c2")
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    from grimoire.orchestrator.errors import OrchestratorError
+
+    with pytest.raises(OrchestratorError, match="does not belong to campaign"):
+        await orch.submit_direction("c2", scene.id, text="Sneak in")
+
+
+async def test_submit_direction_rejects_closed_scene(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    scene = await _seed_pc_absent(scene_manager, fake_store)
+    await scene_manager.close_scene(scene.id, closed_at_turn="t_close")
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    from grimoire.orchestrator.errors import OrchestratorError
+
+    with pytest.raises(OrchestratorError, match="closed"):
+        await orch.submit_direction("c1", scene.id)

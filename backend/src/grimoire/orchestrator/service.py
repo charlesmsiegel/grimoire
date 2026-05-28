@@ -362,12 +362,19 @@ class OrchestratorService:
         await self._require_campaign(campaign_id)
 
         scene = await self._scenes.get_scene(scene_id)
+        if scene.campaign_id != campaign_id:
+            raise OrchestratorError(
+                f"scene {scene_id!r} does not belong to campaign {campaign_id!r}"
+            )
         if scene.present_pc_refs:
             raise OrchestratorError(
                 f"scene {scene_id!r} is not a PC-absent scene; use submit_post instead"
             )
+        if scene.closed:
+            raise OrchestratorError(f"scene {scene_id!r} is closed")
 
         player_input = text or ""
+        direction_post_id: PostId | None = None
 
         if player_input:
             post = self._new_post(
@@ -376,12 +383,14 @@ class OrchestratorService:
                 is_player=True,
             )
             await self._scenes.append_post(scene.id, post)
+            direction_post_id = post.id
 
         turn_id = await self._run_turn(
             campaign_id=campaign_id,
             scene_id=scene.id,
             player_input=player_input,
             triggering_pc=None,
+            player_post_id=direction_post_id,
         )
         return SubmitResult(
             accepted=True,
