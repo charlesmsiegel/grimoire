@@ -31,13 +31,13 @@ def _fact(text: str, post: str = "p-1") -> Fact:
     )
 
 
-async def _seed_post(db: Database, *, post_id: str, campaign_id: str, branch_id: str) -> None:
+async def _seed_post(db: Database, *, post_id: str, campaign_id: str) -> None:
     await db.execute(
         """
-        INSERT INTO posts (id, scene_id, campaign_id, branch_id, order_in_scene, author_kind)
-        VALUES (?, NULL, ?, ?, 0, 'narrator')
+        INSERT INTO posts (id, scene_id, campaign_id, order_in_scene, author_kind)
+        VALUES (?, NULL, ?, 0, 'narrator')
         """,
-        (post_id, campaign_id, branch_id),
+        (post_id, campaign_id),
     )
 
 
@@ -61,8 +61,8 @@ async def test_facts_isolated_per_campaign(tmp_path: Path) -> None:
     await db.connect()
     try:
         await apply_migrations(db)
-        await _seed_post(db, post_id="p-1", campaign_id="camp-a", branch_id="camp-a:main")
-        await _seed_post(db, post_id="p-2", campaign_id="camp-b", branch_id="camp-b:main")
+        await _seed_post(db, post_id="p-1", campaign_id="camp-a")
+        await _seed_post(db, post_id="p-2", campaign_id="camp-b")
         registry = ContinuityRegistry(db=db)
         a = registry.for_campaign("camp-a")
         b = registry.for_campaign("camp-b")
@@ -92,7 +92,7 @@ async def test_event_bus_propagates(tmp_path: Path) -> None:
             captured.append(event)
 
         bus.subscribe("fact_recorded", handler)
-        await _seed_post(db, post_id="p-1", campaign_id="camp-a", branch_id="camp-a:main")
+        await _seed_post(db, post_id="p-1", campaign_id="camp-a")
         registry = ContinuityRegistry(db=db, event_bus=bus)
         a = registry.for_campaign("camp-a")
         await a.add_fact(_fact("hi", post="p-1"), source="user")
@@ -104,20 +104,19 @@ async def test_event_bus_propagates(tmp_path: Path) -> None:
 
 async def test_store_factory_override() -> None:
     """A test passing its own store_factory should bypass the db requirement."""
-    stores: dict[tuple[str, str], InMemoryContinuityStore] = {}
+    stores: dict[str, InMemoryContinuityStore] = {}
 
-    def factory(campaign_id: str, branch_id: str) -> InMemoryContinuityStore:
-        key = (campaign_id, branch_id)
-        if key not in stores:
-            stores[key] = InMemoryContinuityStore()
-        return stores[key]
+    def factory(campaign_id: str) -> InMemoryContinuityStore:
+        if campaign_id not in stores:
+            stores[campaign_id] = InMemoryContinuityStore()
+        return stores[campaign_id]
 
     registry = ContinuityRegistry(store_factory=factory)
     a = registry.for_campaign("camp-a")
     await a.add_fact(_fact("memory only"), source="user")
     rows = await a.facts_about(limit=50)
     assert rows
-    assert ("camp-a", "camp-a:main") in stores
+    assert "camp-a" in stores
 
 
 async def test_export_adapter_lists_facts_and_commitments(tmp_path: Path) -> None:
@@ -127,7 +126,7 @@ async def test_export_adapter_lists_facts_and_commitments(tmp_path: Path) -> Non
     await db.connect()
     try:
         await apply_migrations(db)
-        await _seed_post(db, post_id="p-1", campaign_id="camp-a", branch_id="camp-a:main")
+        await _seed_post(db, post_id="p-1", campaign_id="camp-a")
         registry = ContinuityRegistry(db=db)
         adapter = ContinuityRegistryExportAdapter(registry)
         a = registry.for_campaign("camp-a")
@@ -169,7 +168,7 @@ async def test_judge_uses_configured_model_route() -> None:
         config=config,
         judge_gateway=_Gateway(),
         judge_request_factory=_factory,
-        store_factory=lambda c, b: InMemoryContinuityStore(),
+        store_factory=lambda c: InMemoryContinuityStore(),
     )
     service = registry.for_campaign("camp-x")
     judge = service._judge
@@ -182,15 +181,15 @@ async def test_resolve_continuity_unwraps_registry_or_passes_service() -> None:
 
     class FakeRegistry:
         def __init__(self) -> None:
-            self.calls: list[tuple[str, str | None]] = []
+            self.calls: list[str] = []
 
-        def for_campaign(self, campaign_id: str, *, branch_id: str | None = None):
-            self.calls.append((campaign_id, branch_id))
+        def for_campaign(self, campaign_id: str):
+            self.calls.append(campaign_id)
             return f"service-for-{campaign_id}"
 
     reg = FakeRegistry()
     assert resolve_continuity(reg, "c1") == "service-for-c1"
-    assert reg.calls == [("c1", None)]
+    assert reg.calls == ["c1"]
 
     sentinel = object()
     assert resolve_continuity(sentinel, "c1") is sentinel

@@ -32,8 +32,8 @@ class StubScenes:
     scenes: list[Scene] = field(default_factory=list)
     posts: dict[str, list[Post]] = field(default_factory=dict)
 
-    async def list_scenes(self, campaign_id, branch_id="main"):
-        return [s for s in self.scenes if s.campaign_id == campaign_id and s.branch_id == branch_id]
+    async def list_scenes(self, campaign_id):
+        return [s for s in self.scenes if s.campaign_id == campaign_id]
 
     async def get_posts(self, scene_id):
         return list(self.posts.get(scene_id, []))
@@ -106,7 +106,6 @@ def make_scene(
     ordinal: int = 1,
     title: str = "Elysium Opening",
     slug: str = "elysium-opening",
-    branch_id: str = "main",
     location_ref: str | None = "elysium",
     in_game_start: datetime | None = None,
     tags: list[str] | None = None,
@@ -116,7 +115,6 @@ def make_scene(
     return Scene(
         id=scene_id,
         campaign_id=campaign_id,
-        branch_id=branch_id,
         ordinal=ordinal,
         slug=slug,
         title=title,
@@ -185,7 +183,6 @@ def make_fact(text: str = "Alistair is now sworn to House Hyde.") -> Fact:
     return Fact(
         id=f"fact_{hash(text) & 0xFFFF_FFFF:x}",
         campaign_id="campaign-a",
-        branch_id="main",
         text=text,
         established_in_post=None,
         established_at_in_game=None,
@@ -199,7 +196,6 @@ def make_commitment(text: str = "Return to the tower at midnight.") -> Commitmen
     return Commitment(
         id=f"com_{hash(text) & 0xFFFF_FFFF:x}",
         campaign_id="campaign-a",
-        branch_id="main",
         kind=CommitmentKind.OBLIGATION,
         text=text,
         created_in_post=None,

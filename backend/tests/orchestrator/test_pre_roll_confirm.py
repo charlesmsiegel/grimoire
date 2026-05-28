@@ -45,7 +45,6 @@ class StubMechanics:
         self,
         campaign_id: str,
         roll: Roll,
-        branch_id: str | None = None,
     ) -> RollResult:
         self.resolve_calls.append(roll)
         return RollResult(

@@ -37,18 +37,6 @@ class FakeOrchestrator:
 
         return UndoResult(turns_undone=[f"t_{i}" for i in range(count)])
 
-    async def fork(self, campaign_id: str, from_turn_id: str, label: str) -> Any:
-        from datetime import UTC, datetime
-
-        from grimoire.types.orchestrator import ForkResult
-
-        return ForkResult(
-            new_branch_id=f"{campaign_id}:{label}",
-            from_turn_id=from_turn_id,
-            label=label,
-            created_at=datetime.now(UTC),
-        )
-
     async def fork_campaign(
         self,
         *,

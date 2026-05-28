@@ -40,7 +40,6 @@ async def test_apply_writes_override(store, library, world) -> None:
         target_id="library:worlds/w1/locations/town",
         after={
             "campaign_id": "camp-1",
-            "branch_id": "camp-1:main",
             "weather": Weather(kind=WeatherKind.RAIN, source="override").model_dump(mode="json"),
         },
         confidence=0.9,
@@ -93,7 +92,6 @@ async def test_apply_rejects_unparseable_location_ref(store, library, world) -> 
         target_id="not-a-ref",
         after={
             "campaign_id": "camp-1",
-            "branch_id": "camp-1:main",
             "weather": Weather(kind=WeatherKind.RAIN, source="override").model_dump(mode="json"),
         },
         confidence=0.5,

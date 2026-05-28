@@ -467,7 +467,6 @@ async def test_extract_flags_unresolved_commitment_id_and_routes_to_review(
     # The LLM hallucinates `c_4521` — there are no open commitments to match.
     snapshot = StateSnapshot(
         campaign_id="camp-1",
-        branch_id="main",
         scene_id="scene-1",
         open_commitments=[{"id": "c_001", "text": "winifred owes julian the silver ring."}],
     )
@@ -500,7 +499,6 @@ async def test_extract_flags_unresolved_commitment_id_and_routes_to_review(
 async def test_extract_leaves_matching_commitment_id_alone(scene: Scene):
     snapshot = StateSnapshot(
         campaign_id="camp-1",
-        branch_id="main",
         scene_id="scene-1",
         open_commitments=[{"id": "c_001", "text": "winifred owes julian the silver ring."}],
     )
@@ -628,13 +626,11 @@ async def test_extract_includes_known_chars_in_snapshot(
 ):
     snapshot = StateSnapshot(
         campaign_id="camp-1",
-        branch_id="main",
         scene_id="scene-1",
         character_states=[
             CharacterState(
                 character_ref="Margaux",
                 campaign_id="camp-1",
-                branch_id="main",
             )
         ],
     )

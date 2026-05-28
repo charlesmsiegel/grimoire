@@ -206,7 +206,6 @@ async def test_scene_emits_scene_file_changed_without_indexing(
 
     payload = collector.of_type("scene_file_changed")[-1].payload
     assert payload["scene_basename"] == "0001-opening"
-    assert payload["branch_id"] == "main"
 
 
 async def test_image_metadata_indexes(

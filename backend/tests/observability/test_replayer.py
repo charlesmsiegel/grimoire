@@ -35,25 +35,6 @@ class _FakeGateway:
 class _FakeStore:
     def __init__(self) -> None:
         self.fork_calls: list[dict] = []
-        self.next_branch_id: str = "c_1:replay-abc"
-
-    async def fork_branch(
-        self,
-        *,
-        campaign_id: str,
-        parent_branch_id: str,
-        new_label: str,
-        at_turn_id: str | None = None,
-    ) -> str:
-        self.fork_calls.append(
-            {
-                "campaign_id": campaign_id,
-                "parent_branch_id": parent_branch_id,
-                "new_label": new_label,
-                "at_turn_id": at_turn_id,
-            }
-        )
-        return self.next_branch_id
 
 
 async def _seed(db, **overrides) -> tuple[AuditStore, TurnAudit]:
@@ -61,7 +42,6 @@ async def _seed(db, **overrides) -> tuple[AuditStore, TurnAudit]:
     audit = TurnAudit(
         turn_id="t_seed",
         campaign_id="c_1",
-        branch_id="c_1:main",
         started_at=datetime(2024, 1, 1, tzinfo=UTC),
         player_input="I open the door.",
         response_text="The door opens slowly.",
@@ -80,17 +60,8 @@ async def test_replay_calls_gateway_and_returns_diff(db) -> None:
     state = _FakeStore()
     replayer = TurnReplayerService(audit_store=audit_store, gateway=gateway, state_store=state)
 
-    result = await replayer.replay("t_seed", ReplayOptions(on_fork=True))
+    result = await replayer.replay("t_seed", ReplayOptions(on_fork=False))
     assert result.new_response_text == "new response"
-    assert result.forked_branch_id == "c_1:replay-abc"
-    assert state.fork_calls == [
-        {
-            "campaign_id": "c_1",
-            "parent_branch_id": "c_1:main",
-            "new_label": "replay-t_seed",
-            "at_turn_id": "t_seed",
-        }
-    ]
     assert gateway.calls
     _, request, campaign_id = gateway.calls[0]
     assert campaign_id == "c_1"
@@ -159,4 +130,4 @@ async def test_on_fork_false_skips_state_store_call(db) -> None:
     replayer = TurnReplayerService(audit_store=audit_store, gateway=gateway, state_store=state)
     result = await replayer.replay("t_seed", ReplayOptions(on_fork=False))
     assert state.fork_calls == []
-    assert result.forked_branch_id is None
+    assert result.forked_campaign_id is None

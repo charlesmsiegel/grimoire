@@ -15,7 +15,6 @@ def _run(text: str, *, location_ref: str | None = "library:worlds/w1/locations/t
             config=ExtractorConfig(),
             source="extractor",
             scene_location_ref=location_ref,
-            scene_branch_id="camp-1:main",
         )
     )
 

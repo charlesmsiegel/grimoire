@@ -90,13 +90,12 @@ async def test_extractor_service_surfaces_transient_updates_from_llm():
     scene = Scene(
         id="s1",
         campaign_id="c1",
-        branch_id="c1:main",
         ordinal=1,
         slug="s1",
         file_path="scenes/s1.md",
         title="t",
     )
-    snapshot = StateSnapshot(campaign_id="c1", branch_id="c1:main", scene_id="s1")
+    snapshot = StateSnapshot(campaign_id="c1", scene_id="s1")
     result = await extractor.extract(
         response_text="...",
         scene=scene,

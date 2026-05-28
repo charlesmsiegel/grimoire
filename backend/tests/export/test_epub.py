@@ -30,7 +30,6 @@ PNG_1x1 = bytes.fromhex(
 
 def _selection(*, scene_ids=None, include_appendices=None, **kw) -> ExportSelection:
     return ExportSelection(
-        branch_id="main",
         scene_ids=scene_ids,
         include_appendices=list(include_appendices or []),
         **kw,

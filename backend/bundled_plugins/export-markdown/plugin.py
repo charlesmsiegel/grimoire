@@ -96,7 +96,6 @@ def _render_index(snapshot: FsCampaignSnapshot, selected_scenes: list) -> str:
         f"# {snapshot.title}",
         "",
         f"- **Campaign id:** `{snapshot.campaign_id}`",
-        f"- **Branch:** `{snapshot.branch_id}`",
         f"- **Scenes included:** {len(selected_scenes)}",
         f"- **Characters:** {len(snapshot.characters)}",
         f"- **Locations:** {len(snapshot.locations)}",
@@ -175,9 +174,7 @@ class MarkdownBundleAdapter:
         options: ExportOptions,
         output_path: Path,
     ) -> ExportResult:
-        snapshot = load_fs_snapshot(
-            self._data_root, campaign_id, selection.branch_id.split(":")[-1]
-        )
+        snapshot = load_fs_snapshot(self._data_root, campaign_id)
         filters = filter_context_from_dict(selection.filters)
         scenes = filter_scenes(
             snapshot,

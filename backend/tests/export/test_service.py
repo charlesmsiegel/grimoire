@@ -36,7 +36,7 @@ async def test_service_lists_and_resolves_adapters(tmp_path: Path) -> None:
 
 async def test_service_export_writes_into_default_directory(tmp_path: Path) -> None:
     svc = _service(tmp_path)
-    selection = ExportSelection(branch_id="main", include_appendices=[])
+    selection = ExportSelection(include_appendices=[])
     options = ExportOptions(title="My Campaign", style_preset="novel")
     result = await svc.export("campaign-a", "epub", selection, options)
 
@@ -56,7 +56,7 @@ async def test_service_export_writes_into_default_directory(tmp_path: Path) -> N
 
 async def test_service_preview_reports_counts_without_writing(tmp_path: Path) -> None:
     svc = _service(tmp_path)
-    selection = ExportSelection(branch_id="main", include_appendices=[])
+    selection = ExportSelection(include_appendices=[])
     options = ExportOptions(title="T")
     preview = await svc.preview("campaign-a", "epub", selection, options)
     assert preview.scene_count == 1
@@ -69,7 +69,7 @@ async def test_service_preview_reports_counts_without_writing(tmp_path: Path) ->
 async def test_service_export_uses_explicit_output_path(tmp_path: Path) -> None:
     svc = _service(tmp_path)
     custom = tmp_path / "elsewhere" / "book.epub"
-    selection = ExportSelection(branch_id="main", include_appendices=[])
+    selection = ExportSelection(include_appendices=[])
     options = ExportOptions(title="X")
     result = await svc.export("campaign-a", "epub", selection, options, output_path=custom)
     assert custom.exists()

@@ -78,7 +78,6 @@ class FakeStateStore:
         delta_set_id: str,
         *,
         campaign_id: str,
-        branch_id: str,
     ) -> None:
         self.rewound.append(delta_set_id)
 
@@ -174,7 +173,6 @@ class FakeContextBuilder:
         mechanics_results: list[Any] | None = None,
         extra: str | None = None,
         *,
-        branch_id: str | None = None,
         pc_ref: str | None = None,
         turn_id: str | None = None,
         extractor_mode: Any = None,
@@ -276,7 +274,6 @@ async def seeded_state(scene_manager: SceneManager, fake_store: FakeStateStore) 
     scene = await scene_manager.start_scene(
         SceneInit(
             campaign_id=campaign_id,
-            branch_id="main",
             title="The Tower",
             slug="tower",
             pov_character_ref=pc_ref,

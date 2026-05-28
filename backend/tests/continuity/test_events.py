@@ -31,7 +31,7 @@ def _collect_events(bus: EventBus) -> tuple[list[Event], object]:
 async def test_add_fact_emits_fact_recorded() -> None:
     bus = EventBus()
     captured, _ = _collect_events(bus)
-    service = ContinuityService(event_bus=bus, campaign_id="camp-1", branch_id="camp-1:main")
+    service = ContinuityService(event_bus=bus, campaign_id="camp-1")
     fid = await service.add_fact(make_fact(text="A new fact"), source="extractor")
     types = [e.type for e in captured]
     assert "fact_recorded" in types

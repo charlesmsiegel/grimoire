@@ -19,7 +19,6 @@ def _scene(campaign_id: str = "c1") -> SceneContext:
     scene = Scene(
         id="scene-1",
         campaign_id=campaign_id,
-        branch_id=f"{campaign_id}:main",
         ordinal=1,
         slug="opening",
         file_path="scenes/0001-opening.md",
@@ -230,12 +229,11 @@ async def test_resolve_roll_differs_across_branches(
     # Add a second branch to compare against.
     await store.fork_branch(
         campaign_id="c1",
-        parent_branch_id="c1:main",
-        new_label="alt",
+        parent_new_label="alt",
     )
     roll = Roll(id="r1", kind="dice-pool", pool=5, seed=7, difficulty=6)
-    main = await service.resolve_roll("c1", roll, branch_id="c1:main")
-    alt = await service.resolve_roll("c1", roll, branch_id="c1:alt")
+    main = await service.resolve_roll("c1", roll)
+    alt = await service.resolve_roll("c1", roll)
     assert _dice(main) != _dice(alt)
 
 
@@ -255,7 +253,7 @@ async def test_branch_seed_fallback_is_stable_across_processes(
     await service.rescan()
     await _seed(store, "wod")
     roll = Roll(id="r1", kind="dice-pool", pool=5, seed=7, difficulty=6)
-    first = await service.resolve_roll("c1", roll, branch_id="c1:never-forked")
+    first = await service.resolve_roll("c1", roll)
     in_process_dice = _dice(first)
 
     # Re-derive in a child process with a different PYTHONHASHSEED to

@@ -33,7 +33,6 @@ class FakeAuxOrchestrator:
         campaign_id: str,
         task: AuxiliaryTask,
         on_token: Any = None,
-        branch_id: str | None = None,
     ) -> AuxiliaryResult:
         self.calls.append((campaign_id, task))
         result = AuxiliaryResult(

@@ -48,7 +48,6 @@ def _scene() -> Scene:
     return Scene(
         id="s1",
         campaign_id="c",
-        branch_id="main",
         ordinal=1,
         slug="scene",
         title="Scene",

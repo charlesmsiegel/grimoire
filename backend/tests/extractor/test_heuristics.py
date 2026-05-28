@@ -58,7 +58,6 @@ def test_missing_context_name_flagged_when_repeated():
     scene = Scene(
         id="s",
         campaign_id="c",
-        branch_id="m",
         ordinal=1,
         slug="s",
         file_path="/tmp/s.md",
@@ -73,13 +72,12 @@ def test_run_heuristics_returns_candidates_and_flags():
     scene = Scene(
         id="s",
         campaign_id="c",
-        branch_id="m",
         ordinal=1,
         slug="s",
         file_path="/tmp/s.md",
         present_character_refs=["julian"],
     )
-    snapshot = StateSnapshot(campaign_id="c", branch_id="m", scene_id="s")
+    snapshot = StateSnapshot(campaign_id="c", scene_id="s")
     out = run_heuristics(
         text,
         scene=scene,

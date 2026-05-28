@@ -157,7 +157,7 @@ def test_change_location_projects_to_scene_change():
         }
     )
     parsed = parse_tracker_text(raw)
-    deltas = project_tracker_to_deltas(parsed, campaign_id="camp-1", scene_branch_id="main")
+    deltas = project_tracker_to_deltas(parsed, campaign_id="camp-1")
     scene_changes = [d for d in deltas if d.kind == DeltaKind.SCENE_CHANGE]
     assert len(scene_changes) == 1
     assert scene_changes[0].after["to_location"] == "campaign:locations/the-docks"

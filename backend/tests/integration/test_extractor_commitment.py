@@ -44,7 +44,6 @@ async def test_extractor_emits_commitment_add_delta() -> None:
     scene = Scene(
         id="scene-1",
         campaign_id="cmp-ironhold-1",
-        branch_id="main",
         ordinal=1,
         slug="forge",
         file_path="/tmp/forge.md",
@@ -54,7 +53,7 @@ async def test_extractor_emits_commitment_add_delta() -> None:
         present_pc_refs=["pc"],
         pov_character_ref="pc",
     )
-    snapshot = StateSnapshot(campaign_id="cmp-ironhold-1", branch_id="main", scene_id="scene-1")
+    snapshot = StateSnapshot(campaign_id="cmp-ironhold-1", scene_id="scene-1")
 
     result = await service.extract(
         response_text="Garrick promises to forge a blade.",

@@ -84,9 +84,7 @@ class _OrchFakeStore:
     db: _OrchFakeDB = field(default_factory=_OrchFakeDB)
     _applied: int = 0
 
-    async def apply_delta(
-        self, *, delta, source="", turn_id=None, branch_id=None, campaign_id=None
-    ):
+    async def apply_delta(self, *, delta, source="", turn_id=None, campaign_id=None):
         self._applied += 1
         return f"d_{self._applied:06d}"
 
@@ -115,7 +113,6 @@ class _OrchFakeContextBuilder:
         *,
         pc_ref=None,
         extra=None,
-        branch_id=None,
         turn_id=None,
         extractor_mode=None,
         auxiliary_task=None,
@@ -293,7 +290,7 @@ class _ContextStubWorld:
     async def get_location(self, world_id: str, location_id: str):
         raise KeyError((world_id, location_id))
 
-    async def weather_for(self, world_id, location_id, when, campaign_id, *, branch_id=None):
+    async def weather_for(self, world_id, location_id, when, campaign_id):
         return None
 
     async def adjacent_locations(self, world_id, location_id, campaign_id):
@@ -308,7 +305,7 @@ class _ContextStubScenes:
         self._scene = scene
         self._posts = [_ContextStubPost(body="The room is quiet.")]
 
-    async def active_scene_for_campaign(self, campaign_id: str, branch_id: str = "main"):
+    async def active_scene_for_campaign(self, campaign_id: str):
         return self._scene
 
     async def recent_posts(self, scene_id: str, n: int = 10):

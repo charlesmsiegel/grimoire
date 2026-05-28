@@ -16,14 +16,12 @@ async def _seed_minimal(store: StateStore, campaign_id: str = "c1") -> None:
             "after": {
                 "character_ref": "lib:winifred",
                 "campaign_id": campaign_id,
-                "branch_id": f"{campaign_id}:main",
                 "emotional_state": "calm",
                 "drift_score": 0.0,
             },
         },
         source="seed",
         turn_id="t1",
-        branch_id=f"{campaign_id}:main",
         campaign_id=campaign_id,
     )
     await store.apply_delta(
@@ -34,14 +32,12 @@ async def _seed_minimal(store: StateStore, campaign_id: str = "c1") -> None:
             "after": {
                 "character_ref": "lib:julian",
                 "campaign_id": campaign_id,
-                "branch_id": f"{campaign_id}:main",
                 "emotional_state": "wary",
                 "drift_score": 0.1,
             },
         },
         source="seed",
         turn_id="t2",
-        branch_id=f"{campaign_id}:main",
         campaign_id=campaign_id,
     )
 
@@ -71,20 +67,11 @@ async def test_bulk_copy_duplicates_state(store: StateStore) -> None:
     )
     assert [r["character_ref"] for r in rows] == ["lib:julian", "lib:winifred"]
 
-    # branches rewritten and source branches preserved
-    src_branches = await store.db.fetchall("SELECT id FROM branches WHERE campaign_id = ?", ("c1",))
-    new_branches = await store.db.fetchall(
-        "SELECT id FROM branches WHERE campaign_id = ?", ("c1-fork",)
-    )
-    assert "c1:main" in [r["id"] for r in src_branches]
-    assert "c1-fork:main" in [r["id"] for r in new_branches]
-
     # deltas copied
     delta_rows = await store.db.fetchall(
-        "SELECT id, branch_id FROM deltas WHERE campaign_id = ?", ("c1-fork",)
+        "SELECT id FROM deltas WHERE campaign_id = ?", ("c1-fork",)
     )
     assert len(delta_rows) == 2
-    assert all(r["branch_id"] == "c1-fork:main" for r in delta_rows)
     # IDs prefixed so they don't collide with source
     assert all(r["id"].startswith("c1-fork::") for r in delta_rows)
 
@@ -99,20 +86,20 @@ async def test_bulk_copy_duplicates_state(store: StateStore) -> None:
 async def test_bulk_copy_cutoff_filters_posts(store: StateStore) -> None:
     await store.upsert_campaign(campaign_id="c1", name="With posts")
     await store.db.execute(
-        "INSERT INTO scenes (id, campaign_id, branch_id, ordinal, slug, file_path) "
-        "VALUES ('s1','c1','c1:main',1,'one','/tmp/one.md')"
+        "INSERT INTO scenes (id, campaign_id, ordinal, slug, file_path) "
+        "VALUES ('s1','c1',1,'one','/tmp/one.md')"
     )
     await store.db.execute(
-        "INSERT INTO posts (id, scene_id, campaign_id, branch_id, order_in_scene, created_at) "
-        "VALUES ('p1','s1','c1','c1:main',0, '2026-05-19T10:00:00')"
+        "INSERT INTO posts (id, scene_id, campaign_id, order_in_scene, created_at) "
+        "VALUES ('p1','s1','c1',0, '2026-05-19T10:00:00')"
     )
     await store.db.execute(
-        "INSERT INTO posts (id, scene_id, campaign_id, branch_id, order_in_scene, created_at) "
-        "VALUES ('p2','s1','c1','c1:main',1, '2026-05-19T11:00:00')"
+        "INSERT INTO posts (id, scene_id, campaign_id, order_in_scene, created_at) "
+        "VALUES ('p2','s1','c1',1, '2026-05-19T11:00:00')"
     )
     await store.db.execute(
-        "INSERT INTO posts (id, scene_id, campaign_id, branch_id, order_in_scene, created_at) "
-        "VALUES ('p3','s1','c1','c1:main',2, '2026-05-19T12:00:00')"
+        "INSERT INTO posts (id, scene_id, campaign_id, order_in_scene, created_at) "
+        "VALUES ('p3','s1','c1',2, '2026-05-19T12:00:00')"
     )
 
     await _clone_campaign_row(store, "c1", "c1-fork")

@@ -28,7 +28,6 @@ class StubPinStore:
         self,
         *,
         campaign_id: str,
-        branch_id: str,
         current_turn_id: str | None = None,
     ) -> list[dict]:
         return [p for p in self.pins if p["campaign_id"] == campaign_id]
@@ -65,7 +64,6 @@ async def test_pin_emits_pinned_by_user_reason() -> None:
             {
                 "id": "ctx_pin_1",
                 "campaign_id": "camp",
-                "branch_id": "camp:main",
                 "kind": "pin",
                 "target_kind": "entity",
                 "target_source_id": None,
@@ -97,7 +95,6 @@ async def test_excluded_entity_dropped_from_candidates() -> None:
             {
                 "id": "ctx_pin_x",
                 "campaign_id": "camp",
-                "branch_id": "camp:main",
                 "kind": "exclude",
                 "target_kind": "entity",
                 "target_source_id": None,
@@ -154,7 +151,6 @@ async def test_pinned_entity_survives_budget_truncation() -> None:
             {
                 "id": "ctx_pin_h",
                 "campaign_id": "camp",
-                "branch_id": "camp:main",
                 "kind": "pin",
                 "target_kind": "entity",
                 "target_source_id": None,
@@ -186,7 +182,6 @@ async def test_pin_does_not_reorder_tier() -> None:
             {
                 "id": "ctx_pin_h",
                 "campaign_id": "camp",
-                "branch_id": "camp:main",
                 "kind": "pin",
                 "target_kind": "entity",
                 "target_source_id": None,

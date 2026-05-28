@@ -693,7 +693,6 @@ async def test_subscriber_drives_advance_on_turn_complete(
                     "turn_id": "t-1",
                     "campaign_id": CAMPAIGN,
                     "scene_id": "scene-1",
-                    "branch_id": None,
                     "time_advances": [{"duration": "P1D"}],
                 },
             )

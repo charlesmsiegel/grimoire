@@ -64,14 +64,12 @@ async def _seed_campaign(store: StateStore, cid: str = "c1") -> None:
             "after": {
                 "character_ref": "lib:winifred",
                 "campaign_id": cid,
-                "branch_id": f"{cid}:main",
                 "emotional_state": "calm",
                 "drift_score": 0.0,
             },
         },
         source="seed",
         turn_id="t1",
-        branch_id=f"{cid}:main",
         campaign_id=cid,
     )
     # Campaign directory + a scene file so file-copy has something to chew on.
@@ -158,20 +156,20 @@ async def test_fork_from_earlier_post_id(orch: OrchestratorService, real_store: 
     await _seed_campaign(real_store, "c1")
     # Add posts with distinct created_at so cutoff filtering bites.
     await real_store.db.execute(
-        "INSERT INTO scenes (id, campaign_id, branch_id, ordinal, slug, file_path) "
-        "VALUES ('s1','c1','c1:main',1,'one','/tmp/o.md')"
+        "INSERT INTO scenes (id, campaign_id, ordinal, slug, file_path) "
+        "VALUES ('s1','c1',1,'one','/tmp/o.md')"
     )
     await real_store.db.execute(
-        "INSERT INTO posts (id, scene_id, campaign_id, branch_id, order_in_scene, "
-        "turn_id, created_at) VALUES ('p1','s1','c1','c1:main',0,'t1','2026-05-19T10:00:00')"
+        "INSERT INTO posts (id, scene_id, campaign_id, order_in_scene, "
+        "turn_id, created_at) VALUES ('p1','s1','c1',0,'t1','2026-05-19T10:00:00')"
     )
     await real_store.db.execute(
-        "INSERT INTO posts (id, scene_id, campaign_id, branch_id, order_in_scene, "
-        "turn_id, created_at) VALUES ('p2','s1','c1','c1:main',1,'t2','2026-05-19T11:00:00')"
+        "INSERT INTO posts (id, scene_id, campaign_id, order_in_scene, "
+        "turn_id, created_at) VALUES ('p2','s1','c1',1,'t2','2026-05-19T11:00:00')"
     )
     await real_store.db.execute(
-        "INSERT INTO posts (id, scene_id, campaign_id, branch_id, order_in_scene, "
-        "turn_id, created_at) VALUES ('p3','s1','c1','c1:main',2,'t3','2026-05-19T12:00:00')"
+        "INSERT INTO posts (id, scene_id, campaign_id, order_in_scene, "
+        "turn_id, created_at) VALUES ('p3','s1','c1',2,'t3','2026-05-19T12:00:00')"
     )
 
     result = await orch.fork_campaign(

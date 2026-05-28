@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from grimoire.event_bus import Event, EventBus
@@ -366,40 +364,6 @@ async def test_undo_no_turns_raises(
     )
     with pytest.raises(NoTurnsToUndoError):
         await orch.undo_turn("c1")
-
-
-# --------------------------------------------------------------------------- #
-# Fork
-# --------------------------------------------------------------------------- #
-
-
-async def test_fork_creates_branch_and_copies_scenes(
-    scene_manager,
-    event_bus,
-    fake_store,
-    fake_gateway,
-    fake_extractor,
-    fake_context_builder,
-    tmp_path: Path,
-):
-    await _seed(scene_manager, fake_store)
-    orch = _build_orch(
-        scene_manager=scene_manager,
-        event_bus=event_bus,
-        fake_store=fake_store,
-        fake_gateway=fake_gateway,
-        fake_extractor=fake_extractor,
-        fake_context_builder=fake_context_builder,
-    )
-    result = await orch.fork("c1", "t_dummy", "what-if")
-    assert result.new_branch_id == "c1:what-if"
-    assert result.label == "what-if"
-    # The branch was registered in the fake store.
-    assert fake_store.forks[-1]["new_id"] == "c1:what-if"
-    # The branched scenes directory exists on disk.
-    # Branch IDs use ":" which is Windows-unsafe, so on-disk it is encoded as "__".
-    branched = tmp_path / "campaigns" / "c1" / "branches" / "c1__what-if" / "scenes"
-    assert branched.exists()
 
 
 # --------------------------------------------------------------------------- #

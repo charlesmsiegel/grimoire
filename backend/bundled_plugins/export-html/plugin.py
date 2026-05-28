@@ -113,9 +113,7 @@ class HtmlExportAdapter:
         options: ExportOptions,
         output_path: Path,
     ) -> ExportResult:
-        snapshot = load_fs_snapshot(
-            self._data_root, campaign_id, selection.branch_id.split(":")[-1]
-        )
+        snapshot = load_fs_snapshot(self._data_root, campaign_id)
         filters = filter_context_from_dict(selection.filters)
         scenes = filter_scenes(
             snapshot,

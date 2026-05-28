@@ -460,57 +460,6 @@ async def test_advance_surfaces_stale_commitments_via_commitments_due(
 
 
 # ---------------------------------------------------------------------------
-# Branch isolation
-# ---------------------------------------------------------------------------
-
-
-async def test_schedule_event_honours_branch_id(time_engine: TimeEngineService, store: StateStore):
-    """Events scheduled against a non-main branch must persist on that branch
-    and stay invisible to listings/advances on other branches."""
-    await _seed_campaign(store)
-    await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1))
-
-    # Manually register an alternative branch.
-    await store.db.execute(
-        """
-        INSERT INTO branches (id, campaign_id, parent_branch_id,
-          forked_from_turn_id, label, rng_seed, created_at)
-        VALUES (?, ?, NULL, NULL, 'alt', 0, datetime('now'))
-        """,
-        (f"{CAMPAIGN}:alt", CAMPAIGN),
-    )
-
-    eid = await time_engine.schedule_event(
-        ScheduledEvent(
-            id="",
-            campaign_id=CAMPAIGN,
-            at=_time(2024, 1, 3),
-            label="Alt-only event",
-            kind="one_off",
-        ),
-        branch_id=f"{CAMPAIGN}:alt",
-    )
-
-    # The main branch sees nothing.
-    on_main = await time_engine.upcoming_events(CAMPAIGN)
-    assert eid not in [e.id for e in on_main]
-
-    # Advancing on main should not fire the alt-branch event.
-    result = await time_engine.advance(CAMPAIGN, _duration_days(5), TimeAdvanceReason.EXPLICIT_USER)
-    assert eid not in [e.id for e in result.scheduled_events_triggered]
-
-    # The alt branch sees and fires it.
-    await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1), branch_id=f"{CAMPAIGN}:alt")
-    alt_result = await time_engine.advance(
-        CAMPAIGN,
-        _duration_days(5),
-        TimeAdvanceReason.EXPLICIT_USER,
-        branch_id=f"{CAMPAIGN}:alt",
-    )
-    assert eid in [e.id for e in alt_result.scheduled_events_triggered]
-
-
-# ---------------------------------------------------------------------------
 # Mechanics fan-out
 # ---------------------------------------------------------------------------
 

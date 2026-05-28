@@ -70,7 +70,6 @@ def _scene_to_dict(record, filters: FilterContext) -> dict[str, Any]:
         "ordinal": s.ordinal,
         "slug": s.slug,
         "title": s.title,
-        "branch_id": s.branch_id,
         "location_ref": s.location_ref,
         "in_game_start": s.in_game_start.isoformat() if s.in_game_start else None,
         "in_game_end": s.in_game_end.isoformat() if s.in_game_end else None,
@@ -155,9 +154,7 @@ class JsonExportAdapter:
         options: ExportOptions,
         output_path: Path,
     ) -> ExportResult:
-        snapshot: FsCampaignSnapshot = load_fs_snapshot(
-            self._data_root, campaign_id, selection.branch_id.split(":")[-1]
-        )
+        snapshot: FsCampaignSnapshot = load_fs_snapshot(self._data_root, campaign_id)
         filters = filter_context_from_dict(selection.filters)
         scenes = filter_scenes(
             snapshot,
@@ -175,7 +172,6 @@ class JsonExportAdapter:
             "schema_version": "1",
             "campaign": {
                 "id": snapshot.campaign_id,
-                "branch_id": snapshot.branch_id,
                 "title": snapshot.title,
                 "metadata": _to_jsonable(snapshot.campaign_yaml),
             },
