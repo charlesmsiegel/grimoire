@@ -299,7 +299,7 @@ class RetconReplaySession:
         """
         original_primary_ds: str | None = None
         try:
-            _scene, post = await self._orch._alternates.find_scene_and_post(post_id)
+            _, post = await self._orch._alternates.find_scene_and_post(post_id)
             original_primary_ds = next(
                 (
                     a.delta_set_id
