@@ -158,7 +158,7 @@ CREATE INDEX idx_factionstate_campaign ON faction_state(campaign_id);
 -- below would cascade through knowledge_state.fact_id and wipe it.
 CREATE TABLE knowledge_state_hold AS SELECT
   fact_id, character_ref, campaign_id, knows, learned_in_post, source
-FROM knowledge_state WHERE branch_id LIKE '%:main';
+FROM knowledge_state WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE knowledge_state;
 
 -- ── facts ───────────────────────────────────────────────
@@ -187,7 +187,7 @@ INSERT INTO facts_new SELECT
   id, campaign_id, text, established_in_post, in_game_when,
   about, source, speaker_ref, confidence, keywords, retired,
   retired_in_post, contradicts, tags
-FROM facts WHERE branch_id LIKE '%:main';
+FROM facts WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE facts;
 ALTER TABLE facts_new RENAME TO facts;
 CREATE INDEX idx_facts_campaign ON facts(campaign_id);
@@ -235,7 +235,7 @@ INSERT INTO commitments_new SELECT
   id, campaign_id, kind, text, from_character_ref,
   to_character_ref, due_by, status, weight, created_in_post,
   in_game_created_at, resolved_in_post, tags, related_fact_ids
-FROM commitments WHERE branch_id LIKE '%:main';
+FROM commitments WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE commitments;
 ALTER TABLE commitments_new RENAME TO commitments;
 CREATE INDEX idx_commitments_campaign ON commitments(campaign_id);
@@ -255,7 +255,7 @@ CREATE TABLE relationships_new (
 INSERT INTO relationships_new SELECT
   id, campaign_id, from_character_ref, to_character_ref,
   types, state, updated_at_turn, history
-FROM relationships WHERE branch_id LIKE '%:main';
+FROM relationships WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE relationships;
 ALTER TABLE relationships_new RENAME TO relationships;
 CREATE INDEX idx_relationships_campaign ON relationships(campaign_id);
@@ -283,7 +283,7 @@ CREATE TABLE calendar_new (
   current_in_game_time TEXT
 );
 INSERT INTO calendar_new SELECT campaign_id, current_in_game_time
-FROM calendar WHERE branch_id LIKE '%:main';
+FROM calendar WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE calendar;
 ALTER TABLE calendar_new RENAME TO calendar;
 
@@ -309,7 +309,7 @@ INSERT INTO images_new SELECT
   id, campaign_id, scene_id, post_id, file_path, thumbnail_path,
   prompt, negative_prompt, params, backend, model, seed,
   created_at, user_starred, tags
-FROM images WHERE branch_id LIKE '%:main';
+FROM images WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE images;
 ALTER TABLE images_new RENAME TO images;
 CREATE INDEX idx_images_campaign ON images(campaign_id);
@@ -415,7 +415,7 @@ CREATE TABLE contradiction_reports_new (
 INSERT INTO contradiction_reports_new SELECT
   id, campaign_id, candidate_fact, conflicts, resolved,
   resolution, created_at, resolved_at
-FROM contradiction_reports WHERE branch_id LIKE '%:main';
+FROM contradiction_reports WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE contradiction_reports;
 ALTER TABLE contradiction_reports_new RENAME TO contradiction_reports;
 CREATE INDEX idx_contradictions_campaign ON contradiction_reports(campaign_id);
@@ -437,7 +437,7 @@ CREATE TABLE scheduled_events_new (
 INSERT INTO scheduled_events_new SELECT
   id, campaign_id, at, kind, label, payload, triggered,
   triggered_at, created_at, pre_notice_emitted_at
-FROM scheduled_events WHERE branch_id LIKE '%:main';
+FROM scheduled_events WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE scheduled_events;
 ALTER TABLE scheduled_events_new RENAME TO scheduled_events;
 CREATE INDEX idx_scheduled_events_campaign ON scheduled_events(campaign_id);
@@ -482,7 +482,7 @@ INSERT INTO context_pins_new SELECT
   id, campaign_id, kind, target_kind, target_source_id,
   target_entity_kind, target_entity_id, created_at, created_by,
   created_at_turn_id, ttl_turns, cleared_at, cleared_by
-FROM context_pins WHERE branch_id LIKE '%:main';
+FROM context_pins WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE context_pins;
 ALTER TABLE context_pins_new RENAME TO context_pins;
 CREATE INDEX ix_ctx_pins_active
@@ -508,7 +508,7 @@ INSERT INTO transient_character_state_new SELECT
   id, campaign_id, entity_id, field, value, provenance,
   source_post_id, confidence, created_at, expires_at,
   superseded_by, in_game_at
-FROM transient_character_state WHERE branch_id LIKE '%:main';
+FROM transient_character_state WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE transient_character_state;
 ALTER TABLE transient_character_state_new RENAME TO transient_character_state;
 CREATE INDEX ix_tcs_current
@@ -537,7 +537,7 @@ INSERT INTO transient_location_state_new SELECT
   id, campaign_id, entity_id, field, value, provenance,
   source_post_id, confidence, created_at, expires_at,
   superseded_by, in_game_at
-FROM transient_location_state WHERE branch_id LIKE '%:main';
+FROM transient_location_state WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE transient_location_state;
 ALTER TABLE transient_location_state_new RENAME TO transient_location_state;
 CREATE INDEX ix_tls_current
@@ -566,7 +566,7 @@ INSERT INTO transient_faction_state_new SELECT
   id, campaign_id, entity_id, field, value, provenance,
   source_post_id, confidence, created_at, expires_at,
   superseded_by, in_game_at
-FROM transient_faction_state WHERE branch_id LIKE '%:main';
+FROM transient_faction_state WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE transient_faction_state;
 ALTER TABLE transient_faction_state_new RENAME TO transient_faction_state;
 CREATE INDEX ix_tfs_current
@@ -595,7 +595,7 @@ INSERT INTO transient_scene_state_new SELECT
   id, campaign_id, entity_id, field, value, provenance,
   source_post_id, confidence, created_at, expires_at,
   superseded_by, in_game_at
-FROM transient_scene_state WHERE branch_id LIKE '%:main';
+FROM transient_scene_state WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE transient_scene_state;
 ALTER TABLE transient_scene_state_new RENAME TO transient_scene_state;
 CREATE INDEX ix_tss_current
@@ -617,7 +617,7 @@ CREATE TABLE library_snapshots_new (
 );
 INSERT INTO library_snapshots_new SELECT
   campaign_id, library_id, version, frontmatter, body, snapshot_at
-FROM library_snapshots WHERE branch_id LIKE '%:main';
+FROM library_snapshots WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE library_snapshots;
 ALTER TABLE library_snapshots_new RENAME TO library_snapshots;
 CREATE INDEX idx_libsnap_lib ON library_snapshots(library_id);

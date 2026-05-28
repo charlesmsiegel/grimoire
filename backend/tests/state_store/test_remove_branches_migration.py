@@ -176,6 +176,74 @@ async def test_036_keeps_rows_with_bare_main(pre_migration_db):
             "(campaign_id, branch_id, post_id, delta_set_id, updated_at) "
             "VALUES ('c1', 'main', 'p1', 'ds1', '2026-05-28T00:00:00Z')"
         )
+        # Additional tables the reviewer flagged: continuity, time, transient,
+        # and other auxiliary stores can all receive bare-'main' writes when
+        # SceneInit / continuity defaults pass it through unchanged.
+        await conn.execute(
+            "INSERT INTO facts (id, campaign_id, branch_id, text) "
+            "VALUES ('f1', 'c1', 'main', 'sky is blue')"
+        )
+        await conn.execute(
+            "INSERT INTO commitments (id, campaign_id, branch_id) VALUES ('cm1', 'c1', 'main')"
+        )
+        await conn.execute(
+            "INSERT INTO relationships (id, campaign_id, branch_id) VALUES ('rel1', 'c1', 'main')"
+        )
+        await conn.execute(
+            "INSERT INTO knowledge_state "
+            "(fact_id, character_ref, campaign_id, branch_id, knows) "
+            "VALUES ('f1', 'char-a', 'c1', 'main', 1)"
+        )
+        await conn.execute(
+            "INSERT INTO calendar (campaign_id, branch_id, current_in_game_time) "
+            "VALUES ('c1', 'main', '2026-05-28T00:00:00Z')"
+        )
+        await conn.execute(
+            "INSERT INTO contradiction_reports "
+            "(id, campaign_id, branch_id, candidate_fact, conflicts, created_at) "
+            "VALUES ('cr1', 'c1', 'main', '{}', '[]', '2026-05-28T00:00:00Z')"
+        )
+        await conn.execute(
+            "INSERT INTO scheduled_events "
+            "(id, campaign_id, branch_id, at, kind, label, created_at) "
+            "VALUES ('se1', 'c1', 'main', '2026-05-28T00:00:00Z', "
+            "'reminder', 'test', '2026-05-28T00:00:00Z')"
+        )
+        await conn.execute(
+            "INSERT INTO context_pins "
+            "(id, campaign_id, branch_id, kind, target_kind, created_at, created_by) "
+            "VALUES ('cp1', 'c1', 'main', 'pin', 'source', "
+            "'2026-05-28T00:00:00Z', 'tester')"
+        )
+        await conn.execute(
+            "INSERT INTO library_snapshots "
+            "(campaign_id, branch_id, library_id, version, frontmatter, snapshot_at) "
+            "VALUES ('c1', 'main', 'lib1', 1, '{}', '2026-05-28T00:00:00Z')"
+        )
+        await conn.execute(
+            "INSERT INTO transient_character_state "
+            "(campaign_id, branch_id, entity_id, field, value, provenance, created_at) "
+            "VALUES ('c1', 'main', 'char-a', 'mood', '\"calm\"', 'extractor', "
+            "'2026-05-28T00:00:00Z')"
+        )
+        await conn.execute(
+            "INSERT INTO transient_location_state "
+            "(campaign_id, branch_id, entity_id, field, value, provenance, created_at) "
+            "VALUES ('c1', 'main', 'loc-1', 'weather', '\"rain\"', 'extractor', "
+            "'2026-05-28T00:00:00Z')"
+        )
+        await conn.execute(
+            "INSERT INTO transient_faction_state "
+            "(campaign_id, branch_id, entity_id, field, value, provenance, created_at) "
+            "VALUES ('c1', 'main', 'fac-1', 'mood', '\"hostile\"', 'extractor', "
+            "'2026-05-28T00:00:00Z')"
+        )
+        await conn.execute(
+            "INSERT INTO transient_scene_state "
+            "(campaign_id, branch_id, entity_id, field, value, provenance, created_at) "
+            "VALUES ('c1', 'main', 's1', 'mood', '\"tense\"', 'extractor', "
+            "'2026-05-28T00:00:00Z')"
+        )
 
     # Apply 036.
     async with db.acquire() as conn:
@@ -197,6 +265,19 @@ async def test_036_keeps_rows_with_bare_main(pre_migration_db):
             "deltas",
             "turn_audits",
             "current_alternate_delta_sets",
+            "facts",
+            "commitments",
+            "relationships",
+            "knowledge_state",
+            "calendar",
+            "contradiction_reports",
+            "scheduled_events",
+            "context_pins",
+            "library_snapshots",
+            "transient_character_state",
+            "transient_location_state",
+            "transient_faction_state",
+            "transient_scene_state",
         ):
             async with conn.execute(f"SELECT COUNT(*) FROM {table}") as cur:
                 count = (await cur.fetchone())[0]
