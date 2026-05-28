@@ -71,7 +71,9 @@ async def test_reverse_delta_restores_prior_row(store: StateStore) -> None:
     assert state["emotional_state"] == "wary"
 
     await store.reverse_delta(delta_id)
-    rolled_back = await store.resolve_character_state(character_ref="lib:winifred", campaign_id="c1")
+    rolled_back = await store.resolve_character_state(
+        character_ref="lib:winifred", campaign_id="c1"
+    )
     assert rolled_back["emotional_state"] == "calm"
     assert rolled_back["drift_score"] == 0.0
 
@@ -133,7 +135,9 @@ async def test_review_queue_flow(store: StateStore) -> None:
         source="extractor",
     )
     # Queued but not yet applied:
-    assert (await store.resolve_character_state(character_ref="lib:emergent", campaign_id="c1")) is None
+    assert (
+        await store.resolve_character_state(character_ref="lib:emergent", campaign_id="c1")
+    ) is None
 
     delta_id = await store.approve_review_item(review_id)
     assert delta_id
