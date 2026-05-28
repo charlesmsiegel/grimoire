@@ -145,6 +145,11 @@ class FakeStateStore:
     async def reverse_delta(self, delta_id: str) -> None:
         self.reversed_ids.append(delta_id)
 
+    async def get_campaign_row(self, campaign_id: str) -> dict | None:
+        if campaign_id not in self.db.campaigns:
+            return None
+        return {"id": campaign_id, "config": self.db.campaign_configs.get(campaign_id)}
+
     async def fork_branch(
         self,
         *,

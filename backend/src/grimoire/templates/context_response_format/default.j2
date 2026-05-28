@@ -21,9 +21,11 @@ Rules:
 - Write the prose inside each tag as normal narrative — dialogue, action, internal thought.
 - Do not nest tags or use any tags other than `<character>` and `<narrator>`.
 
+{%- if present_npcs | length > 0 %}
 Example:
 <narrator>The gas lamps flicker as wind sweeps through the alley.</narrator>
 <character ref="{{ present_npcs[0].ref }}">{{ present_npcs[0].name }} reacts to the scene.</character>
 {%- if present_npcs | length > 1 %}
 <character ref="{{ present_npcs[1].ref }}">{{ present_npcs[1].name }} responds.</character>
+{%- endif %}
 {%- endif %}

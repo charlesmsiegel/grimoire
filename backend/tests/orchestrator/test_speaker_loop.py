@@ -24,6 +24,8 @@ from .conftest import (
     fixed_clock,
 )
 
+pytestmark = pytest.mark.integration
+
 
 def _make_orchestrator(
     *,
