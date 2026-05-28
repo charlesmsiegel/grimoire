@@ -192,7 +192,9 @@ export function PostItem({
             characterName={name}
             asOfTurn={post.turn_id}
             size="sm"
-            expressionsEnabled={expressionsEnabledCharacters?.has(speakerRef) ?? false}
+            expressionsEnabled={
+              expressionsEnabledCharacters?.has(speakerRef.split("/").pop() ?? speakerRef) ?? false
+            }
           />
         )}
         <span className="post-author">{name}</span>
