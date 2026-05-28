@@ -75,7 +75,7 @@ export function RetconLauncher({
       await campaignApi.forkCampaign(campaignId, {
         new_campaign_id: newId,
         new_name: `Retcon from ${campaignId}`,
-        fork_at_post_id: turnId,
+        fork_at_post_id: postId,
       });
       // Stay on the source campaign; the design says "switch to the fork"
       // but that requires routing changes outside this PR's scope. Surface
