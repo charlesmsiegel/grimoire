@@ -24,6 +24,12 @@ def test_default_response_format_with_single_npc() -> None:
     assert "Alice" in result
 
 
+def test_default_response_format_with_empty_npcs_does_not_crash() -> None:
+    """An empty present_npcs list must not raise (StrictUndefined sensitivity)."""
+    result = render("context_response_format", present_npcs=[])
+    assert "Response format" in result
+
+
 def test_single_character_variant_renders_character() -> None:
     result = render(
         "context_response_format",

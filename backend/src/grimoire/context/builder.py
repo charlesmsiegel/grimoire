@@ -462,7 +462,10 @@ class ContextBuilderService:
 
         present_npcs: list[dict] = []
         if scene is not None:
+            pc_refs = set(getattr(scene, "present_pc_refs", []))
             for ref in getattr(scene, "present_character_refs", []):
+                if ref in pc_refs:
+                    continue
                 name = ref.rsplit("/", 1)[-1].replace("-", " ").title()
                 try:
                     entity = await self._library.get_entity(ref)

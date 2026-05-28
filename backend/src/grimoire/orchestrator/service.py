@@ -788,12 +788,9 @@ class OrchestratorService:
         # Check narrator mode — multi-call enters the speaker loop instead
         from grimoire.scenes.narrator_mode import PER_CHARACTER_MULTI_CALL, effective_response_mode
 
-        try:
-            campaign_row = await self._store.db.fetchone(
-                "SELECT config FROM campaigns WHERE id = ?", (campaign_id,)
-            )
-        except Exception:
-            campaign_row = None
+        campaign_row: dict | None = None
+        with contextlib.suppress(Exception):
+            campaign_row = await self._store.get_campaign_row(campaign_id)
         scene_for_mode = await self._scenes.get_scene(scene_id)
         narrator_mode = effective_response_mode(
             scene_override=scene_for_mode.narrator_response_mode,
@@ -1002,12 +999,9 @@ class OrchestratorService:
         from grimoire.scenes.narrator_mode import effective_response_mode
 
         cleaned_text = strip_tracker_block(response_text)
-        try:
-            campaign_row = await self._store.db.fetchone(
-                "SELECT config FROM campaigns WHERE id = ?", (campaign_id,)
-            )
-        except Exception:
-            campaign_row = None
+        campaign_row: dict | None = None
+        with contextlib.suppress(Exception):
+            campaign_row = await self._store.get_campaign_row(campaign_id)
         narrator_mode = effective_response_mode(
             scene_override=scene_obj.narrator_response_mode,
             campaign_row=campaign_row,
