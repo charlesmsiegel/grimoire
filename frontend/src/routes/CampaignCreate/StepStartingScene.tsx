@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import type { CharacterSummary, GreetingSummary } from "../../api/wizard";
 import type { WizardDraft } from "./types";
@@ -41,6 +41,12 @@ export function StepStartingScene({
       return g.role_tags.some((t) => pcRoleTagUnion.has(t));
     });
   }, [greetings, pcRoleTagUnion]);
+
+  useEffect(() => {
+    if (draft.greetingId && !filteredGreetings.some((g) => g.id === draft.greetingId)) {
+      update({ greetingId: null });
+    }
+  }, [filteredGreetings, draft.greetingId, update]);
 
   const selectedGreeting = filteredGreetings.find((g) => g.id === draft.greetingId) ?? null;
 
