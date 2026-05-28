@@ -373,17 +373,24 @@ class OrchestratorService:
         if scene.closed:
             raise OrchestratorError(f"scene {scene_id!r} is closed")
 
-        player_input = text or ""
-        direction_post_id: PostId | None = None
-
-        if player_input:
-            post = self._new_post(
-                author_kind=SceneAuthorKind.SYSTEM,
-                body=player_input,
-                is_player=True,
+        active_scene = await self._scenes.active_scene_for_campaign(campaign_id, scene.branch_id)
+        active_scene_id = getattr(active_scene, "id", None)
+        if active_scene_id is not None and active_scene_id != scene.id:
+            raise OrchestratorError(
+                f"scene {scene_id!r} is not the active scene for campaign {campaign_id!r}"
             )
-            await self._scenes.append_post(scene.id, post)
-            direction_post_id = post.id
+
+        player_input = text or ""
+        # Always append a direction post (even for empty Continue) so regenerate
+        # can reconstruct the exact input via _strip_response_for_turn instead of
+        # walking back to an older direction.
+        post = self._new_post(
+            author_kind=SceneAuthorKind.SYSTEM,
+            body=player_input,
+            is_player=True,
+        )
+        await self._scenes.append_post(scene.id, post)
+        direction_post_id = post.id
 
         turn_id = await self._run_turn(
             campaign_id=campaign_id,
