@@ -157,6 +157,7 @@ class _CampaignTurnState:
     active: _ActiveTurn | None = None
     last_turn_id: TurnId | None = None
     pending_pre_roll: _PendingPreRoll | None = None
+    speaker_loop_event: asyncio.Event | None = None
 
 
 class OrchestratorService:
@@ -386,6 +387,12 @@ class OrchestratorService:
             turn_id=turn_id,
             note="advance dispatched",
         )
+
+    async def next_speaker(self, campaign_id: CampaignId) -> None:
+        """Signal the speaker loop to pick and stream the next character."""
+        state = self._state_for(campaign_id)
+        if state.speaker_loop_event is not None:
+            state.speaker_loop_event.set()
 
     async def regenerate_last(self, campaign_id: CampaignId) -> RegenerateResult:
         """Undo the most recent model response and re-run the turn.
@@ -778,6 +785,38 @@ class OrchestratorService:
             )
             return True
 
+        # Check narrator mode — multi-call enters the speaker loop instead
+        from grimoire.scenes.narrator_mode import PER_CHARACTER_MULTI_CALL, effective_response_mode
+
+        try:
+            campaign_row = await self._store.db.fetchone(
+                "SELECT config FROM campaigns WHERE id = ?", (campaign_id,)
+            )
+        except Exception:
+            campaign_row = None
+        scene_for_mode = await self._scenes.get_scene(scene_id)
+        narrator_mode = effective_response_mode(
+            scene_override=scene_for_mode.narrator_response_mode,
+            campaign_row=campaign_row,
+        )
+        if narrator_mode == PER_CHARACTER_MULTI_CALL:
+            await self._run_speaker_loop(
+                campaign_id=campaign_id,
+                scene_id=scene_id,
+                turn_id=turn_id,
+                active=active,
+                player_input=player_input,
+                triggering_pc=triggering_pc,
+            )
+            await self._emit_turn_event(
+                events.TURN_COMPLETE,
+                turn_id,
+                campaign_id,
+                scene_id,
+                branch_id=scene_for_mode.branch_id,
+            )
+            return False
+
         await self._continue_turn_after_pre_roll(
             active=active,
             resolved_results=pre_roll.results,
@@ -991,6 +1030,128 @@ class OrchestratorService:
             branch_id=scene_obj.branch_id,
             time_advances=time_advance_durations,
         )
+
+    async def _run_speaker_loop(
+        self,
+        *,
+        campaign_id: CampaignId,
+        scene_id: SceneId,
+        turn_id: TurnId,
+        active: _ActiveTurn,
+        player_input: str,
+        triggering_pc: CharacterRef | None,
+    ) -> None:
+        """Multi-call speaker loop for ``per_character_multi_call`` mode.
+
+        Loops: select speaker → build context → stream → create NPC post
+        → emit ``speaker_round_waiting`` → wait for ``next_speaker`` or
+        player input.  Exits when the wait times out (disconnect) or the
+        event is never set (player typed instead of clicking Next).
+        """
+        from grimoire.extractor.together import strip_tracker_block
+        from grimoire.orchestrator.speaker_select import (
+            parse_speaker_ref,
+            select_fallback_speaker,
+        )
+        from grimoire.scenes.narrator_mode import effective_response_mode
+
+        scene_obj = await self._scenes.get_scene(scene_id)
+        pc_refs = set(scene_obj.present_pc_refs)
+        present_npcs = [r for r in scene_obj.present_character_refs if r not in pc_refs]
+        if not present_npcs:
+            return
+
+        state = self._state_for(campaign_id)
+        recent_speakers: list[str] = []
+
+        while True:
+            self._check_cancelled(active)
+
+            # Speaker selection
+            if len(present_npcs) == 1:
+                speaker_ref = present_npcs[0]
+            else:
+                speaker_ref = select_fallback_speaker(
+                    present_npcs, recent_speakers, self._rng
+                )
+
+            recent_speakers.append(speaker_ref)
+
+            # Build context with this character foregrounded
+            extract_mode = await self._delta.select_extract_mode(campaign_id=campaign_id)
+            prompt = await self._context.build(
+                player_input,
+                campaign_id,
+                extra=None,
+                pc_ref=triggering_pc,
+                turn_id=turn_id,
+                extractor_mode=extract_mode,
+            )
+
+            # Stream response
+            active.stage = "streaming"
+            response_text = await self._stream_main_response(
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                prompt=prompt,
+                active=active,
+            )
+            if active.cancel_event.is_set():
+                raise TurnCancelledError()
+
+            # Extract deltas
+            active.stage = "extracting"
+            extraction = await self._delta.extract(
+                response_text=response_text,
+                scene=scene_obj,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                mode=extract_mode,
+            )
+            if extraction is not None:
+                await self._delta.apply_routing(
+                    campaign_id=campaign_id,
+                    branch_id=scene_obj.branch_id,
+                    turn_id=turn_id,
+                    extraction=extraction,
+                )
+
+            # Create NPC post
+            cleaned = strip_tracker_block(response_text)
+            post = self._new_post(
+                author_kind=SceneAuthorKind.NPC,
+                body=cleaned,
+                is_player=False,
+                turn_id=turn_id,
+                author_npc_ref=speaker_ref,
+            )
+            await self._scenes.append_post(scene_id, post)
+            await self._emit_fragment(turn_id, campaign_id, scene_appended=True)
+
+            # Signal frontend: ready for next
+            await self._push_to_ws(
+                campaign_id,
+                {"type": events.SPEAKER_ROUND_WAITING, "turn_id": turn_id},
+            )
+
+            # Wait for next_speaker signal or timeout
+            evt = asyncio.Event()
+            state.speaker_loop_event = evt
+            try:
+                await asyncio.wait_for(
+                    evt.wait(),
+                    timeout=self._config.speaker_loop.timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                break
+            finally:
+                state.speaker_loop_event = None
+
+            if active.cancel_event.is_set():
+                break
+
+            # Refresh scene in case it changed
+            scene_obj = await self._scenes.get_scene(scene_id)
 
     def _check_cancelled(self, active: _ActiveTurn) -> None:
         if active.cancel_event.is_set():
