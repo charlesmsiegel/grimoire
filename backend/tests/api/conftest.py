@@ -31,13 +31,8 @@ def container(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ServiceContain
     # Pre-stamp the fully-migrated schema so the lifespan's apply_migrations
     # is a no-op instead of replaying every migration on each API test.
     stamp_migrated_db(tmp_path / "test.sqlite")
-    # Loading the real bundled plugins in the app lifespan dominates API-test
-    # time: each test imports every bundled plugin, runs conformance, and fires
-    # network health probes (10s timeouts) — ~18s/test. No API route test needs
-    # them, so disable bundled-plugin discovery for the lifespan's rescan.
-    from grimoire.plugins import config as plugins_config
-
-    monkeypatch.setattr(plugins_config, "_default_bundled_root", lambda: None)
+    # (Bundled-plugin loading in the lifespan is disabled globally by the
+    # _no_bundled_plugins autouse fixture in the root conftest.)
     # Reload settings so the env vars take effect.
     from grimoire import config as config_module
 
