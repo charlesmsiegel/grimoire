@@ -315,6 +315,15 @@ ALTER TABLE images_new RENAME TO images;
 CREATE INDEX idx_images_campaign ON images(campaign_id);
 CREATE INDEX idx_images_scene ON images(scene_id);
 
+-- ── review_queue (stage into FK-less holding table) ─────
+-- review_queue.delta_id REFERENCES deltas(id) ON DELETE CASCADE
+-- (migration 007). Same pattern as posts/knowledge_state: stage
+-- here, drop, restore after deltas is rebuilt.
+CREATE TABLE review_queue_hold AS SELECT
+  id, delta_id, campaign_id, status, reviewed_at, reviewer_notes
+FROM review_queue;
+DROP TABLE review_queue;
+
 -- ── deltas ──────────────────────────────────────────────
 CREATE TABLE deltas_new (
   id TEXT PRIMARY KEY,
@@ -346,6 +355,21 @@ CREATE INDEX idx_deltas_turn ON deltas(turn_id);
 CREATE INDEX idx_deltas_applied_at ON deltas(applied_at);
 CREATE INDEX idx_deltas_target ON deltas(target_scope, target_id);
 CREATE INDEX idx_deltas_set ON deltas(campaign_id, delta_set_id);
+
+-- ── review_queue (restore with FK to rebuilt deltas) ────
+CREATE TABLE review_queue (
+  id TEXT PRIMARY KEY,
+  delta_id TEXT NOT NULL REFERENCES deltas(id) ON DELETE CASCADE,
+  campaign_id TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  reviewed_at TEXT,
+  reviewer_notes TEXT
+);
+INSERT INTO review_queue SELECT
+  id, delta_id, campaign_id, status, reviewed_at, reviewer_notes
+FROM review_queue_hold;
+DROP TABLE review_queue_hold;
+CREATE INDEX idx_review_queue_campaign ON review_queue(campaign_id, status);
 
 -- ── turn_audits ─────────────────────────────────────────
 CREATE TABLE turn_audits_new (
