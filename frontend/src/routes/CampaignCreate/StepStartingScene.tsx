@@ -43,10 +43,16 @@ export function StepStartingScene({
   }, [greetings, pcRoleTagUnion]);
 
   useEffect(() => {
+    // Don't clear while the greetings list is reloading — the temporarily
+    // empty `greetings` would wipe a valid selection just by revisiting the
+    // step. Only clear once the loaded list confirms the selection no longer
+    // matches the current PC role_tags.
+    if (loading) return;
+    if (greetings.length === 0) return;
     if (draft.greetingId && !filteredGreetings.some((g) => g.id === draft.greetingId)) {
       update({ greetingId: null });
     }
-  }, [filteredGreetings, draft.greetingId, update]);
+  }, [filteredGreetings, draft.greetingId, update, loading, greetings.length]);
 
   const selectedGreeting = filteredGreetings.find((g) => g.id === draft.greetingId) ?? null;
 

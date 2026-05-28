@@ -222,3 +222,44 @@ async def test_add_pc_upsert_updates_role_tags(
     listed = await characters.list_pcs("camp-1")
     assert len(listed) == 1
     assert listed[0].role_tags == ["vivienne", "spy"]
+
+
+async def test_add_pc_upsert_without_role_tags_preserves_existing(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """A legacy caller that omits role_tags must not erase stored tags."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create(
+        "wod-london",
+        CharacterData(id="vivienne", name="vivienne", role=CharacterRole.PC),
+    )
+    ref = "library:worlds/wod-london/characters/vivienne"
+
+    await characters.add_pc("camp-1", ref, "vivienne", role_tags=["debutante"])
+    # Re-add without role_tags (None → preserve existing).
+    await characters.add_pc("camp-1", ref, "vivienne")
+
+    listed = await characters.list_pcs("camp-1")
+    assert len(listed) == 1
+    assert listed[0].role_tags == ["debutante"]
+
+
+async def test_add_pc_upsert_with_empty_role_tags_clears(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """An explicit empty list intentionally clears stored tags."""
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create(
+        "wod-london",
+        CharacterData(id="vivienne", name="vivienne", role=CharacterRole.PC),
+    )
+    ref = "library:worlds/wod-london/characters/vivienne"
+
+    await characters.add_pc("camp-1", ref, "vivienne", role_tags=["debutante"])
+    await characters.add_pc("camp-1", ref, "vivienne", role_tags=[])
+
+    listed = await characters.list_pcs("camp-1")
+    assert len(listed) == 1
+    assert listed[0].role_tags == []

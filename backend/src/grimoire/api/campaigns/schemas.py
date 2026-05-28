@@ -86,7 +86,9 @@ class AddPCPayload(BaseModel):
     character_ref: str
     name: str
     owner: str = "local"
-    role_tags: list[str] = Field(default_factory=list)
+    # `None` (omitted) preserves any existing stored role_tags on upsert;
+    # an explicit list (including `[]`) replaces them. See StateStore.add_pc.
+    role_tags: list[str] | None = None
 
 
 class PCProfilePayload(BaseModel):
