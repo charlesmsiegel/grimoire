@@ -37,7 +37,7 @@ from grimoire.context.cast import CastResolver
 from grimoire.context.config import ContextBuilderConfig
 from grimoire.context.continuity_context import ContinuityContextResolver
 from grimoire.context.tokens import TokenEstimator, cheap_estimator
-from grimoire.context.types import BuiltContext, PinSet, TierItem
+from grimoire.context.types import BuiltContext, PinSet, TierItem, make_source_id
 from grimoire.context.world_context import WorldContextResolver
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.types.common import CampaignId, TurnId
@@ -316,9 +316,8 @@ class ContextBuilderService:
         scene_header = self._cast.render_scene_header(scene)
 
         # Step 2 — cast
-        present_chars = list(getattr(scene, "present_character_refs", []) or []) if scene else []
         present_pcs = list(getattr(scene, "present_pc_refs", []) or []) if scene else []
-        pc_absent = bool(present_chars) and not present_pcs
+        pc_absent = scene is not None and not present_pcs
 
         if pc_absent:
             scene_mode = (
@@ -380,9 +379,10 @@ class ContextBuilderService:
                             source=ContextSource(
                                 kind="character",
                                 scope="campaign-local",
-                                owner_id=campaign_id,
+                                owner_id=ref,
                                 tier=ContextTier.BACKGROUND,
                                 summary=f"absent-pc:{ref}",
+                                source_id=make_source_id("absent_pc", ref),
                             ),
                         )
                     )
