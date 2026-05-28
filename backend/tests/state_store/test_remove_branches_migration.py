@@ -102,8 +102,7 @@ async def test_036_preserves_posts_and_knowledge_state(pre_migration_db):
         for stmt in _split(m036.sql):
             await conn.execute(stmt)
         await conn.execute(
-            "INSERT INTO schema_version (version, name, applied_at) "
-            "VALUES (?, ?, datetime('now'))",
+            "INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, datetime('now'))",
             (m036.version, m036.name),
         )
         await conn.execute("COMMIT")
@@ -115,13 +114,9 @@ async def test_036_preserves_posts_and_knowledge_state(pre_migration_db):
         async with conn.execute("SELECT COUNT(*) FROM knowledge_state") as cur:
             assert (await cur.fetchone())[0] == 1
         # FK to rebuilt parents still intact (insert with bad FK should fail).
-        async with conn.execute(
-            "PRAGMA foreign_key_check('posts')"
-        ) as cur:
+        async with conn.execute("PRAGMA foreign_key_check('posts')") as cur:
             assert await cur.fetchall() == []
-        async with conn.execute(
-            "PRAGMA foreign_key_check('knowledge_state')"
-        ) as cur:
+        async with conn.execute("PRAGMA foreign_key_check('knowledge_state')") as cur:
             assert await cur.fetchall() == []
 
 
@@ -173,8 +168,7 @@ async def test_036_keeps_rows_with_bare_main(pre_migration_db):
         for stmt in _split(m036.sql):
             await conn.execute(stmt)
         await conn.execute(
-            "INSERT INTO schema_version (version, name, applied_at) "
-            "VALUES (?, ?, datetime('now'))",
+            "INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, datetime('now'))",
             (m036.version, m036.name),
         )
         await conn.execute("COMMIT")
