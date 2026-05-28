@@ -477,7 +477,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             obs.replayer = TurnReplayerService(
                 audit_store=obs.audit_store,
                 gateway=llm_gateway,
-                state_store=container.state_store,
             )
         await obs.start()
         await obs.health_monitor.start_periodic()
@@ -631,6 +630,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ws_push=container.stream.push,
                 metrics=obs.metrics(),
             )
+
+        if obs.replayer is not None:
+            obs.replayer.set_forker(container.orchestrator)
 
         # Characters drift fan-out: subscribe to turn_complete and sample
         # drift checks on present characters. The cadence gate inside

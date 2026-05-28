@@ -147,7 +147,7 @@ class AuxiliaryCoordinator:
             }
 
         if action == CommitAction.APPEND_POST:
-            scene = await self._scenes.active_scene_for_campaign(campaign_id, "main")
+            scene = await self._scenes.active_scene_for_campaign(campaign_id)
             if scene is None:
                 raise OrchestratorError(
                     f"no active scene for aux append in campaign {campaign_id!r}"

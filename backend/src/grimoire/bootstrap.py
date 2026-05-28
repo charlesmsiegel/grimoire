@@ -368,7 +368,6 @@ async def build_llm_services(
         obs.replayer = TurnReplayerService(
             audit_store=obs.audit_store,
             gateway=llm_gateway,
-            state_store=container.state_store,
         )
     await obs.start()
     await obs.health_monitor.start_periodic()
@@ -520,6 +519,9 @@ async def build_play_services(
             ws_push=container.stream.push,
             metrics=container.observability.metrics(),
         )
+
+    if container.observability.replayer is not None:
+        container.observability.replayer.set_forker(container.orchestrator)
 
     if (
         container.characters_integration is None
