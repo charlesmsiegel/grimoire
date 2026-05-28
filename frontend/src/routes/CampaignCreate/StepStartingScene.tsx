@@ -45,14 +45,15 @@ export function StepStartingScene({
   useEffect(() => {
     // Don't clear while the greetings list is reloading — the temporarily
     // empty `greetings` would wipe a valid selection just by revisiting the
-    // step. Only clear once the loaded list confirms the selection no longer
-    // matches the current PC role_tags.
+    // step. Once `loading` is false, a (possibly empty) loaded list is
+    // authoritative: an empty list means the new composition has no
+    // greetings at all, and a stale id from a previous composition must be
+    // cleared so submit doesn't send a greeting that no longer exists.
     if (loading) return;
-    if (greetings.length === 0) return;
     if (draft.greetingId && !filteredGreetings.some((g) => g.id === draft.greetingId)) {
       update({ greetingId: null });
     }
-  }, [filteredGreetings, draft.greetingId, update, loading, greetings.length]);
+  }, [filteredGreetings, draft.greetingId, update, loading]);
 
   const selectedGreeting = filteredGreetings.find((g) => g.id === draft.greetingId) ?? null;
 
