@@ -905,7 +905,11 @@ class StateStore:
         asset_id: str,
         world_id: str | None = None,
     ) -> dict | None:
-        """Cascade: campaign override → snapshot (pinned) / live index → None."""
+        """Cascade: campaign override → snapshot (pinned) / live index → None.
+
+        ``world_id=None`` means try campaign emergent first (the entity is
+        campaign-local). Pinned vs live is determined per world ref.
+        """
         if world_id is None:
             emergent = await self.get_emergent(campaign_id, kind, asset_id)
             if emergent is not None:
@@ -927,6 +931,10 @@ class StateStore:
             )
             merged = dict(base or {})
             merged_fm = dict(merged.get("frontmatter") or {})
+            # Narrative extras (frontmatter['extras']) need a key-by-key
+            # merge so an override on one key doesn't drop unrelated
+            # library keys. None entries in the override are "override-
+            # null" tombstones that delete the cascaded library value.
             base_extras = dict(merged_fm.get("extras") or {})
             override_extras = override.get("extras")
             merged_fm.update(override)
@@ -1916,7 +1924,14 @@ class StateStore:
         created_by: str = "user",
         pin_id: str | None = None,
     ) -> str:
-        """Insert a context pin/exclude row."""
+        """Insert a context pin/exclude row.
+
+        TTL is stored as an integer turn count alongside
+        ``created_at_turn_id``. Expiry is resolved at read time by counting
+        turns elapsed between ``created_at_turn_id`` and the current turn id
+        using ``turn_audits.created_at`` ordering — turn ids themselves are
+        random hex and not lexicographically comparable.
+        """
         if kind not in ("pin", "exclude"):
             raise ValueError(f"context pin kind must be 'pin' or 'exclude', got {kind!r}")
         target_kind = "source" if target_source_id else "entity"
@@ -1958,7 +1973,11 @@ class StateStore:
     ) -> list[dict]:
         """Return every active pin/exclude for the campaign.
 
-        Active = ``cleared_at IS NULL`` AND TTL not exhausted.
+        Active = ``cleared_at IS NULL`` AND TTL not exhausted. TTL is
+        exhausted when the number of canonical turns recorded in
+        ``turn_audits`` between ``created_at_turn_id`` (exclusive) and
+        ``current_turn_id`` (inclusive) is >= ``ttl_turns``. Rows with
+        ``ttl_turns IS NULL`` never expire.
         """
         rows = await self.db.fetchall(
             """
