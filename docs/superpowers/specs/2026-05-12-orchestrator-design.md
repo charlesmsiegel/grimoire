@@ -34,7 +34,7 @@ class OrchestratorService:
     # Editing past turns
     async def undo_turn(campaign_id, count=1) -> UndoResult
     async def retcon_post(post_id, new_text) -> RetconResult
-    async def fork(campaign_id, from_turn_id, label) -> ForkResult
+    async def fork_campaign(...) -> ForkCampaignResult  # creates a sibling campaign
 
     # Status
     async def turn_in_progress(campaign_id) -> TurnStatus | None
@@ -84,12 +84,12 @@ One turn per campaign at a time via `asyncio.Lock`. Multiple campaigns run indep
 
 The event bus (`event_bus.py`) is a synchronous fan-out — `emit` awaits each subscriber in registration order. The previously held `asyncio.Lock` was removed in `e8cb59f` after documenting that callers rely on emit returning only after all subscribers have run.
 
-## Undo / regenerate / retcon / fork
+## Undo / regenerate / retcon / fork-campaign
 
 - `undo_turn(campaign_id, count)` walks the delta log for the most-recent `count` turns, reverses each turn's deltas LIFO via `state_store.reverse_delta`, emits a `turn_undone` event per turn with the reversed delta ids, then resets `last_turn_id` to whatever turn now sits on top. Returns `UndoResult(turns_undone, reversed_delta_ids, warnings)`. Empty campaigns raise `NoTurnsToUndoError`.
 - `regenerate_last(campaign_id)` reverses the last turn's deltas, strips the narrator post for that turn from its scene (via `_strip_response_for_turn`), recovers the preceding player input and `pc_ref`, then runs a fresh turn from that input. Returns a `RegenerateResult` with `accepted=False` and a reason if there's nothing to regenerate.
 - `retcon_post(post_id, new_text)` locates the post + scene, reverses any deltas attributed to the post's turn, calls `scene_manager.edit_post(..., source="retcon")` to overwrite the body on disk, re-runs the extractor on the new text (using the original turn id as the source), routes the new deltas through auto-apply / review, and returns the before/after texts plus delta ids. Downstream-turn flagging is reserved for a follow-up.
-- `fork(campaign_id, from_turn_id, label)` calls `state_store.fork_branch(...)` to create a new branch id and copies scene files from `main` into the new branch via `scene_manager.fork_scenes_for_branch(...)` (suppressing `FileExistsError` so re-runs are safe).
+- `fork_campaign(...)` creates a sibling campaign rooted at a chosen turn. Within-campaign branching was removed in #494; `state_store.fork_branch` / `scene_manager.fork_scenes_for_branch` no longer exist.
 
 ## Streaming
 

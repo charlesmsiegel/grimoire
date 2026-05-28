@@ -95,6 +95,17 @@ async def test_036_preserves_posts_and_knowledge_state(pre_migration_db):
             "(fact_id, character_ref, campaign_id, branch_id, knows) "
             "VALUES ('f1', 'char-a', 'c1', 'c1:main', 1)"
         )
+        # review_queue.delta_id REFERENCES deltas(id) ON DELETE CASCADE
+        # (migration 007) — same cascade risk as posts/knowledge_state
+        # when deltas is dropped during 036.
+        await conn.execute(
+            "INSERT INTO deltas (id, campaign_id, branch_id, kind, applied_at) "
+            "VALUES ('d1', 'c1', 'c1:main', 'fact_add', '2026-05-28T00:00:00Z')"
+        )
+        await conn.execute(
+            "INSERT INTO review_queue (id, delta_id, campaign_id, status) "
+            "VALUES ('rq1', 'd1', 'c1', 'pending')"
+        )
 
     # Apply 036.
     async with db.acquire() as conn:
@@ -107,16 +118,20 @@ async def test_036_preserves_posts_and_knowledge_state(pre_migration_db):
         )
         await conn.execute("COMMIT")
 
-    # Both children survived their parents' DROP.
+    # All children survived their parents' DROP.
     async with db.acquire() as conn:
         async with conn.execute("SELECT COUNT(*) FROM posts") as cur:
             assert (await cur.fetchone())[0] == 1
         async with conn.execute("SELECT COUNT(*) FROM knowledge_state") as cur:
             assert (await cur.fetchone())[0] == 1
+        async with conn.execute("SELECT COUNT(*) FROM review_queue") as cur:
+            assert (await cur.fetchone())[0] == 1
         # FK to rebuilt parents still intact (insert with bad FK should fail).
         async with conn.execute("PRAGMA foreign_key_check('posts')") as cur:
             assert await cur.fetchall() == []
         async with conn.execute("PRAGMA foreign_key_check('knowledge_state')") as cur:
+            assert await cur.fetchall() == []
+        async with conn.execute("PRAGMA foreign_key_check('review_queue')") as cur:
             assert await cur.fetchall() == []
 
 

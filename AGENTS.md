@@ -19,7 +19,7 @@ The foundational concept is **three scopes**: every piece of data lives in exact
 backend/
   src/grimoire/          # Python backend — one package per domain module
     api/                 # FastAPI routers (one per domain)
-    orchestrator/        # Turn loop, advance trigger, forks, retcon
+    orchestrator/        # Turn loop, advance trigger, campaign forks, retcon
     context/             # Context assembly and prompt building
     scenes/              # Scene management, posts, summarization
     characters/          # Character services, PC management

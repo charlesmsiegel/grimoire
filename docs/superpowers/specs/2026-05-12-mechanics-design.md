@@ -177,7 +177,7 @@ The Extractor's `MechanicsValidator` protocol (`extractor/protocols.py:21`) is t
 `time_tick(campaign_id, entity_ref, duration, context=None, *, entity_kind=None)`:
 1. Null campaign → `[]`.
 2. Parse the entity ref; load the sheet via `StateStore.get_sheet` (passing `{}` if absent).
-3. Build a default `TickContext(campaign_id, branch_id=f"{campaign_id}:main", duration=duration)` if none supplied.
+3. Build a default `TickContext(campaign_id, duration=duration)` if none supplied. (Within-campaign branching was removed in #494; `branch_id` is no longer a `TickContext` field.)
 4. Delegate to `module.time_tick(entity_ref, sheet, duration, context)`.
 
 The Time Engine (`time_engine/service.py:472, 785`) drives this per present character on each clock advance and feeds the returned deltas back to the State Store.

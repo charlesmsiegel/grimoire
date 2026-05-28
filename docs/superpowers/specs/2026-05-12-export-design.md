@@ -129,7 +129,7 @@ Five plugins, each a `manifest.yaml` + `plugin.py` + `requirements.txt`:
 | `export-html` | `HtmlExportAdapter` | One standalone `.html` with inlined default CSS |
 | `export-transcript` | `TranscriptAdapter` | Plain `.txt` |
 
-Each plugin reads from disk via `load_fs_snapshot`, applies filters via `filter_context_from_dict`, narrows scenes via `filter_scenes`, and renders without touching the live services. The branch id received in `ExportSelection.branch_id` is split on `:` and the trailing component is treated as the branch name (matching how the conformance suite generates `f"{campaign_id}:main"`).
+Each plugin reads from disk via `load_fs_snapshot`, applies filters via `filter_context_from_dict`, narrows scenes via `filter_scenes`, and renders without touching the live services. (The original within-campaign branching subsystem — `ExportSelection.branch_id` and the `.split(":")[-1]` adapter pattern — was removed in #494; exports are now per-campaign.)
 
 The bundled plugins implement `option_schema` returning permissive JSON-schema dicts; `default_options` returns an empty-titled `ExportOptions(style_preset="default")`.
 
