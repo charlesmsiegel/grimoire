@@ -28,13 +28,16 @@ CREATE TABLE scenes_new (
   closed INTEGER NOT NULL DEFAULT 0,
   closed_at_turn TEXT
 );
+-- Scenes and posts use a bare 'main' literal (SceneInit default), not the
+-- `{campaign_id}:main` form used by other tables. Accept both so neither
+-- index is silently dropped on migration.
 INSERT INTO scenes_new SELECT
   id, campaign_id, ordinal, slug, file_path, location_ref,
   in_game_start, in_game_end, pov_character_ref, present_character_refs,
   present_pc_refs, summary, running_summary, key_beats, tags,
   emotional_arc, post_count, threads_introduced, threads_paid_off,
   title, greeting_id, closed, closed_at_turn
-FROM scenes WHERE branch_id LIKE '%:main';
+FROM scenes WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE scenes;
 ALTER TABLE scenes_new RENAME TO scenes;
 CREATE INDEX idx_scenes_campaign ON scenes(campaign_id, ordinal);
@@ -60,7 +63,7 @@ INSERT INTO posts_new SELECT
   id, scene_id, campaign_id, turn_id, order_in_scene,
   author_kind, author_pc_ref, body_excerpt, body_hash, is_player,
   created_at, retconned_from, body, author_npc_ref
-FROM posts WHERE branch_id LIKE '%:main';
+FROM posts WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE posts;
 ALTER TABLE posts_new RENAME TO posts;
 CREATE INDEX idx_posts_scene_order ON posts(scene_id, order_in_scene);
