@@ -10,16 +10,18 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Protocol
+from collections.abc import Callable
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
-from grimoire.extractor.llm_strategy import parse_llm_payload
-from grimoire.extractor.schema import output_schema
 from grimoire.scenes.types import Post, Scene, Thread
 from grimoire.types.common import CampaignId
 from grimoire.types.extraction import ExtractionResult
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
+
+PayloadParser = Callable[..., Any]
+SchemaFactory = Callable[[], dict]
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +65,12 @@ class _AdaptiveGateway(Protocol):
     async def get_model_info(self, provider_id: str, model: str) -> object | None: ...
 
 
-def analysis_schema() -> dict:
+def analysis_schema(extraction_schema_fn: SchemaFactory) -> dict:
     """JSON schema for the bundled analysis LLM output.
 
     Extends the extraction schema with summary, key_beats, and threads.
     """
-    extraction = output_schema()
+    extraction = extraction_schema_fn()
     extraction["properties"]["summary"] = {"type": "string"}
     extraction["properties"]["key_beats"] = {
         "type": "array",
@@ -171,6 +173,7 @@ def _parse_analysis_response(
     payload: dict,
     *,
     campaign_id: CampaignId,
+    payload_parser: PayloadParser,
     source: str = "scene_analysis",
     max_key_beats: int = 5,
     max_new_entities: int = 10,
@@ -184,7 +187,7 @@ def _parse_analysis_response(
     raw_threads = payload.get("threads") or []
     introduced, paid_off = _parse_threads(raw_threads)
 
-    llm_output = parse_llm_payload(
+    llm_output = payload_parser(
         payload,
         campaign_id=campaign_id,
         source=source,
@@ -212,6 +215,8 @@ def _parse_analysis_response(
 def make_scene_analyzer(
     gateway: _Gateway,
     *,
+    extraction_schema_fn: SchemaFactory,
+    payload_parser: PayloadParser,
     task: str = _DEFAULT_TASK,
     max_tokens: int = _DEFAULT_MAX_TOKENS,
     model: str = "default",
@@ -223,7 +228,7 @@ def make_scene_analyzer(
     Returns an async callable matching the SceneAnalyzer type alias:
     ``(Scene, list[Post], CampaignId) -> SceneAnalysisResult``.
     """
-    schema = analysis_schema()
+    schema = analysis_schema(extraction_schema_fn)
 
     async def _analyze(
         scene: Scene,
@@ -260,6 +265,7 @@ def make_scene_analyzer(
         return _parse_analysis_response(
             parsed,
             campaign_id=campaign_id,
+            payload_parser=payload_parser,
             max_key_beats=max_key_beats,
             max_new_entities=max_new_entities,
         )
@@ -270,6 +276,8 @@ def make_scene_analyzer(
 def make_adaptive_scene_analyzer(
     gateway: _AdaptiveGateway,
     *,
+    extraction_schema_fn: SchemaFactory,
+    payload_parser: PayloadParser,
     task: str = _DEFAULT_TASK,
     max_tokens: int = _DEFAULT_MAX_TOKENS,
     model: str = "default",
@@ -282,11 +290,11 @@ def make_adaptive_scene_analyzer(
     For longer scenes, processes windows with rolling summaries and extraction,
     then consolidates into a final result.
     """
-    schema = analysis_schema()
+    schema = analysis_schema(extraction_schema_fn)
 
-    async def _get_context_window() -> int:
+    async def _get_context_window(campaign_id: CampaignId | None = None) -> int:
         try:
-            route = gateway.resolve_route(task)
+            route = gateway.resolve_route(task, campaign_id)
             info = await gateway.get_model_info(route.provider_id, route.model)
             if info is not None:
                 cw = getattr(info, "context_window", 0) or 0
@@ -328,6 +336,7 @@ def make_adaptive_scene_analyzer(
         return _parse_analysis_response(
             parsed,
             campaign_id=campaign_id,
+            payload_parser=payload_parser,
             max_key_beats=max_key_beats,
             max_new_entities=max_new_entities,
         )
@@ -377,7 +386,7 @@ def make_adaptive_scene_analyzer(
             return previous_summary or "", ExtractionResult()
 
         window_summary = str(parsed.get("summary") or previous_summary or "").strip()
-        llm_output = parse_llm_payload(
+        llm_output = payload_parser(
             parsed,
             campaign_id=campaign_id,
             source="scene_analysis:window",
@@ -475,7 +484,7 @@ def make_adaptive_scene_analyzer(
         if not posts:
             return SceneAnalysisResult(summary=scene.running_summary or "")
 
-        context_window = await _get_context_window()
+        context_window = await _get_context_window(campaign_id)
         total_chars = sum(len(p.body) for p in posts)
         total_tokens_est = total_chars // 4
         budget = context_window // 2

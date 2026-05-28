@@ -9,6 +9,8 @@ from typing import Any
 
 import pytest
 
+from grimoire.extractor.llm_strategy import parse_llm_payload
+from grimoire.extractor.schema import output_schema
 from grimoire.scenes.analysis import (
     _extract_json,
     _parse_analysis_response,
@@ -87,7 +89,7 @@ def _scene() -> Scene:
 
 
 def test_analysis_schema_extends_extraction():
-    schema = analysis_schema()
+    schema = analysis_schema(output_schema)
     props = schema["properties"]
     assert "summary" in props
     assert "key_beats" in props
@@ -158,7 +160,9 @@ def test_parse_analysis_response_full():
             {"proposed_name": "Guardian Kael", "confidence": 0.7, "role": "major_npc"}
         ],
     }
-    result = _parse_analysis_response(payload, campaign_id="camp1")
+    result = _parse_analysis_response(
+        payload, campaign_id="camp1", payload_parser=parse_llm_payload
+    )
     assert result.summary == "The party explored the ruins."
     assert len(result.key_beats) == 2
     assert len(result.threads_introduced) == 1
@@ -169,7 +173,7 @@ def test_parse_analysis_response_full():
 
 
 def test_parse_analysis_response_empty():
-    result = _parse_analysis_response({}, campaign_id="camp1")
+    result = _parse_analysis_response({}, campaign_id="camp1", payload_parser=parse_llm_payload)
     assert result.summary == ""
     assert result.key_beats == []
     assert result.extraction.deltas == []
@@ -180,7 +184,9 @@ def test_parse_analysis_caps_key_beats():
         "summary": "s",
         "key_beats": ["a", "b", "c", "d", "e", "f", "g"],
     }
-    result = _parse_analysis_response(payload, campaign_id="c", max_key_beats=3)
+    result = _parse_analysis_response(
+        payload, campaign_id="c", payload_parser=parse_llm_payload, max_key_beats=3
+    )
     assert len(result.key_beats) == 3
 
 
@@ -195,7 +201,9 @@ async def test_single_pass_analyzer_parses_response():
         "facts": [{"text": "Door is locked", "confidence": 0.8}],
     }
     gateway = _FakeGateway(json.dumps(payload))
-    analyze = make_scene_analyzer(gateway)
+    analyze = make_scene_analyzer(
+        gateway, extraction_schema_fn=output_schema, payload_parser=parse_llm_payload
+    )
     result = await analyze(_scene(), [_post(1, "They found the door.")], "camp1")
     assert result.summary == "Adventure ensues."
     assert len(result.key_beats) == 1
@@ -205,7 +213,9 @@ async def test_single_pass_analyzer_parses_response():
 
 async def test_single_pass_analyzer_empty_posts():
     gateway = _FakeGateway("{}")
-    analyze = make_scene_analyzer(gateway)
+    analyze = make_scene_analyzer(
+        gateway, extraction_schema_fn=output_schema, payload_parser=parse_llm_payload
+    )
     result = await analyze(_scene(), [], "camp1")
     assert result.summary == "Things have happened."
     assert gateway.calls == []
@@ -214,7 +224,9 @@ async def test_single_pass_analyzer_empty_posts():
 async def test_single_pass_analyzer_llm_failure():
     gateway = _FakeGateway("")
     gateway.raise_on_call = True
-    analyze = make_scene_analyzer(gateway)
+    analyze = make_scene_analyzer(
+        gateway, extraction_schema_fn=output_schema, payload_parser=parse_llm_payload
+    )
     result = await analyze(_scene(), [_post(1, "x")], "camp1")
     assert result.summary == ""
     assert result.extraction.deltas == []
@@ -222,7 +234,9 @@ async def test_single_pass_analyzer_llm_failure():
 
 async def test_single_pass_analyzer_bad_json():
     gateway = _FakeGateway("not json")
-    analyze = make_scene_analyzer(gateway)
+    analyze = make_scene_analyzer(
+        gateway, extraction_schema_fn=output_schema, payload_parser=parse_llm_payload
+    )
     result = await analyze(_scene(), [_post(1, "x")], "camp1")
     assert result.summary == ""
 
@@ -238,7 +252,9 @@ async def test_adaptive_analyzer_single_pass_for_short_scene():
         "facts": [],
     }
     gateway = _FakeAdaptiveGateway(json.dumps(payload), context_window=200_000)
-    analyze = make_adaptive_scene_analyzer(gateway)
+    analyze = make_adaptive_scene_analyzer(
+        gateway, extraction_schema_fn=output_schema, payload_parser=parse_llm_payload
+    )
     result = await analyze(_scene(), [_post(1, "Short post.")], "camp1")
     assert result.summary == "Short scene summary."
     assert len(result.threads_introduced) == 1
@@ -273,7 +289,9 @@ async def test_adaptive_analyzer_windows_for_long_scene():
 
     # context_window=10 forces windowing — each post exceeds the window budget
     gateway = _SequentialGateway("", context_window=10)
-    analyze = make_adaptive_scene_analyzer(gateway)
+    analyze = make_adaptive_scene_analyzer(
+        gateway, extraction_schema_fn=output_schema, payload_parser=parse_llm_payload
+    )
     posts = [_post(i, f"Post body {i} with enough text.") for i in range(1, 4)]
     result = await analyze(_scene(), posts, "camp1")
     assert result.summary == "Final consolidated summary."
@@ -285,7 +303,9 @@ async def test_adaptive_analyzer_windows_for_long_scene():
 
 async def test_adaptive_analyzer_empty_posts():
     gateway = _FakeAdaptiveGateway("{}")
-    analyze = make_adaptive_scene_analyzer(gateway)
+    analyze = make_adaptive_scene_analyzer(
+        gateway, extraction_schema_fn=output_schema, payload_parser=parse_llm_payload
+    )
     result = await analyze(_scene(), [], "camp1")
     assert result.summary == "Things have happened."
     assert gateway.calls == []
@@ -294,6 +314,7 @@ async def test_adaptive_analyzer_empty_posts():
 # -- SceneManager.analyze_scene() -----------------------------------------
 
 
+@pytest.mark.integration
 async def test_manager_analyze_scene_writes_summary(tmp_path: Path):
     from grimoire.scenes import (
         InMemoryEventBus,
@@ -311,7 +332,9 @@ async def test_manager_analyze_scene_writes_summary(tmp_path: Path):
     }
 
     async def fake_analyzer(scene, posts, campaign_id):
-        return _parse_analysis_response(payload, campaign_id=campaign_id)
+        return _parse_analysis_response(
+            payload, campaign_id=campaign_id, payload_parser=parse_llm_payload
+        )
 
     bus = InMemoryEventBus()
     config = SceneManagerConfig(running_summary_every_n_posts=0)
@@ -341,6 +364,55 @@ async def test_manager_analyze_scene_writes_summary(tmp_path: Path):
     assert len(refreshed.threads_introduced) == 1
 
 
+@pytest.mark.integration
+async def test_manager_analyze_scene_skips_when_summary_exists(tmp_path: Path):
+    from grimoire.scenes import (
+        InMemoryEventBus,
+        SceneInit,
+        SceneManager,
+        SceneManagerConfig,
+        new_post,
+    )
+
+    call_count = 0
+
+    async def counting_analyzer(scene, posts, campaign_id):
+        nonlocal call_count
+        call_count += 1
+        return _parse_analysis_response(
+            {"summary": "Fresh analysis."},
+            campaign_id=campaign_id,
+            payload_parser=parse_llm_payload,
+        )
+
+    bus = InMemoryEventBus()
+    config = SceneManagerConfig(running_summary_every_n_posts=0)
+    manager = SceneManager(tmp_path, config=config, event_bus=bus, scene_analyzer=counting_analyzer)
+
+    scene = await manager.start_scene(
+        SceneInit(campaign_id="c1", title="Test", present_pc_refs=["alice"])
+    )
+    post = new_post(
+        author_kind=AuthorKind.NARRATOR,
+        body="text",
+        turn_id="t1",
+        is_player=False,
+    )
+    await manager.append_post(scene.id, post)
+
+    result1 = await manager.analyze_scene(scene.id, force=True)
+    assert call_count == 1
+    assert result1.summary == "Fresh analysis."
+
+    result2 = await manager.analyze_scene(scene.id, force=False)
+    assert call_count == 1  # no new LLM call
+    assert result2.summary == "Fresh analysis."
+
+    await manager.analyze_scene(scene.id, force=True)
+    assert call_count == 2  # forced re-analysis
+
+
+@pytest.mark.integration
 async def test_manager_analyze_scene_without_analyzer_raises(tmp_path: Path):
     from grimoire.scenes import (
         SceneInit,
