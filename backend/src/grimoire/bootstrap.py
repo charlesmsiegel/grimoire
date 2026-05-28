@@ -285,6 +285,8 @@ async def build_llm_services(
 ) -> None:
     """Wire the LLM gateway and everything downstream of it."""
     from grimoire.context.builder import ContextBuilderService
+    from grimoire.extractor.llm_strategy import parse_llm_payload
+    from grimoire.extractor.schema import output_schema
     from grimoire.extractor.service import ExtractorService
     from grimoire.llm_gateway.gateway import LLMGatewayService
     from grimoire.observability.replayer import TurnReplayerService
@@ -399,7 +401,13 @@ async def build_llm_services(
             )
         )
     if getattr(container.scenes, "_scene_analyzer", None) is None:
-        container.scenes.set_scene_analyzer(make_adaptive_scene_analyzer(llm_gateway))
+        container.scenes.set_scene_analyzer(
+            make_adaptive_scene_analyzer(
+                llm_gateway,
+                extraction_schema_fn=output_schema,
+                payload_parser=parse_llm_payload,
+            )
+        )
 
     if container.scene_summary_worker is None:
         worker = RunningSummaryWorker(container.scenes, container.event_bus)

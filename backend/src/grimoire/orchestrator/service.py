@@ -557,14 +557,45 @@ class OrchestratorService:
         branch_id: str,
         extraction: ExtractionResult,
     ) -> tuple[list[str], list[str]]:
-        """Route deltas from a scene analysis through the standard pipeline."""
+        """Route deltas from a scene analysis through the standard pipeline.
+
+        Filters out TIME_ADVANCE deltas (the Time Engine subscriber owns
+        calendar advancement; applying them directly would race it) and
+        routes transient updates when a transient-state service is wired.
+        """
+        from grimoire.types.state import DeltaKind
+
         turn_id = f"analysis:{uuid.uuid4().hex[:12]}"
-        return await self._delta.apply_routing(
+
+        filtered = ExtractionResult(
+            deltas=[d for d in extraction.deltas if d.kind != DeltaKind.TIME_ADVANCE],
+            candidates=extraction.candidates,
+            flags=extraction.flags,
+            transient_updates=extraction.transient_updates,
+            confidence_overall=extraction.confidence_overall,
+            extraction_strategies_run=extraction.extraction_strategies_run,
+        )
+
+        applied_ids, queued_ids = await self._delta.apply_routing(
             campaign_id=campaign_id,
             branch_id=branch_id,
             turn_id=turn_id,
-            extraction=extraction,
+            extraction=filtered,
         )
+
+        if self._transient_state is not None and filtered.transient_updates:
+            from grimoire.transient_state.routing import route_transient_updates
+
+            await route_transient_updates(
+                campaign_id=campaign_id,
+                proposals=list(filtered.transient_updates),
+                transient_state=self._transient_state,
+                source_post_id=turn_id,
+                branch_id=branch_id,
+                continuity=self._continuity,
+            )
+
+        return applied_ids, queued_ids
 
     # ------------------------------------------------------------------ #
     # Turn loop

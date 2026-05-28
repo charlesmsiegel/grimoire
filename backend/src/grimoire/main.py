@@ -46,6 +46,8 @@ from grimoire.event_bus import EventBus
 from grimoire.export.epub import EpubAdapter
 from grimoire.export.service import ExportService, ExportServiceConfig
 from grimoire.export.sources import DataSources
+from grimoire.extractor.llm_strategy import parse_llm_payload
+from grimoire.extractor.schema import output_schema
 from grimoire.extractor.service import ExtractorService
 from grimoire.imagegen import (
     BackendRegistry,
@@ -63,6 +65,7 @@ from grimoire.observability.service import ObservabilityService
 from grimoire.orchestrator.service import OrchestratorService
 from grimoire.plugins import PluginsConfig, PluginsService
 from grimoire.scenes import SceneManager
+from grimoire.scenes.analysis import make_adaptive_scene_analyzer
 from grimoire.scenes.default_summarizers import (
     make_default_final_summarizer,
     make_default_running_summarizer,
@@ -499,6 +502,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 llm_gateway,
                 max_tokens=container.scenes.config.running_summary.max_tokens,
                 model=container.scenes.config.running_summary.model or "default",
+            )
+        if getattr(container.scenes, "_scene_analyzer", None) is None:
+            container.scenes.set_scene_analyzer(
+                make_adaptive_scene_analyzer(
+                    llm_gateway,
+                    extraction_schema_fn=output_schema,
+                    payload_parser=parse_llm_payload,
+                )
             )
         # Background worker drains running_summary_due events so a slow LLM
         # call doesn't block the next append. Coalesces per-scene FIFO.

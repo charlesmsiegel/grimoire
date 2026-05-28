@@ -680,6 +680,18 @@ class SceneManager:
 
         async with self._lock_for(scene_id):
             scene = await self.get_scene(scene_id)
+
+            has_summary = (scene.closed and scene.final_summary) or (
+                not scene.closed and scene.running_summary
+            )
+            if has_summary and not force:
+                return SceneAnalysisResult(
+                    summary=(scene.final_summary if scene.closed else scene.running_summary) or "",
+                    key_beats=list(scene.key_beats),
+                    threads_introduced=list(scene.threads_introduced),
+                    threads_paid_off=list(scene.threads_paid_off),
+                )
+
             posts = await self.get_posts(scene_id)
             if not posts:
                 return SceneAnalysisResult()
