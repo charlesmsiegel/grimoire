@@ -1526,7 +1526,9 @@ pre {
   color: var(--fg-muted, #888);
   font-size: 0.75rem;
   cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
 }
 
 .hud-collapse-toggle:hover {
@@ -6365,7 +6367,9 @@ button.primary:disabled {
   color: var(--fg, currentColor);
   font-size: 0.8rem;
   cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .hud-quick-actions button:hover:not(:disabled) {
@@ -6411,7 +6415,10 @@ button.primary:disabled {
   color: var(--fg-muted, #888);
   font-size: 0.8rem;
   cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
 }
 
 .inspector-tabs button:hover {
@@ -6681,7 +6688,9 @@ button.primary:disabled {
   text-decoration: none;
   font-size: 0.85rem;
   line-height: 1.4;
-  transition: background-color 0.12s ease, border-color 0.12s ease;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .hud-present-cast-chip:hover {
