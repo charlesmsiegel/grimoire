@@ -212,7 +212,11 @@ export function PostItem({
         </time>
       </header>
       {editDraft === null ? (
-        <Markdown className="post-body">{displayBody}</Markdown>
+        isDirection && !displayBody.trim() ? (
+          <p className="post-body post-body-continue">(Continue)</p>
+        ) : (
+          <Markdown className="post-body">{displayBody}</Markdown>
+        )
       ) : (
         <form
           className="post-edit-form"
