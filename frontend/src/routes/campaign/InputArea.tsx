@@ -18,6 +18,9 @@ interface Props {
   onAdvance: () => Promise<void>;
   advanceEnabled: boolean;
   advanceReason: string;
+  onNextSpeaker: () => Promise<void>;
+  nextSpeakerEnabled: boolean;
+  speakerRoundActive: boolean;
   busy: boolean;
 }
 
@@ -33,6 +36,9 @@ export function InputArea({
   onAdvance,
   advanceEnabled,
   advanceReason,
+  onNextSpeaker,
+  nextSpeakerEnabled,
+  speakerRoundActive,
   busy,
 }: Props) {
   const [emotion, setEmotion] = useState("neutral");
@@ -117,6 +123,18 @@ export function InputArea({
     }
   }, [advanceEnabled, advancing, busy, onAdvance]);
 
+  const [requestingNext, setRequestingNext] = useState(false);
+
+  const nextSpeaker = useCallback(async () => {
+    if (!nextSpeakerEnabled || requestingNext || busy) return;
+    setRequestingNext(true);
+    try {
+      await onNextSpeaker();
+    } finally {
+      setRequestingNext(false);
+    }
+  }, [nextSpeakerEnabled, requestingNext, busy, onNextSpeaker]);
+
   // Autofocus on initial mount only. The submit() handler refocuses the
   // textarea explicitly after a successful submit; refocusing on every
   // busy→idle (e.g. Regenerate / Undo / Skip) yanked focus off the button
@@ -181,6 +199,17 @@ export function InputArea({
             title={advanceEnabled ? "Run the narrator on queued posts" : advanceReason}
           >
             {advancing ? "Advancing…" : "Advance"}
+          </button>
+        )}
+        {speakerRoundActive && (
+          <button
+            type="button"
+            onClick={nextSpeaker}
+            disabled={!nextSpeakerEnabled || requestingNext || busy}
+            className="input-next-speaker"
+            title="Let the next character speak"
+          >
+            {requestingNext ? "Calling…" : "Next"}
           </button>
         )}
         <button

@@ -2210,9 +2210,20 @@ pre {
 }
 
 .input-submit:disabled,
-.input-advance:disabled {
+.input-advance:disabled,
+.input-next-speaker:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.input-next-speaker {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 500;
+}
+.input-next-speaker:not(:disabled):hover {
+  filter: brightness(1.08);
 }
 
 /* ======================================================}

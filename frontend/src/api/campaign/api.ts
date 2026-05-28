@@ -91,6 +91,11 @@ export const campaignApi = {
   advance: (id: string, sceneId: string) =>
     api.post<AdvanceTurnResult>(`/api/campaigns/${enc(id)}/turns/advance`, { scene_id: sceneId }),
 
+  nextSpeaker: (id: string, sceneId: string) =>
+    api.post<{ accepted: boolean }>(`/api/campaigns/${enc(id)}/turns/next-speaker`, {
+      scene_id: sceneId,
+    }),
+
   regenerate: (id: string) => api.post<unknown>(`/api/campaigns/${enc(id)}/turns/regenerate`),
 
   regeneratePost: (
