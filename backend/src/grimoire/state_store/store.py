@@ -1309,6 +1309,19 @@ class StateStore:
             for row in rows
         ]
 
+    async def resolve_character_state(
+        self,
+        *,
+        character_ref: str,
+        campaign_id: str,
+    ) -> dict | None:
+        """Look up a single character's state row."""
+        row = await self.db.fetchone(
+            "SELECT * FROM character_state WHERE character_ref = ? AND campaign_id = ?",
+            (character_ref, campaign_id),
+        )
+        return _character_state_row_to_dict(row) if row is not None else None
+
     async def list_tier_pins(
         self,
         *,

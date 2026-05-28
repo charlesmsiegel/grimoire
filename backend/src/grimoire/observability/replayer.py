@@ -29,7 +29,7 @@ from grimoire.types.observability import (
 logger = logging.getLogger(__name__)
 
 
-class _BranchForker(Protocol):
+class _CampaignForker(Protocol):
     async def fork_campaign(
         self,
         *,
@@ -63,7 +63,7 @@ class TurnReplayerService:
         *,
         audit_store: AuditStore,
         gateway: _Completer,
-        state_store: _BranchForker | None = None,
+        state_store: _CampaignForker | None = None,
         task: str = "replay",
     ) -> None:
         self._audit_store = audit_store

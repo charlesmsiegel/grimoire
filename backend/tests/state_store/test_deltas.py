@@ -29,7 +29,7 @@ async def test_apply_delta_writes_row_and_logs(store: StateStore) -> None:
     delta_id = await store.apply_delta(delta=delta, source="extractor", turn_id="t1")
     assert delta_id
 
-    state = await store.resolve_character_state(character_ref="lib:winifred")
+    state = await store.resolve_character_state(character_ref="lib:winifred", campaign_id="c1")
     assert state["emotional_state"] == "wary"
 
     log = await store.get_delta_log()
@@ -67,11 +67,11 @@ async def test_reverse_delta_restores_prior_row(store: StateStore) -> None:
     )
 
     # Sanity: latest write is visible.
-    state = await store.resolve_character_state(character_ref="lib:winifred")
+    state = await store.resolve_character_state(character_ref="lib:winifred", campaign_id="c1")
     assert state["emotional_state"] == "wary"
 
     await store.reverse_delta(delta_id)
-    rolled_back = await store.resolve_character_state(character_ref="lib:winifred")
+    rolled_back = await store.resolve_character_state(character_ref="lib:winifred", campaign_id="c1")
     assert rolled_back["emotional_state"] == "calm"
     assert rolled_back["drift_score"] == 0.0
 
@@ -92,7 +92,7 @@ async def test_reverse_delta_deletes_inserted_row(store: StateStore) -> None:
         source="extractor",
     )
     await store.reverse_delta(delta_id)
-    state = await store.resolve_character_state(character_ref="lib:winifred")
+    state = await store.resolve_character_state(character_ref="lib:winifred", campaign_id="c1")
     assert state is None
 
 
@@ -133,12 +133,12 @@ async def test_review_queue_flow(store: StateStore) -> None:
         source="extractor",
     )
     # Queued but not yet applied:
-    assert (await store.resolve_character_state(character_ref="lib:emergent")) is None
+    assert (await store.resolve_character_state(character_ref="lib:emergent", campaign_id="c1")) is None
 
     delta_id = await store.approve_review_item(review_id)
     assert delta_id
 
-    state = await store.resolve_character_state(character_ref="lib:emergent")
+    state = await store.resolve_character_state(character_ref="lib:emergent", campaign_id="c1")
     assert state["emotional_state"] == "uncertain"
 
 
