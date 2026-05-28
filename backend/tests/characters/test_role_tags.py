@@ -227,7 +227,12 @@ async def test_add_pc_upsert_updates_role_tags(
 async def test_add_pc_upsert_without_role_tags_preserves_existing(
     characters: CharactersService, store: StateStore
 ) -> None:
-    """A legacy caller that omits role_tags must not erase stored tags."""
+    """A legacy caller that omits role_tags must not erase stored tags.
+
+    Both the persisted row and the returned PCEntry must reflect the
+    preserved tags, so clients that update their state from the POST
+    response don't temporarily lose the data.
+    """
     await _seed_world(store, "wod-london")
     await _bind_campaign(store, "camp-1", "wod-london")
     await characters.create(
@@ -238,8 +243,9 @@ async def test_add_pc_upsert_without_role_tags_preserves_existing(
 
     await characters.add_pc("camp-1", ref, "vivienne", role_tags=["debutante"])
     # Re-add without role_tags (None → preserve existing).
-    await characters.add_pc("camp-1", ref, "vivienne")
+    returned = await characters.add_pc("camp-1", ref, "vivienne")
 
+    assert returned.role_tags == ["debutante"]
     listed = await characters.list_pcs("camp-1")
     assert len(listed) == 1
     assert listed[0].role_tags == ["debutante"]
