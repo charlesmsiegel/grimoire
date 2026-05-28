@@ -190,6 +190,13 @@ export function PlayView({ campaignId }: Props) {
               onAdvance={() => runAction(() => play.advance())}
               advanceEnabled={play.state.advanceEnabled}
               advanceReason={play.state.advanceReason}
+              onNextSpeaker={async () => {
+                if (play.state.scene) {
+                  await campaignApi.nextSpeaker(campaignId, play.state.scene.id);
+                }
+              }}
+              nextSpeakerEnabled={play.state.nextSpeakerEnabled}
+              speakerRoundActive={play.state.speakerRoundActive}
               busy={busy}
             />
           )}
