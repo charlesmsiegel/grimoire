@@ -49,3 +49,28 @@ def golden_llm(request: pytest.FixtureRequest) -> RecordReplayLLM:
             "construct RecordReplayLLM(mode=RECORD, real_gateway=...) explicitly."
         )
     return RecordReplayLLM(FIXTURE_DIR, mode=mode)
+
+
+@pytest.fixture(autouse=True)
+def _no_bundled_plugins(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stop the app lifespan from loading real bundled plugins.
+
+    Booting the app (API route tests, scenario harness) runs
+    ``PluginsService.rescan()``, which imports every bundled plugin, runs
+    conformance, and fires network health probes (10s timeouts) — ~18s per
+    boot, the single largest cost in the suite. No route/scenario test needs
+    the real plugins.
+
+    The dedicated plugin suites (``tests/plugins``, ``tests/bundled_plugins``)
+    drive discovery with explicit bundled roots rather than through
+    ``_default_bundled_root()``, so they are unaffected. End-to-end
+    ``tests/scenario`` flows do exercise the real bundled plugins through the
+    app, so they keep them too.
+    """
+    if request.path.parent.name in {"plugins", "bundled_plugins", "scenario"}:
+        return
+    from grimoire.plugins import config as plugins_config
+
+    monkeypatch.setattr(plugins_config, "_default_bundled_root", lambda: None)
