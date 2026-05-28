@@ -803,17 +803,10 @@ class MechanicsService:
     ) -> int:
         if not self._config.rng.per_branch_seed:
             return 0
-        row = await self._state_store.db.fetchone(
-            "SELECT rng_seed FROM campaigns WHERE id = ?",
-            (campaign_id,),
-        )
-        if row is None or row["rng_seed"] is None:
-            # Built-in hash() is per-process randomized, which would
-            # defeat replay determinism — derive the fallback from
-            # SHA-256 instead.
-            digest = hashlib.sha256(campaign_id.encode("utf-8")).digest()
-            return int.from_bytes(digest[:8], "big") & 0x7FFFFFFFFFFFFFFF
-        return int(row["rng_seed"])
+        # SHA-256 of the campaign id gives a deterministic per-campaign seed
+        # that survives process restarts (Python's hash() does not).
+        digest = hashlib.sha256(campaign_id.encode("utf-8")).digest()
+        return int.from_bytes(digest[:8], "big") & 0x7FFFFFFFFFFFFFFF
 
 
 def _id_or_dirname(discovered: Any) -> str:
