@@ -305,7 +305,6 @@ async def test_multi_pc_should_auto_respond(
     scene = Scene(
         id="scene-1",
         campaign_id="camp-1",
-        branch_id="camp-1:main",
         ordinal=1,
         slug="opening",
         file_path="scenes/0001-opening.md",
@@ -328,7 +327,6 @@ async def test_pending_pc_inputs_since_last_advance(
     scene = Scene(
         id="scene-1",
         campaign_id="c",
-        branch_id="c:main",
         ordinal=1,
         slug="s",
         file_path="x.md",
@@ -375,7 +373,6 @@ async def test_recommend_tiers(characters: CharactersService, store: StateStore)
     scene = Scene(
         id="scene-1",
         campaign_id="camp-1",
-        branch_id="camp-1:main",
         ordinal=1,
         slug="s",
         file_path="x.md",
@@ -394,7 +391,6 @@ async def test_pin_tier_overrides_recommendation(
     scene = Scene(
         id="scene-1",
         campaign_id="camp-1",
-        branch_id="camp-1:main",
         ordinal=1,
         slug="s",
         file_path="x.md",
@@ -415,7 +411,6 @@ async def test_recommend_tiers_promotes_recent_mentions_to_background(
     scene = Scene(
         id="scene-1",
         campaign_id="camp-1",
-        branch_id="camp-1:main",
         ordinal=1,
         slug="s",
         file_path="x.md",
@@ -448,7 +443,6 @@ async def test_recommend_tiers_promotes_open_commitment_targets_to_background(
     scene = Scene(
         id="scene-1",
         campaign_id="camp-1",
-        branch_id="camp-1:main",
         ordinal=1,
         slug="s",
         file_path="x.md",
@@ -472,7 +466,6 @@ async def test_recommend_tiers_demotes_inactive_characters(
     scene = Scene(
         id="scene-1",
         campaign_id="camp-1",
-        branch_id="camp-1:main",
         ordinal=1,
         slug="s",
         file_path="x.md",
@@ -509,7 +502,6 @@ async def test_recommend_tiers_archives_long_inactive_characters(
     scene = Scene(
         id="scene-1",
         campaign_id="camp-1",
-        branch_id="camp-1:main",
         ordinal=1,
         slug="s",
         file_path="x.md",
@@ -546,7 +538,6 @@ async def test_recommend_tiers_presence_beats_inactivity_demotion(
     scene = Scene(
         id="scene-1",
         campaign_id="camp-1",
-        branch_id="camp-1:main",
         ordinal=1,
         slug="s",
         file_path="x.md",

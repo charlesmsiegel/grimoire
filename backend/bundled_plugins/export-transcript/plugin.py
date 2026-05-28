@@ -65,9 +65,7 @@ class TranscriptAdapter:
         options: ExportOptions,
         output_path: Path,
     ) -> ExportResult:
-        snapshot = load_fs_snapshot(
-            self._data_root, campaign_id, selection.branch_id.split(":")[-1]
-        )
+        snapshot = load_fs_snapshot(self._data_root, campaign_id)
         # Plain text drops mechanics chatter and OOC unless the caller said otherwise.
         raw_filters = dict(selection.filters or {})
         raw_filters.setdefault("strip_mechanics", True)

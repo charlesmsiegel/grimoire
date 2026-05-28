@@ -76,7 +76,6 @@ def test_state_delta_construction() -> None:
         id="d-001",
         delta=delta,
         campaign_id="by-night-london",
-        branch_id="main",
         turn_id="t-100",
         applied_at=datetime.now(UTC),
     )
@@ -99,7 +98,6 @@ def test_scene_and_post_construction() -> None:
     scene = gt.Scene(
         id="s-0001",
         campaign_id="by-night-london",
-        branch_id="main",
         ordinal=1,
         slug="elysium-opening",
         file_path="data/campaigns/by-night-london/scenes/0001-elysium-opening.md",
@@ -114,7 +112,6 @@ def test_fact_and_commitment_construction() -> None:
     fact = gt.Fact(
         id="f-1",
         campaign_id="by-night-london",
-        branch_id="main",
         text="winifred visited Sion as a child",
         established_in_post="p-9",
         established_at_in_game=moment,
@@ -125,7 +122,6 @@ def test_fact_and_commitment_construction() -> None:
     commitment = gt.Commitment(
         id="c-1",
         campaign_id="by-night-london",
-        branch_id="main",
         kind=gt.CommitmentKind.PROMISE,
         text="winifred promised to teach julian to ride",
         created_in_post="p-3",
@@ -303,7 +299,6 @@ def test_scene_round_trip_via_dict() -> None:
     scene = gt.Scene(
         id="s-0001",
         campaign_id="by-night-london",
-        branch_id="main",
         ordinal=1,
         slug="elysium-opening",
         file_path="data/campaigns/by-night-london/scenes/0001-elysium-opening.md",
@@ -327,7 +322,6 @@ def test_turn_audit_nested_round_trip() -> None:
     audit = gt.TurnAudit(
         turn_id="t-1",
         campaign_id="by-night-london",
-        branch_id="main",
         started_at=datetime.now(UTC),
         extracted_deltas=[delta],
         applied_deltas=[
@@ -335,7 +329,6 @@ def test_turn_audit_nested_round_trip() -> None:
                 id="d-1",
                 delta=delta,
                 campaign_id="by-night-london",
-                branch_id="main",
                 turn_id="t-1",
                 applied_at=datetime.now(UTC),
             )

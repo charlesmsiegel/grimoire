@@ -94,7 +94,6 @@ async def test_compresses_old_turn_audits(db) -> None:
         TurnAudit(
             turn_id="t_old",
             campaign_id="c",
-            branch_id="b",
             started_at=datetime.now(UTC) - timedelta(days=1000),
             response_text="old response",
         )
@@ -103,7 +102,6 @@ async def test_compresses_old_turn_audits(db) -> None:
         TurnAudit(
             turn_id="t_new",
             campaign_id="c",
-            branch_id="b",
             started_at=datetime.now(UTC),
             response_text="new response",
         )

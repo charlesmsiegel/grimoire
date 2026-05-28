@@ -42,7 +42,6 @@ async def test_pinned_bind_writes_snapshots(store: StateStore) -> None:
 
     resolved = await store.resolve_entity(
         campaign_id="c1",
-        branch_id="c1:main",
         kind="character",
         asset_id="winifred",
         world_id="wod-london",
@@ -72,7 +71,6 @@ async def test_track_latest_skips_snapshots(store: StateStore) -> None:
 
     resolved = await store.resolve_entity(
         campaign_id="c1",
-        branch_id="c1:main",
         kind="character",
         asset_id="winifred",
         world_id="wod-london",
@@ -108,7 +106,6 @@ async def test_upgrade_world_ref_refreshes_snapshots(store: StateStore) -> None:
 
     resolved = await store.resolve_entity(
         campaign_id="c1",
-        branch_id="c1:main",
         kind="character",
         asset_id="winifred",
         world_id="wod-london",

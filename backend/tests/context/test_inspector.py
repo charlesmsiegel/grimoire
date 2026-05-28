@@ -38,7 +38,6 @@ class StubPinStore:
         self,
         *,
         campaign_id: str,
-        branch_id: str,
         current_turn_id: str | None = None,
     ) -> list[dict]:
         return [
@@ -51,7 +50,6 @@ class StubPinStore:
             {
                 "id": pin_id,
                 "campaign_id": kwargs["campaign_id"],
-                "branch_id": kwargs["branch_id"],
                 "kind": kwargs["kind"],
                 "target_kind": ("source" if kwargs.get("target_source_id") else "entity"),
                 "target_source_id": kwargs.get("target_source_id"),
@@ -275,12 +273,10 @@ async def test_preview_is_byte_identical_to_canonical_build() -> None:
         campaign_id="camp",
         player_input="hi",
         session_id="s1",
-        branch_id="camp:main",
     )
     cached = await insp.get(session_id="s1", handle=handle)
     canonical = await builder.build(
         player_input="hi",
         campaign_id="camp",
-        branch_id="camp:main",
     )
     assert cached.messages_hash == canonical.messages_hash

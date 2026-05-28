@@ -74,7 +74,6 @@ async def test_keyword_search_over_facts(store: StateStore) -> None:
             "after": {
                 "id": "f1",
                 "campaign_id": "c1",
-                "branch_id": "c1:main",
                 "text": "winifred visited the Elysium on Tuesday evening.",
                 "keywords": '["winifred", "elysium", "tuesday"]',
                 "retired": 0,
@@ -90,7 +89,6 @@ async def test_keyword_search_over_facts(store: StateStore) -> None:
             "after": {
                 "id": "f2",
                 "campaign_id": "c1",
-                "branch_id": "c1:main",
                 "text": "Alistair lost his pocket watch at the docks.",
                 "retired": 0,
             },

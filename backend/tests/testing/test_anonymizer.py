@@ -77,13 +77,13 @@ async def test_anonymize_sqlite_rewrites_prose_columns(tmp_path: Path) -> None:
 
     # Seed a couple of rows touching the columns the anonymizer rewrites.
     await db.execute(
-        "INSERT INTO posts (id, scene_id, campaign_id, branch_id, order_in_scene,"
-        " body_excerpt) VALUES (?, NULL, ?, ?, ?, ?)",
-        ("p1", "cmp", "b", 0, "winifred smiled."),
+        "INSERT INTO posts (id, scene_id, campaign_id, order_in_scene,"
+        " body_excerpt) VALUES (?, NULL, ?, ?, ?)",
+        ("p1", "cmp", 0, "winifred smiled."),
     )
     await db.execute(
-        "INSERT INTO facts (id, campaign_id, branch_id, text) VALUES (?, ?, ?, ?)",
-        ("f1", "cmp", "b", "winifred promised to meet at Camden."),
+        "INSERT INTO facts (id, campaign_id, text) VALUES (?, ?, ?)",
+        ("f1", "cmp", "winifred promised to meet at Camden."),
     )
     await db.close()
 
@@ -185,13 +185,13 @@ async def test_anonymize_sqlite_rewrites_summary_and_commitment(tmp_path: Path) 
     await db.connect()
     await apply_migrations(db)
     await db.execute(
-        "INSERT INTO scenes (id, campaign_id, branch_id, ordinal, slug, file_path, summary)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ("s1", "cmp", "b", 0, "intro", "scenes/intro.md", "winifred enters."),
+        "INSERT INTO scenes (id, campaign_id, ordinal, slug, file_path, summary)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        ("s1", "cmp", 0, "intro", "scenes/intro.md", "winifred enters."),
     )
     await db.execute(
-        "INSERT INTO commitments (id, campaign_id, branch_id, text, status) VALUES (?, ?, ?, ?, ?)",
-        ("c1", "cmp", "b", "winifred will ride.", "OPEN"),
+        "INSERT INTO commitments (id, campaign_id, text, status) VALUES (?, ?, ?, ?)",
+        ("c1", "cmp", "winifred will ride.", "OPEN"),
     )
     await db.close()
 

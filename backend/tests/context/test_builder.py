@@ -139,8 +139,6 @@ class StubWorld:
         location_id: str,
         when: Any,
         campaign_id: str,
-        *,
-        branch_id: str | None = None,
     ) -> _Weather | None:
         return self._weather
 
@@ -185,9 +183,7 @@ class StubScenes:
         self._scene = scene
         self._posts = posts or []
 
-    async def active_scene_for_campaign(
-        self, campaign_id: str, branch_id: str = "main"
-    ) -> _Scene | None:
+    async def active_scene_for_campaign(self, campaign_id: str) -> _Scene | None:
         return self._scene
 
     async def recent_posts(self, scene_id: str, n: int = 10) -> list[_Post]:
@@ -743,8 +739,6 @@ class StubCharactersWithRecommend(StubCharacters):
         from_ref: str,
         to_ref: str,
         campaign_id: str,
-        *,
-        branch_id: str | None = None,
     ) -> list[dict]:
         return list(self._rel.get((from_ref, to_ref), []))
 
@@ -1058,9 +1052,7 @@ async def test_faction_state_rendered_into_background() -> None:
         async def list_factions(self, world_id: str) -> list[_Faction]:
             return [_Faction(asset_id="court")]
 
-        async def faction_state(
-            self, ref: str, campaign_id: str, *, branch_id: str | None = None
-        ) -> _FactionState:
+        async def faction_state(self, ref: str, campaign_id: str) -> _FactionState:
             return _FactionState(
                 current_focus="press the orchard claim",
                 public_perception="cautious",
@@ -1091,12 +1083,10 @@ async def test_calendar_item_uses_time_engine() -> None:
         title: str = "Festival of the Orchard"
 
     class _TE:
-        async def current(self, campaign_id: str, *, branch_id: str | None = None) -> _Moment:
+        async def current(self, campaign_id: str) -> _Moment:
             return _Moment()
 
-        async def upcoming_events(
-            self, campaign_id: str, *, branch_id: str | None = None
-        ) -> list[_Event]:
+        async def upcoming_events(self, campaign_id: str) -> list[_Event]:
             return [_Event()]
 
     class _World(StubWorld):
@@ -1133,7 +1123,6 @@ async def test_cache_module_round_trip() -> None:
         player_input="hi",
         composition_hash="abc",
         scene_id="s1",
-        branch_id="main",
         pc_ref=None,
     )
     cache.put(key, prompt)
@@ -1146,7 +1135,6 @@ async def test_cache_module_round_trip() -> None:
                 player_input=f"input-{i}",
                 composition_hash="abc",
                 scene_id="s1",
-                branch_id="main",
                 pc_ref=None,
             ),
             prompt,

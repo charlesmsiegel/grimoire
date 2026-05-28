@@ -42,7 +42,7 @@ class _MinimalStore:
         self.reviewed.append((delta, source, campaign_id))
         return "review-1"
 
-    async def apply_delta(self, *, delta, source, turn_id, branch_id, campaign_id):
+    async def apply_delta(self, *, delta, source, turn_id, campaign_id):
         self.applied.append(delta)
         return "delta-1"
 
@@ -61,7 +61,7 @@ def _orchestrator(registry: ContinuityRegistry, store: _MinimalStore) -> Orchest
 
 async def test_fact_add_routes_to_continuity_when_no_conflict() -> None:
     registry = ContinuityRegistry(
-        store_factory=lambda c, b: InMemoryContinuityStore(),
+        store_factory=lambda c: InMemoryContinuityStore(),
     )
     store = _MinimalStore()
     orch = _orchestrator(registry, store)
@@ -81,7 +81,6 @@ async def test_fact_add_routes_to_continuity_when_no_conflict() -> None:
     handled = await orch._delta._apply_continuity_delta(
         delta=delta,
         campaign_id="camp-a",
-        branch_id="camp-a:main",
         turn_id="t1",
     )
     assert handled is True
@@ -106,13 +105,12 @@ async def test_fact_add_conflict_queues_for_review() -> None:
             )
 
     # Pre-populate one fact in the store the judge can flag as a conflict.
-    stores: dict[tuple[str, str], InMemoryContinuityStore] = {}
+    stores: dict[str, InMemoryContinuityStore] = {}
 
-    def store_factory(c: str, b: str) -> InMemoryContinuityStore:
-        key = (c, b)
-        if key not in stores:
-            stores[key] = InMemoryContinuityStore()
-        return stores[key]
+    def store_factory(c: str) -> InMemoryContinuityStore:
+        if c not in stores:
+            stores[c] = InMemoryContinuityStore()
+        return stores[c]
 
     registry = ContinuityRegistry(store_factory=store_factory)
     # Force-construct service so we can seed a conflict-target fact.
@@ -143,7 +141,7 @@ async def test_fact_add_conflict_queues_for_review() -> None:
         source="extractor",
     )
     handled = await orch._delta._apply_continuity_delta(
-        delta=delta, campaign_id="camp-a", branch_id="camp-a:main", turn_id="t1"
+        delta=delta, campaign_id="camp-a", turn_id="t1"
     )
     assert handled is True  # conflict path "handled" by review queue
     assert store.reviewed, "FACT_ADD with conflict should land in review queue"
@@ -151,7 +149,7 @@ async def test_fact_add_conflict_queues_for_review() -> None:
 
 async def test_commitment_add_routes_to_continuity() -> None:
     registry = ContinuityRegistry(
-        store_factory=lambda c, b: InMemoryContinuityStore(),
+        store_factory=lambda c: InMemoryContinuityStore(),
     )
     store = _MinimalStore()
     orch = _orchestrator(registry, store)
@@ -170,7 +168,7 @@ async def test_commitment_add_routes_to_continuity() -> None:
         source="extractor",
     )
     handled = await orch._delta._apply_continuity_delta(
-        delta=delta, campaign_id="camp-a", branch_id="camp-a:main", turn_id="t1"
+        delta=delta, campaign_id="camp-a", turn_id="t1"
     )
     assert handled is True
     service = registry.for_campaign("camp-a")
@@ -180,7 +178,7 @@ async def test_commitment_add_routes_to_continuity() -> None:
 
 async def test_commitment_resolve_routes_to_continuity() -> None:
     registry = ContinuityRegistry(
-        store_factory=lambda c, b: InMemoryContinuityStore(),
+        store_factory=lambda c: InMemoryContinuityStore(),
     )
     store = _MinimalStore()
     orch = _orchestrator(registry, store)
@@ -204,7 +202,7 @@ async def test_commitment_resolve_routes_to_continuity() -> None:
         source="extractor",
     )
     handled = await orch._delta._apply_continuity_delta(
-        delta=delta, campaign_id="camp-a", branch_id="camp-a:main", turn_id="t2"
+        delta=delta, campaign_id="camp-a", turn_id="t2"
     )
     assert handled is True
     assert (await service.get_commitment(cid)).status == CommitmentStatus.PAID
@@ -213,7 +211,7 @@ async def test_commitment_resolve_routes_to_continuity() -> None:
 async def test_unrouted_kind_returns_false() -> None:
     """Unsupported continuity kinds fall back so the caller still logs."""
     registry = ContinuityRegistry(
-        store_factory=lambda c, b: InMemoryContinuityStore(),
+        store_factory=lambda c: InMemoryContinuityStore(),
     )
     store = _MinimalStore()
     orch = _orchestrator(registry, store)
@@ -226,7 +224,7 @@ async def test_unrouted_kind_returns_false() -> None:
         source="extractor",
     )
     handled = await orch._delta._apply_continuity_delta(
-        delta=delta, campaign_id="camp-a", branch_id="camp-a:main", turn_id="t2"
+        delta=delta, campaign_id="camp-a", turn_id="t2"
     )
     assert handled is False
 
@@ -252,6 +250,6 @@ async def test_routes_skipped_when_no_continuity_wired() -> None:
         source="extractor",
     )
     handled = await orch._delta._apply_continuity_delta(
-        delta=delta, campaign_id="camp-a", branch_id="camp-a:main", turn_id="t1"
+        delta=delta, campaign_id="camp-a", turn_id="t1"
     )
     assert handled is False

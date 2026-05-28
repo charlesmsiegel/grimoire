@@ -73,7 +73,6 @@ class FakeStateStore:
     applied: list[dict] = field(default_factory=list)
     reviewed: list[dict] = field(default_factory=list)
     reversed_ids: list[str] = field(default_factory=list)
-    forks: list[dict] = field(default_factory=list)
     # When set, apply_delta raises on the Nth call (0-indexed) so tests can
     # simulate a mid-batch failure.
     fail_apply_on_call: int | None = None
@@ -85,7 +84,6 @@ class FakeStateStore:
         delta: Any,
         source: str = "",
         turn_id: str | None = None,
-        branch_id: str | None = None,
         campaign_id: str | None = None,
     ) -> str:
         idx = self._apply_call_count
@@ -99,7 +97,6 @@ class FakeStateStore:
                 "delta": delta,
                 "source": source,
                 "turn_id": turn_id,
-                "branch_id": branch_id,
                 "campaign_id": campaign_id,
             }
         )
@@ -150,33 +147,12 @@ class FakeStateStore:
             return None
         return {"id": campaign_id, "config": self.db.campaign_configs.get(campaign_id)}
 
-    async def fork_branch(
-        self,
-        *,
-        campaign_id: str,
-        parent_branch_id: str,
-        new_label: str,
-        at_turn_id: str | None = None,
-    ) -> str:
-        new_id = f"{campaign_id}:{new_label}"
-        self.forks.append(
-            {
-                "new_id": new_id,
-                "campaign_id": campaign_id,
-                "parent": parent_branch_id,
-                "label": new_label,
-                "at_turn": at_turn_id,
-            }
-        )
-        return new_id
-
 
 class _DeltaRow:
     def __init__(self, entry: dict) -> None:
         self.id = entry["id"]
         self.turn_id = entry["turn_id"]
         self.campaign_id = entry["campaign_id"]
-        self.branch_id = entry["branch_id"]
         self.delta = entry["delta"]
         self.target_id = getattr(entry["delta"], "target_id", None)
 
@@ -195,7 +171,6 @@ class FakeContextBuilder:
         *,
         pc_ref: str | None = None,
         extra: str | None = None,
-        branch_id: str | None = None,
         turn_id: str | None = None,
         extractor_mode: Any = None,
         auxiliary_task: Any | None = None,

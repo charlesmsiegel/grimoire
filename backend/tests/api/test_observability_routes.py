@@ -52,7 +52,6 @@ async def _seed_audit(obs: ObservabilityService, *, turn_id: str = "t_test") -> 
     audit = TurnAudit(
         turn_id=turn_id,
         campaign_id="c1",
-        branch_id="main",
         scene_id="s1",
         started_at=datetime.now(UTC),
         completed_at=datetime.now(UTC),
@@ -112,7 +111,6 @@ async def test_get_turn_prompt_tier_from_metadata(
     audit = TurnAudit(
         turn_id="t_tier",
         campaign_id="c1",
-        branch_id="main",
         started_at=datetime.now(UTC),
         assembled_messages=[
             {"role": "system", "content": "lock-in block", "metadata": {"tier": "lock-in"}},
@@ -135,7 +133,6 @@ async def test_get_turn_prompt_diff(
         TurnAudit(
             turn_id="t_prev",
             campaign_id="c1",
-            branch_id="main",
             started_at=datetime.now(UTC),
             assembled_messages=[
                 {"role": "system", "content": "old", "metadata": {"tier": "lock-in"}},
@@ -147,7 +144,6 @@ async def test_get_turn_prompt_diff(
         TurnAudit(
             turn_id="t_curr",
             campaign_id="c1",
-            branch_id="main",
             started_at=datetime.now(UTC),
             assembled_messages=[
                 {"role": "system", "content": "new", "metadata": {"tier": "lock-in"}},
@@ -192,15 +188,14 @@ async def test_get_turn_deltas_envelope_shape(
     await db.execute(
         """
         INSERT INTO deltas (
-            id, campaign_id, branch_id, turn_id, source, kind,
+            id, campaign_id, turn_id, source, kind,
             target_scope, target_table, target_path, target_id,
             before, after, confidence, applied_at, reversed_at, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
         """,
         (
             "d_a",
             "c1",
-            "main",
             "t_with_deltas",
             "extractor",
             DeltaKind.FACT_ADD.value,
@@ -219,7 +214,6 @@ async def test_get_turn_deltas_envelope_shape(
     audit = TurnAudit(
         turn_id="t_with_deltas",
         campaign_id="c1",
-        branch_id="main",
         scene_id="s1",
         started_at=datetime.now(UTC),
         extracted_deltas=[
@@ -241,7 +235,6 @@ async def test_get_turn_deltas_envelope_shape(
                     target_id="f_1",
                 ),
                 campaign_id="c1",
-                branch_id="main",
                 turn_id="t_with_deltas",
                 applied_at=datetime.now(UTC),
             ),

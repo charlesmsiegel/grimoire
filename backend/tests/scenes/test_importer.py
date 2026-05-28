@@ -97,7 +97,6 @@ async def test_run_import_pipeline_progress_events(tmp_path: Path) -> None:
     scene_mock = MagicMock()
     scene_mock.id = "camp:0001-test"
     scene_mock.campaign_id = "camp"
-    scene_mock.branch_id = "main"
     scene_manager.start_scene.return_value = scene_mock
     scene_manager.detect_threads.return_value = []
     scene_manager.generate_summary.return_value = ("Summary", ["beat1"])

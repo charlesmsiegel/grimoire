@@ -36,7 +36,6 @@ async def test_facade_records_and_lists_audits(db) -> None:
         TurnAudit(
             turn_id="t",
             campaign_id="c",
-            branch_id="b",
             started_at=datetime.now(UTC),
             response_text="hi",
         )
@@ -125,7 +124,6 @@ async def test_start_subscribes_auditor_when_event_bus_passed(db) -> None:
                 payload={
                     "turn_id": "t_e",
                     "campaign_id": "c_e",
-                    "branch_id": "c_e:main",
                     "scene_id": "s_e",
                 },
             )

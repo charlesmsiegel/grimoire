@@ -38,7 +38,7 @@ async def test_arc_tag_selection_narrows_scenes() -> None:
             s3.id: [make_post(s3.id, 1, "Untagged scene.")],
         },
     )
-    selection = ExportSelection(branch_id="main", arcs=["saint-werewolf"])
+    selection = ExportSelection(arcs=["saint-werewolf"])
     snapshot = await build_snapshot("campaign-a", selection, ExportOptions(), sources)
     slugs = [part.scene.slug for part in snapshot.scenes]
     assert slugs == ["opening"]
@@ -59,7 +59,7 @@ async def test_pov_consolidation_by_kind_merges_adjacent_posts() -> None:
             ]
         },
     )
-    selection = ExportSelection(branch_id="main", filters={"pov_consolidation": "by_kind"})
+    selection = ExportSelection(filters={"pov_consolidation": "by_kind"})
     snapshot = await build_snapshot("campaign-a", selection, ExportOptions(), sources)
     posts = snapshot.scenes[0].posts
     assert len(posts) == 2
@@ -79,7 +79,6 @@ async def test_share_audience_excludes_continuity_appendix() -> None:
         commitments=[make_commitment()],
     )
     selection = ExportSelection(
-        branch_id="main",
         include_appendices=["continuity"],
         audience="share",
     )
@@ -97,7 +96,6 @@ async def test_personal_audience_keeps_continuity_appendix() -> None:
         commitments=[make_commitment()],
     )
     selection = ExportSelection(
-        branch_id="main",
         include_appendices=["continuity"],
         audience="personal",
     )
@@ -116,7 +114,7 @@ async def test_filter_defaults_honoured_when_selection_silent() -> None:
         posts={scene.id: [make_post(scene.id, 1, "Body. [roll Dex 5]")]},
     )
     defaults = ExportFiltersConfig(strip_mechanics_default=True)
-    selection = ExportSelection(branch_id="main")
+    selection = ExportSelection()
     snapshot = await build_snapshot(
         "campaign-a", selection, ExportOptions(), sources, filter_defaults=defaults
     )
@@ -142,7 +140,7 @@ async def test_epub_emits_real_footnotes_for_mech_chips() -> None:
         out = Path(tmp) / "book.epub"
         await adapter.export(
             "campaign-a",
-            ExportSelection(branch_id="main"),
+            ExportSelection(),
             ExportOptions(title="Test", extra={"include_mechanics_footnotes": True}),
             out,
         )
@@ -178,7 +176,7 @@ async def test_epub_attribution_renders_source_label() -> None:
         out = Path(tmp) / "book.epub"
         await adapter.export(
             "campaign-a",
-            ExportSelection(branch_id="main", include_appendices=["world", "locations"]),
+            ExportSelection(include_appendices=["world", "locations"]),
             ExportOptions(title="T", extra={"show_source_attribution": True}),
             out,
         )
@@ -224,7 +222,7 @@ async def test_epub_auto_cover_pulls_from_generator() -> None:
         out = Path(tmp) / "book.epub"
         await adapter.export(
             "campaign-a",
-            ExportSelection(branch_id="main"),
+            ExportSelection(),
             ExportOptions(title="T", extra={"generate_cover": True}),
             out,
         )

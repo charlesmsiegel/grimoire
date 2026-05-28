@@ -52,7 +52,7 @@ class _AuxScenes:
         self._scene = scene
         self._posts = posts or (scene.posts if scene else [])
 
-    async def active_scene_for_campaign(self, campaign_id: str, branch_id: str = "main"):
+    async def active_scene_for_campaign(self, campaign_id: str):
         return self._scene
 
     async def recent_posts(self, scene_id: str, n: int = 10):

@@ -181,15 +181,15 @@ async def test_queue_generation_routes_by_task(env) -> None:
     await env["svc"].store.db.execute(
         """
         INSERT INTO scenes (
-          id, campaign_id, branch_id, ordinal, slug, file_path,
+          id, campaign_id, ordinal, slug, file_path,
           location_ref, in_game_start, in_game_end, pov_character_ref,
           present_character_refs, present_pc_refs, summary, running_summary,
           key_beats, tags, emotional_arc, post_count, threads_introduced,
           threads_paid_off, title, greeting_id, closed, closed_at_turn
-        ) VALUES (?, ?, ?, 1, ?, ?, NULL, NULL, NULL, NULL,
+        ) VALUES (?, ?, 1, ?, ?, NULL, NULL, NULL, NULL,
                   '[]', '[]', '', '', '[]', '[]', '', 0, '[]', '[]', '', NULL, 0, NULL)
         """,
-        ("scene-1", "camp-1", "camp-1:main", "scene-1", "scenes/scene-1.md"),
+        ("scene-1", "camp-1", "scene-1", "scenes/scene-1.md"),
     )
 
     job_id = await env["svc"].queue_generation(

@@ -71,24 +71,11 @@ def test_scene_files(tmp_path: Path) -> None:
     assert w1.kind == "scene_body"
     assert w1.event_type == "scene_file_changed"
     assert w1.campaign_id == "c1"
-    assert w1.branch_id == "main"
     assert w1.scene_basename == "0001-elysium-opening"
 
     w2 = classify_path(root, yaml)
     assert w2 is not None
     assert w2.kind == "scene_sidecar"
-
-
-def test_scene_on_branch(tmp_path: Path) -> None:
-    root = _root(tmp_path)
-    md = root / "campaigns" / "c1" / "branches" / "what-if" / "scenes" / "0007-side-quest.md"
-    md.parent.mkdir(parents=True)
-    md.touch()
-    w = classify_path(root, md)
-    assert w is not None
-    assert w.kind == "scene_body"
-    assert w.branch_id == "what-if"
-    assert w.campaign_id == "c1"
 
 
 def test_override_emergent_sheet_image(tmp_path: Path) -> None:

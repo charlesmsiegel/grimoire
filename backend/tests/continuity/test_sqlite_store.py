@@ -33,12 +33,12 @@ async def sqlite_store(tmp_path: Path):
         await db.execute(
             """
             INSERT INTO posts (
-              id, scene_id, campaign_id, branch_id, order_in_scene, author_kind
-            ) VALUES (?, NULL, ?, ?, 0, 'narrator')
+              id, scene_id, campaign_id, order_in_scene, author_kind
+            ) VALUES (?, NULL, ?, 0, 'narrator')
             """,
-            (pid, "c1", "c1:main"),
+            (pid, "c1"),
         )
-    store = SqliteContinuityStore(db, campaign_id="c1", branch_id="c1:main")
+    store = SqliteContinuityStore(db, campaign_id="c1")
     try:
         yield store, db
     finally:
@@ -85,16 +85,26 @@ async def test_list_facts_excludes_retired_by_default(sqlite_store) -> None:
     assert restored.retired_reason is RetirementReason.SUPERSEDED
 
 
-async def test_branch_isolation(sqlite_store) -> None:
+async def test_campaign_isolation(sqlite_store) -> None:
     store, db = sqlite_store
-    other = SqliteContinuityStore(db, campaign_id="c1", branch_id="c1:fork")
-    await store.put_fact(make_fact(fact_id="main_only", text="lives on main"))
-    await other.put_fact(make_fact(fact_id="fork_only", text="lives on fork"))
+    # Seed FK targets for the second campaign
+    for pid in ("p-other-1",):
+        await db.execute(
+            """
+            INSERT INTO posts (
+              id, scene_id, campaign_id, order_in_scene, author_kind
+            ) VALUES (?, NULL, ?, 0, 'narrator')
+            """,
+            (pid, "c2"),
+        )
+    other = SqliteContinuityStore(db, campaign_id="c2")
+    await store.put_fact(make_fact(fact_id="main_only", text="lives on c1"))
+    await other.put_fact(make_fact(fact_id="other_only", text="lives on c2"))
 
-    main_ids = {f.id for f in await store.list_facts()}
-    fork_ids = {f.id for f in await other.list_facts()}
-    assert main_ids == {"main_only"}
-    assert fork_ids == {"fork_only"}
+    c1_ids = {f.id for f in await store.list_facts()}
+    c2_ids = {f.id for f in await other.list_facts()}
+    assert c1_ids == {"main_only"}
+    assert c2_ids == {"other_only"}
 
 
 async def test_commitment_round_trip_with_status_filter(sqlite_store) -> None:

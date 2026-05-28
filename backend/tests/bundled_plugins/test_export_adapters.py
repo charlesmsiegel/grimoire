@@ -67,7 +67,6 @@ def _build_campaign(root: Path, campaign_id: str = "cmp-1") -> str:
     scene = Scene(
         id="sc-001",
         campaign_id=campaign_id,
-        branch_id="main",
         ordinal=1,
         slug="arrival",
         title="Arrival",
@@ -94,7 +93,6 @@ def _build_campaign(root: Path, campaign_id: str = "cmp-1") -> str:
     draft = Scene(
         id="sc-002",
         campaign_id=campaign_id,
-        branch_id="main",
         ordinal=2,
         slug="empty",
         title="Placeholder",
@@ -167,7 +165,7 @@ async def test_markdown_bundle_zips_scenes_and_cast(
     out = tmp_path / "out.zip"
     result = await adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main"),
+        ExportSelection(),
         ExportOptions(title="Bundle Probe"),
         out,
     )
@@ -196,7 +194,7 @@ async def test_markdown_bundle_respects_scene_selection(
     out = tmp_path / "out.zip"
     result = await adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main", scene_ids=[]),
+        ExportSelection(scene_ids=[]),
         ExportOptions(title="Empty"),
         out,
     )
@@ -217,7 +215,7 @@ async def test_single_markdown_lists_scenes_and_filters_ooc(
     out = tmp_path / "campaign.md"
     result = await adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main", filters={"strip_ooc": True}),
+        ExportSelection(filters={"strip_ooc": True}),
         ExportOptions(title="My Campaign", author="The Storyteller"),
         out,
     )
@@ -239,7 +237,7 @@ async def test_json_export_structure(export_json_module, campaign_fixture, tmp_p
     out = tmp_path / "dump.json"
     result = await adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main"),
+        ExportSelection(),
         ExportOptions(title="Snapshot"),
         out,
     )
@@ -265,7 +263,7 @@ async def test_json_export_can_be_compact(
     out = tmp_path / "dump.json"
     await adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main"),
+        ExportSelection(),
         ExportOptions(title="Snapshot"),
         out,
     )
@@ -283,7 +281,7 @@ async def test_transcript_drops_mechanics_and_labels_speakers(
     out = tmp_path / "transcript.txt"
     result = await adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main"),
+        ExportSelection(),
         ExportOptions(title="The Long Night"),
         out,
     )
@@ -306,7 +304,7 @@ async def test_html_export_emits_anchors_and_assets(
     out = tmp_path / "campaign.html"
     result = await adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main"),
+        ExportSelection(),
         ExportOptions(title="The Long Night"),
         out,
     )
@@ -332,7 +330,7 @@ async def test_html_export_writes_external_stylesheet_when_not_embedded(
     out = tmp_path / "campaign.html"
     await adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main"),
+        ExportSelection(),
         ExportOptions(title="Probe"),
         out,
     )
@@ -351,7 +349,7 @@ async def test_empty_campaign_still_produces_output(export_json_module, tmp_path
     out = tmp_path / "out.json"
     result = await adapter.export(
         "probe",
-        ExportSelection(branch_id="probe:main"),
+        ExportSelection(),
         ExportOptions(title="Empty"),
         out,
     )
@@ -371,7 +369,7 @@ async def test_html_export_neutralizes_custom_css_breakout(
     hostile = "</style><script>alert(1)</script><style>"
     await adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main"),
+        ExportSelection(),
         ExportOptions(title="Probe", extra={"custom_css": hostile}),
         out,
     )
@@ -401,7 +399,7 @@ async def test_anonymize_pcs_rewrites_speaker_labels(
     html_out = tmp_path / "out.html"
     await html_adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main", filters=filters),
+        ExportSelection(filters=filters),
         ExportOptions(title="Anon"),
         html_out,
     )
@@ -415,7 +413,7 @@ async def test_anonymize_pcs_rewrites_speaker_labels(
     md_out = tmp_path / "out.md"
     await md_adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main", filters=filters),
+        ExportSelection(filters=filters),
         ExportOptions(title="Anon"),
         md_out,
     )
@@ -427,7 +425,7 @@ async def test_anonymize_pcs_rewrites_speaker_labels(
     txt_out = tmp_path / "out.txt"
     await txt_adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main", filters=filters),
+        ExportSelection(filters=filters),
         ExportOptions(title="Anon"),
         txt_out,
     )
@@ -445,7 +443,7 @@ async def test_markdown_bundle_image_count_matches_written_files(
     out = tmp_path / "out.zip"
     result = await adapter.export(
         campaign_id,
-        ExportSelection(branch_id=f"{campaign_id}:main"),
+        ExportSelection(),
         # extra={include_image_binaries: False} → image is *not* written
         ExportOptions(title="Probe", extra={"include_image_binaries": False}),
         out,

@@ -19,9 +19,7 @@ class _StubTransientState:
         self.bundles = bundles
         self.calls: list[tuple[str, str]] = []
 
-    async def get(
-        self, campaign_id, entity_kind, entity_id, field=None, *, branch_id=None, for_observer=None
-    ):
+    async def get(self, campaign_id, entity_kind, entity_id, field=None, *, for_observer=None):
         self.calls.append((entity_id, str(for_observer) if for_observer else ""))
         bundle = self.bundles.get(entity_id, {})
         if field is None:

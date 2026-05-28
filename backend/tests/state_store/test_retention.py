@@ -20,13 +20,13 @@ CUTOFF = NOW - timedelta(seconds=MAX_AGE)  # 2024-03-03 12:00:00 UTC
 
 async def _insert_post(store: StateStore, post_id: str, created_at: str) -> None:
     await store.db.execute(
-        "INSERT INTO scenes (id, campaign_id, branch_id, ordinal, slug, file_path)"
-        " VALUES ('s1', 'c1', 'c1:main', 1, 'scene-1', 'scenes/scene-1.md')"
+        "INSERT INTO scenes (id, campaign_id, ordinal, slug, file_path)"
+        " VALUES ('s1', 'c1', 1, 'scene-1', 'scenes/scene-1.md')"
         " ON CONFLICT DO NOTHING"
     )
     await store.db.execute(
-        "INSERT INTO posts (id, scene_id, campaign_id, branch_id, order_in_scene, created_at)"
-        " VALUES (?, 's1', 'c1', 'c1:main', 1, ?)",
+        "INSERT INTO posts (id, scene_id, campaign_id, order_in_scene, created_at)"
+        " VALUES (?, 's1', 'c1', 1, ?)",
         (post_id, created_at),
     )
 
@@ -40,8 +40,8 @@ async def _insert_fact(
 ) -> None:
     await store.db.execute(
         "INSERT INTO facts"
-        " (id, campaign_id, branch_id, text, retired, retired_in_post)"
-        " VALUES (?, 'c1', 'c1:main', 'some fact', ?, ?)",
+        " (id, campaign_id, text, retired, retired_in_post)"
+        " VALUES (?, 'c1', 'some fact', ?, ?)",
         (fact_id, retired, retired_in_post),
     )
 

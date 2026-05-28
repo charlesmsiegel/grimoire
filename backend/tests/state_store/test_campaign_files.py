@@ -49,7 +49,6 @@ async def test_override_falls_back_to_library_via_resolve(store: StateStore) -> 
     # No override yet: resolve returns the library row.
     resolved = await store.resolve_entity(
         campaign_id="c1",
-        branch_id="c1:main",
         kind="character",
         asset_id="winifred",
         world_id="wod-london",
@@ -66,7 +65,6 @@ async def test_override_falls_back_to_library_via_resolve(store: StateStore) -> 
     )
     resolved = await store.resolve_entity(
         campaign_id="c1",
-        branch_id="c1:main",
         kind="character",
         asset_id="winifred",
         world_id="wod-london",
@@ -89,7 +87,6 @@ async def test_resolve_finds_emergent_when_world_omitted(store: StateStore) -> N
     )
     resolved = await store.resolve_entity(
         campaign_id="c1",
-        branch_id="c1:main",
         kind="character",
         asset_id="the-bartender",
     )
@@ -118,7 +115,6 @@ async def test_image_metadata_write(store: StateStore) -> None:
         image_id="img-123",
         metadata={
             "prompt": "a foggy street",
-            "branch_id": "c1:main",
             "scene_id": "0001",
         },
         source="imagegen",

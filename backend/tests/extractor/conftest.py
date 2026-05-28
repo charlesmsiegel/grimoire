@@ -139,7 +139,6 @@ def scene() -> Scene:
     return Scene(
         id="scene-1",
         campaign_id="camp-1",
-        branch_id="main",
         ordinal=1,
         slug="cliff-top",
         file_path="/tmp/cliff-top.md",
@@ -155,6 +154,5 @@ def scene() -> Scene:
 def snapshot() -> StateSnapshot:
     return StateSnapshot(
         campaign_id="camp-1",
-        branch_id="main",
         scene_id="scene-1",
     )

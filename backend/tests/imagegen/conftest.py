@@ -42,19 +42,18 @@ async def _seed_scene(store: StateStore, *, campaign_id: str, scene_id: str) -> 
     await store.db.execute(
         """
         INSERT INTO scenes (
-          id, campaign_id, branch_id, ordinal, slug, file_path,
+          id, campaign_id, ordinal, slug, file_path,
           location_ref, in_game_start, in_game_end, pov_character_ref,
           present_character_refs, present_pc_refs, summary, running_summary,
           key_beats, tags, emotional_arc, post_count, threads_introduced,
           threads_paid_off, title, greeting_id, closed, closed_at_turn
         )
-        VALUES (?, ?, ?, 1, ?, ?, NULL, NULL, NULL, NULL,
+        VALUES (?, ?, 1, ?, ?, NULL, NULL, NULL, NULL,
                 '[]', '[]', '', '', '[]', '[]', '', 0, '[]', '[]', '', NULL, 0, NULL)
         """,
         (
             scene_id,
             campaign_id,
-            f"{campaign_id}:main",
             scene_id,
             f"scenes/{scene_id}.md",
         ),

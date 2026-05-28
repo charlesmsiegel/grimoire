@@ -123,14 +123,12 @@ async def test_snapshot_captures_delta_turn_ids_from_db(tmp_path: Path) -> None:
     db = Database(snap, pool_size=1)
     await db.connect()
     await db.execute(
-        "INSERT INTO deltas (id, campaign_id, branch_id, turn_id, source, kind)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
-        ("d-0", "cmp", "b", "t-0", "extractor", "note"),
+        "INSERT INTO deltas (id, campaign_id, turn_id, source, kind) VALUES (?, ?, ?, ?, ?)",
+        ("d-0", "cmp", "t-0", "extractor", "note"),
     )
     await db.execute(
-        "INSERT INTO deltas (id, campaign_id, branch_id, turn_id, source, kind)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
-        ("d-1", "cmp", "b", "t-1", "extractor", "note"),
+        "INSERT INTO deltas (id, campaign_id, turn_id, source, kind) VALUES (?, ?, ?, ?, ?)",
+        ("d-1", "cmp", "t-1", "extractor", "note"),
     )
     await db.close()
 

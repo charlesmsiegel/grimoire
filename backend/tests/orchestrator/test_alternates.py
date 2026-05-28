@@ -59,7 +59,7 @@ def _make_orch(scenes: SceneManager, store: StateStore) -> OrchestratorService:
     )
 
 
-def _char_delta(mood: str, *, campaign_id: str, branch_id: str) -> dict:
+def _char_delta(mood: str, *, campaign_id: str) -> dict:
     return {
         "kind": "character_state_update",
         "target_scope": "campaign-sqlite",
@@ -68,7 +68,6 @@ def _char_delta(mood: str, *, campaign_id: str, branch_id: str) -> dict:
         "after": {
             "character_ref": "lib:winifred",
             "campaign_id": campaign_id,
-            "branch_id": branch_id,
             "emotional_state": mood,
         },
     }
@@ -78,15 +77,14 @@ async def _seed_scene_with_alternates(
     tmp_path: Path,
     scenes: SceneManager,
     store: StateStore,
-) -> tuple[str, str, str, str, str]:
+) -> tuple[str, str, str, str]:
     """Set up a campaign + scene + one model post with two alternates.
 
-    Returns (campaign_id, branch_id, scene_id, post_id, alt_b_id). The
+    Returns (campaign_id, scene_id, post_id, alt_b_id). The
     primary is the implicit one synthesized from the seed body ('A'),
     alt_b_id is the non-primary alternate ('B') with a pre-applied delta set.
     """
     campaign_id = "c1"
-    branch_id = "main"
     await store.upsert_campaign(campaign_id=campaign_id, name="Test")
     scene = await scenes.start_scene(SceneInit(campaign_id=campaign_id, title="Opening"))
     from grimoire.scenes.manager import new_post
@@ -96,10 +94,9 @@ async def _seed_scene_with_alternates(
     # Pre-apply alt B's deltas under a delta_set_id.
     ds_b = "ds_b"
     await store.apply_delta_set(
-        deltas=[_char_delta("anxious", campaign_id=campaign_id, branch_id=branch_id)],
+        deltas=[_char_delta("anxious", campaign_id=campaign_id)],
         delta_set_id=ds_b,
         campaign_id=campaign_id,
-        branch_id=branch_id,
         turn_id=post.turn_id,
         source="test",
     )
@@ -120,12 +117,11 @@ async def _seed_scene_with_alternates(
     ds_a = "ds_a"
     # First rewind ds_b (we'll re-activate it later through swap), so the
     # "A" deltas can apply against character_state cleanly.
-    await store.rewind_delta_set(ds_b, campaign_id=campaign_id, branch_id=branch_id)
+    await store.rewind_delta_set(ds_b, campaign_id=campaign_id)
     await store.apply_delta_set(
-        deltas=[_char_delta("calm", campaign_id=campaign_id, branch_id=branch_id)],
+        deltas=[_char_delta("calm", campaign_id=campaign_id)],
         delta_set_id=ds_a,
         campaign_id=campaign_id,
-        branch_id=branch_id,
         turn_id=post.turn_id,
         source="test",
     )
@@ -133,11 +129,10 @@ async def _seed_scene_with_alternates(
     await scenes.update_alternate(post.id, implicit_primary.id, delta_set_id=ds_a)
     await store.set_current_alternate_delta_set(
         campaign_id=campaign_id,
-        branch_id=branch_id,
         post_id=post.id,
         delta_set_id=ds_a,
     )
-    return campaign_id, branch_id, scene.id, post.id, alt_b.id
+    return campaign_id, scene.id, post.id, alt_b.id
 
 
 # ----- tests -----------------------------------------------------------------
@@ -149,7 +144,7 @@ async def test_switch_primary_alternate_swaps_delta_set_and_rewrites_md(
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, branch_id, scene_id, post_id, alt_b = await _seed_scene_with_alternates(
+    campaign_id, scene_id, post_id, alt_b = await _seed_scene_with_alternates(
         tmp_path, scenes, real_store
     )
     orch = _make_orch(scenes, real_store)
@@ -171,9 +166,7 @@ async def test_switch_primary_alternate_swaps_delta_set_and_rewrites_md(
     assert "B" in body
 
     # State store reflects alt_b being current.
-    current = await real_store.current_delta_set_for(
-        post_id=post_id, campaign_id=campaign_id, branch_id=branch_id
-    )
+    current = await real_store.current_delta_set_for(post_id=post_id, campaign_id=campaign_id)
     assert current == "ds_b"
 
 
@@ -181,7 +174,7 @@ async def test_switch_primary_same_alternate_is_noop(tmp_path: Path, real_store:
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, _branch_id, _scene_id, post_id, _alt_b = await _seed_scene_with_alternates(
+    campaign_id, _scene_id, post_id, _alt_b = await _seed_scene_with_alternates(
         tmp_path, scenes, real_store
     )
     orch = _make_orch(scenes, real_store)
@@ -197,7 +190,7 @@ async def test_switch_primary_unknown_alternate_raises(tmp_path: Path, real_stor
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, _branch_id, _scene_id, post_id, _alt_b = await _seed_scene_with_alternates(
+    campaign_id, _scene_id, post_id, _alt_b = await _seed_scene_with_alternates(
         tmp_path, scenes, real_store
     )
     orch = _make_orch(scenes, real_store)
@@ -211,7 +204,7 @@ async def test_pin_alternate(tmp_path: Path, real_store: StateStore):
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    _campaign_id, _branch_id, scene_id, post_id, alt_b = await _seed_scene_with_alternates(
+    _campaign_id, scene_id, post_id, alt_b = await _seed_scene_with_alternates(
         tmp_path, scenes, real_store
     )
     orch = _make_orch(scenes, real_store)
@@ -225,7 +218,7 @@ async def test_delete_primary_rejected(tmp_path: Path, real_store: StateStore):
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    _campaign_id, _branch_id, scene_id, post_id, _alt_b = await _seed_scene_with_alternates(
+    _campaign_id, scene_id, post_id, _alt_b = await _seed_scene_with_alternates(
         tmp_path, scenes, real_store
     )
     orch = _make_orch(scenes, real_store)
@@ -239,7 +232,7 @@ async def test_delete_non_primary_rewinds_its_delta_set(tmp_path: Path, real_sto
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, branch_id, scene_id, post_id, alt_b = await _seed_scene_with_alternates(
+    campaign_id, scene_id, post_id, alt_b = await _seed_scene_with_alternates(
         tmp_path, scenes, real_store
     )
     orch = _make_orch(scenes, real_store)
@@ -251,7 +244,6 @@ async def test_delete_non_primary_rewinds_its_delta_set(tmp_path: Path, real_sto
         apply_deltas=None,
         apply_set_id="ds_b",
         campaign_id=campaign_id,
-        branch_id=branch_id,
         turn_id=None,
         source="test",
     )
@@ -266,7 +258,6 @@ async def test_delete_non_primary_rewinds_its_delta_set(tmp_path: Path, real_sto
         apply_deltas=None,
         apply_set_id="ds_a",
         campaign_id=campaign_id,
-        branch_id=branch_id,
         turn_id=None,
         source="test",
     )
@@ -280,13 +271,12 @@ async def test_delete_non_primary_rewinds_its_delta_set(tmp_path: Path, real_sto
 
 async def _seed_scene_with_one_model_post(
     scenes: SceneManager, store: StateStore
-) -> tuple[str, str, str, str]:
+) -> tuple[str, str, str]:
     """Player post + model post (with primary alternate + delta set).
 
-    Returns (campaign_id, branch_id, scene_id, model_post_id).
+    Returns (campaign_id, scene_id, model_post_id).
     """
     campaign_id = "c1"
-    branch_id = "main"
     await store.upsert_campaign(campaign_id=campaign_id, name="Test")
     scene = await scenes.start_scene(SceneInit(campaign_id=campaign_id, title="Opening"))
     from grimoire.scenes.manager import new_post
@@ -299,10 +289,9 @@ async def _seed_scene_with_one_model_post(
     # swap path is exercised (rather than the legacy plain-apply branch).
     ds_primary = "ds_primary"
     await store.apply_delta_set(
-        deltas=[_char_delta("calm", campaign_id=campaign_id, branch_id=branch_id)],
+        deltas=[_char_delta("calm", campaign_id=campaign_id)],
         delta_set_id=ds_primary,
         campaign_id=campaign_id,
-        branch_id=branch_id,
         turn_id=model.turn_id,
         source="test",
     )
@@ -320,11 +309,10 @@ async def _seed_scene_with_one_model_post(
     await scenes.set_primary_alternate(model.id, primary.id)
     await store.set_current_alternate_delta_set(
         campaign_id=campaign_id,
-        branch_id=branch_id,
         post_id=model.id,
         delta_set_id=ds_primary,
     )
-    return campaign_id, branch_id, scene.id, model.id
+    return campaign_id, scene.id, model.id
 
 
 def _new_delta(target: str, mood: str) -> StateDelta:
@@ -336,7 +324,6 @@ def _new_delta(target: str, mood: str) -> StateDelta:
         after={
             "character_ref": target,
             "campaign_id": "c1",
-            "branch_id": "main",
             "emotional_state": mood,
         },
     )
@@ -348,9 +335,7 @@ async def test_regenerate_post_creates_non_primary_alternate(
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
-        scenes, real_store
-    )
+    campaign_id, scene_id, post_id = await _seed_scene_with_one_model_post(scenes, real_store)
     gateway = FakeGateway(chunks=["A ", "new ", "rendering."])
     extractor = FakeExtractor(deltas=[_new_delta("lib:winifred", "anxious")])
     orch = OrchestratorService(
@@ -374,9 +359,7 @@ async def test_regenerate_post_creates_non_primary_alternate(
     # Primary pointer unchanged: user must accept via switch_primary.
     assert target.primary_alternate_id == "a_primary"
     # New set is the materialized current for this post.
-    current = await real_store.current_delta_set_for(
-        post_id=post_id, campaign_id=campaign_id, branch_id=branch_id
-    )
+    current = await real_store.current_delta_set_for(post_id=post_id, campaign_id=campaign_id)
     assert current == result.delta_set_id
 
 
@@ -384,7 +367,7 @@ async def test_regenerate_post_rejects_non_latest_post(tmp_path: Path, real_stor
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, _branch_id, scene_id, first_model_id = await _seed_scene_with_one_model_post(
+    campaign_id, scene_id, first_model_id = await _seed_scene_with_one_model_post(
         scenes, real_store
     )
     # Append a second model post; the first one is no longer the latest.
@@ -413,9 +396,7 @@ async def test_regenerate_post_rollback_on_sidecar_failure(
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
-        scenes, real_store
-    )
+    campaign_id, scene_id, post_id = await _seed_scene_with_one_model_post(scenes, real_store)
     gateway = FakeGateway(chunks=["chunk"])
     extractor = FakeExtractor(deltas=[_new_delta("lib:winifred", "anxious")])
     orch = OrchestratorService(
@@ -440,9 +421,7 @@ async def test_regenerate_post_rollback_on_sidecar_failure(
     posts = await scenes.get_posts(scene_id)
     target = posts[-1]
     assert target.primary_alternate_id == "a_primary"
-    current = await real_store.current_delta_set_for(
-        post_id=post_id, campaign_id=campaign_id, branch_id=branch_id
-    )
+    current = await real_store.current_delta_set_for(post_id=post_id, campaign_id=campaign_id)
     assert current == "ds_primary"
 
 
@@ -460,23 +439,20 @@ async def test_regenerate_post_evicts_oldest_when_over_cap(tmp_path: Path, real_
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
-        scenes, real_store
-    )
+    campaign_id, scene_id, post_id = await _seed_scene_with_one_model_post(scenes, real_store)
     # Pre-seed two old non-primary alternates with backdated created_at so we
     # can predict eviction order.
     base = datetime.now(UTC) - timedelta(days=10)
     for i, ds in enumerate(["ds_old1", "ds_old2"]):
         await real_store.apply_delta_set(
-            deltas=[_char_delta(f"x{i}", campaign_id=campaign_id, branch_id=branch_id)],
+            deltas=[_char_delta(f"x{i}", campaign_id=campaign_id)],
             delta_set_id=ds,
             campaign_id=campaign_id,
-            branch_id=branch_id,
             turn_id="t_seed",
             source="test",
         )
         # Rewind so the world state matches the primary at this point.
-        await real_store.rewind_delta_set(ds, campaign_id=campaign_id, branch_id=branch_id)
+        await real_store.rewind_delta_set(ds, campaign_id=campaign_id)
         await scenes.append_alternate(
             post_id,
             Alternate(
@@ -524,19 +500,16 @@ async def test_regenerate_post_does_not_evict_pinned(tmp_path: Path, real_store:
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
-        scenes, real_store
-    )
+    campaign_id, scene_id, post_id = await _seed_scene_with_one_model_post(scenes, real_store)
     base = datetime.now(UTC) - timedelta(days=10)
     await real_store.apply_delta_set(
-        deltas=[_char_delta("xp", campaign_id=campaign_id, branch_id=branch_id)],
+        deltas=[_char_delta("xp", campaign_id=campaign_id)],
         delta_set_id="ds_pinned",
         campaign_id=campaign_id,
-        branch_id=branch_id,
         turn_id="t_seed",
         source="test",
     )
-    await real_store.rewind_delta_set("ds_pinned", campaign_id=campaign_id, branch_id=branch_id)
+    await real_store.rewind_delta_set("ds_pinned", campaign_id=campaign_id)
     await scenes.append_alternate(
         post_id,
         Alternate(
@@ -576,9 +549,7 @@ async def test_purge_stale_alternates_deletes_only_old_unpinned_non_primary(
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
-        scenes, real_store
-    )
+    campaign_id, scene_id, post_id = await _seed_scene_with_one_model_post(scenes, real_store)
     now = datetime.now(UTC)
     old = now - timedelta(days=45)
     fresh = now - timedelta(days=2)
@@ -588,14 +559,13 @@ async def test_purge_stale_alternates_deletes_only_old_unpinned_non_primary(
         ("a_fresh", fresh, False, "ds_fresh"),
     ]:
         await real_store.apply_delta_set(
-            deltas=[_char_delta(alt_id, campaign_id=campaign_id, branch_id=branch_id)],
+            deltas=[_char_delta(alt_id, campaign_id=campaign_id)],
             delta_set_id=ds,
             campaign_id=campaign_id,
-            branch_id=branch_id,
             turn_id="t_seed",
             source="test",
         )
-        await real_store.rewind_delta_set(ds, campaign_id=campaign_id, branch_id=branch_id)
+        await real_store.rewind_delta_set(ds, campaign_id=campaign_id)
         await scenes.append_alternate(
             post_id,
             Alternate(
@@ -625,9 +595,7 @@ async def test_purge_stale_alternates_skips_primary(tmp_path: Path, real_store: 
     scenes_root = tmp_path / "scenes_root"
     scenes_root.mkdir()
     scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
-    campaign_id, _branch_id, scene_id, post_id = await _seed_scene_with_one_model_post(
-        scenes, real_store
-    )
+    campaign_id, scene_id, post_id = await _seed_scene_with_one_model_post(scenes, real_store)
     # The seeded primary "a_primary" has created_at = now-ish from append_alternate;
     # force its created_at into the past via update_alternate.
     old = datetime.now(UTC) - timedelta(days=60)

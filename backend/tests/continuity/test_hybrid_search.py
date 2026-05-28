@@ -49,12 +49,12 @@ async def db_with_facts(tmp_path: Path):
         await db.execute(
             """
             INSERT INTO posts (
-              id, scene_id, campaign_id, branch_id, order_in_scene, author_kind
-            ) VALUES (?, NULL, ?, ?, 0, 'narrator')
+              id, scene_id, campaign_id, order_in_scene, author_kind
+            ) VALUES (?, NULL, ?, 0, 'narrator')
             """,
-            (pid, "c1", "c1:main"),
+            (pid, "c1"),
         )
-    store = SqliteContinuityStore(db, campaign_id="c1", branch_id="c1:main")
+    store = SqliteContinuityStore(db, campaign_id="c1")
 
     facts = [
         make_fact(
@@ -109,7 +109,7 @@ async def db_with_facts(tmp_path: Path):
 
 async def test_keyword_only_returns_matching_facts(db_with_facts) -> None:
     store, db = db_with_facts
-    index = HybridFactSearchIndex(store, db, campaign_id="c1", branch_id="c1:main")
+    index = HybridFactSearchIndex(store, db, campaign_id="c1")
     results = await index.search("orchard", top_k=3)
     assert results
     ids = [f.id for f, _ in results]
@@ -119,9 +119,7 @@ async def test_keyword_only_returns_matching_facts(db_with_facts) -> None:
 async def test_hybrid_search_combines_vector_and_keyword(db_with_facts) -> None:
     store, db = db_with_facts
     embedder = _StaticEmbedder({"winifred": [1.0, 0.0, 0.0]})
-    index = HybridFactSearchIndex(
-        store, db, campaign_id="c1", branch_id="c1:main", embedder=embedder
-    )
+    index = HybridFactSearchIndex(store, db, campaign_id="c1", embedder=embedder)
     results = await index.search("winifred", top_k=2)
     ids = [f.id for f, _ in results]
     # Vector pass should rank winifred-related facts at the top.
@@ -131,7 +129,7 @@ async def test_hybrid_search_combines_vector_and_keyword(db_with_facts) -> None:
 
 async def test_vector_degrades_gracefully_when_embedder_unavailable(db_with_facts) -> None:
     store, db = db_with_facts
-    index = HybridFactSearchIndex(store, db, campaign_id="c1", branch_id="c1:main")
+    index = HybridFactSearchIndex(store, db, campaign_id="c1")
     results = await index.search("nonsense_token_xyz", top_k=3)
     assert results == []
 
@@ -141,7 +139,7 @@ async def test_search_skips_retired_by_default(db_with_facts) -> None:
     fact = await store.get_fact("f_orchard")
     fact.retired = True
     await store.put_fact(fact)
-    index = HybridFactSearchIndex(store, db, campaign_id="c1", branch_id="c1:main")
+    index = HybridFactSearchIndex(store, db, campaign_id="c1")
     results = await index.search("orchard", top_k=3)
     assert all(f.id != "f_orchard" for f, _ in results)
     results_incl = await index.search("orchard", top_k=3, include_retired=True)
@@ -151,9 +149,7 @@ async def test_search_skips_retired_by_default(db_with_facts) -> None:
 async def test_vector_search_returns_within_top_k(db_with_facts) -> None:
     store, db = db_with_facts
     embedder = _StaticEmbedder({"winifred": [1.0, 0.0, 0.0]})
-    index = HybridFactSearchIndex(
-        store, db, campaign_id="c1", branch_id="c1:main", embedder=embedder
-    )
+    index = HybridFactSearchIndex(store, db, campaign_id="c1", embedder=embedder)
     results = await index.search("winifred", top_k=2)
     assert len(results) <= 2
     for _, score in results:

@@ -55,7 +55,6 @@ async def test_apply_emergent_location_writes_to_disk(store, library, world) -> 
         target_id="emergent:location:tavern",
         after={
             "campaign_id": "camp-1",
-            "branch_id": "camp-1:main",
             "kind": "location",
             "name": "tavern",
             "evidence": "they entered the tavern",

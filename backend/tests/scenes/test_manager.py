@@ -297,21 +297,6 @@ async def test_active_scene_tracking(tmp_path: Path) -> None:
     assert await manager.active_scene_for_pc("c", "vance") is None
 
 
-async def test_fork_copies_scenes_to_branch(tmp_path: Path) -> None:
-    manager, _ = _manager(tmp_path)
-    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
-    await manager.append_post(
-        scene.id,
-        new_post(author_kind=AuthorKind.NARRATOR, body="prologue", is_player=False),
-    )
-    forked = await manager.fork_scenes_for_branch("c", "what-if")
-    assert len(forked) == 1
-    assert forked[0].branch_id == "what-if"
-    branch_md = tmp_path / "campaigns" / "c" / "branches" / "what-if" / "scenes" / "0001-scene.md"
-    assert branch_md.exists()
-    assert "prologue" in branch_md.read_text()
-
-
 async def test_list_scenes_sorts_by_ordinal(tmp_path: Path) -> None:
     manager, _ = _manager(tmp_path)
     for title in ("A", "B", "C"):
@@ -492,7 +477,6 @@ async def test_legacy_thread_sidecar_loads(tmp_path: Path) -> None:
             {
                 "id": "c:0001-scene",
                 "campaign_id": "c",
-                "branch_id": "main",
                 "ordinal": 1,
                 "slug": "scene",
                 "title": "Scene",
@@ -576,7 +560,7 @@ async def test_is_scene_break_uses_active_scene(tmp_path: Path) -> None:
 
 # ----------------------------------------------------------------------
 # Issue #109 — events emitted on the shared bus must carry campaign_id /
-# scene_id / branch_id inside ``payload`` so subscribers that read those
+# scene_id inside ``payload`` so subscribers that read those
 # fields off ``event.payload`` (api.stream, transient_state.triggers,
 # imagegen.integration) can route the event correctly.
 # ----------------------------------------------------------------------
@@ -602,7 +586,6 @@ async def test_scene_started_payload_carries_routing_fields(tmp_path: Path) -> N
     payload = _payload_for(bus, SCENE_STARTED)
     assert payload["campaign_id"] == "campaign-a"
     assert payload["scene_id"] == scene.id
-    assert payload["branch_id"] == scene.branch_id
 
 
 async def test_scene_ended_payload_carries_decay_fields(tmp_path: Path) -> None:
@@ -620,7 +603,6 @@ async def test_scene_ended_payload_carries_decay_fields(tmp_path: Path) -> None:
     payload = _payload_for(bus, SCENE_ENDED)
     assert payload["campaign_id"] == "campaign-a"
     assert payload["scene_id"] == scene.id
-    assert payload["branch_id"] == scene.branch_id
     assert payload["location_ref"] == "loc_pub"
     assert sorted(payload["present_character_refs"]) == ["alistair", "innkeeper"]
 
@@ -646,7 +628,6 @@ async def test_pc_post_appended_payload_carries_routing_fields(tmp_path: Path) -
     payload = _payload_for(bus, PC_POST_APPENDED)
     assert payload["campaign_id"] == "campaign-a"
     assert payload["scene_id"] == scene.id
-    assert payload["branch_id"] == scene.branch_id
     payload_post_appended = _payload_for(bus, POST_APPENDED)
     assert payload_post_appended["campaign_id"] == "campaign-a"
     assert payload_post_appended["scene_id"] == scene.id
@@ -675,7 +656,6 @@ async def test_advance_requested_payload_carries_routing_fields(tmp_path: Path) 
     payload = _payload_for(bus, ADVANCE_REQUESTED)
     assert payload["campaign_id"] == "campaign-a"
     assert payload["scene_id"] == scene.id
-    assert payload["branch_id"] == scene.branch_id
 
 
 async def test_advance_disabled_payload_carries_routing_fields(tmp_path: Path) -> None:
@@ -691,7 +671,6 @@ async def test_advance_disabled_payload_carries_routing_fields(tmp_path: Path) -
     payload = _payload_for(bus, ADVANCE_DISABLED)
     assert payload["campaign_id"] == "campaign-a"
     assert payload["scene_id"] == scene.id
-    assert payload["branch_id"] == scene.branch_id
 
 
 async def test_advance_enabled_payload_carries_routing_fields(tmp_path: Path) -> None:
@@ -709,7 +688,6 @@ async def test_advance_enabled_payload_carries_routing_fields(tmp_path: Path) ->
     payload = _payload_for(bus, ADVANCE_ENABLED)
     assert payload["campaign_id"] == "campaign-a"
     assert payload["scene_id"] == scene.id
-    assert payload["branch_id"] == scene.branch_id
 
 
 async def test_scene_events_route_through_shared_event_bus(tmp_path: Path) -> None:

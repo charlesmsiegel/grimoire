@@ -20,7 +20,6 @@ async def test_assembles_audit_from_orchestrator_events(db) -> None:
                 "turn_id": "t_1",
                 "campaign_id": "c_1",
                 "scene_id": "s_1",
-                "branch_id": "c_1:main",
                 "player_input": "I shout at the door.",
             },
         )
@@ -107,7 +106,6 @@ async def test_turn_audit_fragment_event_merges_extra_fields(db) -> None:
                 "turn_id": "t_2",
                 "campaign_id": "c_1",
                 "scene_id": "s_1",
-                "branch_id": "c_1:main",
             },
         )
     )
@@ -146,7 +144,6 @@ async def test_llm_response_received_event_merged_with_translated_keys(db) -> No
                 "turn_id": "t_llm",
                 "campaign_id": "c_1",
                 "scene_id": "s_1",
-                "branch_id": "c_1:main",
             },
         )
     )
@@ -289,7 +286,6 @@ def test_turn_audit_carries_transient_state_writes_and_conflicts():
         {
             "turn_id": "t1",
             "campaign_id": "c1",
-            "branch_id": "main",
             "started_at": "2026-05-19T00:00:00Z",
             "transient_state_writes": [
                 {

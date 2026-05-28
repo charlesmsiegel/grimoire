@@ -23,12 +23,10 @@ class _StubBus:
 def _fake_scene(
     campaign_id: str = "camp-1",
     scene_id: str = "scene-1",
-    branch_id: str = "main",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         campaign_id=campaign_id,
         id=scene_id,
-        branch_id=branch_id,
         location_ref=None,
         present_character_refs=[],
     )

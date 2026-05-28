@@ -56,7 +56,6 @@ def test_sidecar_roundtrip(tmp_path: Path) -> None:
     scene = Scene(
         id="campaign-a:0001-elysium-opening",
         campaign_id="campaign-a",
-        branch_id="main",
         ordinal=1,
         slug="elysium-opening",
         title="Elysium Opening",

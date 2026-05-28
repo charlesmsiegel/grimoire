@@ -60,17 +60,6 @@ def test_submit_direction_with_no_text(client, container) -> None:
     assert fake.calls == [("submit_direction", "c1", "s1", None)]
 
 
-def test_fork_branch(client, container) -> None:
-    container.orchestrator = FakeOrchestrator()
-    response = client.post(
-        "/api/campaigns/c1/branches",
-        json={"from_turn_id": "t_5", "label": "side-arc"},
-    )
-    assert response.status_code == 201
-    body = response.json()
-    assert body["new_branch_id"] == "c1:side-arc"
-
-
 def test_fork_campaign_route(client, container) -> None:
     container.orchestrator = FakeOrchestrator()
     response = client.post(
@@ -236,7 +225,7 @@ def test_continuity_ledger_via_registry(client, container) -> None:
             self.requested_for: list[str] = []
             self._service = FakeContinuity()
 
-        def for_campaign(self, campaign_id: str, *, branch_id: str | None = None) -> Any:
+        def for_campaign(self, campaign_id: str) -> Any:
             self.requested_for.append(campaign_id)
             return self._service
 
@@ -657,7 +646,7 @@ def test_preview_export_returns_preview(client, container) -> None:
         "/api/campaigns/c1/exports/preview",
         json={
             "adapter_id": "epub",
-            "selection": {"branch_id": "main"},
+            "selection": {},
             "options": {"title": "Probe"},
         },
     )
@@ -684,7 +673,7 @@ def test_list_export_history_paginates(client, container) -> None:
             id=f"e{i}",
             campaign_id="c1",
             adapter_id="epub",
-            selection=ExportSelection(branch_id="main"),
+            selection=ExportSelection(),
             options=ExportOptions(title=f"T{i}"),
             result=ExportResult(format="epub", size_bytes=10),
             created_at=datetime.now(UTC),

@@ -45,7 +45,6 @@ async def test_snapshot_filters_by_scene_id_and_date_range() -> None:
     )
 
     selection = ExportSelection(
-        branch_id="main",
         scene_ids=[s2.id, s3.id],
         include_appendices=[],
     )
@@ -63,7 +62,7 @@ async def test_snapshot_collects_appendix_data() -> None:
         facts=[make_fact()],
         commitments=[make_commitment()],
     )
-    selection = ExportSelection(branch_id="main", include_appendices=["cast", "continuity"])
+    selection = ExportSelection(include_appendices=["cast", "continuity"])
     snap = await build_snapshot("campaign-a", selection, ExportOptions(title="t"), sources)
     assert len(snap.characters) == 1
     assert len(snap.facts) == 1
@@ -92,7 +91,6 @@ async def test_snapshot_applies_filters_to_post_bodies() -> None:
         },
     )
     selection = ExportSelection(
-        branch_id="main",
         include_appendices=[],
         filters={"strip_ooc": True, "strip_mechanics": True},
     )
@@ -115,7 +113,6 @@ async def test_snapshot_skips_scenes_with_skip_tags() -> None:
         },
     )
     selection = ExportSelection(
-        branch_id="main",
         include_appendices=[],
         filters={"skip_tags": ["draft"]},
     )
@@ -133,7 +130,6 @@ async def test_snapshot_anonymize_pcs_swaps_pc_names_in_characters_and_text() ->
         pcs={"alistair": "Alistair"},
     )
     selection = ExportSelection(
-        branch_id="main",
         include_appendices=["cast"],
         filters={"anonymize_pcs": "The Adept"},
     )

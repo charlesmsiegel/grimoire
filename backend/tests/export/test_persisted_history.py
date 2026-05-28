@@ -74,7 +74,7 @@ async def test_persisted_history_round_trip(tmp_path: Path) -> None:
         store = StateStore(db, data_root)
 
         service = _build_service(store, tmp_path)
-        selection = ExportSelection(branch_id="main")
+        selection = ExportSelection()
         options = ExportOptions(title="Once")
         await service.export("campaign-a", "fake", selection, options)
         await service.export("campaign-a", "fake", selection, ExportOptions(title="Twice"))

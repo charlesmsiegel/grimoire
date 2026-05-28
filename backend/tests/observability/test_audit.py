@@ -22,7 +22,6 @@ async def test_record_and_get_turn_audit(db) -> None:
     audit = TurnAudit(
         turn_id="t_001",
         campaign_id="c_one",
-        branch_id="c_one:main",
         started_at=datetime(2024, 1, 1, 12, 0, tzinfo=UTC),
         completed_at=datetime(2024, 1, 1, 12, 0, 5, tzinfo=UTC),
         duration_ms=5000,
@@ -63,7 +62,6 @@ async def test_record_is_upsert(db) -> None:
     audit = TurnAudit(
         turn_id="t_upsert",
         campaign_id="c",
-        branch_id="b",
         started_at=datetime(2024, 1, 1, tzinfo=UTC),
         response_text="first",
     )
@@ -91,14 +89,12 @@ async def test_record_serializes_applied_deltas(db) -> None:
             source="extractor",
         ),
         campaign_id="c",
-        branch_id="b",
         turn_id="t_applied",
         applied_at=datetime(2024, 1, 1, tzinfo=UTC),
     )
     audit = TurnAudit(
         turn_id="t_applied",
         campaign_id="c",
-        branch_id="b",
         started_at=datetime(2024, 1, 1, tzinfo=UTC),
         applied_deltas=[applied],
     )
@@ -130,15 +126,14 @@ async def _seed_delta_row(
     await db.execute(
         """
         INSERT INTO deltas (
-            id, campaign_id, branch_id, turn_id, source, kind,
+            id, campaign_id, turn_id, source, kind,
             target_scope, target_table, target_path, target_id,
             before, after, confidence, applied_at, reversed_at, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
         """,
         (
             delta_id,
             "c",
-            "b",
             turn_id,
             source,
             kind,
@@ -176,7 +171,6 @@ async def test_deltas_for_turn_returns_envelope_with_evidence_and_strategy(db) -
     audit = TurnAudit(
         turn_id="t_diff",
         campaign_id="c",
-        branch_id="b",
         started_at=datetime(2024, 1, 1, tzinfo=UTC),
         extracted_deltas=[
             StateDelta(
@@ -205,7 +199,6 @@ async def test_deltas_for_turn_returns_envelope_with_evidence_and_strategy(db) -
                     target_id="f_applied",
                 ),
                 campaign_id="c",
-                branch_id="b",
                 turn_id="t_diff",
                 applied_at=datetime(2024, 1, 1, tzinfo=UTC),
             ),
@@ -263,7 +256,6 @@ async def test_deltas_for_turn_empty_when_audit_has_no_deltas(db) -> None:
         TurnAudit(
             turn_id="t_empty",
             campaign_id="c",
-            branch_id="b",
             started_at=datetime(2024, 1, 1, tzinfo=UTC),
         )
     )
@@ -278,7 +270,6 @@ async def test_list_orders_by_recency_and_filters_by_campaign(db) -> None:
             TurnAudit(
                 turn_id=f"t_{idx}",
                 campaign_id="c_one",
-                branch_id="c_one:main",
                 started_at=datetime(2024, 1, idx + 1, tzinfo=UTC),
             )
         )
@@ -286,7 +277,6 @@ async def test_list_orders_by_recency_and_filters_by_campaign(db) -> None:
         TurnAudit(
             turn_id="t_other",
             campaign_id="c_two",
-            branch_id="c_two:main",
             started_at=datetime(2024, 1, 9, tzinfo=UTC),
         )
     )
@@ -310,7 +300,6 @@ def _audit_with_messages(
     return TurnAudit(
         turn_id=turn_id,
         campaign_id="c_diff",
-        branch_id="c_diff:main",
         started_at=datetime(2024, 1, 1, tzinfo=UTC),
         assembled_messages=messages,
         context_sources=sources or [],
@@ -416,7 +405,6 @@ async def test_diff_prompts_raises_keyerror_on_missing_turn(db) -> None:
         TurnAudit(
             turn_id="t_only",
             campaign_id="c",
-            branch_id="b",
             started_at=datetime(2024, 1, 1, tzinfo=UTC),
         )
     )

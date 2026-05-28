@@ -11,7 +11,7 @@ from grimoire.types.transient import EntityKind, Provenance
 
 @pytest.fixture
 def continuity() -> ContinuityService:
-    return ContinuityService(campaign_id="c_test", branch_id="c_test:main")
+    return ContinuityService(campaign_id="c_test")
 
 
 async def test_promote_creates_fact_and_supersedes_transient(
