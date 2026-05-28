@@ -11,6 +11,7 @@ from grimoire.api.util import map_lookup_errors, to_payload
 
 from .schemas import (
     AdvanceTurnPayload,
+    NextSpeakerPayload,
     ResolveProposalsPayload,
     ResolveSceneBreakPayload,
     SubmitTurnPayload,
@@ -46,6 +47,19 @@ async def advance_turn(
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return to_payload(result)
+
+
+@router.post("/{campaign_id}/turns/next-speaker")
+async def next_speaker(
+    campaign_id: str,
+    payload: NextSpeakerPayload,
+    orchestrator: OrchestratorDep,
+) -> Any:
+    try:
+        await orchestrator.next_speaker(campaign_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {"accepted": True}
 
 
 @router.post("/{campaign_id}/turns/regenerate")

@@ -104,6 +104,10 @@ class AdvanceTurnPayload(BaseModel):
     scene_id: str
 
 
+class NextSpeakerPayload(BaseModel):
+    scene_id: str
+
+
 class RetconPayload(BaseModel):
     post_id: str
     new_text: str
