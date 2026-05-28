@@ -27,9 +27,7 @@ def test_mixed_tags_preserve_order() -> None:
     assert len(result) == 3
     assert result[0] == ResponseSegment(kind="narrator", ref=None, body="Rain falls.")
     assert result[1] == ResponseSegment(kind="character", ref="alice", body="Alice shivers.")
-    assert result[2] == ResponseSegment(
-        kind="character", ref="bob", body="Bob opens an umbrella."
-    )
+    assert result[2] == ResponseSegment(kind="character", ref="bob", body="Bob opens an umbrella.")
 
 
 def test_text_outside_tags_becomes_narrator() -> None:

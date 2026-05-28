@@ -21,6 +21,7 @@ passes the concrete services from :mod:`grimoire.library`,
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -452,10 +453,8 @@ class ContextBuilderService:
 
         campaign_row = None
         if self._store is not None:
-            try:
+            with contextlib.suppress(Exception):
                 campaign_row = await self._store.get_campaign(campaign_id)
-            except Exception:
-                pass
         narrator_mode = effective_response_mode(
             scene_override=getattr(scene, "narrator_response_mode", None),
             campaign_row=campaign_row,

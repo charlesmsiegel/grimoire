@@ -18,8 +18,7 @@ def test_parse_speaker_ref_exact_match() -> None:
 def test_parse_speaker_ref_trailing_whitespace() -> None:
     present = ["worlds/w/characters/alice"]
     assert (
-        parse_speaker_ref("  worlds/w/characters/alice  \n", present)
-        == "worlds/w/characters/alice"
+        parse_speaker_ref("  worlds/w/characters/alice  \n", present) == "worlds/w/characters/alice"
     )
 
 

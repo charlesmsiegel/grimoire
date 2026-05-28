@@ -1049,11 +1049,7 @@ class OrchestratorService:
         event is never set (player typed instead of clicking Next).
         """
         from grimoire.extractor.together import strip_tracker_block
-        from grimoire.orchestrator.speaker_select import (
-            parse_speaker_ref,
-            select_fallback_speaker,
-        )
-        from grimoire.scenes.narrator_mode import effective_response_mode
+        from grimoire.orchestrator.speaker_select import select_fallback_speaker
 
         scene_obj = await self._scenes.get_scene(scene_id)
         pc_refs = set(scene_obj.present_pc_refs)
@@ -1071,9 +1067,7 @@ class OrchestratorService:
             if len(present_npcs) == 1:
                 speaker_ref = present_npcs[0]
             else:
-                speaker_ref = select_fallback_speaker(
-                    present_npcs, recent_speakers, self._rng
-                )
+                speaker_ref = select_fallback_speaker(present_npcs, recent_speakers, self._rng)
 
             recent_speakers.append(speaker_ref)
 
@@ -1142,7 +1136,7 @@ class OrchestratorService:
                     evt.wait(),
                     timeout=self._config.speaker_loop.timeout_seconds,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
             finally:
                 state.speaker_loop_event = None

@@ -61,10 +61,7 @@ def test_per_character_no_tags_degrades_to_narrator() -> None:
 
 
 def test_all_posts_share_turn_id() -> None:
-    response = (
-        '<character ref="alice">Alice.</character>'
-        '<character ref="bob">Bob.</character>'
-    )
+    response = '<character ref="alice">Alice.</character><character ref="bob">Bob.</character>'
     posts = create_response_posts(
         response_text=response,
         narrator_mode=PER_CHARACTER,
@@ -75,10 +72,7 @@ def test_all_posts_share_turn_id() -> None:
 
 
 def test_all_posts_have_unique_ids() -> None:
-    response = (
-        '<character ref="alice">Alice.</character>'
-        '<character ref="bob">Bob.</character>'
-    )
+    response = '<character ref="alice">Alice.</character><character ref="bob">Bob.</character>'
     posts = create_response_posts(
         response_text=response,
         narrator_mode=PER_CHARACTER,
