@@ -227,7 +227,7 @@ async def analyze_scene(
     force: bool = False,
 ) -> Any:
     try:
-        scene = await _require_scene_owned(scenes, campaign_id, scene_id)
+        await _require_scene_owned(scenes, campaign_id, scene_id)
         result = await scenes.analyze_scene(scene_id, force=force)
 
         applied_ids: list[str] = []
@@ -235,7 +235,6 @@ async def analyze_scene(
         if result.extraction.deltas or result.extraction.candidates:
             applied_ids, queued_ids = await orchestrator.route_analysis_deltas(
                 campaign_id=campaign_id,
-                branch_id=scene.branch_id,
                 extraction=result.extraction,
             )
 

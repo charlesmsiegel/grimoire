@@ -372,7 +372,7 @@ class OrchestratorService:
         if scene.closed:
             raise OrchestratorError(f"scene {scene_id!r} is closed")
 
-        active_scene = await self._scenes.active_scene_for_campaign(campaign_id, scene.branch_id)
+        active_scene = await self._scenes.active_scene_for_campaign(campaign_id)
         active_scene_id = getattr(active_scene, "id", None)
         if active_scene_id is not None and active_scene_id != scene.id:
             raise OrchestratorError(
@@ -603,7 +603,6 @@ class OrchestratorService:
     async def route_analysis_deltas(
         self,
         campaign_id: CampaignId,
-        branch_id: str,
         extraction: ExtractionResult,
     ) -> tuple[list[str], list[str]]:
         """Route deltas from a scene analysis through the standard pipeline.
@@ -627,7 +626,6 @@ class OrchestratorService:
 
         applied_ids, queued_ids = await self._delta.apply_routing(
             campaign_id=campaign_id,
-            branch_id=branch_id,
             turn_id=turn_id,
             extraction=filtered,
         )
@@ -640,7 +638,6 @@ class OrchestratorService:
                 proposals=list(filtered.transient_updates),
                 transient_state=self._transient_state,
                 source_post_id=turn_id,
-                branch_id=branch_id,
                 continuity=self._continuity,
             )
 
@@ -902,7 +899,6 @@ class OrchestratorService:
                 turn_id,
                 campaign_id,
                 scene_id,
-                branch_id=scene_for_mode.branch_id,
             )
             return False
 
@@ -1185,7 +1181,6 @@ class OrchestratorService:
             if extraction is not None:
                 await self._delta.apply_routing(
                     campaign_id=campaign_id,
-                    branch_id=scene_obj.branch_id,
                     turn_id=turn_id,
                     extraction=extraction,
                 )

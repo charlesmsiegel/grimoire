@@ -77,7 +77,6 @@ def _scene() -> Scene:
     return Scene(
         id="s1",
         campaign_id="camp1",
-        branch_id="main",
         ordinal=1,
         slug="scene",
         title="The Dark Tower",
