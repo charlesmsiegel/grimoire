@@ -41,6 +41,7 @@ from grimoire.imagegen.backend import cache_key_for_request, make_thumbnail
 from grimoire.imagegen.config import ImageGenConfig
 from grimoire.imagegen.errors import NoBackendAvailableError
 from grimoire.imagegen.prompt import ComposedPrompt, PromptComposer
+from grimoire.observability import wire_log
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.state_store import StateStore
 from grimoire.state_store.paths import campaigns_root, image_metadata_path
@@ -66,7 +67,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class TriggerConfig:
-    mode: str = "per_scene"  # 'per_scene' | 'per_post' | 'every_n_posts' | 'manual_only'
+    # Default off: images are only generated on an explicit user request.
+    # A campaign opts into automatic illustration by setting a different
+    # mode ('per_scene' | 'per_post' | 'every_n_posts').
+    mode: str = "manual_only"  # 'manual_only' | 'per_scene' | 'per_post' | 'every_n_posts'
     every_n: int = 5
     on_scene_open: bool = True
     on_new_location: bool = True
@@ -88,7 +92,7 @@ class TriggerConfig:
             return default
 
         return cls(
-            mode=str(raw.get("trigger_mode") or raw.get("mode") or "per_scene"),
+            mode=str(raw.get("trigger_mode") or raw.get("mode") or "manual_only"),
             every_n=int(raw.get("trigger_n") or raw.get("every_n") or 5),
             on_scene_open=_get_bool("trigger_on_scene_open", "on_scene_open", default=True),
             on_new_location=_get_bool("trigger_on_new_location", "on_new_location", default=True),
@@ -662,7 +666,22 @@ class ImageGenService:
         cached = self._lookup_cache(campaign_id, request, backend=backend)
         if cached is not None:
             return cached
+        wire_log.log_request(
+            "imagegen",
+            payload=request,
+            campaign_id=campaign_id,
+            backend=backend_id,
+            model=routed_model,
+            task=task,
+        )
         result = await backend.generate(request)
+        wire_log.log_response(
+            "imagegen",
+            payload=result,
+            campaign_id=campaign_id,
+            backend=backend_id,
+            task=task,
+        )
         self._store_in_cache(campaign_id, request, backend=backend, result=result)
         return result
 
@@ -1241,6 +1260,15 @@ class ImageGenService:
                 },
             )
 
+        wire_log.log_request(
+            "imagegen",
+            payload=request,
+            campaign_id=job.campaign_id,
+            backend=getattr(backend, "id", ""),
+            job_id=job.id,
+            scene_id=job.scene_id,
+            post_id=job.post_id,
+        )
         token = asyncio.Event()
         self._cancel_tokens[job.id] = token
         try:
@@ -1251,6 +1279,13 @@ class ImageGenService:
                 result = await backend.generate(request)
         finally:
             self._cancel_tokens.pop(job.id, None)
+        wire_log.log_response(
+            "imagegen",
+            payload=result,
+            campaign_id=job.campaign_id,
+            backend=getattr(backend, "id", ""),
+            job_id=job.id,
+        )
         # The job may have been cancelled while the backend was running.
         # Skip persistence + `image_ready` so the caller doesn't see a
         # completed image for a job they explicitly cancelled.
