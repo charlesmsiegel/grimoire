@@ -1,6 +1,29 @@
 -- Remove branch_id from all tables; drop branches table.
--- Copies only main-branch rows (branch_id LIKE '%:main').
+-- Copies only main-branch rows (branch_id LIKE '%:main' or bare 'main').
 -- SQLite requires table recreation when dropping PK/indexed columns.
+--
+-- DROP TABLE with foreign_keys = ON does an implicit DELETE FROM that
+-- fires ON DELETE CASCADE actions, and we can't toggle foreign_keys
+-- inside a transaction. Two child tables — posts (scene_id REFERENCES
+-- scenes ON DELETE CASCADE) and knowledge_state (fact_id REFERENCES
+-- facts ON DELETE CASCADE) — would be wiped when scenes / facts get
+-- dropped. We stage their data in FK-less holding tables, drop the
+-- child to break the FK, rebuild the parent freely, then restore the
+-- child with its FK pointing at the rebuilt parent.
+--
+-- The bare 'main' literal vs '{campaign_id}:main' form: SceneInit
+-- defaults to "main", apply_delta propagates that to character_state,
+-- location_state, faction_state, deltas; turn_auditor and alternates
+-- also default to "main". Other tables use the colon form. Accept
+-- both so neither set of rows is silently dropped.
+
+-- ── posts (stage into FK-less holding table) ────────────
+CREATE TABLE posts_hold AS SELECT
+  id, scene_id, campaign_id, turn_id, order_in_scene,
+  author_kind, author_pc_ref, body_excerpt, body_hash, is_player,
+  created_at, retconned_from, body, author_npc_ref
+FROM posts WHERE branch_id = 'main' OR branch_id LIKE '%:main';
+DROP TABLE posts;
 
 -- ── scenes ──────────────────────────────────────────────
 CREATE TABLE scenes_new (
@@ -28,9 +51,6 @@ CREATE TABLE scenes_new (
   closed INTEGER NOT NULL DEFAULT 0,
   closed_at_turn TEXT
 );
--- Scenes and posts use a bare 'main' literal (SceneInit default), not the
--- `{campaign_id}:main` form used by other tables. Accept both so neither
--- index is silently dropped on migration.
 INSERT INTO scenes_new SELECT
   id, campaign_id, ordinal, slug, file_path, location_ref,
   in_game_start, in_game_end, pov_character_ref, present_character_refs,
@@ -42,8 +62,8 @@ DROP TABLE scenes;
 ALTER TABLE scenes_new RENAME TO scenes;
 CREATE INDEX idx_scenes_campaign ON scenes(campaign_id, ordinal);
 
--- ── posts ───────────────────────────────────────────────
-CREATE TABLE posts_new (
+-- ── posts (restore with FK to rebuilt scenes) ───────────
+CREATE TABLE posts (
   id TEXT PRIMARY KEY,
   scene_id TEXT REFERENCES scenes(id) ON DELETE CASCADE,
   campaign_id TEXT NOT NULL,
@@ -59,13 +79,12 @@ CREATE TABLE posts_new (
   body TEXT NOT NULL DEFAULT '',
   author_npc_ref TEXT
 );
-INSERT INTO posts_new SELECT
+INSERT INTO posts SELECT
   id, scene_id, campaign_id, turn_id, order_in_scene,
   author_kind, author_pc_ref, body_excerpt, body_hash, is_player,
   created_at, retconned_from, body, author_npc_ref
-FROM posts WHERE branch_id = 'main' OR branch_id LIKE '%:main';
-DROP TABLE posts;
-ALTER TABLE posts_new RENAME TO posts;
+FROM posts_hold;
+DROP TABLE posts_hold;
 CREATE INDEX idx_posts_scene_order ON posts(scene_id, order_in_scene);
 CREATE INDEX idx_posts_campaign ON posts(campaign_id);
 CREATE INDEX idx_posts_turn ON posts(turn_id);
@@ -94,7 +113,7 @@ INSERT INTO character_state_new SELECT
   physical_state, immediate_intent, knowledge_state, last_action,
   last_screen_time_turn, visible_to_pc, drift_score, tier_pin,
   current_scene_id, updated_at_turn, appearances_since_last_drift_check
-FROM character_state WHERE branch_id LIKE '%:main';
+FROM character_state WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE character_state;
 ALTER TABLE character_state_new RENAME TO character_state;
 CREATE INDEX idx_charstate_campaign ON character_state(campaign_id);
@@ -114,7 +133,7 @@ CREATE TABLE location_state_new (
 INSERT INTO location_state_new SELECT
   location_ref, campaign_id, weather, time_of_day, occupants,
   condition, transient_features, updated_at_turn
-FROM location_state WHERE branch_id LIKE '%:main';
+FROM location_state WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE location_state;
 ALTER TABLE location_state_new RENAME TO location_state;
 CREATE INDEX idx_locstate_campaign ON location_state(campaign_id);
@@ -129,10 +148,18 @@ CREATE TABLE faction_state_new (
 );
 INSERT INTO faction_state_new SELECT
   faction_ref, campaign_id, state, updated_at_turn
-FROM faction_state WHERE branch_id LIKE '%:main';
+FROM faction_state WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE faction_state;
 ALTER TABLE faction_state_new RENAME TO faction_state;
 CREATE INDEX idx_factionstate_campaign ON faction_state(campaign_id);
+
+-- ── knowledge_state (stage into FK-less holding table) ──
+-- Same ON DELETE CASCADE problem as posts/scenes: DROP TABLE facts
+-- below would cascade through knowledge_state.fact_id and wipe it.
+CREATE TABLE knowledge_state_hold AS SELECT
+  fact_id, character_ref, campaign_id, knows, learned_in_post, source
+FROM knowledge_state WHERE branch_id LIKE '%:main';
+DROP TABLE knowledge_state;
 
 -- ── facts ───────────────────────────────────────────────
 DROP TRIGGER IF EXISTS facts_ai;
@@ -234,8 +261,8 @@ ALTER TABLE relationships_new RENAME TO relationships;
 CREATE INDEX idx_relationships_campaign ON relationships(campaign_id);
 CREATE INDEX idx_relationships_pair ON relationships(from_character_ref, to_character_ref);
 
--- ── knowledge_state ─────────────────────────────────────
-CREATE TABLE knowledge_state_new (
+-- ── knowledge_state (restore with FK to rebuilt facts) ──
+CREATE TABLE knowledge_state (
   fact_id TEXT NOT NULL REFERENCES facts(id) ON DELETE CASCADE,
   character_ref TEXT NOT NULL,
   campaign_id TEXT NOT NULL,
@@ -244,11 +271,10 @@ CREATE TABLE knowledge_state_new (
   source TEXT,
   PRIMARY KEY (fact_id, character_ref)
 );
-INSERT INTO knowledge_state_new SELECT
+INSERT INTO knowledge_state SELECT
   fact_id, character_ref, campaign_id, knows, learned_in_post, source
-FROM knowledge_state WHERE branch_id LIKE '%:main';
-DROP TABLE knowledge_state;
-ALTER TABLE knowledge_state_new RENAME TO knowledge_state;
+FROM knowledge_state_hold;
+DROP TABLE knowledge_state_hold;
 CREATE INDEX idx_knowledge_character ON knowledge_state(character_ref);
 
 -- ── calendar ────────────────────────────────────────────
@@ -312,7 +338,7 @@ INSERT INTO deltas_new SELECT
   id, campaign_id, turn_id, source, kind, target_scope,
   target_table, target_path, target_id, before, after, confidence,
   applied_at, reversed_at, notes, delta_set_id
-FROM deltas WHERE branch_id LIKE '%:main' OR branch_id IS NULL;
+FROM deltas WHERE branch_id = 'main' OR branch_id LIKE '%:main' OR branch_id IS NULL;
 DROP TABLE deltas;
 ALTER TABLE deltas_new RENAME TO deltas;
 CREATE INDEX idx_deltas_campaign ON deltas(campaign_id);
@@ -346,7 +372,7 @@ INSERT INTO turn_audits_new SELECT
   context_summary, prompt_messages, prompt_budget, mechanics_results,
   llm_metadata, response_text, extraction_summary, applied_delta_ids,
   queued_review_ids, side_effects, errors, created_at
-FROM turn_audits WHERE branch_id LIKE '%:main';
+FROM turn_audits WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE turn_audits;
 ALTER TABLE turn_audits_new RENAME TO turn_audits;
 CREATE INDEX idx_turnaudit_campaign ON turn_audits(campaign_id, created_at);
@@ -404,7 +430,7 @@ CREATE TABLE current_alternate_delta_sets_new (
 );
 INSERT INTO current_alternate_delta_sets_new SELECT
   campaign_id, post_id, delta_set_id, updated_at
-FROM current_alternate_delta_sets WHERE branch_id LIKE '%:main';
+FROM current_alternate_delta_sets WHERE branch_id = 'main' OR branch_id LIKE '%:main';
 DROP TABLE current_alternate_delta_sets;
 ALTER TABLE current_alternate_delta_sets_new RENAME TO current_alternate_delta_sets;
 CREATE INDEX idx_current_alt_sets_campaign
