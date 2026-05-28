@@ -20,7 +20,7 @@ class ValidationConfig:
 
 @dataclass(frozen=True)
 class RngConfig:
-    per_branch_seed: bool = True
+    per_campaign_seed: bool = True
 
 
 @dataclass(frozen=True)

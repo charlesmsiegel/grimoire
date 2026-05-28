@@ -4,7 +4,7 @@ Glues the constituent stores (audit, costs, metrics, health, logs,
 errors) and the turn auditor + replayer behind a single Observability
 protocol. Construction takes the SQLite ``Database`` and optionally an
 event bus (so the turn auditor can subscribe) and a state-store +
-gateway pair (so replay can fork branches and re-run prompts).
+gateway pair (so replay can fork campaigns and re-run prompts).
 """
 
 from __future__ import annotations
