@@ -1,6 +1,6 @@
 """Regression test for migration 036_remove_branches.sql.
 
-Pre-fix, this migration had two bugs:
+Pre-fix, this migration had three bugs:
 
 1. FK ON DELETE CASCADE wiped child tables. ``DROP TABLE scenes`` /
    ``DROP TABLE facts`` did an implicit DELETE FROM with foreign_keys
@@ -9,6 +9,10 @@ Pre-fix, this migration had two bugs:
 2. ``WHERE branch_id LIKE '%:main'`` silently dropped rows where
    ``branch_id`` was the bare string ``'main'`` (no colon). Code paths
    like SceneInit, turn_auditor, and alternates wrote the bare form.
+3. Tables whose new PK no longer includes ``branch_id`` could hold both a
+   bare 'main' row and a 'campaign_id:main' row for the same key; copying
+   both hit a UNIQUE constraint and aborted the migration. The fix
+   deduplicates via ROW_NUMBER(), preferring the colon form.
 
 The test builds a pre-migration DB by applying migrations 001-035 only,
 seeds rows that exercise both bugs, runs 036, and asserts the rows
@@ -282,3 +286,107 @@ async def test_036_keeps_rows_with_bare_main(pre_migration_db):
             async with conn.execute(f"SELECT COUNT(*) FROM {table}") as cur:
                 count = (await cur.fetchone())[0]
                 assert count == 1, f"{table} lost its bare-main row"
+
+
+async def test_036_dedupes_dual_main_forms_on_narrowed_pk(pre_migration_db):
+    """Bug 3 regression: tables whose new PK drops branch_id can hold both a
+    bare 'main' and a 'campaign_id:main' row for the same key. The migration
+    must dedupe (preferring the colon form) instead of hitting a UNIQUE
+    constraint and aborting the transaction.
+    """
+    db, m036 = pre_migration_db
+    async with db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO campaigns (id, name, created_at) "
+            "VALUES ('c1', 'Test', '2026-05-28T00:00:00Z')"
+        )
+        for bid in ("main", "c1:main"):
+            await conn.execute(
+                "INSERT INTO branches "
+                "(id, campaign_id, label, parent_branch_id, rng_seed, created_at) "
+                "VALUES (?, 'c1', 'main', NULL, 42, '2026-05-28T00:00:00Z')",
+                (bid,),
+            )
+        # character_state — colon form gets a distinct drift_score so we can
+        # assert it is the row that survives deduplication.
+        await conn.execute(
+            "INSERT INTO character_state (character_ref, campaign_id, branch_id, "
+            "location_ref, drift_score, visible_to_pc, "
+            "appearances_since_last_drift_check) "
+            "VALUES ('char-a', 'c1', 'main', 'loc-1', 1, 0, 0)"
+        )
+        await conn.execute(
+            "INSERT INTO character_state (character_ref, campaign_id, branch_id, "
+            "location_ref, drift_score, visible_to_pc, "
+            "appearances_since_last_drift_check) "
+            "VALUES ('char-a', 'c1', 'c1:main', 'loc-1', 2, 0, 0)"
+        )
+        for bid in ("main", "c1:main"):
+            await conn.execute(
+                "INSERT INTO location_state (location_ref, campaign_id, branch_id) "
+                "VALUES ('loc-1', 'c1', ?)",
+                (bid,),
+            )
+            await conn.execute(
+                "INSERT INTO faction_state (faction_ref, campaign_id, branch_id) "
+                "VALUES ('fac-1', 'c1', ?)",
+                (bid,),
+            )
+            await conn.execute(
+                "INSERT INTO calendar (campaign_id, branch_id, current_in_game_time) "
+                "VALUES ('c1', ?, '2026-05-28T00:00:00Z')",
+                (bid,),
+            )
+            await conn.execute(
+                "INSERT INTO current_alternate_delta_sets "
+                "(campaign_id, branch_id, post_id, delta_set_id, updated_at) "
+                "VALUES ('c1', ?, 'p1', 'ds1', '2026-05-28T00:00:00Z')",
+                (bid,),
+            )
+            await conn.execute(
+                "INSERT INTO library_snapshots "
+                "(campaign_id, branch_id, library_id, version, frontmatter, snapshot_at) "
+                "VALUES ('c1', ?, 'lib1', 1, '{}', '2026-05-28T00:00:00Z')",
+                (bid,),
+            )
+        await conn.execute(
+            "INSERT INTO facts (id, campaign_id, branch_id, text) "
+            "VALUES ('f1', 'c1', 'c1:main', 'sky is blue')"
+        )
+        for bid in ("main", "c1:main"):
+            await conn.execute(
+                "INSERT INTO knowledge_state "
+                "(fact_id, character_ref, campaign_id, branch_id, knows) "
+                "VALUES ('f1', 'char-a', 'c1', ?, 1)",
+                (bid,),
+            )
+
+    # Apply 036 — must not raise a UNIQUE constraint error.
+    async with db.acquire() as conn:
+        await conn.execute("BEGIN")
+        for stmt in _split(m036.sql):
+            await conn.execute(stmt)
+        await conn.execute(
+            "INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, datetime('now'))",
+            (m036.version, m036.name),
+        )
+        await conn.execute("COMMIT")
+
+    async with db.acquire() as conn:
+        for table in (
+            "character_state",
+            "location_state",
+            "faction_state",
+            "knowledge_state",
+            "calendar",
+            "current_alternate_delta_sets",
+            "library_snapshots",
+        ):
+            async with conn.execute(f"SELECT COUNT(*) FROM {table}") as cur:
+                count = (await cur.fetchone())[0]
+                assert count == 1, f"{table} did not dedupe dual main forms"
+        # The colon-form row is the one that survived.
+        async with conn.execute(
+            "SELECT drift_score FROM character_state WHERE character_ref = 'char-a'"
+        ) as cur:
+            assert (await cur.fetchone())[0] == 2

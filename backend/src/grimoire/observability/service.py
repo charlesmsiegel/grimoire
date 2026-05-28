@@ -77,7 +77,7 @@ class ObservabilityService:
             self.replayer = TurnReplayerService(
                 audit_store=self.audit_store,
                 gateway=llm_gateway,  # type: ignore[arg-type]
-                state_store=state_store,  # type: ignore[arg-type]
+                forker=state_store,  # type: ignore[arg-type]
             )
 
         self._cost_subscription: Subscription | None = None

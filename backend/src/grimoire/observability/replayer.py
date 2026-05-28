@@ -63,13 +63,21 @@ class TurnReplayerService:
         *,
         audit_store: AuditStore,
         gateway: _Completer,
-        state_store: _CampaignForker | None = None,
+        forker: _CampaignForker | None = None,
         task: str = "replay",
     ) -> None:
         self._audit_store = audit_store
         self._gateway = gateway
-        self._store = state_store
+        self._forker = forker
         self._task = task
+
+    def set_forker(self, forker: _CampaignForker | None) -> None:
+        """Wire the campaign forker after construction.
+
+        The forker (the orchestrator) is built in a later phase than the
+        replayer, so it is injected once it exists.
+        """
+        self._forker = forker
 
     async def replay(self, turn_id: TurnId, opts: ReplayOptions | None = None) -> ReplayResult:
         opts = opts or ReplayOptions()
@@ -80,10 +88,10 @@ class TurnReplayerService:
         warnings: list[str] = []
         forked_campaign_id: str | None = None
         if opts.on_fork:
-            if self._store is None:
-                warnings.append("no state_store provided; fork skipped")
+            if self._forker is None:
+                warnings.append("no campaign forker provided; fork skipped")
             else:
-                result = await self._store.fork_campaign(
+                result = await self._forker.fork_campaign(
                     campaign_id=audit.campaign_id,
                     new_name=f"replay-{turn_id[:8]}",
                 )

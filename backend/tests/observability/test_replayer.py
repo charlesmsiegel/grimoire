@@ -32,9 +32,18 @@ class _FakeGateway:
         return _FakeCompletion(text=self.next_text)
 
 
-class _FakeStore:
+@dataclass
+class _FakeForkResult:
+    new_campaign_id: str = "c_forked"
+
+
+class _FakeForker:
     def __init__(self) -> None:
         self.fork_calls: list[dict] = []
+
+    async def fork_campaign(self, **kwargs: Any) -> _FakeForkResult:
+        self.fork_calls.append(kwargs)
+        return _FakeForkResult()
 
 
 async def _seed(db, **overrides) -> tuple[AuditStore, TurnAudit]:
@@ -57,8 +66,8 @@ async def _seed(db, **overrides) -> tuple[AuditStore, TurnAudit]:
 async def test_replay_calls_gateway_and_returns_diff(db) -> None:
     audit_store, _ = await _seed(db)
     gateway = _FakeGateway()
-    state = _FakeStore()
-    replayer = TurnReplayerService(audit_store=audit_store, gateway=gateway, state_store=state)
+    forker = _FakeForker()
+    replayer = TurnReplayerService(audit_store=audit_store, gateway=gateway, forker=forker)
 
     result = await replayer.replay("t_seed", ReplayOptions(on_fork=False))
     assert result.new_response_text == "new response"
@@ -123,11 +132,35 @@ async def test_replay_handles_gateway_failure(db) -> None:
     assert any("provider down" in w for w in result.warnings)
 
 
-async def test_on_fork_false_skips_state_store_call(db) -> None:
+async def test_on_fork_false_skips_fork_call(db) -> None:
     audit_store, _ = await _seed(db)
     gateway = _FakeGateway()
-    state = _FakeStore()
-    replayer = TurnReplayerService(audit_store=audit_store, gateway=gateway, state_store=state)
+    forker = _FakeForker()
+    replayer = TurnReplayerService(audit_store=audit_store, gateway=gateway, forker=forker)
     result = await replayer.replay("t_seed", ReplayOptions(on_fork=False))
-    assert state.fork_calls == []
+    assert forker.fork_calls == []
     assert result.forked_campaign_id is None
+
+
+async def test_on_fork_true_calls_forker(db) -> None:
+    audit_store, _ = await _seed(db)
+    gateway = _FakeGateway()
+    forker = _FakeForker()
+    replayer = TurnReplayerService(audit_store=audit_store, gateway=gateway, forker=forker)
+    result = await replayer.replay("t_seed", ReplayOptions(on_fork=True))
+    assert len(forker.fork_calls) == 1
+    assert forker.fork_calls[0]["campaign_id"] == "c_1"
+    assert result.forked_campaign_id == "c_forked"
+
+
+async def test_set_forker_wires_after_construction(db) -> None:
+    audit_store, _ = await _seed(db)
+    gateway = _FakeGateway()
+    replayer = TurnReplayerService(audit_store=audit_store, gateway=gateway)
+    result = await replayer.replay("t_seed", ReplayOptions(on_fork=True))
+    assert any("no campaign forker" in w for w in result.warnings)
+
+    forker = _FakeForker()
+    replayer.set_forker(forker)
+    result = await replayer.replay("t_seed", ReplayOptions(on_fork=True))
+    assert len(forker.fork_calls) == 1

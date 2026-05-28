@@ -16,6 +16,13 @@
 -- location_state, faction_state, deltas; turn_auditor and alternates
 -- also default to "main". Other tables use the colon form. Accept
 -- both so neither set of rows is silently dropped.
+--
+-- Tables whose new PK no longer includes branch_id (character_state,
+-- location_state, faction_state, knowledge_state, calendar,
+-- current_alternate_delta_sets, library_snapshots) can hold *both* a
+-- bare 'main' row and a '{campaign_id}:main' row for the same key.
+-- Inserting both would hit a UNIQUE constraint and abort the migration,
+-- so we deduplicate via ROW_NUMBER(), preferring the colon form.
 
 -- ── posts (stage into FK-less holding table) ────────────
 CREATE TABLE posts_hold AS SELECT
@@ -113,7 +120,15 @@ INSERT INTO character_state_new SELECT
   physical_state, immediate_intent, knowledge_state, last_action,
   last_screen_time_turn, visible_to_pc, drift_score, tier_pin,
   current_scene_id, updated_at_turn, appearances_since_last_drift_check
-FROM character_state WHERE branch_id = 'main' OR branch_id LIKE '%:main';
+FROM (
+  SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY character_ref, campaign_id
+    ORDER BY CASE WHEN branch_id LIKE '%:main' THEN 0 ELSE 1 END
+  ) AS _rn
+  FROM character_state
+  WHERE branch_id = 'main' OR branch_id LIKE '%:main'
+)
+WHERE _rn = 1;
 DROP TABLE character_state;
 ALTER TABLE character_state_new RENAME TO character_state;
 CREATE INDEX idx_charstate_campaign ON character_state(campaign_id);
@@ -133,7 +148,15 @@ CREATE TABLE location_state_new (
 INSERT INTO location_state_new SELECT
   location_ref, campaign_id, weather, time_of_day, occupants,
   condition, transient_features, updated_at_turn
-FROM location_state WHERE branch_id = 'main' OR branch_id LIKE '%:main';
+FROM (
+  SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY location_ref, campaign_id
+    ORDER BY CASE WHEN branch_id LIKE '%:main' THEN 0 ELSE 1 END
+  ) AS _rn
+  FROM location_state
+  WHERE branch_id = 'main' OR branch_id LIKE '%:main'
+)
+WHERE _rn = 1;
 DROP TABLE location_state;
 ALTER TABLE location_state_new RENAME TO location_state;
 CREATE INDEX idx_locstate_campaign ON location_state(campaign_id);
@@ -148,7 +171,15 @@ CREATE TABLE faction_state_new (
 );
 INSERT INTO faction_state_new SELECT
   faction_ref, campaign_id, state, updated_at_turn
-FROM faction_state WHERE branch_id = 'main' OR branch_id LIKE '%:main';
+FROM (
+  SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY faction_ref, campaign_id
+    ORDER BY CASE WHEN branch_id LIKE '%:main' THEN 0 ELSE 1 END
+  ) AS _rn
+  FROM faction_state
+  WHERE branch_id = 'main' OR branch_id LIKE '%:main'
+)
+WHERE _rn = 1;
 DROP TABLE faction_state;
 ALTER TABLE faction_state_new RENAME TO faction_state;
 CREATE INDEX idx_factionstate_campaign ON faction_state(campaign_id);
@@ -158,7 +189,15 @@ CREATE INDEX idx_factionstate_campaign ON faction_state(campaign_id);
 -- below would cascade through knowledge_state.fact_id and wipe it.
 CREATE TABLE knowledge_state_hold AS SELECT
   fact_id, character_ref, campaign_id, knows, learned_in_post, source
-FROM knowledge_state WHERE branch_id = 'main' OR branch_id LIKE '%:main';
+FROM (
+  SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY fact_id, character_ref
+    ORDER BY CASE WHEN branch_id LIKE '%:main' THEN 0 ELSE 1 END
+  ) AS _rn
+  FROM knowledge_state
+  WHERE branch_id = 'main' OR branch_id LIKE '%:main'
+)
+WHERE _rn = 1;
 DROP TABLE knowledge_state;
 
 -- ── facts ───────────────────────────────────────────────
@@ -283,7 +322,15 @@ CREATE TABLE calendar_new (
   current_in_game_time TEXT
 );
 INSERT INTO calendar_new SELECT campaign_id, current_in_game_time
-FROM calendar WHERE branch_id = 'main' OR branch_id LIKE '%:main';
+FROM (
+  SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY campaign_id
+    ORDER BY CASE WHEN branch_id LIKE '%:main' THEN 0 ELSE 1 END
+  ) AS _rn
+  FROM calendar
+  WHERE branch_id = 'main' OR branch_id LIKE '%:main'
+)
+WHERE _rn = 1;
 DROP TABLE calendar;
 ALTER TABLE calendar_new RENAME TO calendar;
 
@@ -454,7 +501,15 @@ CREATE TABLE current_alternate_delta_sets_new (
 );
 INSERT INTO current_alternate_delta_sets_new SELECT
   campaign_id, post_id, delta_set_id, updated_at
-FROM current_alternate_delta_sets WHERE branch_id = 'main' OR branch_id LIKE '%:main';
+FROM (
+  SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY campaign_id, post_id
+    ORDER BY CASE WHEN branch_id LIKE '%:main' THEN 0 ELSE 1 END
+  ) AS _rn
+  FROM current_alternate_delta_sets
+  WHERE branch_id = 'main' OR branch_id LIKE '%:main'
+)
+WHERE _rn = 1;
 DROP TABLE current_alternate_delta_sets;
 ALTER TABLE current_alternate_delta_sets_new RENAME TO current_alternate_delta_sets;
 CREATE INDEX idx_current_alt_sets_campaign
@@ -617,7 +672,15 @@ CREATE TABLE library_snapshots_new (
 );
 INSERT INTO library_snapshots_new SELECT
   campaign_id, library_id, version, frontmatter, body, snapshot_at
-FROM library_snapshots WHERE branch_id = 'main' OR branch_id LIKE '%:main';
+FROM (
+  SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY campaign_id, library_id
+    ORDER BY CASE WHEN branch_id LIKE '%:main' THEN 0 ELSE 1 END
+  ) AS _rn
+  FROM library_snapshots
+  WHERE branch_id = 'main' OR branch_id LIKE '%:main'
+)
+WHERE _rn = 1;
 DROP TABLE library_snapshots;
 ALTER TABLE library_snapshots_new RENAME TO library_snapshots;
 CREATE INDEX idx_libsnap_lib ON library_snapshots(library_id);
