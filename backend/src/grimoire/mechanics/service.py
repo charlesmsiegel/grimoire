@@ -801,7 +801,7 @@ class MechanicsService:
         self,
         campaign_id: CampaignId,
     ) -> int:
-        if not self._config.rng.per_branch_seed:
+        if not self._config.rng.per_campaign_seed:
             return 0
         # SHA-256 of the campaign id gives a deterministic per-campaign seed
         # that survives process restarts (Python's hash() does not).

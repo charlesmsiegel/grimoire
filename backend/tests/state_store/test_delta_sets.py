@@ -11,7 +11,6 @@ from grimoire.state_store import StateStore
 from grimoire.state_store.errors import StateStoreError
 
 CAMPAIGN_ID = "c1"
-BRANCH_ID = "c1:main"
 
 
 def _char_delta(mood: str, drift: float = 0.0) -> dict:
