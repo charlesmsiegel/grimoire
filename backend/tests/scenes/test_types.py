@@ -7,7 +7,6 @@ def test_pc_absent_true_when_no_pcs():
     scene = Scene(
         id="s1",
         campaign_id="c1",
-        branch_id="main",
         ordinal=1,
         slug="test",
         title="Test",
@@ -21,7 +20,6 @@ def test_pc_absent_false_when_pcs_present():
     scene = Scene(
         id="s1",
         campaign_id="c1",
-        branch_id="main",
         ordinal=1,
         slug="test",
         title="Test",
