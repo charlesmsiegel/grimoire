@@ -393,3 +393,25 @@ def test_default_off_prevents_404_flood(tmp_path: Path, container: ServiceContai
             r = client.get(f"/api/campaigns/cmp_1/characters/{char}/expression")
             assert r.status_code == 200
             assert r.json()["emotion"] == "neutral"
+
+
+def test_malformed_ref_rejected_before_disabled_shortcut(
+    tmp_path: Path, container: ServiceContainer
+) -> None:
+    """Path component validation runs before the disabled-character shortcut.
+
+    A malformed ref (containing characters outside the safe allowlist) must
+    be rejected with 400 even when expressions are disabled — otherwise the
+    shortcut would mask the traversal guard.
+    """
+    from grimoire.main import create_app
+
+    app = create_app()
+    app.state.container = container
+    with TestClient(app) as client:
+        _enable_expressions(client, "cmp_1", [])
+        # Colon is not in the safe-component allowlist; this routes to the
+        # handler as a single segment but must be rejected before the
+        # disabled shortcut returns a neutral 200.
+        r = client.get("/api/campaigns/cmp_1/characters/bad%3Achar/expression")
+        assert r.status_code == 400
