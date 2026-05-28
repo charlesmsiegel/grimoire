@@ -91,6 +91,7 @@ class ScenarioApp:
         self._llm: RecordReplayLLM | None = None
         self._lifespan_cm: Any | None = None
         self._saved_settings: Any | None = None
+        self._saved_main_settings: Any | None = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -111,13 +112,24 @@ class ScenarioApp:
 
         # Swap settings to point at our tmp data root. Saved + restored
         # on exit so the surrounding test process isn't mutated.
+        #
+        # ``grimoire.main`` binds ``settings`` via ``from grimoire.config
+        # import settings`` at import time, so patching only
+        # ``config.settings`` leaves the lifespan reading the original
+        # (default ``~/.grimoire``) — the app would build its DB and write
+        # imported library files outside our tmp tree, polluting the real
+        # data root and leaking state across tests. Patch both bindings.
         from grimoire import config as config_module
+        from grimoire import main as main_module
 
-        self._saved_settings = config_module.settings
-        config_module.settings = config_module.Settings(
+        fresh_settings = config_module.Settings(
             data_root=self.data_root,
             database_path=db_path,
         )
+        self._saved_settings = config_module.settings
+        self._saved_main_settings = main_module.settings
+        config_module.settings = fresh_settings
+        main_module.settings = fresh_settings
 
         # Build the app and pre-install a RecordReplayLLM in the
         # container before lifespan runs — the lifespan code checks
@@ -168,8 +180,10 @@ class ScenarioApp:
             # same process see the original configuration.
             if self._saved_settings is not None:
                 from grimoire import config as config_module
+                from grimoire import main as main_module
 
                 config_module.settings = self._saved_settings
+                main_module.settings = self._saved_main_settings
             if self._owns_tmp and self._tmp_dir is not None:
                 shutil.rmtree(self._tmp_dir, ignore_errors=True)
 
