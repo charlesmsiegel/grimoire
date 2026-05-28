@@ -22,7 +22,6 @@ import pytest
 from grimoire.storage.db import Database
 from grimoire.storage.migrations import (
     DEFAULT_MIGRATIONS_DIR,
-    apply_migrations,
     discover_migrations,
 )
 
