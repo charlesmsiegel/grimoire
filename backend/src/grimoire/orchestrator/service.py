@@ -959,14 +959,28 @@ class OrchestratorService:
                 )
 
         from grimoire.extractor.together import strip_tracker_block
+        from grimoire.orchestrator.post_splitting import create_response_posts
+        from grimoire.scenes.narrator_mode import effective_response_mode
 
-        response_post = self._new_post(
-            author_kind=SceneAuthorKind.NARRATOR,
-            body=strip_tracker_block(response_text),
-            is_player=False,
-            turn_id=turn_id,
+        cleaned_text = strip_tracker_block(response_text)
+        try:
+            campaign_row = await self._store.db.fetchone(
+                "SELECT config FROM campaigns WHERE id = ?", (campaign_id,)
+            )
+        except Exception:
+            campaign_row = None
+        narrator_mode = effective_response_mode(
+            scene_override=scene_obj.narrator_response_mode,
+            campaign_row=campaign_row,
         )
-        await self._scenes.append_post(scene_id, response_post)
+        response_posts = create_response_posts(
+            response_text=cleaned_text,
+            narrator_mode=narrator_mode,
+            turn_id=turn_id,
+            clock=self._clock,
+        )
+        for rp in response_posts:
+            await self._scenes.append_post(scene_id, rp)
         await self._emit_fragment(turn_id, campaign_id, scene_appended=True)
 
         await self._emit_turn_event(
