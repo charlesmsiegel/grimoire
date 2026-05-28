@@ -223,7 +223,7 @@ async def test_resolve_roll_deterministic_per_branch(
 async def test_campaign_seed_fallback_is_stable_across_processes(
     service: MechanicsService, store: StateStore, mechanics_root: Path
 ) -> None:
-    """When the branch row is missing, the seed must still be deterministic.
+    """The campaign-seed fallback must be deterministic across processes.
 
     Python's built-in ``hash()`` is randomised per-process via PYTHONHASHSEED,
     so the fallback must not rely on it.
@@ -244,8 +244,8 @@ async def test_campaign_seed_fallback_is_stable_across_processes(
     script = (
         "from grimoire.mechanics.rng import derive_roll_seed;"
         "import hashlib;"
-        "tid = 'c1:never-forked';"
-        "digest = hashlib.sha256(tid.encode()).digest();"
+        "cid = 'c1';"
+        "digest = hashlib.sha256(cid.encode()).digest();"
         "bs = int.from_bytes(digest[:8], 'big') & 0x7FFFFFFFFFFFFFFF;"
         "print(derive_roll_seed(bs, 7, 'r1'))"
     )
