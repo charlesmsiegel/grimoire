@@ -52,9 +52,7 @@ def golden_llm(request: pytest.FixtureRequest) -> RecordReplayLLM:
 
 
 @pytest.fixture(autouse=True)
-def _no_bundled_plugins(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _no_bundled_plugins(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Stop the app lifespan from loading real bundled plugins.
 
     Booting the app (API route tests, scenario harness) runs
