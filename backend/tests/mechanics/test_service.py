@@ -220,24 +220,7 @@ async def test_resolve_roll_deterministic_per_branch(
     assert _dice(first) == _dice(second)
 
 
-async def test_resolve_roll_differs_across_branches(
-    service: MechanicsService, store: StateStore, mechanics_root: Path
-) -> None:
-    write_module(mechanics_root, "wod")
-    await service.rescan()
-    await _seed(store, "wod")
-    # Add a second branch to compare against.
-    await store.fork_branch(
-        campaign_id="c1",
-        parent_new_label="alt",
-    )
-    roll = Roll(id="r1", kind="dice-pool", pool=5, seed=7, difficulty=6)
-    main = await service.resolve_roll("c1", roll)
-    alt = await service.resolve_roll("c1", roll)
-    assert _dice(main) != _dice(alt)
-
-
-async def test_branch_seed_fallback_is_stable_across_processes(
+async def test_campaign_seed_fallback_is_stable_across_processes(
     service: MechanicsService, store: StateStore, mechanics_root: Path
 ) -> None:
     """When the branch row is missing, the seed must still be deterministic.

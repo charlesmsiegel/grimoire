@@ -106,22 +106,15 @@ async def seed_minimal(output: Path) -> Path:
             ("cmp-min", "Minimal Test Campaign", "synthetic"),
         )
         await db.execute(
-            "INSERT INTO branches (id, campaign_id, parent_branch_id, label, rng_seed,"
-            " created_at) VALUES (?, ?, NULL, ?, ?, datetime('now'))",
-            ("b-main", "cmp-min", "main", 0),
+            "INSERT INTO scenes (id, campaign_id, ordinal, slug, file_path,"
+            " summary) VALUES (?, ?, ?, ?, ?, ?)",
+            ("s-0", "cmp-min", 0, "intro", "scenes/intro.md", "Opening scene."),
         )
-        await db.execute(
-            "INSERT INTO scenes (id, campaign_id, branch_id, ordinal, slug, file_path,"
-            " summary) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ("s-0", "cmp-min", "b-main", 0, "intro", "scenes/intro.md", "Opening scene."),
-        )
-        # A pair of contiguous deltas so the contiguity invariant has
-        # something to check (turn ids ``t-0`` and ``t-1``).
         for turn in ("t-0", "t-1"):
             await db.execute(
-                "INSERT INTO deltas (id, campaign_id, branch_id, turn_id, source, kind)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (f"d-{turn}", "cmp-min", "b-main", turn, "extractor", "note"),
+                "INSERT INTO deltas (id, campaign_id, turn_id, source, kind)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (f"d-{turn}", "cmp-min", turn, "extractor", "note"),
             )
     finally:
         await db.close()
