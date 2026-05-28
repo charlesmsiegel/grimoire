@@ -30,6 +30,7 @@ from grimoire.llm_gateway.retry import resolve_retry_exceptions, run_with_retrie
 from grimoire.llm_gateway.route_manager import RouteManager
 from grimoire.llm_gateway.routing import Route, RouteResolver
 from grimoire.llm_gateway.tiers import Tier, tier_for_task
+from grimoire.observability import wire_log
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.storage.db import Database
 from grimoire.types.common import CampaignId, HealthLevel, HealthStatus, TurnId
@@ -773,6 +774,17 @@ class LLMGatewayService:
             },
         )
 
+        wire_log.log_request(
+            "llm.complete",
+            payload=scoped,
+            task=task,
+            provider=route.provider_id,
+            model=route.model,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            fallback_used=fallback_used,
+        )
+
         async def _call() -> CompletionResponse:
             return await asyncio.wait_for(provider.complete(scoped), timeout=timeout_seconds)
 
@@ -818,6 +830,17 @@ class LLMGatewayService:
                 retry_override=self._retry_dict(retry),
                 timeout_override=self._timeout_dict(timeout),
             )
+        wire_log.log_response(
+            "llm.complete",
+            payload=response,
+            task=task,
+            provider=route.provider_id,
+            model=route.model,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            retries=retries,
+            fallback_used=fallback_used,
+        )
         await self._emit(
             events.LLM_RESPONSE_RECEIVED,
             {
@@ -861,6 +884,17 @@ class LLMGatewayService:
         retry: RetryPolicy | None = None,
         timeout: TimeoutPolicy | None = None,
     ) -> None:
+        wire_log.log_error(
+            "llm",
+            error=f"{type(error).__name__}: {error}",
+            task=task,
+            provider=route.provider_id,
+            model=route.model,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            retries=retries,
+            fallback_used=fallback_used,
+        )
         await self._emit(
             events.LLM_REQUEST_FAILED,
             {
@@ -1147,6 +1181,16 @@ class LLMGatewayService:
             },
         )
 
+        wire_log.log_request(
+            "llm.stream",
+            payload=request,
+            task=task,
+            provider=route.provider_id,
+            model=route.model,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            fallback_used=fallback_used,
+        )
         stream = provider.stream(request)
         usage: TokenUsage | None = None
         text_parts: list[str] = []
@@ -1203,6 +1247,22 @@ class LLMGatewayService:
                 retry_override=self._retry_dict(retry),
                 timeout_override=self._timeout_dict(timeout),
             )
+        wire_log.log_response(
+            "llm.stream",
+            payload={
+                "text": "".join(text_parts),
+                "usage": usage.model_dump() if usage else None,
+                "finish_reason": "stop",
+                "cost_estimate_usd": cost_estimate_usd,
+                "latency_ms": latency_ms,
+            },
+            task=task,
+            provider=route.provider_id,
+            model=route.model,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            fallback_used=fallback_used,
+        )
         await self._emit(
             events.LLM_RESPONSE_RECEIVED,
             {
@@ -1287,6 +1347,17 @@ class LLMGatewayService:
             )
             started = time.monotonic()
 
+            wire_log.log_request(
+                "embedding",
+                payload={"texts": missing},
+                task=task,
+                provider=route.provider_id,
+                model=model_id,
+                input_count=len(missing),
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+            )
+
             # Determine whether to chunk into batches.
             # If the provider exposes max_batch_size and it is smaller than the
             # number of missing texts, split into chunks of that size.  Each
@@ -1326,6 +1397,15 @@ class LLMGatewayService:
                     total_retries += batch_retries
                     all_vectors.extend(batch_vectors)
             except PermanentError as exc:
+                wire_log.log_error(
+                    "embedding",
+                    error=f"{type(exc).__name__}: {exc}",
+                    task=task,
+                    provider=route.provider_id,
+                    model=model_id,
+                    input_count=len(missing),
+                    retries=total_retries,
+                )
                 if self._config.observability.log_all_requests:
                     await self._log.record(
                         task=task,
@@ -1360,6 +1440,15 @@ class LLMGatewayService:
                 # `total_retries` sums batches that succeeded; add the
                 # exhausted-retries count for the batch that finally failed.
                 final_retries = total_retries + resolved_retry.max_retries
+                wire_log.log_error(
+                    "embedding",
+                    error=f"{type(exc).__name__}: {exc}",
+                    task=task,
+                    provider=route.provider_id,
+                    model=model_id,
+                    input_count=len(missing),
+                    retries=final_retries,
+                )
                 if self._config.observability.log_all_requests:
                     await self._log.record(
                         task=task,
@@ -1416,6 +1505,22 @@ class LLMGatewayService:
                     retry_override=self._retry_dict(retry),
                     timeout_override=self._timeout_dict(timeout),
                 )
+            wire_log.log_response(
+                "embedding",
+                payload={
+                    "vector_count": len(vectors),
+                    "dimensions": len(vectors[0]) if vectors else 0,
+                    "vectors": (
+                        f"<omitted: {len(vectors)} x {len(vectors[0]) if vectors else 0} floats>"
+                    ),
+                },
+                task=task,
+                provider=route.provider_id,
+                model=model_id,
+                input_count=len(missing),
+                retries=retries,
+                latency_ms=latency_ms,
+            )
             embed_cost: float = 0.0
             embed_input_tokens = max(1, sum(len(t) // 4 for t in missing))
             info = await self._get_pricing(route.provider_id, model_id)

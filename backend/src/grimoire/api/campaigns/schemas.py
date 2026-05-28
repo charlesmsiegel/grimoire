@@ -267,7 +267,7 @@ class VariationPayload(BaseModel):
 
 
 class TriggerConfigPayload(BaseModel):
-    mode: str = "per_scene"
+    mode: str = "manual_only"
     every_n: int = 5
     on_scene_open: bool = True
     on_new_location: bool = True
