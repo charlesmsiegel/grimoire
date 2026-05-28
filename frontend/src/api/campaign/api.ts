@@ -52,15 +52,10 @@ export const campaignApi = {
   getScene: (id: string, sceneId: string) =>
     api.get<SceneDetail>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}`),
 
-  getPostsPaginated: (
-    id: string,
-    sceneId: string,
-    params?: { limit?: number; before?: number },
-  ) =>
-    api.get<PaginatedPostsResponse>(
-      `/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}/posts`,
-      { query: params },
-    ),
+  getPostsPaginated: (id: string, sceneId: string, params?: { limit?: number; before?: number }) =>
+    api.get<PaginatedPostsResponse>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}/posts`, {
+      query: params,
+    }),
 
   endScene: (id: string, sceneId: string) =>
     api.post<ApiScene>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}/end`),
@@ -88,9 +83,7 @@ export const campaignApi = {
       };
     }>(
       `/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}`,
-      next === null
-        ? { clear_narrator_response_mode: true }
-        : { narrator_response_mode: next },
+      next === null ? { clear_narrator_response_mode: true } : { narrator_response_mode: next },
     ),
 
   submitTurn: (id: string, pcRef: string, text: string) =>
@@ -150,12 +143,7 @@ export const campaignApi = {
       { pinned },
     ),
 
-  deleteAlternate: (
-    campaignId: string,
-    sceneId: string,
-    postId: string,
-    alternateId: string,
-  ) =>
+  deleteAlternate: (campaignId: string, sceneId: string, postId: string, alternateId: string) =>
     api.delete<void>(
       `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}/alternates/${enc(alternateId)}`,
     ),
@@ -195,15 +183,10 @@ export const campaignApi = {
     ),
 
   getIntegratedDeltas: (campaignId: string) =>
-    api.get<{ enabled: boolean }>(
-      `/api/campaigns/${enc(campaignId)}/integrated-deltas`,
-    ),
+    api.get<{ enabled: boolean }>(`/api/campaigns/${enc(campaignId)}/integrated-deltas`),
 
   setIntegratedDeltas: (campaignId: string, body: { enabled: boolean }) =>
-    api.put<{ enabled: boolean }>(
-      `/api/campaigns/${enc(campaignId)}/integrated-deltas`,
-      body,
-    ),
+    api.put<{ enabled: boolean }>(`/api/campaigns/${enc(campaignId)}/integrated-deltas`, body),
 
   retconPost: (
     campaignId: string,
@@ -216,9 +199,7 @@ export const campaignApi = {
     ),
 
   getRetconReplay: (campaignId: string, batchId: string) =>
-    api.get<ReplayBatchView>(
-      `/api/campaigns/${enc(campaignId)}/retcon/replay/${enc(batchId)}`,
-    ),
+    api.get<ReplayBatchView>(`/api/campaigns/${enc(campaignId)}/retcon/replay/${enc(batchId)}`),
 
   acceptRetconReplay: (campaignId: string, batchId: string) =>
     api.post<ReplayBatchView>(

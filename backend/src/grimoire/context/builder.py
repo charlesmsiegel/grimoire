@@ -48,10 +48,10 @@ from grimoire.types.context import (
     ContextSource,
 )
 from grimoire.types.extraction_modes import ExtractionMode
-from grimoire.types.state import ContextTier
 from grimoire.types.inclusion_reasons import InclusionReason
 from grimoire.types.llm import Message, MessageRole, ModelParams
 from grimoire.types.mechanics import MechanicsResult
+from grimoire.types.state import ContextTier
 
 logger = logging.getLogger(__name__)
 

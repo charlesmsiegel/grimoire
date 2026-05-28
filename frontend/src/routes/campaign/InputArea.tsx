@@ -186,7 +186,12 @@ export function InputArea({
     >
       <div className="input-meta">
         {!isPcAbsent && (
-          <PCSwitcher pcs={pcs} activePcRef={activePcRef} onChange={onChangePC} campaignId={campaignId} />
+          <PCSwitcher
+            pcs={pcs}
+            activePcRef={activePcRef}
+            onChange={onChangePC}
+            campaignId={campaignId}
+          />
         )}
         {isPcAbsent && (
           <span className="input-director-hint" aria-live="polite">
@@ -226,11 +231,7 @@ export function InputArea({
       />
       <div className="input-actions">
         {!isPcAbsent && (
-          <ExpressionPicker
-            value={emotion}
-            onChange={setEmotion}
-            disabled={submitting || busy}
-          />
+          <ExpressionPicker value={emotion} onChange={setEmotion} disabled={submitting || busy} />
         )}
         <button type="submit" disabled={!canSubmit} className="input-submit">
           {submitting ? "Submitting…" : isPcAbsent ? "Direct" : "Submit"}

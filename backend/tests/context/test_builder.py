@@ -1174,9 +1174,7 @@ async def test_pc_absent_scene_skips_active_pc_card() -> None:
     prompt = await builder.build("scene begins", "camp")
     body = "\n".join(m.content for m in prompt.messages)
     assert "Elder Tremere" not in body
-    assert not any(
-        s.tier == ContextTier.LOCK_IN and s.kind == "character" for s in prompt.sources
-    )
+    assert not any(s.tier == ContextTier.LOCK_IN and s.kind == "character" for s in prompt.sources)
 
 
 async def test_pc_absent_scene_includes_director_instruction() -> None:
