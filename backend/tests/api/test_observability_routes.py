@@ -411,41 +411,18 @@ async def test_turn_costs_returns_sorted_list(
     db = container_with_obs.db
     now = datetime.now(UTC).isoformat()
     await db.execute(
-        "INSERT INTO cost_records (campaign_id, turn_id, task, model, cost_usd, recorded_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("c1", "t_cost", "extraction", "m-2", 0.001, now),
+        "INSERT INTO cost_records"
+        " (campaign_id, turn_id, task, model, cost_usd,"
+        " input_tokens, output_tokens, recorded_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("c1", "t_cost", "extraction", "m-2", 0.001, 400, 50, now),
     )
     await db.execute(
-        "INSERT INTO cost_records (campaign_id, turn_id, task, model, cost_usd, recorded_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("c1", "t_cost", "primary", "m-1", 0.05, now),
-    )
-    # Matching llm_requests row for primary only — tokens flow through.
-    await db.execute(
-        "INSERT INTO llm_requests ("
-        "id, campaign_id, turn_id, task, provider, model, "
-        "prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, "
-        "retries, fallback_used, request_hash, response_excerpt, error, created_at"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            "r1",
-            "c1",
-            "t_cost",
-            "primary",
-            "p",
-            "m-1",
-            800,
-            350,
-            1150,
-            0.05,
-            200,
-            0,
-            0,
-            None,
-            None,
-            None,
-            now,
-        ),
+        "INSERT INTO cost_records"
+        " (campaign_id, turn_id, task, model, cost_usd,"
+        " input_tokens, output_tokens, recorded_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("c1", "t_cost", "primary", "m-1", 0.05, 800, 350, now),
     )
 
     resp = client.get("/api/observability/turns/t_cost/costs")
@@ -458,7 +435,7 @@ async def test_turn_costs_returns_sorted_list(
     assert rows[0]["output_tokens"] == 350
     assert rows[0]["call_count"] == 1
     assert rows[1]["task"] == "extraction"
-    assert rows[1]["input_tokens"] == 0  # no matching llm_requests row
+    assert rows[1]["input_tokens"] == 400
 
 
 @pytest.mark.asyncio
