@@ -18,6 +18,8 @@ DELTAS_EXTRACTED = "deltas_extracted"
 DELTAS_APPLIED = "deltas_applied"
 INTEGRATED_DELTAS_FALLBACK = "integrated_deltas_fallback"
 PRE_ROLL_PENDING = "pre_roll_pending"
+SPEAKER_ROUND_WAITING = "speaker_round_waiting"
+SPEAKER_ROUND_NEXT = "speaker_round_next"
 TURN_AUDIT_FRAGMENT = "turn_audit_fragment"
 
 # Scene lifecycle

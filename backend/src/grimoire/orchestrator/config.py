@@ -68,6 +68,12 @@ class SwipesConfig:
 
 
 @dataclass
+class SpeakerLoopConfig:
+    timeout_seconds: float = 300.0
+    speaker_select_max_tokens: int = 50
+
+
+@dataclass
 class OrchestratorConfig:
     per_campaign_concurrency: int = 1
     turn_timeout_seconds: float = 180.0
@@ -80,6 +86,7 @@ class OrchestratorConfig:
     errors: ErrorConfig = None  # type: ignore[assignment]
     heartbeat: HeartbeatConfig = None  # type: ignore[assignment]
     swipes: SwipesConfig = None  # type: ignore[assignment]
+    speaker_loop: SpeakerLoopConfig = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.scene_break is None:
@@ -96,6 +103,8 @@ class OrchestratorConfig:
             self.heartbeat = HeartbeatConfig()
         if self.swipes is None:
             self.swipes = SwipesConfig()
+        if self.speaker_loop is None:
+            self.speaker_loop = SpeakerLoopConfig()
 
 
 __all__ = [
@@ -106,5 +115,6 @@ __all__ = [
     "OrchestratorConfig",
     "PreRollConfig",
     "SceneBreakConfig",
+    "SpeakerLoopConfig",
     "SwipesConfig",
 ]
