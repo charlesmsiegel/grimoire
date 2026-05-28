@@ -598,6 +598,8 @@ class CharactersService:
         owner: str = "local",
         role_tags: list[str] | None = None,
     ) -> PCEntry:
+        import json as _json
+
         await self.store.add_pc(
             campaign_id=campaign_id,
             character_ref=character_ref,
@@ -607,12 +609,25 @@ class CharactersService:
         )
         if self._cache.get_active_pc(campaign_id) is None:
             self._cache.cache_active_pc(campaign_id, character_ref)
+        # Reflect the actual stored row in the response: when role_tags is
+        # None (preserve-on-upsert path) the caller must see the preserved
+        # tags, not the omitted argument.
+        if role_tags is None:
+            rows = await self.store.list_pcs(campaign_id)
+            stored = next((r for r in rows if r["character_ref"] == character_ref), None)
+            if stored is not None:
+                raw = stored.get("role_tags") or "[]"
+                resolved_tags = _json.loads(raw) if isinstance(raw, str) else list(raw)
+            else:
+                resolved_tags = []
+        else:
+            resolved_tags = role_tags
         return PCEntry(
             character_ref=character_ref,
             name=name,
             owner=owner,
             active=self._cache.get_active_pc(campaign_id) == character_ref,
-            role_tags=role_tags or [],
+            role_tags=resolved_tags,
         )
 
     async def remove_pc(self, campaign_id: CampaignId, character_ref: CharacterRef) -> None:

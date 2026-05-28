@@ -663,6 +663,7 @@ class StateStore(Protocol):
         character_ref: CharacterRef,
         display_name: str,
         owner: str,
+        role_tags: list[str] | None = None,
     ) -> None: ...
 
     async def remove_pc(self, campaign_id: CampaignId, character_ref: CharacterRef) -> None: ...
@@ -839,7 +840,8 @@ class Characters(Protocol):
         campaign_id: CampaignId,
         character_ref: CharacterRef,
         name: str,
-        owner: str,
+        owner: str = "local",
+        role_tags: list[str] | None = None,
     ) -> PCEntry: ...
     async def remove_pc(self, campaign_id: CampaignId, character_ref: CharacterRef) -> None: ...
     async def set_active_pc(self, campaign_id: CampaignId, character_ref: CharacterRef) -> None: ...
