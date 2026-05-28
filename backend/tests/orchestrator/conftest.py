@@ -26,6 +26,9 @@ class FakeRow:
     def __getitem__(self, key: str) -> Any:
         return self.data[key]
 
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.data.get(key, default)
+
 
 @dataclass
 class FakeDB:
@@ -33,6 +36,8 @@ class FakeDB:
 
     campaigns: set[str] = field(default_factory=set)
     pcs: dict[str, set[str]] = field(default_factory=dict)
+
+    campaign_configs: dict[str, str] = field(default_factory=dict)
 
     async def fetchone(self, sql: str, params: tuple) -> FakeRow | None:
         sql = sql.strip().lower()
@@ -45,6 +50,11 @@ class FakeDB:
             cid, pc = params
             if pc in self.pcs.get(cid, set()):
                 return FakeRow({"character_ref": pc})
+            return None
+        if sql.startswith("select config from campaigns"):
+            cid = params[0]
+            if cid in self.campaigns:
+                return FakeRow({"config": self.campaign_configs.get(cid)})
             return None
         return None
 
