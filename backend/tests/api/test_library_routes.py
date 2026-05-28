@@ -283,6 +283,7 @@ def test_list_worlds(client, container) -> None:
             "name": "WoD London",
             "description": "",
             "tags": [],
+            "pc_role_tags": [],
             "genre": "",
             "calendar": {},
             "calendar_ids": [],

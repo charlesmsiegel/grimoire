@@ -737,6 +737,7 @@ def character_from_frontmatter(frontmatter: dict, body: str, *, world_id: str | 
         aliases=[str(a) for a in (fm.get("aliases") or [])],
         age=fm.get("age"),
         tags=[str(t) for t in (fm.get("tags") or [])],
+        role_tags=[str(t) for t in (fm.get("role_tags") or [])],
         voice=voice,
         image=image,
         images=images,
@@ -756,6 +757,7 @@ def frontmatter_from_payload(payload: CharacterData) -> dict:
         "role": payload.role.value,
         "aliases": list(payload.aliases),
         "tags": list(payload.tags),
+        "role_tags": list(payload.role_tags),
         "description": payload.description,
         "voice": voice_dict,
     }

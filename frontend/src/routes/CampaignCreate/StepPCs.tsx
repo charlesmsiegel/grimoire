@@ -24,8 +24,13 @@ export function StepPCs({ draft, update, candidates, loading, error, worlds }: P
         for (const t of w.pc_role_tags ?? []) tags.add(t);
       }
     }
+    for (const chars of candidates.values()) {
+      for (const c of chars) {
+        for (const t of c.role_tags ?? []) tags.add(t);
+      }
+    }
     return [...tags].sort();
-  }, [worlds, draft.worldRefs]);
+  }, [worlds, draft.worldRefs, candidates]);
 
   const removePC = (ref: string) => {
     update({ pcs: draft.pcs.filter((p) => p.character_ref !== ref) });

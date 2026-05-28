@@ -1265,17 +1265,29 @@ class StateStore:
             (campaign_id,),
         )
         active_default = 0 if row else 1
-        tags_json = _json.dumps(role_tags or [])
-        await self.db.execute(
+        tags_json = _json.dumps(role_tags) if role_tags is not None else "[]"
+        # When role_tags was explicitly provided, update it on conflict;
+        # otherwise preserve the existing value so callers that only refresh
+        # display_name/owner don't silently erase campaign-scoped tags.
+        if role_tags is not None:
+            conflict_clause = """
+              display_name = excluded.display_name,
+              owner = excluded.owner,
+              role_tags = excluded.role_tags
             """
+        else:
+            conflict_clause = """
+              display_name = excluded.display_name,
+              owner = excluded.owner
+            """
+        await self.db.execute(
+            f"""
             INSERT INTO campaign_pcs (
               campaign_id, character_ref, display_name, owner, active, added_at, role_tags
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(campaign_id, character_ref) DO UPDATE SET
-              display_name = excluded.display_name,
-              owner = excluded.owner,
-              role_tags = excluded.role_tags
+            {conflict_clause}
             """,
             (
                 campaign_id,
