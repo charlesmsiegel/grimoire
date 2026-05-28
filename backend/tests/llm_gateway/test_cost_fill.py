@@ -12,6 +12,7 @@ from grimoire.llm_gateway.config import (
     EmbeddingCacheConfig,
     GatewayConfig,
     ObservabilityConfig,
+    PricingOverride,
 )
 from grimoire.storage import Database, apply_migrations
 from grimoire.types.llm import (
@@ -333,8 +334,6 @@ async def test_cost_appears_in_response_received_event(db, plugins) -> None:
 # --------------------------------------------------------------------------- #
 # Pricing overrides
 # --------------------------------------------------------------------------- #
-
-from grimoire.llm_gateway.config import PricingOverride
 
 
 async def test_pricing_override_used_when_provider_returns_none(db, plugins) -> None:

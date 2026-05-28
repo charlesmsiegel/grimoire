@@ -127,8 +127,8 @@ async def test_by_turn_returns_cost_totals_by_task(db) -> None:
     assert by_turn["extraction"].total_usd == 0.005
     assert by_turn["extraction"].call_count == 1
     # Tokens come from cost_records directly — no llm_requests needed.
-    assert by_turn["primary"].input_tokens == 200  # 2 calls × 100 input tokens each
-    assert by_turn["primary"].output_tokens == 100  # 2 calls × 50 output tokens each
+    assert by_turn["primary"].input_tokens == 200  # 2 calls x100 input tokens each
+    assert by_turn["primary"].output_tokens == 100  # 2 calls x50 output tokens each
 
 
 async def test_by_turn_unknown_returns_empty(db) -> None:
