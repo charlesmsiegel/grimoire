@@ -756,11 +756,16 @@ class FileWatcher:
             await self.store.clear_holder_inventory(cid, kind, hid)
             for e in entries:
                 await self.store.upsert_inventory_holding(
-                    campaign_id=cid, holder_kind=kind, holder_id=hid,
-                    item_ref=e["item_ref"], item_name=e.get("item_name", e["item_ref"]),
-                    quantity=int(e.get("quantity", 1)), fungible=bool(e.get("fungible", False)),
+                    campaign_id=cid,
+                    holder_kind=kind,
+                    holder_id=hid,
+                    item_ref=e["item_ref"],
+                    item_name=e.get("item_name", e["item_ref"]),
+                    quantity=int(e.get("quantity", 1)),
+                    fungible=bool(e.get("fungible", False)),
                     equipped=bool(e.get("equipped", False)),
-                    provenance=e.get("provenance"), notes=e.get("notes"),
+                    provenance=e.get("provenance"),
+                    notes=e.get("notes"),
                 )
 
     async def _drop_orphans(self, table: str, seen: set[str]) -> None:

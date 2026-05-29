@@ -102,8 +102,7 @@ def output_schema() -> JsonSchema:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["acquire", "drop", "transfer", "consume",
-                         "adjust", "equip", "unequip"],
+                "enum": ["acquire", "drop", "transfer", "consume", "adjust", "equip", "unequip"],
             },
             "item": {"type": "string"},
             "holder": {"type": "string"},

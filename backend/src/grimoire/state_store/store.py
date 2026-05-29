@@ -916,8 +916,19 @@ class StateStore:
               fungible=excluded.fungible, equipped=excluded.equipped,
               provenance=excluded.provenance, notes=excluded.notes
             """,
-            (rid, campaign_id, holder_kind, holder_id, item_ref, item_name,
-             int(quantity), int(fungible), int(equipped), provenance, notes),
+            (
+                rid,
+                campaign_id,
+                holder_kind,
+                holder_id,
+                item_ref,
+                item_name,
+                int(quantity),
+                int(fungible),
+                int(equipped),
+                provenance,
+                notes,
+            ),
         )
 
     async def delete_inventory_holding(
