@@ -228,6 +228,10 @@ class DeltaApplier:
                     )
                     if handled:
                         continue
+                if delta.kind == DeltaKind.INVENTORY_CHANGE:
+                    # Applied by InventoryService after routing (it writes the
+                    # reversible file deltas). Skip the generic table apply.
+                    continue
                 did = await self._store.apply_delta(
                     delta=delta,
                     source=delta.source or "extractor",

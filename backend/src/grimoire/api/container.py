@@ -50,6 +50,7 @@ if TYPE_CHECKING:
         StateStoreConfig,
     )
     from grimoire.storage import Database
+    from grimoire.inventory import InventoryService
     from grimoire.time_engine.service import TimeEngineService
     from grimoire.time_engine.subscriber import TimeEngineSubscriber
     from grimoire.transient_state import TransientStateService
@@ -85,6 +86,7 @@ class ServiceContainer:
     hud: HudService | None = None
     hud_config: HudConfigService | None = None
     transient_state: TransientStateService | None = None
+    inventory: InventoryService | None = None
     extras_service: _ExtrasService | None = None
     """``grimoire.extras.ExtrasService`` -- narrative extras CRUD + search."""
     calendar: CalendarService | None = None

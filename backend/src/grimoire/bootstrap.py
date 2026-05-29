@@ -247,6 +247,14 @@ async def build_content_services(
     if container.scenes is not None and getattr(container.scenes, "_continuity", None) is None:
         container.scenes.set_continuity(container.continuity)
 
+    if container.inventory is None:
+        from grimoire.inventory import InventoryService
+
+        container.inventory = InventoryService(
+            store=container.state_store,
+            event_bus=container.event_bus,
+        )
+
     if container.imagegen is None:
         imagegen_cfg = ImageGenConfig.from_yaml(data_root / "config" / "imagegen.yaml")
         container.imagegen = ImageGenService(
@@ -516,6 +524,7 @@ async def build_play_services(
             world=container.world,
             continuity=container.continuity,
             transient_state=container.transient_state,
+            inventory=container.inventory,
             ws_push=container.stream.push,
             metrics=container.observability.metrics(),
         )
