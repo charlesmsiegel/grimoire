@@ -52,4 +52,9 @@ export const newSceneApi = {
       `/api/campaigns/${enc(campaignId)}/scene-ledger/${enc(itemId)}`,
       { status },
     ),
+
+  backfillLedger: (campaignId: string) =>
+    api.post<{ added: number }>(
+      `/api/campaigns/${enc(campaignId)}/scene-ledger/backfill`,
+    ),
 };

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+from tests.api.conftest import _FakeAttr
 from tests.mocks import FakeCharacters, FakeContinuity, FakeOrchestrator
 
 
@@ -720,3 +721,121 @@ def test_rescan_campaigns_returns_503_when_watcher_not_configured(client, contai
     container.file_watcher = None
     response = client.post("/api/campaigns/rescan")
     assert response.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Scene ledger greeting backfill (issue #472)
+# ---------------------------------------------------------------------------
+
+
+class _FakeLedger:
+    def __init__(self) -> None:
+        self.items: list[dict[str, Any]] = []
+        self._n = 0
+
+    async def list_all(self, campaign_id: str) -> list[dict[str, Any]]:
+        return [i for i in self.items if i["campaign_id"] == campaign_id]
+
+    async def list_active(self, campaign_id: str) -> list[dict[str, Any]]:
+        return [
+            i for i in self.items if i["campaign_id"] == campaign_id and i["status"] == "active"
+        ]
+
+    async def add(self, *, campaign_id, summary, source, greeting_id=None, **kw) -> str:
+        self._n += 1
+        item_id = f"ledger-{self._n}"
+        self.items.append(
+            {
+                "id": item_id,
+                "campaign_id": campaign_id,
+                "summary": summary,
+                "source": source,
+                "greeting_id": greeting_id,
+                "status": "active",
+            }
+        )
+        return item_id
+
+
+class _FakeScenesNoScenes:
+    async def list_scenes(self, campaign_id: str) -> list[Any]:
+        return []
+
+
+class _FakeLibraryWithGreetings:
+    def __init__(self, greetings: list[Any]) -> None:
+        self._greetings = greetings
+
+    async def get_composition(self, campaign_id: str) -> Any:
+        return _FakeAttr(worlds=[_FakeAttr(world_id="w1")])
+
+    async def list_greetings(self, world_id: str) -> list[Any]:
+        return self._greetings
+
+
+class _FakeStateStorePCs:
+    def __init__(self, pc_role_tags: list[list[str]]) -> None:
+        import json
+
+        self._rows = [{"role_tags": json.dumps(tags)} for tags in pc_role_tags]
+
+    async def list_pcs(self, campaign_id: str) -> list[dict[str, Any]]:
+        return self._rows
+
+
+def _greeting(gid: str, *, role_tags: list[str] | None = None) -> Any:
+    return _FakeAttr(
+        id=gid,
+        name=gid.title(),
+        body="",
+        role_tags=role_tags or [],
+        starting_location="Harbor",
+    )
+
+
+def test_backfill_scene_ledger_populates_applicable_greetings(client, container) -> None:
+    container.scene_ledger = _FakeLedger()
+    container.scenes = _FakeScenesNoScenes()
+    container.library = _FakeLibraryWithGreetings(
+        [
+            _greeting("gr-universal"),
+            _greeting("gr-hero", role_tags=["hero"]),
+            _greeting("gr-villain", role_tags=["villain"]),
+        ]
+    )
+    container.state_store = _FakeStateStorePCs([["hero"]])
+
+    resp = client.post("/api/campaigns/c1/scene-ledger/backfill")
+    assert resp.status_code == 200
+    assert resp.json() == {"added": 2}
+
+    listed = client.get("/api/campaigns/c1/scene-ledger?status=active").json()
+    assert {i["greeting_id"] for i in listed} == {"gr-universal", "gr-hero"}
+
+    # Idempotent: a second backfill adds nothing.
+    resp2 = client.post("/api/campaigns/c1/scene-ledger/backfill")
+    assert resp2.json() == {"added": 0}
+
+
+def test_suggest_lazily_backfills_empty_ledger(client, container) -> None:
+    from grimoire.types.llm import CompletionResponse, TokenUsage
+
+    container.scene_ledger = _FakeLedger()
+    container.scenes = _FakeScenesNoScenes()
+    container.library = _FakeLibraryWithGreetings([_greeting("gr-universal")])
+    container.state_store = _FakeStateStorePCs([["hero"]])
+    container.continuity = FakeContinuity()
+
+    class _FakeGateway:
+        async def complete(self, *args: Any, **kwargs: Any) -> Any:
+            return CompletionResponse(
+                text="[]", model="t", finish_reason="stop", usage=TokenUsage()
+            )
+
+    container.llm_gateway = _FakeGateway()
+
+    resp = client.post("/api/campaigns/c1/scenes/suggest")
+    assert resp.status_code == 200
+    # The empty ledger was backfilled from the applicable greeting.
+    listed = client.get("/api/campaigns/c1/scene-ledger?status=active").json()
+    assert {i["greeting_id"] for i in listed} == {"gr-universal"}

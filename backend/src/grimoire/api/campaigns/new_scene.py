@@ -22,6 +22,8 @@ from grimoire.api.deps import (
 from grimoire.api.util import to_payload
 from grimoire.scenes.suggest import SceneSuggestionEngine, SuggestionContext
 
+from .helpers import _backfill_ledger_from_greetings
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -110,6 +112,42 @@ async def update_ledger_item(
 # ---------------------------------------------------------------------------
 
 
+async def _used_greeting_ids(all_scenes: list[Any]) -> set[str]:
+    """Greeting ids already consumed by an existing scene."""
+    return {gid for s in all_scenes if (gid := getattr(s, "greeting_id", None))}
+
+
+async def _campaign_world_refs(library: Any, campaign_id: str) -> list[Any]:
+    composition = await library.get_composition(campaign_id)
+    return list(getattr(composition, "worlds", []) or [])
+
+
+@router.post("/{campaign_id}/scene-ledger/backfill")
+async def backfill_scene_ledger(
+    campaign_id: str,
+    ledger: SceneLedgerDep,
+    scenes: ScenesDep,
+    library: LibraryDep,
+    state_store: StateStoreDep,
+) -> dict[str, int]:
+    """Populate the ledger with applicable, unused greetings (issue #472).
+
+    Powers the ledger UI's "Get greetings" button so campaigns created before
+    the new-scene workflow can backfill their ledger. Idempotent.
+    """
+    all_scenes = await scenes.list_scenes(campaign_id)
+    world_refs = await _campaign_world_refs(library, campaign_id)
+    added = await _backfill_ledger_from_greetings(
+        campaign_id=campaign_id,
+        library=library,
+        state_store=state_store,
+        ledger=ledger,
+        world_refs=world_refs,
+        exclude_greeting_ids=await _used_greeting_ids(all_scenes),
+    )
+    return {"added": len(added)}
+
+
 @router.post("/{campaign_id}/scenes/suggest")
 async def suggest_scenes(
     campaign_id: str,
@@ -118,8 +156,27 @@ async def suggest_scenes(
     scenes: ScenesDep,
     continuity: ContinuityDep,
     state_store: StateStoreDep,
+    library: LibraryDep,
 ) -> dict[str, Any]:
     all_scenes = await scenes.list_scenes(campaign_id)
+
+    # Lazy backfill (issue #472): legacy campaigns created before the new-scene
+    # workflow have an empty ledger; populate it from applicable greetings on
+    # the first suggest so there are hooks to draw from.
+    if not await ledger.list_all(campaign_id):
+        try:
+            world_refs = await _campaign_world_refs(library, campaign_id)
+            await _backfill_ledger_from_greetings(
+                campaign_id=campaign_id,
+                library=library,
+                state_store=state_store,
+                ledger=ledger,
+                world_refs=world_refs,
+                exclude_greeting_ids=await _used_greeting_ids(all_scenes),
+            )
+        except Exception:
+            logger.warning("lazy scene ledger backfill failed", exc_info=True)
+
     closed = [s for s in all_scenes if s.closed]
     recent_summaries = [
         s.final_summary or s.running_summary or ""
