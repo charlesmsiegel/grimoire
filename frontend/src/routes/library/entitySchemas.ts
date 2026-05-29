@@ -266,11 +266,135 @@ const MONSTER: EntityDescriptor = {
   ],
 };
 
+const FACTION: EntityDescriptor = {
+  kind: "faction",
+  sections: [
+    {
+      title: "Identity",
+      fields: [
+        { key: "name", label: "Name", widget: "text" },
+        { key: "id", label: "ID", widget: "text", readOnly: true },
+        { key: "kind", label: "Kind", widget: "text" },
+        { key: "tags", label: "Tags", widget: "tags" },
+      ],
+    },
+    {
+      title: "Detail",
+      fields: [
+        { key: "base_location", label: "Base location", widget: "ref", refKinds: ["location"] },
+        { key: "description", label: "Description", widget: "textarea", rows: 4 },
+      ],
+    },
+    {
+      title: "Membership",
+      fields: [
+        { key: "leaders", label: "Leaders", widget: "refList", refKinds: ["character"] },
+        { key: "members", label: "Members", widget: "refList", refKinds: ["character"] },
+        { key: "allies", label: "Allies", widget: "refList", refKinds: ["faction"] },
+        { key: "rivals", label: "Rivals", widget: "refList", refKinds: ["faction"] },
+      ],
+    },
+  ],
+};
+
+const LORE: EntityDescriptor = {
+  kind: "lore",
+  sections: [
+    {
+      title: "Identity",
+      fields: [
+        { key: "title", label: "Title", widget: "text" },
+        { key: "id", label: "ID", widget: "text", readOnly: true },
+        { key: "tags", label: "Tags", widget: "tags" },
+        { key: "keywords", label: "Keywords", widget: "tags" },
+        {
+          key: "secrecy",
+          label: "Secrecy",
+          widget: "enum",
+          options: [
+            { value: "public", label: "Public" },
+            { value: "common-knowledge", label: "Common knowledge" },
+            {
+              value: "common-knowledge-among-kindred",
+              label: "Common knowledge (among kindred)",
+            },
+            { value: "restricted", label: "Restricted" },
+            { value: "secret", label: "Secret" },
+          ],
+        },
+      ],
+    },
+    {
+      title: "Relations",
+      fields: [
+        {
+          key: "related_locations",
+          label: "Related locations",
+          widget: "refList",
+          refKinds: ["location"],
+        },
+        {
+          key: "related_factions",
+          label: "Related factions",
+          widget: "refList",
+          refKinds: ["faction"],
+        },
+        {
+          key: "related_characters",
+          label: "Related characters",
+          widget: "refList",
+          refKinds: ["character"],
+        },
+      ],
+    },
+    {
+      title: "Activation (lorebook)",
+      collapsed: true,
+      fields: [
+        { key: "secondary_keys", label: "Secondary keys", widget: "tags" },
+        {
+          key: "selective_logic",
+          label: "Selective logic",
+          widget: "enum",
+          options: [
+            { value: "and_any", label: "AND any" },
+            { value: "and_all", label: "AND all" },
+            { value: "not_any", label: "NOT any" },
+            { value: "not_all", label: "NOT all" },
+          ],
+        },
+        { key: "constant", label: "Constant", widget: "bool" },
+        { key: "enabled", label: "Enabled", widget: "bool" },
+        { key: "priority", label: "Priority", widget: "number" },
+        { key: "probability", label: "Probability", widget: "number" },
+        {
+          key: "position",
+          label: "Position",
+          widget: "enum",
+          options: [
+            { value: "before_cast", label: "Before cast" },
+            { value: "after_cast", label: "After cast" },
+            { value: "at_depth", label: "At depth" },
+            { value: "archive", label: "Archive" },
+          ],
+        },
+        { key: "at_depth", label: "At depth", widget: "number" },
+        { key: "scan_depth", label: "Scan depth", widget: "number" },
+        { key: "case_sensitive", label: "Case sensitive", widget: "bool" },
+        { key: "match_whole_words", label: "Match whole words", widget: "bool" },
+        { key: "comment", label: "Comment", widget: "textarea", rows: 2 },
+      ],
+    },
+  ],
+};
+
 const REGISTRY: Partial<Record<EntityKind, EntityDescriptor>> = {
   character: CHARACTER,
   location: LOCATION,
   item: ITEM,
   monster: MONSTER,
+  faction: FACTION,
+  lore: LORE,
 };
 
 export function getDescriptor(kind: EntityKind | string): EntityDescriptor | undefined {
