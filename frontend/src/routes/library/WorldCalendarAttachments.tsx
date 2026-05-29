@@ -97,8 +97,8 @@ export function WorldCalendarAttachments({
     <fieldset className="world-calendar-attachments">
       <legend>Calendars &amp; holidays</legend>
       <p className="library-section-intro">
-        Attach any number of calendars; their dates reconcile via a shared
-        Julian Day Number. Pick one as the display calendar for scene tracking.
+        Attach any number of calendars; their dates reconcile via a shared Julian Day Number. Pick
+        one as the display calendar for scene tracking.
       </p>
 
       <h5>Built-in calendars</h5>
@@ -167,8 +167,7 @@ export function WorldCalendarAttachments({
                 checked={holidaySetIds.includes(s.id)}
                 onChange={() => toggleHolidaySet(s.id)}
               />{" "}
-              {s.name}{" "}
-              <small>({s.calendar_system})</small>
+              {s.name} <small>({s.calendar_system})</small>
             </label>
           </li>
         ))}

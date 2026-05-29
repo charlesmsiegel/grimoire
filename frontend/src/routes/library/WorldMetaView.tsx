@@ -129,8 +129,8 @@ export function WorldMetaView() {
 
           <details className="legacy-inline-calendar">
             <summary>
-              Legacy inline calendar (for worlds that haven't migrated to
-              attached Calendar entities)
+              Legacy inline calendar (for worlds that haven't migrated to attached Calendar
+              entities)
             </summary>
             <WorldCalendarForm
               value={calendar}

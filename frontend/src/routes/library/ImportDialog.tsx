@@ -77,9 +77,7 @@ export function ImportDialog({ worldId, onClose }: Props) {
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [commitResult, setCommitResult] = useState<CommitResponse | null>(null);
-  const [options, setOptions] = useState<Required<IngestOptionsPayload>>(
-    DEFAULT_OPTIONS,
-  );
+  const [options, setOptions] = useState<Required<IngestOptionsPayload>>(DEFAULT_OPTIONS);
   const [loreRows, setLoreRows] = useState<LoreRowState[]>([]);
 
   const suggestionsByIndex = useMemo(() => {
@@ -104,11 +102,7 @@ export function ImportDialog({ worldId, onClose }: Props) {
 
   function setRowKind(sourceIndex: number, kind: LoreOverrideKind) {
     setLoreRows((rows) =>
-      rows.map((row) =>
-        row.source_index === sourceIndex
-          ? { ...row, kind, overrides: {} }
-          : row,
-      ),
+      rows.map((row) => (row.source_index === sourceIndex ? { ...row, kind, overrides: {} } : row)),
     );
   }
 
@@ -194,9 +188,7 @@ export function ImportDialog({ worldId, onClose }: Props) {
         <section className="import-dialog-preview">
           <h4>{preview.ingested.data.name}</h4>
           {preview.ingested.data.description && (
-            <p className="import-dialog-description">
-              {preview.ingested.data.description}
-            </p>
+            <p className="import-dialog-description">{preview.ingested.data.description}</p>
           )}
 
           <fieldset className="import-dialog-options">
@@ -231,16 +223,13 @@ export function ImportDialog({ worldId, onClose }: Props) {
                 checked={options.import_character_book}
                 onChange={() => toggle("import_character_book")}
               />
-              Import character_book entries (
-              {preview.ingested.lore_entries.length})
+              Import character_book entries ({preview.ingested.lore_entries.length})
             </label>
           </fieldset>
 
           {preview.ingested.greetings.length > 0 && (
             <details>
-              <summary>
-                Greetings ({preview.ingested.greetings.length})
-              </summary>
+              <summary>Greetings ({preview.ingested.greetings.length})</summary>
               <ul>
                 {preview.ingested.greetings.map((g) => (
                   <li key={g.source_index}>
@@ -260,21 +249,16 @@ export function ImportDialog({ worldId, onClose }: Props) {
               </legend>
               <ul>
                 {preview.ingested.lore_entries.map((entry) => {
-                  const row = loreRows.find(
-                    (r) => r.source_index === entry.source_index,
-                  );
+                  const row = loreRows.find((r) => r.source_index === entry.source_index);
                   if (!row) return null;
                   const suggestion = suggestionsByIndex.get(entry.source_index);
                   const required = requiredOverridesFor(row.kind);
-                  const label =
-                    entry.name || entry.keys[0] || `entry-${entry.source_index}`;
+                  const label = entry.name || entry.keys[0] || `entry-${entry.source_index}`;
                   return (
                     <li key={entry.source_index} className="import-dialog-lore-row">
                       <span className="import-dialog-lore-row-name">
                         <strong>{label}</strong>
-                        {entry.keys.length > 0 && (
-                          <> — keys: {entry.keys.join(", ")}</>
-                        )}
+                        {entry.keys.length > 0 && <> — keys: {entry.keys.join(", ")}</>}
                       </span>
                       <label>
                         <span className="visually-hidden">
@@ -284,10 +268,7 @@ export function ImportDialog({ worldId, onClose }: Props) {
                           aria-label={`Category for row ${entry.source_index}`}
                           value={row.kind}
                           onChange={(e) =>
-                            setRowKind(
-                              entry.source_index,
-                              e.target.value as LoreOverrideKind,
-                            )
+                            setRowKind(entry.source_index, e.target.value as LoreOverrideKind)
                           }
                         >
                           {KIND_OPTIONS.map((opt) => (
@@ -298,10 +279,7 @@ export function ImportDialog({ worldId, onClose }: Props) {
                         </select>
                       </label>
                       {suggestion && suggestion.kind !== "lore" && suggestion.reason && (
-                        <span
-                          className="import-dialog-lore-row-why"
-                          title={suggestion.reason}
-                        >
+                        <span className="import-dialog-lore-row-why" title={suggestion.reason}>
                           Why?
                         </span>
                       )}
@@ -315,11 +293,7 @@ export function ImportDialog({ worldId, onClose }: Props) {
                             aria-label={`${kindLabel(row.kind)} ${key} (row ${entry.source_index})`}
                             value={row.overrides[key] ?? ""}
                             onChange={(e) =>
-                              setRowOverride(
-                                entry.source_index,
-                                key,
-                                e.target.value,
-                              )
+                              setRowOverride(entry.source_index, key, e.target.value)
                             }
                           />
                         </label>
@@ -343,8 +317,7 @@ export function ImportDialog({ worldId, onClose }: Props) {
           )}
 
           <p className="import-dialog-note">
-            Character-scoped lore coming in a future release; for now lore
-            lands at world scope.
+            Character-scoped lore coming in a future release; for now lore lands at world scope.
           </p>
 
           {errorMsg && (

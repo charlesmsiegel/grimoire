@@ -43,12 +43,7 @@ describe("ConvertModal", () => {
 
   it("renders the mapping preview after loading", async () => {
     render(
-      <ConvertModal
-        worldId="w"
-        sourceId="beatrice"
-        onClose={() => {}}
-        onConverted={() => {}}
-      />,
+      <ConvertModal worldId="w" sourceId="beatrice" onClose={() => {}} onConverted={() => {}} />,
     );
     await waitFor(() => screen.getByText(/Beatrice/));
     // Frontmatter JSON section
@@ -91,12 +86,7 @@ describe("ConvertModal", () => {
   it("calls commitReclassify with overrides on submit", async () => {
     const onConverted = vi.fn();
     render(
-      <ConvertModal
-        worldId="w"
-        sourceId="beatrice"
-        onClose={() => {}}
-        onConverted={onConverted}
-      />,
+      <ConvertModal worldId="w" sourceId="beatrice" onClose={() => {}} onConverted={onConverted} />,
     );
     await waitFor(() => screen.getByText(/Beatrice/));
     fireEvent.click(screen.getByRole("button", { name: /^Convert$/i }));

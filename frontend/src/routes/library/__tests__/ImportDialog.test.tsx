@@ -69,7 +69,12 @@ function makePreview() {
       greetings: [],
     },
     lore_suggestions: [
-      { source_index: 0, kind: "location" as const, confidence: 0.82, reason: "title contains a place noun" },
+      {
+        source_index: 0,
+        kind: "location" as const,
+        confidence: 0.82,
+        reason: "title contains a place noun",
+      },
       { source_index: 1, kind: "lore" as const, confidence: 0.0, reason: "" },
     ],
   };
@@ -90,9 +95,7 @@ describe("ImportDialog reclassification flow", () => {
     fireEvent.change(input, {
       target: { files: [new File(["x"], "card.png", { type: "image/png" })] },
     });
-    await waitFor(() =>
-      expect(importsModule.previewSillyTavernImport).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => expect(importsModule.previewSillyTavernImport).toHaveBeenCalledTimes(1));
     // Wait for the lore-row UI to render.
     await screen.findByText(/Brackhollow Inn/);
   }
@@ -114,9 +117,7 @@ describe("ImportDialog reclassification flow", () => {
     await uploadFile();
     const commit = await screen.findByRole("button", { name: /^Commit$/ });
     fireEvent.click(commit);
-    expect(
-      await screen.findByText(/Location row 0 requires kind/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Location row 0 requires kind/i)).toBeInTheDocument();
     expect(importsModule.commitSillyTavernImport).not.toHaveBeenCalled();
   });
 
@@ -129,9 +130,7 @@ describe("ImportDialog reclassification flow", () => {
     fireEvent.change(selects[1]!, { target: { value: "skip" } });
 
     fireEvent.click(await screen.findByRole("button", { name: /^Commit$/ }));
-    await waitFor(() =>
-      expect(importsModule.commitSillyTavernImport).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => expect(importsModule.commitSillyTavernImport).toHaveBeenCalledTimes(1));
     const args = vi.mocked(importsModule.commitSillyTavernImport).mock.calls[0]!;
     expect(args[0]).toBe("w1");
     expect(args[1]).toBe("pid-1");

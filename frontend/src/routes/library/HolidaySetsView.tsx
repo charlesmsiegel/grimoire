@@ -83,13 +83,11 @@ function List() {
     <section className="library-section">
       <header className="library-section-header">
         <h3>Holiday sets</h3>
-        <button onClick={() => navigate("/library/holiday-sets/new")}>
-          + New holiday set
-        </button>
+        <button onClick={() => navigate("/library/holiday-sets/new")}>+ New holiday set</button>
       </header>
       <p className="library-section-intro">
-        Each holiday set binds to a specific calendar system. Attach sets to a
-        world to overlay multiple traditions onto its calendars.
+        Each holiday set binds to a specific calendar system. Attach sets to a world to overlay
+        multiple traditions onto its calendars.
       </p>
       <AsyncBoundary
         loading={loading}
@@ -106,9 +104,7 @@ function List() {
                 <h4>{s.name}</h4>
                 <small>{SYSTEM_LABELS[s.calendar_system]}</small>
                 <p className="library-card-meta">{s.holidays.length} holidays</p>
-                {s.description && (
-                  <p className="library-card-meta">{s.description}</p>
-                )}
+                {s.description && <p className="library-card-meta">{s.description}</p>}
               </Link>
             </li>
           ))}
@@ -126,9 +122,7 @@ function List() {
                     <p className="library-card-meta">{s.holidays.length} holidays</p>
                   </Link>
                   <div className="library-card-actions">
-                    <Link to={`/library/holiday-sets/${encodeURIComponent(s.id)}/edit`}>
-                      Edit
-                    </Link>
+                    <Link to={`/library/holiday-sets/${encodeURIComponent(s.id)}/edit`}>Edit</Link>
                   </div>
                 </li>
               ))}
@@ -189,8 +183,7 @@ function Detail() {
             <ul className="holiday-list">
               {data.holidays.map((h) => (
                 <li key={h.id || h.name}>
-                  <strong>{h.name}</strong>{" "}
-                  <small>({RULE_LABELS[h.rule]})</small>
+                  <strong>{h.name}</strong> <small>({RULE_LABELS[h.rule]})</small>
                   <br />
                   <small>{formatHolidayRule(h)}</small>
                 </li>
@@ -330,7 +323,10 @@ function Form({
     setBusy(true);
     setErr(null);
     try {
-      const tags = tagsStr.split(",").map((t) => t.trim()).filter(Boolean);
+      const tags = tagsStr
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
       await onSubmit({
         id: id.trim(),
         name: name.trim(),
@@ -385,10 +381,7 @@ function Form({
         </label>
         <label>
           <span>Calendar system</span>
-          <select
-            value={system}
-            onChange={(e) => setSystem(e.target.value as CalendarSystem)}
-          >
+          <select value={system} onChange={(e) => setSystem(e.target.value as CalendarSystem)}>
             {(Object.keys(SYSTEM_LABELS) as CalendarSystem[]).map((s) => (
               <option key={s} value={s}>
                 {SYSTEM_LABELS[s]}
@@ -403,7 +396,10 @@ function Form({
             <div key={i} className="holiday-row">
               <label>
                 <span>Name</span>
-                <input value={h.name} onChange={(e) => updateHoliday(i, { name: e.target.value })} />
+                <input
+                  value={h.name}
+                  onChange={(e) => updateHoliday(i, { name: e.target.value })}
+                />
               </label>
               <label>
                 <span>Rule</span>
@@ -460,9 +456,7 @@ function Form({
                     <span>Weekday</span>
                     <select
                       value={h.weekday}
-                      onChange={(e) =>
-                        updateHoliday(i, { weekday: parseInt(e.target.value) || 0 })
-                      }
+                      onChange={(e) => updateHoliday(i, { weekday: parseInt(e.target.value) || 0 })}
                     >
                       {WEEKDAY_LABELS.map((label, w) => (
                         <option key={w} value={w}>

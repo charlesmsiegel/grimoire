@@ -5,9 +5,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { CalendarsView } from "../CalendarsView";
 
 vi.mock("../../../api/library", async () => {
-  const actual = await vi.importActual<typeof import("../../../api/library")>(
-    "../../../api/library",
-  );
+  const actual =
+    await vi.importActual<typeof import("../../../api/library")>("../../../api/library");
   return {
     ...actual,
     calendarsApi: {

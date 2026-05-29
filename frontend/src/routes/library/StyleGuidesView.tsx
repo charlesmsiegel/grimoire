@@ -97,8 +97,7 @@ function StyleGuideCreate() {
         .split(",")
         .map((t) => t.trim())
         .filter(Boolean);
-      const cleanSection = (key: SectionKey) =>
-        sections[key].map((b) => b.trim()).filter(Boolean);
+      const cleanSection = (key: SectionKey) => sections[key].map((b) => b.trim()).filter(Boolean);
       const created = await libraryApi.createStyleGuide({
         id: id.trim(),
         name: name.trim(),
@@ -236,8 +235,7 @@ function StyleGuideEdit() {
         .split(",")
         .map((t) => t.trim())
         .filter(Boolean);
-      const cleanSection = (key: SectionKey) =>
-        sections[key].map((b) => b.trim()).filter(Boolean);
+      const cleanSection = (key: SectionKey) => sections[key].map((b) => b.trim()).filter(Boolean);
       await libraryApi.updateStyleGuide(guideId, {
         name: name.trim(),
         description: description.trim(),

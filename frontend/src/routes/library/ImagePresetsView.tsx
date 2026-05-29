@@ -289,8 +289,7 @@ function ImagePresetEdit() {
     <section className="library-section">
       <p className="library-breadcrumb">
         <Link to="/library/image-presets">Image presets</Link> /{" "}
-        <Link to={`/library/image-presets/${encodeURIComponent(presetId)}`}>{presetId}</Link> /
-        edit
+        <Link to={`/library/image-presets/${encodeURIComponent(presetId)}`}>{presetId}</Link> / edit
       </p>
       <header className="library-section-header">
         <h3>Edit image preset</h3>
@@ -330,11 +329,7 @@ function ImagePresetEdit() {
         </label>
         <label>
           <span>Default params (JSON)</span>
-          <textarea
-            rows={4}
-            value={paramsText}
-            onChange={(e) => setParamsText(e.target.value)}
-          />
+          <textarea rows={4} value={paramsText} onChange={(e) => setParamsText(e.target.value)} />
         </label>
         <div className="library-form-actions">
           <button type="submit" disabled={busy || deleting}>
@@ -448,9 +443,7 @@ function PresetPreview({ presetId }: { presetId: string }) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [samplePrompt, setSamplePrompt] = useState(
-    "a portrait of a wizard in a library",
-  );
+  const [samplePrompt, setSamplePrompt] = useState("a portrait of a wizard in a library");
 
   async function regenerate() {
     setLoading(true);

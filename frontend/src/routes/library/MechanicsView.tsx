@@ -1,10 +1,12 @@
 import { useCallback, useState } from "react";
-import { Link, Route, Routes, useParams } from "react-router-dom";
+import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, mechanicsApi, type RegisteredModule } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { LibraryCharacterCreationPreview } from "../campaign/CharacterCreation";
 import { AsyncBoundary } from "./AsyncBoundary";
+import { MechanicsEditor } from "./mechanics/MechanicsEditor";
+import { ModuleCreateForm } from "./mechanics/ModuleCreateForm";
 
 export function MechanicsView() {
   return (
@@ -21,6 +23,8 @@ function MechanicsList() {
   );
   const [rescanning, setRescanning] = useState(false);
   const [rescanErr, setRescanErr] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const navigate = useNavigate();
 
   async function rescan() {
     setRescanning(true);
@@ -39,10 +43,20 @@ function MechanicsList() {
     <section className="library-section">
       <header className="library-section-header">
         <h3>Installed mechanics</h3>
-        <button onClick={rescan} disabled={rescanning}>
-          {rescanning ? "Rescanning…" : "Rescan"}
-        </button>
+        <div className="library-section-actions">
+          <button onClick={() => setCreating((c) => !c)}>
+            {creating ? "Cancel" : "New module"}
+          </button>
+          <button onClick={rescan} disabled={rescanning}>
+            {rescanning ? "Rescanning…" : "Rescan"}
+          </button>
+        </div>
       </header>
+      {creating && (
+        <ModuleCreateForm
+          onCreated={(id) => navigate(`/library/mechanics/${encodeURIComponent(id)}`)}
+        />
+      )}
       <p className="library-status">
         Mechanics modules ship as Python packages dropped into <code>data/mechanics/</code>. Install
         or remove a module on disk and rescan.
@@ -103,14 +117,20 @@ function MechanicsDetail() {
         {!module ? (
           <p className="library-status">Module {moduleId} is not installed.</p>
         ) : (
-          <ModuleDetailCard module={module} />
+          <ModuleDetailCard module={module} onChanged={reload} />
         )}
       </AsyncBoundary>
     </section>
   );
 }
 
-function ModuleDetailCard({ module: m }: { module: RegisteredModule }) {
+function ModuleDetailCard({
+  module: m,
+  onChanged,
+}: {
+  module: RegisteredModule;
+  onChanged: () => void;
+}) {
   const manifest = m.manifest;
   const [previewing, setPreviewing] = useState(false);
   return (
@@ -208,6 +228,15 @@ function ModuleDetailCard({ module: m }: { module: RegisteredModule }) {
         <button type="button" onClick={() => setPreviewing(true)}>
           Preview character creation
         </button>
+      </Section>
+
+      <Section title="Edit declarative parts">
+        <p className="library-status">
+          Edit the manifest, sheet/content schemas, and theme CSS. The behavioral logic in{" "}
+          <code>mechanics.py</code> is generated once at creation and hand-edited on disk — this
+          editor never rewrites it.
+        </p>
+        <MechanicsEditor manifest={manifest} themeCss={m.theme_css ?? null} onSaved={onChanged} />
       </Section>
 
       {previewing && (
