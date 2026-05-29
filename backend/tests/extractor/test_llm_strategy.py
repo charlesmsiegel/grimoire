@@ -52,9 +52,10 @@ def test_parse_payload_emits_typed_deltas():
         "new_characters": [{"proposed_name": "Margaux", "role": "maid", "confidence": 0.8}],
         "inventory_changes": [
             {
-                "character_id": "julian",
+                "action": "acquire",
                 "item": "silver ring",
-                "delta": "+1",
+                "holder": "julian",
+                "quantity": 1,
                 "confidence": 0.95,
             }
         ],

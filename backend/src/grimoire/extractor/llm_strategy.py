@@ -253,16 +253,20 @@ def _make_commitment_delta(item: dict, *, campaign_id: CampaignId, source: str) 
 
 
 def _make_inventory_delta(item: dict, *, campaign_id: CampaignId, source: str) -> StateDelta:
-    actor = item.get("character_id", "unknown")
+    holder = item.get("holder", "unknown")
+    action = item.get("action", "acquire")
     return StateDelta(
         kind=DeltaKind.INVENTORY_CHANGE,
         target_scope=Scope.CAMPAIGN_SQLITE,
-        target_id=f"{actor}:{item.get('item', '')}",
-        target_table="character_state",
+        target_id=f"{holder}:{action}:{item.get('item', '')}",
         after={
-            "character_id": actor,
+            "action": action,
             "item": item.get("item"),
-            "delta": item.get("delta"),
+            "holder": holder,
+            "to": item.get("to"),
+            "quantity": item.get("quantity"),
+            "equipped": item.get("equipped"),
+            "provenance": item.get("provenance"),
             "campaign_id": campaign_id,
         },
         confidence=float(item.get("confidence", 0.0)),
