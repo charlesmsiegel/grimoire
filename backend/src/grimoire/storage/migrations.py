@@ -105,7 +105,18 @@ async def apply_migrations(
             try:
                 await conn.execute("BEGIN")
                 for stmt in statements:
-                    await conn.execute(stmt)
+                    try:
+                        await conn.execute(stmt)
+                    except sqlite3.OperationalError as exc:
+                        # Additive `ADD COLUMN` migrations are idempotent: if the
+                        # column already exists — e.g. a database that applied an
+                        # earlier, differently-numbered copy of this migration
+                        # before it was renumbered — re-adding it is a harmless
+                        # no-op. SQLite leaves the transaction usable after this
+                        # error, so we skip the statement and carry on. Any other
+                        # operational error is a genuine failure and propagates.
+                        if "duplicate column name" not in str(exc).lower():
+                            raise
                 await conn.execute(
                     "INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, ?)",
                     (migration.version, migration.name, datetime.now(UTC).isoformat()),

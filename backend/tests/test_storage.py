@@ -152,6 +152,46 @@ async def test_migration_gap_rejected(tmp_path: Path) -> None:
         await database.close()
 
 
+async def test_add_column_migration_is_idempotent(tmp_path: Path) -> None:
+    """A renumbered ``ADD COLUMN`` migration must not crash on a DB that
+    already applied the column under a different version number.
+
+    Scenario: two PRs shipped a migration with the same number; one was
+    renumbered to resolve the clash. A database that ran the *old* number
+    sits at that ``schema_version`` with the column already present, so the
+    renumbered migration re-runs and re-adds the column. Duplicate-column
+    errors on an additive migration are swallowed so startup survives.
+    """
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    (migrations_dir / "001_base.sql").write_text("CREATE TABLE widgets (id INTEGER PRIMARY KEY);")
+    (migrations_dir / "002_add_qty.sql").write_text(
+        "ALTER TABLE widgets ADD COLUMN qty INTEGER NOT NULL DEFAULT 0;"
+    )
+
+    database = Database(tmp_path / "db.sqlite", pool_size=1)
+    await database.connect()
+    try:
+        # Simulate a DB that already added `qty` under the old migration but
+        # only recorded the base version, so migration 002 is still "pending".
+        await current_version(database)  # bootstrap the schema_version table
+        await database.execute("CREATE TABLE widgets (id INTEGER PRIMARY KEY)")
+        await database.execute("ALTER TABLE widgets ADD COLUMN qty INTEGER NOT NULL DEFAULT 0")
+        await database.execute(
+            "INSERT INTO schema_version (version, name, applied_at) VALUES (1, 'base', 'x')"
+        )
+
+        applied = await apply_migrations(database, directory=migrations_dir)
+        assert [m.version for m in applied] == [2]
+        assert await current_version(database) == 2
+
+        # Column is present exactly once; the re-add was a harmless no-op.
+        cols = await database.fetchall("PRAGMA table_info(widgets)")
+        assert [row["name"] for row in cols].count("qty") == 1
+    finally:
+        await database.close()
+
+
 def test_discover_migrations_ignores_non_sql_files(tmp_path: Path) -> None:
     (tmp_path / "001_ok.sql").write_text("-- ok")
     (tmp_path / "README.md").write_text("notes")
