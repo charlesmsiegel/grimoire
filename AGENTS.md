@@ -154,7 +154,7 @@ Writes go through the owning module. Don't bypass this.
 | ImageGen | Image generation | Backend registry, generation pipeline |
 | Export | Artifact generation | EPUB, Markdown, HTML, transcript |
 | Plugins | Plugin lifecycle | Loading, validation, registry |
-| Observability | Audit trail | Turn replay, metrics, context inspection |
+| Observability | Audit trail | Turn replay, metrics, context inspection, terminal wire logging |
 
 ## Development Commands
 

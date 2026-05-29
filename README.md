@@ -63,7 +63,7 @@ The Context Builder assembles each prompt from explicit inputs: relevant charact
 
 ### Image Generation
 
-Generate illustrations for your scenes using integrated Stable Diffusion (via `diffusers`), or connect to Automatic1111, ComfyUI, or DALL-E. Image presets let you define a consistent visual style across a campaign — oil paintings for gothic horror, watercolors for high fantasy.
+Generate illustrations for your scenes using integrated Stable Diffusion (via `diffusers`), or connect to Automatic1111, ComfyUI, or DALL-E. Image presets let you define a consistent visual style across a campaign — oil paintings for gothic horror, watercolors for high fantasy. Image generation is **manual by default** (images are created only when you ask); enable automatic illustration per campaign with the `per_scene`, `per_post`, or `every_n_posts` triggers.
 
 <!-- ![Image generation](docs/images/feature-image-generation.png) -->
 *Screenshot: drop `docs/images/feature-image-generation.png` here.*
@@ -207,6 +207,7 @@ User content lives at `~/.grimoire/` by default — outside the repo, so multipl
 | `GRIMOIRE_FRONTEND_HOST` | `127.0.0.1` | Frontend bind address |
 | `GRIMOIRE_OPEN_BROWSER` | `1` | Auto-open browser on `run.sh` (0 to disable) |
 | `GRIMOIRE_BACKEND_RELOAD` | `0` | Enable uvicorn autoreload (1 to enable) |
+| `GRIMOIRE_WIRE_LOG` | `1` | Print every LLM, embedding, and image-gen request/response to the terminal (0/`false`/`no`/`off` to disable) |
 
 ## For Developers
 
