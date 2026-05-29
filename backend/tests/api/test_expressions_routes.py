@@ -6,30 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
 from fastapi.testclient import TestClient
 
 from grimoire.api.container import ServiceContainer
-
-
-@pytest.fixture(autouse=True)
-def _refresh_main_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Force ``grimoire.main.settings`` to point at this test's tmp data root.
-
-    ``grimoire.main`` binds ``settings`` via ``from grimoire.config import
-    settings`` at import time, so the base ``container`` fixture's
-    ``config_module.settings = Settings()`` replacement doesn't reach
-    inside main. Patch it directly so the lifespan creates its DB +
-    library scan under ``tmp_path``.
-    """
-    monkeypatch.setenv("GRIMOIRE_DATA_ROOT", str(tmp_path))
-    monkeypatch.setenv("GRIMOIRE_DATABASE_PATH", str(tmp_path / "test.sqlite"))
-    from grimoire import config as config_module
-    from grimoire import main as main_module
-
-    fresh = config_module.Settings()
-    monkeypatch.setattr(config_module, "settings", fresh)
-    monkeypatch.setattr(main_module, "settings", fresh)
 
 
 def _seed_character_files(

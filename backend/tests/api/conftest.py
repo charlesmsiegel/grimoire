@@ -20,23 +20,37 @@ from grimoire.main import create_app
 from grimoire.testing.db_template import stamp_migrated_db
 
 
-@pytest.fixture()
-def container(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ServiceContainer:
-    """An empty container with a tmp data root.
+@pytest.fixture(autouse=True)
+def _isolate_api_data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate every API test's app to a per-test tmp data root.
 
-    Tests populate the services they need before issuing requests.
+    API route tests boot the full app via :func:`create_app`; the lifespan
+    seeds default library assets and opens ``campaigns.sqlite`` under
+    ``settings.data_root``. ``grimoire.main`` binds ``settings`` via
+    ``from grimoire.config import settings`` at import time, so BOTH the config
+    and main bindings must be patched — otherwise those writes land in the real
+    ``~/.grimoire`` and leak across runs. Applies to every API test regardless
+    of which container fixture it uses. The lifespan DB is pre-stamped so its
+    ``apply_migrations`` is a no-op; monkeypatch restores everything afterwards.
+
+    (Bundled-plugin loading in the lifespan is disabled separately by the
+    ``_no_bundled_plugins`` autouse fixture in the root conftest.)
     """
     monkeypatch.setenv("GRIMOIRE_DATA_ROOT", str(tmp_path))
     monkeypatch.setenv("GRIMOIRE_DATABASE_PATH", str(tmp_path / "test.sqlite"))
-    # Pre-stamp the fully-migrated schema so the lifespan's apply_migrations
-    # is a no-op instead of replaying every migration on each API test.
     stamp_migrated_db(tmp_path / "test.sqlite")
-    # (Bundled-plugin loading in the lifespan is disabled globally by the
-    # _no_bundled_plugins autouse fixture in the root conftest.)
-    # Reload settings so the env vars take effect.
     from grimoire import config as config_module
+    from grimoire import main as main_module
 
-    config_module.settings = config_module.Settings()
+    fresh = config_module.Settings()
+    monkeypatch.setattr(config_module, "settings", fresh)
+    monkeypatch.setattr(main_module, "settings", fresh)
+
+
+@pytest.fixture()
+def container() -> ServiceContainer:
+    """An empty container; data-root isolation is handled by the autouse
+    :func:`_isolate_api_data_root` fixture. Tests attach the services they need."""
     return ServiceContainer()
 
 
