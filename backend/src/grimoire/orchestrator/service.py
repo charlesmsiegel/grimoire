@@ -1058,14 +1058,15 @@ class OrchestratorService:
             )
 
         if self._inventory is not None and extraction is not None:
+            # The inventory service is injected at startup (Protocol-style);
+            # the orchestrator hands it raw deltas and never imports the
+            # inventory package (no orchestrator -> inventory module edge).
             try:
-                from grimoire.inventory.service import deltas_to_operations
-
-                ops = deltas_to_operations(list(extraction.deltas))
-                if ops:
-                    await self._inventory.apply(
-                        campaign_id=campaign_id, turn_id=turn_id, operations=ops
-                    )
+                await self._inventory.apply_from_deltas(
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    deltas=list(extraction.deltas),
+                )
             except Exception:
                 logger.exception("inventory apply failed; continuing turn")
 

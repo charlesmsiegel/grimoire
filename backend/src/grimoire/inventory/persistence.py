@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from grimoire.state_store.indexers import make_library_id
-
 from .models import HolderKind, InventoryEntry
 
 
@@ -76,11 +74,14 @@ class InventoryPersistence:
                 turn_id=turn_id,
             )
         else:
-            # Library-scoped (override / library-*): write an override patch.
-            library_id = make_library_id(world_id, holder_kind.value, holder_id)
-            await self._store.write_override(
+            # Library-scoped holder: merge the inventory section into the
+            # override (preserving any other override keys). merge_override
+            # keeps library-id construction inside the storage package.
+            await self._store.merge_override(
                 campaign_id=campaign_id,
-                library_id=library_id,
+                world_id=world_id,
+                kind=holder_kind.value,
+                asset_id=holder_id,
                 patch={"inventory": section},
                 source=source,
                 turn_id=turn_id,

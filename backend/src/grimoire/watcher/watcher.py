@@ -744,7 +744,7 @@ class FileWatcher:
         sections in overlay files. Delegates to the storage layer, which owns
         the table and does a full truncate-and-repopulate (so removed sections
         and removed holders leave no stale rows)."""
-        await self.store.rebuild_inventory_holdings_from_index()
+        await self.store.rebuild_inventory_holdings_from_files()
 
     async def _drop_orphans(self, table: str, seen: set[str]) -> None:
         """Delete every ``table`` row whose id isn't in ``seen``.
