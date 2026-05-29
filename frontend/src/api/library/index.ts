@@ -4,6 +4,7 @@ export {
   ENTITY_KIND_PLURAL,
   ENTITY_KIND_SINGULAR,
   type WorldMeta,
+  type WorldSummary,
   type LibraryEntity,
   type Greeting,
   type ReclassificationSuggestion,
