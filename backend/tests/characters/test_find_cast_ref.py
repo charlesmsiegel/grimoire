@@ -59,6 +59,18 @@ async def test_find_cast_ref_flags_pc(characters: CharactersService, store: Stat
     assert ref.is_pc is True
 
 
+async def test_find_cast_ref_matches_canonical_ref(
+    characters: CharactersService, store: StateStore
+):
+    campaign_id = await _setup(characters, store)
+    ref = await characters.find_cast_ref(
+        campaign_id, "library:worlds/wod-london/characters/alistair"
+    )
+    assert ref is not None
+    assert ref.character_ref == "library:worlds/wod-london/characters/alistair"
+    assert ref.is_pc is False
+
+
 async def test_find_cast_ref_unknown_returns_none(characters: CharactersService, store: StateStore):
     campaign_id = await _setup(characters, store)
     assert await characters.find_cast_ref(campaign_id, "nobody-xyz") is None

@@ -184,7 +184,12 @@ async def resolve_cast_changes(
     queued: list[str] = []
     if characters is None or scenes is None:
         return queued
-    present = set(getattr(scene, "present_character_refs", []) or [])
+    # PCs may sit in ``present_pc_refs`` before they appear in
+    # ``present_character_refs`` (a freshly started scene seeds them
+    # separately), so union both when deciding what counts as already-present.
+    present = set(getattr(scene, "present_character_refs", []) or []) | set(
+        getattr(scene, "present_pc_refs", []) or []
+    )
     for proposal in extraction.cast_changes:
         cast_ref = await characters.find_cast_ref(campaign_id, proposal.character_ref)
         if cast_ref is None:
@@ -971,11 +976,13 @@ class OrchestratorService:
                 player_input=player_input,
                 triggering_pc=triggering_pc,
             )
+            pending_cast = await self._scenes.list_pending_cast_changes(scene_id)
             await self._emit_turn_event(
                 events.TURN_COMPLETE,
                 turn_id,
                 campaign_id,
                 scene_id,
+                pending_cast_changes=[p.model_dump(mode="json") for p in pending_cast],
             )
             return False
 
@@ -1294,6 +1301,16 @@ class OrchestratorService:
                     turn_id=turn_id,
                     extraction=extraction,
                 )
+                # §464: resolve cast-change proposals in multi-call scenes too.
+                if self._characters is not None:
+                    await resolve_cast_changes(
+                        extraction=extraction,
+                        scene=scene_obj,
+                        campaign_id=campaign_id,
+                        turn_id=turn_id,
+                        characters=self._characters,
+                        scenes=self._scenes,
+                    )
 
             # Create NPC post
             cleaned = strip_tracker_block(response_text)

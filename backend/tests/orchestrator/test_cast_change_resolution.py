@@ -95,6 +95,44 @@ async def test_noop_enter_already_present_is_dropped():
     assert scenes.queued == []
 
 
+async def test_noop_pc_present_only_in_pc_refs_is_dropped():
+    # A PC seeded into present_pc_refs but not yet present_character_refs must
+    # still count as present, so a redundant ENTER is dropped.
+    chars = _FakeCharacters({"hero": CastRef("ref:hero", True, "Hero")})
+    scenes = _RecordingScenes()
+    extraction = ExtractionResult(
+        cast_changes=[CastChangeProposal(character_ref="hero", change=CastChange.ENTER)]
+    )
+    queued = await resolve_cast_changes(
+        extraction=extraction,
+        scene=_Scene(present=[], pcs=["ref:hero"]),
+        campaign_id="c",
+        turn_id="t1",
+        characters=chars,
+        scenes=scenes,
+    )
+    assert queued == []
+    assert scenes.queued == []
+
+
+async def test_pc_leave_present_only_in_pc_refs_is_queued():
+    chars = _FakeCharacters({"hero": CastRef("ref:hero", True, "Hero")})
+    scenes = _RecordingScenes()
+    extraction = ExtractionResult(
+        cast_changes=[CastChangeProposal(character_ref="hero", change=CastChange.LEAVE)]
+    )
+    queued = await resolve_cast_changes(
+        extraction=extraction,
+        scene=_Scene(present=[], pcs=["ref:hero"]),
+        campaign_id="c",
+        turn_id="t1",
+        characters=chars,
+        scenes=scenes,
+    )
+    assert len(queued) == 1
+    assert scenes.queued == [("ref:hero", CastChange.LEAVE, True)]
+
+
 async def test_noop_leave_not_present_is_dropped():
     chars = _FakeCharacters({"reyes": CastRef("ref:reyes", False, "Reyes")})
     scenes = _RecordingScenes()

@@ -236,7 +236,11 @@ async def analyze_scene(
 
         applied_ids: list[str] = []
         queued_ids: list[str] = []
-        if result.extraction.deltas or result.extraction.candidates:
+        if (
+            result.extraction.deltas
+            or result.extraction.candidates
+            or result.extraction.cast_changes
+        ):
             applied_ids, queued_ids = await orchestrator.route_analysis_deltas(
                 campaign_id=campaign_id,
                 extraction=result.extraction,
@@ -275,17 +279,22 @@ async def analyze_scene(
 @router.get("/{campaign_id}/scenes/{scene_id}/cast-changes")
 async def list_cast_changes(campaign_id: str, scene_id: str, scenes: ScenesDep) -> Any:
     """Pending cast changes awaiting confirmation for this scene (#464)."""
-    await _require_scene_owned(scenes, campaign_id, scene_id)
-    pending = await scenes.list_pending_cast_changes(scene_id)
-    return [p.model_dump(mode="json") for p in pending]
+    try:
+        await _require_scene_owned(scenes, campaign_id, scene_id)
+        pending = await scenes.list_pending_cast_changes(scene_id)
+        return [p.model_dump(mode="json") for p in pending]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
 
 
 @router.post("/{campaign_id}/scenes/{scene_id}/cast-changes/{change_id}/confirm")
 async def confirm_cast_change(
     campaign_id: str, scene_id: str, change_id: str, scenes: ScenesDep
 ) -> Any:
-    await _require_scene_owned(scenes, campaign_id, scene_id)
     try:
+        await _require_scene_owned(scenes, campaign_id, scene_id)
         await scenes.confirm_cast_change(scene_id, change_id)
     except HTTPException:
         raise
@@ -298,8 +307,8 @@ async def confirm_cast_change(
 async def dismiss_cast_change(
     campaign_id: str, scene_id: str, change_id: str, scenes: ScenesDep
 ) -> Any:
-    await _require_scene_owned(scenes, campaign_id, scene_id)
     try:
+        await _require_scene_owned(scenes, campaign_id, scene_id)
         await scenes.dismiss_cast_change(scene_id, change_id)
     except HTTPException:
         raise

@@ -308,21 +308,32 @@ class CharactersService:
         ``None`` when nothing resolves — the caller routes unknown names to the
         new-character candidate flow (#464).
         """
-        needle = slugify_id(query, fallback=query.lower()).strip()
-        if not needle:
+        raw = query.strip()
+        if not raw:
+            return None
+        # The model may echo a full ref (``library:worlds/<w>/characters/<id>``
+        # or ``campaign:emergent/character/<id>``). Match on the raw ref and on
+        # the slugified trailing segment, as well as the bare id/name.
+        tail = raw.rsplit("/", 1)[-1]
+        needles = {
+            slugify_id(raw, fallback=raw.lower()),
+            slugify_id(tail, fallback=tail.lower()),
+        }
+        needles.discard("")
+        if not needles:
             return None
         for resolved in await self.list_for_campaign(campaign_id):
             ch = resolved.character
-            candidates = {
-                slugify_id(ch.id, fallback=ch.id.lower()),
-                slugify_id(ch.name, fallback=ch.name.lower()),
-            }
-            if needle not in candidates:
-                continue
             if ch.world_id is None:
                 ref = f"campaign:emergent/character/{ch.id}"
             else:
                 ref = f"library:worlds/{ch.world_id}/characters/{ch.id}"
+            candidates = {
+                slugify_id(ch.id, fallback=ch.id.lower()),
+                slugify_id(ch.name, fallback=ch.name.lower()),
+            }
+            if raw != ref and needles.isdisjoint(candidates):
+                continue
             return CastRef(
                 character_ref=ref,
                 is_pc=(ch.role == CharacterRole.PC),

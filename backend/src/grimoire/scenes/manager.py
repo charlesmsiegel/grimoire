@@ -948,10 +948,18 @@ class SceneManager:
         confidence: float = 0.0,
         turn_id: str | None = None,
     ) -> str:
-        """Persist a resolved cast change for review (never auto-applied)."""
+        """Persist a resolved cast change for review (never auto-applied).
+
+        Deduplicates against existing pending rows: if the same
+        ``(scene_id, character_ref, change)`` is already awaiting review, the
+        existing id is returned rather than queuing a duplicate prompt.
+        """
         if self._cast_change_store is None:
             raise RuntimeError("cast_change_store not wired")
         scene = await self.get_scene(scene_id)
+        existing = await self._cast_change_store.find_pending(scene_id, character_ref, change)
+        if existing is not None:
+            return existing.id
         return await self._cast_change_store.add(
             campaign_id=scene.campaign_id,
             scene_id=scene_id,
