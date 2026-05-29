@@ -15,13 +15,14 @@ from pathlib import Path
 import pytest
 
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
 from grimoire.testing import (
     CampaignFixture,
     LibraryCampaignFixture,
     TestApp,
     fixtures_registry,
 )
+from grimoire.testing.db_template import stamp_migrated_db
 
 pytestmark = pytest.mark.integration
 
@@ -30,9 +31,8 @@ pytestmark = pytest.mark.integration
 async def store(tmp_path: Path):
     data_root = tmp_path / "data"
     data_root.mkdir()
-    db = Database(tmp_path / "campaigns.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "campaigns.sqlite"), pool_size=2)
     await db.connect()
-    await apply_migrations(db)
     s = StateStore(db, data_root)
     try:
         yield s

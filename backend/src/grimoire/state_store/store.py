@@ -945,6 +945,57 @@ class StateStore:
             (campaign_id, holder_kind, holder_id),
         )
 
+    async def rebuild_inventory_holdings_from_index(self) -> None:
+        """Rebuild the derived ``inventory_holdings`` table from the
+        ``inventory:`` sections in campaign-content overlay files (the SSOT).
+
+        A full truncate-and-repopulate so removed sections and removed holders
+        leave no stale rows. Runs inside one transaction. Called by the watcher
+        on a full campaign rescan; the storage layer owns this derived table.
+        """
+        import json
+
+        rows = await self.db.fetchall(
+            "SELECT campaign_id, entity_subkind, asset_id, frontmatter "
+            "FROM campaign_content_index "
+            "WHERE entity_subkind IN ('character', 'location')"
+        )
+        async with self._txn() as conn:
+            await conn.execute("DELETE FROM inventory_holdings")
+            for r in rows:
+                fm = json.loads(r["frontmatter"]) if r["frontmatter"] else {}
+                entries = (fm.get("inventory") or {}).get("entries") or []
+                if not entries:
+                    continue
+                cid, kind, hid = r["campaign_id"], r["entity_subkind"], r["asset_id"]
+                for e in entries:
+                    rid = f"{cid}:{kind}:{hid}:{e['item_ref']}"
+                    await conn.execute(
+                        """
+                        INSERT INTO inventory_holdings
+                          (id, campaign_id, holder_kind, holder_id, item_ref, item_name,
+                           quantity, fungible, equipped, provenance, notes)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                          item_name=excluded.item_name, quantity=excluded.quantity,
+                          fungible=excluded.fungible, equipped=excluded.equipped,
+                          provenance=excluded.provenance, notes=excluded.notes
+                        """,
+                        (
+                            rid,
+                            cid,
+                            kind,
+                            hid,
+                            e["item_ref"],
+                            e.get("item_name", e["item_ref"]),
+                            int(e.get("quantity", 1)),
+                            int(bool(e.get("fungible", False))),
+                            int(bool(e.get("equipped", False))),
+                            e.get("provenance"),
+                            e.get("notes"),
+                        ),
+                    )
+
     async def list_inventory_holdings(
         self,
         campaign_id: str,

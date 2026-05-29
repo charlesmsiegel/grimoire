@@ -211,10 +211,11 @@ def _inventory_fetcher(store: Any):
     async def fetch(_w: HudWidget, campaign_id: str, _scene: Any, _observer: Any) -> dict[str, Any]:
         if store is None:
             return {"items": []}
-        from grimoire.inventory.config import InventoryConfig
-
-        cfg = InventoryConfig.from_campaign_config(await store.get_campaign_config(campaign_id))
-        if not cfg.enabled:
+        # Read the per-campaign toggle through the store's public config API
+        # rather than importing the inventory module (no module-map arrow
+        # hud -> inventory). Default off when unset.
+        cfg = await store.get_campaign_config(campaign_id) or {}
+        if not (cfg.get("inventory") or {}).get("enabled", False):
             return {"items": []}
         rows = await store.list_inventory_holdings(campaign_id)
         grouped: dict[str, list[str]] = {}
