@@ -18,8 +18,12 @@ import { TokenBadge } from "../../components/TokenBadge";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
 import { ConvertModal } from "./ConvertModal";
+import { EntityForm } from "./EntityForm";
+import { getDescriptor, primaryLabelKey } from "./entitySchemas";
+import { type Frontmatter } from "./frontmatter";
 import { emptyGreetingForm, greetingFormToPayload, type GreetingFormValue } from "./greeting-form";
 import { GreetingFormFields } from "./GreetingFormFields";
+import { IdField } from "./IdField";
 
 interface Props {
   /** Plural kind from URL: characters, items, locations, lore, factions, greetings. */
@@ -44,6 +48,7 @@ export function EntityListView({ kindOverride }: Props) {
   const [creating, setCreating] = useState(false);
   const [newId, setNewId] = useState("");
   const [newName, setNewName] = useState("");
+  const [createDraft, setCreateDraft] = useState<Frontmatter>({});
   const [greetingForm, setGreetingForm] = useState<GreetingFormValue>(emptyGreetingForm);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -90,9 +95,19 @@ export function EntityListView({ kindOverride }: Props) {
     setBusy(true);
     try {
       const id = newId.trim();
-      const { frontmatter, body } = isGreetingKind
-        ? greetingFormToPayload({ ...greetingForm, name: newName.trim() }, id)
-        : { frontmatter: { name: newName.trim(), id }, body: "" };
+      const descriptor = getDescriptor(singular);
+      let frontmatter: Record<string, unknown>;
+      let body = "";
+      if (isGreetingKind) {
+        ({ frontmatter, body } = greetingFormToPayload(
+          { ...greetingForm, name: newName.trim() },
+          id,
+        ));
+      } else if (descriptor) {
+        frontmatter = { ...createDraft, id, [primaryLabelKey(descriptor)]: newName.trim() };
+      } else {
+        frontmatter = { name: newName.trim(), id };
+      }
       const created = await libraryApi.createEntity(worldId, kindPlural, {
         id,
         frontmatter,
@@ -101,6 +116,7 @@ export function EntityListView({ kindOverride }: Props) {
       setCreating(false);
       setNewId("");
       setNewName("");
+      setCreateDraft({});
       setGreetingForm(emptyGreetingForm());
       navigate(
         `/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(
@@ -125,20 +141,28 @@ export function EntityListView({ kindOverride }: Props) {
 
       {creating && (
         <form onSubmit={submit} className="library-form" aria-label={`Create ${singular}`}>
-          <label>
-            <span>ID</span>
-            <input
-              required
-              value={newId}
-              pattern="[a-z0-9][a-z0-9-]*"
-              title="lowercase letters, digits, and hyphens"
-              onChange={(e) => setNewId(e.target.value)}
+          <IdField
+            nameLabel={
+              getDescriptor(singular) && primaryLabelKey(getDescriptor(singular)!) === "title"
+                ? "Title"
+                : "Name"
+            }
+            name={newName}
+            id={newId}
+            onNameChange={setNewName}
+            onIdChange={setNewId}
+          />
+          {!isGreetingKind && getDescriptor(singular) && (
+            <EntityForm
+              descriptor={getDescriptor(singular)!}
+              worldId={worldId}
+              mode="create"
+              frontmatter={createDraft}
+              body=""
+              onFrontmatterChange={setCreateDraft}
+              onBodyChange={() => {}}
             />
-          </label>
-          <label>
-            <span>Name</span>
-            <input required value={newName} onChange={(e) => setNewName(e.target.value)} />
-          </label>
+          )}
           {isGreetingKind && (
             <GreetingFormFields
               worldId={worldId}
