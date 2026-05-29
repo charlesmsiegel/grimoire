@@ -89,6 +89,35 @@ describe("CastChangePrompt", () => {
     await waitFor(() => expect(screen.queryByText(/reyes enters the scene/i)).toBeNull());
   });
 
+  it("calls onApplied after a confirm so the scene can refresh", async () => {
+    const socket = new FakeSocket();
+    const onApplied = vi.fn();
+    render(
+      withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" onApplied={onApplied} />),
+    );
+    socket.emit({ type: "turn_complete", turn_id: "t_42", pending_cast_changes: PENDING } as WSMessage);
+
+    await screen.findByText(/reyes enters the scene/i);
+    fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
+
+    await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not call onApplied on dismiss", async () => {
+    const socket = new FakeSocket();
+    const onApplied = vi.fn();
+    render(
+      withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" onApplied={onApplied} />),
+    );
+    socket.emit({ type: "turn_complete", turn_id: "t_42", pending_cast_changes: PENDING } as WSMessage);
+
+    await screen.findByText(/reyes enters the scene/i);
+    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+
+    await waitFor(() => expect(screen.queryByText(/reyes enters the scene/i)).toBeNull());
+    expect(onApplied).not.toHaveBeenCalled();
+  });
+
   it("dismisses a pending change", async () => {
     const socket = new FakeSocket();
     render(withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" />));

@@ -71,6 +71,19 @@ async def test_find_cast_ref_matches_canonical_ref(
     assert ref.is_pc is False
 
 
+async def test_find_cast_ref_flags_registered_pc_regardless_of_card_role(
+    characters: CharactersService, store: StateStore
+):
+    # A character whose card role is not PC, but who is registered as a
+    # campaign PC, must still report is_pc=True (drives advance gating).
+    campaign_id = await _setup(characters, store)
+    ref = "library:worlds/wod-london/characters/alistair"
+    await characters.add_pc(campaign_id, ref, "Alistair", owner="local")
+    cast_ref = await characters.find_cast_ref(campaign_id, "alistair")
+    assert cast_ref is not None
+    assert cast_ref.is_pc is True
+
+
 async def test_find_cast_ref_unknown_returns_none(characters: CharactersService, store: StateStore):
     campaign_id = await _setup(characters, store)
     assert await characters.find_cast_ref(campaign_id, "nobody-xyz") is None

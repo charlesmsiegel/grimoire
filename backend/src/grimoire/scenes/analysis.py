@@ -199,6 +199,7 @@ def _parse_analysis_response(
         candidates=llm_output.candidates,
         flags=llm_output.flags,
         transient_updates=llm_output.transient_updates,
+        cast_changes=llm_output.cast_changes,
         confidence_overall=llm_output.confidence_avg,
         extraction_strategies_run=["scene_analysis"],
     )
