@@ -80,6 +80,33 @@ describe("usePlayState reducer", () => {
     expect(state.posts.map((p) => p.id)).toEqual(["p1", "p2"]);
   });
 
+  it("starts with no pending response", () => {
+    expect(initial.awaitingResponse).toBe(false);
+  });
+
+  it("flags a pending response on turn-pending and clears it on turn-settled", () => {
+    let state = reducer(initial, { type: "turn-pending" });
+    expect(state.awaitingResponse).toBe(true);
+    state = reducer(state, { type: "turn-settled" });
+    expect(state.awaitingResponse).toBe(false);
+  });
+
+  it("clears the pending flag once the first token starts streaming", () => {
+    const state = reducer(
+      { ...initial, awaitingResponse: true },
+      { type: "stream-start", turn_id: "t1" },
+    );
+    expect(state.awaitingResponse).toBe(false);
+  });
+
+  it("clears the pending flag when the stream ends", () => {
+    const state = reducer(
+      { ...initial, awaitingResponse: true },
+      { type: "stream-end", turn_id: "t1", post: null },
+    );
+    expect(state.awaitingResponse).toBe(false);
+  });
+
   it("replaces posts wholesale when the loaded scene is different", () => {
     const scene1 = makeScene("s1");
     const scene2 = makeScene("s2");

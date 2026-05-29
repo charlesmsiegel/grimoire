@@ -21,6 +21,10 @@ export interface PlayState {
   loading: boolean;
   error: string | null;
   streaming: PendingTurn | null;
+  // True between ``turn_started`` and the first streamed token (or a
+  // terminal turn event). Drives the "narrator is working" placeholder so
+  // the user sees the backend is busy before any prose arrives.
+  awaitingResponse: boolean;
   advanceEnabled: boolean;
   advanceReason: string;
   nextSpeakerEnabled: boolean;
@@ -46,6 +50,8 @@ export type PlayAction =
   | { type: "error"; message: string }
   | { type: "set-active-pc"; ref: string }
   | { type: "append-post"; post: ApiPost }
+  | { type: "turn-pending" }
+  | { type: "turn-settled" }
   | { type: "stream-start"; turn_id: string }
   | { type: "stream-delta"; turn_id: string; delta: string }
   | { type: "stream-end"; turn_id: string; post: ApiPost | null }
@@ -71,6 +77,7 @@ export const initialPlayState: PlayState = {
   loading: true,
   error: null,
   streaming: null,
+  awaitingResponse: false,
   advanceEnabled: false,
   advanceReason: "",
   nextSpeakerEnabled: false,
@@ -140,8 +147,16 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
       if (state.scene && action.post.scene_id !== state.scene.id) return state;
       if (state.posts.some((p) => p.id === action.post.id)) return state;
       return { ...state, posts: [...state.posts, action.post] };
+    case "turn-pending":
+      return { ...state, awaitingResponse: true };
+    case "turn-settled":
+      return { ...state, awaitingResponse: false };
     case "stream-start":
-      return { ...state, streaming: { turn_id: action.turn_id, text: "" } };
+      return {
+        ...state,
+        awaitingResponse: false,
+        streaming: { turn_id: action.turn_id, text: "" },
+      };
     case "stream-delta": {
       if (!state.streaming || state.streaming.turn_id !== action.turn_id) return state;
       const combined = state.streaming.text + action.delta;
@@ -159,12 +174,13 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
     }
     case "stream-end": {
       const streaming = state.streaming;
-      if (!streaming || streaming.turn_id !== action.turn_id) return { ...state, streaming: null };
+      if (!streaming || streaming.turn_id !== action.turn_id)
+        return { ...state, streaming: null, awaitingResponse: false };
       let posts = state.posts;
       if (action.post && !posts.some((p) => p.id === action.post!.id)) {
         posts = [...posts, action.post];
       }
-      return { ...state, streaming: null, posts };
+      return { ...state, streaming: null, awaitingResponse: false, posts };
     }
     case "set-scene":
       return {
