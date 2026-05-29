@@ -93,10 +93,13 @@ describe("StatusBar cost item", () => {
       daily_budget_alert_usd: 20.0,
     });
     renderStatusBar();
-    // Wait for the data fetches to settle, then assert the cost item never appears.
+    // The cost item renders while the config is still loading (costConfig is
+    // null → showCost defaults true), so assert that it ends up *removed* once
+    // getCostConfig resolves with surface=false. A bare post-fetch assertion
+    // races the two independent fetches; poll until the item is gone instead.
     await waitFor(() =>
-      expect(observabilityModule.observabilityApi.getSessionCost).toHaveBeenCalled(),
+      expect(observabilityModule.observabilityApi.getCostConfig).toHaveBeenCalled(),
     );
-    expect(screen.queryByText(/cost:/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/cost:/)).not.toBeInTheDocument());
   });
 });
