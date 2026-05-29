@@ -72,6 +72,20 @@ def output_schema() -> JsonSchema:
         },
         "required": ["kind", "confidence"],
     }
+    # A known character entering or leaving the current scene (#464). The
+    # Orchestrator resolves ``character_id`` against the read cascade; the
+    # change is always review-gated before the scene cast is touched.
+    cast_change = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "character_id": {"type": "string"},
+            "change": {"type": "string", "enum": ["enter", "leave"]},
+            "evidence": {"type": "string"},
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        },
+        "required": ["character_id", "change", "confidence"],
+    }
     time_advance = {
         "type": "object",
         "additionalProperties": False,
@@ -178,6 +192,7 @@ def output_schema() -> JsonSchema:
             "new_factions": {"type": "array", "items": new_entity},
             "new_items": {"type": "array", "items": new_entity},
             "scene_changes": {"type": "array", "items": scene_change},
+            "cast_changes": {"type": "array", "items": cast_change},
             "time_advances": {"type": "array", "items": time_advance},
             "commitments": {"type": "array", "items": commitment},
             "inventory_changes": {"type": "array", "items": inventory_change},
@@ -199,6 +214,7 @@ def empty_payload() -> dict:
         "new_factions": [],
         "new_items": [],
         "scene_changes": [],
+        "cast_changes": [],
         "time_advances": [],
         "commitments": [],
         "inventory_changes": [],
