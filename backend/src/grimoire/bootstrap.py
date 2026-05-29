@@ -343,6 +343,7 @@ async def build_llm_services(
             continuity=container.continuity,
             scenes=container.scenes,
             world=container.world,
+            store=container.state_store,
         )
     except Exception:
         log.exception("hud: failed to register default fetchers")
