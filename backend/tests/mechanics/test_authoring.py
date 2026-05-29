@@ -97,6 +97,38 @@ async def test_scaffold_rejects_invalid_manifest(service):
     assert exc.value.errors  # carries human-readable messages
 
 
+async def test_scaffold_creates_nested_theme_path(service):
+    author = MechanicsAuthor(service)
+    report = await author.scaffold(
+        {
+            "id": "nested",
+            "name": "Nested",
+            "version": "1.0.0",
+            "api_version": "1",
+            "ui": {"theme_css": "styles/theme.css"},
+        }
+    )
+    assert (service.config.root / "nested" / "styles" / "theme.css").is_file()
+    assert "nested" in report.loaded
+
+
+async def test_write_theme_css_creates_nested_parent(service):
+    author = MechanicsAuthor(service)
+    await author.scaffold(
+        {
+            "id": "nested2",
+            "name": "Nested2",
+            "version": "1.0.0",
+            "api_version": "1",
+            "ui": {"theme_css": "styles/theme.css"},
+        }
+    )
+    await author.write_theme_css("nested2", ".x { color: blue; }")
+    assert (service.config.root / "nested2" / "styles" / "theme.css").read_text(
+        encoding="utf-8"
+    ) == ".x { color: blue; }"
+
+
 # --------------------------------------------------------------------------- #
 # Task 3: edit methods + guards
 # --------------------------------------------------------------------------- #

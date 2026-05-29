@@ -236,7 +236,13 @@ function ModuleDetailCard({
           <code>mechanics.py</code> is generated once at creation and hand-edited on disk — this
           editor never rewrites it.
         </p>
-        <MechanicsEditor manifest={manifest} themeCss={m.theme_css ?? null} onSaved={onChanged} />
+        <MechanicsEditor
+          manifest={manifest}
+          themeCss={m.theme_css ?? null}
+          sheetSchemas={m.sheet_schemas}
+          contentSchemas={m.content_schemas}
+          onSaved={onChanged}
+        />
       </Section>
 
       {previewing && (

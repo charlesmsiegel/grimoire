@@ -215,7 +215,9 @@ class MechanicsAuthor:
         theme_rel = ui.get("theme_css")
         if theme_rel:
             self._check_relative(theme_rel, module_dir)
-            (module_dir / theme_rel).write_text("", encoding="utf-8")
+            theme_path = module_dir / theme_rel
+            theme_path.parent.mkdir(parents=True, exist_ok=True)
+            theme_path.write_text("", encoding="utf-8")
         return await self._service.rescan()
 
     def _require_dir(self, module_id: str) -> Path:
@@ -264,7 +266,9 @@ class MechanicsAuthor:
             data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
             theme_rel = (data.get("ui") or {}).get("theme_css") or "theme.css"
         self._check_relative(theme_rel, module_dir)
-        (module_dir / theme_rel).write_text(css, encoding="utf-8")
+        theme_path = module_dir / theme_rel
+        theme_path.parent.mkdir(parents=True, exist_ok=True)
+        theme_path.write_text(css, encoding="utf-8")
         return await self._service.rescan()
 
     @staticmethod

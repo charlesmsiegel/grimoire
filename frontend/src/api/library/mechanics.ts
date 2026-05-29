@@ -21,6 +21,8 @@ export interface RegisteredModule {
   manifest: ModuleManifest;
   instance?: unknown;
   theme_css?: string | null;
+  sheet_schemas?: Record<string, Record<string, unknown>>;
+  content_schemas?: Record<string, Record<string, unknown>>;
 }
 
 export interface CreationStep {

@@ -17,10 +17,21 @@ interface Props {
   manifest: ModuleManifest;
   themeCss: string | null;
   onSaved: (report: RescanReport) => void;
+  /** Current on-disk sheet schemas, keyed by sheet kind. */
+  sheetSchemas?: Record<string, Record<string, unknown>>;
+  /** Current on-disk content schemas, keyed by content kind. */
+  contentSchemas?: Record<string, Record<string, unknown>>;
 }
 
 function emptySchema(title: string): SheetSchema {
   return { type: "object", title, properties: {} };
+}
+
+function initialSchema(existing: Record<string, unknown> | undefined, title: string): SheetSchema {
+  if (existing && Object.keys(existing).length > 0) {
+    return existing as unknown as SheetSchema;
+  }
+  return emptySchema(title);
 }
 
 function errorMessages(err: unknown): string[] {
@@ -40,7 +51,13 @@ function errorMessages(err: unknown): string[] {
   return [String(err)];
 }
 
-export function MechanicsEditor({ manifest, themeCss, onSaved }: Props) {
+export function MechanicsEditor({
+  manifest,
+  themeCss,
+  onSaved,
+  sheetSchemas,
+  contentSchemas,
+}: Props) {
   const [tab, setTab] = useState<Tab>("manifest");
   const [spec, setSpec] = useState<ManifestSpec>(() => ({ ...manifest }));
   const [error, setError] = useState<string[] | null>(null);
@@ -92,6 +109,7 @@ export function MechanicsEditor({ manifest, themeCss, onSaved }: Props) {
           moduleId={manifest.id}
           themeCss={themeCss}
           kinds={manifest.sheet_kinds}
+          existing={sheetSchemas}
           save={(k, s) => run(() => mechanicsApi.putSheetSchema(manifest.id, k, s))}
           emptyTitle="Sheet"
         />
@@ -102,6 +120,7 @@ export function MechanicsEditor({ manifest, themeCss, onSaved }: Props) {
           moduleId={manifest.id}
           themeCss={themeCss}
           kinds={manifest.content_kinds}
+          existing={contentSchemas}
           save={(k, s) => run(() => mechanicsApi.putContentSchema(manifest.id, k, s))}
           emptyTitle="Content"
         />
@@ -121,10 +140,11 @@ function SchemaTabs(props: {
   moduleId: string;
   themeCss: string | null;
   kinds: string[];
+  existing?: Record<string, Record<string, unknown>>;
   save: (kind: string, schema: Record<string, unknown>) => void;
   emptyTitle: string;
 }) {
-  const { moduleId, themeCss, kinds, save, emptyTitle } = props;
+  const { moduleId, themeCss, kinds, existing, save, emptyTitle } = props;
   const [drafts, setDrafts] = useState<Record<string, SheetSchema>>({});
 
   if (kinds.length === 0) {
@@ -134,7 +154,7 @@ function SchemaTabs(props: {
   return (
     <>
       {kinds.map((kind) => {
-        const value = drafts[kind] ?? emptySchema(emptyTitle);
+        const value = drafts[kind] ?? initialSchema(existing?.[kind], emptyTitle);
         return (
           <section key={kind} className="schema-tab">
             <h4>{kind}</h4>
