@@ -674,7 +674,18 @@ class ImageGenService:
             model=routed_model,
             task=task,
         )
-        result = await backend.generate(request)
+        try:
+            result = await backend.generate(request)
+        except Exception as exc:
+            wire_log.log_error(
+                "imagegen",
+                error=f"{type(exc).__name__}: {exc}",
+                campaign_id=campaign_id,
+                backend=backend_id,
+                model=routed_model,
+                task=task,
+            )
+            raise
         wire_log.log_response(
             "imagegen",
             payload=result,
@@ -1277,6 +1288,17 @@ class ImageGenService:
             except TypeError:
                 # Older backends that don't accept progress/cancel kwargs.
                 result = await backend.generate(request)
+        except Exception as exc:
+            wire_log.log_error(
+                "imagegen",
+                error=f"{type(exc).__name__}: {exc}",
+                campaign_id=job.campaign_id,
+                backend=getattr(backend, "id", ""),
+                job_id=job.id,
+                scene_id=job.scene_id,
+                post_id=job.post_id,
+            )
+            raise
         finally:
             self._cancel_tokens.pop(job.id, None)
         wire_log.log_response(

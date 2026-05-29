@@ -774,19 +774,34 @@ class LLMGatewayService:
             },
         )
 
-        wire_log.log_request(
-            "llm.complete",
-            payload=scoped,
-            task=task,
-            provider=route.provider_id,
-            model=route.model,
-            campaign_id=campaign_id,
-            turn_id=turn_id,
-            fallback_used=fallback_used,
-        )
-
         async def _call() -> CompletionResponse:
-            return await asyncio.wait_for(provider.complete(scoped), timeout=timeout_seconds)
+            # Log every outbound attempt. `run_with_retries` invokes this once
+            # per try, so retries — and the failed attempts that trigger them —
+            # are all visible in the wire audit, not just the first request.
+            wire_log.log_request(
+                "llm.complete",
+                payload=scoped,
+                task=task,
+                provider=route.provider_id,
+                model=route.model,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                fallback_used=fallback_used,
+            )
+            try:
+                return await asyncio.wait_for(provider.complete(scoped), timeout=timeout_seconds)
+            except Exception as exc:
+                wire_log.log_error(
+                    "llm.complete",
+                    error=f"{type(exc).__name__}: {exc}",
+                    task=task,
+                    provider=route.provider_id,
+                    model=route.model,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    fallback_used=fallback_used,
+                )
+                raise
 
         started = time.monotonic()
         response, retries = await run_with_retries(_call, policy=resolved_retry)
@@ -884,17 +899,9 @@ class LLMGatewayService:
         retry: RetryPolicy | None = None,
         timeout: TimeoutPolicy | None = None,
     ) -> None:
-        wire_log.log_error(
-            "llm",
-            error=f"{type(error).__name__}: {error}",
-            task=task,
-            provider=route.provider_id,
-            model=route.model,
-            campaign_id=campaign_id,
-            turn_id=turn_id,
-            retries=retries,
-            fallback_used=fallback_used,
-        )
+        # The failed provider call is wire-logged at the call site (`_call` /
+        # `_stream_one`); here we only persist the audit row and emit the
+        # failure event, so the same error isn't printed to the terminal twice.
         await self._emit(
             events.LLM_REQUEST_FAILED,
             {
@@ -1213,6 +1220,23 @@ class LLMGatewayService:
                 yield chunk
                 if chunk.is_final:
                     break
+        except Exception as exc:
+            # Covers both zero-chunk attempt failures (which `_stream_inner`
+            # may retry / fall back on) and mid-stream crashes (which propagate
+            # uncaught past the success-path response log); either way the
+            # failed provider call is recorded in the wire audit.
+            wire_log.log_error(
+                "llm.stream",
+                error=f"{type(exc).__name__}: {exc}",
+                task=task,
+                provider=route.provider_id,
+                model=route.model,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                fallback_used=fallback_used,
+                mid_stream=not first,
+            )
+            raise
         finally:
             close = getattr(stream, "aclose", None)
             if close is not None:
@@ -1347,17 +1371,6 @@ class LLMGatewayService:
             )
             started = time.monotonic()
 
-            wire_log.log_request(
-                "embedding",
-                payload={"texts": missing},
-                task=task,
-                provider=route.provider_id,
-                model=model_id,
-                input_count=len(missing),
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-            )
-
             # Determine whether to chunk into batches.
             # If the provider exposes max_batch_size and it is smaller than the
             # number of missing texts, split into chunks of that size.  Each
@@ -1375,9 +1388,10 @@ class LLMGatewayService:
 
             all_vectors: list[list[float]] = []
             total_retries = 0
+            batch_count = len(batches)
 
             try:
-                for batch in batches:
+                for batch_index, batch in enumerate(batches, start=1):
                     # Capture `batch` in a closure-safe variable to avoid the
                     # "late binding" pitfall in Python async closures.
                     _batch = batch
@@ -1391,8 +1405,40 @@ class LLMGatewayService:
                             timeout=_tout,
                         )
 
+                    # Log the real payload of each outbound request. When the
+                    # provider splits inputs into batches this is the only place
+                    # the per-request texts are visible, and it lets a failed
+                    # later batch be matched to the request that reached the
+                    # provider.
+                    wire_log.log_request(
+                        "embedding",
+                        payload={"texts": _batch},
+                        task=task,
+                        provider=route.provider_id,
+                        model=model_id,
+                        input_count=len(_batch),
+                        batch=f"{batch_index}/{batch_count}",
+                        campaign_id=campaign_id,
+                        turn_id=turn_id,
+                    )
                     batch_vectors, batch_retries = await run_with_retries(
                         _call, policy=resolved_retry
+                    )
+                    wire_log.log_response(
+                        "embedding",
+                        payload={
+                            "vector_count": len(batch_vectors),
+                            "dimensions": len(batch_vectors[0]) if batch_vectors else 0,
+                            "vectors": (
+                                f"<omitted: {len(batch_vectors)} x "
+                                f"{len(batch_vectors[0]) if batch_vectors else 0} floats>"
+                            ),
+                        },
+                        task=task,
+                        provider=route.provider_id,
+                        model=model_id,
+                        batch=f"{batch_index}/{batch_count}",
+                        retries=batch_retries,
                     )
                     total_retries += batch_retries
                     all_vectors.extend(batch_vectors)
@@ -1505,22 +1551,6 @@ class LLMGatewayService:
                     retry_override=self._retry_dict(retry),
                     timeout_override=self._timeout_dict(timeout),
                 )
-            wire_log.log_response(
-                "embedding",
-                payload={
-                    "vector_count": len(vectors),
-                    "dimensions": len(vectors[0]) if vectors else 0,
-                    "vectors": (
-                        f"<omitted: {len(vectors)} x {len(vectors[0]) if vectors else 0} floats>"
-                    ),
-                },
-                task=task,
-                provider=route.provider_id,
-                model=model_id,
-                input_count=len(missing),
-                retries=retries,
-                latency_ms=latency_ms,
-            )
             embed_cost: float = 0.0
             embed_input_tokens = max(1, sum(len(t) // 4 for t in missing))
             info = await self._get_pricing(route.provider_id, model_id)
