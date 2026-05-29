@@ -70,6 +70,20 @@ class CastChangeStore:
         )
         return item_id
 
+    async def find_pending(
+        self, scene_id: str, character_ref: str, change: CastChange
+    ) -> PendingCastChange | None:
+        """Return an existing *pending* row matching the triple, if any (#464)."""
+        row = await self._db.fetchone(
+            """
+            SELECT * FROM pending_cast_changes
+            WHERE scene_id = ? AND character_ref = ? AND change = ? AND status = 'pending'
+            LIMIT 1
+            """,
+            (scene_id, character_ref, str(change)),
+        )
+        return _row_to_model(row) if row else None
+
     async def list_pending(self, scene_id: str) -> list[PendingCastChange]:
         rows = await self._db.fetchall(
             """

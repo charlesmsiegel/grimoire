@@ -104,3 +104,15 @@ def test_dismiss_cast_change(wire, client) -> None:
     resp = client.post("/api/campaigns/c1/scenes/s1/cast-changes/cc-1/dismiss")
     assert resp.status_code == 200
     assert wire.scenes.calls == [("dismiss", "s1", "cc-1")]
+
+
+def test_list_unknown_scene_maps_to_404(wire, client) -> None:
+    # get_scene raises KeyError for an unknown scene; the route must map it to
+    # 404 rather than leaking a 500 (ownership check now inside the try).
+    resp = client.get("/api/campaigns/c1/scenes/s_nope/cast-changes")
+    assert resp.status_code == 404
+
+
+def test_confirm_unknown_scene_maps_to_404(wire, client) -> None:
+    resp = client.post("/api/campaigns/c1/scenes/s_nope/cast-changes/cc-1/confirm")
+    assert resp.status_code == 404

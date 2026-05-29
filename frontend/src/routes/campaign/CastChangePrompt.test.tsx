@@ -51,13 +51,15 @@ describe("CastChangePrompt", () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    fetchSpy = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    // GET (list on mount) returns an array; POST (confirm/dismiss) returns ok.
+    fetchSpy = vi.fn(async (_url: string, init?: RequestInit) => {
+      const isPost = (init?.method ?? "GET").toUpperCase() === "POST";
+      const body = isPost ? { ok: true } : [];
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
   });
 
@@ -79,9 +81,11 @@ describe("CastChangePrompt", () => {
     await screen.findByText(/reyes enters the scene/i);
     fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
 
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
-    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain("/api/campaigns/c1/scenes/s1/cast-changes/cc-1/confirm");
+    await waitFor(() =>
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url).includes("/cast-changes/cc-1/confirm")),
+      ).toBe(true),
+    );
     await waitFor(() => expect(screen.queryByText(/reyes enters the scene/i)).toBeNull());
   });
 
@@ -93,9 +97,11 @@ describe("CastChangePrompt", () => {
     await screen.findByText(/reyes enters the scene/i);
     fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
 
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
-    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain("/cast-changes/cc-1/dismiss");
+    await waitFor(() =>
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url).includes("/cast-changes/cc-1/dismiss")),
+      ).toBe(true),
+    );
     await waitFor(() => expect(screen.queryByText(/reyes enters the scene/i)).toBeNull());
   });
 });

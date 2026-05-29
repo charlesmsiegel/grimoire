@@ -91,3 +91,22 @@ async def test_confirm_unknown_id_raises(manager):
     scene = await manager.start_scene(SceneInit(campaign_id="c", title="t"))
     with pytest.raises(KeyError):
         await manager.confirm_cast_change(scene.id, "cc-nope")
+
+
+async def test_queue_dedupes_identical_pending(manager):
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="t"))
+    first = await manager.queue_cast_change(
+        scene.id, character_ref="npc:guard", change=CastChange.ENTER, is_pc=False
+    )
+    second = await manager.queue_cast_change(
+        scene.id, character_ref="npc:guard", change=CastChange.ENTER, is_pc=False
+    )
+    assert first == second
+    assert len(await manager.list_pending_cast_changes(scene.id)) == 1
+
+    # A different change (leave) for the same character is a distinct row.
+    third = await manager.queue_cast_change(
+        scene.id, character_ref="npc:guard", change=CastChange.LEAVE, is_pc=False
+    )
+    assert third != first
+    assert len(await manager.list_pending_cast_changes(scene.id)) == 2

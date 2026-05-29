@@ -9,7 +9,7 @@
  * the Scene Manager, dismissing leaves the cast untouched.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { campaignApi, type PendingCastChange } from "../../api/campaign";
 import { ApiError } from "../../api/client";
@@ -28,6 +28,28 @@ function label(c: PendingCastChange): string {
 export function CastChangePrompt({ campaignId, sceneId }: Props) {
   const [pending, setPending] = useState<PendingCastChange[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+
+  // Load any persisted pending changes on mount / scene change so prompts
+  // queued before a reload or navigation remain actionable. Reset first so a
+  // scene switch never shows the previous scene's pending items.
+  useEffect(() => {
+    let cancelled = false;
+    setPending([]);
+    void campaignApi
+      .listCastChanges(campaignId, sceneId)
+      .then((items) => {
+        // Only seed from the fetch when it actually returns items, so a
+        // late-resolving empty response can't clobber a turn_complete that
+        // arrived first.
+        if (!cancelled && items.length > 0) setPending(items);
+      })
+      .catch(() => {
+        /* nothing persisted yet, or scene not found — leave empty */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [campaignId, sceneId]);
 
   const handleEvent = useCallback((m: { type: string } & Record<string, unknown>) => {
     if (m.type !== "turn_complete") return;
