@@ -36,6 +36,11 @@ class _Gateway(Protocol):
 
 
 _DEFAULT_TASK = "scene_summary"
+# Distinct task routes so the rolling/running summary (cheap, frequent) can be
+# tiered separately from the final scene close-out summary (durable artifact).
+# See ``llm_gateway/tiers.py``: running → Light, final → Heavy.
+_RUNNING_TASK = "scenes.running_summary"
+_FINAL_TASK = "scenes.final_summary"
 _DEFAULT_MAX_TOKENS = 1024
 
 
@@ -49,7 +54,7 @@ def _post_window(posts: list[Post], n: int = 10) -> str:
 def make_default_running_summarizer(
     gateway: _Gateway,
     *,
-    task: str = _DEFAULT_TASK,
+    task: str = _RUNNING_TASK,
     max_tokens: int = _DEFAULT_MAX_TOKENS,
     model: str = "default",
 ):
@@ -115,7 +120,7 @@ def _extract_json(text: str) -> dict | None:
 def make_default_final_summarizer(
     gateway: _Gateway,
     *,
-    task: str = _DEFAULT_TASK,
+    task: str = _FINAL_TASK,
     max_tokens: int = _DEFAULT_MAX_TOKENS,
     model: str = "default",
     max_key_beats: int = 5,
@@ -205,7 +210,9 @@ class _AdaptiveGateway(Protocol):
 def make_adaptive_summarizer(
     gateway: _AdaptiveGateway,
     *,
-    task: str = _DEFAULT_TASK,
+    task: str | None = None,
+    running_task: str = _RUNNING_TASK,
+    final_task: str = _FINAL_TASK,
     max_tokens: int = _DEFAULT_MAX_TOKENS,
     model: str = "default",
     max_key_beats: int = 5,
@@ -216,11 +223,18 @@ def make_adaptive_summarizer(
     the single-pass final summarizer. Otherwise, processes posts in windows
     using a rolling summary, then produces the final summary from the
     accumulated context.
+
+    The intermediate rolling passes route through ``running_task`` (Light
+    tier) while the final close-out pass routes through ``final_task``
+    (Heavy tier). ``task``, if given, overrides both for back-compat.
     """
+    if task is not None:
+        running_task = task
+        final_task = task
 
     async def _get_context_window() -> int:
         try:
-            route = gateway.resolve_route(task)
+            route = gateway.resolve_route(final_task)
             info = await gateway.get_model_info(route.provider_id, route.model)
             if info is not None:
                 cw = getattr(info, "context_window", 0) or 0
@@ -252,7 +266,7 @@ def make_adaptive_summarizer(
             temperature=0.4,
         )
         try:
-            response = await gateway.complete(task, request)
+            response = await gateway.complete(running_task, request)
         except Exception as exc:
             logger.warning("adaptive rolling summary LLM call failed: %s", exc)
             return previous or ""
@@ -287,7 +301,7 @@ def make_adaptive_summarizer(
             temperature=0.3,
         )
         try:
-            response = await gateway.complete(task, request)
+            response = await gateway.complete(final_task, request)
         except Exception as exc:
             logger.warning("adaptive final summary LLM call failed: %s", exc)
             return running or _trivial_summary(scene, posts), []

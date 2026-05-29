@@ -871,6 +871,8 @@ class LLMGatewayService:
                     "input_tokens": response.usage.input_tokens,
                     "output_tokens": response.usage.output_tokens,
                     "total_tokens": response.usage.total_tokens,
+                    "cache_read_input_tokens": response.usage.cache_read_input_tokens,
+                    "cache_creation_input_tokens": response.usage.cache_creation_input_tokens,
                 },
                 "cost_estimate_usd": response.cost_estimate_usd,
                 "finish_reason": response.finish_reason,
@@ -1302,6 +1304,10 @@ class LLMGatewayService:
                     "input_tokens": usage.input_tokens if usage else 0,
                     "output_tokens": usage.output_tokens if usage else 0,
                     "total_tokens": usage.total_tokens if usage else 0,
+                    "cache_read_input_tokens": usage.cache_read_input_tokens if usage else 0,
+                    "cache_creation_input_tokens": (
+                        usage.cache_creation_input_tokens if usage else 0
+                    ),
                 },
                 "cost_estimate_usd": cost_estimate_usd,
                 "finish_reason": "stop",

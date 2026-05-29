@@ -60,7 +60,8 @@ async def test_running_summarizer_returns_model_text() -> None:
     summarize = make_default_running_summarizer(gateway)
     result = await summarize("prior", [_post(1, "Opening line.")])
     assert result == "Updated scene summary."
-    assert gateway.calls and gateway.calls[0][0] == "scene_summary"
+    # Running summary routes through the Light-tier task.
+    assert gateway.calls and gateway.calls[0][0] == "scenes.running_summary"
 
 
 async def test_running_summarizer_falls_back_on_error() -> None:
@@ -79,6 +80,8 @@ async def test_final_summarizer_parses_json_payload() -> None:
     summary, beats = await finalize(_scene(), [_post(1, "x"), _post(2, "y")])
     assert summary == "All resolved."
     assert beats == ["Met the Prince", "Made a vow"]
+    # Final summary routes through the Heavy-tier task.
+    assert gateway.calls and gateway.calls[0][0] == "scenes.final_summary"
 
 
 async def test_final_summarizer_handles_fenced_json() -> None:
@@ -182,6 +185,11 @@ async def test_adaptive_summarizer_windowed() -> None:
     assert summary == "Final summary."
     assert beats == ["Beat A", "Beat B"]
     assert call_count >= 2  # at least one rolling + one final
+    # Rolling passes route through the Light-tier task; the final close-out
+    # pass routes through the Heavy-tier task.
+    tasks = [t for t, _ in gateway.calls]
+    assert tasks[-1] == "scenes.final_summary"
+    assert "scenes.running_summary" in tasks[:-1]
 
 
 async def test_adaptive_summarizer_no_posts() -> None:

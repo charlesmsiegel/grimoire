@@ -35,10 +35,16 @@ class PromptAssembler:
 
         system_text = await self._system_block(ctx)
         if system_text:
+            # Cache breakpoint: the system block (style guide, content
+            # boundaries, voice) is the largest reliably-static prefix across
+            # turns in a scene. Marking it lets caching providers reuse it
+            # instead of re-billing it every turn. Providers without explicit
+            # caching ignore the hint.
             messages.append(
                 Message(
                     role=MessageRole.SYSTEM,
                     content=system_text,
+                    cache=True,
                     metadata={"tier": "system"},
                 )
             )

@@ -174,14 +174,58 @@ class AnthropicLLMProvider:
     # ------------------------------------------------------------------ #
 
     def _build_kwargs(self, request: CompletionRequest) -> dict[str, Any]:
+        # Anthropic requires the system prompt as a top-level ``system`` param;
+        # ``system``-role messages are NOT valid inside ``messages``. Hoist them
+        # out, preserving order, and apply a single ``cache_control`` breakpoint
+        # at the last system block that requested caching (Anthropic caches the
+        # prefix up to and including the marked block).
+        system_blocks: list[dict[str, Any]] = []
+        cache_break_idx: int | None = None
+        if request.system:
+            system_blocks.append({"type": "text", "text": request.system})
+        convo: list[dict[str, Any]] = []
+        for m in request.messages:
+            role = _role(m.role)
+            if role == "system":
+                system_blocks.append({"type": "text", "text": m.content})
+                if m.cache:
+                    cache_break_idx = len(system_blocks) - 1
+                continue
+            if m.cache:
+                convo.append(
+                    {
+                        "role": role,
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": m.content,
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ],
+                    }
+                )
+            else:
+                convo.append({"role": role, "content": m.content})
+
+        if cache_break_idx is not None:
+            system_blocks[cache_break_idx] = {
+                **system_blocks[cache_break_idx],
+                "cache_control": {"type": "ephemeral"},
+            }
+
         kwargs: dict[str, Any] = {
             "model": request.model or self._default_model,
-            "messages": [{"role": _role(m.role), "content": m.content} for m in request.messages],
+            "messages": convo,
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
         }
-        if request.system:
-            kwargs["system"] = request.system
+        if system_blocks:
+            # Plain-string form when there's a single uncached block (back-compat
+            # and smaller payload); block-list form when caching or multi-block.
+            if len(system_blocks) == 1 and "cache_control" not in system_blocks[0]:
+                kwargs["system"] = system_blocks[0]["text"]
+            else:
+                kwargs["system"] = system_blocks
         if request.stop_sequences:
             kwargs["stop_sequences"] = list(request.stop_sequences)
         return kwargs
@@ -205,10 +249,16 @@ def _usage_from_response(response: Any) -> TokenUsage:
         return TokenUsage()
     input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
     output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    # With prompt caching, ``input_tokens`` counts only uncached prompt tokens;
+    # cache reads/writes are reported separately.
+    cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    cache_creation = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
     return TokenUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        total_tokens=input_tokens + output_tokens,
+        total_tokens=input_tokens + output_tokens + cache_read + cache_creation,
+        cache_read_input_tokens=cache_read,
+        cache_creation_input_tokens=cache_creation,
     )
 
 
@@ -229,7 +279,14 @@ def _estimate_cost(usage: TokenUsage, model: str) -> float | None:
     if pricing is None:
         return None
     input_rate, output_rate = pricing
-    return (usage.input_tokens / 1000.0) * input_rate + (usage.output_tokens / 1000.0) * output_rate
+    # Anthropic prompt-cache pricing: cache writes cost 1.25x the base input
+    # rate, cache reads 0.1x. Plain ``input_tokens`` already excludes cached
+    # tokens, so the three terms don't overlap.
+    cost = (usage.input_tokens / 1000.0) * input_rate
+    cost += (usage.cache_creation_input_tokens / 1000.0) * input_rate * 1.25
+    cost += (usage.cache_read_input_tokens / 1000.0) * input_rate * 0.1
+    cost += (usage.output_tokens / 1000.0) * output_rate
+    return cost
 
 
 __all__ = ["AnthropicLLMProvider"]
