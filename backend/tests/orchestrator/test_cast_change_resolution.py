@@ -35,7 +35,13 @@ class _Scene:
 
 
 async def test_known_character_queued_unknown_becomes_candidate():
-    chars = _FakeCharacters({"reyes": CastRef(character_ref="library:worlds/w/characters/reyes", is_pc=False, name="Reyes")})
+    chars = _FakeCharacters(
+        {
+            "reyes": CastRef(
+                character_ref="library:worlds/w/characters/reyes", is_pc=False, name="Reyes"
+            )
+        }
+    )
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
         cast_changes=[
@@ -57,7 +63,9 @@ async def test_known_character_queued_unknown_becomes_candidate():
 
 
 async def test_pc_arrival_flagged_is_pc():
-    chars = _FakeCharacters({"hero": CastRef(character_ref="campaign:emergent/character/hero", is_pc=True, name="Hero")})
+    chars = _FakeCharacters(
+        {"hero": CastRef(character_ref="campaign:emergent/character/hero", is_pc=True, name="Hero")}
+    )
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
         cast_changes=[
@@ -76,7 +84,9 @@ async def test_pc_arrival_flagged_is_pc():
 
 
 async def test_noop_enter_already_present_is_dropped():
-    chars = _FakeCharacters({"reyes": CastRef(character_ref="ref:reyes", is_pc=False, name="Reyes")})
+    chars = _FakeCharacters(
+        {"reyes": CastRef(character_ref="ref:reyes", is_pc=False, name="Reyes")}
+    )
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
         cast_changes=[
@@ -134,7 +144,9 @@ async def test_pc_leave_present_only_in_pc_refs_is_queued():
 
 
 async def test_noop_leave_not_present_is_dropped():
-    chars = _FakeCharacters({"reyes": CastRef(character_ref="ref:reyes", is_pc=False, name="Reyes")})
+    chars = _FakeCharacters(
+        {"reyes": CastRef(character_ref="ref:reyes", is_pc=False, name="Reyes")}
+    )
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
         cast_changes=[
