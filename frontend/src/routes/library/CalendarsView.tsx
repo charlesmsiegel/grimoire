@@ -95,9 +95,9 @@ function CalendarsList() {
         <button onClick={() => navigate("/library/calendars/new")}>+ New calendar</button>
       </header>
       <p className="library-section-intro">
-        Worlds and campaigns can attach multiple calendars at once; dates in
-        one calendar reconcile to any other via a shared Julian Day Number.
-        Pick one as the "display" calendar for scene tracking.
+        Worlds and campaigns can attach multiple calendars at once; dates in one calendar reconcile
+        to any other via a shared Julian Day Number. Pick one as the "display" calendar for scene
+        tracking.
       </p>
       <AsyncBoundary
         loading={loading}
@@ -114,9 +114,7 @@ function CalendarsList() {
                 <h4>{c.name}</h4>
                 <small>{SYSTEM_LABELS[c.system]}</small>
                 {c.description && <p className="library-card-meta">{c.description}</p>}
-                {c.tags.length > 0 && (
-                  <p className="library-card-meta">{c.tags.join(" · ")}</p>
-                )}
+                {c.tags.length > 0 && <p className="library-card-meta">{c.tags.join(" · ")}</p>}
               </Link>
             </li>
           ))}
@@ -131,14 +129,10 @@ function CalendarsList() {
                   <Link to={`/library/calendars/${encodeURIComponent(c.id)}`}>
                     <h4>{c.name || c.id}</h4>
                     <small>{c.id}</small>
-                    {c.tags.length > 0 && (
-                      <p className="library-card-meta">{c.tags.join(" · ")}</p>
-                    )}
+                    {c.tags.length > 0 && <p className="library-card-meta">{c.tags.join(" · ")}</p>}
                   </Link>
                   <div className="library-card-actions">
-                    <Link to={`/library/calendars/${encodeURIComponent(c.id)}/edit`}>
-                      Edit
-                    </Link>
+                    <Link to={`/library/calendars/${encodeURIComponent(c.id)}/edit`}>Edit</Link>
                   </div>
                 </li>
               ))}
@@ -264,7 +258,10 @@ function CalendarCreate() {
         date_format: "",
       }}
       onSubmit={async (id, payload) => {
-        const created = await calendarsApi.createCalendar({ ...payload, id } as CreateCalendarPayload);
+        const created = await calendarsApi.createCalendar({
+          ...payload,
+          id,
+        } as CreateCalendarPayload);
         navigate(`/library/calendars/${encodeURIComponent(created.id)}`);
       }}
     />
@@ -357,7 +354,10 @@ function CalendarForm({
     setBusy(true);
     setErr(null);
     try {
-      const tags = tagsStr.split(",").map((t) => t.trim()).filter(Boolean);
+      const tags = tagsStr
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
       await onSubmit(id.trim(), {
         id: id.trim(),
         name: name.trim(),
@@ -477,7 +477,10 @@ function CalendarForm({
               onChange={(e) =>
                 setCustom((c) => ({
                   ...c,
-                  week_day_names: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                  week_day_names: e.target.value
+                    .split(",")
+                    .map((s) => s.trim())
+                    .filter(Boolean),
                 }))
               }
             />
@@ -562,8 +565,7 @@ function CalendarForm({
               </label>
             </>
           )}
-          {(custom.leap_rule.kind === "custom_cycle" ||
-            custom.leap_rule.kind === "leap_month") && (
+          {(custom.leap_rule.kind === "custom_cycle" || custom.leap_rule.kind === "leap_month") && (
             <>
               <label>
                 <span>Cycle length (years)</span>
@@ -662,8 +664,8 @@ function CalendarForm({
               }
             />
             <small>
-              1721426 = 1 Jan 1 CE (proleptic Gregorian). Pick any JDN to anchor
-              your fantasy calendar to a real-world date.
+              1721426 = 1 Jan 1 CE (proleptic Gregorian). Pick any JDN to anchor your fantasy
+              calendar to a real-world date.
             </small>
           </label>
           <label>

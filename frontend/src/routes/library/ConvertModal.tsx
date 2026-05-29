@@ -25,9 +25,7 @@ export function ConvertModal({
   onClose,
   onConverted,
 }: Props) {
-  const [targetKind, setTargetKind] = useState<EntityKind>(
-    initialTargetKind ?? "character",
-  );
+  const [targetKind, setTargetKind] = useState<EntityKind>(initialTargetKind ?? "character");
   const [preview, setPreview] = useState<ReclassificationPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -68,9 +66,7 @@ export function ConvertModal({
 
   const requiredFilled = useMemo(() => {
     if (!preview) return false;
-    return preview.required_overrides.every(
-      (k) => (overrides[k] ?? "").trim() !== "",
-    );
+    return preview.required_overrides.every((k) => (overrides[k] ?? "").trim() !== "");
   }, [preview, overrides]);
 
   async function submit() {
@@ -95,11 +91,7 @@ export function ConvertModal({
   }
 
   return (
-    <div
-      role="dialog"
-      aria-label={`Convert ${sourceId}`}
-      className="library-convert-modal"
-    >
+    <div role="dialog" aria-label={`Convert ${sourceId}`} className="library-convert-modal">
       <header>
         <h3>Convert {sourceId}</h3>
         <button type="button" onClick={onClose} aria-label="Close">
@@ -109,10 +101,7 @@ export function ConvertModal({
 
       <label>
         <span>Target kind</span>
-        <select
-          value={targetKind}
-          onChange={(e) => setTargetKind(e.target.value as EntityKind)}
-        >
+        <select value={targetKind} onChange={(e) => setTargetKind(e.target.value as EntityKind)}>
           {TARGETS.map((k) => (
             <option key={k} value={k}>
               {k}
@@ -129,8 +118,7 @@ export function ConvertModal({
           {preview.suggestion.kind !== "lore" && (
             <p className="convert-suggestion">
               Heuristic suggests <strong>{preview.suggestion.kind}</strong>:{" "}
-              {preview.suggestion.reason} (
-              {(preview.suggestion.confidence * 100).toFixed(0)}%)
+              {preview.suggestion.reason} ({(preview.suggestion.confidence * 100).toFixed(0)}%)
             </p>
           )}
 
@@ -182,11 +170,7 @@ export function ConvertModal({
             <button type="button" onClick={onClose} disabled={busy}>
               Cancel
             </button>
-            <button
-              type="button"
-              onClick={submit}
-              disabled={busy || !requiredFilled}
-            >
+            <button type="button" onClick={submit} disabled={busy || !requiredFilled}>
               Convert
             </button>
           </footer>

@@ -174,10 +174,7 @@ function EntityEditorBody({
   }
 
   const basePath = `/library/worlds/${encodeURIComponent(worldId)}/${encodeURIComponent(kindPlural)}/${encodeURIComponent(entityId)}`;
-  const subTabs = useMemo(
-    () => SUB_TABS(isCharacter, basePath),
-    [isCharacter, basePath],
-  );
+  const subTabs = useMemo(() => SUB_TABS(isCharacter, basePath), [isCharacter, basePath]);
 
   return (
     <div className="entity-editor-body">

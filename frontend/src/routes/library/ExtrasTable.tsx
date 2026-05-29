@@ -79,7 +79,9 @@ export function ExtrasTable({ worldId, kind, entityId, campaignId }: Props) {
         </button>
       </header>
       {entries.length === 0 && !adding ? (
-        <p className="extras-empty">No extras yet. Add a free-form detail like favorite_drink, scars, dialect_notes…</p>
+        <p className="extras-empty">
+          No extras yet. Add a free-form detail like favorite_drink, scars, dialect_notes…
+        </p>
       ) : null}
       <ul className="extras-rows">
         {entries.map(([key, extra]) => (
@@ -295,7 +297,10 @@ function parseEditableValue(text: string): ExtraValueShape {
   const trimmed = text.trim();
   if (!trimmed) return null;
   // Multi-line: list-of-strings, unless every line matches key=value → dict.
-  const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
   if (lines.length > 1) {
     if (lines.every((line) => /^[^=]+=[^=]*$/.test(line))) {
       const obj: Record<string, string> = {};

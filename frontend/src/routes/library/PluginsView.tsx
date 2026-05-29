@@ -214,17 +214,14 @@ function PluginConfigForm({ plugin }: { plugin: PluginManifest }) {
     setSaveErr(null);
   }, [properties]);
 
-  const handleGGUFIntrospect = useCallback(
-    (info: GGUFInfo) => {
-      setDraft((d) => {
-        const next = { ...d };
-        if (info.context_length != null && !d["n_ctx"]) next["n_ctx"] = info.context_length;
-        if (info.name && !d["model_id"]) next["model_id"] = info.name;
-        return next;
-      });
-    },
-    [],
-  );
+  const handleGGUFIntrospect = useCallback((info: GGUFInfo) => {
+    setDraft((d) => {
+      const next = { ...d };
+      if (info.context_length != null && !d["n_ctx"]) next["n_ctx"] = info.context_length;
+      if (info.name && !d["model_id"]) next["model_id"] = info.name;
+      return next;
+    });
+  }, []);
 
   if (propertyKeys.length === 0) {
     return (
@@ -277,4 +274,3 @@ function PluginConfigForm({ plugin }: { plugin: PluginManifest }) {
     </section>
   );
 }
-
