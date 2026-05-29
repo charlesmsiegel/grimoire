@@ -57,6 +57,10 @@ CONTRADICTION_DETECTED = "contradiction_detected"
 COMMITMENT_CREATED = "commitment_created"
 COMMITMENT_PAID_OFF = "commitment_paid_off"
 COMMITMENT_BROKEN = "commitment_broken"
+
+# Inventory (#444)
+INVENTORY_CHANGED = "inventory_changed"
+INVENTORY_FLAGGED = "inventory_flagged"
 COMMITMENT_REOPENED = "commitment_reopened"
 COMMITMENT_OVERDUE = "commitment_overdue"
 COMMITMENT_STALE = "commitment_stale"
