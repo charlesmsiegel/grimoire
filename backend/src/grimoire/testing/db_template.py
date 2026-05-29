@@ -79,5 +79,12 @@ def stamp_migrated_db(path: str | Path) -> Path:
             _template_path = _build_template()
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    # A prior consumer of this path may have left WAL/SHM sidecars behind (WAL
+    # is the default journal mode). The copied template is a complete,
+    # self-contained snapshot; any leftover -wal/-shm would replay stale frames
+    # into it on the next open and leak old rows into a supposedly pristine DB.
+    # Drop them so the stamped database stands alone.
+    for sidecar in (f"{dest}-wal", f"{dest}-shm"):
+        Path(sidecar).unlink(missing_ok=True)
     shutil.copy(_template_path, dest)
     return dest
