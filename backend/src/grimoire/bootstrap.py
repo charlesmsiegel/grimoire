@@ -528,6 +528,7 @@ async def build_play_services(
             state_store=container.state_store,
             mechanics=container.mechanics,
             world=container.world,
+            characters=container.characters,
             continuity=container.continuity,
             transient_state=container.transient_state,
             inventory=container.inventory,

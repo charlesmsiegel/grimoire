@@ -240,6 +240,7 @@ async def analyze_scene(
             applied_ids, queued_ids = await orchestrator.route_analysis_deltas(
                 campaign_id=campaign_id,
                 extraction=result.extraction,
+                scene_id=scene_id,
             )
 
         return {

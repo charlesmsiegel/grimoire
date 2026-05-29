@@ -160,6 +160,65 @@ class _CampaignTurnState:
     speaker_loop_event: asyncio.Event | None = None
 
 
+async def resolve_cast_changes(
+    *,
+    extraction: ExtractionResult,
+    scene: Any,
+    campaign_id: CampaignId,
+    turn_id: str | None,
+    characters: Any,
+    scenes: Any,
+) -> list[str]:
+    """Resolve extractor cast-change proposals and queue the known ones (#464).
+
+    Known characters → ``SceneManager.queue_cast_change`` (pending review).
+    Unknown names → appended to ``extraction.candidates`` (new-character flow).
+    No-ops (enter already-present / leave not-present) are dropped. Returns the
+    list of queued pending-cast-change ids.
+    """
+    from grimoire.types.common import EntityKind
+    from grimoire.types.extraction import EntityCandidate
+    from grimoire.types.scene import CastChange
+    from grimoire.util import slugify_id
+
+    queued: list[str] = []
+    if characters is None or scenes is None:
+        return queued
+    present = set(getattr(scene, "present_character_refs", []) or [])
+    for proposal in extraction.cast_changes:
+        cast_ref = await characters.find_cast_ref(campaign_id, proposal.character_ref)
+        if cast_ref is None:
+            name = proposal.character_ref.strip()
+            if name and not any(c.proposed_name == name for c in extraction.candidates):
+                extraction.candidates.append(
+                    EntityCandidate(
+                        kind=EntityKind.CHARACTER,
+                        proposed_id=slugify_id(name, fallback="unknown"),
+                        proposed_name=name,
+                        evidence=proposal.evidence,
+                        confidence=proposal.confidence,
+                        suggested_card={"name": name, "scope": "campaign-local"},
+                    )
+                )
+            continue
+        ref = cast_ref.character_ref
+        if proposal.change == CastChange.ENTER and ref in present:
+            continue
+        if proposal.change == CastChange.LEAVE and ref not in present:
+            continue
+        change_id = await scenes.queue_cast_change(
+            scene.id,
+            character_ref=ref,
+            change=proposal.change,
+            is_pc=cast_ref.is_pc,
+            evidence=proposal.evidence,
+            confidence=proposal.confidence,
+            turn_id=turn_id,
+        )
+        queued.append(change_id)
+    return queued
+
+
 class OrchestratorService:
     """Concrete Orchestrator.
 
@@ -179,6 +238,7 @@ class OrchestratorService:
         state_store: Any,
         mechanics: Any | None = None,
         world: Any | None = None,
+        characters: Any | None = None,
         continuity: Any | None = None,
         transient_state: Any | None = None,
         inventory: Any | None = None,
@@ -200,6 +260,7 @@ class OrchestratorService:
         self._store = state_store
         self._mechanics = mechanics
         self._world = world  # §5: optional, used to dispatch weather-override deltas
+        self._characters = characters  # §464: optional, used for cast-change resolution
         self._library = library
         # §5: optional continuity (registry or single service). When wired,
         # FACT_* / COMMITMENT_* / KNOWLEDGE_REVEAL deltas route to the
@@ -606,6 +667,7 @@ class OrchestratorService:
         self,
         campaign_id: CampaignId,
         extraction: ExtractionResult,
+        scene_id: SceneId | None = None,
     ) -> tuple[list[str], list[str]]:
         """Route deltas from a scene analysis through the standard pipeline.
 
@@ -622,6 +684,7 @@ class OrchestratorService:
             candidates=extraction.candidates,
             flags=extraction.flags,
             transient_updates=extraction.transient_updates,
+            cast_changes=extraction.cast_changes,
             confidence_overall=extraction.confidence_overall,
             extraction_strategies_run=extraction.extraction_strategies_run,
         )
@@ -631,6 +694,18 @@ class OrchestratorService:
             turn_id=turn_id,
             extraction=filtered,
         )
+
+        # §464: resolve cast-change proposals when a scene context is given.
+        if scene_id is not None and self._characters is not None and filtered.cast_changes:
+            scene_obj = await self._scenes.get_scene(scene_id)
+            await resolve_cast_changes(
+                extraction=filtered,
+                scene=scene_obj,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                characters=self._characters,
+                scenes=self._scenes,
+            )
 
         if self._transient_state is not None and filtered.transient_updates:
             from grimoire.transient_state.routing import route_transient_updates
@@ -1070,6 +1145,24 @@ class OrchestratorService:
             except Exception:
                 logger.exception("inventory apply failed; continuing turn")
 
+        # §464: resolve cast-change proposals into pending review items.
+        if extraction is not None and self._characters is not None:
+            pending_ids = await resolve_cast_changes(
+                extraction=extraction,
+                scene=scene_obj,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                characters=self._characters,
+                scenes=self._scenes,
+            )
+            if pending_ids:
+                pending = await self._scenes.list_pending_cast_changes(scene_id)
+                await self._emit_fragment(
+                    turn_id,
+                    campaign_id,
+                    pending_cast_changes=[p.model_dump(mode="json") for p in pending],
+                )
+
         if (
             extraction is not None
             and self._transient_state is not None
@@ -1114,12 +1207,14 @@ class OrchestratorService:
             await self._scenes.append_post(scene_id, rp)
         await self._emit_fragment(turn_id, campaign_id, scene_appended=True)
 
+        pending_cast = await self._scenes.list_pending_cast_changes(scene_id)
         await self._emit_turn_event(
             events.TURN_COMPLETE,
             turn_id,
             campaign_id,
             scene_id,
             time_advances=time_advance_durations,
+            pending_cast_changes=[p.model_dump(mode="json") for p in pending_cast],
         )
 
     async def _run_speaker_loop(
