@@ -8,6 +8,7 @@ import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
 import { ImportDialog } from "./ImportDialog";
 
 const ENTITY_TABS = [
+  { to: ".", label: "Overview", end: true },
   { to: "characters", label: "Characters" },
   { to: "monsters", label: "Monsters" },
   { to: "items", label: "Items" },
@@ -162,6 +163,7 @@ export function WorldDetailView() {
             <NavLink
               key={tab.to}
               to={tab.to}
+              end={(tab as { end?: boolean }).end}
               className={({ isActive }) => (isActive ? "world-tab active" : "world-tab")}
             >
               {tab.label}
