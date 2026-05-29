@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
@@ -89,6 +90,16 @@ from .views import (
 )
 
 _log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CastRef:
+    """A character reference resolved for cast-change purposes (#464)."""
+
+    character_ref: str
+    is_pc: bool
+    name: str
+
 
 PostFetcher = Callable[[str], Awaitable[list[Post]]]
 
@@ -288,6 +299,36 @@ class CharactersService:
             if filter is None or _passes_resolved_filter(resolved, filter):
                 out.append(resolved)
         return out
+
+    async def find_cast_ref(self, campaign_id: CampaignId, query: str) -> CastRef | None:
+        """Resolve an extractor-emitted id/name to a canonical character ref.
+
+        Matches ``query`` against character id and slugified name across every
+        character composed into the campaign (library + emergent). Returns
+        ``None`` when nothing resolves — the caller routes unknown names to the
+        new-character candidate flow (#464).
+        """
+        needle = slugify_id(query, fallback=query.lower()).strip()
+        if not needle:
+            return None
+        for resolved in await self.list_for_campaign(campaign_id):
+            ch = resolved.character
+            candidates = {
+                slugify_id(ch.id, fallback=ch.id.lower()),
+                slugify_id(ch.name, fallback=ch.name.lower()),
+            }
+            if needle not in candidates:
+                continue
+            if ch.world_id is None:
+                ref = f"campaign:emergent/character/{ch.id}"
+            else:
+                ref = f"library:worlds/{ch.world_id}/characters/{ch.id}"
+            return CastRef(
+                character_ref=ref,
+                is_pc=(ch.role == CharacterRole.PC),
+                name=ch.name,
+            )
+        return None
 
     # ------------------------------------------------------------------ #
     # Cross-world variants
