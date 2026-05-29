@@ -215,16 +215,16 @@ def _make_inventory_delta(
     campaign_id: CampaignId,
     source: str,
 ) -> StateDelta:
-    delta_value = "+1" if direction == "gain" else "-1"
+    action = "acquire" if direction == "gain" else "drop"
     return StateDelta(
         kind=DeltaKind.INVENTORY_CHANGE,
         target_scope=Scope.CAMPAIGN_SQLITE,
-        target_id=f"{actor.lower()}:{item.strip().lower()}",
-        target_table="character_state",
+        target_id=f"{actor.lower()}:{action}:{item.strip().lower()}",
         after={
-            "character_id": actor,
+            "action": action,
             "item": item.strip(),
-            "delta": delta_value,
+            "holder": actor,
+            "quantity": 1,
             "campaign_id": campaign_id,
         },
         confidence=confidence,

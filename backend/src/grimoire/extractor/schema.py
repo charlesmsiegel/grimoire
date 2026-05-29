@@ -100,13 +100,21 @@ def output_schema() -> JsonSchema:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "character_id": {"type": "string"},
+            "action": {
+                "type": "string",
+                "enum": ["acquire", "drop", "transfer", "consume",
+                         "adjust", "equip", "unequip"],
+            },
             "item": {"type": "string"},
-            "delta": {"type": "string"},
+            "holder": {"type": "string"},
+            "to": {"type": ["string", "null"]},
+            "quantity": {"type": ["integer", "null"]},
+            "equipped": {"type": ["boolean", "null"]},
+            "provenance": {"type": ["string", "null"]},
             "evidence": {"type": "string"},
             "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
         },
-        "required": ["character_id", "item", "delta", "confidence"],
+        "required": ["action", "item", "holder", "confidence"],
     }
     mechanical_event = {
         "type": "object",

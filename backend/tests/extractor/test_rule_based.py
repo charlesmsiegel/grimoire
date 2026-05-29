@@ -42,7 +42,8 @@ def test_inventory_pick_up_emits_inventory_change():
     inv = [d for d in deltas if d.kind == DeltaKind.INVENTORY_CHANGE]
     assert len(inv) == 1
     assert inv[0].after["item"].strip() == "silver ring"
-    assert inv[0].after["delta"] == "+1"
+    assert inv[0].after["action"] == "acquire"
+    assert inv[0].after["holder"] == "winifred"
     # Inventory is intentionally below auto-apply threshold.
     assert inv[0].confidence == 0.8
 
@@ -58,6 +59,7 @@ def test_handed_emits_loss_direction():
     )
     inv = [d for d in deltas if d.kind == DeltaKind.INVENTORY_CHANGE]
     assert inv and inv[0].extra["direction"] == "loss"
+    assert inv[0].after["action"] == "drop"
 
 
 def test_wound_phrase_emits_mechanical_event():
