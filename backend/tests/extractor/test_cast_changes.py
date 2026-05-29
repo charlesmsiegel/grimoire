@@ -96,3 +96,24 @@ def test_tracker_projects_cast_changes():
     assert len(changes) == 1
     assert changes[0].character_ref == "reyes"
     assert changes[0].change == "enter"
+
+
+def test_update_cast_tool_registered():
+    from grimoire.extractor.tool_use import ALL_TOOLS, UPDATE_CAST_TOOL
+
+    assert UPDATE_CAST_TOOL in ALL_TOOLS
+    assert UPDATE_CAST_TOOL.name == "update_cast"
+
+
+def test_project_cast_changes_from_tool_calls():
+    from grimoire.extractor.tool_use import ToolCall, project_cast_changes
+
+    calls = [
+        ToolCall(name="update_cast", args={"character_id": "reyes", "change": "leave", "confidence": 0.7}),
+        ToolCall(name="record_fact", args={"text": "ignored"}),
+        ToolCall(name="update_cast", args={"character_id": "x", "change": "bogus", "confidence": 0.5}),
+    ]
+    out = project_cast_changes(calls)
+    assert len(out) == 1
+    assert out[0].character_ref == "reyes"
+    assert out[0].change == "leave"

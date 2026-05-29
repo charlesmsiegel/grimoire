@@ -37,7 +37,7 @@ from grimoire.extractor.together import (
     project_tracker_to_cast_changes,
     project_tracker_to_deltas,
 )
-from grimoire.extractor.tool_use import ToolCall, project_tool_calls
+from grimoire.extractor.tool_use import ToolCall, project_cast_changes, project_tool_calls
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
 from grimoire.types.common import CampaignId, EntityKind, Json, Scope, TurnId
 from grimoire.types.extraction import (
@@ -480,6 +480,7 @@ class ExtractorService:
             tool_calls,
             campaign_id=campaign_id,
         )
+        tool_cast_changes = project_cast_changes(tool_calls)
         sanity = await self._run_sanity_layer(
             text=response_text,
             scene=scene,
@@ -496,6 +497,7 @@ class ExtractorService:
             snapshot=snapshot,
             turn_id=turn_id,
             strategies_run=["tool_use", *sanity.strategies_run],
+            primary_cast_changes=tool_cast_changes,
         )
 
     async def _run_sanity_layer(
