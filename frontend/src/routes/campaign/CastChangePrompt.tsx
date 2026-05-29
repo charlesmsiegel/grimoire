@@ -18,6 +18,9 @@ import { useCampaignEvent } from "../../state/useCampaignEvent";
 interface Props {
   campaignId: string;
   sceneId: string;
+  /** Called after a confirmed cast change is applied, so the caller can
+   *  reload scene state (Side HUD cast, PC-dependent controls). */
+  onApplied?: () => void;
 }
 
 function label(c: PendingCastChange): string {
@@ -25,7 +28,7 @@ function label(c: PendingCastChange): string {
   return c.change === "enter" ? `${name} enters the scene` : `${name} leaves the scene`;
 }
 
-export function CastChangePrompt({ campaignId, sceneId }: Props) {
+export function CastChangePrompt({ campaignId, sceneId, onApplied }: Props) {
   const [pending, setPending] = useState<PendingCastChange[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -64,8 +67,15 @@ export function CastChangePrompt({ campaignId, sceneId }: Props) {
   async function act(id: string, kind: "confirm" | "dismiss") {
     setBusy(id);
     try {
-      if (kind === "confirm") await campaignApi.confirmCastChange(campaignId, sceneId, id);
-      else await campaignApi.dismissCastChange(campaignId, sceneId, id);
+      if (kind === "confirm") {
+        await campaignApi.confirmCastChange(campaignId, sceneId, id);
+        remove(id);
+        // Applying changed the scene cast — reload so the HUD/PC controls
+        // reflect the new present_*_refs rather than stale membership.
+        onApplied?.();
+        return;
+      }
+      await campaignApi.dismissCastChange(campaignId, sceneId, id);
       remove(id);
     } catch (err) {
       // 404/400 mean the change was already resolved or the scene moved on —

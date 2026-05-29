@@ -1089,6 +1089,28 @@ class OrchestratorService:
             mode=extract_mode,
         )
         extract_duration_ms = int((self._clock() - extract_started).total_seconds() * 1000)
+
+        # §464: resolve cast-change proposals *before* routing/emitting, so an
+        # unknown-name candidate it appends is part of the extraction for every
+        # downstream consumer (DELTAS_EXTRACTED, apply_routing), and pending
+        # cast changes are queued for review.
+        if extraction is not None and self._characters is not None:
+            pending_ids = await resolve_cast_changes(
+                extraction=extraction,
+                scene=scene_obj,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                characters=self._characters,
+                scenes=self._scenes,
+            )
+            if pending_ids:
+                pending = await self._scenes.list_pending_cast_changes(scene_id)
+                await self._emit_fragment(
+                    turn_id,
+                    campaign_id,
+                    pending_cast_changes=[p.model_dump(mode="json") for p in pending],
+                )
+
         await self._emit_turn_event(
             events.DELTAS_EXTRACTED,
             turn_id,
@@ -1151,24 +1173,6 @@ class OrchestratorService:
                 )
             except Exception:
                 logger.exception("inventory apply failed; continuing turn")
-
-        # §464: resolve cast-change proposals into pending review items.
-        if extraction is not None and self._characters is not None:
-            pending_ids = await resolve_cast_changes(
-                extraction=extraction,
-                scene=scene_obj,
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                characters=self._characters,
-                scenes=self._scenes,
-            )
-            if pending_ids:
-                pending = await self._scenes.list_pending_cast_changes(scene_id)
-                await self._emit_fragment(
-                    turn_id,
-                    campaign_id,
-                    pending_cast_changes=[p.model_dump(mode="json") for p in pending],
-                )
 
         if (
             extraction is not None

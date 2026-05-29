@@ -322,6 +322,10 @@ class CharactersService:
         needles.discard("")
         if not needles:
             return None
+        # Campaign PC registration is authoritative for is_pc: a character can
+        # be registered as a campaign PC via ``add_pc`` regardless of its card
+        # role, and that drives multi-PC advance gating on confirm.
+        pc_refs = {pc.character_ref for pc in await self.list_pcs(campaign_id)}
         for resolved in await self.list_for_campaign(campaign_id):
             ch = resolved.character
             if ch.world_id is None:
@@ -336,7 +340,7 @@ class CharactersService:
                 continue
             return CastRef(
                 character_ref=ref,
-                is_pc=(ch.role == CharacterRole.PC),
+                is_pc=(ch.role == CharacterRole.PC or ref in pc_refs),
                 name=ch.name,
             )
         return None

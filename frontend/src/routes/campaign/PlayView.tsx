@@ -131,7 +131,11 @@ export function PlayView({ campaignId }: Props) {
       <PreRollConfirmation campaignId={campaignId} />
       <SceneBreakPrompt campaignId={campaignId} />
       {play.state.scene && (
-        <CastChangePrompt campaignId={campaignId} sceneId={play.state.scene.id} />
+        <CastChangePrompt
+          campaignId={campaignId}
+          sceneId={play.state.scene.id}
+          onApplied={play.refresh}
+        />
       )}
 
       {actionError && (

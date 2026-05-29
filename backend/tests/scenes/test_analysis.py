@@ -178,6 +178,19 @@ def test_parse_analysis_response_empty():
     assert result.extraction.deltas == []
 
 
+def test_parse_analysis_response_carries_cast_changes():
+    # A scene analysis that only detects a character entering must still
+    # surface the cast change in the extraction (#464).
+    payload = {
+        "summary": "s",
+        "cast_changes": [{"character_id": "reyes", "change": "enter", "confidence": 0.9}],
+    }
+    result = _parse_analysis_response(
+        payload, campaign_id="camp1", payload_parser=parse_llm_payload
+    )
+    assert [c.character_ref for c in result.extraction.cast_changes] == ["reyes"]
+
+
 def test_parse_analysis_caps_key_beats():
     payload = {
         "summary": "s",

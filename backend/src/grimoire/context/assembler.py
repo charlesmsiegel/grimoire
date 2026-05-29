@@ -236,8 +236,10 @@ class PromptAssembler:
             "character_updates (list of {character_id, field, after, before?, "
             "confidence?}). Optional keys: location_updates, faction_updates, "
             "commitments_added, commitments_resolved, new_entities, advance_time, "
-            "change_location. Position the tracker after the prose; do not "
-            "interleave it with narrative text."
+            "change_location, cast_changes (list of {character_id, change: "
+            "'enter'|'leave', evidence?, confidence?} for known characters who "
+            "enter or leave the scene). Position the tracker after the prose; do "
+            "not interleave it with narrative text."
         )
 
     async def _system_block(self, ctx: BuiltContext) -> str:
