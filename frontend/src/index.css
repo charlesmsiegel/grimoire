@@ -3446,6 +3446,122 @@ pre {
   margin: 0;
 }
 
+/* --- Mechanics authoring editor --- */
+
+.library-section-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.module-create-form,
+.manifest-form,
+.field-editor,
+.theme-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-elev);
+}
+
+.manifest-form input,
+.manifest-form textarea,
+.module-create-form input,
+.theme-editor textarea,
+.field-editor input,
+.field-editor textarea,
+.field-editor select,
+.schema-builder textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.mechanics-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mechanics-tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mechanics-tabs button {
+  text-transform: capitalize;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent;
+}
+
+.mechanics-tabs button.active {
+  background: var(--bg-elev);
+  border-color: var(--border-subtle);
+}
+
+.schema-builder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.schema-builder-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.schema-builder-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.schema-builder-preview {
+  border-left: 1px solid var(--border-subtle);
+  padding-left: var(--space-4);
+}
+
+.field-editor-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.field-editor-row input[type="text"],
+.field-editor-row select {
+  width: auto;
+}
+
+.field-editor-config {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.schema-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+@media (max-width: 720px) {
+  .schema-builder-body {
+    grid-template-columns: 1fr;
+  }
+  .schema-builder-preview {
+    border-left: none;
+    padding-left: 0;
+  }
+}
+
 .mechanics-requirements {
   background: var(--bg-elev);
   border: 1px solid var(--border-subtle);
