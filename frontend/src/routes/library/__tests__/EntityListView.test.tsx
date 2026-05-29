@@ -14,6 +14,7 @@ vi.mock("../../../api/library", async () => {
       listEntities: vi.fn(),
       deleteEntity: vi.fn(),
       dependents: vi.fn(),
+      createEntity: vi.fn(),
     },
   };
 });
@@ -90,5 +91,36 @@ describe("EntityListView token badges", () => {
 
     await waitFor(() => expect(screen.getByText("Alistair")).toBeInTheDocument());
     expect(screen.getByText(/tokens/)).toBeInTheDocument();
+  });
+});
+
+describe("EntityListView rich create", () => {
+  it("creates a character with auto-id and role via the rich create form", async () => {
+    vi.mocked(libraryModule.libraryApi.listEntities).mockResolvedValue([]);
+    vi.mocked(libraryModule.libraryApi.dependents).mockResolvedValue([]);
+    vi.mocked(libraryModule.libraryApi.createEntity).mockResolvedValue({
+      asset_id: "alistair",
+    } as never);
+
+    render(
+      <MemoryRouter initialEntries={["/library/worlds/w1/characters"]}>
+        <Routes>
+          <Route path="/library/worlds/:worldId/:kind" element={<EntityListView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /New character/ }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Alistair" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Create/ }));
+    await waitFor(() =>
+      expect(libraryModule.libraryApi.createEntity).toHaveBeenCalledWith(
+        "w1",
+        "characters",
+        expect.objectContaining({
+          id: "alistair",
+          frontmatter: expect.objectContaining({ name: "Alistair" }),
+        }),
+      ),
+    );
   });
 });
