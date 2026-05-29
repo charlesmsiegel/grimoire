@@ -34,6 +34,7 @@ from grimoire.extractor.together import (
     extract_tracker_block,
     parse_tracker_text,
     project_tracker_to_candidates,
+    project_tracker_to_cast_changes,
     project_tracker_to_deltas,
 )
 from grimoire.extractor.tool_use import ToolCall, project_tool_calls
@@ -422,6 +423,7 @@ class ExtractorService:
             source=self._source + ":together",
         )
         tracker_candidates = project_tracker_to_candidates(parsed)
+        tracker_cast_changes = project_tracker_to_cast_changes(parsed)
         sanity = await self._run_sanity_layer(
             text=response_text,
             scene=scene,
@@ -438,6 +440,7 @@ class ExtractorService:
             snapshot=snapshot,
             turn_id=turn_id,
             strategies_run=["together", *sanity.strategies_run],
+            primary_cast_changes=tracker_cast_changes,
         )
 
     async def _run_tool_use(
@@ -552,6 +555,7 @@ class ExtractorService:
         snapshot: StateSnapshot,
         turn_id: TurnId | None,
         strategies_run: list[str],
+        primary_cast_changes: list | None = None,
     ) -> ExtractionResult:
         """Combine tracker/tool deltas with the sanity layer + downstream
         validation (mechanics, contradictions, library drift).
@@ -595,6 +599,7 @@ class ExtractorService:
             candidates=candidates,
             extras_proposals=extras_proposals,
             flags=flags,
+            cast_changes=list(primary_cast_changes or []),
             confidence_overall=confidence_overall,
             extraction_strategies_run=strategies_run,
             duration_ms=int((time.monotonic() - started) * 1000),
