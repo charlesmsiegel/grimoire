@@ -882,6 +882,150 @@ class StateStore:
             return None
         return _json_loads(row["config"])
 
+    async def set_campaign_config(self, campaign_id: str, config: dict | None) -> None:
+        await self.db.execute(
+            "UPDATE campaigns SET config = ? WHERE id = ?",
+            (_json_dumps(config) if config is not None else None, campaign_id),
+        )
+
+    # ── Inventory derived state (#444) ──────────────────────────────
+
+    async def upsert_inventory_holding(
+        self,
+        *,
+        campaign_id: str,
+        holder_kind: str,
+        holder_id: str,
+        item_ref: str,
+        item_name: str,
+        quantity: int,
+        fungible: bool,
+        equipped: bool,
+        provenance: str | None,
+        notes: str | None,
+    ) -> None:
+        rid = f"{campaign_id}:{holder_kind}:{holder_id}:{item_ref}"
+        await self.db.execute(
+            """
+            INSERT INTO inventory_holdings
+              (id, campaign_id, holder_kind, holder_id, item_ref, item_name,
+               quantity, fungible, equipped, provenance, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              item_name=excluded.item_name, quantity=excluded.quantity,
+              fungible=excluded.fungible, equipped=excluded.equipped,
+              provenance=excluded.provenance, notes=excluded.notes
+            """,
+            (rid, campaign_id, holder_kind, holder_id, item_ref, item_name,
+             int(quantity), int(fungible), int(equipped), provenance, notes),
+        )
+
+    async def delete_inventory_holding(
+        self, campaign_id: str, holder_kind: str, holder_id: str, item_ref: str
+    ) -> None:
+        rid = f"{campaign_id}:{holder_kind}:{holder_id}:{item_ref}"
+        await self.db.execute("DELETE FROM inventory_holdings WHERE id = ?", (rid,))
+
+    async def clear_holder_inventory(
+        self, campaign_id: str, holder_kind: str, holder_id: str
+    ) -> None:
+        await self.db.execute(
+            "DELETE FROM inventory_holdings WHERE campaign_id=? AND holder_kind=? AND holder_id=?",
+            (campaign_id, holder_kind, holder_id),
+        )
+
+    async def list_inventory_holdings(
+        self,
+        campaign_id: str,
+        *,
+        holder_kind: str | None = None,
+        holder_id: str | None = None,
+        item_ref: str | None = None,
+    ) -> list[dict]:
+        sql = "SELECT * FROM inventory_holdings WHERE campaign_id = ?"
+        params: list = [campaign_id]
+        if holder_kind is not None:
+            sql += " AND holder_kind = ?"
+            params.append(holder_kind)
+        if holder_id is not None:
+            sql += " AND holder_id = ?"
+            params.append(holder_id)
+        if item_ref is not None:
+            sql += " AND item_ref = ?"
+            params.append(item_ref)
+        rows = await self.db.fetchall(sql, tuple(params))
+        return [dict(r) for r in rows]
+
+    async def record_inventory_flag(
+        self,
+        *,
+        campaign_id: str,
+        turn_id: str | None,
+        op_json: str,
+        flag_reason: str,
+        created_at: str,
+    ) -> str:
+        from grimoire.util import new_id
+
+        fid = new_id("invflag")
+        await self.db.execute(
+            """
+            INSERT INTO inventory_flags
+              (id, campaign_id, turn_id, op_json, flag_reason, resolved, created_at)
+            VALUES (?, ?, ?, ?, ?, 0, ?)
+            """,
+            (fid, campaign_id, turn_id, op_json, flag_reason, created_at),
+        )
+        return fid
+
+    async def list_inventory_flags(self, campaign_id: str, *, resolved: bool) -> list[dict]:
+        rows = await self.db.fetchall(
+            "SELECT * FROM inventory_flags WHERE campaign_id=? AND resolved=? "
+            "ORDER BY created_at DESC",
+            (campaign_id, int(resolved)),
+        )
+        return [dict(r) for r in rows]
+
+    async def resolve_inventory_flag(self, campaign_id: str, flag_id: str) -> None:
+        await self.db.execute(
+            "UPDATE inventory_flags SET resolved=1 WHERE campaign_id=? AND id=?",
+            (campaign_id, flag_id),
+        )
+
+    async def find_item_by_name(self, campaign_id: str, name: str) -> dict | None:
+        """Resolve an item name to a campaign-visible item via the content index."""
+        import json
+
+        from grimoire.util import slugify_id
+
+        slug = slugify_id(name)
+        row = await self.db.fetchone(
+            "SELECT asset_id, frontmatter FROM campaign_content_index "
+            "WHERE campaign_id=? AND entity_subkind='item' AND asset_id=?",
+            (campaign_id, slug),
+        )
+        if row is None:
+            return None
+        fm = json.loads(row["frontmatter"]) if row["frontmatter"] else {}
+        return {"item_ref": row["asset_id"], "item_name": fm.get("name", name)}
+
+    async def create_emergent_item(
+        self, campaign_id: str, name: str, *, source: str, turn_id: str | None = None
+    ) -> str:
+        from grimoire.util import slugify_id
+
+        slug = slugify_id(name)
+        await self.write_emergent(
+            campaign_id=campaign_id,
+            kind="item",
+            entity_id=slug,
+            frontmatter={"id": slug, "name": name, "tags": ["emergent"]},
+            body="",
+            source=source,
+            turn_id=turn_id,
+        )
+        return slug
+
     async def campaign_exists(self, campaign_id: str) -> bool:
         row = await self.db.fetchone("SELECT 1 FROM campaigns WHERE id = ?", (campaign_id,))
         return row is not None
