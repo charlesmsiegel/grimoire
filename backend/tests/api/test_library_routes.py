@@ -323,6 +323,26 @@ def test_create_world_entity(client, container) -> None:
     assert fake.created == [("character", "new-pc")]
 
 
+def test_world_summary_returns_counts_and_flags(client, container) -> None:
+    container.library = FakeLibrary()
+    response = client.get("/api/library/worlds/wod-london/summary")
+    assert response.status_code == 200
+    body = response.json()
+    # FakeLibrary.list_in_world returns one entity for every kind.
+    assert body["counts"]["characters"] == 1
+    assert set(body["counts"]) == {
+        "characters",
+        "locations",
+        "items",
+        "lore",
+        "factions",
+        "monsters",
+        "greetings",
+    }
+    assert body["has_description"] is False
+    assert body["has_genre"] is False
+
+
 def test_entity_schema_returns_model_properties(client) -> None:
     response = client.get("/api/library/entity-schemas/character")
     assert response.status_code == 200
