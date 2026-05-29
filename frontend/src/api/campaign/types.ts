@@ -260,6 +260,20 @@ export interface SceneBreakSuggestedEvent {
 
 export type SceneBreakChoice = "continue" | "new_scene";
 
+export interface PendingCastChange {
+  id: string;
+  campaign_id: string;
+  scene_id: string;
+  character_ref: string;
+  change: "enter" | "leave";
+  is_pc: boolean;
+  evidence: string;
+  confidence: number;
+  turn_id: string | null;
+  status: string;
+  created_at: string;
+}
+
 export interface MissingSheet {
   kind: string;
   entity_id: string;
