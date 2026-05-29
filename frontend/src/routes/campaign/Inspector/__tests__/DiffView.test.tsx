@@ -16,6 +16,7 @@ const diff: ContextDiff = {
       inclusion_reasons: ["present_in_scene"],
       tokens: 800,
       summary: "Henry",
+      text: "Henry body",
     },
   ],
   entities_removed: [],
