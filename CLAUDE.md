@@ -41,6 +41,7 @@ backend/
     templates/           # Jinja2 template rendering
     auxiliary/           # Background LLM jobs (summarization, etc.)
     transient_state/     # Ephemeral character/location state
+    inventory/           # Deterministic per-holder item/resource tracking
     watcher/             # File watcher for library/campaign changes
     validation/          # JSON Schema validation
     event_bus.py         # In-process async event bus
@@ -155,6 +156,7 @@ Writes go through the owning module. Don't bypass this.
 | Export | Artifact generation | EPUB, Markdown, HTML, transcript |
 | Plugins | Plugin lifecycle | Loading, validation, registry |
 | Observability | Audit trail | Turn replay, metrics, context inspection, terminal wire logging |
+| Inventory | Holdings, operations | Deterministic per-holder item/resource tracking (toggleable) |
 
 ## Development Commands
 
@@ -259,6 +261,22 @@ User data lives at `~/.grimoire/` by default (override with `GRIMOIRE_DATA_ROOT`
 ├── mechanics/                   # installed mechanics modules
 └── plugins/                     # installed plugins
 ```
+
+### Optional per-campaign subsystems
+
+Some subsystems are opt-in per campaign via a block in `campaign.yaml`. The
+inventory system (deterministic item/resource tracking) is off by default:
+
+```yaml
+inventory:
+  enabled: true            # default false (opt-in)
+  flag_threshold: 0.6      # ops below this confidence are applied but flagged for review
+  fungible_resources: [gold, silver, arrows, rations, torches]   # extends built-in defaults
+```
+
+Holdings are written as an `inventory:` section in each holder's campaign
+overlay (override YAML / emergent frontmatter), with a derived
+`inventory_holdings` SQLite table rebuilt from those files. Files remain SSOT.
 
 ## Common Pitfalls
 

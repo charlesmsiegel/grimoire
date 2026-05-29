@@ -50,6 +50,10 @@ Every fact the narrative establishes, every commitment a character makes, every 
 
 Low-confidence extractions go to a review queue so you stay in control of what becomes canon.
 
+### Deterministic Inventory
+
+For campaigns that care about who carries what, an optional inventory system tracks discrete items and physical resources (gold, ammo, rations) per character or location. The LLM only identifies what changed in the prose; applying those changes — acquire, drop, transfer, consume — is a deterministic state machine. The narrative stays canon: conflicting changes are reconciled and surfaced for review rather than blocking play. Enable it per campaign with `inventory.enabled` in `campaign.yaml`.
+
 ### Pluggable Mechanics
 
 Grimoire ships with no built-in game rules. Instead, mechanics modules are external packages that implement a rich API: character sheets, dice, combat, capability queries, NPC behaviors, and custom UI themes. Install a World of Darkness module for dot-rated attributes and Disciplines. Install an Ars Magica module for Arts, Virtues, and Covenant management. Or play in pure narrative mode with no mechanics at all — that's the default.
