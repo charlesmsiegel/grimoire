@@ -10,6 +10,7 @@ import { MechanicsView } from "./MechanicsView";
 import { PluginsView } from "./PluginsView";
 import { WorldDependentsView } from "./WorldDependentsView";
 import { WorldDetailView } from "./WorldDetailView";
+import { WorldHub } from "./WorldHub";
 import { WorldMetaView } from "./WorldMetaView";
 import { WorldsListView } from "./WorldsListView";
 import { StyleGuidesView } from "./StyleGuidesView";
@@ -22,7 +23,7 @@ export function LibraryRoutes() {
 
         <Route path="worlds" element={<WorldsListView />} />
         <Route path="worlds/:worldId" element={<WorldDetailView />}>
-          <Route index element={<Navigate to="characters" replace />} />
+          <Route index element={<WorldHub />} />
           <Route path="meta" element={<WorldMetaView />} />
           <Route path="dependents" element={<WorldDependentsView />} />
           <Route path=":kind" element={<EntityListView />} />

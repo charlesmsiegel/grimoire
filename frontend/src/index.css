@@ -3262,6 +3262,71 @@ pre {
   font-variant-numeric: tabular-nums;
 }
 
+/* ----- World hub (issue #441) ----- */
+.world-hub {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.world-hub-progress-bar {
+  height: 8px;
+  background: var(--bg-elev);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.world-hub-progress-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent, #33aa77);
+}
+.world-hub-checklist,
+.world-hub-suggestions {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 0.85rem;
+}
+.world-hub-checklist li.done {
+  color: var(--fg-muted);
+}
+.world-hub-counts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--space-2);
+}
+.world-hub-counts li {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-elev);
+}
+.world-hub-counts li.empty {
+  border-style: dashed;
+}
+.world-hub-counts a {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+}
+.world-hub-count {
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+.world-hub-kind {
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+}
+.world-hub-add {
+  font-size: 0.75rem;
+  color: var(--accent, #33aa77);
+}
+
 /* ----- Dependents ----- */
 
 .dependents-banner {
