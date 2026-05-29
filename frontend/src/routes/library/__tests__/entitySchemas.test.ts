@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { getDescriptor, managedKeys } from "../entitySchemas";
-import properties from "./fixtures/character-schema-properties.json";
+import type { EntityKind } from "../../../api/library";
+import characterProps from "./fixtures/character-schema-properties.json";
+import locationProps from "./fixtures/location-schema-properties.json";
+import itemProps from "./fixtures/item-schema-properties.json";
+import monsterProps from "./fixtures/monster-schema-properties.json";
+import factionProps from "./fixtures/faction-schema-properties.json";
+import loreProps from "./fixtures/lore-schema-properties.json";
 
 describe("character descriptor", () => {
   it("is registered for the character kind", () => {
@@ -54,11 +60,22 @@ describe("faction/lore descriptors", () => {
   });
 });
 
-describe("character descriptor drift", () => {
-  it("only manages keys that exist in the Character schema", () => {
-    const allowed = new Set(properties as string[]);
-    for (const key of managedKeys(getDescriptor("character")!)) {
-      expect(allowed.has(key), `descriptor key '${key}' missing from Character schema`).toBe(true);
-    }
-  });
+const FIXTURES: Record<string, string[]> = {
+  character: characterProps,
+  location: locationProps,
+  item: itemProps,
+  monster: monsterProps,
+  faction: factionProps,
+  lore: loreProps,
+};
+
+describe("descriptor drift", () => {
+  for (const [kind, props] of Object.entries(FIXTURES)) {
+    it(`${kind} descriptor only manages keys in its schema`, () => {
+      const allowed = new Set(props);
+      for (const key of managedKeys(getDescriptor(kind as EntityKind)!)) {
+        expect(allowed.has(key), `${kind} key '${key}' missing from schema`).toBe(true);
+      }
+    });
+  }
 });
