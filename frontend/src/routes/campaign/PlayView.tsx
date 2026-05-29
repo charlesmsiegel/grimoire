@@ -10,6 +10,7 @@ import { DriftBanner } from "./DriftBanner";
 import { InputArea } from "./InputArea";
 
 import { PreRollConfirmation } from "./PreRollConfirmation";
+import { CastChangePrompt } from "./CastChangePrompt";
 import { SceneBreakPrompt } from "./SceneBreakPrompt";
 import { SceneHeader } from "./SceneHeader";
 import { ScenePane } from "./ScenePane";
@@ -129,6 +130,9 @@ export function PlayView({ campaignId }: Props) {
 
       <PreRollConfirmation campaignId={campaignId} />
       <SceneBreakPrompt campaignId={campaignId} />
+      {play.state.scene && (
+        <CastChangePrompt campaignId={campaignId} sceneId={play.state.scene.id} />
+      )}
 
       {actionError && (
         <div className="play-error" role="alert">

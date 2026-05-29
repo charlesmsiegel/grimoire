@@ -1,0 +1,101 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+
+import { CastChangePrompt } from "./CastChangePrompt";
+import { CampaignStreamContext } from "../../state/campaignStreamContext";
+import type { WSMessage } from "../../ws/client";
+
+class FakeSocket {
+  private listeners = new Set<(m: WSMessage) => void>();
+
+  onMessage(listener: (m: WSMessage) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  emit(message: WSMessage): void {
+    act(() => {
+      for (const listener of this.listeners) listener(message);
+    });
+  }
+}
+
+function withSocket(socket: FakeSocket, children: ReactNode) {
+  return (
+    <CampaignStreamContext.Provider
+      value={{ socket: socket as unknown as never, status: "open", campaignId: "c1" }}
+    >
+      {children}
+    </CampaignStreamContext.Provider>
+  );
+}
+
+const PENDING = [
+  {
+    id: "cc-1",
+    campaign_id: "c1",
+    scene_id: "s1",
+    character_ref: "library:worlds/w/characters/reyes",
+    change: "enter",
+    is_pc: false,
+    evidence: "strides in",
+    confidence: 0.9,
+    turn_id: "t_42",
+    status: "pending",
+    created_at: "2026-05-28T00:00:00+00:00",
+  },
+];
+
+describe("CastChangePrompt", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders nothing until a turn_complete carries pending cast changes", () => {
+    const socket = new FakeSocket();
+    const { container } = render(withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" />));
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("renders a pending change and confirms it", async () => {
+    const socket = new FakeSocket();
+    render(withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" />));
+    socket.emit({ type: "turn_complete", turn_id: "t_42", pending_cast_changes: PENDING } as WSMessage);
+
+    await screen.findByText(/reyes enters the scene/i);
+    fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/api/campaigns/c1/scenes/s1/cast-changes/cc-1/confirm");
+    await waitFor(() => expect(screen.queryByText(/reyes enters the scene/i)).toBeNull());
+  });
+
+  it("dismisses a pending change", async () => {
+    const socket = new FakeSocket();
+    render(withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" />));
+    socket.emit({ type: "turn_complete", turn_id: "t_42", pending_cast_changes: PENDING } as WSMessage);
+
+    await screen.findByText(/reyes enters the scene/i);
+    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/cast-changes/cc-1/dismiss");
+    await waitFor(() => expect(screen.queryByText(/reyes enters the scene/i)).toBeNull());
+  });
+});
