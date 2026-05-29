@@ -67,6 +67,35 @@ async def test_find_and_create_emergent_item(store):
     assert found is not None and found["item_ref"] == "rusty-key"
 
 
+async def test_merge_override_preserves_other_keys(store):
+    from grimoire.state_store.indexers import make_library_id
+
+    await store.upsert_campaign(campaign_id="c1", name="C")
+    lib_id = make_library_id("w", "character", "bob")
+    # Seed an override with unrelated keys.
+    await store.merge_override(
+        campaign_id="c1",
+        world_id="w",
+        kind="character",
+        asset_id="bob",
+        patch={"name": "Custom Bob", "extras": {"hp": 10}},
+        source="t",
+    )
+    # Add an inventory section — must not clobber name/extras.
+    await store.merge_override(
+        campaign_id="c1",
+        world_id="w",
+        kind="character",
+        asset_id="bob",
+        patch={"inventory": {"entries": [{"item_ref": "ring", "item_name": "Ring"}]}},
+        source="t",
+    )
+    ov = await store.get_override("c1", lib_id)
+    assert ov["name"] == "Custom Bob"
+    assert ov["extras"] == {"hp": 10}
+    assert ov["inventory"]["entries"][0]["item_ref"] == "ring"
+
+
 async def test_set_and_get_campaign_config(store):
     await store.upsert_campaign(campaign_id="c1", name="C")
     await store.set_campaign_config("c1", {"inventory": {"enabled": True}})

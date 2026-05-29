@@ -414,6 +414,35 @@ class StateStore:
             )
         return target
 
+    async def merge_override(
+        self,
+        *,
+        campaign_id: str,
+        world_id: str,
+        kind: str,
+        asset_id: str,
+        patch: dict,
+        source: str,
+        turn_id: str | None = None,
+    ) -> Path:
+        """Shallow-merge ``patch`` into a library entity's campaign override.
+
+        ``write_override`` is a full-file overwrite; this reads the existing
+        override first and merges top-level keys so unrelated overrides (name,
+        role, extras, …) are preserved. ``make_library_id`` stays inside the
+        storage package.
+        """
+        library_id = make_library_id(world_id, kind, asset_id)
+        existing = await self.get_override(campaign_id, library_id) or {}
+        merged = {**existing, **patch}
+        return await self.write_override(
+            campaign_id=campaign_id,
+            library_id=library_id,
+            patch=merged,
+            source=source,
+            turn_id=turn_id,
+        )
+
     async def delete_override(
         self,
         *,
@@ -945,29 +974,65 @@ class StateStore:
             (campaign_id, holder_kind, holder_id),
         )
 
-    async def rebuild_inventory_holdings_from_index(self) -> None:
-        """Rebuild the derived ``inventory_holdings`` table from the
-        ``inventory:`` sections in campaign-content overlay files (the SSOT).
+    async def rebuild_inventory_holdings_from_files(self) -> None:
+        """Rebuild the derived ``inventory_holdings`` table by reading the
+        ``inventory:`` sections directly from campaign overlay files (the SSOT).
 
-        A full truncate-and-repopulate so removed sections and removed holders
-        leave no stale rows. Runs inside one transaction. Called by the watcher
-        on a full campaign rescan; the storage layer owns this derived table.
+        Reads files rather than ``campaign_content_index`` so the rebuild is
+        immune to content-index keying (emergent rows are keyed by the raw
+        ``kind`` while the watcher classifies by directory). A full
+        truncate-and-repopulate, so removed sections and removed holders leave
+        no stale rows. The storage layer owns this derived table and file I/O.
         """
-        import json
+        from grimoire.state_store.paths import KIND_TO_DIR
 
-        rows = await self.db.fetchall(
-            "SELECT campaign_id, entity_subkind, asset_id, frontmatter "
-            "FROM campaign_content_index "
-            "WHERE entity_subkind IN ('character', 'location')"
-        )
+        dir_to_kind = {dir_name: kind for kind, dir_name in KIND_TO_DIR.items()}
+        wanted = {"character", "location"}
+        # (campaign_id, kind, holder_id, entries)
+        discovered: list[tuple[str, str, str, list]] = []
+
+        def _subdirs(parent: Path) -> list[Path]:
+            if not parent.is_dir():
+                return []
+            return [p for p in parent.iterdir() if p.is_dir()]
+
+        def _entries(block: object) -> list:
+            return (block or {}).get("entries") or [] if isinstance(block, dict) else []
+
+        root = campaigns_root(self.data_root)
+        for camp_dir in _subdirs(root):
+            cid = camp_dir.name
+            # Emergent holders: emergent/<dir>/<id>.md (markdown + frontmatter).
+            for kind_dir in _subdirs(camp_dir / "emergent"):
+                kind = dir_to_kind.get(kind_dir.name, kind_dir.name)
+                if kind not in wanted:
+                    continue
+                for f in kind_dir.glob("*.md"):
+                    try:
+                        fm = read_markdown(f).frontmatter or {}
+                    except Exception:
+                        continue
+                    entries = _entries(fm.get("inventory"))
+                    if entries:
+                        discovered.append((cid, kind, f.stem, entries))
+            # Library-scoped holders: overrides/worlds/<world>/<dir>/<id>.yaml.
+            for world_dir in _subdirs(camp_dir / "overrides" / "worlds"):
+                for kind_dir in _subdirs(world_dir):
+                    kind = dir_to_kind.get(kind_dir.name, kind_dir.name)
+                    if kind not in wanted:
+                        continue
+                    for f in kind_dir.glob("*.yaml"):
+                        try:
+                            data = load_yaml(f) or {}
+                        except Exception:
+                            continue
+                        entries = _entries(data.get("inventory"))
+                        if entries:
+                            discovered.append((cid, kind, f.stem, entries))
+
         async with self._txn() as conn:
             await conn.execute("DELETE FROM inventory_holdings")
-            for r in rows:
-                fm = json.loads(r["frontmatter"]) if r["frontmatter"] else {}
-                entries = (fm.get("inventory") or {}).get("entries") or []
-                if not entries:
-                    continue
-                cid, kind, hid = r["campaign_id"], r["entity_subkind"], r["asset_id"]
+            for cid, kind, hid, entries in discovered:
                 for e in entries:
                     rid = f"{cid}:{kind}:{hid}:{e['item_ref']}"
                     await conn.execute(

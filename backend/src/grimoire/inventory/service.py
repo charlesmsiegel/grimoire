@@ -68,6 +68,20 @@ class InventoryService:
             await self._store.get_campaign_config(campaign_id)
         )
 
+    async def apply_from_deltas(
+        self, *, campaign_id: str, turn_id: str | None, deltas: list[StateDelta]
+    ) -> dict | None:
+        """Map extracted ``INVENTORY_CHANGE`` deltas to operations and apply.
+
+        Lets callers (the orchestrator) hand off raw deltas without importing
+        the inventory package — they hold this service via an injected
+        reference and never reach into ``grimoire.inventory``.
+        """
+        ops = deltas_to_operations(deltas)
+        if not ops:
+            return None
+        return await self.apply(campaign_id=campaign_id, turn_id=turn_id, operations=ops)
+
     async def apply(
         self, *, campaign_id: str, turn_id: str | None, operations: list[InventoryOperation]
     ) -> dict | None:
