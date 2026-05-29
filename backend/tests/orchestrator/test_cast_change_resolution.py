@@ -150,6 +150,31 @@ async def test_pc_enter_queues_registration_ref_not_canonical():
     assert scenes.queued == [(shorthand, CastChange.ENTER, True)]
 
 
+async def test_pc_enter_queues_bare_emergent_registration_ref():
+    # The campaign creator can register an emergent PC with the bare
+    # ``emergent/<slug>`` form. It must canonicalize to the same identity as
+    # ``campaign:emergent/character/<slug>`` so the ENTER queues that registered
+    # ref rather than the canonical cast ref (#464).
+    canonical = "campaign:emergent/character/hero"
+    bare = "emergent/hero"
+    chars = _FakeCharacters(
+        {"hero": CastRef(character_ref=canonical, is_pc=True, name="Hero")},
+        pcs=[bare],
+    )
+    scenes = _RecordingScenes()
+    await resolve_cast_changes(
+        extraction=ExtractionResult(
+            cast_changes=[CastChangeProposal(character_ref="hero", change=CastChange.ENTER)]
+        ),
+        scene=_Scene(),
+        campaign_id="c",
+        turn_id="t1",
+        characters=chars,
+        scenes=scenes,
+    )
+    assert scenes.queued == [(bare, CastChange.ENTER, True)]
+
+
 async def test_noop_enter_already_present_is_dropped():
     chars = _FakeCharacters(
         {"reyes": CastRef(character_ref="ref:reyes", is_pc=False, name="Reyes")}

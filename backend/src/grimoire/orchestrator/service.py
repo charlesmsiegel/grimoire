@@ -160,19 +160,6 @@ class _CampaignTurnState:
     speaker_loop_event: asyncio.Event | None = None
 
 
-def _canonical_cast_ref(ref: str) -> str:
-    """Normalize an emergent-character ref to its canonical form (#464).
-
-    Scenes may store the ``emergent/character/<id>`` shorthand (e.g. the scene
-    route reconciles ``present_pc_refs`` with that prefix), while
-    ``find_cast_ref`` returns the canonical ``campaign:emergent/character/<id>``.
-    Normalizing both sides lets presence checks and removals line up.
-    """
-    if ref.startswith("emergent/"):
-        return f"campaign:{ref}"
-    return ref
-
-
 async def resolve_cast_changes(
     *,
     extraction: ExtractionResult,
@@ -192,7 +179,7 @@ async def resolve_cast_changes(
     from grimoire.types.common import EntityKind
     from grimoire.types.extraction import EntityCandidate
     from grimoire.types.scene import CastChange
-    from grimoire.util import slugify_id
+    from grimoire.util import canonicalize_character_ref, slugify_id
 
     queued: list[str] = []
     if characters is None or scenes is None:
@@ -210,7 +197,7 @@ async def resolve_cast_changes(
         *(getattr(scene, "present_character_refs", []) or []),
         *(getattr(scene, "present_pc_refs", []) or []),
     ):
-        canon_to_stored.setdefault(_canonical_cast_ref(r), r)
+        canon_to_stored.setdefault(canonicalize_character_ref(r), r)
     # Campaign PC registrations keyed by canonical form → the ref as registered
     # (often the ``emergent/...`` shorthand). A PC ENTER queues this exact ref so
     # confirming it keys present_pc_refs / _pc_current_scene the same way the PC
@@ -218,7 +205,7 @@ async def resolve_cast_changes(
     # instead would strand an emergent PC ("no active scene") (#464).
     pc_canon_to_ref: dict[str, str] = {}
     for pc in await characters.list_pcs(campaign_id):
-        pc_canon_to_ref.setdefault(_canonical_cast_ref(pc.character_ref), pc.character_ref)
+        pc_canon_to_ref.setdefault(canonicalize_character_ref(pc.character_ref), pc.character_ref)
     for proposal in extraction.cast_changes:
         cast_ref = await characters.find_cast_ref(campaign_id, proposal.character_ref)
         if cast_ref is None:
@@ -235,7 +222,7 @@ async def resolve_cast_changes(
                     )
                 )
             continue
-        canon = _canonical_cast_ref(cast_ref.character_ref)
+        canon = canonicalize_character_ref(cast_ref.character_ref)
         present = canon in canon_to_stored
         if proposal.change == CastChange.ENTER and present:
             continue

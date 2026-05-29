@@ -109,6 +109,24 @@ async def test_find_cast_ref_flags_emergent_pc_registered_with_shorthand_ref(
     assert cast_ref.is_pc is True
 
 
+async def test_find_cast_ref_flags_emergent_pc_registered_with_bare_ref(
+    characters: CharactersService, store: StateStore
+):
+    # Bare ``emergent/<slug>`` registration (campaign-creator form) must still
+    # flag is_pc=True: canonicalization maps it to the same identity as the
+    # resolved ``campaign:emergent/character/<slug>`` ref (#464).
+    campaign_id = await _setup(characters, store)
+    emergent_ref = await characters.create_emergent(
+        campaign_id,
+        CharacterData(id="the-drifter", name="The Drifter", role=CharacterRole.MINOR_NPC),
+    )
+    assert emergent_ref == "campaign:emergent/character/the-drifter"
+    await characters.add_pc(campaign_id, "emergent/the-drifter", "The Drifter", owner="local")
+    cast_ref = await characters.find_cast_ref(campaign_id, "the-drifter")
+    assert cast_ref is not None
+    assert cast_ref.is_pc is True
+
+
 async def test_find_cast_ref_unknown_returns_none(characters: CharactersService, store: StateStore):
     campaign_id = await _setup(characters, store)
     assert await characters.find_cast_ref(campaign_id, "nobody-xyz") is None
