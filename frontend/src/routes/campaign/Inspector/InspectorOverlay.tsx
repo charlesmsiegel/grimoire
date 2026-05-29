@@ -6,7 +6,7 @@
  * prompt fetched on demand. Uses the codebase modal-backdrop/modal idiom.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   inspectorApi,
@@ -17,6 +17,7 @@ import {
 } from "../../../api/inspector";
 import { REASON_LABELS } from "../../observability/inclusionReasonLabels";
 import { PinControls } from "./PinControls";
+import { isPinnable } from "./sourceKinds";
 
 const TIERS: ContextTier[] = ["lock-in", "spotlight", "background", "archive"];
 const TIER_ORDER: Record<ContextTier, number> = {
@@ -55,17 +56,33 @@ export function InspectorOverlay({
 
   const selected = sorted.find((s) => s.source_id === selectedId) ?? null;
 
-  const toggleRaw = async () => {
-    const next = !raw;
-    setRaw(next);
-    if (next && !detail) {
-      try {
-        setDetail(await inspectorApi.getPreview(campaignId, handle, sessionId));
-      } catch (err) {
-        setRawErr(err instanceof Error ? err.message : String(err));
-      }
-    }
-  };
+  // A new preview handle (pin/exclude or a live refresh) invalidates any cached
+  // raw messages — drop them so a stale prompt is never shown.
+  useEffect(() => {
+    setDetail(null);
+    setRawErr(null);
+  }, [handle]);
+
+  // Fetch the verbatim prompt for the current handle whenever the raw view is
+  // on and we don't already have it. Re-runs after the reset above, so a
+  // handle change refetches instead of showing the previous prompt.
+  useEffect(() => {
+    if (!raw || detail) return;
+    let cancelled = false;
+    inspectorApi
+      .getPreview(campaignId, handle, sessionId)
+      .then((d) => {
+        if (!cancelled) setDetail(d);
+      })
+      .catch((err) => {
+        if (!cancelled) setRawErr(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [raw, detail, campaignId, handle, sessionId]);
+
+  const toggleRaw = () => setRaw((v) => !v);
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Context for next post">
@@ -80,7 +97,7 @@ export function InspectorOverlay({
             ))}
           </div>
           <div className="inspector-overlay-actions">
-            <button type="button" onClick={() => void toggleRaw()}>
+            <button type="button" onClick={toggleRaw}>
               {raw ? "By source" : "Raw messages"}
             </button>
             <button type="button" onClick={onClose} aria-label="Close">
@@ -144,7 +161,9 @@ export function InspectorOverlay({
                   <pre className="inspector-overlay-text">
                     {selected.text || "No text captured for this source."}
                   </pre>
-                  <PinControls campaignId={campaignId} source={selected} onChanged={onChanged} />
+                  {isPinnable(selected.kind) && (
+                    <PinControls campaignId={campaignId} source={selected} onChanged={onChanged} />
+                  )}
                 </>
               ) : (
                 <p className="inspector-empty">Select a source.</p>
