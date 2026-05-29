@@ -1,0 +1,158 @@
+/**
+ * Full-page overlay for deep inspection of the next-post context.
+ *
+ * Master/detail over the comprehensive source list (full precise text +
+ * pin/exclude), plus a verbatim "raw messages" view of the assembled
+ * prompt fetched on demand. Uses the codebase modal-backdrop/modal idiom.
+ */
+
+import { useState } from "react";
+
+import {
+  inspectorApi,
+  type ContextSourceExplanation,
+  type ContextTier,
+  type PreviewDetail,
+  type PreviewSummary,
+} from "../../../api/inspector";
+import { REASON_LABELS } from "../../observability/inclusionReasonLabels";
+import { PinControls } from "./PinControls";
+
+const TIERS: ContextTier[] = ["lock-in", "spotlight", "background", "archive"];
+const TIER_ORDER: Record<ContextTier, number> = {
+  "lock-in": 0,
+  spotlight: 1,
+  background: 2,
+  archive: 3,
+};
+
+interface Props {
+  campaignId: string;
+  sessionId: string;
+  handle: string;
+  sources: ContextSourceExplanation[];
+  summary: PreviewSummary | null;
+  onClose: () => void;
+  onChanged: () => void;
+}
+
+export function InspectorOverlay({
+  campaignId,
+  sessionId,
+  handle,
+  sources,
+  summary,
+  onClose,
+  onChanged,
+}: Props) {
+  const sorted = [...sources].sort(
+    (a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier] || b.tokens - a.tokens,
+  );
+  const [selectedId, setSelectedId] = useState<string | null>(sorted[0]?.source_id ?? null);
+  const [raw, setRaw] = useState(false);
+  const [detail, setDetail] = useState<PreviewDetail | null>(null);
+  const [rawErr, setRawErr] = useState<string | null>(null);
+
+  const selected = sorted.find((s) => s.source_id === selectedId) ?? null;
+
+  const toggleRaw = async () => {
+    const next = !raw;
+    setRaw(next);
+    if (next && !detail) {
+      try {
+        setDetail(await inspectorApi.getPreview(campaignId, handle, sessionId));
+      } catch (err) {
+        setRawErr(err instanceof Error ? err.message : String(err));
+      }
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Context for next post">
+      <div className="modal inspector-overlay">
+        <header className="inspector-overlay-header">
+          <h2>Context for next post</h2>
+          <div className="inspector-overlay-tiers">
+            {TIERS.map((t) => (
+              <span key={t} className="inspector-overlay-tier-chip">
+                {t} {(summary?.per_tier_tokens[t] ?? 0).toLocaleString()}
+              </span>
+            ))}
+          </div>
+          <div className="inspector-overlay-actions">
+            <button type="button" onClick={() => void toggleRaw()}>
+              {raw ? "By source" : "Raw messages"}
+            </button>
+            <button type="button" onClick={onClose} aria-label="Close">
+              ✕
+            </button>
+          </div>
+        </header>
+
+        {raw ? (
+          <div className="inspector-overlay-raw">
+            {rawErr && <p className="inspector-error">{rawErr}</p>}
+            {!detail ? (
+              <p className="inspector-empty">Loading messages…</p>
+            ) : (
+              <ol className="inspector-raw-messages">
+                {detail.messages.map((m, i) => (
+                  <li key={i} className="inspector-raw-message">
+                    <header>
+                      <span className="inspector-raw-role">{m.role}</span>
+                      {typeof m.metadata?.tier === "string" && (
+                        <span className="inspector-raw-tier">{m.metadata.tier}</span>
+                      )}
+                    </header>
+                    <pre>{m.content}</pre>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        ) : (
+          <div className="inspector-overlay-body">
+            <ul className="inspector-overlay-list" aria-label="Sources">
+              {sorted.map((s) => (
+                <li key={s.source_id || `${s.kind}:${s.owner_id}`}>
+                  <button
+                    type="button"
+                    className={s.source_id === selectedId ? "is-active" : ""}
+                    onClick={() => setSelectedId(s.source_id)}
+                  >
+                    <span className="inspector-source-tier">{s.tier}</span>
+                    <span className="inspector-source-kind">{s.kind}</span>
+                    <span className="inspector-source-headline">
+                      {s.summary || s.owner_id || s.kind}
+                    </span>
+                    <span className="inspector-source-tokens">{s.tokens.toLocaleString()} tok</span>
+                  </button>
+                </li>
+              ))}
+              {sorted.length === 0 && <li className="inspector-empty">No sources.</li>}
+            </ul>
+            <div className="inspector-overlay-detail">
+              {selected ? (
+                <>
+                  <ul className="inspector-reason-list">
+                    {selected.inclusion_reasons.map((r) => (
+                      <li key={r} className="inspector-reason">
+                        {REASON_LABELS[r] ?? r}
+                      </li>
+                    ))}
+                  </ul>
+                  <pre className="inspector-overlay-text">
+                    {selected.text || "No text captured for this source."}
+                  </pre>
+                  <PinControls campaignId={campaignId} source={selected} onChanged={onChanged} />
+                </>
+              ) : (
+                <p className="inspector-empty">Select a source.</p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
