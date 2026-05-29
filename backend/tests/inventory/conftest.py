@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from grimoire.event_bus import EventBus
 from grimoire.state_store import StateStore
 from grimoire.storage import Database, apply_migrations
+from grimoire.watcher.watcher import FileWatcher
 
 
 @pytest.fixture
@@ -22,3 +24,8 @@ async def store(tmp_path: Path):
         yield s
     finally:
         await db.close()
+
+
+@pytest.fixture
+def file_watcher(store):
+    return FileWatcher(data_root=store.data_root, store=store, bus=EventBus())
