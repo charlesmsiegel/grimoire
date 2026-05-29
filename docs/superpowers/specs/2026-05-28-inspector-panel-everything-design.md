@@ -2,7 +2,7 @@
 
 **Issue:** #486 — Revisit Inspector panel UX
 **Date:** 2026-05-28
-**Status:** Design — approved, pending implementation plan
+**Status:** Implemented (see `docs/superpowers/plans/2026-05-28-inspector-panel-everything.md`)
 **Supersedes UX of:** `2026-05-19-context-inspector-design.md` (the preview/explain/pin/diff backend surface from that spec stays; this changes what the panel shows and adds per-source text).
 
 ## Problem
