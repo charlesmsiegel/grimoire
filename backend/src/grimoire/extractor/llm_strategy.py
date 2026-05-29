@@ -25,7 +25,7 @@ from grimoire.templates import render as render_template
 from grimoire.types.common import CampaignId, Duration, EntityKind, Scope, TurnId
 from grimoire.types.extraction import EntityCandidate, ExtractionFlag, FlagLevel
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
-from grimoire.types.scene import Scene
+from grimoire.types.scene import CastChange, CastChangeProposal, Scene
 from grimoire.types.state import DeltaKind, StateDelta, StateSnapshot
 from grimoire.types.transient import EntityKind as TransientEntityKind
 from grimoire.types.transient import TransientUpdateProposal
@@ -61,6 +61,7 @@ class LLMStrategyOutput:
     candidates: list[EntityCandidate] = field(default_factory=list)
     flags: list[ExtractionFlag] = field(default_factory=list)
     transient_updates: list[TransientUpdateProposal] = field(default_factory=list)
+    cast_changes: list[CastChangeProposal] = field(default_factory=list)
     confidence_avg: float = 0.0
 
 
@@ -399,6 +400,22 @@ def _make_transient_update(item: dict) -> TransientUpdateProposal | None:
         return None
 
 
+def _make_cast_change(item: dict) -> CastChangeProposal | None:
+    try:
+        change = CastChange(str(item.get("change", "")))
+    except ValueError:
+        return None
+    ref = str(item.get("character_id", "")).strip()
+    if not ref:
+        return None
+    return CastChangeProposal(
+        character_ref=ref,
+        change=change,
+        evidence=str(item.get("evidence", "")),
+        confidence=float(item.get("confidence", 0.0)),
+    )
+
+
 def parse_llm_payload(
     payload: dict,
     *,
@@ -444,6 +461,13 @@ def parse_llm_payload(
         if proposal is not None:
             out.transient_updates.append(proposal)
             confidences.append(proposal.confidence)
+    for raw in payload.get("cast_changes", []) or []:
+        if not isinstance(raw, dict):
+            continue
+        cast_change = _make_cast_change(raw)
+        if cast_change is not None:
+            out.cast_changes.append(cast_change)
+            confidences.append(cast_change.confidence)
     if confidences:
         out.confidence_avg = sum(confidences) / len(confidences)
     return out
