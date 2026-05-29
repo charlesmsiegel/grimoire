@@ -147,3 +147,37 @@ class SceneContext(BaseModel):
     location_ref: str | None = None
     in_game_time: InGameTime | None = None
     extras: Json = Field(default_factory=dict)
+
+
+class CastChange(StrEnum):
+    ENTER = "enter"
+    LEAVE = "leave"
+
+
+class CastChangeProposal(BaseModel):
+    """A character entering/leaving a scene, proposed by the Extractor (#464).
+
+    ``character_ref`` is the raw id or name the model emitted; the
+    Orchestrator resolves it against the read cascade before persisting.
+    """
+
+    character_ref: str
+    change: CastChange
+    evidence: str = ""
+    confidence: float = 0.0
+
+
+class PendingCastChange(BaseModel):
+    """A resolved cast change awaiting user confirmation (scene-owned, #464)."""
+
+    id: str
+    campaign_id: CampaignId
+    scene_id: SceneId
+    character_ref: CharacterRef  # resolved composite ref
+    change: CastChange
+    is_pc: bool
+    evidence: str
+    confidence: float
+    turn_id: TurnId | None
+    status: str  # "pending" | "confirmed" | "dismissed"
+    created_at: str

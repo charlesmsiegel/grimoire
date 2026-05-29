@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from .common import EntityKind, Json
 from .expressions import ExpressionChange
 from .extras import ExtraScope
+from .scene import CastChangeProposal
 from .state import StateDelta
 from .transient import TransientUpdateProposal
 
@@ -69,6 +70,7 @@ class ExtractionResult(BaseModel):
     extras_proposals: list[ExtrasProposal] = Field(default_factory=list)
     flags: list[ExtractionFlag] = Field(default_factory=list)
     transient_updates: list[TransientUpdateProposal] = Field(default_factory=list)
+    cast_changes: list[CastChangeProposal] = Field(default_factory=list)
     expression_changes: list[ExpressionChange] = Field(default_factory=list)
     confidence_overall: float = 0.0
     extraction_strategies_run: list[str] = Field(default_factory=list)
