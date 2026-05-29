@@ -1384,8 +1384,14 @@ class OrchestratorService:
             if active.cancel_event.is_set():
                 break
 
-            # Refresh scene in case it changed
+            # Refresh scene + present-NPC list so a cast change confirmed during
+            # the wait (enter/leave) takes effect on the next speaker selection
+            # (#464): a removed NPC is no longer selectable, an arrival becomes one.
             scene_obj = await self._scenes.get_scene(scene_id)
+            pc_refs = set(scene_obj.present_pc_refs)
+            present_npcs = [r for r in scene_obj.present_character_refs if r not in pc_refs]
+            if not present_npcs:
+                break
 
     def _check_cancelled(self, active: _ActiveTurn) -> None:
         if active.cancel_event.is_set():
