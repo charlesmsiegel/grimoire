@@ -74,6 +74,8 @@ _FORWARDED_EVENTS: tuple[str, ...] = (
     events.RETCON_COMPLETE,
     events.HEALTH_STATUS_CHANGED,
     events.ERROR_REPORTED,
+    events.INVENTORY_CHANGED,
+    events.INVENTORY_FLAGGED,
 )
 
 
