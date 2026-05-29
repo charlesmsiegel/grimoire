@@ -35,9 +35,7 @@ class _Scene:
 
 
 async def test_known_character_queued_unknown_becomes_candidate():
-    chars = _FakeCharacters(
-        {"reyes": CastRef("library:worlds/w/characters/reyes", False, "Reyes")}
-    )
+    chars = _FakeCharacters({"reyes": CastRef("library:worlds/w/characters/reyes", False, "Reyes")})
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
         cast_changes=[
@@ -62,7 +60,9 @@ async def test_pc_arrival_flagged_is_pc():
     chars = _FakeCharacters({"hero": CastRef("campaign:emergent/character/hero", True, "Hero")})
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
-        cast_changes=[CastChangeProposal(character_ref="hero", change=CastChange.ENTER, confidence=0.9)]
+        cast_changes=[
+            CastChangeProposal(character_ref="hero", change=CastChange.ENTER, confidence=0.9)
+        ]
     )
     await resolve_cast_changes(
         extraction=extraction,
@@ -79,7 +79,9 @@ async def test_noop_enter_already_present_is_dropped():
     chars = _FakeCharacters({"reyes": CastRef("ref:reyes", False, "Reyes")})
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
-        cast_changes=[CastChangeProposal(character_ref="reyes", change=CastChange.ENTER, confidence=0.9)]
+        cast_changes=[
+            CastChangeProposal(character_ref="reyes", change=CastChange.ENTER, confidence=0.9)
+        ]
     )
     queued = await resolve_cast_changes(
         extraction=extraction,
@@ -97,7 +99,9 @@ async def test_noop_leave_not_present_is_dropped():
     chars = _FakeCharacters({"reyes": CastRef("ref:reyes", False, "Reyes")})
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
-        cast_changes=[CastChangeProposal(character_ref="reyes", change=CastChange.LEAVE, confidence=0.9)]
+        cast_changes=[
+            CastChangeProposal(character_ref="reyes", change=CastChange.LEAVE, confidence=0.9)
+        ]
     )
     queued = await resolve_cast_changes(
         extraction=extraction,

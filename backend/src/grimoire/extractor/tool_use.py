@@ -16,6 +16,7 @@ from typing import Any
 
 from grimoire.types.common import Scope
 from grimoire.types.extraction import EntityCandidate
+from grimoire.types.scene import CastChange, CastChangeProposal
 from grimoire.types.state import DeltaKind, StateDelta
 
 SOURCE = "extractor:tool_use"
@@ -233,7 +234,7 @@ def project_tool_calls(
     return deltas, candidates
 
 
-def project_cast_changes(calls: list[ToolCall]) -> list["CastChangeProposal"]:
+def project_cast_changes(calls: list[ToolCall]) -> list[CastChangeProposal]:
     """Project ``update_cast`` tool calls into `CastChangeProposal`s (#464)."""
     out: list[CastChangeProposal] = []
     for call in calls:
@@ -245,9 +246,7 @@ def project_cast_changes(calls: list[ToolCall]) -> list["CastChangeProposal"]:
     return out
 
 
-def _update_cast(call: ToolCall) -> "CastChangeProposal | None":
-    from grimoire.types.scene import CastChange, CastChangeProposal
-
+def _update_cast(call: ToolCall) -> CastChangeProposal | None:
     ref = str(call.args.get("character_id") or "").strip()
     if not ref:
         return None

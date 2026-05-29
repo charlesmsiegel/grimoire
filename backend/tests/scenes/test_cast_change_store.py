@@ -53,7 +53,11 @@ async def test_store_add_list_get_set_status(db):
 
 async def test_store_scopes_pending_by_scene(db):
     store = CastChangeStore(db)
-    await store.add(campaign_id="c", scene_id="s1", character_ref="a", change=CastChange.ENTER, is_pc=False)
-    await store.add(campaign_id="c", scene_id="s2", character_ref="b", change=CastChange.LEAVE, is_pc=True)
+    await store.add(
+        campaign_id="c", scene_id="s1", character_ref="a", change=CastChange.ENTER, is_pc=False
+    )
+    await store.add(
+        campaign_id="c", scene_id="s2", character_ref="b", change=CastChange.LEAVE, is_pc=True
+    )
     assert len(await store.list_pending("s1")) == 1
     assert len(await store.list_pending("s2")) == 1
