@@ -31,7 +31,11 @@ export type InclusionReason =
   | "lore_after_cast"
   | "lore_at_depth"
   | "lore_archive"
-  | "transient_state_active";
+  | "transient_state_active"
+  | "system_prompt"
+  | "scene_header"
+  | "verbatim_recent"
+  | "player_input";
 
 export interface PreviewSummary {
   handle: string;
@@ -56,6 +60,21 @@ export interface ContextSourceExplanation {
   inclusion_reasons: InclusionReason[];
   tokens: number;
   summary: string;
+  text: string;
+}
+
+export interface PreviewMessage {
+  role: string;
+  content: string;
+  name?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PreviewDetail {
+  messages: PreviewMessage[];
+  sources: ContextSourceExplanation[];
+  budget_used: Record<ContextTier, number>;
+  messages_hash: string;
 }
 
 export interface SourceVersionChange {
@@ -120,7 +139,7 @@ export const inspectorApi = {
     }, { signal });
   },
 
-  getPreview(campaignId: string, handle: string, sessionId: string) {
+  getPreview(campaignId: string, handle: string, sessionId: string): Promise<PreviewDetail> {
     return api.get(
       `${base(campaignId)}/preview/${encodeURIComponent(handle)}`,
       { query: { session_id: sessionId } },

@@ -19,12 +19,23 @@ describe("REASON_LABELS", () => {
         "mentioned_in_recent_posts": "Mentioned recently",
         "pc_card": "PC card",
         "pinned_by_user": "Pinned by user",
+        "player_input": "Player input",
         "present_in_scene": "Present in scene",
         "relationship_to_present": "Relationship to present",
         "scene_anchor": "Scene anchor",
+        "scene_header": "Scene header",
         "style_guide_active": "Style guide active",
+        "system_prompt": "System prompt",
         "transient_state_active": "Transient state active",
+        "verbatim_recent": "Recent posts (verbatim)",
       }
     `);
+  });
+
+  it("has labels for the new always-on block reasons", () => {
+    expect(REASON_LABELS.system_prompt).toBe("System prompt");
+    expect(REASON_LABELS.scene_header).toBe("Scene header");
+    expect(REASON_LABELS.verbatim_recent).toBe("Recent posts (verbatim)");
+    expect(REASON_LABELS.player_input).toBe("Player input");
   });
 });

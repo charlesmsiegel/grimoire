@@ -26,4 +26,8 @@ export const REASON_LABELS: Record<InclusionReason, string> = {
   lore_at_depth: "Lore at depth",
   lore_archive: "Lore archive",
   transient_state_active: "Transient state active",
+  system_prompt: "System prompt",
+  scene_header: "Scene header",
+  verbatim_recent: "Recent posts (verbatim)",
+  player_input: "Player input",
 };

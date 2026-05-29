@@ -15,6 +15,7 @@ const sources: ContextSourceExplanation[] = [
     inclusion_reasons: ["pc_card"],
     tokens: 800,
     summary: "Active PC: Alistair",
+    text: "PC card body",
   },
   {
     source_id: "src_florence",
@@ -26,6 +27,7 @@ const sources: ContextSourceExplanation[] = [
     inclusion_reasons: ["present_in_scene", "commitment_open_to_pc"],
     tokens: 1200,
     summary: "library:worlds/wod/characters/winifred",
+    text: "winifred body text",
   },
 ];
 
