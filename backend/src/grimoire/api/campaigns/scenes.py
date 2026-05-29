@@ -272,6 +272,42 @@ async def analyze_scene(
         raise map_lookup_errors(exc) from exc
 
 
+@router.get("/{campaign_id}/scenes/{scene_id}/cast-changes")
+async def list_cast_changes(campaign_id: str, scene_id: str, scenes: ScenesDep) -> Any:
+    """Pending cast changes awaiting confirmation for this scene (#464)."""
+    await _require_scene_owned(scenes, campaign_id, scene_id)
+    pending = await scenes.list_pending_cast_changes(scene_id)
+    return [p.model_dump(mode="json") for p in pending]
+
+
+@router.post("/{campaign_id}/scenes/{scene_id}/cast-changes/{change_id}/confirm")
+async def confirm_cast_change(
+    campaign_id: str, scene_id: str, change_id: str, scenes: ScenesDep
+) -> Any:
+    await _require_scene_owned(scenes, campaign_id, scene_id)
+    try:
+        await scenes.confirm_cast_change(scene_id, change_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {"ok": True}
+
+
+@router.post("/{campaign_id}/scenes/{scene_id}/cast-changes/{change_id}/dismiss")
+async def dismiss_cast_change(
+    campaign_id: str, scene_id: str, change_id: str, scenes: ScenesDep
+) -> Any:
+    await _require_scene_owned(scenes, campaign_id, scene_id)
+    try:
+        await scenes.dismiss_cast_change(scene_id, change_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {"ok": True}
+
+
 @router.post("/{campaign_id}/scenes/{scene_id}/end")
 async def end_scene(
     campaign_id: str,
