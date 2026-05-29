@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { api } from "../client";
 import { CampaignSummarySchema } from "../schemas/campaign";
+import { PendingCastChangeArraySchema } from "../schemas/castChange";
 import type {
   AdvanceTurnResult,
   AlternateListResponse,
@@ -296,6 +297,7 @@ export const campaignApi = {
   listCastChanges: (campaignId: string, sceneId: string) =>
     api.get<PendingCastChange[]>(
       `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/cast-changes`,
+      { schema: PendingCastChangeArraySchema },
     ),
 
   confirmCastChange: (campaignId: string, sceneId: string, changeId: string) =>

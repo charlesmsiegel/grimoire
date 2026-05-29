@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -179,5 +180,5 @@ class PendingCastChange(BaseModel):
     evidence: str
     confidence: float
     turn_id: TurnId | None
-    status: str  # "pending" | "confirmed" | "dismissed"
+    status: Literal["pending", "confirmed", "dismissed"]
     created_at: str

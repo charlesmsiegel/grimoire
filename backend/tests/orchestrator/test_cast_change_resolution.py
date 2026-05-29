@@ -35,7 +35,7 @@ class _Scene:
 
 
 async def test_known_character_queued_unknown_becomes_candidate():
-    chars = _FakeCharacters({"reyes": CastRef("library:worlds/w/characters/reyes", False, "Reyes")})
+    chars = _FakeCharacters({"reyes": CastRef(character_ref="library:worlds/w/characters/reyes", is_pc=False, name="Reyes")})
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
         cast_changes=[
@@ -57,7 +57,7 @@ async def test_known_character_queued_unknown_becomes_candidate():
 
 
 async def test_pc_arrival_flagged_is_pc():
-    chars = _FakeCharacters({"hero": CastRef("campaign:emergent/character/hero", True, "Hero")})
+    chars = _FakeCharacters({"hero": CastRef(character_ref="campaign:emergent/character/hero", is_pc=True, name="Hero")})
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
         cast_changes=[
@@ -76,7 +76,7 @@ async def test_pc_arrival_flagged_is_pc():
 
 
 async def test_noop_enter_already_present_is_dropped():
-    chars = _FakeCharacters({"reyes": CastRef("ref:reyes", False, "Reyes")})
+    chars = _FakeCharacters({"reyes": CastRef(character_ref="ref:reyes", is_pc=False, name="Reyes")})
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
         cast_changes=[
@@ -98,7 +98,7 @@ async def test_noop_enter_already_present_is_dropped():
 async def test_noop_pc_present_only_in_pc_refs_is_dropped():
     # A PC seeded into present_pc_refs but not yet present_character_refs must
     # still count as present, so a redundant ENTER is dropped.
-    chars = _FakeCharacters({"hero": CastRef("ref:hero", True, "Hero")})
+    chars = _FakeCharacters({"hero": CastRef(character_ref="ref:hero", is_pc=True, name="Hero")})
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
         cast_changes=[CastChangeProposal(character_ref="hero", change=CastChange.ENTER)]
@@ -116,7 +116,7 @@ async def test_noop_pc_present_only_in_pc_refs_is_dropped():
 
 
 async def test_pc_leave_present_only_in_pc_refs_is_queued():
-    chars = _FakeCharacters({"hero": CastRef("ref:hero", True, "Hero")})
+    chars = _FakeCharacters({"hero": CastRef(character_ref="ref:hero", is_pc=True, name="Hero")})
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
         cast_changes=[CastChangeProposal(character_ref="hero", change=CastChange.LEAVE)]
@@ -134,7 +134,7 @@ async def test_pc_leave_present_only_in_pc_refs_is_queued():
 
 
 async def test_noop_leave_not_present_is_dropped():
-    chars = _FakeCharacters({"reyes": CastRef("ref:reyes", False, "Reyes")})
+    chars = _FakeCharacters({"reyes": CastRef(character_ref="ref:reyes", is_pc=False, name="Reyes")})
     scenes = _RecordingScenes()
     extraction = ExtractionResult(
         cast_changes=[

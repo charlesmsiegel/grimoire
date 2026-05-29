@@ -401,19 +401,22 @@ def _make_transient_update(item: dict) -> TransientUpdateProposal | None:
 
 
 def _make_cast_change(item: dict) -> CastChangeProposal | None:
+    # Wrap the whole construction (mirrors _make_transient_update): a
+    # non-numeric confidence from the model must drop this one proposal, not
+    # raise out of parse_llm_payload and abandon the entire turn's extraction.
     try:
         change = CastChange(str(item.get("change", "")))
-    except ValueError:
+        ref = str(item.get("character_id", "")).strip()
+        if not ref:
+            return None
+        return CastChangeProposal(
+            character_ref=ref,
+            change=change,
+            evidence=str(item.get("evidence", "")),
+            confidence=float(item.get("confidence", 0.0)),
+        )
+    except (ValueError, TypeError):
         return None
-    ref = str(item.get("character_id", "")).strip()
-    if not ref:
-        return None
-    return CastChangeProposal(
-        character_ref=ref,
-        change=change,
-        evidence=str(item.get("evidence", "")),
-        confidence=float(item.get("confidence", 0.0)),
-    )
 
 
 def parse_llm_payload(

@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { campaignApi, type PendingCastChange } from "../../api/campaign";
 import { ApiError } from "../../api/client";
+import { PendingCastChangeArraySchema } from "../../api/schemas/castChange";
 import { useCampaignEvent } from "../../state/useCampaignEvent";
 
 interface Props {
@@ -31,6 +32,7 @@ function label(c: PendingCastChange): string {
 export function CastChangePrompt({ campaignId, sceneId, onApplied }: Props) {
   const [pending, setPending] = useState<PendingCastChange[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Load any persisted pending changes on mount / scene change so prompts
   // queued before a reload or navigation remain actionable. Reset first so a
@@ -56,8 +58,9 @@ export function CastChangePrompt({ campaignId, sceneId, onApplied }: Props) {
 
   const handleEvent = useCallback((m: { type: string } & Record<string, unknown>) => {
     if (m.type !== "turn_complete") return;
-    const changes = m.pending_cast_changes;
-    if (Array.isArray(changes)) setPending(changes as PendingCastChange[]);
+    // The WS payload is untyped at runtime; validate before trusting it.
+    const parsed = PendingCastChangeArraySchema.safeParse(m.pending_cast_changes);
+    if (parsed.success) setPending(parsed.data);
   }, []);
 
   useCampaignEvent("turn_complete", handleEvent);
@@ -66,6 +69,7 @@ export function CastChangePrompt({ campaignId, sceneId, onApplied }: Props) {
 
   async function act(id: string, kind: "confirm" | "dismiss") {
     setBusy(id);
+    setError(null);
     try {
       if (kind === "confirm") {
         await campaignApi.confirmCastChange(campaignId, sceneId, id);
@@ -84,6 +88,8 @@ export function CastChangePrompt({ campaignId, sceneId, onApplied }: Props) {
         remove(id);
         return;
       }
+      // Any other failure (500, network) must be visible, not swallowed.
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }
@@ -93,6 +99,11 @@ export function CastChangePrompt({ campaignId, sceneId, onApplied }: Props) {
 
   return (
     <div className="cast-change-prompt" role="region" aria-label="Pending cast changes">
+      {error && (
+        <p className="cast-change-error" role="alert">
+          {error}
+        </p>
+      )}
       {pending.map((c) => (
         <div key={c.id} className="cast-change-row">
           <span className="cast-change-label">{label(c)}</span>

@@ -1001,6 +1001,8 @@ class SceneManager:
         rec = await self._cast_change_store.get(change_id)
         if rec is None or rec.scene_id != scene_id:
             raise KeyError(f"cast change not found: {change_id}")
+        if rec.status != "pending":
+            raise ValueError(f"cast change {change_id} already {rec.status}")
         await self._cast_change_store.set_status(change_id, "dismissed")
 
     async def set_narrator_response_mode(

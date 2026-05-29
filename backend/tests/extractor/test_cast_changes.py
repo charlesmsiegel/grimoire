@@ -71,6 +71,20 @@ def test_parse_llm_payload_extracts_cast_changes():
     assert out.cast_changes[0].change == "enter"
 
 
+def test_parse_llm_payload_nonnumeric_confidence_drops_only_that_cast_change():
+    from grimoire.extractor.llm_strategy import parse_llm_payload
+
+    payload = {
+        "cast_changes": [
+            {"character_id": "reyes", "change": "enter", "confidence": "high"},  # bad -> dropped
+            {"character_id": "kael", "change": "leave", "confidence": 0.8},
+        ]
+    }
+    # Must not raise (which would abandon the whole turn's extraction).
+    out = parse_llm_payload(payload, campaign_id="c", source="structured_llm", max_new_entities=5)
+    assert [c.character_ref for c in out.cast_changes] == ["kael"]
+
+
 def test_tracker_projects_cast_changes():
     import json
 
