@@ -27,4 +27,28 @@ describe("MechanicsEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: /save manifest/i }));
     expect(spy).toHaveBeenCalledWith("acme", expect.objectContaining({ id: "acme" }));
   });
+
+  it("seeds the sheet editor from existing schemas and does not blank them on save", () => {
+    const spy = vi
+      .spyOn(mechanicsApi, "putSheetSchema")
+      .mockResolvedValue({ discovered: [], loaded: ["acme"], failed: [], removed: [] });
+    const existing = {
+      character: {
+        type: "object",
+        title: "Sheet",
+        properties: { hp: { type: "integer", widget: "number" } },
+      },
+    };
+    render(
+      <MechanicsEditor
+        manifest={manifest}
+        themeCss={null}
+        sheetSchemas={existing}
+        onSaved={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: /sheets/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save character/i }));
+    expect(spy).toHaveBeenCalledWith("acme", "character", existing.character);
+  });
 });
