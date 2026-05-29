@@ -34,6 +34,41 @@ class _Scene:
         self.present_pc_refs = pcs or []
 
 
+async def test_emergent_shorthand_present_ref_normalized():
+    # Scene stores the emergent shorthand; find_cast_ref returns canonical.
+    # ENTER must be a no-op (already present), LEAVE must queue removal of the
+    # exact stored shorthand ref so it actually comes out of the scene.
+    canonical = "campaign:emergent/character/ghost"
+    shorthand = "emergent/character/ghost"
+    chars = _FakeCharacters({"ghost": CastRef(character_ref=canonical, is_pc=False, name="Ghost")})
+
+    scenes_enter = _RecordingScenes()
+    await resolve_cast_changes(
+        extraction=ExtractionResult(
+            cast_changes=[CastChangeProposal(character_ref="ghost", change=CastChange.ENTER)]
+        ),
+        scene=_Scene(present=[shorthand]),
+        campaign_id="c",
+        turn_id="t1",
+        characters=chars,
+        scenes=scenes_enter,
+    )
+    assert scenes_enter.queued == []  # already present via shorthand
+
+    scenes_leave = _RecordingScenes()
+    await resolve_cast_changes(
+        extraction=ExtractionResult(
+            cast_changes=[CastChangeProposal(character_ref="ghost", change=CastChange.LEAVE)]
+        ),
+        scene=_Scene(present=[shorthand]),
+        campaign_id="c",
+        turn_id="t1",
+        characters=chars,
+        scenes=scenes_leave,
+    )
+    assert scenes_leave.queued == [(shorthand, CastChange.LEAVE, False)]
+
+
 async def test_known_character_queued_unknown_becomes_candidate():
     chars = _FakeCharacters(
         {

@@ -160,6 +160,19 @@ class _CampaignTurnState:
     speaker_loop_event: asyncio.Event | None = None
 
 
+def _canonical_cast_ref(ref: str) -> str:
+    """Normalize an emergent-character ref to its canonical form (#464).
+
+    Scenes may store the ``emergent/character/<id>`` shorthand (e.g. the scene
+    route reconciles ``present_pc_refs`` with that prefix), while
+    ``find_cast_ref`` returns the canonical ``campaign:emergent/character/<id>``.
+    Normalizing both sides lets presence checks and removals line up.
+    """
+    if ref.startswith("emergent/"):
+        return f"campaign:{ref}"
+    return ref
+
+
 async def resolve_cast_changes(
     *,
     extraction: ExtractionResult,
@@ -187,9 +200,15 @@ async def resolve_cast_changes(
     # PCs may sit in ``present_pc_refs`` before they appear in
     # ``present_character_refs`` (a freshly started scene seeds them
     # separately), so union both when deciding what counts as already-present.
-    present = set(getattr(scene, "present_character_refs", []) or []) | set(
-        getattr(scene, "present_pc_refs", []) or []
-    )
+    # Map canonical form → the ref as actually stored, so a LEAVE removes the
+    # exact stored ref (canonical or emergent shorthand) and presence checks
+    # match regardless of which form the scene holds.
+    canon_to_stored: dict[str, str] = {}
+    for r in (
+        *(getattr(scene, "present_character_refs", []) or []),
+        *(getattr(scene, "present_pc_refs", []) or []),
+    ):
+        canon_to_stored.setdefault(_canonical_cast_ref(r), r)
     for proposal in extraction.cast_changes:
         cast_ref = await characters.find_cast_ref(campaign_id, proposal.character_ref)
         if cast_ref is None:
@@ -206,14 +225,21 @@ async def resolve_cast_changes(
                     )
                 )
             continue
-        ref = cast_ref.character_ref
-        if proposal.change == CastChange.ENTER and ref in present:
+        canon = _canonical_cast_ref(cast_ref.character_ref)
+        present = canon in canon_to_stored
+        if proposal.change == CastChange.ENTER and present:
             continue
-        if proposal.change == CastChange.LEAVE and ref not in present:
+        if proposal.change == CastChange.LEAVE and not present:
             continue
+        # Remove the exact stored form on LEAVE; add the canonical ref on ENTER.
+        queue_ref = (
+            canon_to_stored[canon]
+            if proposal.change == CastChange.LEAVE
+            else cast_ref.character_ref
+        )
         change_id = await scenes.queue_cast_change(
             scene.id,
-            character_ref=ref,
+            character_ref=queue_ref,
             change=proposal.change,
             is_pc=cast_ref.is_pc,
             evidence=proposal.evidence,
@@ -694,13 +720,9 @@ class OrchestratorService:
             extraction_strategies_run=extraction.extraction_strategies_run,
         )
 
-        applied_ids, queued_ids = await self._delta.apply_routing(
-            campaign_id=campaign_id,
-            turn_id=turn_id,
-            extraction=filtered,
-        )
-
-        # §464: resolve cast-change proposals when a scene context is given.
+        # §464: resolve cast-change proposals *before* apply_routing so an
+        # unknown-name candidate it appends is routed with the rest, matching
+        # the invariant in _continue_turn_after_pre_roll.
         if scene_id is not None and self._characters is not None and filtered.cast_changes:
             scene_obj = await self._scenes.get_scene(scene_id)
             await resolve_cast_changes(
@@ -711,6 +733,13 @@ class OrchestratorService:
                 characters=self._characters,
                 scenes=self._scenes,
             )
+            await self._push_pending_cast_changes(campaign_id, scene_id)
+
+        applied_ids, queued_ids = await self._delta.apply_routing(
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            extraction=filtered,
+        )
 
         if self._transient_state is not None and filtered.transient_updates:
             from grimoire.transient_state.routing import route_transient_updates
@@ -1110,6 +1139,7 @@ class OrchestratorService:
                     campaign_id,
                     pending_cast_changes=[p.model_dump(mode="json") for p in pending],
                 )
+                await self._push_pending_cast_changes(campaign_id, scene_id)
 
         await self._emit_turn_event(
             events.DELTAS_EXTRACTED,
@@ -1300,12 +1330,8 @@ class OrchestratorService:
                 mode=extract_mode,
             )
             if extraction is not None:
-                await self._delta.apply_routing(
-                    campaign_id=campaign_id,
-                    turn_id=turn_id,
-                    extraction=extraction,
-                )
-                # §464: resolve cast-change proposals in multi-call scenes too.
+                # §464: resolve before apply_routing (same invariant as the
+                # single-response path) so unknown-name candidates are routed.
                 if self._characters is not None:
                     await resolve_cast_changes(
                         extraction=extraction,
@@ -1315,6 +1341,14 @@ class OrchestratorService:
                         characters=self._characters,
                         scenes=self._scenes,
                     )
+                    # Surface prompts queued this round without waiting for the
+                    # loop's final turn_complete.
+                    await self._push_pending_cast_changes(campaign_id, scene_id)
+                await self._delta.apply_routing(
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    extraction=extraction,
+                )
 
             # Create NPC post
             cleaned = strip_tracker_block(response_text)
@@ -1852,6 +1886,23 @@ class OrchestratorService:
             await self._ws_push(campaign_id, message)
         except Exception as exc:
             logger.debug("ws_push failed: %s", exc)
+
+    async def _push_pending_cast_changes(self, campaign_id: CampaignId, scene_id: SceneId) -> None:
+        """Push the scene's pending cast changes to the frontend (#464).
+
+        Lets ``CastChangePrompt`` surface prompts queued mid-turn (speaker-loop
+        rounds) or from a scene analysis, without waiting for ``turn_complete``
+        or a manual reload.
+        """
+        pending = await self._scenes.list_pending_cast_changes(scene_id)
+        await self._push_to_ws(
+            campaign_id,
+            {
+                "type": events.PENDING_CAST_CHANGES,
+                "scene_id": scene_id,
+                "pending_cast_changes": [p.model_dump(mode="json") for p in pending],
+            },
+        )
 
 
 __all__ = ["OrchestratorService", "WSPushFn"]

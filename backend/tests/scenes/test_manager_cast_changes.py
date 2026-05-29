@@ -7,16 +7,15 @@ import pytest
 from grimoire.scenes.cast_changes import CastChangeStore
 from grimoire.scenes.manager import SceneManager
 from grimoire.scenes.types import SceneInit
-from grimoire.storage import apply_migrations
 from grimoire.storage.db import Database
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.scene import CastChange
 
 
 @pytest.fixture
 async def manager(tmp_path):
-    db = Database(tmp_path / "t.sqlite")
+    db = Database(stamp_migrated_db(tmp_path / "t.sqlite"))
     await db.connect()
-    await apply_migrations(db)
     mgr = SceneManager(tmp_path, cast_change_store=CastChangeStore(db))
     yield mgr
     await db.close()

@@ -333,6 +333,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 event_bus=container.event_bus,
                 state_store=container.state_store,
             )
+        # §464: wire the pending-cast-change store so the Scene Manager can
+        # queue/confirm/dismiss cast changes detected during play.
+        if container.scenes is not None:
+            from grimoire.scenes.cast_changes import CastChangeStore
+
+            container.scenes.set_cast_change_store(CastChangeStore(db))
         # Scene indexer keeps the SQLite scenes/posts tables in sync with the
         # markdown + sidecar source-of-truth. Subscribed to manager events
         # post-construction; backfill walks the disk once to catch any

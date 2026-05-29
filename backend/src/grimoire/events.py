@@ -21,6 +21,7 @@ PRE_ROLL_PENDING = "pre_roll_pending"
 SPEAKER_ROUND_WAITING = "speaker_round_waiting"
 SPEAKER_ROUND_NEXT = "speaker_round_next"
 TURN_AUDIT_FRAGMENT = "turn_audit_fragment"
+PENDING_CAST_CHANGES = "pending_cast_changes"
 
 # Scene lifecycle
 SCENE_STARTED = "scene_started"
