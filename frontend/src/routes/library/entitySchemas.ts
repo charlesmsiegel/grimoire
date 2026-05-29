@@ -79,7 +79,15 @@ const CHARACTER: EntityDescriptor = {
     },
     {
       title: "Description",
-      fields: [{ key: "description", label: "Description", widget: "textarea", rows: 4, createDefault: true }],
+      fields: [
+        {
+          key: "description",
+          label: "Description",
+          widget: "textarea",
+          rows: 4,
+          createDefault: true,
+        },
+      ],
     },
     {
       title: "Voice",
@@ -182,7 +190,13 @@ const LOCATION: EntityDescriptor = {
       fields: [
         { key: "permanent_features", label: "Permanent features", widget: "stringList" },
         { key: "typical_occupants", label: "Typical occupants", widget: "stringList" },
-        { key: "description", label: "Description", widget: "textarea", rows: 4, createDefault: true },
+        {
+          key: "description",
+          label: "Description",
+          widget: "textarea",
+          rows: 4,
+          createDefault: true,
+        },
       ],
     },
     {
@@ -222,7 +236,13 @@ const ITEM: EntityDescriptor = {
       fields: [
         { key: "provenance", label: "Provenance", widget: "text" },
         { key: "current_holder", label: "Current holder", widget: "ref", refKinds: ["character"] },
-        { key: "description", label: "Description", widget: "textarea", rows: 4, createDefault: true },
+        {
+          key: "description",
+          label: "Description",
+          widget: "textarea",
+          rows: 4,
+          createDefault: true,
+        },
       ],
     },
   ],
@@ -265,7 +285,13 @@ const MONSTER: EntityDescriptor = {
         { key: "habitat", label: "Habitat", widget: "stringList" },
         { key: "abilities", label: "Abilities", widget: "stringList" },
         { key: "weaknesses", label: "Weaknesses", widget: "stringList" },
-        { key: "description", label: "Description", widget: "textarea", rows: 4, createDefault: true },
+        {
+          key: "description",
+          label: "Description",
+          widget: "textarea",
+          rows: 4,
+          createDefault: true,
+        },
       ],
     },
   ],
@@ -287,7 +313,13 @@ const FACTION: EntityDescriptor = {
       title: "Detail",
       fields: [
         { key: "base_location", label: "Base location", widget: "ref", refKinds: ["location"] },
-        { key: "description", label: "Description", widget: "textarea", rows: 4, createDefault: true },
+        {
+          key: "description",
+          label: "Description",
+          widget: "textarea",
+          rows: 4,
+          createDefault: true,
+        },
       ],
     },
     {
