@@ -158,6 +158,24 @@ CLOSE_THREAD_TOOL = ToolDeclaration(
     },
 )
 
+UPDATE_CAST_TOOL = ToolDeclaration(
+    name="update_cast",
+    description=(
+        "Record that a known character entered or left the current scene. "
+        "Only use for characters already established in the world or campaign."
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "character_id": {"type": "string"},
+            "change": {"type": "string", "enum": ["enter", "leave"]},
+            "evidence": {"type": "string"},
+            "confidence": {"type": "number"},
+        },
+        "required": ["character_id", "change"],
+    },
+)
+
 
 ALL_TOOLS: list[ToolDeclaration] = [
     RECORD_FACT_TOOL,
@@ -168,6 +186,7 @@ ALL_TOOLS: list[ToolDeclaration] = [
     CREATE_COMMITMENT_TOOL,
     UPDATE_COMMITMENT_TOOL,
     CLOSE_THREAD_TOOL,
+    UPDATE_CAST_TOOL,
 ]
 
 
@@ -212,6 +231,36 @@ def project_tool_calls(
         if delta is not None:
             deltas.append(delta)
     return deltas, candidates
+
+
+def project_cast_changes(calls: list[ToolCall]) -> list["CastChangeProposal"]:
+    """Project ``update_cast`` tool calls into `CastChangeProposal`s (#464)."""
+    out: list[CastChangeProposal] = []
+    for call in calls:
+        if call.name != UPDATE_CAST_TOOL.name:
+            continue
+        proposal = _update_cast(call)
+        if proposal is not None:
+            out.append(proposal)
+    return out
+
+
+def _update_cast(call: ToolCall) -> "CastChangeProposal | None":
+    from grimoire.types.scene import CastChange, CastChangeProposal
+
+    ref = str(call.args.get("character_id") or "").strip()
+    if not ref:
+        return None
+    try:
+        change = CastChange(str(call.args.get("change", "")))
+    except ValueError:
+        return None
+    return CastChangeProposal(
+        character_ref=ref,
+        change=change,
+        evidence=str(call.args.get("evidence") or ""),
+        confidence=_confidence(call.args),
+    )
 
 
 def _record_fact(call: ToolCall) -> StateDelta | None:
