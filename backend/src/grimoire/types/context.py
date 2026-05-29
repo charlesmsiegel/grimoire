@@ -21,6 +21,7 @@ class ContextSource(BaseModel):
     override_applied: bool = False
     tokens: int = 0
     summary: str = ""
+    text: str = ""  # exact rendered text this source contributed to the prompt
     source_id: str = ""
     inclusion_reasons: list[InclusionReason] = Field(default_factory=list)
 
