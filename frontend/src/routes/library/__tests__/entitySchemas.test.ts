@@ -15,8 +15,25 @@ describe("character descriptor", () => {
     }
   });
 
-  it("has no descriptor for a kind not yet implemented", () => {
-    expect(getDescriptor("item")).toBeUndefined();
+  it("has no descriptor for greetings (they keep their bespoke form)", () => {
+    expect(getDescriptor("greeting")).toBeUndefined();
+  });
+});
+
+describe("location/item/monster descriptors", () => {
+  it("registers location with kind + connections", () => {
+    const keys = managedKeys(getDescriptor("location")!);
+    expect(keys).toEqual(
+      expect.arrayContaining(["kind", "parent_id", "connections", "coordinates"]),
+    );
+  });
+  it("registers item with provenance + current_holder", () => {
+    const keys = managedKeys(getDescriptor("item")!);
+    expect(keys).toEqual(expect.arrayContaining(["provenance", "current_holder"]));
+  });
+  it("registers monster with category + abilities", () => {
+    const keys = managedKeys(getDescriptor("monster")!);
+    expect(keys).toEqual(expect.arrayContaining(["category", "abilities", "weaknesses"]));
   });
 });
 

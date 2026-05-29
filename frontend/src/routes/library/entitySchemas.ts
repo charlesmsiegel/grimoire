@@ -131,8 +131,146 @@ const CHARACTER: EntityDescriptor = {
   ],
 };
 
+const LOCATION: EntityDescriptor = {
+  kind: "location",
+  sections: [
+    {
+      title: "Identity",
+      fields: [
+        { key: "name", label: "Name", widget: "text" },
+        { key: "id", label: "ID", widget: "text", readOnly: true },
+        {
+          key: "kind",
+          label: "Kind",
+          widget: "enum",
+          options: [
+            { value: "city", label: "City" },
+            { value: "building", label: "Building" },
+            { value: "room", label: "Room" },
+            { value: "region", label: "Region" },
+            { value: "outdoor", label: "Outdoor" },
+            { value: "other", label: "Other" },
+          ],
+        },
+        { key: "parent_id", label: "Parent location", widget: "ref", refKinds: ["location"] },
+        { key: "aliases", label: "Aliases", widget: "tags" },
+        { key: "tags", label: "Tags", widget: "tags" },
+      ],
+    },
+    {
+      title: "Geography",
+      fields: [
+        { key: "climate_zone", label: "Climate zone", widget: "text" },
+        { key: "indoor", label: "Indoor", widget: "bool" },
+        {
+          key: "coordinates",
+          label: "Coordinates",
+          widget: "object",
+          fields: [
+            { key: "x", label: "X", widget: "number" },
+            { key: "y", label: "Y", widget: "number" },
+          ],
+        },
+      ],
+    },
+    {
+      title: "Detail",
+      fields: [
+        { key: "permanent_features", label: "Permanent features", widget: "stringList" },
+        { key: "typical_occupants", label: "Typical occupants", widget: "stringList" },
+        { key: "description", label: "Description", widget: "textarea", rows: 4 },
+      ],
+    },
+    {
+      title: "Connections",
+      collapsed: true,
+      fields: [
+        {
+          key: "connections",
+          label: "Connections",
+          widget: "objectList",
+          fields: [
+            { key: "to", label: "To", widget: "ref", refKinds: ["location"] },
+            { key: "via", label: "Via", widget: "text" },
+            { key: "duration_min", label: "Duration (min)", widget: "number" },
+            { key: "notes", label: "Notes", widget: "text" },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+const ITEM: EntityDescriptor = {
+  kind: "item",
+  sections: [
+    {
+      title: "Identity",
+      fields: [
+        { key: "name", label: "Name", widget: "text" },
+        { key: "id", label: "ID", widget: "text", readOnly: true },
+        { key: "aliases", label: "Aliases", widget: "tags" },
+        { key: "tags", label: "Tags", widget: "tags" },
+      ],
+    },
+    {
+      title: "Detail",
+      fields: [
+        { key: "provenance", label: "Provenance", widget: "text" },
+        { key: "current_holder", label: "Current holder", widget: "ref", refKinds: ["character"] },
+        { key: "description", label: "Description", widget: "textarea", rows: 4 },
+      ],
+    },
+  ],
+};
+
+const MONSTER: EntityDescriptor = {
+  kind: "monster",
+  sections: [
+    {
+      title: "Identity",
+      fields: [
+        { key: "name", label: "Name", widget: "text" },
+        { key: "id", label: "ID", widget: "text", readOnly: true },
+        {
+          key: "category",
+          label: "Category",
+          widget: "enum",
+          options: [
+            { value: "beast", label: "Beast" },
+            { value: "undead", label: "Undead" },
+            { value: "dragon", label: "Dragon" },
+            { value: "fey", label: "Fey" },
+            { value: "demon", label: "Demon" },
+            { value: "aberration", label: "Aberration" },
+            { value: "humanoid", label: "Humanoid" },
+            { value: "construct", label: "Construct" },
+            { value: "elemental", label: "Elemental" },
+            { value: "other", label: "Other" },
+          ],
+        },
+        { key: "aliases", label: "Aliases", widget: "tags" },
+        { key: "tags", label: "Tags", widget: "tags" },
+      ],
+    },
+    {
+      title: "Detail",
+      fields: [
+        { key: "threat_level", label: "Threat level", widget: "text" },
+        { key: "habitat", label: "Habitat", widget: "stringList" },
+        { key: "abilities", label: "Abilities", widget: "stringList" },
+        { key: "weaknesses", label: "Weaknesses", widget: "stringList" },
+        { key: "description", label: "Description", widget: "textarea", rows: 4 },
+      ],
+    },
+  ],
+};
+
 const REGISTRY: Partial<Record<EntityKind, EntityDescriptor>> = {
   character: CHARACTER,
+  location: LOCATION,
+  item: ITEM,
+  monster: MONSTER,
 };
 
 export function getDescriptor(kind: EntityKind | string): EntityDescriptor | undefined {
