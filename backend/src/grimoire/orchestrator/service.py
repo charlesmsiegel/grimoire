@@ -181,6 +181,7 @@ class OrchestratorService:
         world: Any | None = None,
         continuity: Any | None = None,
         transient_state: Any | None = None,
+        inventory: Any | None = None,
         ws_push: WSPushFn | None = None,
         extractor_config: ExtractorConfig | None = None,
         config: OrchestratorConfig | None = None,
@@ -206,6 +207,7 @@ class OrchestratorService:
         # being applied through the generic state-store path.
         self._continuity = continuity
         self._transient_state = transient_state
+        self._inventory = inventory
         self._ws_push = ws_push
         self._extractor_config = extractor_config or ExtractorConfig()
         self._config = config or OrchestratorConfig()
@@ -1054,6 +1056,18 @@ class OrchestratorService:
                 applied_deltas=[{"id": did} for did in applied_ids],
                 queued_for_review=[{"id": qid} for qid in queued_ids],
             )
+
+        if self._inventory is not None and extraction is not None:
+            try:
+                from grimoire.inventory.service import deltas_to_operations
+
+                ops = deltas_to_operations(list(extraction.deltas))
+                if ops:
+                    await self._inventory.apply(
+                        campaign_id=campaign_id, turn_id=turn_id, operations=ops
+                    )
+            except Exception:
+                logger.exception("inventory apply failed; continuing turn")
 
         if (
             extraction is not None
