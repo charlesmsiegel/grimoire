@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { getDescriptor, managedKeys } from "../entitySchemas";
+import {
+  createDefaultFields,
+  getDescriptor,
+  managedKeys,
+  primaryLabelKey,
+} from "../entitySchemas";
 import type { EntityKind } from "../../../api/library";
 import characterProps from "./fixtures/character-schema-properties.json";
 import locationProps from "./fixtures/location-schema-properties.json";
@@ -68,6 +73,19 @@ const FIXTURES: Record<string, string[]> = {
   faction: factionProps,
   lore: loreProps,
 };
+
+describe("create-mode helpers", () => {
+  it("marks headline create fields per kind", () => {
+    expect(createDefaultFields(getDescriptor("character")!).map((f) => f.key)).toEqual(
+      expect.arrayContaining(["role", "description"]),
+    );
+    expect(createDefaultFields(getDescriptor("location")!).map((f) => f.key)).toContain("kind");
+  });
+  it("uses title as the primary label for lore, name otherwise", () => {
+    expect(primaryLabelKey(getDescriptor("lore")!)).toBe("title");
+    expect(primaryLabelKey(getDescriptor("character")!)).toBe("name");
+  });
+});
 
 describe("descriptor drift", () => {
   for (const [kind, props] of Object.entries(FIXTURES)) {
