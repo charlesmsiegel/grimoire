@@ -183,6 +183,17 @@ class MechanicsAuthor:
         if module_dir.exists():
             raise ModuleExistsError(f"module {module_id!r} already exists")
 
+        # Validate everything BEFORE touching the filesystem so a bad kind or
+        # theme path can't leave a half-written module directory behind.
+        sheet_kinds = manifest_spec.get("sheet_kinds", [])
+        content_kinds = manifest_spec.get("content_kinds", [])
+        for kind in (*sheet_kinds, *content_kinds):
+            self._check_kind(kind)
+        ui = manifest_spec.get("ui") or {}
+        theme_rel = ui.get("theme_css")
+        if theme_rel:
+            self._check_relative(theme_rel, module_dir)
+
         module_dir.mkdir(parents=True)
         (module_dir / "manifest.yaml").write_text(
             yaml.safe_dump(manifest_spec, sort_keys=False), encoding="utf-8"
@@ -197,24 +208,19 @@ class MechanicsAuthor:
             ),
             encoding="utf-8",
         )
-        for kind in manifest_spec.get("sheet_kinds", []):
-            self._check_kind(kind)
+        for kind in sheet_kinds:
             sheets = module_dir / "sheets"
             sheets.mkdir(exist_ok=True)
             (sheets / f"{kind}.json").write_text(
                 json.dumps(self._placeholder_schema(kind), indent=2), encoding="utf-8"
             )
-        for kind in manifest_spec.get("content_kinds", []):
-            self._check_kind(kind)
+        for kind in content_kinds:
             content = module_dir / "content"
             content.mkdir(exist_ok=True)
             (content / f"{kind}.json").write_text(
                 json.dumps(self._placeholder_schema(kind), indent=2), encoding="utf-8"
             )
-        ui = manifest_spec.get("ui") or {}
-        theme_rel = ui.get("theme_css")
         if theme_rel:
-            self._check_relative(theme_rel, module_dir)
             theme_path = module_dir / theme_rel
             theme_path.parent.mkdir(parents=True, exist_ok=True)
             theme_path.write_text("", encoding="utf-8")

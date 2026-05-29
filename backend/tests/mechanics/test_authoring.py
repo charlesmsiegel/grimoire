@@ -97,6 +97,23 @@ async def test_scaffold_rejects_invalid_manifest(service):
     assert exc.value.errors  # carries human-readable messages
 
 
+async def test_scaffold_bad_kind_leaves_no_partial_module(service):
+    author = MechanicsAuthor(service)
+    with pytest.raises(InvalidIdentifierError):
+        await author.scaffold(
+            {
+                "id": "partial",
+                "name": "Partial",
+                "version": "1.0.0",
+                "api_version": "1",
+                "sheet_kinds": ["Bad Kind!"],
+            }
+        )
+    # Nothing must be written when validation fails — a retry would otherwise
+    # hit "already exists".
+    assert not (service.config.root / "partial").exists()
+
+
 async def test_scaffold_creates_nested_theme_path(service):
     author = MechanicsAuthor(service)
     report = await author.scaffold(
