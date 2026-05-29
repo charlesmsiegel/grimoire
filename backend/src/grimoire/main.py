@@ -366,6 +366,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # earlier — patching the attribute here keeps the wiring linear.
         if container.scenes is not None and getattr(container.scenes, "_continuity", None) is None:
             container.scenes._continuity = container.continuity
+        if container.inventory is None:
+            from grimoire.inventory import InventoryService
+
+            container.inventory = InventoryService(
+                store=container.state_store,
+                event_bus=container.event_bus,
+            )
         if container.imagegen is None:
             # No image-generation backends registered. /images endpoints (read)
             # work against the SQLite index; queue_generation / active_backend
@@ -628,6 +635,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 world=container.world,
                 continuity=container.continuity,
                 transient_state=container.transient_state,
+                inventory=container.inventory,
                 ws_push=container.stream.push,
                 metrics=obs.metrics(),
             )
