@@ -70,6 +70,7 @@ class ContextSourceExplanation(BaseModel):
     inclusion_reasons: list[InclusionReason] = Field(default_factory=list)
     tokens: int = 0
     summary: str = ""
+    text: str = ""
 
 
 class SourceVersionChange(BaseModel):
@@ -361,6 +362,7 @@ class ContextInspector:
             inclusion_reasons=list(source.inclusion_reasons),
             tokens=source.tokens,
             summary=source.summary,
+            text=source.text,
         )
 
     def _make_summary(self, handle: str, prompt: AssembledPrompt) -> PreviewSummary:

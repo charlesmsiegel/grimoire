@@ -8,6 +8,7 @@ import { useState } from "react";
 import type { ContextSourceExplanation, ContextTier } from "../../../api/inspector";
 import { REASON_LABELS } from "../../observability/inclusionReasonLabels";
 import { PinControls } from "./PinControls";
+import { isPinnable } from "./sourceKinds";
 
 interface Props {
   campaignId: string;
@@ -86,7 +87,9 @@ function SourceRow({
           ) : (
             <p className="inspector-empty">No text captured for this source.</p>
           )}
-          <PinControls campaignId={campaignId} source={source} onChanged={onChanged} />
+          {isPinnable(source.kind) && (
+            <PinControls campaignId={campaignId} source={source} onChanged={onChanged} />
+          )}
         </div>
       )}
     </li>

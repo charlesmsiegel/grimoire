@@ -94,6 +94,12 @@ class PromptAssembler:
             label="Archive",
         )
 
+        # The verbatim tail is always sent inside the lock-in block; the older
+        # block is appended only when it fits the recent-posts budget. Track
+        # exactly what reached ``messages`` so the recent_posts source below
+        # claims only the posts actually sent.
+        recent_tail = self._lock_in_verbatim_posts(ctx)
+        older_sent = ""
         verbatim = self._config.lock_in_verbatim_posts
         if verbatim > 0 and ctx.recent_posts_text:
             older = self._render_older_recent(ctx, verbatim)
@@ -107,6 +113,7 @@ class PromptAssembler:
                             metadata={"tier": "recent-posts"},
                         )
                     )
+                    older_sent = older
 
         if player_input:
             messages.append(
@@ -128,15 +135,19 @@ class PromptAssembler:
             temperature=self._config.default_temperature,
             max_tokens=self._config.default_max_tokens,
         )
+        recent_sent = "\n\n".join(part for part in (older_sent, recent_tail) if part)
         sources = list(ctx.sources)
         await self._append_block_sources(
             sources,
             system_text=system_text,
             scene_header=ctx.scene_header,
             mechanics_block=ctx.mechanics_block,
-            recent_posts_text=ctx.recent_posts_text,
+            recent_posts_text=recent_sent,
             player_input=player_input,
         )
+        # Resolve {{user}} in source text with the same pass applied to the
+        # messages above, so the inspector shows the text the LLM receives.
+        _resolve_source_macros(sources, ctx.active_pc_name)
         summary = self._summary(ctx, budget_used)
         composition_snapshot = self._composition_snapshot(ctx.composition)
         return AssembledPrompt(
@@ -380,12 +391,25 @@ def render_recent_posts(posts: list[Any]) -> str:
     return "\n\n".join(rendered)
 
 
-def _resolve_runtime_macros(messages: list[Message], active_pc_name: str) -> list[Message]:
+def _pc_macro_name(active_pc_name: str) -> str:
     pc_name = active_pc_name.strip() if active_pc_name else ""
-    pc_name = pc_name or "the player"
+    return pc_name or "the player"
+
+
+def _resolve_runtime_macros(messages: list[Message], active_pc_name: str) -> list[Message]:
+    pc_name = _pc_macro_name(active_pc_name)
     return [
         m.model_copy(update={"content": m.content.replace("{{user}}", pc_name)}) for m in messages
     ]
+
+
+def _resolve_source_macros(sources: list[ContextSource], active_pc_name: str) -> None:
+    """Apply the same ``{{user}}`` substitution to captured source text that
+    ``_resolve_runtime_macros`` applies to the assembled messages."""
+    pc_name = _pc_macro_name(active_pc_name)
+    for source in sources:
+        if source.text and "{{user}}" in source.text:
+            source.text = source.text.replace("{{user}}", pc_name)
 
 
 def _hash_messages(messages: list[Message]) -> str:

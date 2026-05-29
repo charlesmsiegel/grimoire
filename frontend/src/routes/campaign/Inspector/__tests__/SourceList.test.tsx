@@ -64,4 +64,26 @@ describe("SourceList", () => {
     fireEvent.click(florenceRow!);
     expect(screen.getByText("winifred body text")).toBeInTheDocument();
   });
+
+  it("hides pin/exclude controls for attribution-only blocks", () => {
+    const attribution: ContextSourceExplanation[] = [
+      {
+        source_id: "src_sys",
+        owner_id: null,
+        kind: "system",
+        scope: "campaign-local",
+        tier: "lock-in",
+        library_version: null,
+        inclusion_reasons: ["system_prompt"],
+        tokens: 100,
+        summary: "",
+        text: "SYSTEM TEXT",
+      },
+    ];
+    render(<SourceList campaignId="camp" sources={attribution} />);
+    fireEvent.click(screen.getByRole("button", { name: /system/i }));
+    expect(screen.getByText("SYSTEM TEXT")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^pin$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^exclude$/i })).not.toBeInTheDocument();
+  });
 });

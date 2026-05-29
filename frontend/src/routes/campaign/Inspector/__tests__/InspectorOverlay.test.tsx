@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import type { ContextSourceExplanation, PreviewDetail } from "../../../../api/inspector";
+import {
+  inspectorApi,
+  type ContextSourceExplanation,
+  type PreviewDetail,
+  type PreviewSummary,
+} from "../../../../api/inspector";
 import { InspectorOverlay } from "../InspectorOverlay";
 
 vi.mock("../../../../api/inspector", async (orig) => {
@@ -62,5 +67,40 @@ describe("InspectorOverlay", () => {
     // Raw-messages toggle fetches and renders verbatim messages.
     fireEvent.click(screen.getByRole("button", { name: /raw messages/i }));
     await waitFor(() => expect(screen.getByText("SYS BODY")).toBeInTheDocument());
+  });
+
+  it("refetches raw messages when the preview handle changes", async () => {
+    const summary: PreviewSummary = {
+      handle: "ph_1",
+      per_tier_tokens: { "lock-in": 0, spotlight: 0, background: 0, archive: 0 },
+      per_tier_budget: { "lock-in": 0, spotlight: 0, background: 0, archive: 0 },
+      source_count: 0,
+      messages_hash: "h",
+    };
+    vi.mocked(inspectorApi.getPreview).mockImplementation(
+      (_campaignId, handle): Promise<PreviewDetail> =>
+        Promise.resolve({
+          messages: [{ role: "system", content: `BODY ${handle}`, metadata: {} }],
+          sources: [],
+          budget_used: { "lock-in": 0, spotlight: 0, background: 0, archive: 0 },
+          messages_hash: handle,
+        }),
+    );
+    const props = {
+      campaignId: "camp",
+      sessionId: "camp",
+      sources,
+      onClose: () => {},
+      onChanged: () => {},
+    };
+    const { rerender } = render(<InspectorOverlay {...props} handle="ph_1" summary={summary} />);
+    fireEvent.click(screen.getByRole("button", { name: /raw messages/i }));
+    await waitFor(() => expect(screen.getByText("BODY ph_1")).toBeInTheDocument());
+
+    // A pin/refresh produces a new handle while the overlay stays open in raw
+    // mode: the stale prompt must be replaced, not reused.
+    rerender(<InspectorOverlay {...props} handle="ph_2" summary={{ ...summary, handle: "ph_2" }} />);
+    await waitFor(() => expect(screen.getByText("BODY ph_2")).toBeInTheDocument());
+    expect(screen.queryByText("BODY ph_1")).not.toBeInTheDocument();
   });
 });
