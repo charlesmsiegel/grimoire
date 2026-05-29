@@ -43,6 +43,32 @@ async def test_create_then_edit_module(tmp_path: Path) -> None:
         assert got == schema
 
 
+async def test_put_theme_css_accepts_raw_text(tmp_path: Path) -> None:
+    async with ScenarioApp(tmp_path) as app:
+        assert app.client is not None
+        client = app.client
+        spec = {
+            "id": "themed",
+            "name": "Themed",
+            "version": "1.0.0",
+            "api_version": "1",
+            "ui": {"theme_css": "theme.css"},
+        }
+        assert (await client.post("/api/library/mechanics", json=spec)).status_code == 201
+
+        css = ".sheet { color: rebeccapurple; }"
+        put = await client.put(
+            "/api/library/mechanics/themed/theme.css",
+            content=css,
+            headers={"Content-Type": "text/plain"},
+        )
+        assert put.status_code == 200, put.text
+
+        got = await client.get("/api/library/mechanics/themed/theme.css")
+        assert got.status_code == 200, got.text
+        assert got.text == css
+
+
 async def test_create_duplicate_is_conflict(tmp_path: Path) -> None:
     async with ScenarioApp(tmp_path) as app:
         assert app.client is not None

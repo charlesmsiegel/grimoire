@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, HTTPException, Query, Response
+from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from grimoire.api.deps import (
@@ -807,11 +807,15 @@ async def put_mechanics_content_schema(
 @router.put("/library/mechanics/{module_id}/theme.css")
 async def put_mechanics_theme_css(
     module_id: str,
+    request: Request,
     mechanics: MechanicsDep,
-    body: str = Body(..., media_type="text/plain"),
 ) -> Any:
+    # Read the raw request body: the frontend PUTs CSS as text/plain, which
+    # FastAPI's JSON body parser would reject. ``Body(media_type=...)`` only
+    # changes OpenAPI docs, not the runtime parser, so read the bytes directly.
+    css = (await request.body()).decode("utf-8")
     try:
-        report = await mechanics.author.write_theme_css(module_id, body)
+        report = await mechanics.author.write_theme_css(module_id, css)
     except Exception as exc:
         raise _map_authoring_error(exc) from exc
     return to_payload(report)
