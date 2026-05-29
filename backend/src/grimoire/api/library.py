@@ -726,6 +726,97 @@ async def mechanics_powers(module_id: str, mechanics: MechanicsDep) -> Any:
     return to_payload(defs)
 
 
+# --------------------------------------------------------------------------- #
+# Mechanics authoring (create + edit declarative parts)
+# --------------------------------------------------------------------------- #
+
+
+def _map_authoring_error(exc: Exception) -> HTTPException:
+    from grimoire.mechanics import (
+        ManifestValidationError,
+        ModuleExistsError,
+        ModuleNotFoundError,
+        SchemaValidationError,
+    )
+    from grimoire.mechanics.authoring import InvalidIdentifierError
+
+    if isinstance(exc, ModuleExistsError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, ModuleNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, ManifestValidationError | SchemaValidationError):
+        return HTTPException(status_code=422, detail=exc.errors)
+    if isinstance(exc, InvalidIdentifierError):
+        return HTTPException(status_code=400, detail=str(exc))
+    raise exc
+
+
+@router.post("/library/mechanics", status_code=201)
+async def create_mechanics_module(
+    body: dict[str, Any],
+    mechanics: MechanicsDep,
+) -> Any:
+    try:
+        report = await mechanics.author.scaffold(body)
+    except Exception as exc:
+        raise _map_authoring_error(exc) from exc
+    return {"id": body.get("id"), "report": to_payload(report)}
+
+
+@router.put("/library/mechanics/{module_id}/manifest")
+async def update_mechanics_manifest(
+    module_id: str,
+    body: dict[str, Any],
+    mechanics: MechanicsDep,
+) -> Any:
+    try:
+        report = await mechanics.author.write_manifest(module_id, body)
+    except Exception as exc:
+        raise _map_authoring_error(exc) from exc
+    return to_payload(report)
+
+
+@router.put("/library/mechanics/{module_id}/sheets/{kind}")
+async def put_mechanics_sheet_schema(
+    module_id: str,
+    kind: str,
+    body: dict[str, Any],
+    mechanics: MechanicsDep,
+) -> Any:
+    try:
+        report = await mechanics.author.write_sheet_schema(module_id, kind, body)
+    except Exception as exc:
+        raise _map_authoring_error(exc) from exc
+    return to_payload(report)
+
+
+@router.put("/library/mechanics/{module_id}/content/{kind}")
+async def put_mechanics_content_schema(
+    module_id: str,
+    kind: str,
+    body: dict[str, Any],
+    mechanics: MechanicsDep,
+) -> Any:
+    try:
+        report = await mechanics.author.write_content_schema(module_id, kind, body)
+    except Exception as exc:
+        raise _map_authoring_error(exc) from exc
+    return to_payload(report)
+
+
+@router.put("/library/mechanics/{module_id}/theme.css")
+async def put_mechanics_theme_css(
+    module_id: str,
+    mechanics: MechanicsDep,
+    body: str = Body(..., media_type="text/plain"),
+) -> Any:
+    try:
+        report = await mechanics.author.write_theme_css(module_id, body)
+    except Exception as exc:
+        raise _map_authoring_error(exc) from exc
+    return to_payload(report)
+
+
 @router.get("/plugins/installed")
 async def installed_plugins(plugins: PluginsDep) -> Any:
     try:
