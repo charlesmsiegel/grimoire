@@ -56,14 +56,20 @@ export function CastChangePrompt({ campaignId, sceneId, onApplied }: Props) {
     };
   }, [campaignId, sceneId]);
 
-  const handleEvent = useCallback((m: { type: string } & Record<string, unknown>) => {
-    if (m.type !== "turn_complete") return;
-    // The WS payload is untyped at runtime; validate before trusting it.
-    const parsed = PendingCastChangeArraySchema.safeParse(m.pending_cast_changes);
-    if (parsed.success) setPending(parsed.data);
-  }, []);
+  const handleEvent = useCallback(
+    (m: { type: string } & Record<string, unknown>) => {
+      // turn_complete carries the payload for normal turns; pending_cast_changes
+      // is pushed mid-turn (speaker-loop rounds) and after a scene analysis. The
+      // latter is scene-scoped — ignore it if it targets a different scene.
+      if (m.type === "pending_cast_changes" && m.scene_id !== sceneId) return;
+      // The WS payload is untyped at runtime; validate before trusting it.
+      const parsed = PendingCastChangeArraySchema.safeParse(m.pending_cast_changes);
+      if (parsed.success) setPending(parsed.data);
+    },
+    [sceneId],
+  );
 
-  useCampaignEvent("turn_complete", handleEvent);
+  useCampaignEvent(["turn_complete", "pending_cast_changes"], handleEvent);
 
   const remove = (id: string) => setPending((p) => p.filter((c) => c.id !== id));
 

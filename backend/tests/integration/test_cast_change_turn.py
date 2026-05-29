@@ -23,8 +23,9 @@ from grimoire.scenes.cast_changes import CastChangeStore
 from grimoire.scenes.manager import SceneManager
 from grimoire.scenes.types import SceneInit
 from grimoire.state_store import StateStore
-from grimoire.storage import Database, apply_migrations
+from grimoire.storage import Database
 from grimoire.testing import MockLLMGateway
+from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.types.characters import CharacterData, CharacterRole
 from grimoire.types.scene import Scene
 from grimoire.types.state import StateSnapshot
@@ -76,9 +77,8 @@ async def test_extractor_surfaces_cast_change() -> None:
 async def test_resolution_queues_then_confirm_updates_scene(tmp_path) -> None:
     data_root = tmp_path / "data"
     data_root.mkdir()
-    db = Database(tmp_path / "campaigns.sqlite", pool_size=2)
+    db = Database(stamp_migrated_db(tmp_path / "campaigns.sqlite"), pool_size=2)
     await db.connect()
-    await apply_migrations(db)
     try:
         store = StateStore(db, data_root)
         library = LibraryService(store)

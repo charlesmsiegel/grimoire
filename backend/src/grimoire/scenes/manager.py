@@ -957,19 +957,23 @@ class SceneManager:
         if self._cast_change_store is None:
             raise RuntimeError("cast_change_store not wired")
         scene = await self.get_scene(scene_id)
-        existing = await self._cast_change_store.find_pending(scene_id, character_ref, change)
-        if existing is not None:
-            return existing.id
-        return await self._cast_change_store.add(
-            campaign_id=scene.campaign_id,
-            scene_id=scene_id,
-            character_ref=character_ref,
-            change=change,
-            is_pc=is_pc,
-            evidence=evidence,
-            confidence=confidence,
-            turn_id=turn_id,
-        )
+        # Serialize the check-then-insert under the per-scene lock (like every
+        # other mutating method here) so concurrent turns can't both pass
+        # find_pending and insert duplicate pending rows for the same triple.
+        async with self._lock_for(scene_id):
+            existing = await self._cast_change_store.find_pending(scene_id, character_ref, change)
+            if existing is not None:
+                return existing.id
+            return await self._cast_change_store.add(
+                campaign_id=scene.campaign_id,
+                scene_id=scene_id,
+                character_ref=character_ref,
+                change=change,
+                is_pc=is_pc,
+                evidence=evidence,
+                confidence=confidence,
+                turn_id=turn_id,
+            )
 
     async def list_pending_cast_changes(self, scene_id: str) -> list:
         if self._cast_change_store is None:
