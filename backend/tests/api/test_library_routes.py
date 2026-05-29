@@ -334,6 +334,22 @@ def test_entity_schema_unknown_kind_404(client) -> None:
     assert response.status_code == 404
 
 
+def test_entity_schema_character_matches_frontend_fixture(client) -> None:
+    """The committed front-end fixture must list exactly the Character schema's
+    property names — so a backend field rename forces a fixture update, which in
+    turn re-checks the descriptor (frontend entitySchemas.test.ts)."""
+    import json
+    from pathlib import Path
+
+    fixture = (
+        Path(__file__).resolve().parents[3]
+        / "frontend/src/routes/library/__tests__/fixtures/character-schema-properties.json"
+    )
+    expected = set(json.loads(fixture.read_text()))
+    props = set(client.get("/api/library/entity-schemas/character").json()["properties"].keys())
+    assert props == expected
+
+
 def test_create_style_guide(client, container) -> None:
     fake = FakeLibrary()
     container.library = fake
