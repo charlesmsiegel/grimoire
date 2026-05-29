@@ -132,6 +132,7 @@ export function PlayView({ campaignId }: Props) {
       <SceneBreakPrompt campaignId={campaignId} />
       {play.state.scene && (
         <CastChangePrompt
+          key={play.state.scene.id}
           campaignId={campaignId}
           sceneId={play.state.scene.id}
           onApplied={play.refresh}

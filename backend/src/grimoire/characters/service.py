@@ -13,9 +13,10 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+
+from pydantic import BaseModel
 
 from grimoire.event_bus import Event, EventBus
 from grimoire.library import LibraryService
@@ -92,8 +93,7 @@ from .views import (
 _log = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class CastRef:
+class CastRef(BaseModel):
     """A character reference resolved for cast-change purposes (#464)."""
 
     character_ref: str

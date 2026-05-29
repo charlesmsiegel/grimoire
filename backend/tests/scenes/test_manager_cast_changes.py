@@ -93,6 +93,17 @@ async def test_confirm_unknown_id_raises(manager):
         await manager.confirm_cast_change(scene.id, "cc-nope")
 
 
+async def test_dismiss_after_confirm_raises(manager):
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="t"))
+    cid = await manager.queue_cast_change(
+        scene.id, character_ref="x", change=CastChange.ENTER, is_pc=False
+    )
+    await manager.confirm_cast_change(scene.id, cid)
+    # Dismissing an already-confirmed change must not silently overwrite status.
+    with pytest.raises(ValueError):
+        await manager.dismiss_cast_change(scene.id, cid)
+
+
 async def test_queue_dedupes_identical_pending(manager):
     scene = await manager.start_scene(SceneInit(campaign_id="c", title="t"))
     first = await manager.queue_cast_change(
