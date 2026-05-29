@@ -1,8 +1,7 @@
 /**
- * Per-tier token usage bars for the Inspector panel.
- *
- * Each tier renders as a labelled horizontal bar showing
- * used/budget; tiers over budget glow red.
+ * Total token-usage bar for the Inspector panel. Shows summed used/budget
+ * across all tiers; the per-tier breakdown is exposed via the bar's title
+ * (hover) so the inline block stays compact.
  */
 
 import type { ContextTier, PreviewSummary } from "../../../api/inspector";
@@ -10,10 +9,10 @@ import type { ContextTier, PreviewSummary } from "../../../api/inspector";
 const TIERS: ContextTier[] = ["lock-in", "spotlight", "background", "archive"];
 
 const TIER_LABELS: Record<ContextTier, string> = {
-  "lock-in": "Lock-in",
-  spotlight: "Spotlight",
-  background: "Background",
-  archive: "Archive",
+  "lock-in": "lock-in",
+  spotlight: "spotlight",
+  background: "background",
+  archive: "archive",
 };
 
 interface Props {
@@ -29,28 +28,25 @@ export function TokenBars({ summary, loading }: Props) {
       </p>
     );
   }
+  const used = TIERS.reduce((acc, t) => acc + (summary.per_tier_tokens[t] ?? 0), 0);
+  const budget = TIERS.reduce((acc, t) => acc + (summary.per_tier_budget[t] ?? 0), 0);
+  const ratio = budget > 0 ? Math.min(1, used / budget) : 0;
+  const over = budget > 0 && used > budget;
+  const breakdown = TIERS.map(
+    (t) => `${TIER_LABELS[t]} ${(summary.per_tier_tokens[t] ?? 0).toLocaleString()}`,
+  ).join(" · ");
   return (
-    <ul className="inspector-token-bars" aria-label="Per-tier token usage">
-      {TIERS.map((tier) => {
-        const used = summary.per_tier_tokens[tier] ?? 0;
-        const budget = summary.per_tier_budget[tier] ?? 0;
-        const ratio = budget > 0 ? Math.min(1, used / budget) : 0;
-        const over = budget > 0 && used > budget;
-        return (
-          <li key={tier} className={`inspector-token-row ${over ? "is-over" : ""}`}>
-            <span className="inspector-token-label">{TIER_LABELS[tier]}</span>
-            <span className="inspector-token-bar" aria-hidden>
-              <span
-                className="inspector-token-fill"
-                style={{ width: `${(ratio * 100).toFixed(1)}%` }}
-              />
-            </span>
-            <span className="inspector-token-counts">
-              {used.toLocaleString()} / {budget.toLocaleString()}
-            </span>
-          </li>
-        );
-      })}
-    </ul>
+    <div
+      className={`inspector-token-total ${over ? "is-over" : ""}`}
+      aria-label="Per-tier token usage"
+      title={breakdown}
+    >
+      <span className="inspector-token-bar" aria-hidden>
+        <span className="inspector-token-fill" style={{ width: `${(ratio * 100).toFixed(1)}%` }} />
+      </span>
+      <span className="inspector-token-counts">
+        {used.toLocaleString()} / {budget.toLocaleString()}
+      </span>
+    </div>
   );
 }
