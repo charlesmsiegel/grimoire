@@ -10,7 +10,7 @@ A toggleable, per-campaign inventory subsystem that tracks who holds what. The
 only non-deterministic step is the extractor identifying inventory changes from
 post prose; everything after extraction is a deterministic, ordered state
 machine. Mutations are expressed as the same reversible file-write deltas the
-system already handles, so undo, branch forks, and replay work with no
+system already handles, so undo, campaign forks, and replay work with no
 inventory-specific reversal code.
 
 The extractor already emits `INVENTORY_CHANGE` deltas, but today they dump a
@@ -129,9 +129,8 @@ overlay files by the watcher's `scan_now`.
 
 ```sql
 CREATE TABLE inventory_holdings (
-  id           TEXT PRIMARY KEY,    -- campaign:branch:holder_kind:holder_id:item_ref
+  id           TEXT PRIMARY KEY,    -- campaign_id:holder_kind:holder_id:item_ref
   campaign_id  TEXT NOT NULL,
-  branch_id    TEXT NOT NULL,
   holder_kind  TEXT NOT NULL,       -- 'character' | 'location'
   holder_id    TEXT NOT NULL,
   item_ref     TEXT NOT NULL,
@@ -142,9 +141,13 @@ CREATE TABLE inventory_holdings (
   provenance   TEXT,
   notes        TEXT
 );
-CREATE INDEX idx_inv_holder ON inventory_holdings(campaign_id, branch_id, holder_kind, holder_id);
-CREATE INDEX idx_inv_item   ON inventory_holdings(campaign_id, branch_id, item_ref);
+CREATE INDEX idx_inv_holder ON inventory_holdings(campaign_id, holder_kind, holder_id);
+CREATE INDEX idx_inv_item   ON inventory_holdings(campaign_id, item_ref);
 ```
+
+> Note: branches were removed from the schema in migration 036; all
+> campaign-scoped tables key on `campaign_id` only. The inventory tables
+> follow that convention (no `branch_id`).
 
 ### Flagged-op audit table
 
@@ -154,7 +157,6 @@ Low-confidence and reconciled ops the user can review and undo:
 CREATE TABLE inventory_flags (
   id           TEXT PRIMARY KEY,
   campaign_id  TEXT NOT NULL,
-  branch_id    TEXT NOT NULL,
   turn_id      TEXT,
   op_json      TEXT NOT NULL,       -- the originating InventoryOperation
   flag_reason  TEXT NOT NULL,       -- see reasons below
@@ -256,7 +258,7 @@ when `enabled`**.
 ### Pipeline
 
 After the extractor produces deltas, when inventory is enabled the orchestrator
-calls `await inventory.apply(campaign_id, branch_id, turn_id, ops)`. The service:
+calls `await inventory.apply(campaign_id, turn_id, ops)`. The service:
 
 1. Resolves each op's item + holders (`resolver.py`, auto-creating emergent
    items as needed — those creations are themselves logged deltas).
@@ -270,7 +272,7 @@ calls `await inventory.apply(campaign_id, branch_id, turn_id, ops)`. The service
    emits `INVENTORY_CHANGED` / `INVENTORY_FLAGGED` events for the HUD.
 
 Because mutations are expressed as the same reversible file deltas the system
-already handles, turn undo, branch forks, and replay all work with no
+already handles, turn undo, campaign forks, and replay all work with no
 inventory-specific reversal code.
 
 ## REST / WebSocket API
