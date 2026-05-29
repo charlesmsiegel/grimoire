@@ -71,6 +71,11 @@ def _remove(bucket: dict[str, InventoryEntry], item_ref: str, qty: int) -> bool:
 
 def apply_op(holdings: Holdings, op: ResolvedOp) -> StepResult:
     qty = op.quantity if op.quantity is not None else 1
+    # ADJUST is the only action that accepts a signed quantity. For every
+    # other action a negative quantity would invert a removal into a grant
+    # (``entry.quantity -= qty``), so normalise to its magnitude.
+    if op.action is not InventoryAction.ADJUST and qty < 0:
+        qty = -qty
     src = _bucket(holdings, op.holder_kind, op.holder_id)
 
     if op.action is InventoryAction.ACQUIRE:

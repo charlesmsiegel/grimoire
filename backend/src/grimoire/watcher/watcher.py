@@ -740,33 +740,11 @@ class FileWatcher:
         await self._drop_orphans("campaign_content_index", seen)
 
     async def _rebuild_inventory_holdings(self) -> None:
-        """Repopulate inventory_holdings from `inventory:` sections in overlay/
-        emergent files. The file is the source of truth; the table is derived."""
-        rows = await self.store.db.fetchall(
-            "SELECT campaign_id, entity_subkind, asset_id, frontmatter "
-            "FROM campaign_content_index "
-            "WHERE entity_subkind IN ('character', 'location') "
-            "AND frontmatter LIKE '%\"inventory\"%'"
-        )
-        for r in rows:
-            fm = json.loads(r["frontmatter"]) if r["frontmatter"] else {}
-            block = fm.get("inventory") or {}
-            entries = block.get("entries") or []
-            cid, kind, hid = r["campaign_id"], r["entity_subkind"], r["asset_id"]
-            await self.store.clear_holder_inventory(cid, kind, hid)
-            for e in entries:
-                await self.store.upsert_inventory_holding(
-                    campaign_id=cid,
-                    holder_kind=kind,
-                    holder_id=hid,
-                    item_ref=e["item_ref"],
-                    item_name=e.get("item_name", e["item_ref"]),
-                    quantity=int(e.get("quantity", 1)),
-                    fungible=bool(e.get("fungible", False)),
-                    equipped=bool(e.get("equipped", False)),
-                    provenance=e.get("provenance"),
-                    notes=e.get("notes"),
-                )
+        """Repopulate the derived inventory_holdings table from `inventory:`
+        sections in overlay files. Delegates to the storage layer, which owns
+        the table and does a full truncate-and-repopulate (so removed sections
+        and removed holders leave no stale rows)."""
+        await self.store.rebuild_inventory_holdings_from_index()
 
     async def _drop_orphans(self, table: str, seen: set[str]) -> None:
         """Delete every ``table`` row whose id isn't in ``seen``.

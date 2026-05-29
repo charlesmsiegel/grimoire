@@ -143,3 +143,38 @@ def test_equip_missing_item_reconciles_and_flags():
     res = apply_op(h, _op(InventoryAction.EQUIP, item_ref="sword", item_name="Sword"))
     assert h[(HolderKind.CHARACTER, "flo")]["sword"].equipped is True
     assert res.flag is FlagReason.RECONCILED_MISSING_ITEM
+
+
+def test_negative_drop_does_not_grant():
+    # A negative quantity on a non-ADJUST action must never increase holdings.
+    h = _holdings(
+        (
+            ("character", "flo"),
+            InventoryEntry(item_ref="gold", item_name="Gold", quantity=500, fungible=True),
+        ),
+    )
+    apply_op(h, _op(InventoryAction.DROP, item_ref="gold", fungible=True, quantity=-1000))
+    # abs(-1000) removed from 500 -> clamped to 0 (entry gone), not 1500.
+    assert "gold" not in h[(HolderKind.CHARACTER, "flo")]
+
+
+def test_negative_transfer_does_not_invert():
+    h = _holdings(
+        (
+            ("character", "flo"),
+            InventoryEntry(item_ref="gold", item_name="Gold", quantity=100, fungible=True),
+        ),
+    )
+    apply_op(
+        h,
+        _op(
+            InventoryAction.TRANSFER,
+            item_ref="gold",
+            fungible=True,
+            to=("character", "julian"),
+            quantity=-40,
+        ),
+    )
+    # Magnitude moved: flo 100→60, julian gains 40 (not the inverse).
+    assert h[(HolderKind.CHARACTER, "flo")]["gold"].quantity == 60
+    assert h[(HolderKind.CHARACTER, "julian")]["gold"].quantity == 40

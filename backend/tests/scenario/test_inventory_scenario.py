@@ -9,7 +9,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from grimoire.testing.scenario import ScenarioApp
+
+pytestmark = [pytest.mark.scenario, pytest.mark.asyncio]
 
 
 async def test_inventory_end_to_end(tmp_path: Path) -> None:
