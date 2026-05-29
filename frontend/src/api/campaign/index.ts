@@ -31,6 +31,7 @@ export type {
   PreRollPendingEvent,
   SceneBreakSuggestedEvent,
   SceneBreakChoice,
+  PendingCastChange,
   MissingSheet,
   MechanicsSwitchResult,
   ForkCampaignRequest,

@@ -20,6 +20,7 @@ import type {
   OpenCommitment,
   PaginatedPostsResponse,
   PCEntry,
+  PendingCastChange,
   RegeneratePostResult,
   ReplayBatchView,
   RetconResultPayload,
@@ -290,6 +291,23 @@ export const campaignApi = {
     api.post<{ resolved: boolean; turn_id: string; choice: SceneBreakChoice }>(
       `/api/campaigns/${enc(campaignId)}/turns/${enc(turnId)}/resolve-scene-break`,
       { choice },
+    ),
+
+  listCastChanges: (campaignId: string, sceneId: string) =>
+    api.get<PendingCastChange[]>(
+      `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/cast-changes`,
+    ),
+
+  confirmCastChange: (campaignId: string, sceneId: string, changeId: string) =>
+    api.post<{ ok: boolean }>(
+      `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/cast-changes/${enc(changeId)}/confirm`,
+      {},
+    ),
+
+  dismissCastChange: (campaignId: string, sceneId: string, changeId: string) =>
+    api.post<{ ok: boolean }>(
+      `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/cast-changes/${enc(changeId)}/dismiss`,
+      {},
     ),
 
   switchMechanics: (campaignId: string, mechanics: string | null, source: string = "user") =>
