@@ -10,14 +10,22 @@ async def test_emergent_holder_roundtrip(store):
     await store.upsert_campaign(campaign_id="c1", name="C")
     # Seed an emergent character holder.
     await store.write_emergent(
-        campaign_id="c1", kind="character", entity_id="joe",
-        frontmatter={"id": "joe", "name": "Joe"}, body="barkeep", source="test",
+        campaign_id="c1",
+        kind="character",
+        entity_id="joe",
+        frontmatter={"id": "joe", "name": "Joe"},
+        body="barkeep",
+        source="test",
     )
     p = InventoryPersistence(store)
     entries = [InventoryEntry(item_ref="ring", item_name="Ring", quantity=1)]
     await p.write_holder_inventory(
-        campaign_id="c1", holder_kind=HolderKind.CHARACTER, holder_id="joe",
-        entries=entries, source="inventory", turn_id="t1",
+        campaign_id="c1",
+        holder_kind=HolderKind.CHARACTER,
+        holder_id="joe",
+        entries=entries,
+        source="inventory",
+        turn_id="t1",
     )
 
     # File SSOT updated.

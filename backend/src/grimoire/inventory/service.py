@@ -95,10 +95,18 @@ class InventoryService:
                 await self._ensure_loaded(campaign_id, holdings, to_kind, to_id)
 
             resolved = ResolvedOp(
-                action=op.action, item_ref=item_ref, item_name=item_name, fungible=fungible,
-                holder_kind=holder_kind, holder_id=holder_id,
-                to_kind=to_kind, to_id=to_id, quantity=op.quantity,
-                equipped=op.equipped, provenance=op.provenance, acquired_in_post=turn_id,
+                action=op.action,
+                item_ref=item_ref,
+                item_name=item_name,
+                fungible=fungible,
+                holder_kind=holder_kind,
+                holder_id=holder_id,
+                to_kind=to_kind,
+                to_id=to_id,
+                quantity=op.quantity,
+                equipped=op.equipped,
+                provenance=op.provenance,
+                acquired_in_post=turn_id,
             )
             step = apply_op(holdings, resolved)
             touched.add((holder_kind, holder_id))
@@ -111,25 +119,35 @@ class InventoryService:
                 flags.append(FlaggedOp(op=op, reason=FlagReason.LOW_CONFIDENCE))
 
         # Persist every touched holder (file SSOT + derived rows).
-        for (hk, hid) in touched:
+        for hk, hid in touched:
             entries = list(holdings.get((hk, hid), {}).values())
             await self._persist.write_holder_inventory(
-                campaign_id=campaign_id, holder_kind=hk, holder_id=hid,
-                entries=entries, source="inventory", turn_id=turn_id,
+                campaign_id=campaign_id,
+                holder_kind=hk,
+                holder_id=hid,
+                entries=entries,
+                source="inventory",
+                turn_id=turn_id,
             )
 
         await self._record_flags(campaign_id, turn_id, flags)
 
         await self._bus.emit(
-            Event(type=inv_events.INVENTORY_CHANGED,
-                  payload={"campaign_id": campaign_id, "turn_id": turn_id,
-                           "holders": [{"kind": k.value, "id": i} for (k, i) in touched]})
+            Event(
+                type=inv_events.INVENTORY_CHANGED,
+                payload={
+                    "campaign_id": campaign_id,
+                    "turn_id": turn_id,
+                    "holders": [{"kind": k.value, "id": i} for (k, i) in touched],
+                },
+            )
         )
         if flags:
             await self._bus.emit(
-                Event(type=inv_events.INVENTORY_FLAGGED,
-                      payload={"campaign_id": campaign_id, "turn_id": turn_id,
-                               "count": len(flags)})
+                Event(
+                    type=inv_events.INVENTORY_FLAGGED,
+                    payload={"campaign_id": campaign_id, "turn_id": turn_id, "count": len(flags)},
+                )
             )
         return {"touched": len(touched), "flags": len(flags)}
 
@@ -147,8 +165,11 @@ class InventoryService:
         now = self._clock().isoformat()
         for f in flags:
             await self._store.record_inventory_flag(
-                campaign_id=campaign_id, turn_id=turn_id,
-                op_json=f.op.model_dump_json(), flag_reason=f.reason.value, created_at=now,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                op_json=f.op.model_dump_json(),
+                flag_reason=f.reason.value,
+                created_at=now,
             )
 
     @staticmethod

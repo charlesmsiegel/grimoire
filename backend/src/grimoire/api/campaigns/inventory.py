@@ -21,9 +21,7 @@ async def _require_enabled(store: Any, campaign_id: str) -> InventoryConfig:
 
 
 @router.get("/{campaign_id}/inventory")
-async def get_inventory(
-    campaign_id: str, store: StateStoreDep, item_ref: str | None = None
-) -> Any:
+async def get_inventory(campaign_id: str, store: StateStoreDep, item_ref: str | None = None) -> Any:
     await _require_enabled(store, campaign_id)
     rows = await store.list_inventory_holdings(campaign_id, item_ref=item_ref)
     holders: dict[str, list] = {}
@@ -33,13 +31,9 @@ async def get_inventory(
 
 
 @router.get("/{campaign_id}/inventory/holders/{kind}/{holder_id}")
-async def get_holder(
-    campaign_id: str, kind: str, holder_id: str, store: StateStoreDep
-) -> Any:
+async def get_holder(campaign_id: str, kind: str, holder_id: str, store: StateStoreDep) -> Any:
     await _require_enabled(store, campaign_id)
-    rows = await store.list_inventory_holdings(
-        campaign_id, holder_kind=kind, holder_id=holder_id
-    )
+    rows = await store.list_inventory_holdings(campaign_id, holder_kind=kind, holder_id=holder_id)
     return {"holder": f"{kind}:{holder_id}", "entries": rows}
 
 
@@ -55,9 +49,7 @@ async def submit_operation(
 
 
 @router.get("/{campaign_id}/inventory/flags")
-async def list_flags(
-    campaign_id: str, store: StateStoreDep, resolved: bool = False
-) -> Any:
+async def list_flags(campaign_id: str, store: StateStoreDep, resolved: bool = False) -> Any:
     await _require_enabled(store, campaign_id)
     return {"flags": await store.list_inventory_flags(campaign_id, resolved=resolved)}
 

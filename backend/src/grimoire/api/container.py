@@ -30,6 +30,7 @@ if TYPE_CHECKING:
         ImageGenIntegration,
         ImageGenService,
     )
+    from grimoire.inventory import InventoryService
     from grimoire.library import LibraryService
     from grimoire.lifecycle import LifecycleManager
     from grimoire.llm_gateway.gateway import LLMGatewayService
@@ -50,7 +51,6 @@ if TYPE_CHECKING:
         StateStoreConfig,
     )
     from grimoire.storage import Database
-    from grimoire.inventory import InventoryService
     from grimoire.time_engine.service import TimeEngineService
     from grimoire.time_engine.subscriber import TimeEngineSubscriber
     from grimoire.transient_state import TransientStateService

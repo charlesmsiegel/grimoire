@@ -7,7 +7,7 @@ def test_defaults_disabled():
     cfg = InventoryConfig.from_campaign_config(None)
     assert cfg.enabled is False
     assert cfg.flag_threshold == 0.6
-    assert DEFAULT_FUNGIBLES <= cfg.fungible_resources
+    assert cfg.fungible_resources >= DEFAULT_FUNGIBLES
 
 
 def test_reads_campaign_block():

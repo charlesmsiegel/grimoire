@@ -9,14 +9,21 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 async def test_rebuild_repopulates_holdings_from_files(store, file_watcher):
     await store.upsert_campaign(campaign_id="c1", name="C")
     await store.write_emergent(
-        campaign_id="c1", kind="character", entity_id="joe",
-        frontmatter={"id": "joe", "name": "Joe"}, body="", source="test",
+        campaign_id="c1",
+        kind="character",
+        entity_id="joe",
+        frontmatter={"id": "joe", "name": "Joe"},
+        body="",
+        source="test",
     )
     p = InventoryPersistence(store)
     await p.write_holder_inventory(
-        campaign_id="c1", holder_kind=HolderKind.CHARACTER, holder_id="joe",
+        campaign_id="c1",
+        holder_kind=HolderKind.CHARACTER,
+        holder_id="joe",
         entries=[InventoryEntry(item_ref="ring", item_name="Ring", quantity=3)],
-        source="inventory", turn_id=None,
+        source="inventory",
+        turn_id=None,
     )
     # Simulate DB loss of the derived rows.
     await store.db.execute("DELETE FROM inventory_holdings")
