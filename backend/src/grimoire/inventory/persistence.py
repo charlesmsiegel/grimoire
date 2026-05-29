@@ -26,7 +26,9 @@ class InventoryPersistence:
     ) -> list[InventoryEntry]:
         world_id = await self._world_id_for(campaign_id, holder_kind, holder_id)
         resolved = await self._store.resolve_entity(
-            campaign_id=campaign_id, kind=holder_kind.value, asset_id=holder_id,
+            campaign_id=campaign_id,
+            kind=holder_kind.value,
+            asset_id=holder_id,
             world_id=world_id,
         )
         fm = (resolved or {}).get("frontmatter", {}) or {}
@@ -46,7 +48,9 @@ class InventoryPersistence:
         section = {"entries": [e.model_dump(exclude_none=True) for e in entries]}
         world_id = await self._world_id_for(campaign_id, holder_kind, holder_id)
         resolved = await self._store.resolve_entity(
-            campaign_id=campaign_id, kind=holder_kind.value, asset_id=holder_id,
+            campaign_id=campaign_id,
+            kind=holder_kind.value,
+            asset_id=holder_id,
             world_id=world_id,
         )
         origin = (resolved or {}).get("source", "")
@@ -63,29 +67,46 @@ class InventoryPersistence:
             body = (doc or {}).get("body", "") if doc else ""
             fm["inventory"] = section
             await self._store.write_emergent(
-                campaign_id=campaign_id, kind=holder_kind.value, entity_id=holder_id,
-                frontmatter=fm, body=body, source=source, turn_id=turn_id,
+                campaign_id=campaign_id,
+                kind=holder_kind.value,
+                entity_id=holder_id,
+                frontmatter=fm,
+                body=body,
+                source=source,
+                turn_id=turn_id,
             )
         else:
             # Library-scoped (override / library-*): write an override patch.
             library_id = make_library_id(world_id, holder_kind.value, holder_id)
             await self._store.write_override(
-                campaign_id=campaign_id, library_id=library_id,
-                patch={"inventory": section}, source=source, turn_id=turn_id,
+                campaign_id=campaign_id,
+                library_id=library_id,
+                patch={"inventory": section},
+                source=source,
+                turn_id=turn_id,
             )
 
         await self._sync_derived(campaign_id, holder_kind, holder_id, entries)
 
     async def _sync_derived(
-        self, campaign_id: str, holder_kind: HolderKind, holder_id: str,
+        self,
+        campaign_id: str,
+        holder_kind: HolderKind,
+        holder_id: str,
         entries: list[InventoryEntry],
     ) -> None:
         await self._store.clear_holder_inventory(campaign_id, holder_kind.value, holder_id)
         for e in entries:
             await self._store.upsert_inventory_holding(
-                campaign_id=campaign_id, holder_kind=holder_kind.value, holder_id=holder_id,
-                item_ref=e.item_ref, item_name=e.item_name, quantity=e.quantity,
-                fungible=e.fungible, equipped=e.equipped, provenance=e.provenance,
+                campaign_id=campaign_id,
+                holder_kind=holder_kind.value,
+                holder_id=holder_id,
+                item_ref=e.item_ref,
+                item_name=e.item_name,
+                quantity=e.quantity,
+                fungible=e.fungible,
+                equipped=e.equipped,
+                provenance=e.provenance,
                 notes=e.notes,
             )
 
@@ -101,7 +122,10 @@ class InventoryPersistence:
         for r in refs:
             wid = r["world_id"]
             resolved = await self._store.resolve_entity(
-                campaign_id=campaign_id, kind=holder_kind.value, asset_id=holder_id, world_id=wid,
+                campaign_id=campaign_id,
+                kind=holder_kind.value,
+                asset_id=holder_id,
+                world_id=wid,
             )
             if resolved is not None:
                 return wid

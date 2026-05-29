@@ -22,9 +22,16 @@ async def test_inventory_holdings_has_no_branch_id(store):
 async def test_upsert_and_list_holdings(store):
     await store.upsert_campaign(campaign_id="c1", name="C")
     await store.upsert_inventory_holding(
-        campaign_id="c1", holder_kind="character", holder_id="flo",
-        item_ref="ring", item_name="Ring", quantity=2, fungible=False,
-        equipped=False, provenance=None, notes=None,
+        campaign_id="c1",
+        holder_kind="character",
+        holder_id="flo",
+        item_ref="ring",
+        item_name="Ring",
+        quantity=2,
+        fungible=False,
+        equipped=False,
+        provenance=None,
+        notes=None,
     )
     rows = await store.list_inventory_holdings("c1", holder_kind="character", holder_id="flo")
     assert len(rows) == 1
@@ -38,8 +45,11 @@ async def test_upsert_and_list_holdings(store):
 async def test_record_and_list_flags(store):
     await store.upsert_campaign(campaign_id="c1", name="C")
     await store.record_inventory_flag(
-        campaign_id="c1", turn_id="t1", op_json='{"action":"drop"}',
-        flag_reason="low_confidence", created_at="2026-05-28T00:00:00Z",
+        campaign_id="c1",
+        turn_id="t1",
+        op_json='{"action":"drop"}',
+        flag_reason="low_confidence",
+        created_at="2026-05-28T00:00:00Z",
     )
     flags = await store.list_inventory_flags("c1", resolved=False)
     assert len(flags) == 1

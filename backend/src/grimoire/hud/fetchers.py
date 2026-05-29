@@ -220,7 +220,7 @@ def _inventory_fetcher(store: Any):
         grouped: dict[str, list[str]] = {}
         for r in rows:
             label = f"{r['holder_kind']}:{r['holder_id']}"
-            qty = f" ×{r['quantity']}" if r["quantity"] != 1 else ""
+            qty = f" x{r['quantity']}" if r["quantity"] != 1 else ""
             eq = " (equipped)" if r["equipped"] else ""
             grouped.setdefault(label, []).append(f"{r['item_name']}{qty}{eq}")
         items = [{"text": f"{label}: {', '.join(things)}"} for label, things in grouped.items()]

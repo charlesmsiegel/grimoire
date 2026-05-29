@@ -26,8 +26,12 @@ async def _build(container: ServiceContainer, tmp_path: Path, *, enabled: bool):
     if enabled:
         await store.set_campaign_config("c_test", {"inventory": {"enabled": True}})
         await store.write_emergent(
-            campaign_id="c_test", kind="character", entity_id="joe",
-            frontmatter={"id": "joe", "name": "Joe"}, body="", source="test",
+            campaign_id="c_test",
+            kind="character",
+            entity_id="joe",
+            frontmatter={"id": "joe", "name": "Joe"},
+            body="",
+            source="test",
         )
     container.state_store = store
     container.inventory = InventoryService(store=store, event_bus=EventBus())

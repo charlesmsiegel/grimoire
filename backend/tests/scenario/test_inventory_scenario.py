@@ -81,9 +81,7 @@ async def test_inventory_end_to_end(tmp_path: Path) -> None:
         )
         assert resp.status_code == 200, resp.text
 
-        resp = await client.get(
-            f"/api/campaigns/{campaign_id}/inventory/holders/character/pc-bob"
-        )
+        resp = await client.get(f"/api/campaigns/{campaign_id}/inventory/holders/character/pc-bob")
         assert resp.status_code == 200, resp.text
         entries = resp.json()["entries"]
         assert any(e["item_ref"] == "resource:gold" for e in entries)

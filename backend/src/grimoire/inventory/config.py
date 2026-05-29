@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-_DEFAULT_FUNGIBLES = frozenset(
-    {"gold", "silver", "coins", "arrows", "rations", "torches"}
-)
+_DEFAULT_FUNGIBLES = frozenset({"gold", "silver", "coins", "arrows", "rations", "torches"})
 
 
 @dataclass(frozen=True)

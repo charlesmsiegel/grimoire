@@ -1,6 +1,6 @@
 from grimoire.inventory.models import (
-    FlagReason,
     FlaggedOp,
+    FlagReason,
     InventoryAction,
     InventoryEntry,
     InventoryOperation,
