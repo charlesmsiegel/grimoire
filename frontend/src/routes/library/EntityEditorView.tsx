@@ -11,9 +11,11 @@ import {
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { Markdown } from "../../components/Markdown";
+import { TokenBadge } from "../../components/TokenBadge";
 import { AsyncBoundary } from "./AsyncBoundary";
-import { CharacterExtras } from "./CharacterExtras";
 import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
+import { EntityForm } from "./EntityForm";
+import { getDescriptor } from "./entitySchemas";
 import { ExtrasTable } from "./ExtrasTable";
 import { FrontmatterEditor } from "./FrontmatterEditor";
 import { ensureFrontmatter, type Frontmatter } from "./frontmatter";
@@ -22,7 +24,6 @@ import { GreetingFormFields } from "./GreetingFormFields";
 import { VariantsBreadcrumb } from "./VariantsBreadcrumb";
 import { VariantsPanel } from "./VariantsPanel";
 
-const CHARACTER_HIDDEN_KEYS = ["voice", "image", "name", "id", "extras"];
 const ENTITY_HIDDEN_KEYS = ["extras"];
 const EXTRAS_SUPPORTED_KINDS = new Set([
   "characters",
@@ -182,7 +183,8 @@ function EntityEditorBody({
         <div>
           <h3>{entity.name || entity.asset_id}</h3>
           <small>
-            <code>{entity.path}</code> · v{entity.version}
+            <code>{entity.path}</code> · v{entity.version} ·{" "}
+            <TokenBadge text={`${JSON.stringify(frontmatter)}\n${body}`} />
           </small>
           <VariantsBreadcrumb
             kindPlural={kindPlural}
@@ -231,6 +233,8 @@ function EntityEditorBody({
           element={
             <>
               <EditorPanel
+                worldId={worldId}
+                kindPlural={kindPlural}
                 frontmatter={frontmatter}
                 onFrontmatterChange={patchFrontmatter}
                 body={body}
@@ -238,7 +242,6 @@ function EntityEditorBody({
                   setBody(b);
                   setDirty(true);
                 }}
-                isCharacter={isCharacter}
               />
               {EXTRAS_SUPPORTED_KINDS.has(kindPlural) ? (
                 <ExtrasTable
@@ -321,29 +324,41 @@ function EntityEditorBody({
 }
 
 function EditorPanel({
+  worldId,
+  kindPlural,
   frontmatter,
   onFrontmatterChange,
   body,
   onBodyChange,
-  isCharacter,
 }: {
+  worldId: string;
+  kindPlural: string;
   frontmatter: Frontmatter;
   onFrontmatterChange: (next: Frontmatter) => void;
   body: string;
   onBodyChange: (next: string) => void;
-  isCharacter: boolean;
 }) {
+  const descriptor = getDescriptor(ENTITY_KIND_SINGULAR[kindPlural] ?? kindPlural);
+  if (descriptor) {
+    return (
+      <EntityForm
+        descriptor={descriptor}
+        worldId={worldId}
+        frontmatter={frontmatter}
+        body={body}
+        onFrontmatterChange={onFrontmatterChange}
+        onBodyChange={onBodyChange}
+      />
+    );
+  }
   return (
     <div className="entity-editor-panels">
       <section className="entity-editor-panel" aria-labelledby="frontmatter-heading">
         <h4 id="frontmatter-heading">Frontmatter</h4>
-        {isCharacter && (
-          <CharacterExtras frontmatter={frontmatter} onChange={onFrontmatterChange} />
-        )}
         <FrontmatterEditor
           value={frontmatter}
           onChange={onFrontmatterChange}
-          hiddenKeys={isCharacter ? CHARACTER_HIDDEN_KEYS : ENTITY_HIDDEN_KEYS}
+          hiddenKeys={ENTITY_HIDDEN_KEYS}
         />
       </section>
       <section className="entity-editor-panel" aria-labelledby="body-heading">
