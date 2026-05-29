@@ -22,8 +22,21 @@ from grimoire.api.deps import (
     WorldDep,
 )
 from grimoire.api.util import map_lookup_errors, to_payload
+from grimoire.types.characters import Character
+from grimoire.types.world import Faction, Item, Location, LoreEntry, Monster
 
 router = APIRouter()
+
+# Pydantic models whose JSON schema drives the front-end structured entity
+# forms (issue #441). Keyed by the singular entity kind used in the UI.
+_ENTITY_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
+    "character": Character,
+    "location": Location,
+    "item": Item,
+    "monster": Monster,
+    "faction": Faction,
+    "lore": LoreEntry,
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -111,6 +124,16 @@ class ImagePresetPreviewPayload(BaseModel):
 # --------------------------------------------------------------------------- #
 # Worlds
 # --------------------------------------------------------------------------- #
+
+
+@router.get("/library/entity-schemas/{kind}")
+async def get_entity_schema(kind: str) -> dict[str, Any]:
+    """JSON schema for an entity kind's library model — drives the front-end
+    structured forms (issue #441). Read-only, no service state."""
+    model = _ENTITY_SCHEMA_MODELS.get(kind)
+    if model is None:
+        raise HTTPException(status_code=404, detail=f"unknown kind: {kind}")
+    return model.model_json_schema()
 
 
 @router.get("/library/worlds")

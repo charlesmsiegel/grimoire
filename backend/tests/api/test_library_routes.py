@@ -321,6 +321,19 @@ def test_create_world_entity(client, container) -> None:
     assert fake.created == [("character", "new-pc")]
 
 
+def test_entity_schema_returns_model_properties(client) -> None:
+    response = client.get("/api/library/entity-schemas/character")
+    assert response.status_code == 200
+    props = response.json()["properties"]
+    for key in ("name", "role", "voice", "structural_relationships", "image"):
+        assert key in props
+
+
+def test_entity_schema_unknown_kind_404(client) -> None:
+    response = client.get("/api/library/entity-schemas/widget")
+    assert response.status_code == 404
+
+
 def test_create_style_guide(client, container) -> None:
     fake = FakeLibrary()
     container.library = fake
