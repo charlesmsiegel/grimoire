@@ -45,6 +45,12 @@ export interface WorldMeta {
   version: number;
 }
 
+export interface WorldSummary {
+  counts: Record<string, number>;
+  has_description: boolean;
+  has_genre: boolean;
+}
+
 export interface LibraryEntity {
   id: string;
   world_id: string | null;
@@ -162,6 +168,8 @@ export const libraryApi = {
   rescanWorlds: () => request<LibraryRescanReport>("POST", `/library/worlds/rescan`),
   getWorld: (worldId: string) =>
     request<WorldMeta>("GET", `/library/worlds/${encodeURIComponent(worldId)}`),
+  worldSummary: (worldId: string) =>
+    request<WorldSummary>("GET", `/library/worlds/${encodeURIComponent(worldId)}/summary`),
   createWorld: (id: string, meta: Record<string, unknown>) =>
     request<WorldMeta>("POST", `/library/worlds`, { id, meta }),
   updateWorld: (worldId: string, patch: Record<string, unknown>) =>
