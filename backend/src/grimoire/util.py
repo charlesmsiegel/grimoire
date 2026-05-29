@@ -61,4 +61,47 @@ def safe_json_dumps(value: Any) -> str | None:
     return json.dumps(value, sort_keys=True, default=str)
 
 
-__all__ = ["new_id", "now_iso", "safe_json_dumps", "safe_json_loads", "slugify_id"]
+def canonicalize_character_ref(ref: str) -> str:
+    """Collapse any recognized character-ref spelling to one canonical string.
+
+    Characters are referenced in several equivalent spellings across the
+    codebase — the canonical ``library:worlds/<world>/characters/<id>`` and
+    ``campaign:emergent/character/<id>`` forms, plus shorthands emitted by the
+    campaign creator and the scene reconciliation path:
+
+    - ``emergent/character/<id>`` / ``emergent/<id>`` / ``campaign:emergent/<id>``
+      → ``campaign:emergent/character/<id>``
+    - ``library:worlds/<w>/character/<id>`` / ``worlds/<w>/characters/<id>`` /
+      bare ``<w>/<id>`` → ``library:worlds/<w>/characters/<id>``
+
+    Normalizing both sides of a comparison lets identity checks (cast-change
+    presence, ``is_pc``, PC-enter queueing) line up regardless of which spelling
+    was stored (#464). Unrecognized refs are returned unchanged.
+    """
+    raw = ref.strip()
+    if not raw:
+        return ref
+    # Emergent (campaign-local): every spelling carries the asset id as the
+    # trailing path segment.
+    if raw.startswith("campaign:emergent/") or raw.startswith("emergent/"):
+        asset = raw.rstrip("/").rsplit("/", 1)[-1]
+        return f"campaign:emergent/character/{asset}" if asset else ref
+    # Library: pull (world, id) from the full, scheme-less, or singular spelling.
+    body = raw.partition("library:")[2] if raw.startswith("library:") else raw
+    parts = [p for p in body.split("/") if p]
+    if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"characters", "character"}:
+        return f"library:worlds/{parts[1]}/characters/{parts[3]}"
+    if len(parts) == 2 and ":" not in raw and parts[0] != "worlds":
+        # Bare ``<world>/<id>`` shorthand the campaign creator can register.
+        return f"library:worlds/{parts[0]}/characters/{parts[1]}"
+    return ref
+
+
+__all__ = [
+    "canonicalize_character_ref",
+    "new_id",
+    "now_iso",
+    "safe_json_dumps",
+    "safe_json_loads",
+    "slugify_id",
+]

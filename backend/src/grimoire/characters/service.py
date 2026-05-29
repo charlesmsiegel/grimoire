@@ -47,7 +47,7 @@ from grimoire.types.composition import LibraryEntity, ResolutionLayer, Resolutio
 from grimoire.types.mechanics import Capability
 from grimoire.types.scene import Post, Scene
 from grimoire.types.state import CharacterState, ContextTier, DeltaKind, StateDelta
-from grimoire.util import new_id, now_iso, slugify_id
+from grimoire.util import canonicalize_character_ref, new_id, now_iso, slugify_id
 
 from .config import CharactersConfig
 from .drift import (
@@ -99,17 +99,6 @@ class CastRef(BaseModel):
     character_ref: str
     is_pc: bool
     name: str
-
-
-def _canonical_ref(ref: str) -> str:
-    """Normalize the ``emergent/...`` shorthand to its canonical ``campaign:`` form.
-
-    Campaign PC rows (``add_pc``) and scene present-refs may store the bare
-    ``emergent/character/<id>`` shorthand, while a resolved ref is the canonical
-    ``campaign:emergent/character/<id>``. Normalizing both sides keeps the
-    ``is_pc`` membership check correct for emergent PCs (#464).
-    """
-    return f"campaign:{ref}" if ref.startswith("emergent/") else ref
 
 
 PostFetcher = Callable[[str], Awaitable[list[Post]]]
@@ -336,7 +325,9 @@ class CharactersService:
         # Campaign PC registration is authoritative for is_pc: a character can
         # be registered as a campaign PC via ``add_pc`` regardless of its card
         # role, and that drives multi-PC advance gating on confirm.
-        pc_refs = {_canonical_ref(pc.character_ref) for pc in await self.list_pcs(campaign_id)}
+        pc_refs = {
+            canonicalize_character_ref(pc.character_ref) for pc in await self.list_pcs(campaign_id)
+        }
         for resolved in await self.list_for_campaign(campaign_id):
             ch = resolved.character
             if ch.world_id is None:
@@ -351,7 +342,7 @@ class CharactersService:
                 continue
             return CastRef(
                 character_ref=ref,
-                is_pc=(ch.role == CharacterRole.PC or _canonical_ref(ref) in pc_refs),
+                is_pc=(ch.role == CharacterRole.PC or canonicalize_character_ref(ref) in pc_refs),
                 name=ch.name,
             )
         return None
