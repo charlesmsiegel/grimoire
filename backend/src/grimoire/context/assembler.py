@@ -257,6 +257,7 @@ class PromptAssembler:
             cost = await self._tokens(item.text)
             packed.append(item.text)
             item.source.tokens = cost
+            item.source.text = item.text
             used += cost
         for item in normal_items:
             cost = await self._tokens(item.text)
@@ -264,6 +265,7 @@ class PromptAssembler:
                 continue
             packed.append(item.text)
             item.source.tokens = cost
+            item.source.text = item.text
             used += cost
         if not packed:
             return 0
