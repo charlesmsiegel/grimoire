@@ -207,6 +207,28 @@ def _active_threads_fetcher():
     return fetch
 
 
+def _inventory_fetcher(store: Any):
+    async def fetch(_w: HudWidget, campaign_id: str, _scene: Any, _observer: Any) -> dict[str, Any]:
+        if store is None:
+            return {"items": []}
+        from grimoire.inventory.config import InventoryConfig
+
+        cfg = InventoryConfig.from_campaign_config(await store.get_campaign_config(campaign_id))
+        if not cfg.enabled:
+            return {"items": []}
+        rows = await store.list_inventory_holdings(campaign_id)
+        grouped: dict[str, list[str]] = {}
+        for r in rows:
+            label = f"{r['holder_kind']}:{r['holder_id']}"
+            qty = f" ×{r['quantity']}" if r["quantity"] != 1 else ""
+            eq = " (equipped)" if r["equipped"] else ""
+            grouped.setdefault(label, []).append(f"{r['item_name']}{qty}{eq}")
+        items = [{"text": f"{label}: {', '.join(things)}"} for label, things in grouped.items()]
+        return {"items": items}
+
+    return fetch
+
+
 def _empty_fetcher_with(default: Any):
     async def fetch(_w: HudWidget, _c: str, _s: Any, _o: Any) -> Any:
         return default
@@ -366,6 +388,7 @@ def register_default_fetchers(
     continuity: Any = None,
     scenes: Any = None,
     world: Any = None,
+    store: Any = None,
 ) -> None:
     """Register the canonical owner fetchers on ``hud``.
 
@@ -385,6 +408,7 @@ def register_default_fetchers(
     hud.register_fetcher("core.drift-alerts", _empty_fetcher_with({"items": []}))
     hud.register_fetcher("core.review-queue", _empty_fetcher_with({"count": 0}))
     hud.register_fetcher("core.active-threads", _active_threads_fetcher())
+    hud.register_fetcher("core.inventory", _inventory_fetcher(store))
 
     # The HudService also needs scene hooks so the aggregator can pass the
     # scene into fetchers' ``scene`` arg.

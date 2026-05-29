@@ -137,6 +137,15 @@ CORE_WIDGETS: list[HudWidget] = [
         refresh_on=["deltas_extracted", "thread_opened", "thread_closed"],
         owner_module="continuity",
     ),
+    HudWidget(
+        id="core.inventory",
+        title="Inventory",
+        scope=WidgetScope.CAMPAIGN,
+        read=WidgetRead(endpoint="/campaigns/{id}/inventory"),
+        render_hint=RenderHint.BLOCK.value,
+        refresh_on=["inventory_changed", "turn_complete", "scene_started"],
+        owner_module="inventory",
+    ),
 ]
 
 
