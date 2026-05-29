@@ -3116,6 +3116,152 @@ pre {
   align-self: flex-start;
 }
 
+/* ----- Structured entity form (issue #441) ----- */
+
+.entity-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.entity-form-section,
+.entity-form-object {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--bg-elev);
+}
+
+.entity-form-section > legend,
+.entity-form-section > summary {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 0 var(--space-2);
+  color: var(--fg-strong);
+  cursor: default;
+}
+
+.entity-form-section > summary,
+.entity-form-advanced > summary {
+  cursor: pointer;
+}
+
+.entity-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+.entity-form-field input,
+.entity-form-field textarea,
+.entity-form-field select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  font-weight: 400;
+}
+
+.entity-form-advanced {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.entity-form-advanced > summary {
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+}
+
+/* Tag chips */
+.tags-input-chips {
+  list-style: none;
+  margin: 0 0 var(--space-1);
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.tags-input-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.1rem 0.45rem;
+  font-size: 0.8rem;
+}
+
+.tags-input-chip button,
+.map-editor button,
+.object-list-row > button {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 0.2rem;
+}
+
+/* Object list (e.g. relationships) and map (e.g. address terms) */
+.object-list-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-2);
+}
+
+.object-list-fields {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.map-editor ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.map-editor li,
+.map-add {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.map-key {
+  min-width: 6rem;
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+}
+
+/* Token estimate badge */
+.token-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ----- Dependents ----- */
 
 .dependents-banner {

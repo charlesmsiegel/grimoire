@@ -36,9 +36,10 @@ function asObject(v: FrontmatterValue | undefined): Record<string, FrontmatterVa
 }
 function asRows(v: FrontmatterValue | undefined): Record<string, unknown>[] {
   return Array.isArray(v)
-    ? (v.filter(
-        (x) => x && typeof x === "object" && !Array.isArray(x),
-      ) as Record<string, unknown>[])
+    ? (v.filter((x) => x && typeof x === "object" && !Array.isArray(x)) as Record<
+        string,
+        unknown
+      >[])
     : [];
 }
 
@@ -94,7 +95,9 @@ export function EntityForm({
           />
         );
       case "enum":
-        return <EnumSelect value={asString(value)} options={field.options ?? []} onChange={onChange} />;
+        return (
+          <EnumSelect value={asString(value)} options={field.options ?? []} onChange={onChange} />
+        );
       case "tags":
         return <TagsInput value={asStringArray(value)} onChange={onChange} />;
       case "stringList":

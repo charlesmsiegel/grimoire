@@ -16,9 +16,7 @@ describe("RefPicker", () => {
     ]);
     const onChange = vi.fn();
     render(<RefPicker worldId="w1" refKinds={["character"]} value="" onChange={onChange} />);
-    await waitFor(() =>
-      expect(screen.getByRole("option", { hidden: true })).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByRole("option", { hidden: true })).toBeInTheDocument());
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "alistair" } });
     expect(onChange).toHaveBeenCalledWith("alistair");
   });
