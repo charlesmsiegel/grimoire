@@ -134,3 +134,49 @@ async def test_next_speaker_continues_loop(tmp_path: Path) -> None:
     posts = await sm.recent_posts(scene.id, n=20)
     npc_posts = [p for p in posts if p.author_kind == AuthorKind.NPC]
     assert len(npc_posts) >= 2
+
+
+@pytest.mark.asyncio
+async def test_speaker_loop_refreshes_cast_after_confirmed_leave(tmp_path: Path) -> None:
+    """Regression (#464): a cast change confirmed during ``speaker_round_waiting``
+    must take effect on the next selection. With a single present NPC, confirming
+    its LEAVE mid-wait should end the loop rather than re-select the departed NPC
+    from a stale ``present_npcs`` list captured before the loop began.
+    """
+    config = json.dumps({"narrator": {"response_mode": "per_character_multi_call"}})
+    orch, sm, _ws, _store = _make_orchestrator(
+        tmp_path=tmp_path,
+        campaign_config=config,
+        speaker_timeout=2.0,
+    )
+    scene = await sm.start_scene(
+        SceneInit(
+            campaign_id="camp1",
+            present_character_refs=["worlds/w/characters/alice"],
+            present_pc_refs=["pc1"],
+        )
+    )
+
+    submit_task = asyncio.create_task(orch.submit_post("camp1", "pc1", "Hello Alice"))
+
+    # Wait until the loop is parked on the next-speaker event (Alice posted once).
+    state = orch._state_for("camp1")
+    for _ in range(100):
+        await asyncio.sleep(0.02)
+        if state.speaker_loop_event is not None:
+            break
+    assert state.speaker_loop_event is not None
+
+    # User confirms Alice's LEAVE while the loop waits, then advances the round.
+    await sm.remove_present_character(scene.id, "worlds/w/characters/alice")
+    await orch.next_speaker("camp1")
+
+    await asyncio.sleep(0.2)
+    await asyncio.wait_for(submit_task, timeout=3.0)
+
+    posts = await sm.recent_posts(scene.id, n=20)
+    npc_posts = [p for p in posts if p.author_kind == AuthorKind.NPC]
+    # The departed NPC must not be re-selected after the refresh: exactly the
+    # one pre-leave post, and no second round for the absent character.
+    assert len(npc_posts) == 1
+    assert npc_posts[0].author_npc_ref == "worlds/w/characters/alice"

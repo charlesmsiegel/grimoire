@@ -108,6 +108,10 @@ Bundled plugins live at `backend/bundled_plugins/` and ship with the app.
 
 Supporting modules (cross-cutting): Plugins, Observability, Export.
 
+The Orchestrator also holds a narrow read dependency on **Characters**
+(`find_cast_ref`) to resolve extractor-emitted cast-change refs to canonical
+ids/PC flags before queuing them for review through the Scene Manager (#464).
+
 ### Canonical Turn Flow
 
 1. Frontend → Orchestrator: `submit_post(campaign_id, pc_ref, text)`
@@ -149,7 +153,7 @@ Writes go through the owning module. Don't bypass this.
 | Time Engine | In-game clock | Calendar, time advancement per campaign |
 | Characters | Character behaviors | Voice, drift, tier, PCs, variants |
 | World | Entity storage | World container, all entity-kind CRUD |
-| Scene Manager | Scenes, posts | Scene lifecycle, multi-PC advance trigger |
+| Scene Manager | Scenes, posts, cast-change review | Scene lifecycle, multi-PC advance trigger, cast-change queue/confirm/dismiss |
 | Continuity | Facts, commitments | Contradiction detection, commitment tracking |
 | Library | File layout, indexing | Watcher, incremental index updates |
 | ImageGen | Image generation | Backend registry, generation pipeline |

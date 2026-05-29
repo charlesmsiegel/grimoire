@@ -84,6 +84,31 @@ async def test_find_cast_ref_flags_registered_pc_regardless_of_card_role(
     assert cast_ref.is_pc is True
 
 
+async def test_find_cast_ref_flags_emergent_pc_registered_with_shorthand_ref(
+    characters: CharactersService, store: StateStore
+):
+    # Regression (#464): a campaign PC row may store the bare
+    # ``emergent/character/<id>`` shorthand, while find_cast_ref resolves the
+    # same emergent character to the canonical ``campaign:emergent/...`` ref.
+    # The is_pc membership check must normalize both forms — otherwise a
+    # registered emergent PC is mis-flagged is_pc=False and confirming an
+    # ENTER routes through add_present_character, skipping multi-PC gating.
+    campaign_id = await _setup(characters, store)
+    emergent_ref = await characters.create_emergent(
+        campaign_id,
+        CharacterData(id="the-stranger", name="The Stranger", role=CharacterRole.MINOR_NPC),
+    )
+    assert emergent_ref == "campaign:emergent/character/the-stranger"
+    # Register as a PC using the legacy shorthand form (no ``campaign:`` prefix).
+    await characters.add_pc(
+        campaign_id, "emergent/character/the-stranger", "The Stranger", owner="local"
+    )
+    cast_ref = await characters.find_cast_ref(campaign_id, "the-stranger")
+    assert cast_ref is not None
+    assert cast_ref.character_ref == "campaign:emergent/character/the-stranger"
+    assert cast_ref.is_pc is True
+
+
 async def test_find_cast_ref_unknown_returns_none(characters: CharactersService, store: StateStore):
     campaign_id = await _setup(characters, store)
     assert await characters.find_cast_ref(campaign_id, "nobody-xyz") is None
