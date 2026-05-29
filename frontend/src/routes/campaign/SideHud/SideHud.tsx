@@ -15,6 +15,7 @@ import { BannerWidget } from "./widgets/BannerWidget";
 import { BlockWidget } from "./widgets/BlockWidget";
 import { ChipListWidget } from "./widgets/ChipListWidget";
 import { CompositeWidget } from "./widgets/CompositeWidget";
+import { InventoryFlagsPanel } from "./widgets/InventoryFlagsPanel";
 import { RowWidget } from "./widgets/RowWidget";
 import {
   asArray,
@@ -65,6 +66,7 @@ const CORE_WIDGET_IDS = new Set([
   "core.review-queue",
   "core.drift-alerts",
   "core.active-threads",
+  "core.inventory",
 ]);
 
 const RENDER_FALLBACK = "block";
@@ -478,6 +480,7 @@ export function SideHud({ campaignId, sceneId, scene, pcs, actions, playerInput,
         pcRef={pcRef}
       />
       <WhatChangedPanel turnId={latestNarratorTurnId} />
+      <InventoryFlagsPanel campaignId={campaignId} />
     </aside>
   );
 }
