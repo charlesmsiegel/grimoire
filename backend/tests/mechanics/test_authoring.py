@@ -29,8 +29,8 @@ def test_generated_stub_contains_identity_and_subclass():
         description="A test system.",
     )
     assert "class Mechanics(DiskBackedMechanicsModule):" in src
-    assert 'id = "my-system"' in src
-    assert 'version = "1.2.3"' in src
+    assert "id = 'my-system'" in src
+    assert "version = '1.2.3'" in src
     # All behavioral protocol methods the base class does NOT provide are present.
     for method in [
         "def validate_sheet",
@@ -53,6 +53,21 @@ def test_generated_stub_is_valid_python():
         module_id="x", name="X", version="1.0.0", api_version="1", description=""
     )
     compile(src, "<stub>", "exec")  # raises SyntaxError if malformed
+
+
+def test_generated_stub_escapes_quoted_name():
+    # A display name with a double quote / newline must not break the literal.
+    src = generate_mechanics_py(
+        module_id="x",
+        name='My "Great" Game\nLine2',
+        version="1.0.0",
+        api_version="1",
+        description="",
+    )
+    compile(src, "<stub>", "exec")  # would raise SyntaxError without escaping
+    ns: dict = {}
+    exec(src, ns)  # trusted generated stub under test
+    assert ns["Mechanics"].name == 'My "Great" Game\nLine2'
 
 
 # --------------------------------------------------------------------------- #
@@ -203,6 +218,39 @@ async def test_write_manifest_updates_name(service):
     data = yaml.safe_load((service.config.root / "edit-me" / "manifest.yaml").read_text())
     assert data["name"] == "Renamed"
     assert data["version"] == "2.0.0"
+
+
+async def test_write_manifest_preserves_unknown_fields(service):
+    author = await _scaffolded(service)
+    # Simulate a hand-authored manifest carrying a loader-only field.
+    manifest_path = service.config.root / "edit-me" / "manifest.yaml"
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    data["entry_class"] = "CustomMechanics"
+    manifest_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    # A UI metadata edit (no entry_class in the payload) must not drop it.
+    await author.write_manifest(
+        "edit-me",
+        {"id": "edit-me", "name": "Renamed", "version": "2.0.0", "api_version": "1"},
+    )
+    merged = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert merged["name"] == "Renamed"
+    assert merged["entry_class"] == "CustomMechanics"
+
+
+async def test_write_manifest_rejects_bad_kind(service):
+    author = await _scaffolded(service)
+    with pytest.raises(InvalidIdentifierError):
+        await author.write_manifest(
+            "edit-me",
+            {
+                "id": "edit-me",
+                "name": "Edit Me",
+                "version": "1.0.0",
+                "api_version": "1",
+                "sheet_kinds": ["Bad Kind!"],
+            },
+        )
 
 
 async def test_edit_missing_module_raises(service):

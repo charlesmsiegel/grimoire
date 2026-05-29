@@ -87,10 +87,10 @@ def generate_mechanics_py(
 
 
         class Mechanics(DiskBackedMechanicsModule):
-            id = "{module_id}"
-            name = "{name}"
-            version = "{version}"
-            api_version = "{api_version}"
+            id = {module_id!r}
+            name = {name!r}
+            version = {version!r}
+            api_version = {api_version!r}
 
             def validate_sheet(self, entity_kind, sheet):
                 return ValidationResult(valid=True)
@@ -236,10 +236,25 @@ class MechanicsAuthor:
         module_dir = self._require_dir(module_id)
         if manifest_spec.get("id") != module_id:
             raise ManifestValidationError(["manifest id must match the module id"])
-        self._validate_manifest(manifest_spec)
-        (module_dir / "manifest.yaml").write_text(
-            yaml.safe_dump(manifest_spec, sort_keys=False), encoding="utf-8"
-        )
+        # Validate edited kinds with the same rule scaffold() uses; the manifest
+        # JSON Schema only enforces non-empty strings, so an uppercase/spaced
+        # kind would otherwise be saved but be unsavable from the Sheets tab.
+        for kind in (
+            *manifest_spec.get("sheet_kinds", []),
+            *manifest_spec.get("content_kinds", []),
+        ):
+            self._check_kind(kind)
+        # Merge onto the existing manifest so loader-only / extension fields the
+        # UI doesn't model (e.g. entry_class) survive a metadata edit.
+        manifest_path = module_dir / "manifest.yaml"
+        existing: dict[str, Any] = {}
+        if manifest_path.is_file():
+            loaded = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        merged = {**existing, **manifest_spec}
+        self._validate_manifest(merged)
+        manifest_path.write_text(yaml.safe_dump(merged, sort_keys=False), encoding="utf-8")
         return await self._service.rescan()
 
     async def write_sheet_schema(

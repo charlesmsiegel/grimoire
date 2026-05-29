@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fieldsToSchema, schemaToFields, type FieldModel } from "../schemaModel";
+import type { SheetSchema } from "../../../../sheets/types";
 
 describe("schemaModel", () => {
   it("serializes a field list to a SheetSchema", () => {
@@ -24,6 +25,41 @@ describe("schemaModel", () => {
       [{ key: "hp", widget: "number", required: false, config: { max: 10 } }],
       "S",
     );
+    const back = fieldsToSchema(schemaToFields(schema), "S");
+    expect(back).toEqual(schema);
+  });
+
+  it("preserves the original type of a widget-less property", () => {
+    const original: SheetSchema = {
+      type: "object",
+      title: "S",
+      properties: { age: { type: "integer" } },
+    };
+    const fields = schemaToFields(original);
+    expect(fields[0]!.type).toBe("integer");
+    // Re-serializing must NOT downgrade integer -> string.
+    const back = fieldsToSchema(fields, "S");
+    expect((back.properties.age as { type: string }).type).toBe("integer");
+  });
+
+  it("emits items.enum for multi-select and round-trips it", () => {
+    const schema = fieldsToSchema(
+      [
+        {
+          key: "elements",
+          widget: "multi-select",
+          required: false,
+          config: { enum: ["fire", "ice"] },
+        },
+      ],
+      "S",
+    );
+    expect(schema.properties.elements).toMatchObject({
+      type: "array",
+      widget: "multi-select",
+      items: { type: "string", enum: ["fire", "ice"] },
+    });
+    expect((schema.properties.elements as { enum?: unknown }).enum).toBeUndefined();
     const back = fieldsToSchema(schemaToFields(schema), "S");
     expect(back).toEqual(schema);
   });
