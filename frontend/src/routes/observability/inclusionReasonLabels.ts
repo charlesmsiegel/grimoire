@@ -30,4 +30,5 @@ export const REASON_LABELS: Record<InclusionReason, string> = {
   scene_header: "Scene header",
   verbatim_recent: "Recent posts (verbatim)",
   player_input: "Player input",
+  response_format: "Response format",
 };

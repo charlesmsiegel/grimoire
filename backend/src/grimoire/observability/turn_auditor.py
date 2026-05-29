@@ -97,6 +97,14 @@ class TurnAuditor:
         if isinstance(summary, dict) and summary:
             buf["context_summary"] = summary
         if sources := event.payload.get("context_sources"):
+            # ``capture_full_prompt`` gates verbatim prompt persistence. The new
+            # per-source ``text`` carries the same verbatim chunks, so strip it
+            # when full-prompt capture is off — keep only source attribution.
+            if not self._config.capture_full_prompt:
+                sources = [
+                    {k: v for k, v in s.items() if k != "text"} if isinstance(s, dict) else s
+                    for s in sources
+                ]
             buf["context_sources"] = sources
         snap = event.payload.get("composition_snapshot")
         if isinstance(snap, dict) and snap:

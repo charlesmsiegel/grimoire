@@ -140,6 +140,7 @@ class PromptAssembler:
         await self._append_block_sources(
             sources,
             system_text=system_text,
+            response_format=response_fmt,
             scene_header=ctx.scene_header,
             mechanics_block=ctx.mechanics_block,
             recent_posts_text=recent_sent,
@@ -165,6 +166,7 @@ class PromptAssembler:
         sources: list[ContextSource],
         *,
         system_text: str,
+        response_format: str,
         scene_header: str,
         mechanics_block: str,
         recent_posts_text: str,
@@ -176,6 +178,7 @@ class PromptAssembler:
         ``messages`` or ``budget_used``."""
         blocks = [
             ("system", system_text, InclusionReason.SYSTEM_PROMPT),
+            ("response_format", response_format, InclusionReason.RESPONSE_FORMAT),
             ("scene_header", scene_header, InclusionReason.SCENE_HEADER),
             ("mechanics", mechanics_block, InclusionReason.MECHANICS_RELEVANT),
             ("recent_posts", recent_posts_text, InclusionReason.VERBATIM_RECENT),

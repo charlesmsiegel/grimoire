@@ -75,7 +75,7 @@ export function InspectorPanel({
           <span className="scene-setting-label">
             Next-post context{live.loading ? " …" : ""}
           </span>
-          <TokenBars summary={live.summary} loading={live.loading} />
+          <TokenBars summary={live.summary} sources={explanations} loading={live.loading} />
         </div>
 
         <div className="scene-setting-entry scene-setting-entry-full inspector-tab-body">

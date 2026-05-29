@@ -37,6 +37,7 @@ class InclusionReason(StrEnum):
     SCENE_HEADER = "scene_header"
     VERBATIM_RECENT = "verbatim_recent"
     PLAYER_INPUT = "player_input"
+    RESPONSE_FORMAT = "response_format"
 
 
 __all__ = ["InclusionReason"]

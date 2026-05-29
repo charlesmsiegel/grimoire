@@ -35,7 +35,8 @@ export type InclusionReason =
   | "system_prompt"
   | "scene_header"
   | "verbatim_recent"
-  | "player_input";
+  | "player_input"
+  | "response_format";
 
 export interface PreviewSummary {
   handle: string;

@@ -22,6 +22,7 @@ describe("REASON_LABELS", () => {
         "player_input": "Player input",
         "present_in_scene": "Present in scene",
         "relationship_to_present": "Relationship to present",
+        "response_format": "Response format",
         "scene_anchor": "Scene anchor",
         "scene_header": "Scene header",
         "style_guide_active": "Style guide active",
