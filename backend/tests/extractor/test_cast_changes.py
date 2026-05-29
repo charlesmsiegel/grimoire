@@ -48,3 +48,26 @@ def test_schema_includes_cast_changes():
 
 def test_empty_payload_includes_cast_changes():
     assert empty_payload()["cast_changes"] == []
+
+
+def test_parse_llm_payload_extracts_cast_changes():
+    from grimoire.extractor.llm_strategy import parse_llm_payload
+
+    payload = {
+        "cast_changes": [
+            {
+                "character_id": "reyes",
+                "change": "enter",
+                "evidence": "strides in",
+                "confidence": 0.9,
+            },
+            {"character_id": "bad", "change": "teleport", "confidence": 0.5},  # invalid -> dropped
+            {"character_id": "", "change": "enter", "confidence": 0.5},  # empty ref -> dropped
+        ]
+    }
+    out = parse_llm_payload(
+        payload, campaign_id="c", source="structured_llm", max_new_entities=5
+    )
+    assert len(out.cast_changes) == 1
+    assert out.cast_changes[0].character_ref == "reyes"
+    assert out.cast_changes[0].change == "enter"
