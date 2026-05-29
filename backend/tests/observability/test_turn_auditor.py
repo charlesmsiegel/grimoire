@@ -93,6 +93,49 @@ async def test_can_be_disabled_via_config(db) -> None:
     assert await store.get("t") is None
 
 
+async def test_strips_source_text_when_full_prompt_capture_disabled(db) -> None:
+    from grimoire.observability.config import AuditConfig
+
+    bus = EventBus()
+    store = AuditStore(db)
+    auditor = TurnAuditor(
+        event_bus=bus,
+        audit_store=store,
+        config=AuditConfig(capture_full_prompt=False),
+    )
+    auditor.start()
+
+    await bus.emit(Event(type="turn_started", payload={"turn_id": "t_x", "campaign_id": "c_1"}))
+    await bus.emit(
+        Event(
+            type="context_built",
+            payload={
+                "turn_id": "t_x",
+                "campaign_id": "c_1",
+                "context_sources": [
+                    {
+                        "kind": "system",
+                        "scope": "campaign-local",
+                        "owner_id": None,
+                        "tier": "lock-in",
+                        "tokens": 42,
+                        "text": "VERBATIM SYSTEM PROMPT",
+                    }
+                ],
+            },
+        )
+    )
+    await bus.emit(Event(type="turn_complete", payload={"turn_id": "t_x", "campaign_id": "c_1"}))
+
+    audit = await store.get("t_x")
+    assert audit is not None
+    assert len(audit.context_sources) == 1
+    # Attribution metadata is kept; the verbatim text is dropped.
+    assert audit.context_sources[0].kind == "system"
+    assert audit.context_sources[0].tokens == 42
+    assert audit.context_sources[0].text == ""
+
+
 async def test_turn_audit_fragment_event_merges_extra_fields(db) -> None:
     bus = EventBus()
     store = AuditStore(db)

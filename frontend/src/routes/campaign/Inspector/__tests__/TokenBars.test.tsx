@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-import type { PreviewSummary } from "../../../../api/inspector";
+import type { ContextSourceExplanation, PreviewSummary } from "../../../../api/inspector";
 import { TokenBars } from "../TokenBars";
 
 const summary: PreviewSummary = {
@@ -29,5 +29,39 @@ describe("TokenBars (total)", () => {
     const bar = screen.getByLabelText(/per-tier token usage/i);
     expect(bar.getAttribute("title")).toMatch(/lock-in 1,500/);
     expect(bar.getAttribute("title")).toMatch(/spotlight 12,000/);
+  });
+
+  it("totals the actual source tokens when sources are provided", () => {
+    // Includes a system block (1,000) that lives outside any tier budget, so
+    // the source sum (3,500) exceeds the tier-budget usage sum (18,500 would be
+    // wrong here — sources is the source of truth).
+    const sources: ContextSourceExplanation[] = [
+      {
+        source_id: "sys",
+        owner_id: null,
+        kind: "system",
+        scope: "campaign-local",
+        tier: "lock-in",
+        library_version: null,
+        inclusion_reasons: ["system_prompt"],
+        tokens: 1000,
+        summary: "",
+        text: "x",
+      },
+      {
+        source_id: "char",
+        owner_id: "c",
+        kind: "character",
+        scope: "library",
+        tier: "spotlight",
+        library_version: null,
+        inclusion_reasons: ["present_in_scene"],
+        tokens: 2500,
+        summary: "",
+        text: "y",
+      },
+    ];
+    render(<TokenBars summary={summary} sources={sources} />);
+    expect(screen.getByText("3,500 / 98,000")).toBeInTheDocument();
   });
 });

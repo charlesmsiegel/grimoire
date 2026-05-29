@@ -6,6 +6,7 @@ from grimoire.context.inspector import ContextInspector
 from grimoire.context.tokens import cheap_estimator
 from grimoire.context.types import BuiltContext, TierItem
 from grimoire.types.context import ContextSource
+from grimoire.types.inclusion_reasons import InclusionReason
 from grimoire.types.state import ContextTier
 
 
@@ -105,6 +106,23 @@ async def test_source_text_resolves_user_macro():
     char = next(s for s in prompt.sources if s.kind == "character")
     assert char.text == "Alistair draws the blade."
     assert "{{user}}" not in char.text
+
+
+@pytest.mark.asyncio
+async def test_response_format_block_emitted_as_source():
+    sources: list[ContextSource] = []
+    await _assembler()._append_block_sources(
+        sources,
+        system_text="",
+        response_format="Respond as each NPC in turn.",
+        scene_header="",
+        mechanics_block="",
+        recent_posts_text="",
+        player_input="",
+    )
+    rf = next(s for s in sources if s.kind == "response_format")
+    assert rf.text == "Respond as each NPC in turn."
+    assert rf.inclusion_reasons == [InclusionReason.RESPONSE_FORMAT]
 
 
 def test_to_explain_includes_text():

@@ -1,10 +1,16 @@
 /**
- * Total token-usage bar for the Inspector panel. Shows summed used/budget
- * across all tiers; the per-tier breakdown is exposed via the bar's title
- * (hover) so the inline block stays compact.
+ * Total token-usage bar for the Inspector panel. The numerator is the sum of
+ * the actual source tokens going into the prompt (including the system and
+ * player-input blocks that live outside any tier budget); the denominator is
+ * the total tier budget. The per-tier budget breakdown is exposed via the
+ * bar's title (hover) so the inline block stays compact.
  */
 
-import type { ContextTier, PreviewSummary } from "../../../api/inspector";
+import type {
+  ContextSourceExplanation,
+  ContextTier,
+  PreviewSummary,
+} from "../../../api/inspector";
 
 const TIERS: ContextTier[] = ["lock-in", "spotlight", "background", "archive"];
 
@@ -17,10 +23,11 @@ const TIER_LABELS: Record<ContextTier, string> = {
 
 interface Props {
   summary: PreviewSummary | null;
+  sources?: ContextSourceExplanation[];
   loading?: boolean;
 }
 
-export function TokenBars({ summary, loading }: Props) {
+export function TokenBars({ summary, sources, loading }: Props) {
   if (!summary) {
     return (
       <p className="inspector-empty">
@@ -28,7 +35,12 @@ export function TokenBars({ summary, loading }: Props) {
       </p>
     );
   }
-  const used = TIERS.reduce((acc, t) => acc + (summary.per_tier_tokens[t] ?? 0), 0);
+  // Prefer the comprehensive source-token sum (every block, not just tiered
+  // content); fall back to per-tier usage when no source list is available.
+  const used =
+    sources && sources.length > 0
+      ? sources.reduce((acc, s) => acc + (s.tokens ?? 0), 0)
+      : TIERS.reduce((acc, t) => acc + (summary.per_tier_tokens[t] ?? 0), 0);
   const budget = TIERS.reduce((acc, t) => acc + (summary.per_tier_budget[t] ?? 0), 0);
   const ratio = budget > 0 ? Math.min(1, used / budget) : 0;
   const over = budget > 0 && used > budget;

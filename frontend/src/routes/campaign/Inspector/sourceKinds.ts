@@ -6,6 +6,7 @@
  */
 export const ATTRIBUTION_ONLY_KINDS: ReadonlySet<string> = new Set([
   "system",
+  "response_format",
   "scene_header",
   "mechanics",
   "recent_posts",
