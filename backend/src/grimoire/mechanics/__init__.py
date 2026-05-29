@@ -10,6 +10,15 @@ No mechanics modules ship with Grimoire — this package is the API
 contract and the loader, not a system implementation.
 """
 
+from grimoire.mechanics.authoring import (
+    AuthoringError,
+    InvalidIdentifierError,
+    ManifestValidationError,
+    MechanicsAuthor,
+    ModuleExistsError,
+    ModuleNotFoundError,
+    SchemaValidationError,
+)
 from grimoire.mechanics.base import DiskBackedMechanicsModule
 from grimoire.mechanics.config import (
     DefaultsConfig,
@@ -41,18 +50,25 @@ __all__ = [
     "DEFAULT_ENTRY_CANDIDATES",
     "NULL_MECHANICS_ID",
     "ActiveModuleResolver",
+    "AuthoringError",
     "DefaultsConfig",
     "DiscoveredModule",
     "DiscoveryError",
     "DiskBackedMechanicsModule",
+    "InvalidIdentifierError",
     "LoadResult",
+    "ManifestValidationError",
+    "MechanicsAuthor",
     "MechanicsConfig",
     "MechanicsRegistry",
     "MechanicsService",
+    "ModuleExistsError",
+    "ModuleNotFoundError",
     "NullMechanicsModule",
     "RegisteredModule",
     "RescanReport",
     "RngConfig",
+    "SchemaValidationError",
     "ValidationConfig",
     "derive_roll_seed",
     "discover",
