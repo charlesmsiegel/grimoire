@@ -41,6 +41,7 @@ backend/
     templates/           # Jinja2 template rendering
     auxiliary/           # Background LLM jobs (summarization, etc.)
     transient_state/     # Ephemeral character/location state
+    inventory/           # Deterministic per-holder item/resource tracking
     watcher/             # File watcher for library/campaign changes
     validation/          # JSON Schema validation
     event_bus.py         # In-process async event bus
@@ -155,6 +156,7 @@ Writes go through the owning module. Don't bypass this.
 | Export | Artifact generation | EPUB, Markdown, HTML, transcript |
 | Plugins | Plugin lifecycle | Loading, validation, registry |
 | Observability | Audit trail | Turn replay, metrics, context inspection, terminal wire logging |
+| Inventory | Holdings, operations | Deterministic per-holder item/resource tracking (toggleable) |
 
 ## Development Commands
 
