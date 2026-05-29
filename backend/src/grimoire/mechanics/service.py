@@ -12,7 +12,7 @@ import hashlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from grimoire.mechanics.config import MechanicsConfig
 from grimoire.mechanics.discovery import DiscoveryError, discover
@@ -46,6 +46,9 @@ from grimoire.types.mechanics import (
 from grimoire.types.protocols import MechanicsModule
 from grimoire.types.scene import SceneContext
 from grimoire.validation.validator import validate
+
+if TYPE_CHECKING:
+    from grimoire.mechanics.authoring import MechanicsAuthor
 
 logger = logging.getLogger(__name__)
 
@@ -95,10 +98,20 @@ class MechanicsService:
         self._warnings: dict[str, list[str]] = {}
         self._event_bus = event_bus
         self._null = NullMechanicsModule()
+        self._author: MechanicsAuthor | None = None
 
     @property
     def config(self) -> MechanicsConfig:
         return self._config
+
+    @property
+    def author(self) -> MechanicsAuthor:
+        """Lazily-constructed authoring write path for this service."""
+        if self._author is None:
+            from grimoire.mechanics.authoring import MechanicsAuthor
+
+            self._author = MechanicsAuthor(self)
+        return self._author
 
     # ------------------------------------------------------------------
     # Discovery
