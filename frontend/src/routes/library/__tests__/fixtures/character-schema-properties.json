@@ -1,0 +1,22 @@
+[
+  "id",
+  "name",
+  "role",
+  "world_id",
+  "aliases",
+  "age",
+  "tags",
+  "role_tags",
+  "voice",
+  "image",
+  "images",
+  "structural_relationships",
+  "description",
+  "body",
+  "file_path",
+  "file_mtime",
+  "version",
+  "household_id",
+  "privacy",
+  "extras"
+]
