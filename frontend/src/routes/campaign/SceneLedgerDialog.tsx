@@ -12,6 +12,8 @@ interface Props {
 export function SceneLedgerDialog({ campaignId, open, onClose }: Props) {
   const [items, setItems] = useState<LedgerEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillNote, setBackfillNote] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -22,6 +24,22 @@ export function SceneLedgerDialog({ campaignId, open, onClose }: Props) {
       setLoading(false);
     }
   }, [campaignId]);
+
+  const getGreetings = useCallback(async () => {
+    setBackfilling(true);
+    setBackfillNote(null);
+    try {
+      const { added } = await newSceneApi.backfillLedger(campaignId);
+      setBackfillNote(
+        added > 0
+          ? `Added ${added} greeting${added === 1 ? "" : "s"}.`
+          : "No new greetings to add.",
+      );
+      await load();
+    } finally {
+      setBackfilling(false);
+    }
+  }, [campaignId, load]);
 
   useEffect(() => {
     if (open) void load();
@@ -47,10 +65,18 @@ export function SceneLedgerDialog({ campaignId, open, onClose }: Props) {
       <div className="ledger-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="ledger-header">
           <h2>Scene Ledger</h2>
+          <button
+            onClick={getGreetings}
+            className="ledger-action"
+            disabled={backfilling}
+          >
+            {backfilling ? "Adding…" : "Get greetings"}
+          </button>
           <button onClick={onClose} className="close-btn">
             &times;
           </button>
         </div>
+        {backfillNote && <p className="ledger-note">{backfillNote}</p>}
 
         {loading ? (
           <p className="ledger-loading">Loading...</p>

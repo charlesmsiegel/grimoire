@@ -18,7 +18,11 @@ from grimoire.api.deps import (
 )
 from grimoire.api.util import map_lookup_errors, to_payload
 
-from .helpers import _require_scene_owned, _seed_greeting_first_post
+from .helpers import (
+    _backfill_ledger_from_greetings,
+    _require_scene_owned,
+    _seed_greeting_first_post,
+)
 from .schemas import SceneSummary, SceneUpdatePayload
 
 logger = logging.getLogger(__name__)
@@ -384,29 +388,21 @@ async def seed_first_scene(
             "greeting first-post append failed; scene 1 exists with empty body",
             exc_info=True,
         )
-    # Populate the scene ledger with all greetings from the campaign's worlds.
+    # Populate the scene ledger with greetings that apply to the party (issue
+    # #472): only those whose role_tags match a PC, and never the opening
+    # greeting itself (it became scene 1).
     ledger = getattr(container, "scene_ledger", None)
     if ledger is not None:
-        used_greeting_id = greeting.id if greeting else None
-        for ref in world_refs:
-            wid = getattr(ref, "world_id", None) or (
-                ref.get("world_id") if isinstance(ref, dict) else None
+        try:
+            await _backfill_ledger_from_greetings(
+                campaign_id=campaign_id,
+                library=library,
+                state_store=state_store,
+                ledger=ledger,
+                world_refs=world_refs,
+                exclude_greeting_ids={greeting.id} if greeting else set(),
             )
-            if not wid:
-                continue
-            try:
-                all_greetings = await library.list_greetings(wid)
-            except Exception:
-                continue
-            for g in all_greetings:
-                item_id = await ledger.add(
-                    campaign_id=campaign_id,
-                    summary=g.name or g.body[:80],
-                    source="greeting",
-                    greeting_id=g.id,
-                    proposed_location=g.starting_location,
-                )
-                if g.id == used_greeting_id:
-                    await ledger.mark_used(campaign_id, item_id, scene_id=scene.id)
+        except Exception:
+            logger.warning("scene ledger backfill failed during seed", exc_info=True)
 
     return {"scene": to_payload(scene), "created": True}

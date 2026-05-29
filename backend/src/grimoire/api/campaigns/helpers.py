@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json as _json
+import logging
 import re
+from collections.abc import Iterable
 from datetime import UTC
 from typing import Any
 
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 _GREETING_IMG_RE = re.compile(
     r"<img\s+[^>]*?src=[\"']([^\"']+)[\"'][^>]*?(?:alt=[\"']([^\"']*)[\"'][^>]*)?/?>",
@@ -114,6 +119,99 @@ async def _seed_greeting_first_post(
         turn_id=str(uuid.uuid4()),
     )
     await scenes.append_post(scene.id, post)
+
+
+def _pc_role_tag_union(pc_rows: Iterable[Any]) -> set[str]:
+    """Union of every PC's ``role_tags`` for a campaign.
+
+    ``state_store.list_pcs`` returns rows where ``role_tags`` is the raw
+    JSON-string column value; tolerate a missing/invalid value or an already
+    decoded list.
+    """
+    union: set[str] = set()
+    for row in pc_rows or []:
+        raw = row.get("role_tags") if isinstance(row, dict) else None
+        if isinstance(raw, str):
+            try:
+                tags = _json.loads(raw)
+            except (TypeError, ValueError):
+                tags = []
+        elif isinstance(raw, list):
+            tags = raw
+        else:
+            tags = []
+        union.update(str(t) for t in tags if t)
+    return union
+
+
+def _greeting_applies(greeting_role_tags: Iterable[str], pc_role_tag_union: set[str]) -> bool:
+    """Whether a greeting applies to the campaign's PCs.
+
+    Mirrors the wizard's greeting picker rule
+    (``frontend/src/routes/CampaignCreate/StepStartingScene.tsx``): a greeting
+    with no ``role_tags`` is universal; a tagged greeting applies only when one
+    of its tags is present in the PC role-tag union.
+    """
+    tags = [t for t in greeting_role_tags if t]
+    if not tags:
+        return True
+    if not pc_role_tag_union:
+        return False
+    return any(t in pc_role_tag_union for t in tags)
+
+
+async def _backfill_ledger_from_greetings(
+    *,
+    campaign_id: str,
+    library: Any,
+    state_store: Any,
+    ledger: Any,
+    world_refs: Iterable[Any],
+    exclude_greeting_ids: Iterable[str] = (),
+) -> list[str]:
+    """Populate the scene ledger with applicable, unused greetings.
+
+    Only greetings that apply to the campaign's PCs (see :func:`_greeting_applies`)
+    and are not already represented in the ledger or in ``exclude_greeting_ids``
+    (typically the opening greeting plus any greeting already consumed by a scene)
+    are added. Idempotent: re-running adds nothing new. Returns the ids of the
+    ledger items created.
+    """
+    pc_rows = await state_store.list_pcs(campaign_id)
+    pc_union = _pc_role_tag_union(pc_rows)
+
+    existing = await ledger.list_all(campaign_id)
+    seen: set[str] = {i.get("greeting_id") for i in existing if i.get("greeting_id")}
+    seen.update(gid for gid in exclude_greeting_ids if gid)
+
+    added: list[str] = []
+    for ref in world_refs or []:
+        wid = getattr(ref, "world_id", None) or (
+            ref.get("world_id") if isinstance(ref, dict) else None
+        )
+        if not wid:
+            continue
+        try:
+            greetings = await library.list_greetings(wid)
+        except Exception:
+            logger.warning("list_greetings failed for world %r", wid, exc_info=True)
+            continue
+        for g in greetings:
+            if g.id in seen:
+                continue
+            if not _greeting_applies(list(getattr(g, "role_tags", []) or []), pc_union):
+                continue
+            body = getattr(g, "body", "") or ""
+            item_id = await ledger.add(
+                campaign_id=campaign_id,
+                summary=g.name or body[:80],
+                source="greeting",
+                greeting_id=g.id,
+                proposed_location=getattr(g, "starting_location", None),
+            )
+            added.append(item_id)
+            seen.add(g.id)
+    return added
 
 
 async def _require_campaign_row(state_store: Any, campaign_id: str) -> dict:
