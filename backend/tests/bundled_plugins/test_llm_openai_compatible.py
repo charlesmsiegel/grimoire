@@ -147,6 +147,65 @@ async def test_complete_round_trip(openai_compat_module) -> None:
 
 
 @pytest.mark.asyncio
+async def test_cached_prompt_tokens_surfaced(openai_compat_module) -> None:
+    provider = openai_compat_module.OpenAICompatibleLLMProvider(
+        config={"preset": "ollama", "default_model": "m"}
+    )
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "m",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 1500,
+                    "completion_tokens": 20,
+                    "total_tokens": 1520,
+                    "prompt_tokens_details": {"cached_tokens": 1200},
+                },
+            },
+        )
+
+    _install_mock_transport(provider, _handler)
+    response = await provider.complete(
+        CompletionRequest(model="", messages=[Message(role=MessageRole.USER, content="hi")])
+    )
+    # cached_tokens is a subset of prompt_tokens — surfaced, not double-counted.
+    assert response.usage.input_tokens == 1500
+    assert response.usage.total_tokens == 1520
+    assert response.usage.cache_read_input_tokens == 1200
+
+
+@pytest.mark.asyncio
+async def test_deepseek_cache_hit_tokens_surfaced(openai_compat_module) -> None:
+    provider = openai_compat_module.OpenAICompatibleLLMProvider(
+        config={"preset": "ollama", "default_model": "m"}
+    )
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "m",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 800,
+                    "completion_tokens": 5,
+                    "total_tokens": 805,
+                    "prompt_cache_hit_tokens": 600,
+                },
+            },
+        )
+
+    _install_mock_transport(provider, _handler)
+    response = await provider.complete(
+        CompletionRequest(model="", messages=[Message(role=MessageRole.USER, content="hi")])
+    )
+    assert response.usage.cache_read_input_tokens == 600
+
+
+@pytest.mark.asyncio
 async def test_request_without_model_raises(openai_compat_module) -> None:
     provider = openai_compat_module.OpenAICompatibleLLMProvider(config={"preset": "ollama"})
     _install_mock_transport(provider, lambda r: httpx.Response(200, json={}))

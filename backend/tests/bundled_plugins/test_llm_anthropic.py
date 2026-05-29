@@ -115,6 +115,103 @@ async def test_complete_parses_anthropic_response(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
+async def test_system_role_messages_hoisted_to_system_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Anthropic rejects role=system inside messages; the provider must move
+    # them to the top-level `system` param and keep only user/assistant in
+    # `messages`.
+    fake_anthropic = _install_fake_anthropic(monkeypatch)
+    fake_anthropic.set_response(
+        text="ok",
+        model="claude-opus-4-7",
+        stop_reason="end_turn",
+        input_tokens=1,
+        output_tokens=1,
+    )
+    result = load_bundled("llm-anthropic", config={"api_key": "sk-test"})
+    provider = result.instances[0].instance
+    request = CompletionRequest(
+        model="claude-opus-4-7",
+        messages=[
+            Message(role=MessageRole.SYSTEM, content="style guide"),
+            Message(role=MessageRole.SYSTEM, content="scene header"),
+            Message(role=MessageRole.USER, content="Hi"),
+        ],
+    )
+    await provider.complete(request)
+    call = fake_anthropic.last_call
+    assert call["messages"] == [{"role": "user", "content": "Hi"}]
+    # Two system blocks, neither cached → list of plain text blocks.
+    assert call["system"] == [
+        {"type": "text", "text": "style guide"},
+        {"type": "text", "text": "scene header"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cache_breakpoint_marks_system_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_anthropic = _install_fake_anthropic(monkeypatch)
+    fake_anthropic.set_response(
+        text="ok",
+        model="claude-opus-4-7",
+        stop_reason="end_turn",
+        input_tokens=1,
+        output_tokens=1,
+    )
+    result = load_bundled("llm-anthropic", config={"api_key": "sk-test"})
+    provider = result.instances[0].instance
+    request = CompletionRequest(
+        model="claude-opus-4-7",
+        messages=[
+            Message(role=MessageRole.SYSTEM, content="stable style block", cache=True),
+            Message(role=MessageRole.SYSTEM, content="volatile lock-in"),
+            Message(role=MessageRole.USER, content="Hi"),
+        ],
+    )
+    await provider.complete(request)
+    system = fake_anthropic.last_call["system"]
+    # Breakpoint sits on the cached block only — not the volatile one after it.
+    assert system[0] == {
+        "type": "text",
+        "text": "stable style block",
+        "cache_control": {"type": "ephemeral"},
+    }
+    assert "cache_control" not in system[1]
+
+
+@pytest.mark.asyncio
+async def test_cache_usage_parsed_and_priced(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_anthropic = _install_fake_anthropic(monkeypatch)
+    fake_anthropic.set_response(
+        text="ok",
+        model="claude-opus-4-7",
+        stop_reason="end_turn",
+        input_tokens=100,
+        output_tokens=10,
+        cache_read_input_tokens=1000,
+        cache_creation_input_tokens=200,
+    )
+    result = load_bundled("llm-anthropic", config={"api_key": "sk-test"})
+    provider = result.instances[0].instance
+    request = CompletionRequest(
+        model="claude-opus-4-7",
+        messages=[Message(role=MessageRole.USER, content="Hi")],
+    )
+    response = await provider.complete(request)
+    assert response.usage.cache_read_input_tokens == 1000
+    assert response.usage.cache_creation_input_tokens == 200
+    assert response.usage.total_tokens == 100 + 10 + 1000 + 200
+    # opus input rate 15/1k, output 75/1k. Cache read = 0.1x, write = 1.25x.
+    expected = (
+        100 / 1000 * 15.0 + 200 / 1000 * 15.0 * 1.25 + 1000 / 1000 * 15.0 * 0.1 + 10 / 1000 * 75.0
+    )
+    assert response.cost_estimate_usd == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
 async def test_stream_yields_deltas_then_final(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_anthropic = _install_fake_anthropic(monkeypatch)
     fake_anthropic.set_stream(
@@ -145,9 +242,17 @@ async def test_stream_yields_deltas_then_final(monkeypatch: pytest.MonkeyPatch) 
 
 
 class _FakeUsage:
-    def __init__(self, input_tokens: int, output_tokens: int) -> None:
+    def __init__(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        cache_read_input_tokens: int = 0,
+        cache_creation_input_tokens: int = 0,
+    ) -> None:
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
+        self.cache_read_input_tokens = cache_read_input_tokens
+        self.cache_creation_input_tokens = cache_creation_input_tokens
 
 
 class _FakeBlock:
@@ -164,11 +269,18 @@ class _FakeResponse:
         stop_reason: str,
         input_tokens: int,
         output_tokens: int,
+        cache_read_input_tokens: int = 0,
+        cache_creation_input_tokens: int = 0,
     ) -> None:
         self.content = [_FakeBlock(text)]
         self.model = model
         self.stop_reason = stop_reason
-        self.usage = _FakeUsage(input_tokens, output_tokens)
+        self.usage = _FakeUsage(
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+        )
 
     def model_dump(self) -> dict[str, Any]:
         return {

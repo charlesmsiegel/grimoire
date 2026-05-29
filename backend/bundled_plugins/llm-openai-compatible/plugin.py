@@ -328,7 +328,23 @@ def _usage(payload: Any) -> TokenUsage:
     prompt = int(payload.get("prompt_tokens") or 0)
     completion = int(payload.get("completion_tokens") or 0)
     total = int(payload.get("total_tokens") or (prompt + completion))
-    return TokenUsage(input_tokens=prompt, output_tokens=completion, total_tokens=total)
+    # Cached-prompt visibility. These endpoints cache prefixes automatically;
+    # the cached count is a SUBSET of ``prompt_tokens`` (already in input_tokens),
+    # so we surface it for observability without altering input/total. OpenAI
+    # exposes ``prompt_tokens_details.cached_tokens``; DeepSeek exposes
+    # ``prompt_cache_hit_tokens``.
+    cached = 0
+    details = payload.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached = int(details.get("cached_tokens") or 0)
+    if not cached:
+        cached = int(payload.get("prompt_cache_hit_tokens") or 0)
+    return TokenUsage(
+        input_tokens=prompt,
+        output_tokens=completion,
+        total_tokens=total,
+        cache_read_input_tokens=cached,
+    )
 
 
 __all__ = ["OpenAICompatibleLLMProvider"]

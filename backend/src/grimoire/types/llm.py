@@ -20,6 +20,12 @@ class Message(BaseModel):
     role: MessageRole
     content: str
     name: str | None = None  # for tool messages
+    # Provider-neutral prompt-cache hint. When True, providers that support
+    # explicit caching (e.g. Anthropic) mark a cache breakpoint at this
+    # message so the stable prefix up to and including it is cached across
+    # turns. Providers without explicit caching (most OpenAI-compatible
+    # endpoints cache automatically) ignore it. Defaults off.
+    cache: bool = False
     metadata: Json = Field(default_factory=dict)
 
 
@@ -45,6 +51,12 @@ class TokenUsage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    # Prompt-caching breakdown (providers that report it). ``input_tokens``
+    # counts only the *uncached* prompt tokens; cache reads/writes are
+    # surfaced separately so cost accounting and the observability view can
+    # show how much caching saved. Both default to 0 when unsupported.
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 class ModelInfo(BaseModel):

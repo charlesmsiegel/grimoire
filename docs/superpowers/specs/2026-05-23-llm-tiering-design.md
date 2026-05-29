@@ -259,3 +259,52 @@ Suggest two PRs:
 This way PR 1 is low-risk, broadly useful infrastructure; PR 2 is the riskier prompt-format change that can ship behind a flag and be promoted to default once we trust the fallback rate is low.
 
 ## Open questions (none — design approved 2026-05-23)
+
+## Follow-up — issue #440 (cost optimization, 2026-05-28)
+
+A post-implementation audit of every LLM call site surfaced further savings on
+top of the tiering/integrated-extraction work above.
+
+**Routing correctness (P0).** Two `_TASK_TIER` keys never matched their call
+sites: the map used `world.atmosphere` / `world.location_generator` (dotted)
+while `world/atmosphere.py` and `world/location_generator.py` pass
+`world_atmosphere` / `world_location_generate` (underscored). `tier_for_task`
+returned `None`, so the tier layer was skipped entirely and these tasks fell to
+the app default route — i.e. the "location gen is Light" intent never applied.
+Keys corrected to the literal call-site strings. Also added the previously
+**unmapped** tasks `scene_analysis` (Heavy) and `library.summarize` (Light),
+which had silently bypassed tiering.
+
+**Heavy → Light reclassification (P3).** `world_atmosphere` (small JSON blob)
+and the **running** scene summary move to Light. The running and final
+summaries previously shared the single `scene_summary` task, so they could not
+be tiered apart; the summarizer factories now route through distinct tasks —
+`scenes.running_summary` (Light) and `scenes.final_summary` (Heavy). The final
+close-out summary (a durable artifact) deliberately stays Heavy. The adaptive
+summarizer's intermediate rolling passes use the running (Light) task while its
+final pass uses the final (Heavy) task. `scene_summary` itself stays Heavy
+(time-engine digest).
+
+**Integrated deltas default (P2).** Already shipped: new campaigns seed
+`integrated_deltas = True` (`api/campaigns/core.py`), so the typical turn is a
+single Heavy call out of the box.
+
+**Prompt caching (P1).** Added a provider-neutral `Message.cache` breakpoint
+hint and `TokenUsage.cache_read_input_tokens` / `cache_creation_input_tokens`.
+The assembler marks the static system block (style guide, content boundaries,
+voice) as the cache breakpoint — the largest reliably-stable prefix across
+turns in a scene. The Anthropic provider now (a) hoists `system`-role messages
+to the top-level `system` param (previously passed inside `messages`, which the
+API rejects), (b) emits `cache_control: ephemeral` at the marked breakpoint,
+and (c) parses/prices cache reads (0.1×) and writes (1.25×). OpenAI-compatible
+endpoints (deepseek/openrouter — the shipped defaults) cache prefixes
+automatically; the provider now surfaces `cached_tokens` /
+`prompt_cache_hit_tokens` for observability. Cached-token counts flow into the
+`llm_response_received` event payload.
+
+**Not done — merging drift + scene-break Light calls (the §Non-goals item).**
+On inspection this isn't worth it: the scene-break classifier fires on the
+*player input before* generation (and only in the ambiguous heuristic band),
+while the drift judge fires on *extracted facts after* generation (and only on
+a 25% sample). They operate on different data at different turn phases, so
+there's no shared call to collapse. Both are already gated/sampled.
