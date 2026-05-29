@@ -71,3 +71,28 @@ def test_parse_llm_payload_extracts_cast_changes():
     assert len(out.cast_changes) == 1
     assert out.cast_changes[0].character_ref == "reyes"
     assert out.cast_changes[0].change == "enter"
+
+
+def test_tracker_projects_cast_changes():
+    import json
+
+    from grimoire.extractor.together import (
+        parse_tracker_text,
+        project_tracker_to_cast_changes,
+    )
+
+    tracker = json.dumps(
+        {
+            "facts": [],
+            "character_updates": [],
+            "cast_changes": [
+                {"character_id": "reyes", "change": "enter", "confidence": 0.8},
+                {"character_id": "x", "change": "bogus", "confidence": 0.5},  # dropped
+            ],
+        }
+    )
+    parsed = parse_tracker_text(tracker)
+    changes = project_tracker_to_cast_changes(parsed)
+    assert len(changes) == 1
+    assert changes[0].character_ref == "reyes"
+    assert changes[0].change == "enter"

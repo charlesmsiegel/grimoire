@@ -40,6 +40,7 @@ class ParsedTracker:
     new_entities: list[dict[str, Any]] = field(default_factory=list)
     advance_time: dict[str, Any] | None = None
     change_location: dict[str, Any] | None = None
+    cast_changes: list[dict[str, Any]] = field(default_factory=list)
 
 
 def strip_tracker_block(text: str) -> str:
@@ -107,6 +108,7 @@ def parse_tracker_text(
         change_location=(
             obj.get("change_location") if isinstance(obj.get("change_location"), dict) else None
         ),
+        cast_changes=_as_list_of_dicts(obj.get("cast_changes")),
     )
 
 
@@ -308,6 +310,30 @@ def project_tracker_to_candidates(parsed: ParsedTracker) -> list[EntityCandidate
                 evidence=str(entry.get("evidence") or ""),
                 confidence=_confidence(entry),
                 suggested_card=entry.get("suggested_card", {}) or {},
+            )
+        )
+    return out
+
+
+def project_tracker_to_cast_changes(parsed: ParsedTracker) -> list[CastChangeProposal]:
+    """Map tracker ``cast_changes`` entries to `CastChangeProposal`s (#464)."""
+    from grimoire.types.scene import CastChange, CastChangeProposal
+
+    out: list[CastChangeProposal] = []
+    for entry in parsed.cast_changes:
+        ref = str(entry.get("character_id") or entry.get("id") or "").strip()
+        if not ref:
+            continue
+        try:
+            change = CastChange(str(entry.get("change", "")))
+        except ValueError:
+            continue
+        out.append(
+            CastChangeProposal(
+                character_ref=ref,
+                change=change,
+                evidence=str(entry.get("evidence") or ""),
+                confidence=_confidence(entry),
             )
         )
     return out
