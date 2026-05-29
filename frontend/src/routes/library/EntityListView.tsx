@@ -14,6 +14,7 @@ import {
 import { useResource } from "../../api/useResource";
 import { CardFilters } from "../../components/CardFilters";
 import { useCardFilters } from "../../hooks/useCardFilters";
+import { TokenBadge } from "../../components/TokenBadge";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
 import { ConvertModal } from "./ConvertModal";
@@ -258,6 +259,10 @@ function EntityListBody({
             const id = "asset_id" in e ? e.asset_id : e.id;
             const name = e.name || id;
             const tags = isGreeting(e) ? e.tags : (e as LibraryEntity).tags;
+            const tokenText =
+              "frontmatter" in e
+                ? `${JSON.stringify(e.frontmatter)}\n${e.body ?? ""}`
+                : (e.body ?? "");
             return (
               <li key={id} className="library-card">
                 <Link
@@ -269,6 +274,9 @@ function EntityListBody({
                     <p className="library-card-meta">{tags.join(" · ")}</p>
                   )}
                 </Link>
+                <p className="library-card-meta">
+                  <TokenBadge text={tokenText} />
+                </p>
                 {kindPlural === "lore" && (
                   <button
                     type="button"

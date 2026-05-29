@@ -62,3 +62,33 @@ describe("EntityListView delete", () => {
     );
   });
 });
+
+describe("EntityListView token badges", () => {
+  it("shows a token badge on each entity card", async () => {
+    vi.mocked(libraryModule.libraryApi.listEntities).mockResolvedValue([
+      {
+        id: "worlds/w1/characters/alistair",
+        asset_id: "alistair",
+        world_id: "w1",
+        kind: "character",
+        name: "Alistair",
+        path: "x.md",
+        frontmatter: { name: "Alistair" },
+        body: "a".repeat(40),
+        tags: [],
+      } as never,
+    ]);
+    vi.mocked(libraryModule.libraryApi.dependents).mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={["/library/worlds/w1/characters"]}>
+        <Routes>
+          <Route path="/library/worlds/:worldId/:kind" element={<EntityListView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("Alistair")).toBeInTheDocument());
+    expect(screen.getByText(/tokens/)).toBeInTheDocument();
+  });
+});
