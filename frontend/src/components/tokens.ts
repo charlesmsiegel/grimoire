@@ -35,9 +35,6 @@ export function estimateTokens(text: string): number {
 }
 
 /** Estimate the on-disk cost of an entity (frontmatter + markdown body). */
-export function estimateEntityTokens(
-  frontmatter: Record<string, unknown>,
-  body: string,
-): number {
+export function estimateEntityTokens(frontmatter: Record<string, unknown>, body: string): number {
   return estimateTokens(`${JSON.stringify(frontmatter)}\n${body}`);
 }

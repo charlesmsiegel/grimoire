@@ -33,10 +33,7 @@ describe("EntityEditorView (character)", () => {
     render(
       <MemoryRouter initialEntries={["/library/worlds/w1/characters/alistair"]}>
         <Routes>
-          <Route
-            path="/library/worlds/:worldId/:kind/:entityId/*"
-            element={<EntityEditorView />}
-          />
+          <Route path="/library/worlds/:worldId/:kind/:entityId/*" element={<EntityEditorView />} />
         </Routes>
       </MemoryRouter>,
     );
