@@ -133,4 +133,29 @@ describe("CastChangePrompt", () => {
     );
     await waitFor(() => expect(screen.queryByText(/reyes enters the scene/i)).toBeNull());
   });
+
+  it("ignores a turn_complete aimed at a different scene", async () => {
+    const socket = new FakeSocket();
+    const { container } = render(
+      withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" />),
+    );
+    // A turn completing in another open scene must not populate this prompt.
+    socket.emit({
+      type: "turn_complete",
+      turn_id: "t_99",
+      scene_id: "s2",
+      pending_cast_changes: PENDING,
+    } as WSMessage);
+    expect(container.firstChild).toBeNull();
+    expect(screen.queryByText(/reyes enters the scene/i)).toBeNull();
+
+    // The same payload scoped to this scene still renders.
+    socket.emit({
+      type: "turn_complete",
+      turn_id: "t_100",
+      scene_id: "s1",
+      pending_cast_changes: PENDING,
+    } as WSMessage);
+    await screen.findByText(/reyes enters the scene/i);
+  });
 });

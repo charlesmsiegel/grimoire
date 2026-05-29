@@ -137,3 +137,84 @@ async def test_analyze_scene_endpoint(tmp_path: Path) -> None:
         )
         assert resp.status_code == 200, resp.text
         assert call_count["n"] == 1
+
+
+async def test_analyze_scene_surfaces_unknown_cast_candidate(tmp_path: Path) -> None:
+    # Regression (#464): when scene analysis detects a cast change for an unknown
+    # character, route_analysis_deltas appends a new-character candidate while
+    # resolving it. The analyze route must surface that candidate in
+    # entity_candidates (the routed extraction is synced back), not drop it.
+    async with ScenarioApp(tmp_path) as app:
+        assert app.client is not None
+        assert app.container is not None
+        client = app.client
+
+        world_id = "cast-cand-world"
+        resp = await client.post(
+            "/api/library/worlds",
+            json={
+                "id": world_id,
+                "meta": {
+                    "name": "Cast Candidate World",
+                    "description": "Analyze cast-candidate scenario.",
+                    "atmosphere": {"themes": ["scenario"], "tone": "neutral"},
+                },
+            },
+        )
+        assert resp.status_code == 201, resp.text
+
+        campaign_id = "cast-cand-campaign"
+        resp = await client.post(
+            "/api/campaigns",
+            json={
+                "id": campaign_id,
+                "name": "Cast Candidate Scenario",
+                "description": "Analysis-only unknown cast entrant.",
+                "composition": {"worlds": [{"world_id": world_id, "priority": 0}]},
+            },
+        )
+        assert resp.status_code == 201, resp.text
+
+        from grimoire.scenes import SceneInit, new_post
+        from grimoire.types.scene import CastChange, CastChangeProposal
+
+        scenes = app.container.scenes
+        assert scenes is not None
+        scene = await scenes.start_scene(SceneInit(campaign_id=campaign_id, title="Arrival"))
+        await scenes.append_post(
+            scene.id,
+            new_post(
+                author_kind=AuthorKind.NARRATOR,
+                body="A hooded stranger slips into the tavern.",
+                turn_id="t1",
+                is_player=False,
+            ),
+        )
+
+        # Analysis discovers only an unknown entrant — no deltas, no candidates.
+        async def cast_only_analyzer(scene_arg, posts_arg, campaign_id_arg):
+            return SceneAnalysisResult(
+                summary="A stranger arrives.",
+                key_beats=[],
+                threads_introduced=[],
+                extraction=ExtractionResult(
+                    cast_changes=[
+                        CastChangeProposal(
+                            character_ref="the-hooded-stranger",
+                            change=CastChange.ENTER,
+                            confidence=0.7,
+                        )
+                    ],
+                    extraction_strategies_run=["scene_analysis"],
+                ),
+            )
+
+        scenes.set_scene_analyzer(cast_only_analyzer)
+
+        resp = await client.post(
+            f"/api/campaigns/{campaign_id}/scenes/{scene.id}/analyze?force=true",
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        names = {c["proposed_name"] for c in body["entity_candidates"]}
+        assert "the-hooded-stranger" in names

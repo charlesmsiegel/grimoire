@@ -197,6 +197,8 @@ async def resolve_cast_changes(
     queued: list[str] = []
     if characters is None or scenes is None:
         return queued
+    if not extraction.cast_changes:
+        return queued
     # PCs may sit in ``present_pc_refs`` before they appear in
     # ``present_character_refs`` (a freshly started scene seeds them
     # separately), so union both when deciding what counts as already-present.
@@ -209,6 +211,14 @@ async def resolve_cast_changes(
         *(getattr(scene, "present_pc_refs", []) or []),
     ):
         canon_to_stored.setdefault(_canonical_cast_ref(r), r)
+    # Campaign PC registrations keyed by canonical form → the ref as registered
+    # (often the ``emergent/...`` shorthand). A PC ENTER queues this exact ref so
+    # confirming it keys present_pc_refs / _pc_current_scene the same way the PC
+    # subsystem and the frontend's submitted pc_ref do; queuing the canonical ref
+    # instead would strand an emergent PC ("no active scene") (#464).
+    pc_canon_to_ref: dict[str, str] = {}
+    for pc in await characters.list_pcs(campaign_id):
+        pc_canon_to_ref.setdefault(_canonical_cast_ref(pc.character_ref), pc.character_ref)
     for proposal in extraction.cast_changes:
         cast_ref = await characters.find_cast_ref(campaign_id, proposal.character_ref)
         if cast_ref is None:
@@ -231,12 +241,15 @@ async def resolve_cast_changes(
             continue
         if proposal.change == CastChange.LEAVE and not present:
             continue
-        # Remove the exact stored form on LEAVE; add the canonical ref on ENTER.
-        queue_ref = (
-            canon_to_stored[canon]
-            if proposal.change == CastChange.LEAVE
-            else cast_ref.character_ref
-        )
+        # LEAVE removes the exact stored form; ENTER adds the canonical ref —
+        # or, for a registered PC, the campaign PC registration ref so the PC
+        # subsystem (present_pc_refs / _pc_current_scene) can match it.
+        if proposal.change == CastChange.LEAVE:
+            queue_ref = canon_to_stored[canon]
+        elif cast_ref.is_pc and canon in pc_canon_to_ref:
+            queue_ref = pc_canon_to_ref[canon]
+        else:
+            queue_ref = cast_ref.character_ref
         change_id = await scenes.queue_cast_change(
             scene.id,
             character_ref=queue_ref,
@@ -733,6 +746,10 @@ class OrchestratorService:
                 characters=self._characters,
                 scenes=self._scenes,
             )
+            # resolve_cast_changes may append unknown-name candidates to the
+            # filtered copy; surface them on the caller's extraction so the
+            # analyze route serializes them as entity_candidates for review.
+            extraction.candidates = filtered.candidates
             await self._push_pending_cast_changes(campaign_id, scene_id)
 
         applied_ids, queued_ids = await self._delta.apply_routing(

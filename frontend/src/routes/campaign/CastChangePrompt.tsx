@@ -59,9 +59,10 @@ export function CastChangePrompt({ campaignId, sceneId, onApplied }: Props) {
   const handleEvent = useCallback(
     (m: { type: string } & Record<string, unknown>) => {
       // turn_complete carries the payload for normal turns; pending_cast_changes
-      // is pushed mid-turn (speaker-loop rounds) and after a scene analysis. The
-      // latter is scene-scoped — ignore it if it targets a different scene.
-      if (m.type === "pending_cast_changes" && m.scene_id !== sceneId) return;
+      // is pushed mid-turn (speaker-loop rounds) and after a scene analysis. Both
+      // carry scene_id — ignore any event aimed at a different open scene so a turn
+      // or analysis elsewhere can't replace this mounted prompt's state.
+      if (typeof m.scene_id === "string" && m.scene_id !== sceneId) return;
       // The WS payload is untyped at runtime; validate before trusting it.
       const parsed = PendingCastChangeArraySchema.safeParse(m.pending_cast_changes);
       if (parsed.success) setPending(parsed.data);
