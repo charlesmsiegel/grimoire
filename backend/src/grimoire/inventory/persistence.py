@@ -51,10 +51,16 @@ class InventoryPersistence:
         )
         origin = (resolved or {}).get("source", "")
 
-        if origin == "campaign-emergent":
+        if origin == "campaign-emergent" or world_id is None:
+            # Emergent holder (existing) or a holder we can't place in any world
+            # (e.g. an as-yet-unknown PC ref). Auto-create/update as emergent so
+            # the section is always persisted to a file we own. This mirrors the
+            # auto-create-emergent policy for items.
             doc = await self._store.get_emergent(campaign_id, holder_kind.value, holder_id)
-            fm = dict((doc or {}).get("frontmatter", {}))
-            body = (doc or {}).get("body", "")
+            fm = dict((doc or {}).get("frontmatter", {})) or {}
+            fm.setdefault("id", holder_id)
+            fm.setdefault("name", holder_id)
+            body = (doc or {}).get("body", "") if doc else ""
             fm["inventory"] = section
             await self._store.write_emergent(
                 campaign_id=campaign_id, kind=holder_kind.value, entity_id=holder_id,

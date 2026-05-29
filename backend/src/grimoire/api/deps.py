@@ -121,6 +121,10 @@ def get_transient_state(request: Request) -> TransientStateService:
     return _require(get_container(request), "transient_state")
 
 
+def get_inventory(request: Request) -> Any:
+    return _require(get_container(request), "inventory")
+
+
 def get_extras_service(request: Request) -> _ExtrasService:
     return _require(get_container(request), "extras_service")
 
@@ -159,6 +163,7 @@ OrchestratorDep = Annotated[Any, Depends(get_orchestrator)]
 ObservabilityDep = Annotated[Any, Depends(get_observability)]
 StreamDep = Annotated[Any, Depends(get_stream)]
 TransientStateDep = Annotated[Any, Depends(get_transient_state)]
+InventoryDep = Annotated[Any, Depends(get_inventory)]
 ExtrasServiceDep = Annotated[Any, Depends(get_extras_service)]
 LLMGatewayDep = Annotated[Any, Depends(get_llm_gateway)]
 FileWatcherDep = Annotated[Any, Depends(get_file_watcher)]
@@ -182,6 +187,7 @@ __all__ = [
     "PluginsDep",
     "SceneLedgerDep",
     "ScenesDep",
+    "InventoryDep",
     "StateStoreDep",
     "StreamDep",
     "TimeEngineDep",
@@ -195,6 +201,7 @@ __all__ = [
     "get_extras_service",
     "get_file_watcher",
     "get_imagegen",
+    "get_inventory",
     "get_library",
     "get_llm_gateway",
     "get_mechanics",
