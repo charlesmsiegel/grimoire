@@ -6,7 +6,12 @@
  */
 import type { Frontmatter, FrontmatterValue } from "./frontmatter";
 import { FrontmatterEditor } from "./FrontmatterEditor";
-import { type EntityDescriptor, type FieldDescriptor, managedKeys } from "./entitySchemas";
+import {
+  type EntityDescriptor,
+  type FieldDescriptor,
+  createDefaultFields,
+  managedKeys,
+} from "./entitySchemas";
 import { EnumSelect } from "./widgets/EnumSelect";
 import { MapEditor } from "./widgets/MapEditor";
 import { ObjectListEditor } from "./widgets/ObjectListEditor";
@@ -21,6 +26,8 @@ interface Props {
   body: string;
   onFrontmatterChange: (next: Frontmatter) => void;
   onBodyChange: (next: string) => void;
+  /** "create" renders only createDefault fields (no Advanced/body). */
+  mode?: "edit" | "create";
 }
 
 function asString(v: FrontmatterValue | undefined): string {
@@ -50,6 +57,7 @@ export function EntityForm({
   body,
   onFrontmatterChange,
   onBodyChange,
+  mode = "edit",
 }: Props) {
   function setKey(key: string, value: FrontmatterValue) {
     onFrontmatterChange({ ...frontmatter, [key]: value });
@@ -162,6 +170,19 @@ export function EntityForm({
   }
 
   const hidden = managedKeys(descriptor);
+
+  if (mode === "create") {
+    return (
+      <div className="entity-form entity-form-create">
+        {createDefaultFields(descriptor).map((field) => (
+          <label key={field.key} className="entity-form-field">
+            <span>{field.label}</span>
+            {renderField(field, frontmatter[field.key], (next) => setKey(field.key, next))}
+          </label>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className="entity-form">

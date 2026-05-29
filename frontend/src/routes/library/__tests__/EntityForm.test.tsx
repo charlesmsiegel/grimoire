@@ -29,6 +29,25 @@ describe("EntityForm", () => {
     expect(onFm).toHaveBeenCalledWith(expect.objectContaining({ name: "Al" }));
   });
 
+  it("create mode renders only createDefault fields, no Advanced/body", () => {
+    const onFm = vi.fn();
+    render(
+      <EntityForm
+        descriptor={descriptor}
+        worldId="w1"
+        mode="create"
+        frontmatter={{}}
+        body=""
+        onFrontmatterChange={onFm}
+        onBodyChange={() => {}}
+      />,
+    );
+    expect(screen.getByText("Role")).toBeInTheDocument();
+    expect(screen.queryByText("Aliases")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Advanced/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Markdown body")).not.toBeInTheDocument();
+  });
+
   it("routes unknown keys into the Advanced section", () => {
     render(
       <EntityForm
