@@ -55,4 +55,13 @@ describe("SourceList", () => {
     render(<SourceList campaignId="camp" sources={[]} />);
     expect(screen.getByText(/No sources in this preview/i)).toBeInTheDocument();
   });
+
+  it("expands a row to show the precise text", () => {
+    render(<SourceList campaignId="camp" sources={sources} />);
+    const florenceRow = screen
+      .getAllByRole("button")
+      .find((b) => b.textContent?.includes("winifred"));
+    fireEvent.click(florenceRow!);
+    expect(screen.getByText("winifred body text")).toBeInTheDocument();
+  });
 });

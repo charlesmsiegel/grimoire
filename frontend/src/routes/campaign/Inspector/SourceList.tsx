@@ -81,6 +81,11 @@ function SourceRow({
               ))
             )}
           </ul>
+          {source.text ? (
+            <pre className="inspector-source-text">{source.text}</pre>
+          ) : (
+            <p className="inspector-empty">No text captured for this source.</p>
+          )}
           <PinControls campaignId={campaignId} source={source} onChanged={onChanged} />
         </div>
       )}
