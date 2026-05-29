@@ -59,6 +59,12 @@ class ForkWorldPayload(BaseModel):
     target_id: str
 
 
+class WorldSummaryResponse(BaseModel):
+    counts: dict[str, int]
+    has_description: bool
+    has_genre: bool
+
+
 class CreateEntityPayload(BaseModel):
     id: str
     frontmatter: dict[str, Any] = Field(default_factory=dict)
@@ -139,6 +145,38 @@ async def get_entity_schema(kind: str) -> dict[str, Any]:
 @router.get("/library/worlds")
 async def list_worlds(library: LibraryDep) -> Any:
     return to_payload(await library.list_worlds())
+
+
+_SUMMARY_KINDS = {
+    "characters": "character",
+    "locations": "location",
+    "items": "item",
+    "lore": "lore",
+    "factions": "faction",
+    "monsters": "monster",
+    "greetings": "greeting",
+}
+
+
+@router.get("/library/worlds/{world_id}/summary")
+async def world_summary(world_id: str, library: LibraryDep) -> WorldSummaryResponse:
+    """Per-kind entity counts + setup flags that drive the world hub (#441).
+
+    Declared before the catch-all ``/library/worlds/{world_id}/{kind}`` route so
+    ``summary`` isn't parsed as an entity kind."""
+    try:
+        world = await library.get_world(world_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    counts: dict[str, int] = {}
+    for plural, singular in _SUMMARY_KINDS.items():
+        entities = await library.list_in_world(world_id, singular)
+        counts[plural] = len(entities)
+    return WorldSummaryResponse(
+        counts=counts,
+        has_description=bool((world.description or "").strip()),
+        has_genre=bool((world.genre or "").strip()),
+    )
 
 
 @router.post("/library/worlds/rescan")
