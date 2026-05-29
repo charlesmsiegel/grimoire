@@ -30,6 +30,8 @@ export interface FieldDescriptor {
   help?: string;
   readOnly?: boolean;
   rows?: number;
+  /** Shown in the compact "create" form (EntityForm mode="create"). */
+  createDefault?: boolean;
   options?: { value: string; label: string }[];
   refKinds?: EntityKind[];
   /** Children for `object` / `objectList` widgets. */
@@ -59,6 +61,7 @@ const CHARACTER: EntityDescriptor = {
           key: "role",
           label: "Role",
           widget: "enum",
+          createDefault: true,
           options: [
             { value: "pc", label: "PC" },
             { value: "major_npc", label: "Major NPC" },
@@ -76,7 +79,7 @@ const CHARACTER: EntityDescriptor = {
     },
     {
       title: "Description",
-      fields: [{ key: "description", label: "Description", widget: "textarea", rows: 4 }],
+      fields: [{ key: "description", label: "Description", widget: "textarea", rows: 4, createDefault: true }],
     },
     {
       title: "Voice",
@@ -143,6 +146,7 @@ const LOCATION: EntityDescriptor = {
           key: "kind",
           label: "Kind",
           widget: "enum",
+          createDefault: true,
           options: [
             { value: "city", label: "City" },
             { value: "building", label: "Building" },
@@ -178,7 +182,7 @@ const LOCATION: EntityDescriptor = {
       fields: [
         { key: "permanent_features", label: "Permanent features", widget: "stringList" },
         { key: "typical_occupants", label: "Typical occupants", widget: "stringList" },
-        { key: "description", label: "Description", widget: "textarea", rows: 4 },
+        { key: "description", label: "Description", widget: "textarea", rows: 4, createDefault: true },
       ],
     },
     {
@@ -218,7 +222,7 @@ const ITEM: EntityDescriptor = {
       fields: [
         { key: "provenance", label: "Provenance", widget: "text" },
         { key: "current_holder", label: "Current holder", widget: "ref", refKinds: ["character"] },
-        { key: "description", label: "Description", widget: "textarea", rows: 4 },
+        { key: "description", label: "Description", widget: "textarea", rows: 4, createDefault: true },
       ],
     },
   ],
@@ -236,6 +240,7 @@ const MONSTER: EntityDescriptor = {
           key: "category",
           label: "Category",
           widget: "enum",
+          createDefault: true,
           options: [
             { value: "beast", label: "Beast" },
             { value: "undead", label: "Undead" },
@@ -260,7 +265,7 @@ const MONSTER: EntityDescriptor = {
         { key: "habitat", label: "Habitat", widget: "stringList" },
         { key: "abilities", label: "Abilities", widget: "stringList" },
         { key: "weaknesses", label: "Weaknesses", widget: "stringList" },
-        { key: "description", label: "Description", widget: "textarea", rows: 4 },
+        { key: "description", label: "Description", widget: "textarea", rows: 4, createDefault: true },
       ],
     },
   ],
@@ -282,7 +287,7 @@ const FACTION: EntityDescriptor = {
       title: "Detail",
       fields: [
         { key: "base_location", label: "Base location", widget: "ref", refKinds: ["location"] },
-        { key: "description", label: "Description", widget: "textarea", rows: 4 },
+        { key: "description", label: "Description", widget: "textarea", rows: 4, createDefault: true },
       ],
     },
     {
@@ -311,6 +316,7 @@ const LORE: EntityDescriptor = {
           key: "secrecy",
           label: "Secrecy",
           widget: "enum",
+          createDefault: true,
           options: [
             { value: "public", label: "Public" },
             { value: "common-knowledge", label: "Common knowledge" },
@@ -404,4 +410,14 @@ export function getDescriptor(kind: EntityKind | string): EntityDescriptor | und
 /** Every top-level frontmatter key a descriptor owns (for the Advanced fallback). */
 export function managedKeys(descriptor: EntityDescriptor): string[] {
   return descriptor.sections.flatMap((s) => s.fields.map((f) => f.key));
+}
+
+/** Flat list of fields shown in the compact "create" form for a kind. */
+export function createDefaultFields(descriptor: EntityDescriptor): FieldDescriptor[] {
+  return descriptor.sections.flatMap((s) => s.fields).filter((f) => f.createDefault);
+}
+
+/** The frontmatter key that holds the entity's human label (title for lore). */
+export function primaryLabelKey(descriptor: EntityDescriptor): string {
+  return descriptor.sections[0]?.fields[0]?.key ?? "name";
 }
