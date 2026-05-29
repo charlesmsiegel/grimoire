@@ -9,11 +9,12 @@ from typing import Any
 from grimoire.context.config import ContextBuilderConfig
 from grimoire.context.errors import LockInOverflowError
 from grimoire.context.tokens import TokenEstimator, estimate_tokens
-from grimoire.context.types import BuiltContext, TierItem
+from grimoire.context.types import BuiltContext, TierItem, make_source_id
 from grimoire.templates import render as render_template
 from grimoire.types.composition import Composition
-from grimoire.types.context import AssembledPrompt, ToolDeclarationSpec
+from grimoire.types.context import AssembledPrompt, ContextSource, ToolDeclarationSpec
 from grimoire.types.extraction_modes import ExtractionMode
+from grimoire.types.inclusion_reasons import InclusionReason
 from grimoire.types.llm import Message, MessageRole, ModelParams
 from grimoire.types.mechanics import MechanicsResult
 from grimoire.types.state import ContextTier
@@ -128,6 +129,14 @@ class PromptAssembler:
             max_tokens=self._config.default_max_tokens,
         )
         sources = list(ctx.sources)
+        await self._append_block_sources(
+            sources,
+            system_text=system_text,
+            scene_header=ctx.scene_header,
+            mechanics_block=ctx.mechanics_block,
+            recent_posts_text=ctx.recent_posts_text,
+            player_input=player_input,
+        )
         summary = self._summary(ctx, budget_used)
         composition_snapshot = self._composition_snapshot(ctx.composition)
         return AssembledPrompt(
@@ -139,6 +148,43 @@ class PromptAssembler:
             composition_snapshot=composition_snapshot,
             messages_hash=_hash_messages(messages),
         )
+
+    async def _append_block_sources(
+        self,
+        sources: list[ContextSource],
+        *,
+        system_text: str,
+        scene_header: str,
+        mechanics_block: str,
+        recent_posts_text: str,
+        player_input: str,
+    ) -> None:
+        """Emit attribution sources for the always-on prompt blocks that
+        otherwise have no ``ContextSource`` — so the inspector's source list
+        reconstructs the entire prompt. Attribution only: these do not affect
+        ``messages`` or ``budget_used``."""
+        blocks = [
+            ("system", system_text, InclusionReason.SYSTEM_PROMPT),
+            ("scene_header", scene_header, InclusionReason.SCENE_HEADER),
+            ("mechanics", mechanics_block, InclusionReason.MECHANICS_RELEVANT),
+            ("recent_posts", recent_posts_text, InclusionReason.VERBATIM_RECENT),
+            ("player_input", player_input, InclusionReason.PLAYER_INPUT),
+        ]
+        for kind, text, reason in blocks:
+            if not text:
+                continue
+            sources.append(
+                ContextSource(
+                    kind=kind,
+                    scope="campaign-local",
+                    owner_id=None,
+                    tier=ContextTier.LOCK_IN,
+                    tokens=await self._tokens(text),
+                    text=text,
+                    source_id=make_source_id(kind, None),
+                    inclusion_reasons=[reason],
+                )
+            )
 
     def apply_extractor_mode(
         self,
