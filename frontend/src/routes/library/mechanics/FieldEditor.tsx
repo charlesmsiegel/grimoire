@@ -1,7 +1,13 @@
 import { useState } from "react";
 
 import type { FieldModel } from "./schemaModel";
-import { WIDGET_CONFIG, WIDGET_NAMES, type ConfigFieldDef } from "./widgetConfig";
+import {
+  WIDGET_CONFIG,
+  WIDGET_NAMES,
+  type ConfigFieldDef,
+  type WidgetConfigDef,
+} from "./widgetConfig";
+import type { WidgetName } from "../../../sheets/types";
 
 interface Props {
   field: FieldModel;
@@ -9,9 +15,17 @@ interface Props {
   onRemove: () => void;
 }
 
+const FALLBACK_DEF: WidgetConfigDef = { schemaType: "string", fields: [] };
+
 export function FieldEditor({ field, onChange, onRemove }: Props) {
   const [raw, setRaw] = useState(false);
-  const def = WIDGET_CONFIG[field.widget];
+  // Unknown widgets (e.g. a custom one the backend allows for forward
+  // compatibility) have no config metadata; fall back to a no-config editor
+  // and keep the current value selectable so it isn't silently rewritten.
+  const def = WIDGET_CONFIG[field.widget as WidgetName] ?? FALLBACK_DEF;
+  const widgetOptions: string[] = WIDGET_NAMES.includes(field.widget as WidgetName)
+    ? WIDGET_NAMES
+    : [field.widget, ...WIDGET_NAMES];
 
   function setConfig(key: string, value: unknown) {
     onChange({ ...field, config: { ...field.config, [key]: value } });
@@ -105,7 +119,7 @@ export function FieldEditor({ field, onChange, onRemove }: Props) {
             onChange({ ...field, widget: e.target.value as FieldModel["widget"], config: {} })
           }
         >
-          {WIDGET_NAMES.map((w) => (
+          {widgetOptions.map((w) => (
             <option key={w} value={w}>
               {w}
             </option>

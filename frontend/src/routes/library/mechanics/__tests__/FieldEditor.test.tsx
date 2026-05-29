@@ -21,4 +21,16 @@ describe("FieldEditor", () => {
     const next = onChange.mock.calls.at(-1)?.[0] as FieldModel;
     expect(next.widget).toBe("boolean");
   });
+
+  it("renders an unknown widget without crashing and keeps it selectable", () => {
+    const unknown: FieldModel = {
+      key: "x",
+      widget: "custom-thing",
+      required: false,
+      config: {},
+    };
+    render(<FieldEditor field={unknown} onChange={vi.fn()} onRemove={vi.fn()} />);
+    const select = screen.getByLabelText(/widget/i) as HTMLSelectElement;
+    expect(select.value).toBe("custom-thing");
+  });
 });
