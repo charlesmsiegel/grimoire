@@ -65,9 +65,7 @@ def test_parse_llm_payload_extracts_cast_changes():
             {"character_id": "", "change": "enter", "confidence": 0.5},  # empty ref -> dropped
         ]
     }
-    out = parse_llm_payload(
-        payload, campaign_id="c", source="structured_llm", max_new_entities=5
-    )
+    out = parse_llm_payload(payload, campaign_id="c", source="structured_llm", max_new_entities=5)
     assert len(out.cast_changes) == 1
     assert out.cast_changes[0].character_ref == "reyes"
     assert out.cast_changes[0].change == "enter"
@@ -109,9 +107,13 @@ def test_project_cast_changes_from_tool_calls():
     from grimoire.extractor.tool_use import ToolCall, project_cast_changes
 
     calls = [
-        ToolCall(name="update_cast", args={"character_id": "reyes", "change": "leave", "confidence": 0.7}),
+        ToolCall(
+            name="update_cast", args={"character_id": "reyes", "change": "leave", "confidence": 0.7}
+        ),
         ToolCall(name="record_fact", args={"text": "ignored"}),
-        ToolCall(name="update_cast", args={"character_id": "x", "change": "bogus", "confidence": 0.5}),
+        ToolCall(
+            name="update_cast", args={"character_id": "x", "change": "bogus", "confidence": 0.5}
+        ),
     ]
     out = project_cast_changes(calls)
     assert len(out) == 1

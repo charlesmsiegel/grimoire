@@ -2,7 +2,7 @@
 
 **Issue:** #464 — Play / Processing Posts
 **Date:** 2026-05-28
-**Status:** Approved (pre-implementation)
+**Status:** Implemented (2026-05-29)
 
 ## Problem
 

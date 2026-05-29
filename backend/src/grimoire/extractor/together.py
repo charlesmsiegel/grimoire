@@ -16,6 +16,7 @@ from typing import Any
 
 from grimoire.types.common import Scope
 from grimoire.types.extraction import EntityCandidate
+from grimoire.types.scene import CastChange, CastChangeProposal
 from grimoire.types.state import DeltaKind, StateDelta
 
 DELIMITER_OPEN = "<!-- TRACKER -->"
@@ -317,8 +318,6 @@ def project_tracker_to_candidates(parsed: ParsedTracker) -> list[EntityCandidate
 
 def project_tracker_to_cast_changes(parsed: ParsedTracker) -> list[CastChangeProposal]:
     """Map tracker ``cast_changes`` entries to `CastChangeProposal`s (#464)."""
-    from grimoire.types.scene import CastChange, CastChangeProposal
-
     out: list[CastChangeProposal] = []
     for entry in parsed.cast_changes:
         ref = str(entry.get("character_id") or entry.get("id") or "").strip()
