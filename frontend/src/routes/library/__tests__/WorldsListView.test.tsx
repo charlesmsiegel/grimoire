@@ -13,6 +13,7 @@ vi.mock("../../../api/library", async () => {
       ...actual.libraryApi,
       listWorlds: vi.fn(),
       deleteWorld: vi.fn(),
+      createWorld: vi.fn(),
     },
     fetchWorldDependents: vi.fn(),
   };
@@ -58,6 +59,31 @@ describe("WorldsListView delete", () => {
 
     await waitFor(() =>
       expect(libraryModule.libraryApi.deleteWorld).toHaveBeenCalledWith("sakura-high"),
+    );
+  });
+});
+
+describe("WorldsListView rich create", () => {
+  it("creates a world with genre/description via the rich form", async () => {
+    vi.mocked(libraryModule.libraryApi.listWorlds).mockResolvedValue([]);
+    vi.mocked(libraryModule.libraryApi.createWorld).mockResolvedValue({ id: "ravenmark" } as never);
+
+    render(
+      <MemoryRouter>
+        <WorldsListView />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /New world/ }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Ravenmark" } });
+    fireEvent.change(screen.getByLabelText("Genre"), { target: { value: "Grimdark fantasy" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Create/ }));
+
+    await waitFor(() =>
+      expect(libraryModule.libraryApi.createWorld).toHaveBeenCalledWith(
+        "ravenmark",
+        expect.objectContaining({ name: "Ravenmark", genre: "Grimdark fantasy" }),
+      ),
     );
   });
 });

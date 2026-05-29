@@ -8,6 +8,7 @@ import { useCardFilters } from "../../hooks/useCardFilters";
 import { markEnd } from "../../state/perf";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
+import { IdField } from "./IdField";
 
 export function WorldsListView() {
   const navigate = useNavigate();
@@ -27,8 +28,11 @@ export function WorldsListView() {
   }, [loading, error, data]);
 
   const [creating, setCreating] = useState(false);
-  const [newId, setNewId] = useState("");
   const [newName, setNewName] = useState("");
+  const [newId, setNewId] = useState("");
+  const [newGenre, setNewGenre] = useState("");
+  const [newDescription, setNewDescription] = useState("");
+  const [newTagsText, setNewTagsText] = useState("");
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -86,10 +90,21 @@ export function WorldsListView() {
     setSubmitErr(null);
     setBusy(true);
     try {
-      const created = await libraryApi.createWorld(newId.trim(), { name: newName.trim() });
+      const meta: Record<string, unknown> = { name: newName.trim() };
+      if (newGenre.trim()) meta.genre = newGenre.trim();
+      if (newDescription.trim()) meta.description = newDescription.trim();
+      const tags = newTagsText
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      if (tags.length) meta.tags = tags;
+      const created = await libraryApi.createWorld(newId.trim(), meta);
       setCreating(false);
-      setNewId("");
       setNewName("");
+      setNewId("");
+      setNewGenre("");
+      setNewDescription("");
+      setNewTagsText("");
       navigate(`/library/worlds/${encodeURIComponent(created.id)}`);
     } catch (err) {
       setSubmitErr(err instanceof ApiError ? err.message : String(err));
@@ -122,19 +137,28 @@ export function WorldsListView() {
 
       {creating && (
         <form onSubmit={submit} className="library-form" aria-label="Create world">
+          <IdField
+            nameLabel="Name"
+            name={newName}
+            id={newId}
+            onNameChange={setNewName}
+            onIdChange={setNewId}
+          />
           <label>
-            <span>ID</span>
-            <input
-              required
-              value={newId}
-              pattern="[a-z0-9][a-z0-9-]*"
-              title="lowercase letters, digits, and hyphens"
-              onChange={(e) => setNewId(e.target.value)}
+            <span>Genre</span>
+            <input value={newGenre} onChange={(e) => setNewGenre(e.target.value)} />
+          </label>
+          <label>
+            <span>Description</span>
+            <textarea
+              rows={3}
+              value={newDescription}
+              onChange={(e) => setNewDescription(e.target.value)}
             />
           </label>
           <label>
-            <span>Name</span>
-            <input required value={newName} onChange={(e) => setNewName(e.target.value)} />
+            <span>Tags (comma separated)</span>
+            <input value={newTagsText} onChange={(e) => setNewTagsText(e.target.value)} />
           </label>
           <button type="submit" disabled={busy}>
             {busy ? "Creating…" : "Create"}
