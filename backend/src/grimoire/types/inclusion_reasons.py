@@ -33,6 +33,10 @@ class InclusionReason(StrEnum):
     LORE_AT_DEPTH = "lore_at_depth"
     LORE_ARCHIVE = "lore_archive"
     TRANSIENT_STATE_ACTIVE = "transient_state_active"
+    SYSTEM_PROMPT = "system_prompt"
+    SCENE_HEADER = "scene_header"
+    VERBATIM_RECENT = "verbatim_recent"
+    PLAYER_INPUT = "player_input"
 
 
 __all__ = ["InclusionReason"]
