@@ -167,6 +167,7 @@ export function PlayView({ campaignId }: Props) {
               posts={play.state.posts}
               pcs={play.state.pcs}
               streaming={play.state.streaming}
+              awaitingResponse={play.state.awaitingResponse}
               images={play.state.images}
               campaignId={campaignId}
               scene={play.state.scene}

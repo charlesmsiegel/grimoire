@@ -9,6 +9,7 @@ interface Props {
   posts: ApiPost[];
   pcs: PCEntry[];
   streaming: PendingTurn | null;
+  awaitingResponse: boolean;
   images: Record<string, SceneImage>;
   campaignId?: string;
   scene?: ApiScene | null;
@@ -21,6 +22,7 @@ export function ScenePane({
   posts,
   pcs,
   streaming,
+  awaitingResponse,
   images,
   campaignId,
   scene,
@@ -46,7 +48,7 @@ export function ScenePane({
       });
     });
     return () => cancelAnimationFrame(handle);
-  }, [posts.length, streaming?.text.length]);
+  }, [posts.length, streaming?.text.length, awaitingResponse]);
 
   useEffect(() => {
     const sentinel = topSentinelRef.current;
@@ -89,7 +91,7 @@ export function ScenePane({
   return (
     <section className="scene-pane" aria-label="Scene posts" aria-live="polite">
       {hasMorePosts && <div ref={topSentinelRef} className="load-more-sentinel" />}
-      {posts.length === 0 && !streaming && (
+      {posts.length === 0 && !streaming && !awaitingResponse && (
         <p className="scene-empty">No posts yet. Begin with a post below.</p>
       )}
       {posts.map((post) => (
@@ -104,6 +106,25 @@ export function ScenePane({
           expressionsEnabledCharacters={expressionsEnabledCharacters}
         />
       ))}
+      {awaitingResponse && !streaming && (
+        <article
+          className="post post-streaming post-pending"
+          aria-label="Narrator response, working"
+          aria-busy="true"
+        >
+          <header className="post-header">
+            <span className="post-author">Narrator</span>
+            <span className="post-author-kind">
+              <span className="pending-dots" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+              thinking…
+            </span>
+          </header>
+        </article>
+      )}
       {streaming && (
         <article className="post post-streaming" aria-label="Narrator response, streaming">
           <header className="post-header">

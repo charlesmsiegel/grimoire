@@ -1916,6 +1916,56 @@ pre {
   animation: streaming-pulse 1.2s ease-in-out infinite;
 }
 
+/* Pending placeholder: shown after a post is submitted while the backend
+   assembles context and calls the LLM, before the first token streams in.
+   Reuses the streaming post chrome; the animated dots signal "working". */
+.post-pending .post-author-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2, 0.5rem);
+}
+
+.pending-dots {
+  display: inline-flex;
+  gap: 0.2rem;
+}
+
+.pending-dots span {
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pending-dots 1.2s ease-in-out infinite;
+}
+
+.pending-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.pending-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes pending-dots {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pending-dots span {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 @keyframes streaming-pulse {
   0%,
   100% {

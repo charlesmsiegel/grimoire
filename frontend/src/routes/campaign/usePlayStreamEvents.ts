@@ -8,6 +8,11 @@ import type { WSMessage } from "../../ws/client";
 import type { PlayAction, PlayState } from "./playReducer";
 
 const STREAM_EVENT_TYPES = [
+  "turn_started",
+  "turn_failed",
+  "turn_timed_out",
+  "turn_cancelled",
+  "pre_roll_pending",
   "token",
   "turn_complete",
   "post_appended",
@@ -35,6 +40,20 @@ export function usePlayStreamEvents(
     (message: WSMessage) => {
       const cur = stateRef.current;
       switch (message.type) {
+        case "turn_started":
+          // Backend has begun the turn; show the "working" placeholder until
+          // the first token streams back (stream-start) or the turn settles.
+          dispatch({ type: "turn-pending" });
+          return;
+        case "turn_failed":
+        case "turn_timed_out":
+        case "turn_cancelled":
+        case "pre_roll_pending":
+          // Terminal/handoff events: the turn won't stream prose from here
+          // (failure, timeout, cancel, or a pre-roll confirmation prompt that
+          // its own UI now owns). Clear the placeholder so it can't get stuck.
+          dispatch({ type: "turn-settled" });
+          return;
         case "token": {
           const turn_id = typeof message.turn_id === "string" ? message.turn_id : null;
           const delta = typeof message.delta === "string" ? message.delta : null;
