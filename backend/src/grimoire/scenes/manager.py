@@ -67,6 +67,7 @@ from grimoire.scenes.types import (
     SceneThreads,
     Thread,
 )
+from grimoire.types.scene import CastChange
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,7 @@ class SceneManager:
         continuity: object | None = None,
         metrics: MetricsRegistryProtocol = NULL_METRICS,
         state_store: Any = None,
+        cast_change_store: Any = None,
     ) -> None:
         self.data_root = Path(data_root)
         self.config = config or SceneManagerConfig()
@@ -170,6 +172,7 @@ class SceneManager:
         self._continuity = continuity
         self._metrics: MetricsRegistryProtocol = metrics
         self._state_store = state_store
+        self._cast_change_store = cast_change_store
 
         # Per-scene in-memory state. Persisted lazily where needed.
         self._post_records: dict[str, dict[str, _PostRecord]] = {}
@@ -190,6 +193,9 @@ class SceneManager:
 
     def set_continuity(self, continuity: object) -> None:
         self._continuity = continuity
+
+    def set_cast_change_store(self, store: object) -> None:
+        self._cast_change_store = store
 
     def set_summarizer(self, summarizer: Summarizer | None) -> None:
         self._summarizer = summarizer
@@ -928,6 +934,66 @@ class SceneManager:
             if character_ref not in scene.present_character_refs:
                 scene.present_character_refs.append(character_ref)
             self._write_sidecar(scene)
+
+    # -- Cast-change review (#464) --------------------------------------
+
+    async def queue_cast_change(
+        self,
+        scene_id: str,
+        *,
+        character_ref: str,
+        change: CastChange,
+        is_pc: bool,
+        evidence: str = "",
+        confidence: float = 0.0,
+        turn_id: str | None = None,
+    ) -> str:
+        """Persist a resolved cast change for review (never auto-applied)."""
+        if self._cast_change_store is None:
+            raise RuntimeError("cast_change_store not wired")
+        scene = await self.get_scene(scene_id)
+        return await self._cast_change_store.add(
+            campaign_id=scene.campaign_id,
+            scene_id=scene_id,
+            character_ref=character_ref,
+            change=change,
+            is_pc=is_pc,
+            evidence=evidence,
+            confidence=confidence,
+            turn_id=turn_id,
+        )
+
+    async def list_pending_cast_changes(self, scene_id: str) -> list:
+        if self._cast_change_store is None:
+            return []
+        return await self._cast_change_store.list_pending(scene_id)
+
+    async def confirm_cast_change(self, scene_id: str, change_id: str) -> None:
+        """Apply a pending cast change through the presence APIs and mark it
+        confirmed. Idempotent presence methods make a stale confirm safe."""
+        if self._cast_change_store is None:
+            raise RuntimeError("cast_change_store not wired")
+        rec = await self._cast_change_store.get(change_id)
+        if rec is None or rec.scene_id != scene_id:
+            raise KeyError(f"cast change not found: {change_id}")
+        if rec.status != "pending":
+            raise ValueError(f"cast change {change_id} already {rec.status}")
+        if rec.change == CastChange.ENTER:
+            if rec.is_pc:
+                await self.add_present_pc(scene_id, rec.character_ref)
+            else:
+                await self.add_present_character(scene_id, rec.character_ref)
+        else:
+            await self.remove_present_character(scene_id, rec.character_ref)
+        await self._cast_change_store.set_status(change_id, "confirmed")
+
+    async def dismiss_cast_change(self, scene_id: str, change_id: str) -> None:
+        if self._cast_change_store is None:
+            raise RuntimeError("cast_change_store not wired")
+        rec = await self._cast_change_store.get(change_id)
+        if rec is None or rec.scene_id != scene_id:
+            raise KeyError(f"cast change not found: {change_id}")
+        await self._cast_change_store.set_status(change_id, "dismissed")
 
     async def set_narrator_response_mode(
         self,

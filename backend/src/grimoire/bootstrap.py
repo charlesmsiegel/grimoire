@@ -228,6 +228,11 @@ async def build_content_services(
             state_store=container.state_store,
         )
 
+    if container.scenes is not None and container.state_store is not None:
+        from grimoire.scenes.cast_changes import CastChangeStore
+
+        container.scenes.set_cast_change_store(CastChangeStore(container.state_store.db))
+
     if container.scene_indexer is None and container.state_store is not None:
         scene_indexer = SceneIndexer(
             container.scenes, container.state_store.db, container.event_bus
