@@ -453,12 +453,14 @@ class ContextBuilderService:
         # Build full sources list (active PC card + commitments + tier items)
         sources: list[ContextSource] = []
         if active_pc_source is not None and not pins.is_excluded(active_pc_source):
+            active_pc_source.text = active_pc_card
             if pins.is_pinned(active_pc_source) and (
                 InclusionReason.PINNED_BY_USER not in active_pc_source.inclusion_reasons
             ):
                 active_pc_source.inclusion_reasons.append(InclusionReason.PINNED_BY_USER)
             sources.append(active_pc_source)
         if commitments_source is not None and not pins.is_excluded(commitments_source):
+            commitments_source.text = commitments_block
             if pins.is_pinned(commitments_source) and (
                 InclusionReason.PINNED_BY_USER not in commitments_source.inclusion_reasons
             ):
