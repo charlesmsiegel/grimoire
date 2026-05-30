@@ -45,13 +45,31 @@ export function usePlayStreamEvents(
           // the first token streams back (stream-start) or the turn settles.
           dispatch({ type: "turn-pending" });
           return;
-        case "turn_failed":
+        case "turn_failed": {
+          // The backend rolled the player's post back and produced no prose.
+          // Surface it so the turn doesn't silently vanish (the #1 "I sent a
+          // message and got nothing" confusion).
+          const reason = typeof message.reason === "string" ? message.reason : "";
+          dispatch({
+            type: "turn-failed",
+            message: reason
+              ? `The narrator couldn't respond (${reason}). Your message wasn't saved — please try again.`
+              : "The narrator couldn't respond. Your message wasn't saved — please try again.",
+          });
+          return;
+        }
         case "turn_timed_out":
+          dispatch({
+            type: "turn-failed",
+            message:
+              "The turn timed out before the narrator responded. Your message wasn't saved — please try again.",
+          });
+          return;
         case "turn_cancelled":
         case "pre_roll_pending":
-          // Terminal/handoff events: the turn won't stream prose from here
-          // (failure, timeout, cancel, or a pre-roll confirmation prompt that
-          // its own UI now owns). Clear the placeholder so it can't get stuck.
+          // Handoff events: the turn won't stream prose from here (cancel, or a
+          // pre-roll confirmation prompt that its own UI now owns). Clear the
+          // placeholder so it can't get stuck — but these aren't errors.
           dispatch({ type: "turn-settled" });
           return;
         case "token": {

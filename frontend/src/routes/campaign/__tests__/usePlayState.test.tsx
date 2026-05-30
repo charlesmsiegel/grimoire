@@ -91,6 +91,23 @@ describe("usePlayState reducer", () => {
     expect(state.awaitingResponse).toBe(false);
   });
 
+  it("surfaces a turn failure and clears the pending placeholder", () => {
+    let state = reducer({ ...initial, awaitingResponse: true }, {
+      type: "turn-failed",
+      message: "boom",
+    });
+    expect(state.awaitingResponse).toBe(false);
+    expect(state.turnError).toBe("boom");
+    // A new turn starting clears the stale error.
+    state = reducer(state, { type: "turn-pending" });
+    expect(state.turnError).toBeNull();
+  });
+
+  it("dismisses a turn error explicitly", () => {
+    const state = reducer({ ...initial, turnError: "boom" }, { type: "clear-turn-error" });
+    expect(state.turnError).toBeNull();
+  });
+
   it("clears the pending flag once the first token starts streaming", () => {
     const state = reducer(
       { ...initial, awaitingResponse: true },
