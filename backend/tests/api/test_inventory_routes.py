@@ -58,8 +58,26 @@ async def enabled_container(container: ServiceContainer, tmp_path: Path):
             await db.close()
 
 
-def test_get_inventory_disabled_returns_409(client: TestClient, disabled_container):
+def test_get_inventory_disabled_returns_empty(client: TestClient, disabled_container):
+    # Reads on a disabled feature return an empty result, not 409 — a safe GET
+    # for "what holdings exist" answers "none" when inventory is off.
     r = client.get("/api/campaigns/c_test/inventory")
+    assert r.status_code == 200
+    assert r.json() == {"holders": []}
+
+
+def test_list_flags_disabled_returns_empty(client: TestClient, disabled_container):
+    r = client.get("/api/campaigns/c_test/inventory/flags?resolved=false")
+    assert r.status_code == 200
+    assert r.json() == {"flags": []}
+
+
+def test_operation_disabled_returns_409(client: TestClient, disabled_container):
+    # Mutations still 409: you cannot apply an operation to a disabled feature.
+    r = client.post(
+        "/api/campaigns/c_test/inventory/operations",
+        json={"action": "acquire", "item": "1 gold", "holder": "joe", "confidence": 1.0},
+    )
     assert r.status_code == 409
 
 
