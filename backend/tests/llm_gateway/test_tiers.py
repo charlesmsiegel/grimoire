@@ -18,7 +18,6 @@ def test_heavy_tasks() -> None:
 
 def test_light_tasks() -> None:
     assert tier_for_task("scenes.running_summary") == Tier.LIGHT
-    assert tier_for_task("library.summarize") == Tier.LIGHT
     assert tier_for_task("drift_check") == Tier.LIGHT
     assert tier_for_task("scene_break_classifier") == Tier.LIGHT
     assert tier_for_task("auxiliary.translate") == Tier.LIGHT

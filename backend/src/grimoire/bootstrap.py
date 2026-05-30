@@ -569,7 +569,6 @@ async def start_background_workers(
     from grimoire.mechanics.file_watcher import MechanicsFileWatcher
     from grimoire.state_store import (
         BackupScheduler,
-        BodySummarizer,
         EmbeddingWorker,
         RetentionSweeper,
         reenqueue_missing_embeddings,
@@ -592,7 +591,6 @@ async def start_background_workers(
             scene_manager=container.scenes,
             config=library_cfg,
             embedding_queue=queues.embedding,
-            summary_queue=queues.summary,
         )
         container.file_watcher = file_watcher
 
@@ -605,19 +603,6 @@ async def start_background_workers(
     )
     container.embedding_worker = embedding_worker
     lifecycle.register_async("embedding_worker", embedding_worker)
-
-    body_summarizer = BodySummarizer(
-        store=container.state_store,
-        gateway=container.llm_gateway,
-        queue=queues.summary,
-        bus=container.event_bus,
-    )
-    if library_cfg.indexing.summarize_on_index:
-        body_summarizer.start()
-    else:
-        log.info("body summarizer disabled (summarize_on_index=false)")
-    container.body_summarizer = body_summarizer
-    lifecycle.register_async("body_summarizer", body_summarizer)
 
     retention_sweeper = RetentionSweeper(
         db=container.db,

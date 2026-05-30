@@ -206,18 +206,14 @@ def _write_yaml_safe(name: str, data: dict[str, Any]) -> None:
 
 class LibrarySettingsPatch(BaseModel):
     embed_on_index: bool | None = None
-    summarize_on_index: bool | None = None
 
 
 @router.get("/state-store/library")
 async def get_library_settings() -> Any:
     ss = _read_yaml_safe("state_store.yaml")
     ss_lib = ss.get("library") if isinstance(ss.get("library"), dict) else {}
-    lib = _read_yaml_safe("library.yaml")
-    idx = lib.get("indexing") if isinstance(lib.get("indexing"), dict) else {}
     return {
         "embed_on_index": bool(ss_lib.get("embed_on_index", False)),
-        "summarize_on_index": bool(idx.get("summarize_on_index", False)),
     }
 
 
@@ -232,16 +228,6 @@ async def patch_library_settings(payload: LibrarySettingsPatch) -> Any:
             _write_yaml_safe("state_store.yaml", ss)
         except Exception as exc:
             logger.exception("state_store.yaml write failed")
-            raise HTTPException(status_code=500, detail=f"failed to persist: {exc}") from exc
-    if payload.summarize_on_index is not None:
-        lib = _read_yaml_safe("library.yaml")
-        idx = lib.get("indexing") if isinstance(lib.get("indexing"), dict) else {}
-        idx["summarize_on_index"] = payload.summarize_on_index
-        lib["indexing"] = idx
-        try:
-            _write_yaml_safe("library.yaml", lib)
-        except Exception as exc:
-            logger.exception("library.yaml write failed")
             raise HTTPException(status_code=500, detail=f"failed to persist: {exc}") from exc
     return await get_library_settings()
 

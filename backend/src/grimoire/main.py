@@ -74,7 +74,6 @@ from grimoire.scenes.indexer import SceneIndexer
 from grimoire.scenes.summary_jobs import RunningSummaryWorker
 from grimoire.state_store import (
     BackupScheduler,
-    BodySummarizer,
     EmbeddingWorker,
     RetentionSweeper,
     StateStore,
@@ -683,9 +682,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             container.file_watcher = file_watcher
 
         # State Store background workers — embedding drainer (§1), auto-backup
-        # (§3), retention sweep (§4), body_compressed summarizer (§5). All
-        # honor `state_store_config`; the embedding worker and summarizer
-        # quietly back off when no LLM provider is registered yet.
+        # (§3), retention sweep (§4). All honor `state_store_config`; the
+        # embedding worker quietly backs off when no LLM provider is
+        # registered yet.
         embedding_worker = EmbeddingWorker(
             store=container.state_store,
             gateway=llm_gateway,
@@ -698,18 +697,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         else:
             log.info("embedding worker disabled (embed_on_index=false)")
         container.embedding_worker = embedding_worker
-
-        body_summarizer = BodySummarizer(
-            store=container.state_store,
-            gateway=llm_gateway,
-            queue=file_watcher.summary_queue,
-            bus=container.event_bus,
-        )
-        if library_cfg.indexing.summarize_on_index:
-            body_summarizer.start()
-        else:
-            log.info("body summarizer disabled (summarize_on_index=false)")
-        container.body_summarizer = body_summarizer
 
         retention_sweeper = RetentionSweeper(
             db=db,
@@ -809,12 +796,6 @@ async def _shutdown(
                 await retention_sweeper.stop()
             except Exception:
                 log.exception("retention_sweeper stop failed during shutdown")
-        body_summarizer = container.body_summarizer
-        if body_summarizer is not None:
-            try:
-                await body_summarizer.stop()
-            except Exception:
-                log.exception("body_summarizer stop failed during shutdown")
         embedding_worker = container.embedding_worker
         if embedding_worker is not None:
             try:

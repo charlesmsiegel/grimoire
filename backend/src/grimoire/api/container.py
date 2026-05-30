@@ -44,7 +44,6 @@ if TYPE_CHECKING:
     from grimoire.scenes.summary_jobs import RunningSummaryWorker
     from grimoire.state_store import (
         BackupScheduler,
-        BodySummarizer,
         EmbeddingWorker,
         RetentionSweeper,
         StateStore,
@@ -102,7 +101,6 @@ class ServiceContainer:
     scene_indexer: SceneIndexer | None = None
     scene_ledger: SceneLedger | None = None
     embedding_worker: EmbeddingWorker | None = None
-    body_summarizer: BodySummarizer | None = None
     retention_sweeper: RetentionSweeper | None = None
     backup_scheduler: BackupScheduler | None = None
     scene_summary_worker: RunningSummaryWorker | None = None

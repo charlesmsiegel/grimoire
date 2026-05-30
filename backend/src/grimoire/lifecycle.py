@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from grimoire.watcher import EmbeddingQueue, SummaryQueue
+from grimoire.watcher import EmbeddingQueue
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +51,10 @@ class LifecycleManager:
 
 @dataclass
 class QueueBundle:
-    """Owns embedding and summary queues independently of the file watcher.
+    """Owns the embedding queue independently of the file watcher.
 
     Created unconditionally at startup so background workers always have
-    queues to drain, even when file watching is disabled.
+    a queue to drain, even when file watching is disabled.
     """
 
     embedding: EmbeddingQueue = field(default_factory=EmbeddingQueue)
-    summary: SummaryQueue = field(default_factory=SummaryQueue)
