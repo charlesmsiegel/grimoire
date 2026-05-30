@@ -34,6 +34,9 @@ package-lock.json
 # scripts/run.sh runtime state (PIDs, ports); consumed by scripts/shutdown.sh
 .grimoire-run.env
 
+# Local environment overrides (pydantic-settings env_file); machine-specific
+.env
+
 # Superpowers brainstorming sessions
 .superpowers/
 
