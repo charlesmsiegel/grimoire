@@ -30,13 +30,11 @@ from grimoire.state_store.paths import (
 )
 from grimoire.state_store.retention import RetentionSweeper, delete_expired_embeddings
 from grimoire.state_store.store import StateStore
-from grimoire.state_store.summarizer import BodySummarizer
 
 __all__ = [
     "KIND_TO_DIR",
     "AutoBackupConfig",
     "BackupScheduler",
-    "BodySummarizer",
     "EmbeddingWorker",
     "LibraryRef",
     "LibrarySectionConfig",

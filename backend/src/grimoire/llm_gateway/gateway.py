@@ -350,7 +350,6 @@ class LLMGatewayService:
     # wizard implicitly promises.
     _DEFAULT_LLM_TASKS: tuple[str, ...] = (
         "main",
-        "library.summarize",
         "extractor",
         "scene_summary",
         "scene_suggest",

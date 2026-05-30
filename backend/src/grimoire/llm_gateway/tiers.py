@@ -34,7 +34,6 @@ _TASK_TIER: dict[str, Tier] = {
     "scene_first_post": Tier.HEAVY,
     # Light — classification, mechanical transforms, short/rolling summaries
     "scenes.running_summary": Tier.LIGHT,
-    "library.summarize": Tier.LIGHT,
     "drift_check": Tier.LIGHT,
     "scene_break_classifier": Tier.LIGHT,
     "auxiliary.translate": Tier.LIGHT,

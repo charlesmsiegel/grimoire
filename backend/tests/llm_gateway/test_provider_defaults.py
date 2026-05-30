@@ -72,7 +72,7 @@ def _embed_manifest(plugin_id: str = "embed-openrouter") -> _FakeManifest:
     return _FakeManifest(id=plugin_id, implements=["embedding_provider"])
 
 
-async def test_registers_main_and_summarize_from_configured_llm_plugin(
+async def test_registers_main_and_extractor_from_configured_llm_plugin(
     empty_db: Database,
 ) -> None:
     plugins = _ConfiguredPlugins(
@@ -88,7 +88,7 @@ async def test_registers_main_and_summarize_from_configured_llm_plugin(
     # Routes are keyed by plugin_id (the registry key), not the provider
     # instance's `.id` — see the comment on register_provider_defaults.
     assert routes["main"] == "llm-openrouter.deepseek/deepseek-v4-pro"
-    assert routes["library.summarize"] == "llm-openrouter.deepseek/deepseek-v4-pro"
+    assert routes["extractor"] == "llm-openrouter.deepseek/deepseek-v4-pro"
 
 
 async def test_registers_embed_default_from_configured_embedding_plugin(
@@ -124,8 +124,8 @@ async def test_does_not_overwrite_existing_defaults(empty_db: Database) -> None:
 
     routes = await gateway.list_routes()
     assert routes["main"] == "anthropic.claude-opus-4-7"
-    # library.summarize had no prior default, so it picks up the wizard plugin.
-    assert routes["library.summarize"] == "llm-openrouter.deepseek/deepseek-v4-pro"
+    # extractor had no prior default, so it picks up the wizard plugin.
+    assert routes["extractor"] == "llm-openrouter.deepseek/deepseek-v4-pro"
 
 
 async def test_skips_unconfigured_plugin(empty_db: Database) -> None:
@@ -145,7 +145,7 @@ async def test_skips_unconfigured_plugin(empty_db: Database) -> None:
 
     routes = await gateway.list_routes()
     assert "main" not in routes
-    assert "library.summarize" not in routes
+    assert "extractor" not in routes
 
 
 async def test_skips_plugin_without_active_model(empty_db: Database) -> None:

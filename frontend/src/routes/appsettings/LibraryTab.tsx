@@ -6,7 +6,6 @@ import { errorMessage, useAppConfig } from "./shared";
 
 interface LibrarySettings {
   embed_on_index: boolean;
-  summarize_on_index: boolean;
 }
 
 function useLibrarySettings() {
@@ -85,19 +84,6 @@ export function LibraryTab() {
         <small>
           Generate vector embeddings when indexing library content. Disable to stop
           embedding API calls. Takes effect on next restart.
-        </small>
-      </label>
-      <label className="wizard-toggle">
-        <input
-          type="checkbox"
-          checked={lib.data?.summarize_on_index ?? false}
-          onChange={(e) => lib.patch({ summarize_on_index: e.target.checked })}
-          disabled={!lib.data}
-        />
-        <span>Enable auto-summarization</span>
-        <small>
-          Summarize library entities via LLM for background-tier context injection.
-          Disable to stop LLM calls for summarization. Takes effect on next restart.
         </small>
       </label>
       <p className="wizard-meta">Changes save automatically and take effect on next restart.</p>

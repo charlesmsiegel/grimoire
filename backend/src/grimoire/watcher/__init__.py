@@ -15,16 +15,12 @@ from grimoire.watcher.watcher import (
     EmbeddingJob,
     EmbeddingQueue,
     FileWatcher,
-    SummaryJob,
-    SummaryQueue,
 )
 
 __all__ = [
     "EmbeddingJob",
     "EmbeddingQueue",
     "FileWatcher",
-    "SummaryJob",
-    "SummaryQueue",
     "WatchedFile",
     "classify_path",
 ]

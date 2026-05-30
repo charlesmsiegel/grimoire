@@ -68,7 +68,6 @@ class LibraryIndexedPayload(BaseModel):
     library_files: int
     campaign_files: int
     embedding_queue_depth: int
-    summary_queue_depth: int
 
 
 class SceneBreakSuggestedPayload(BaseModel):
