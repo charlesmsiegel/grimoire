@@ -75,7 +75,7 @@ export const campaignApi = {
   updateSceneNarratorMode: (
     id: string,
     sceneId: string,
-    next: "all_at_once" | "per_character" | null,
+    next: NarratorResponseMode | null,
   ) =>
     api.patch<{
       scene: ApiScene & { narrator_response_mode: NarratorResponseMode | null };
