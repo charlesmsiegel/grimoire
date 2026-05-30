@@ -185,6 +185,18 @@ export function PlayView({ campaignId }: Props) {
               expressionsEnabledCharacters={expressionsEnabledCharacters}
             />
           )}
+          {play.state.mode === "play" && play.state.turnError && (
+            <p className="play-turn-error" role="alert">
+              <span>{play.state.turnError}</span>
+              <button
+                type="button"
+                className="play-turn-error-dismiss"
+                onClick={() => play.dispatch({ type: "clear-turn-error" })}
+              >
+                Dismiss
+              </button>
+            </p>
+          )}
           {play.state.mode !== "play" ? null : play.state.scene?.closed ? (
             <p className="input-area-closed">This scene is closed. No new posts can be added.</p>
           ) : (

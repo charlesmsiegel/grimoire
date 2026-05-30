@@ -20,6 +20,11 @@ export interface PlayState {
   posts: ApiPost[];
   loading: boolean;
   error: string | null;
+  // Transient, non-fatal notice for a turn that failed or timed out. Unlike
+  // ``error`` (which replaces the whole view on a load failure), this renders
+  // as an inline banner above the input so the user knows the turn didn't
+  // silently vanish, and clears as soon as the next turn starts.
+  turnError: string | null;
   streaming: PendingTurn | null;
   // True between ``turn_started`` and the first streamed token (or a
   // terminal turn event). Drives the "narrator is working" placeholder so
@@ -52,6 +57,8 @@ export type PlayAction =
   | { type: "append-post"; post: ApiPost }
   | { type: "turn-pending" }
   | { type: "turn-settled" }
+  | { type: "turn-failed"; message: string }
+  | { type: "clear-turn-error" }
   | { type: "stream-start"; turn_id: string }
   | { type: "stream-delta"; turn_id: string; delta: string }
   | { type: "stream-end"; turn_id: string; post: ApiPost | null }
@@ -76,6 +83,7 @@ export const initialPlayState: PlayState = {
   posts: [],
   loading: true,
   error: null,
+  turnError: null,
   streaming: null,
   awaitingResponse: false,
   advanceEnabled: false,
@@ -148,13 +156,18 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
       if (state.posts.some((p) => p.id === action.post.id)) return state;
       return { ...state, posts: [...state.posts, action.post] };
     case "turn-pending":
-      return { ...state, awaitingResponse: true };
+      return { ...state, awaitingResponse: true, turnError: null };
     case "turn-settled":
       return { ...state, awaitingResponse: false };
+    case "turn-failed":
+      return { ...state, awaitingResponse: false, streaming: null, turnError: action.message };
+    case "clear-turn-error":
+      return state.turnError === null ? state : { ...state, turnError: null };
     case "stream-start":
       return {
         ...state,
         awaitingResponse: false,
+        turnError: null,
         streaming: { turn_id: action.turn_id, text: "" },
       };
     case "stream-delta": {
