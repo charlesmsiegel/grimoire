@@ -1,8 +1,9 @@
+import type { NarratorResponseMode } from "../../../api/campaign/types";
 import { SaveIndicator } from "./SaveIndicator";
 import { useAutoSavedResource } from "./shared";
 
 interface NarratorValue {
-  response_mode: "all_at_once" | "per_character";
+  response_mode: NarratorResponseMode;
 }
 
 export function NarratorTab({ campaignId }: { campaignId: string }) {
@@ -30,8 +31,13 @@ export function NarratorTab({ campaignId }: { campaignId: string }) {
           }
           disabled={!ready}
         >
-          <option value="all_at_once">All at once (one combined post)</option>
-          <option value="per_character">Per character (one post per present character)</option>
+          <option value="all_at_once">All at once — 1 LLM call, one combined post</option>
+          <option value="per_character">
+            Per character — 1 LLM call, split into per-character posts
+          </option>
+          <option value="per_character_multi_call">
+            Per character, multi-call — one LLM call each, interactive (pick next speaker)
+          </option>
         </select>
       </label>
       <SaveIndicator status={status} error={error} />
