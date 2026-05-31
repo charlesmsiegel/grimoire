@@ -303,13 +303,15 @@ class ContextBuilderService:
                 "This is an NPC-only scene. The player is directing the scene but has "
                 "no character present. Write all characters freely — there are no PC "
                 "agency restrictions. The player's input is scene direction, not "
-                "character dialogue."
+                "character dialogue. Do not recap, quote, or restate the player's "
+                "input — carry the scene forward from it."
             )
         else:
             scene_mode = (
                 "You are narrating a scene where the player acts through their character. "
                 "Never write the player character's dialogue, actions, or internal thoughts. "
-                "Stop at decision points and wait for the player."
+                "Do not recap, quote, or restate the player's post — react to it and move "
+                "the scene forward. Stop at decision points and wait for the player."
             )
 
         if pc_absent:
