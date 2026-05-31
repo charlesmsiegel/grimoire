@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import logging
 import random
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -88,6 +89,10 @@ class _ActiveTurn:
     stage: str = "starting"
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     last_chunk_at: datetime | None = None
+    # Set by the idle watchdog when the turn is cancelled for exceeding the
+    # idle (time-to-first-token / inter-token) budget, so the wrapper can tell
+    # a timeout-cancel apart from a user cancel.
+    timed_out: bool = False
     player_post_id: PostId | None = None
     scene_break_choice: asyncio.Future | None = None
     # Captured at the start of the turn so a resumed continuation has the
@@ -828,7 +833,8 @@ class OrchestratorService:
             if self._config.heartbeat.enabled and self._ws_push is not None:
                 heartbeat_task = asyncio.create_task(self._heartbeat_loop(active))
             try:
-                paused = await asyncio.wait_for(
+                paused = await self._run_with_idle_timeout(
+                    active,
                     self._run_turn_body(
                         active=active,
                         campaign_id=campaign_id,
@@ -838,7 +844,7 @@ class OrchestratorService:
                         turn_id=turn_id,
                         reuse_prompt_cache=reuse_prompt_cache,
                     ),
-                    timeout=self._config.turn_timeout_seconds,
+                    self._config.turn_timeout_seconds,
                 )
                 if paused:
                     # The turn parked on pre_roll_pending; ``resolve_pre_roll``
@@ -1409,6 +1415,57 @@ class OrchestratorService:
         except Exception:
             logger.debug("rollback delete_post for %s failed", active.player_post_id, exc_info=True)
         active.player_post_id = None
+
+    async def _run_with_idle_timeout(
+        self,
+        active: _ActiveTurn,
+        coro: Awaitable[bool],
+        idle_seconds: float,
+    ) -> bool:
+        """Run the turn body, failing only on *idle* — no streamed token for
+        ``idle_seconds`` — rather than on total turn duration.
+
+        Before the first token this measures time-to-first-token; after it,
+        it resets on every token, so a slow-but-steady local model runs to
+        completion and only a genuine stall (or a model stuck before any
+        output) trips the timeout. On trip, the body is cancelled and a
+        ``TimeoutError`` is raised so the caller's existing timeout handling
+        (TURN_TIMED_OUT + rollback) applies unchanged.
+
+        Progress is detected by watching ``active.last_chunk_at`` change and
+        timed with ``time.monotonic()``, so it does not depend on the injected
+        wall clock.
+        """
+        body_task = asyncio.ensure_future(coro)
+        poll = min(max(idle_seconds / 4, 0.05), 5.0)
+
+        async def _watchdog() -> None:
+            last_seen = active.last_chunk_at
+            last_progress = time.monotonic()
+            while not body_task.done():
+                await asyncio.sleep(poll)
+                if body_task.done():
+                    return
+                if active.last_chunk_at != last_seen:
+                    last_seen = active.last_chunk_at
+                    last_progress = time.monotonic()
+                    continue
+                if time.monotonic() - last_progress >= idle_seconds:
+                    active.timed_out = True
+                    body_task.cancel()
+                    return
+
+        watchdog = asyncio.ensure_future(_watchdog())
+        try:
+            return await body_task
+        except asyncio.CancelledError:
+            if active.timed_out:
+                raise TimeoutError from None
+            raise
+        finally:
+            watchdog.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watchdog
 
     async def _heartbeat_loop(self, active: _ActiveTurn) -> None:
         interval = max(0.001, self._config.heartbeat.interval_seconds)
