@@ -21,7 +21,6 @@ passes the concrete services from :mod:`grimoire.library`,
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from typing import Any
 
@@ -477,8 +476,17 @@ class ContextBuilderService:
 
         campaign_row = None
         if self._store is not None:
-            with contextlib.suppress(Exception):
-                campaign_row = await self._store.get_campaign(campaign_id)
+            try:
+                campaign_row = await self._store.get_campaign_row(campaign_id)
+            except Exception:
+                # Don't swallow silently: a broken fetch here makes the
+                # narrator response mode fall back to all_at_once, dropping the
+                # per-character response-format block from every prompt.
+                logger.warning(
+                    "failed to load campaign row for narrator-mode resolution (campaign_id=%s)",
+                    campaign_id,
+                    exc_info=True,
+                )
         narrator_mode = effective_response_mode(
             scene_override=getattr(scene, "narrator_response_mode", None),
             campaign_row=campaign_row,
