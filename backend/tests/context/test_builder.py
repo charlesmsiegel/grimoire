@@ -916,6 +916,35 @@ async def test_relationship_deltas_in_background() -> None:
     assert "orchard promise" in body
 
 
+async def test_per_character_mode_resolved_from_campaign_config() -> None:
+    """Regression: the builder must read the campaign row via the real store
+    method (``get_campaign_row``) so a ``per_character`` setting reaches the
+    prompt. A wrong/missing method name was silently swallowed and the mode
+    fell back to all_at_once, dropping the response-format block every turn.
+    """
+
+    class Store:
+        async def get_campaign_row(self, campaign_id: str) -> dict:
+            return {
+                "id": campaign_id,
+                "config": '{"narrator": {"response_mode": "per_character"}}',
+            }
+
+        async def vector_search(self, **kwargs: Any) -> list:
+            return []
+
+        async def keyword_search(self, **kwargs: Any) -> list:
+            return []
+
+    npc = "library:worlds/wod/characters/winifred"
+    scene = _Scene(present_character_refs=[npc], present_pc_refs=[])
+    builder = _builder(state_store=Store(), scenes=StubScenes(scene=scene))
+    prompt = await builder.build("scene", "camp")
+    body = "\n".join(m.content for m in prompt.messages)
+    assert "# Response format" in body
+    assert f'<character ref="{npc}"' in body
+
+
 async def test_scene_refs_force_archive_inclusion() -> None:
     @dataclass
     class _PastScene:
