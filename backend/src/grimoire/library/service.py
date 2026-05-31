@@ -162,7 +162,11 @@ def _world_meta_from_row(row: dict) -> WorldMeta:
 def _greeting_from_row(row: dict) -> Greeting:
     fm = row.get("frontmatter") or {}
     return Greeting(
-        id=fm.get("id") or row.get("asset_id") or "",
+        # The canonical id is the filename-stem asset_id — the value the
+        # classifier keys on and the only one get_greeting can resolve. A
+        # divergent frontmatter ``id`` is advisory and must not be reported
+        # here, or list/get stops round-tripping (greeting handoff failure).
+        id=row.get("asset_id") or fm.get("id") or "",
         world_id=row.get("world_id") or "",
         name=fm.get("name") or row.get("name") or row.get("asset_id") or "",
         starting_location=fm.get("starting_location"),
