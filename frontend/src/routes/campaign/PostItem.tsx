@@ -25,13 +25,21 @@ const AUTHOR_LABELS: Record<ApiPost["author_kind"], string> = {
   system: "System",
 };
 
+/** Turn a ref/slug like "worlds/sakura-high/characters/yui-natsume" into a
+ *  display name ("Yui Natsume"). Used as a fallback when a post carries only a
+ *  character ref (e.g. per-character split posts) and no resolved name. */
+function prettifyRef(ref: string): string {
+  const slug = ref.split("/").pop() ?? ref;
+  return slug.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function authorName(post: ApiPost, pcs: PCEntry[]): string {
   if (post.author_kind === "system" && post.is_player) return "Direction";
   if (post.author_pc_ref) {
     const pc = pcs.find((p) => p.character_ref === post.author_pc_ref);
-    return pc?.name ?? post.author_pc_ref;
+    return pc?.name ?? prettifyRef(post.author_pc_ref);
   }
-  if (post.author_npc_ref) return post.author_npc_ref;
+  if (post.author_npc_ref) return prettifyRef(post.author_npc_ref);
   return AUTHOR_LABELS[post.author_kind];
 }
 
