@@ -5,7 +5,11 @@ import { ApiError, type PluginKind, type PluginManifest, pluginsApi } from "../.
 import { useResource } from "../../api/useResource";
 import type { GGUFInfo } from "../../components/FilePathPicker";
 import { SchemaField } from "../../components/SchemaField";
-import { type JsonSchema, initialDraftFromSchema } from "../../components/schemaForm";
+import {
+  type JsonSchema,
+  cleanDraftForSave,
+  initialDraftFromSchema,
+} from "../../components/schemaForm";
 import { AsyncBoundary } from "./AsyncBoundary";
 
 const KINDS: { kind: PluginKind | "all"; label: string }[] = [
@@ -237,7 +241,7 @@ function PluginConfigForm({ plugin }: { plugin: PluginManifest }) {
     setSavingState("saving");
     setSaveErr(null);
     try {
-      await pluginsApi.configure(plugin.id, draft);
+      await pluginsApi.configure(plugin.id, cleanDraftForSave(draft));
       setSavingState("ok");
     } catch (err) {
       setSavingState("error");
