@@ -1172,7 +1172,6 @@ class LLMGatewayService:
         """
         resolved_timeout = self._resolved_timeout(timeout)
         first_token_timeout = resolved_timeout.first_token_seconds
-        total_timeout = resolved_timeout.total_seconds
         started = time.monotonic()
 
         await self._emit(
@@ -1205,13 +1204,14 @@ class LLMGatewayService:
         first = True
         try:
             while True:
-                budget = (
-                    first_token_timeout if first else total_timeout - (time.monotonic() - started)
-                )
-                if budget <= 0:
-                    raise TimeoutError(f"stream exceeded total timeout of {total_timeout}s")
+                # Idle (inter-token) timeout only: the first token, and every
+                # token after it, must arrive within first_token_timeout. There
+                # is no cumulative cap, so a slow-but-steady local model runs to
+                # completion — the timeout fires only on a stall (or a model
+                # stuck before producing any output). Output length is bounded
+                # by max_tokens, so there is no unbounded-stream risk.
                 try:
-                    chunk = await asyncio.wait_for(_anext(stream), timeout=budget)
+                    chunk = await asyncio.wait_for(_anext(stream), timeout=first_token_timeout)
                 except StopAsyncIteration:
                     break
                 first = False

@@ -139,6 +139,41 @@ async def test_turn_timeout_emits_turn_timed_out(
     assert posts == []
 
 
+async def test_slow_stream_does_not_timeout_while_progressing(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder, ws
+):
+    """Idle-based turn timeout: a stream whose *total* duration exceeds
+    turn_timeout_seconds still completes, as long as each token arrives within
+    the idle budget. (The old total-cap would have timed this out.)"""
+    scene = await _seed(scene_manager, fake_store)
+    fake_gateway.chunks = ["a", "b", "c", "d", "e", "f"]
+    fake_gateway.chunk_delay = 0.04  # 6 * 0.04 = 0.24s total, past the 0.12s budget
+
+    timed_out: list[Event] = []
+    event_bus.subscribe("turn_timed_out", timed_out.append)
+
+    config = OrchestratorConfig(
+        turn_timeout_seconds=0.12,  # < total stream time, >> per-token gap
+        heartbeat=HeartbeatConfig(enabled=False),
+    )
+    orch = _build_orch(
+        scene_manager,
+        event_bus,
+        fake_store,
+        fake_gateway,
+        fake_extractor,
+        fake_context_builder,
+        ws,
+        config,
+    )
+
+    await orch.submit_post("c1", "alistair", "I bow.")
+
+    assert timed_out == []
+    posts = await scene_manager.get_posts(scene.id)
+    assert any(not p.is_player for p in posts)
+
+
 async def test_heartbeat_during_stream(
     scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder, ws
 ):
