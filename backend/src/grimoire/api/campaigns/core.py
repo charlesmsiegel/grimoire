@@ -278,7 +278,9 @@ async def update_campaign(
 
 @router.delete("/{campaign_id}", status_code=204)
 async def delete_campaign(campaign_id: str, state_store: StateStoreDep) -> None:
-    await state_store.db.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
+    # Cascade-delete the campaign row plus every derived row it owns
+    # (scenes, posts, deltas, embeddings, …) so nothing is left orphaned.
+    await state_store.delete_campaign(campaign_id)
     campaign_dir = campaigns_root(state_store.data_root) / campaign_id
     if campaign_dir.exists():
         shutil.rmtree(campaign_dir, ignore_errors=True)

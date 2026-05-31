@@ -883,6 +883,26 @@ class StateStore:
             (_json_dumps(config) if config is not None else None, campaign_id),
         )
 
+    async def delete_campaign(self, campaign_id: str) -> None:
+        """Delete a campaign and every derived row it owns, in one transaction.
+
+        Campaign-scoped tables are discovered dynamically (any table with a
+        ``campaign_id`` column) so the cascade covers new tables automatically
+        and can't silently drift — which is how deleted campaigns previously
+        left orphaned scenes/posts/deltas/etc. behind.
+        """
+        rows = await self.db.fetchall(
+            "SELECT m.name AS name FROM sqlite_master m "
+            "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' "
+            "AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) p WHERE p.name = 'campaign_id')"
+        )
+        # Table names come from sqlite_master (trusted schema), not user input.
+        tables = [r["name"] for r in rows]
+        async with self._txn() as conn:
+            for table in tables:
+                await conn.execute(f'DELETE FROM "{table}" WHERE campaign_id = ?', (campaign_id,))
+            await conn.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
+
     # ── Inventory derived state (#444) ──────────────────────────────
 
     async def upsert_inventory_holding(
