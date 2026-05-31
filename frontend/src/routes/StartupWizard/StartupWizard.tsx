@@ -27,7 +27,11 @@ import { setupApi } from "../../api/setup";
 import type { GGUFInfo } from "../../components/FilePathPicker";
 import { PluginModelPicker } from "../../components/PluginModelPicker";
 import { SchemaField } from "../../components/SchemaField";
-import { type JsonSchema, initialDraftFromSchema } from "../../components/schemaForm";
+import {
+  type JsonSchema,
+  cleanDraftForSave,
+  initialDraftFromSchema,
+} from "../../components/schemaForm";
 
 export interface StartupWizardProps {
   /** Called after completion or close; the parent persists the flag. */
@@ -485,7 +489,7 @@ function ProviderConfigCard({ manifest }: { manifest: PluginManifest }) {
     setSaving(true);
     setErr(null);
     try {
-      await pluginsApi.configure(manifest.id, draft);
+      await pluginsApi.configure(manifest.id, cleanDraftForSave(draft));
       const cfg = await pluginsApi.getConfig(manifest.id);
       setConfig(cfg);
       setSavedAt(Date.now());

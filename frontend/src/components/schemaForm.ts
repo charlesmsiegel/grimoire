@@ -32,3 +32,22 @@ export function initialDraftFromSchema(
   }
   return out;
 }
+
+/**
+ * Drop blank fields from a config draft before saving. A cleared number
+ * input lands in the draft as `null` (see SchemaField), and an empty text
+ * input as `""`; both fail JSON-Schema validation for typed/optional fields
+ * (`null is not of type 'integer'`). An empty optional field means "unset",
+ * so we omit it — letting the schema default apply on reload. `0` and
+ * `false` are real values and are preserved.
+ */
+export function cleanDraftForSave(
+  draft: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(draft)) {
+    if (value === null || value === undefined || value === "") continue;
+    out[key] = value;
+  }
+  return out;
+}
