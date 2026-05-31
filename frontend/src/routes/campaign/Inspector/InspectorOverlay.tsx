@@ -17,7 +17,7 @@ import {
 } from "../../../api/inspector";
 import { REASON_LABELS } from "../../observability/inclusionReasonLabels";
 import { PinControls } from "./PinControls";
-import { isPinnable } from "./sourceKinds";
+import { chunkLabel, isPinnable } from "./sourceKinds";
 
 const TIERS: ContextTier[] = ["lock-in", "spotlight", "background", "archive"];
 const TIER_ORDER: Record<ContextTier, number> = {
@@ -134,13 +134,15 @@ export function InspectorOverlay({
                 <li key={s.source_id || `${s.kind}:${s.owner_id}`}>
                   <button
                     type="button"
-                    className={s.source_id === selectedId ? "is-active" : ""}
+                    className={`inspector-source-toggle${s.source_id === selectedId ? " is-active" : ""}`}
                     onClick={() => setSelectedId(s.source_id)}
                   >
-                    <span className="inspector-source-tier">{s.tier}</span>
-                    <span className="inspector-source-kind">{s.kind}</span>
-                    <span className="inspector-source-headline">
-                      {s.summary || s.owner_id || s.kind}
+                    <span className="inspector-source-name">
+                      <span className="inspector-source-tier-badge">{s.tier}</span>{" "}
+                      {chunkLabel(s).label}
+                      {chunkLabel(s).detail && (
+                        <span className="inspector-source-detail"> · {chunkLabel(s).detail}</span>
+                      )}
                     </span>
                     <span className="inspector-source-tokens">{s.tokens.toLocaleString()} tok</span>
                   </button>

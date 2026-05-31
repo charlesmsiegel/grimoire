@@ -8,7 +8,7 @@ import { useState } from "react";
 import type { ContextSourceExplanation, ContextTier } from "../../../api/inspector";
 import { REASON_LABELS } from "../../observability/inclusionReasonLabels";
 import { PinControls } from "./PinControls";
-import { isPinnable } from "./sourceKinds";
+import { chunkLabel, isPinnable } from "./sourceKinds";
 
 interface Props {
   campaignId: string;
@@ -52,7 +52,7 @@ function SourceRow({
   onChanged?: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const headline = source.summary || source.owner_id || source.kind;
+  const { label, detail } = chunkLabel(source);
   return (
     <li className={`inspector-source-row inspector-tier-${source.tier}`}>
       <button
@@ -61,14 +61,16 @@ function SourceRow({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="inspector-source-tier">{source.tier}</span>
-        <span className="inspector-source-kind">{source.kind}</span>
-        <span className="inspector-source-headline">{headline}</span>
+        <span className="inspector-source-name">
+          {label}
+          {detail && <span className="inspector-source-detail"> · {detail}</span>}
+        </span>
         <span className="inspector-source-tokens">{source.tokens.toLocaleString()} tok</span>
       </button>
       {open && (
         <div className="inspector-source-details">
           <p className="inspector-source-id">
+            <span className="inspector-source-tier-badge">{source.tier}</span>{" "}
             <code>{source.source_id || "(no id)"}</code>
           </p>
           <ul className="inspector-reason-list">
