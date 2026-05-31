@@ -20,6 +20,13 @@ from grimoire.util import canonicalize_character_ref
         ("library:worlds/harbor/character/reyes", "library:worlds/harbor/characters/reyes"),
         ("worlds/harbor/characters/reyes", "library:worlds/harbor/characters/reyes"),
         ("harbor/reyes", "library:worlds/harbor/characters/reyes"),
+        # Over-qualified: a world-stored PC ref double-prefixed with its world
+        # id collapses to the canonical form (was shown raw in the HUD cast).
+        ("harbor/worlds/harbor/characters/reyes", "library:worlds/harbor/characters/reyes"),
+        (
+            "library:harbor/worlds/harbor/characters/reyes",
+            "library:worlds/harbor/characters/reyes",
+        ),
         # Unrecognized / degenerate inputs pass through untouched.
         ("just-an-id", "just-an-id"),
         ("", ""),
@@ -35,6 +42,7 @@ def test_canonicalize_character_ref_is_idempotent() -> None:
         "campaign:emergent/character/ghost",
         "harbor/reyes",
         "library:worlds/harbor/characters/reyes",
+        "harbor/worlds/harbor/characters/reyes",
     ):
         once = canonicalize_character_ref(ref)
         assert canonicalize_character_ref(once) == once

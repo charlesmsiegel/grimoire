@@ -21,6 +21,7 @@ from grimoire.hud.config import HudConfigService
 from grimoire.hud.service import HudService
 from grimoire.types.common import EntityKind
 from grimoire.types.hud import HudWidget
+from grimoire.util import canonicalize_character_ref
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +33,10 @@ def _character_ref_components(ref: str) -> tuple[str | None, str]:
     ``(None, asset_id)`` for emergent ones. We accept the same shapes
     ``grimoire.characters.service._parse_character_ref`` handles.
     """
+    # Normalize first so over-qualified world-PC refs (e.g.
+    # ``<world>/worlds/<world>/characters/<id>``) parse correctly instead of
+    # falling through to ``(None, <raw ref>)`` and showing the ref as the name.
+    ref = canonicalize_character_ref(ref)
     if ref.startswith("campaign:emergent/"):
         _, _, rest = ref.partition("campaign:emergent/")
         parts = rest.strip("/").split("/")

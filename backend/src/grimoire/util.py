@@ -73,6 +73,8 @@ def canonicalize_character_ref(ref: str) -> str:
       → ``campaign:emergent/character/<id>``
     - ``library:worlds/<w>/character/<id>`` / ``worlds/<w>/characters/<id>`` /
       bare ``<w>/<id>`` → ``library:worlds/<w>/characters/<id>``
+    - over-qualified ``<world>/worlds/<world>/characters/<id>`` (a world-stored
+      PC ref double-prefixed with its world id) → ``library:worlds/<w>/characters/<id>``
 
     Normalizing both sides of a comparison lets identity checks (cast-change
     presence, ``is_pc``, PC-enter queueing) line up regardless of which spelling
@@ -89,8 +91,11 @@ def canonicalize_character_ref(ref: str) -> str:
     # Library: pull (world, id) from the full, scheme-less, or singular spelling.
     body = raw.partition("library:")[2] if raw.startswith("library:") else raw
     parts = [p for p in body.split("/") if p]
-    if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"characters", "character"}:
-        return f"library:worlds/{parts[1]}/characters/{parts[3]}"
+    # Match ``worlds/<w>/characters/<id>`` at the tail of the path. Anchoring on
+    # the tail (rather than parts[0]) also collapses an over-qualified ref like
+    # ``<world>/worlds/<world>/characters/<id>`` to the canonical form.
+    if len(parts) >= 4 and parts[-4] == "worlds" and parts[-2] in {"characters", "character"}:
+        return f"library:worlds/{parts[-3]}/characters/{parts[-1]}"
     if len(parts) == 2 and ":" not in raw and parts[0] != "worlds":
         # Bare ``<world>/<id>`` shorthand the campaign creator can register.
         return f"library:worlds/{parts[0]}/characters/{parts[1]}"
