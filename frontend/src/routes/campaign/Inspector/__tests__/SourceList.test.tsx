@@ -34,10 +34,11 @@ const sources: ContextSourceExplanation[] = [
 describe("SourceList", () => {
   it("renders one row per source ordered by tier", () => {
     render(<SourceList campaignId="camp" sources={sources} />);
-    const rows = screen.getAllByRole("button", { name: /(lock-in|spotlight)/i });
+    const rows = screen.getAllByRole("button");
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toHaveTextContent(/lock-in/i);
-    expect(rows[1]).toHaveTextContent(/spotlight/i);
+    // lock-in sorts before spotlight; each row reads as a natural-language name.
+    expect(rows[0]).toHaveTextContent(/Active PC: Alistair/);
+    expect(rows[1]).toHaveTextContent(/Character · winifred/);
   });
 
   it("expands a row to show inclusion reasons", () => {
@@ -54,6 +55,26 @@ describe("SourceList", () => {
   it("renders an empty state when no sources", () => {
     render(<SourceList campaignId="camp" sources={[]} />);
     expect(screen.getByText(/No sources in this preview/i)).toBeInTheDocument();
+  });
+
+  it("labels each chunk with a natural-language kind name, not the raw id", () => {
+    const recent: ContextSourceExplanation[] = [
+      {
+        source_id: "src_recent",
+        owner_id: "campaign:camp",
+        kind: "recent_posts",
+        scope: "campaign-local",
+        tier: "lock-in",
+        library_version: null,
+        inclusion_reasons: [],
+        tokens: 300,
+        summary: "",
+        text: "...",
+      },
+    ];
+    render(<SourceList campaignId="camp" sources={recent} />);
+    expect(screen.getByText("Recent posts (verbatim)")).toBeInTheDocument();
+    expect(screen.queryByText("recent_posts")).not.toBeInTheDocument();
   });
 
   it("expands a row to show the precise text", () => {
