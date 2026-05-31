@@ -9,13 +9,14 @@
 
 Structure your response as a sequence of character posts and optional narrator segments using XML tags. Each character post is wrapped in a `<character>` tag with the character's ref. Narrator prose (scene-setting, environmental description, transitions) uses a `<narrator>` tag.
 
-Characters present in this scene:
+Characters you may tag (the player character is deliberately excluded):
 {% for npc in present_npcs %}
 - {{ npc.name }} (ref: `{{ npc.ref }}`)
 {% endfor %}
 
 Rules:
 - Use `<character ref="...">` tags with the exact ref values listed above.
+- Only the characters listed above may be tagged. Never write a `<character>` post for the player character — the player controls them; do not put words, actions, or thoughts in their mouth.
 - A character may appear multiple times if the scene calls for it.
 - Use `<narrator>` for environmental prose, transitions, or description not attributable to a character.
 - Write the prose inside each tag as normal narrative — dialogue, action, internal thought.
