@@ -1203,6 +1203,10 @@ class _CharacterRefView:
 def _parse_character_ref(ref: str) -> _CharacterRefView:
     if not ref:
         raise CharactersError("empty character_ref")
+    # Normalize first so over-qualified / shorthand spellings (e.g. a world-PC
+    # ref double-prefixed as ``<world>/worlds/<world>/characters/<id>``) resolve
+    # instead of raising — which silently dropped the PC's card from context.
+    ref = canonicalize_character_ref(ref)
     if ref.startswith("campaign:emergent/"):
         _, _, rest = ref.partition("campaign:emergent/")
         parts = rest.strip("/").split("/")
