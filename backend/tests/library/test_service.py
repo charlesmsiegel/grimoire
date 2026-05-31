@@ -145,6 +145,40 @@ async def test_greeting_listing_returns_typed_greeting(
     assert fetched.present_characters == ["alistair"]
 
 
+async def test_greeting_id_roundtrips_when_frontmatter_id_differs_from_filename(
+    library: LibraryService, store: StateStore
+) -> None:
+    """``list_greetings`` must report the canonical (filename-stem) id so the
+    value round-trips back through ``get_greeting``.
+
+    Regression for the campaign-creation greeting handoff: greetings authored
+    with a descriptive filename but a divergent frontmatter ``id`` were listed
+    under the frontmatter id, which ``get_greeting`` (keyed on the filename
+    stem) could not resolve.
+    """
+    await _seed_world(store, "wod-london")
+    await store.write_library_file(
+        library_id="worlds/wod-london/greetings/harem-night-classroom-student",
+        frontmatter={
+            "id": "club-greeting-05",  # diverges from the filename stem
+            "name": "Harem Night — Classroom",
+            "starting_location": "classroom",
+        },
+        body="The classroom is empty after hours.",
+        source="user",
+    )
+
+    greetings = await library.list_greetings("wod-london")
+    assert len(greetings) == 1
+    listed_id = greetings[0].id
+    assert listed_id == "harem-night-classroom-student"
+
+    # The id handed out by list must be resolvable by get (the exact path the
+    # campaign-creation wizard takes).
+    fetched = await library.get_greeting("wod-london", listed_id)
+    assert fetched.starting_location == "classroom"
+
+
 # ---------------------------------------------------------------------------
 # Top-level assets
 # ---------------------------------------------------------------------------
