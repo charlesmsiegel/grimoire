@@ -90,6 +90,13 @@ class InMemoryContinuityStore(ContinuityStore):
     async def knowledge_for_character(self, character_id: str) -> list[KnowledgeEntry]:
         return [entry for (cid, _), entry in self._knowledge.items() if cid == character_id]
 
+    async def knowledge_learned_in(self, post_id: str) -> list[KnowledgeEntry]:
+        return [e for e in self._knowledge.values() if e.learned_in_post == post_id]
+
+    async def delete_knowledge(self, character_id: str, fact_id: FactId) -> None:
+        async with self._lock:
+            self._knowledge.pop((character_id, fact_id), None)
+
     async def put_contradiction_report(self, report: ContradictionReport) -> None:
         async with self._lock:
             self._contradictions[report.id] = report

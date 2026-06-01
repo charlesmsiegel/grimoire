@@ -2065,6 +2065,26 @@ class StateStore:
             await cur.close()
         return {row["delta_id"] for row in rows}
 
+    async def pending_review_items(self, campaign_id: str) -> list[tuple[str, str | None]]:
+        """``(review_id, turn_id)`` for each pending review item in the campaign.
+
+        Joins the review queue to the delta table so callers (cascade delete)
+        can reject the review rows that belong to turns being removed.
+        """
+        async with self.db.acquire() as conn:
+            cur = await conn.execute(
+                """
+                SELECT rq.id AS review_id, d.turn_id AS turn_id
+                FROM review_queue rq
+                JOIN deltas d ON d.id = rq.delta_id
+                WHERE rq.campaign_id = ? AND rq.status = 'pending'
+                """,
+                (campaign_id,),
+            )
+            rows = await cur.fetchall()
+            await cur.close()
+        return [(row["review_id"], row["turn_id"]) for row in rows]
+
     async def get_delta_log(
         self,
         *,

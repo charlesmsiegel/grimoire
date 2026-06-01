@@ -190,11 +190,22 @@ export function PlayView({ campaignId }: Props) {
                 // closure and never clears a concurrent normal turn's stream.
                 play.dispatch({ type: "stream-end-if-turn", turn_id: turnId })
               }
-              onPostDeleted={(deletedIds) => {
+              onPostDeleted={(deletedIds, warnings) => {
                 // Drop the removed suffix from view immediately: a plain
                 // refresh would re-preserve them, since the ``loaded`` reducer
                 // keeps current same-scene posts missing from the snapshot.
                 play.dispatch({ type: "remove-posts", ids: deletedIds });
+                // Surface any state the backend couldn't revert (e.g. a delta
+                // or continuity write that failed to reverse) so the prose
+                // doesn't just vanish with derived state silently left behind.
+                if (warnings.length > 0) {
+                  play.dispatch({
+                    type: "turn-failed",
+                    message:
+                      "Post deleted, but some derived state could not be reverted:\n" +
+                      warnings.join("\n"),
+                  });
+                }
                 void play.refresh();
               }}
             />

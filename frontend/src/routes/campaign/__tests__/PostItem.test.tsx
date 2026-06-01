@@ -387,6 +387,33 @@ describe("PostItem delete", () => {
     await waitFor(() => expect(onDeleted).toHaveBeenCalled());
   });
 
+  it("forwards backend warnings to onDeleted so the caller can surface them", async () => {
+    vi.spyOn(campaignApi, "deletePost").mockResolvedValue({
+      deleted_post_ids: ["p1"],
+      reversed_turn_ids: [],
+      requeued_review_ids: [],
+      warnings: ["turn T1: 1 delta(s) could not be reversed and remain applied"],
+    });
+    const onDeleted = vi.fn();
+    render(
+      <PostItem
+        post={makePost()}
+        pcs={PCS}
+        images={[]}
+        campaignId="c1"
+        subsequentCount={0}
+        onDeleted={onDeleted}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete post" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await waitFor(() =>
+      expect(onDeleted).toHaveBeenCalledWith(["p1"], [
+        "turn T1: 1 delta(s) could not be reversed and remain applied",
+      ]),
+    );
+  });
+
   it("cancel closes the confirm without calling deletePost", () => {
     const spy = vi.spyOn(campaignApi, "deletePost");
     render(<PostItem post={makePost()} pcs={PCS} images={[]} campaignId="c1" />);

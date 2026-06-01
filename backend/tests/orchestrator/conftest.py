@@ -76,6 +76,9 @@ class FakeStateStore:
     # Delta ids that are queued for review but unapplied; cascade delete must
     # skip these when reversing (they were never applied to their target).
     pending_delta_ids: set[str] = field(default_factory=set)
+    # Review ids rejected via reject_review_item (cascade delete rejects the
+    # review rows of fully-removed turns).
+    rejected_review_ids: list[str] = field(default_factory=list)
     # When set, apply_delta raises on the Nth call (0-indexed) so tests can
     # simulate a mid-batch failure.
     fail_apply_on_call: int | None = None
@@ -147,6 +150,18 @@ class FakeStateStore:
 
     async def pending_review_delta_ids(self, campaign_id: str) -> set[str]:
         return set(self.pending_delta_ids)
+
+    async def pending_review_items(self, campaign_id: str) -> list[tuple[str, str | None]]:
+        # One review row per pending delta, keyed off the applied log so the
+        # turn id matches; review id derived from the delta id.
+        out: list[tuple[str, str | None]] = []
+        for entry in self.applied:
+            if entry["id"] in self.pending_delta_ids and entry["campaign_id"] == campaign_id:
+                out.append((f"rq_{entry['id']}", entry["turn_id"]))
+        return out
+
+    async def reject_review_item(self, review_id: str, *, notes: str = "") -> None:
+        self.rejected_review_ids.append(review_id)
 
     async def get_campaign_row(self, campaign_id: str) -> dict | None:
         if campaign_id not in self.db.campaigns:
