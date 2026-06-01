@@ -96,6 +96,25 @@ class FakeOrchestrator:
     async def delete_alternate(self, *, post_id: str, alternate_id: str) -> None:
         self.calls.append(("delete", post_id, alternate_id))
 
+    async def delete_post_cascade(
+        self, campaign_id: str, scene_id: str, post_id: str
+    ) -> Any:
+        self.calls.append(("cascade_delete", campaign_id, scene_id, post_id))
+
+        @dataclass
+        class _Result:
+            deleted_post_ids: list
+            reversed_turn_ids: list
+            requeued_review_ids: list
+            warnings: list
+
+        return _Result(
+            deleted_post_ids=[post_id],
+            reversed_turn_ids=["T1"],
+            requeued_review_ids=[],
+            warnings=[],
+        )
+
 
 @pytest.fixture
 def wire(container, client):
@@ -196,3 +215,33 @@ def test_unknown_alternate_is_404(wire, client) -> None:
     wire.orchestrator.switch_primary_alternate = boom  # type: ignore[method-assign]
     response = client.post("/api/campaigns/c1/scenes/s1/posts/p1/alternates/a_nope/primary")
     assert response.status_code == 404
+
+
+def test_delete_post_route_calls_orchestrator(wire, client) -> None:
+    response = client.delete("/api/campaigns/c1/scenes/s1/posts/p1")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deleted_post_ids"] == ["p1"]
+    assert body["reversed_turn_ids"] == ["T1"]
+    assert wire.orchestrator.calls[0] == ("cascade_delete", "c1", "s1", "p1")
+
+
+def test_delete_post_rejects_wrong_campaign(wire, client) -> None:
+    response = client.delete("/api/campaigns/other/scenes/s1/posts/p1")
+    assert response.status_code == 404
+
+
+def test_delete_post_rejects_unknown_post(wire, client) -> None:
+    response = client.delete("/api/campaigns/c1/scenes/s1/posts/p_nope")
+    assert response.status_code == 404
+
+
+def test_delete_post_closed_scene_is_409(wire, client) -> None:
+    from grimoire.orchestrator.errors import SceneClosedError
+
+    async def boom(**_kw):
+        raise SceneClosedError("s1")
+
+    wire.orchestrator.delete_post_cascade = boom  # type: ignore[method-assign]
+    response = client.delete("/api/campaigns/c1/scenes/s1/posts/p1")
+    assert response.status_code == 409
