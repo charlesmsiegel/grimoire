@@ -63,7 +63,7 @@ from grimoire.types.world import (
     Weather,
     WorldCalendar,
 )
-from grimoire.util import now_iso
+from grimoire.util import canonicalize_character_ref, now_iso
 
 from .atmosphere import generate_atmosphere
 from .calendar import holiday_at, parse_calendar, season_for
@@ -76,6 +76,25 @@ logger = logging.getLogger(__name__)
 
 
 _DEFAULT_CALENDAR_ID = "gregorian"
+
+
+def _qualify_greeting_ref(ref: str, world_id: str) -> str:
+    """Canonicalize a greeting's character ref into a resolvable form.
+
+    Greetings author present/POV characters as bare world-character ids
+    (e.g. ``mina-ashido``). A bare single-segment id can't be parsed on its
+    own — ``canonicalize_character_ref`` and the characters service both need
+    the world to qualify it. Prefix bare ids with the greeting's world so the
+    seeded scene stores the canonical ``library:worlds/<world>/characters/<id>``
+    form that drift checks, the cast HUD, and context assembly all accept.
+    Refs that already carry a scheme or path are canonicalized as-is.
+    """
+    r = (ref or "").strip()
+    if not r:
+        return r
+    if ":" in r or "/" in r:
+        return canonicalize_character_ref(r)
+    return canonicalize_character_ref(f"{world_id}/{r}")
 
 
 def _seed_from_builtin(cal: WorldCalendar, calendar_id: str) -> WorldCalendar:
@@ -804,14 +823,18 @@ class WorldService:
             except ValueError:
                 in_game_start = None
 
+        pov = getattr(greeting, "pov_character", None)
         init = SceneInit(
             campaign_id=campaign_id,
             greeting_id=greeting_id,
             title=str(getattr(greeting, "name", None) or "Scene 1"),
             location_ref=getattr(greeting, "starting_location", None),
             in_game_start=in_game_start,
-            pov_character_ref=getattr(greeting, "pov_character", None),
-            present_character_refs=list(getattr(greeting, "present_characters", []) or []),
+            pov_character_ref=_qualify_greeting_ref(pov, world_id) if pov else None,
+            present_character_refs=[
+                _qualify_greeting_ref(r, world_id)
+                for r in (getattr(greeting, "present_characters", []) or [])
+            ],
             mood=str(getattr(greeting, "mood", "") or "") or None,
             tags=list(getattr(greeting, "tags", []) or []),
         )
