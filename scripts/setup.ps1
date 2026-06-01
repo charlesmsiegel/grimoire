@@ -4,6 +4,15 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Write-Host "=== Grimoire Setup ===" -ForegroundColor Cyan
 Write-Host ""
 
+# A stale SSL_CERT_FILE (e.g. a leftover anaconda cacert.pem path that no longer
+# exists) breaks Python/httpx TLS and makes `uv sync` warn or fail. If it points
+# at a missing file, clear it for THIS process so the bundled certifi roots are
+# used. Process-scoped only — does not change the global/persistent environment.
+if ($env:SSL_CERT_FILE -and -not (Test-Path -LiteralPath $env:SSL_CERT_FILE)) {
+    Write-Host "SSL_CERT_FILE points to a missing file ($env:SSL_CERT_FILE); clearing it for this session." -ForegroundColor Yellow
+    Remove-Item Env:SSL_CERT_FILE
+}
+
 function Test-Cmd($name) {
     $null -ne (Get-Command $name -ErrorAction SilentlyContinue)
 }
