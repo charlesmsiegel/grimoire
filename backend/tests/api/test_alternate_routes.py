@@ -96,9 +96,7 @@ class FakeOrchestrator:
     async def delete_alternate(self, *, post_id: str, alternate_id: str) -> None:
         self.calls.append(("delete", post_id, alternate_id))
 
-    async def delete_post_cascade(
-        self, campaign_id: str, scene_id: str, post_id: str
-    ) -> Any:
+    async def delete_post_cascade(self, campaign_id: str, scene_id: str, post_id: str) -> Any:
         self.calls.append(("cascade_delete", campaign_id, scene_id, post_id))
 
         @dataclass

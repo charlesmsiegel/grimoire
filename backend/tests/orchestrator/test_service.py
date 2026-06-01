@@ -575,10 +575,12 @@ async def test_cascade_delete_reverses_fully_contained_turns(
         new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
     )
     await scene_manager.append_post(
-        scene.id, new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1")
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1"),
     )
     await scene_manager.append_post(
-        scene.id, new_post(author_kind=AuthorKind.NARRATOR, body="m2", is_player=False, turn_id="T2")
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m2", is_player=False, turn_id="T2"),
     )
     d1 = _seed_applied(fake_store, campaign_id="c1", turn_id="T1", target_id="fact-1")
     d2 = _seed_applied(fake_store, campaign_id="c1", turn_id="T2", target_id="fact-2")
@@ -613,13 +615,16 @@ async def test_cascade_delete_requeues_straddling_turn(
     )
     # Split turn T1 produces two model posts; T2 a third.
     await scene_manager.append_post(
-        scene.id, new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1")
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1"),
     )
     await scene_manager.append_post(
-        scene.id, new_post(author_kind=AuthorKind.NARRATOR, body="m2", is_player=False, turn_id="T1")
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m2", is_player=False, turn_id="T1"),
     )
     await scene_manager.append_post(
-        scene.id, new_post(author_kind=AuthorKind.NARRATOR, body="m3", is_player=False, turn_id="T2")
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m3", is_player=False, turn_id="T2"),
     )
     d1 = _seed_applied(fake_store, campaign_id="c1", turn_id="T1", target_id="fact-1")
     d2 = _seed_applied(fake_store, campaign_id="c1", turn_id="T2", target_id="fact-2")
@@ -654,7 +659,8 @@ async def test_cascade_delete_rejects_closed_scene(
 ):
     scene = await _seed(scene_manager, fake_store)
     await scene_manager.append_post(
-        scene.id, new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1")
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1"),
     )
     appended = (await scene_manager.get_posts(scene.id))[0]
     await scene_manager.close_scene(scene.id, closed_at_turn="T1")
