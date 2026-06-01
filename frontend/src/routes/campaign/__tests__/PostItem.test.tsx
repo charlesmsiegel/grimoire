@@ -221,6 +221,45 @@ describe("PostItem regenerate", () => {
     expect(screen.queryByRole("group", { name: "Alternates" })).toBeNull();
   });
 
+  it("calls onRerollFailed when a reroll fails, to clear the stuck streaming indicator", async () => {
+    vi.spyOn(campaignApi, "regeneratePost").mockRejectedValue(new Error("server error"));
+    const onRerollFailed = vi.fn();
+    render(
+      <PostItem
+        post={makePost()}
+        pcs={PCS}
+        images={[]}
+        isLatestModelPost
+        campaignId="c1"
+        onRerollFailed={onRerollFailed}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate post" }));
+    await waitFor(() => expect(onRerollFailed).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not call onRerollFailed when a reroll succeeds", async () => {
+    vi.spyOn(campaignApi, "regeneratePost").mockResolvedValue({
+      post_id: "p1",
+      new_alternate_id: "a_new",
+      delta_set_id: "ds_new",
+    });
+    const onRerollFailed = vi.fn();
+    render(
+      <PostItem
+        post={makePost()}
+        pcs={PCS}
+        images={[]}
+        isLatestModelPost
+        campaignId="c1"
+        onRerollFailed={onRerollFailed}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate post" }));
+    await waitFor(() => expect(campaignApi.regeneratePost).toHaveBeenCalled());
+    expect(onRerollFailed).not.toHaveBeenCalled();
+  });
+
   it("guided regenerate form stays open on API failure", async () => {
     vi.spyOn(campaignApi, "regeneratePost").mockRejectedValue(new Error("server error"));
     render(<PostItem post={makePost()} pcs={PCS} images={[]} isLatestModelPost campaignId="c1" />);

@@ -27,11 +27,6 @@ class FakeOrchestrator:
             accepted=True, turn_id="t_dir_1", auto_responding=True, reason="direction"
         )
 
-    async def regenerate_last(self, campaign_id: str) -> Any:
-        from grimoire.types.orchestrator import RegenerateResult
-
-        return RegenerateResult(turn_id="t_999", accepted=True, reason="regen")
-
     async def undo_turn(self, campaign_id: str, count: int) -> Any:
         from grimoire.types.orchestrator import UndoResult
 

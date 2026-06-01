@@ -11,7 +11,6 @@ campaign-local store + its referenced library assets.
 from __future__ import annotations
 
 from grimoire.context.builder import ContextBuilderService
-from grimoire.context.cache import ContextBuilderCache, make_cache_key
 from grimoire.context.config import (
     ContextBuilderConfig,
     RetrievalConfig,
@@ -28,7 +27,6 @@ from grimoire.context.inspector import (
 )
 
 __all__ = [
-    "ContextBuilderCache",
     "ContextBuilderConfig",
     "ContextBuilderError",
     "ContextBuilderService",
@@ -41,5 +39,4 @@ __all__ = [
     "PreviewSummary",
     "RetrievalConfig",
     "TierBudget",
-    "make_cache_key",
 ]

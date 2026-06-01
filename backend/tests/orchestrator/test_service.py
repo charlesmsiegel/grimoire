@@ -371,59 +371,6 @@ async def test_undo_no_turns_raises(
 # --------------------------------------------------------------------------- #
 
 
-async def test_regenerate_without_prior_turn_returns_not_accepted(
-    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
-):
-    await _seed(scene_manager, fake_store)
-    orch = _build_orch(
-        scene_manager=scene_manager,
-        event_bus=event_bus,
-        fake_store=fake_store,
-        fake_gateway=fake_gateway,
-        fake_extractor=fake_extractor,
-        fake_context_builder=fake_context_builder,
-    )
-    res = await orch.regenerate_last("c1")
-    assert res.accepted is False
-
-
-async def test_regenerate_replays_last_turn(
-    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
-):
-    scene = await _seed(scene_manager, fake_store)
-    fake_extractor.deltas = [
-        StateDelta(
-            kind=DeltaKind.FACT_ADD,
-            target_scope="campaign-sqlite",
-            target_id="fact-r",
-            target_table="facts",
-            after={"text": "the wind howls"},
-            confidence=0.95,
-            source="extractor",
-        )
-    ]
-    orch = _build_orch(
-        scene_manager=scene_manager,
-        event_bus=event_bus,
-        fake_store=fake_store,
-        fake_gateway=fake_gateway,
-        fake_extractor=fake_extractor,
-        fake_context_builder=fake_context_builder,
-    )
-    first = await orch.submit_post("c1", "alistair", "I knock.")
-
-    # The mock gateway needs more chunks queued — set a fresh response.
-    fake_gateway.chunks = ["She ", "knocks ", "back."]
-
-    regen = await orch.regenerate_last("c1")
-    assert regen.accepted
-    assert regen.turn_id != first.turn_id
-    # Player post remains; previous response post deleted; new response appended.
-    posts = await scene_manager.get_posts(scene.id)
-    assert posts[0].body == "I knock."
-    assert posts[-1].body == "She knocks back."
-
-
 # --------------------------------------------------------------------------- #
 # PC-absent scene direction
 # --------------------------------------------------------------------------- #

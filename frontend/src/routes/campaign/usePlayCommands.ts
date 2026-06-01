@@ -56,10 +56,6 @@ export function usePlayCommands(
     [campaignId, stateRef],
   );
 
-  const regenerate = useCallback(async () => {
-    await campaignApi.regenerate(campaignId);
-  }, [campaignId]);
-
   const undo = useCallback(async () => {
     await campaignApi.undo(campaignId, 1);
     await refresh();
@@ -122,7 +118,6 @@ export function usePlayCommands(
     submit,
     advance,
     direct,
-    regenerate,
     undo,
     endScene,
     analyzeScene,

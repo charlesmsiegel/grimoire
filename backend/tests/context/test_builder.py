@@ -1141,37 +1141,6 @@ async def test_calendar_item_uses_time_engine() -> None:
     assert "Festival of the Orchard" in body
 
 
-async def test_cache_module_round_trip() -> None:
-    from grimoire.context.cache import ContextBuilderCache, make_cache_key
-
-    cache = ContextBuilderCache(max_entries=3)
-    builder = _builder()
-    prompt = await builder.build("hi", "camp")
-    key = make_cache_key(
-        campaign_id="camp",
-        player_input="hi",
-        composition_hash="abc",
-        scene_id="s1",
-        pc_ref=None,
-    )
-    cache.put(key, prompt)
-    assert cache.get(key) is prompt
-    # Eviction order: oldest first.
-    for i in range(4):
-        cache.put(
-            make_cache_key(
-                campaign_id="camp",
-                player_input=f"input-{i}",
-                composition_hash="abc",
-                scene_id="s1",
-                pc_ref=None,
-            ),
-            prompt,
-        )
-    assert cache.get(key) is None
-    assert len(cache) == 3
-
-
 # --------------------------------------------------------------------------- #
 # PC-absent scene tests
 # --------------------------------------------------------------------------- #

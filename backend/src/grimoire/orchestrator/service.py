@@ -23,7 +23,6 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from grimoire import events
-from grimoire.context.cache import ContextBuilderCache, make_cache_key
 from grimoire.event_bus import Event, EventBus
 from grimoire.extractor.config import ExtractorConfig
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
@@ -65,7 +64,6 @@ from grimoire.types.mechanics import (
 from grimoire.types.orchestrator import (
     ForkCampaignResult,
     RegeneratePostResult,
-    RegenerateResult,
     ReplayBatchStateView,
     RetconResult,
     SubmitResult,
@@ -284,7 +282,6 @@ class OrchestratorService:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         rng: random.Random | None = None,
         library: Any | None = None,
-        context_cache: ContextBuilderCache | None = None,
         auto_disable: Any | None = None,
         metrics: MetricsRegistryProtocol = NULL_METRICS,
     ) -> None:
@@ -311,10 +308,6 @@ class OrchestratorService:
         self._clock = clock
         self._rng = rng or random.Random()
         self._campaigns: dict[CampaignId, _CampaignTurnState] = {}
-        # § Spec context-builder-remaining §11. The cache lives at the
-        # orchestrator boundary so invalidation sits next to the regenerate
-        # logic. Defaults to a fresh in-memory store when not provided.
-        self._context_cache = context_cache or ContextBuilderCache()
         # In-memory parking lot for auxiliary tasks awaiting accept/discard.
         # Transient: cleared on restart per spec.
         self._inflight_aux: dict[str, Any] = {}
@@ -479,9 +472,9 @@ class OrchestratorService:
             )
 
         player_input = text or ""
-        # Always append a direction post (even for empty Continue) so regenerate
-        # can reconstruct the exact input via _strip_response_for_turn instead of
-        # walking back to an older direction.
+        # Always append a direction post (even for empty Continue) so a later
+        # regenerate can reconstruct the exact input from the preceding player
+        # post instead of walking back to an older direction.
         post = self._new_post(
             author_kind=SceneAuthorKind.SYSTEM,
             body=player_input,
@@ -545,42 +538,6 @@ class OrchestratorService:
         state = self._state_for(campaign_id)
         if state.speaker_loop_event is not None:
             state.speaker_loop_event.set()
-
-    async def regenerate_last(self, campaign_id: CampaignId) -> RegenerateResult:
-        """Undo the most recent model response and re-run the turn.
-
-        Looks up the last turn id from the delta log, reverses its deltas,
-        deletes the model post if present, then re-runs the turn from the
-        triggering player input.
-        """
-        await self._require_campaign(campaign_id)
-        state = self._state_for(campaign_id)
-        if state.last_turn_id is None:
-            return RegenerateResult(
-                turn_id="", accepted=False, reason="no prior turn to regenerate"
-            )
-        prior_turn_id = state.last_turn_id
-        # Reverse all deltas attributed to the last turn.
-        await self._reverse_turn_deltas(campaign_id, prior_turn_id)
-
-        # Look up the last narrator/system post for the turn and delete it,
-        # then pull the preceding player input to re-prompt.
-        player_input, scene_id, pc_ref = await self._strip_response_for_turn(
-            campaign_id, prior_turn_id
-        )
-        if scene_id is None:
-            return RegenerateResult(
-                turn_id="", accepted=False, reason="no scene found for regenerate"
-            )
-        turn_id = await self._run_turn(
-            campaign_id=campaign_id,
-            scene_id=scene_id,
-            player_input=player_input or "",
-            triggering_pc=pc_ref,
-            reuse_prompt_cache=True,
-            player_post_id=None,
-        )
-        return RegenerateResult(turn_id=turn_id, accepted=True, reason="regenerated")
 
     # ------------------------------------------------------------------ #
     # Swipes / alternates (delegated to AlternatesManager)
@@ -774,7 +731,6 @@ class OrchestratorService:
         scene_id: SceneId,
         player_input: str,
         triggering_pc: CharacterRef | None,
-        reuse_prompt_cache: bool = False,
         player_post_id: PostId | None = None,
     ) -> TurnId:
         async with self._metrics.measure("orchestrator", "turn"):
@@ -783,7 +739,6 @@ class OrchestratorService:
                 scene_id=scene_id,
                 player_input=player_input,
                 triggering_pc=triggering_pc,
-                reuse_prompt_cache=reuse_prompt_cache,
                 player_post_id=player_post_id,
             )
 
@@ -794,7 +749,6 @@ class OrchestratorService:
         scene_id: SceneId,
         player_input: str,
         triggering_pc: CharacterRef | None,
-        reuse_prompt_cache: bool = False,
         player_post_id: PostId | None = None,
     ) -> TurnId:
         state = self._state_for(campaign_id)
@@ -842,7 +796,6 @@ class OrchestratorService:
                         player_input=player_input,
                         triggering_pc=triggering_pc,
                         turn_id=turn_id,
-                        reuse_prompt_cache=reuse_prompt_cache,
                     ),
                     self._config.turn_timeout_seconds,
                 )
@@ -930,7 +883,6 @@ class OrchestratorService:
         player_input: str,
         triggering_pc: CharacterRef | None,
         turn_id: TurnId,
-        reuse_prompt_cache: bool = False,
     ) -> bool:
         """Run the turn until completion or a pre_roll_pending pause.
 
@@ -1028,7 +980,6 @@ class OrchestratorService:
         await self._continue_turn_after_pre_roll(
             active=active,
             resolved_results=pre_roll.results,
-            reuse_prompt_cache=reuse_prompt_cache,
         )
         return False
 
@@ -1037,7 +988,6 @@ class OrchestratorService:
         *,
         active: _ActiveTurn,
         resolved_results: list[MechanicsResult],
-        reuse_prompt_cache: bool = False,
     ) -> None:
         """Drive the turn from context-build through turn_complete.
 
@@ -1053,31 +1003,18 @@ class OrchestratorService:
         triggering_pc = active.triggering_pc
 
         active.stage = "context_build"
-        composition_hash = await self._composition_hash(campaign_id)
         # Decide the extraction mode for this turn before assembling the
         # prompt so the Context Builder can attach tracker instructions or
         # tool declarations as appropriate.
         extract_mode = await self._delta.select_extract_mode(campaign_id=campaign_id)
-        cache_key = make_cache_key(
-            campaign_id=campaign_id,
-            player_input=player_input,
-            composition_hash=composition_hash,
-            scene_id=scene_id,
+        prompt = await self._context.build(
+            player_input,
+            campaign_id,
+            mechanics_results=resolved_results,
             pc_ref=triggering_pc,
+            turn_id=turn_id,
+            extractor_mode=extract_mode,
         )
-        cached = self._context_cache.get(cache_key) if reuse_prompt_cache else None
-        if cached is not None:
-            prompt = cached
-        else:
-            prompt = await self._context.build(
-                player_input,
-                campaign_id,
-                mechanics_results=resolved_results,
-                pc_ref=triggering_pc,
-                turn_id=turn_id,
-                extractor_mode=extract_mode,
-            )
-            self._context_cache.put(cache_key, prompt)
         # ``context_summary`` / ``composition_snapshot`` are deliberately
         # omitted: ``AssembledPrompt`` exposes them as plain primitives
         # (str / dict) which don't satisfy ``ContextSummary`` /
@@ -1710,30 +1647,6 @@ class OrchestratorService:
             reason="pre_roll resolved",
         )
 
-    async def _composition_hash(self, campaign_id: CampaignId) -> str:
-        """SHA-256 fingerprint of the campaign's current composition.
-
-        Used to key the regenerate prompt cache (spec
-        context-builder-remaining §11). When the library service is not
-        wired we fall back to the empty string — the cache key is still
-        deterministic, it just degrades to "ignore composition changes".
-        """
-        if self._library is None:
-            return ""
-        try:
-            composition = await self._library.get_composition(campaign_id)
-        except Exception:
-            return ""
-        if composition is None:
-            return ""
-        import hashlib as _h
-
-        try:
-            payload = composition.model_dump_json()  # type: ignore[attr-defined]
-        except Exception:
-            payload = str(composition)
-        return _h.sha256(payload.encode("utf-8")).hexdigest()
-
     async def _stream_main_response(
         self,
         *,
@@ -1825,37 +1738,6 @@ class OrchestratorService:
             except Exception as exc:
                 logger.warning("reverse_delta(%s) failed: %s", record.id, exc)
         return reversed_ids
-
-    async def _strip_response_for_turn(
-        self, campaign_id: CampaignId, turn_id: TurnId
-    ) -> tuple[str | None, SceneId | None, CharacterRef | None]:
-        """Locate the scene + player input for ``turn_id``; delete the model post.
-
-        Returns ``(player_input, scene_id, pc_ref)`` for re-running.
-        """
-        # Walk every campaign scene; find posts with this turn_id.
-        scene_id: SceneId | None = None
-        player_input: str | None = None
-        pc_ref: CharacterRef | None = None
-        for scene in await self._scenes.list_scenes(campaign_id):
-            posts = await self._scenes.get_posts(scene.id)
-            response_post = next(
-                (p for p in posts if p.turn_id == turn_id and not p.is_player),
-                None,
-            )
-            if response_post is None:
-                continue
-            scene_id = scene.id
-            # The player input is the most recent player post before the response.
-            preceding = [p for p in posts if p.order_in_scene < response_post.order_in_scene]
-            for p in reversed(preceding):
-                if p.is_player:
-                    player_input = p.body
-                    pc_ref = p.author_pc_ref
-                    break
-            await self._scenes.delete_post(response_post.id, source="regenerate")
-            break
-        return player_input, scene_id, pc_ref
 
     # ------------------------------------------------------------------ #
     # Validation + utility

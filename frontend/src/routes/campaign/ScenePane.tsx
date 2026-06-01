@@ -16,6 +16,8 @@ interface Props {
   hasMorePosts: boolean;
   onLoadMore: () => void;
   expressionsEnabledCharacters?: ReadonlySet<string>;
+  /** Clears the stuck streaming indicator when a per-post reroll fails. */
+  onRerollFailed?: () => void;
 }
 
 export function ScenePane({
@@ -29,6 +31,7 @@ export function ScenePane({
   hasMorePosts,
   onLoadMore,
   expressionsEnabledCharacters,
+  onRerollFailed,
 }: Props) {
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -104,6 +107,7 @@ export function ScenePane({
           campaignId={campaignId}
           presentCharacterRefs={scene?.present_character_refs ?? []}
           expressionsEnabledCharacters={expressionsEnabledCharacters}
+          onRerollFailed={onRerollFailed}
         />
       ))}
       {awaitingResponse && !streaming && (

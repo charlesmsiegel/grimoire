@@ -26,7 +26,6 @@ import {
 } from "./widgets/widget-common";
 
 export interface QuickActions {
-  onRegenerate: () => void;
   onUndo: () => void;
   onEndScene: () => void;
   onAnalyzeScene: () => void;
@@ -363,9 +362,6 @@ function QuickActionsBlock({
       <div className="scene-setting-entry scene-setting-entry-full">
         <span className="scene-setting-label">Actions</span>
         <div className="hud-quick-actions">
-          <button type="button" onClick={actions.onRegenerate} disabled={actions.busy}>
-            Regenerate
-          </button>
           <button type="button" onClick={actions.onUndo} disabled={actions.busy}>
             Undo turn
           </button>

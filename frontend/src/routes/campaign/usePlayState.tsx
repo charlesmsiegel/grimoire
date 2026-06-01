@@ -21,7 +21,6 @@ export interface PlayApi {
   submit: (text: string, emotion?: string) => Promise<void>;
   advance: () => Promise<void>;
   direct: (text?: string) => Promise<void>;
-  regenerate: () => Promise<void>;
   undo: () => Promise<void>;
   endScene: () => Promise<void>;
   analyzeScene: () => Promise<void>;
