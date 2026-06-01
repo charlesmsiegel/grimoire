@@ -10,6 +10,7 @@ from grimoire.scenes import (
     ADVANCE_REQUESTED,
     PC_POST_APPENDED,
     POST_APPENDED,
+    POST_DELETED,
     SCENE_ENDED,
     SCENE_STARTED,
     AuthorKind,
@@ -281,6 +282,26 @@ async def test_delete_post_reorders_remaining(tmp_path: Path) -> None:
     assert [p.body for p in posts] == ["line 0", "line 2"]
     refreshed = await manager.get_scene(scene.id)
     assert refreshed.post_count == 2
+
+
+async def test_truncate_scene_from_removes_suffix(tmp_path: Path) -> None:
+    manager, bus = _manager(tmp_path)
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    for i in range(4):
+        await manager.append_post(
+            scene.id,
+            new_post(author_kind=AuthorKind.NARRATOR, body=f"line {i}", is_player=False),
+        )
+    third = (await manager.get_posts(scene.id))[2]  # order_in_scene == 3
+    removed = await manager.truncate_scene_from(third.id, source="cascade_delete")
+
+    posts = await manager.get_posts(scene.id)
+    assert [p.body for p in posts] == ["line 0", "line 1"]
+    assert [p.order_in_scene for p in posts] == [1, 2]
+    assert {p.body for p in removed} == {"line 2", "line 3"}
+    refreshed = await manager.get_scene(scene.id)
+    assert refreshed.post_count == 2
+    assert sum(1 for e in bus.events if e.type == POST_DELETED) == 2
 
 
 async def test_active_scene_tracking(tmp_path: Path) -> None:
