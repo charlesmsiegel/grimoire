@@ -62,6 +62,7 @@ export type PlayAction =
   | { type: "stream-start"; turn_id: string }
   | { type: "stream-delta"; turn_id: string; delta: string }
   | { type: "stream-end"; turn_id: string; post: ApiPost | null }
+  | { type: "stream-end-if-turn"; turn_id: string }
   | { type: "set-scene"; scene: ApiScene; posts: ApiPost[] }
   | { type: "set-advance"; enabled: boolean; reason: string }
   | { type: "image-ready"; image: SceneImage }
@@ -194,6 +195,16 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
         posts = [...posts, action.post];
       }
       return { ...state, streaming: null, awaitingResponse: false, posts };
+    }
+    case "stream-end-if-turn": {
+      // Clear the streaming indicator only if it belongs to this turn — used by
+      // a failed per-post reroll, where the WS alternate_added event (which
+      // clears on success) never arrives. The match runs against live reducer
+      // state, not a render-time closure, so a reroll that streamed partial text
+      // before failing is reliably cleared while a concurrent normal turn's
+      // stream is left untouched.
+      if (state.streaming?.turn_id !== action.turn_id) return state;
+      return { ...state, streaming: null, awaitingResponse: false };
     }
     case "set-scene":
       return {

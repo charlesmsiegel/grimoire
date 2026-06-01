@@ -183,13 +183,13 @@ export function PlayView({ campaignId }: Props) {
               hasMorePosts={play.state.hasMorePosts}
               onLoadMore={loadMorePosts}
               expressionsEnabledCharacters={expressionsEnabledCharacters}
-              onRerollFailed={(turnId) => {
-                // Only clear the streaming indicator if it belongs to this
-                // reroll's stream — never a concurrent normal turn's stream.
-                if (play.state.streaming?.turn_id === turnId) {
-                  play.dispatch({ type: "stream-end", turn_id: turnId, post: null });
-                }
-              }}
+              onRerollFailed={(turnId) =>
+                // Clear the streaming indicator only if it belongs to this
+                // reroll's stream. The turn-id match happens in the reducer
+                // against live state, so it survives the stale click-time
+                // closure and never clears a concurrent normal turn's stream.
+                play.dispatch({ type: "stream-end-if-turn", turn_id: turnId })
+              }
             />
           )}
           {play.state.mode === "play" && play.state.turnError && (
