@@ -148,6 +148,14 @@ export const campaignApi = {
       `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}/alternates/${enc(alternateId)}`,
     ),
 
+  deletePost: (campaignId: string, sceneId: string, postId: string) =>
+    api.delete<{
+      deleted_post_ids: string[];
+      reversed_turn_ids: string[];
+      requeued_review_ids: string[];
+      warnings: string[];
+    }>(`/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}`),
+
   editPostBody: (campaignId: string, sceneId: string, postId: string, body: string) =>
     api.patch<ApiPost>(
       `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}`,
