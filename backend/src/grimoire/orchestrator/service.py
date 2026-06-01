@@ -33,6 +33,7 @@ from grimoire.orchestrator.delta_applier import DeltaApplier
 from grimoire.orchestrator.errors import (
     NoTurnsToUndoError,
     OrchestratorError,
+    SceneClosedError,
     TurnCancelledError,
     TurnTimeoutError,
     UnknownCampaignError,
@@ -62,6 +63,7 @@ from grimoire.types.mechanics import (
     ProposedRoll,
 )
 from grimoire.types.orchestrator import (
+    CascadeDeleteResult,
     ForkCampaignResult,
     RegeneratePostResult,
     ReplayBatchStateView,
@@ -611,6 +613,103 @@ class OrchestratorService:
         all_ids = await self._recent_turn_ids(campaign_id, 1)
         state.last_turn_id = all_ids[0] if all_ids else None
         return UndoResult(turns_undone=undone, reversed_delta_ids=reversed_ids, warnings=warnings)
+
+    async def delete_post_cascade(
+        self,
+        campaign_id: CampaignId,
+        scene_id: SceneId,
+        post_id: PostId,
+    ) -> CascadeDeleteResult:
+        """Delete ``post_id`` and every later post in the scene, reverting state.
+
+        Fully-contained turns (all posts at/after the cut) have their deltas
+        reversed. Straddling turns (split-mode turns with posts on both sides of
+        the cut) are reversed and re-queued for human review. Rejected on a
+        closed scene.
+        """
+        await self._require_campaign(campaign_id)
+        scene = await self._scenes.get_scene(scene_id)
+        if scene.campaign_id != campaign_id:
+            raise OrchestratorError(
+                f"scene {scene_id!r} does not belong to campaign {campaign_id!r}"
+            )
+        if scene.closed:
+            raise SceneClosedError(scene_id)
+
+        posts = await self._scenes.get_posts(scene_id)
+        target = next((p for p in posts if p.id == post_id), None)
+        if target is None:
+            raise KeyError(f"post {post_id!r} not found in scene {scene_id!r}")
+        cut = target.order_in_scene
+
+        min_order: dict[str, int] = {}
+        max_order: dict[str, int] = {}
+        for p in posts:
+            tid = p.turn_id
+            if not tid:
+                continue
+            min_order[tid] = min(min_order.get(tid, p.order_in_scene), p.order_in_scene)
+            max_order[tid] = max(max_order.get(tid, p.order_in_scene), p.order_in_scene)
+
+        deleted_post_ids = [p.id for p in posts if p.order_in_scene >= cut]
+        fully_contained = [t for t, lo in min_order.items() if lo >= cut]
+        straddling = [t for t, lo in min_order.items() if lo < cut <= max_order[t]]
+
+        reversed_turn_ids: list[TurnId] = []
+        requeued_review_ids: list[str] = []
+        warnings: list[str] = []
+
+        for tid in sorted(fully_contained, key=lambda t: min_order[t], reverse=True):
+            try:
+                ids = await self._reverse_turn_deltas(campaign_id, tid)
+            except Exception as exc:
+                warnings.append(f"failed to reverse turn {tid}: {exc}")
+                continue
+            if ids:
+                reversed_turn_ids.append(tid)
+            await self._bus.emit(
+                Event(
+                    type=events.TURN_UNDONE,
+                    payload={
+                        "campaign_id": campaign_id,
+                        "turn_id": tid,
+                        "reversed_deltas": ids,
+                    },
+                )
+            )
+
+        for tid in sorted(straddling, key=lambda t: min_order[t], reverse=True):
+            try:
+                ids, review_ids = await self._reverse_and_requeue_turn(campaign_id, tid)
+            except Exception as exc:
+                warnings.append(f"failed to reverse straddling turn {tid}: {exc}")
+                continue
+            if ids:
+                reversed_turn_ids.append(tid)
+            requeued_review_ids.extend(review_ids)
+            await self._bus.emit(
+                Event(
+                    type=events.TURN_UNDONE,
+                    payload={
+                        "campaign_id": campaign_id,
+                        "turn_id": tid,
+                        "reversed_deltas": ids,
+                    },
+                )
+            )
+
+        await self._scenes.truncate_scene_from(post_id, source="cascade_delete")
+
+        state = self._state_for(campaign_id)
+        top = await self._recent_turn_ids(campaign_id, 1)
+        state.last_turn_id = top[0] if top else None
+
+        return CascadeDeleteResult(
+            deleted_post_ids=deleted_post_ids,
+            reversed_turn_ids=reversed_turn_ids,
+            requeued_review_ids=requeued_review_ids,
+            warnings=warnings,
+        )
 
     # ------------------------------------------------------------------ #
     # Retcon / replay (delegated to RetconCoordinator)
@@ -1738,6 +1837,50 @@ class OrchestratorService:
             except Exception as exc:
                 logger.warning("reverse_delta(%s) failed: %s", record.id, exc)
         return reversed_ids
+
+    async def _reverse_and_requeue_turn(
+        self, campaign_id: CampaignId, turn_id: TurnId
+    ) -> tuple[list[str], list[str]]:
+        """Reverse a turn's deltas, then re-queue each for human review.
+
+        Used for turns that straddle a cascade-delete cut: the deltas can no
+        longer be auto-trusted, so they are reversed and re-queued. Approve
+        (existing review flow) re-applies; reject leaves them reversed.
+        """
+        log = await self._store.get_delta_log(
+            campaign_id=campaign_id, turn_id=turn_id, include_reversed=False
+        )
+        reversed_ids: list[str] = []
+        review_ids: list[str] = []
+        for record in reversed(log):
+            try:
+                await self._store.reverse_delta(record.id)
+                reversed_ids.append(record.id)
+            except Exception as exc:
+                logger.warning("reverse_delta(%s) failed: %s", record.id, exc)
+                continue
+            try:
+                review_id = await self._store.queue_for_review(
+                    delta=record,
+                    source="cascade_delete",
+                    campaign_id=campaign_id,
+                )
+            except Exception as exc:
+                logger.warning("queue_for_review(%s) failed: %s", record.id, exc)
+                continue
+            if review_id:
+                review_ids.append(str(review_id))
+                await self._bus.emit(
+                    Event(
+                        type=events.REVIEW_ITEM_ADDED,
+                        payload={
+                            "campaign_id": campaign_id,
+                            "review_id": review_id,
+                            "turn_id": turn_id,
+                        },
+                    )
+                )
+        return reversed_ids, review_ids
 
     # ------------------------------------------------------------------ #
     # Validation + utility
