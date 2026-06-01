@@ -190,6 +190,7 @@ export function PlayView({ campaignId }: Props) {
                 // closure and never clears a concurrent normal turn's stream.
                 play.dispatch({ type: "stream-end-if-turn", turn_id: turnId })
               }
+              onPostDeleted={play.refresh}
             />
           )}
           {play.state.mode === "play" && play.state.turnError && (
