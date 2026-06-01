@@ -15,6 +15,17 @@ $openBrowser = $env:GRIMOIRE_OPEN_BROWSER -ne "0"
 $dataRoot = if ($env:GRIMOIRE_DATA_ROOT) { $env:GRIMOIRE_DATA_ROOT } else { Join-Path $env:USERPROFILE ".grimoire" }
 $dbPath = if ($env:GRIMOIRE_DATABASE_PATH) { $env:GRIMOIRE_DATABASE_PATH } else { Join-Path $dataRoot "campaigns.sqlite" }
 
+# A stale SSL_CERT_FILE (e.g. a leftover anaconda cacert.pem path that no longer
+# exists) breaks Python's TLS stack, so httpx/uvicorn LLM calls fail with opaque
+# ConnectError/FileNotFoundError. If it points at a missing file, clear it for
+# THIS process and the backend we spawn so Python falls back to its bundled
+# certifi roots. This is process-scoped only — it does not change the global or
+# persistent (registry) environment, and other shells are unaffected.
+if ($env:SSL_CERT_FILE -and -not (Test-Path -LiteralPath $env:SSL_CERT_FILE)) {
+    Write-Host "SSL_CERT_FILE points to a missing file ($env:SSL_CERT_FILE); clearing it for this session." -ForegroundColor Yellow
+    Remove-Item Env:SSL_CERT_FILE
+}
+
 function Stop-GrimoireProcessTree($processId) {
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object { $_.ParentProcessId -eq $processId } |
