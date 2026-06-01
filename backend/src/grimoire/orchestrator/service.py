@@ -164,6 +164,12 @@ class _CampaignTurnState:
     last_turn_id: TurnId | None = None
     pending_pre_roll: _PendingPreRoll | None = None
     speaker_loop_event: asyncio.Event | None = None
+    # Bumped while a submit_post/submit_direction is in flight — i.e. from
+    # before the player post is appended until the turn it spawns is done.
+    # delete_post_cascade rejects while this is > 0 so it can't truncate the
+    # scene between the append and the turn that consumes that post (the append
+    # itself is done under ``lock``, which the delete also holds).
+    submitting: int = 0
 
 
 async def resolve_cast_changes(
@@ -407,45 +413,56 @@ class OrchestratorService:
             is_player=True,
             author_pc_ref=pc_ref,
         )
-        await self._scenes.append_post(scene.id, post)
+        # Mark the submission in flight and append the player post under the
+        # per-campaign turn lock, so a concurrent delete_post_cascade (which
+        # rejects on submitting > 0 and holds the same lock) can't truncate the
+        # scene between this append and the turn it spawns — which would strand
+        # the queued turn on a now-deleted player_post_id.
+        state = self._state_for(campaign_id)
+        state.submitting += 1
         try:
-            await self._store.mark_pc_played(campaign_id=campaign_id, character_ref=pc_ref)
-        except Exception:
-            logger.warning("mark_pc_played failed", exc_info=True)
-        await self._bus.emit(
-            Event(
-                type=events.PC_POST_APPENDED,
-                payload={
-                    "campaign_id": campaign_id,
-                    "scene_id": scene.id,
-                    "post_id": post.id,
-                    "pc_ref": pc_ref,
-                },
+            async with state.lock:
+                await self._scenes.append_post(scene.id, post)
+            try:
+                await self._store.mark_pc_played(campaign_id=campaign_id, character_ref=pc_ref)
+            except Exception:
+                logger.warning("mark_pc_played failed", exc_info=True)
+            await self._bus.emit(
+                Event(
+                    type=events.PC_POST_APPENDED,
+                    payload={
+                        "campaign_id": campaign_id,
+                        "scene_id": scene.id,
+                        "post_id": post.id,
+                        "pc_ref": pc_ref,
+                    },
+                )
             )
-        )
 
-        decision = await self._scenes.on_post_submitted(scene.id, post)
-        if not decision.auto_respond:
+            decision = await self._scenes.on_post_submitted(scene.id, post)
+            if not decision.auto_respond:
+                return SubmitResult(
+                    accepted=True,
+                    turn_id=None,
+                    auto_responding=False,
+                    reason=decision.reason,
+                )
+
+            turn_id = await self._run_turn(
+                campaign_id=campaign_id,
+                scene_id=scene.id,
+                player_input=text,
+                triggering_pc=pc_ref,
+                player_post_id=post.id,
+            )
             return SubmitResult(
                 accepted=True,
-                turn_id=None,
-                auto_responding=False,
+                turn_id=turn_id,
+                auto_responding=True,
                 reason=decision.reason,
             )
-
-        turn_id = await self._run_turn(
-            campaign_id=campaign_id,
-            scene_id=scene.id,
-            player_input=text,
-            triggering_pc=pc_ref,
-            player_post_id=post.id,
-        )
-        return SubmitResult(
-            accepted=True,
-            turn_id=turn_id,
-            auto_responding=True,
-            reason=decision.reason,
-        )
+        finally:
+            state.submitting -= 1
 
     async def submit_direction(
         self,
@@ -483,22 +500,31 @@ class OrchestratorService:
             body=player_input,
             is_player=True,
         )
-        await self._scenes.append_post(scene.id, post)
-        direction_post_id = post.id
+        # See submit_post: announce the in-flight submission and append under
+        # the turn lock so a concurrent cascade delete can't truncate away the
+        # direction post before the turn it spawns runs.
+        state = self._state_for(campaign_id)
+        state.submitting += 1
+        try:
+            async with state.lock:
+                await self._scenes.append_post(scene.id, post)
+            direction_post_id = post.id
 
-        turn_id = await self._run_turn(
-            campaign_id=campaign_id,
-            scene_id=scene.id,
-            player_input=player_input,
-            triggering_pc=None,
-            player_post_id=direction_post_id,
-        )
-        return SubmitResult(
-            accepted=True,
-            turn_id=turn_id,
-            auto_responding=True,
-            reason="direction",
-        )
+            turn_id = await self._run_turn(
+                campaign_id=campaign_id,
+                scene_id=scene.id,
+                player_input=player_input,
+                triggering_pc=None,
+                player_post_id=direction_post_id,
+            )
+            return SubmitResult(
+                accepted=True,
+                turn_id=turn_id,
+                auto_responding=True,
+                reason="direction",
+            )
+        finally:
+            state.submitting -= 1
 
     async def advance(self, campaign_id: CampaignId, scene_id: SceneId) -> AdvanceResult:
         await self._require_campaign(campaign_id)
@@ -637,19 +663,23 @@ class OrchestratorService:
         if scene.closed:
             raise SceneClosedError(scene_id)
 
-        # Refuse to truncate while any turn is active *or queued* for this
-        # campaign. An active turn would keep applying deltas and append its
-        # model post after the cut, leaving an orphan response and un-reversed
-        # state. A queued turn is just as dangerous: submit_post appends the
-        # player post before _run_turn_inner acquires the lock and records
-        # state.active, so a queued same-scene turn has no matching active entry
-        # yet; deleting its prompt post would let it continue with a now-deleted
-        # player_post_id and append an orphan response. Turns are serialized
-        # per-campaign by state.lock, so rejecting on active/queued (rather than
-        # only same-scene active) is the conservative, race-free choice — the
+        # Refuse to truncate while any turn is active, queued, *or being
+        # submitted* for this campaign. An active turn would keep applying
+        # deltas and append its model post after the cut, leaving an orphan
+        # response and un-reversed state. A queued turn is just as dangerous:
+        # submit_post appends the player post before _run_turn_inner acquires
+        # the lock and records state.active, so a queued same-scene turn has no
+        # matching active entry yet. And a submission that has only just begun
+        # has neither — submit_post bumps state.submitting before it appends, so
+        # checking it here (plus both paths sharing state.lock for the append)
+        # closes the window where a post is appended right after this check.
+        # Deleting such a prompt post would let the turn continue with a
+        # now-deleted player_post_id and append an orphan response. Turns are
+        # serialized per-campaign by state.lock, so rejecting on
+        # active/queued/submitting is the conservative, race-free choice — the
         # user must cancel/await the turn first.
         state = self._state_for(campaign_id)
-        if state.active is not None or state.queued > 0:
+        if state.active is not None or state.queued > 0 or state.submitting > 0:
             raise TurnAlreadyInProgressError(campaign_id)
 
         # Hold the turn lock across the read→reverse→truncate sequence so a
@@ -756,8 +786,11 @@ class OrchestratorService:
         # Continuity facts/commitments are written outside the reversible delta
         # log (DeltaApplier routes them to the continuity service), so the
         # reversals above don't retract them — do it explicitly for fully
-        # removed turns. Straddling turns keep theirs (a post still survives).
+        # removed turns. Straddling turns keep theirs (a post still survives),
+        # but those writes aren't post-attributed, so warn when a straddling
+        # turn wrote continuity state that may now reference removed prose.
         await self._retract_continuity_for_turns(campaign_id, fully_contained, warnings)
+        await self._warn_straddling_continuity(campaign_id, straddling, warnings)
 
         # Cast-change review prompts live in a separate store, not the delta
         # log; dismiss any queued by fully removed turns so the HUD can't later
@@ -795,6 +828,36 @@ class OrchestratorService:
                 await service.retract_turn(tid)
             except Exception as exc:
                 warnings.append(f"turn {tid}: continuity retraction failed: {exc}")
+
+    async def _warn_straddling_continuity(
+        self, campaign_id: CampaignId, turn_ids: list[TurnId], warnings: list[str]
+    ) -> None:
+        """Warn for straddling turns that wrote continuity state.
+
+        A straddling turn's posts span the cut, so a post survives and we keep
+        its continuity writes — but those writes are attributed to the turn, not
+        individual posts, so we can't tell which the deleted segment made. Rather
+        than retract writes a surviving post may own (or trust writes whose
+        evidence was removed), surface a warning so the user can review them.
+        """
+        if not turn_ids or self._continuity is None:
+            return
+        from grimoire.continuity.registry import resolve_continuity
+
+        service = resolve_continuity(self._continuity, campaign_id)
+        detector = getattr(service, "turn_has_continuity_writes", None)
+        if detector is None:
+            return
+        for tid in turn_ids:
+            try:
+                if await detector(tid):
+                    warnings.append(
+                        f"turn {tid} straddles the deletion: its continuity "
+                        "facts/commitments/knowledge were not retracted and may "
+                        "reference removed posts"
+                    )
+            except Exception:
+                continue
 
     async def _reject_review_items_for_turns(
         self, campaign_id: CampaignId, turn_ids: set[TurnId], warnings: list[str]

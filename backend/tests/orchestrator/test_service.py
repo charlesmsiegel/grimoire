@@ -41,6 +41,7 @@ def _build_orch(
     fake_context_builder: FakeContextBuilder,
     ws: WSCollector | None = None,
     config: OrchestratorConfig | None = None,
+    continuity: object | None = None,
 ) -> OrchestratorService:
     return OrchestratorService(
         event_bus=event_bus,
@@ -51,6 +52,7 @@ def _build_orch(
         state_store=fake_store,
         ws_push=ws,
         config=config,
+        continuity=continuity,
     )
 
 
@@ -867,6 +869,87 @@ async def test_cascade_delete_rejected_when_turn_queued(
         await orch.delete_post_cascade("c1", scene.id, appended.id)
     # Nothing was truncated.
     assert len(await scene_manager.get_posts(scene.id)) == 1
+
+
+async def test_cascade_delete_rejected_while_submitting(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    """submit_post bumps state.submitting and appends the player post before the
+    turn is queued/active. A delete in that window must reject too, else it could
+    truncate away a post a turn is about to consume."""
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
+    )
+    appended = (await scene_manager.get_posts(scene.id))[0]
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    # A submission is in flight: post appended, turn not yet queued/active.
+    state = orch._state_for("c1")
+    state.submitting = 1
+
+    with pytest.raises(TurnAlreadyInProgressError):
+        await orch.delete_post_cascade("c1", scene.id, appended.id)
+    # Nothing was truncated.
+    assert len(await scene_manager.get_posts(scene.id)) == 1
+
+
+async def test_cascade_delete_warns_on_straddling_continuity(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    """A straddling turn keeps its continuity writes (a post survives), but those
+    writes aren't post-attributed, so the delete surfaces a warning rather than
+    silently trusting state whose evidence may have been removed."""
+    from grimoire.continuity import ContinuityService, InGameTime
+    from tests.continuity.conftest import make_fact
+
+    continuity = ContinuityService()
+    # T1 established a continuity fact and is about to straddle the cut.
+    await continuity.add_fact(make_fact(text="from T1", post="T1"), source="extractor")
+
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
+    )
+    # Split turn T1 produces two model posts; T2 a third.
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1"),
+    )
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m2", is_player=False, turn_id="T1"),
+    )
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m3", is_player=False, turn_id="T2"),
+    )
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+        continuity=continuity,
+    )
+    target = next(p for p in await scene_manager.get_posts(scene.id) if p.body == "m2")
+    result = await orch.delete_post_cascade("c1", scene.id, target.id)
+
+    assert any("T1 straddles the deletion" in w for w in result.warnings)
+    # The straddling fact is *not* retracted — a post (m1) still survives.
+    active = await continuity.recent_facts(InGameTime(day_count=0), limit=50)
+    assert "from T1" in {f.text for f in active}
 
 
 async def test_cascade_delete_rejects_review_items_for_removed_turns(

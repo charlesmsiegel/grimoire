@@ -878,9 +878,23 @@ class SceneManager:
     async def add_present_character(self, scene_id: str, character_ref: str) -> None:
         async with self._lock_for(scene_id):
             scene = await self.get_scene(scene_id)
-            if character_ref in scene.present_character_refs:
+            already_present = character_ref in scene.present_character_refs
+            # Manual / confirmed-cast-change presence is durable: record the ref
+            # in the declared cast so a later truncate_scene_from (which only
+            # drops *post-derived* NPCs) keeps a character a user or cast change
+            # explicitly added, even once its authored posts are gone. Legacy
+            # scenes (declared_character_refs is None) drop nothing on truncate,
+            # so they need no marking.
+            newly_declared = (
+                scene.declared_character_refs is not None
+                and character_ref not in scene.declared_character_refs
+            )
+            if already_present and not newly_declared:
                 return
-            scene.present_character_refs.append(character_ref)
+            if not already_present:
+                scene.present_character_refs.append(character_ref)
+            if newly_declared:
+                scene.declared_character_refs.append(character_ref)
             self._write_sidecar(scene)
 
     async def remove_present_character(self, scene_id: str, character_ref: str) -> None:

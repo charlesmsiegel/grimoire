@@ -259,6 +259,30 @@ class ContinuityService(Continuity):
             "removed_knowledge": removed_knowledge,
         }
 
+    async def turn_has_continuity_writes(self, turn_id: str) -> bool:
+        """Whether ``turn_id`` made any continuity write that bypasses the
+        reversible delta log (a fact established or retired, a commitment created
+        or resolved, or knowledge revealed).
+
+        Read-only. Cascade delete uses this to *warn* about a straddling turn:
+        such a turn keeps its continuity writes (a post survives) but those
+        writes are attributed to the whole turn, not individual posts, so we
+        can't tell which were established by the deleted segment. We surface a
+        warning rather than guess.
+        """
+        for fact in await self._store.list_facts(include_retired=True):
+            if fact.established_in_post == turn_id or (
+                fact.retired and fact.retired_in_post == turn_id
+            ):
+                return True
+        for commitment in await self._store.list_commitments():
+            if commitment.created_in_post == turn_id or commitment.resolved_in_post == turn_id:
+                return True
+        learned_in = getattr(self._store, "knowledge_learned_in", None)
+        if learned_in is None:
+            return False
+        return bool(await learned_in(turn_id))
+
     # ------------------------------------------------------------------
     # Fact reads
     # ------------------------------------------------------------------
@@ -527,10 +551,25 @@ class ContinuityService(Continuity):
             raise CommitmentNotFoundError(cid)
         if status == CommitmentStatus.OPEN:
             raise ValueError("cannot resolve a commitment back to OPEN")
+        # A commitment that is *already* terminal was resolved by an earlier
+        # (surviving) turn; keep that turn's resolved_in_post so a later
+        # duplicate resolution doesn't reattribute it. Otherwise retract_turn,
+        # which reopens commitments whose resolved_in_post matches the deleted
+        # turn, would erase a resolution that still stands. A fresh resolution
+        # (existing was OPEN/STALE/…) records this turn as before.
+        already_terminal = (
+            existing.status in TERMINAL_STATUSES and existing.resolved_in_post is not None
+        )
+        if already_terminal:
+            resolved_in_post = existing.resolved_in_post
+        elif status in TERMINAL_STATUSES:
+            resolved_in_post = in_post
+        else:
+            resolved_in_post = existing.resolved_in_post
         updated = dataclasses.replace(
             existing,
             status=status,
-            resolved_in_post=in_post if status in TERMINAL_STATUSES else existing.resolved_in_post,
+            resolved_in_post=resolved_in_post,
         )
         await self._store.put_commitment(updated)
         if status == CommitmentStatus.PAID:
@@ -684,6 +723,16 @@ class ContinuityService(Continuity):
         if fact is None:
             raise FactNotFoundError(fact_id)
         for character_id in to:
+            # A character can't *re-learn* something they already know: keep the
+            # original learning attribution (learned_in_post / source) rather
+            # than overwriting it with this turn's. Otherwise a duplicate /
+            # confirming reveal in a later turn would re-stamp learned_in_post,
+            # and cascade-deleting that turn (retract_turn → knowledge_learned_in
+            # → delete_knowledge) would then drop knowledge the character had
+            # actually learned from surviving evidence.
+            existing = await self._store.get_knowledge(character_id, fact_id)
+            if existing is not None and existing.knows:
+                continue
             await self._store.put_knowledge(
                 KnowledgeEntry(
                     fact_id=fact_id,

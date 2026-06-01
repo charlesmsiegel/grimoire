@@ -118,6 +118,9 @@ class Continuity(Protocol):
     # Turn retraction (cascade delete / undo): retract continuity writes whose
     # establishing post/turn id matches ``turn_id``.
     async def retract_turn(self, turn_id: str) -> dict: ...
+    # Whether ``turn_id`` made any continuity write — cascade delete uses this to
+    # warn about straddling (partially deleted) turns it can't cleanly retract.
+    async def turn_has_continuity_writes(self, turn_id: str) -> bool: ...
 
     # Fact reads
     async def get_fact(self, fact_id: FactId) -> Fact: ...
