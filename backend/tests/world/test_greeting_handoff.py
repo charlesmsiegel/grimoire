@@ -66,6 +66,44 @@ async def test_seed_scene_from_greeting_calls_start_scene(store, library, world)
     assert init.tags == ["dawn", "city"]
 
 
+async def test_seed_scene_qualifies_bare_character_ids(store, library, world) -> None:
+    """Bare world-character ids in a greeting are qualified to canonical refs.
+
+    Greetings author present/POV characters as bare ids (e.g. ``mina-ashido``).
+    A bare single-segment id is unparseable downstream (drift check raised
+    ``unrecognized character_ref``), so seeding must qualify it with the
+    greeting's world. Refs that already carry a scheme pass through.
+    """
+    await store.upsert_campaign(campaign_id="camp-1", name="t")
+    await library.create_world("w1", {"id": "w1", "name": "W1"})
+    await library.create_entity(
+        "w1",
+        "greeting",
+        "bare",
+        {
+            "id": "bare",
+            "world_id": "w1",
+            "name": "Bare",
+            "present_characters": ["alice", "emergent/bob"],
+            "pov_character": "carol",
+        },
+        body="",
+    )
+    sm = _FakeSceneManager()
+    await world.seed_scene_from_greeting(
+        campaign_id="camp-1",
+        greeting_id="bare",
+        world_id="w1",
+        scene_manager=sm,
+    )
+    init = sm.calls[0]
+    assert init.present_character_refs == [
+        "library:worlds/w1/characters/alice",
+        "campaign:emergent/character/bob",
+    ]
+    assert init.pov_character_ref == "library:worlds/w1/characters/carol"
+
+
 async def test_seed_scene_unknown_greeting_raises(store, library, world) -> None:
     from grimoire.library.errors import LibraryNotFoundError
 
