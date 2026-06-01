@@ -125,7 +125,9 @@ export function ScenePane({
           expressionsEnabledCharacters={expressionsEnabledCharacters}
           onRerollFailed={onRerollFailed}
           subsequentCount={
-            scene ? Math.max(0, scene.post_count - post.order_in_scene - 1) : undefined
+            // order_in_scene is 1-based, so posts after this one is
+            // post_count - order_in_scene (no extra -1).
+            scene ? Math.max(0, scene.post_count - post.order_in_scene) : undefined
           }
           sceneClosed={scene?.closed ?? false}
           onDeleted={onPostDeleted}

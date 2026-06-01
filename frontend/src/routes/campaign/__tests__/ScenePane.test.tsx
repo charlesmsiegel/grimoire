@@ -100,6 +100,27 @@ describe("ScenePane delete wiring", () => {
     await waitFor(() => expect(spy).toHaveBeenCalledWith("c1", "s1", "p1"));
     await waitFor(() => expect(onPostDeleted).toHaveBeenCalled());
   });
+
+  it("counts following posts with 1-based order (no off-by-one)", async () => {
+    const scene = {
+      id: "s1",
+      campaign_id: "c1",
+      post_count: 3,
+      closed: false,
+      present_character_refs: [],
+    } as unknown as Parameters<typeof ScenePane>[0]["scene"];
+    // First post in a 3-post scene → deleting it removes 2 following posts.
+    const first = {
+      ...makePost("p1"),
+      order_in_scene: 1,
+      is_player: true,
+      author_kind: "pc" as const,
+    };
+    renderPane({ posts: [first], campaignId: "c1", scene });
+    const { fireEvent } = await import("@testing-library/react");
+    fireEvent.click(screen.getByRole("button", { name: "Delete post" }));
+    expect(screen.getByText(/2 following posts/i)).toBeInTheDocument();
+  });
 });
 
 describe("ScenePane cost attribution", () => {
