@@ -183,13 +183,13 @@ export function PlayView({ campaignId }: Props) {
               hasMorePosts={play.state.hasMorePosts}
               onLoadMore={loadMorePosts}
               expressionsEnabledCharacters={expressionsEnabledCharacters}
-              onRerollFailed={() =>
-                play.dispatch({
-                  type: "stream-end",
-                  turn_id: play.state.streaming?.turn_id ?? "",
-                  post: null,
-                })
-              }
+              onRerollFailed={(turnId) => {
+                // Only clear the streaming indicator if it belongs to this
+                // reroll's stream — never a concurrent normal turn's stream.
+                if (play.state.streaming?.turn_id === turnId) {
+                  play.dispatch({ type: "stream-end", turn_id: turnId, post: null });
+                }
+              }}
             />
           )}
           {play.state.mode === "play" && play.state.turnError && (

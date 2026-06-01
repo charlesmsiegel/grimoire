@@ -21,13 +21,14 @@ place of them.
 ### Branch C — non-destructive regenerate
 
 The design suggested replacing `regenerate_last` with `regenerate_post`
-(plan step F-end2). `regenerate_last` is still in place because the two
-operations are not semantically equivalent: `regenerate_last` is a
-destructive replay (delete the model post, re-run the turn) while
-`regenerate_post` is non-destructive (append a non-primary alternate the
-user must explicitly accept). Migrating the existing `/turns/regenerate`
-route and its callers is left to a follow-up cleanup PR so this stack can
-focus on the additive surface.
+(plan step F-end2). At the time the two were kept side by side because they
+are not semantically equivalent: `regenerate_last` was a destructive replay
+(delete the model post, re-run the turn) while `regenerate_post` is
+non-destructive (append a non-primary alternate the user can switch to).
+
+> **Resolved (#512).** That follow-up cleanup landed: `regenerate_last` and
+> the `/turns/regenerate` route were removed, and `regenerate_post` (the
+> per-post swipe) is now the single reroll path.
 
 ### Branch E — eviction + vacuum
 

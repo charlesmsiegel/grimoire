@@ -16,9 +16,10 @@ interface Props {
   campaignId?: string;
   presentCharacterRefs?: string[];
   expressionsEnabledCharacters?: ReadonlySet<string>;
-  /** Called when a reroll request fails, so the parent can clear the streaming
-   *  indicator (the WS alternate_added event only fires on success). */
-  onRerollFailed?: () => void;
+  /** Called with this post's turn_id when a reroll request fails, so the parent
+   *  can clear the streaming indicator for *this reroll's* stream (the WS
+   *  alternate_added event only fires on success). */
+  onRerollFailed?: (turnId: string) => void;
 }
 
 const AUTHOR_LABELS: Record<ApiPost["author_kind"], string> = {
@@ -202,8 +203,9 @@ export function PostItem({
     );
     // On success the WS alternate_added event clears the streaming indicator;
     // on failure no such event arrives, so clear it here or the UI stays stuck
-    // showing "streaming".
-    if (!ok) onRerollFailed?.();
+    // showing "streaming". A reroll streams under this post's turn_id, so pass
+    // it up to scope the clear to this reroll and not some other live turn.
+    if (!ok) onRerollFailed?.(post.turn_id);
     return ok;
   }
 

@@ -35,7 +35,7 @@ Spec 08 §Drift detection: "Surface a UI badge", "Inject corrective voice anchor
 Needs:
 - An event emission (e.g. `drift_detected`) on the bus when `check_drift` returns a score ≥ threshold so the Frontend can render the badge. See orchestrator-remaining doc §10.
 - A Context Builder integration: when a character is present and `drift_corrective_context(...)` returns a non-empty snippet, the Builder should inject it into the next prompt. Today `drift_corrective_context` exists but no caller invokes it.
-- A regenerate hook from the Orchestrator that re-runs the last turn with the corrective snippet bolted on (Orchestrator already has `regenerate_last`; needs the snippet to be threaded through).
+- A regenerate hook from the Orchestrator that re-runs the last response with the corrective snippet bolted on (rerolls now go through `regenerate_post`; the snippet would need to be threaded through). Note: `regenerate_last` was removed in #512.
 
 ## 5. Compressed-view caching
 

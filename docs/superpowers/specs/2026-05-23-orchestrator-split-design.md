@@ -115,9 +115,11 @@ Extract five focused collaborator classes. `OrchestratorService` remains as the 
 
 The turn execution loop and its direct helpers:
 
-**Public:** `submit_post`, `advance`, `regenerate_last`, `cancel_turn`, `resolve_scene_break`, `resolve_pre_roll`, `undo_turn`, `turn_in_progress`, `queue_length`, `event_bus`
+**Public:** `submit_post`, `advance`, `cancel_turn`, `resolve_scene_break`, `resolve_pre_roll`, `undo_turn`, `turn_in_progress`, `queue_length`, `event_bus`
 
-**Private:** `_run_turn`, `_run_turn_inner`, `_run_turn_body`, `_continue_turn_after_pre_roll`, `_check_cancelled`, `_rollback_player_post`, `_heartbeat_loop`, `_maybe_break_scene`, `_do_pre_roll`, `_resolve_proposals`, `_stream_main_response`, `_composition_hash`, `_require_campaign`, `_require_pc`, `_state_for`, `_new_post`, `_emit_fragment`, `_emit_turn_event`, `_push_to_ws`, `_recent_turn_ids`, `_reverse_turn_deltas`, `_strip_response_for_turn`
+**Private:** `_run_turn`, `_run_turn_inner`, `_run_turn_body`, `_continue_turn_after_pre_roll`, `_check_cancelled`, `_rollback_player_post`, `_heartbeat_loop`, `_maybe_break_scene`, `_do_pre_roll`, `_resolve_proposals`, `_stream_main_response`, `_require_campaign`, `_require_pc`, `_state_for`, `_new_post`, `_emit_fragment`, `_emit_turn_event`, `_push_to_ws`, `_recent_turn_ids`, `_reverse_turn_deltas`
+
+> `regenerate_last`, `_composition_hash`, and `_strip_response_for_turn` were removed in the reroll consolidation (#512).
 
 ### Facade Delegation Pattern
 
