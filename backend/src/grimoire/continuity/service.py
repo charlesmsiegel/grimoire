@@ -199,6 +199,26 @@ class ContinuityService(Continuity):
         await self._store.put_fact(new_fact)
         return new_fact
 
+    async def retract_turn(self, turn_id: str) -> dict:
+        """Retract continuity writes established in ``turn_id``.
+
+        Used when a turn's posts are deleted (cascade delete): facts established
+        in the turn are retired (RETCONNED) and commitments created in the turn
+        are removed, since these were written outside the reversible delta log.
+        Returns the ids touched.
+        """
+        retired_facts: list[str] = []
+        for fact in await self._store.list_facts(include_retired=False):
+            if fact.established_in_post == turn_id:
+                await self.retire_fact(fact.id, in_post=turn_id, reason="retconned")
+                retired_facts.append(fact.id)
+        removed_commitments: list[str] = []
+        for commitment in await self._store.list_commitments():
+            if commitment.created_in_post == turn_id:
+                await self._store.delete_commitment(commitment.id)
+                removed_commitments.append(commitment.id)
+        return {"retired_facts": retired_facts, "removed_commitments": removed_commitments}
+
     # ------------------------------------------------------------------
     # Fact reads
     # ------------------------------------------------------------------

@@ -335,6 +335,29 @@ async def test_truncate_scene_from_drops_npc_with_no_surviving_post(tmp_path: Pa
     assert refreshed.present_pc_refs == ["alistair"]
 
 
+async def test_truncate_scene_from_keeps_initially_declared_npc(tmp_path: Path) -> None:
+    manager, _ = _manager(tmp_path)
+    # ``guard`` is part of the scene's declared cast from the start.
+    scene = await manager.start_scene(
+        SceneInit(
+            campaign_id="c",
+            title="Scene",
+            present_pc_refs=["alistair"],
+            present_character_refs=["alistair", "guard"],
+        )
+    )
+    await manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NPC, author_npc_ref="guard", body="halt", is_player=False),
+    )
+    guard_post = (await manager.get_posts(scene.id))[0]
+    await manager.truncate_scene_from(guard_post.id, source="cascade_delete")
+
+    refreshed = await manager.get_scene(scene.id)
+    # Even with no surviving post, an initially-declared NPC stays in the cast.
+    assert "guard" in refreshed.present_character_refs
+
+
 async def test_truncate_scene_from_keeps_npc_with_surviving_post(tmp_path: Path) -> None:
     manager, _ = _manager(tmp_path)
     scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))

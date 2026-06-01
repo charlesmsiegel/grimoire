@@ -93,6 +93,11 @@ class Scene:
     pov_character_ref: str | None = None
     present_character_refs: list[str] = field(default_factory=list)
     present_pc_refs: list[str] = field(default_factory=list)
+    # The cast declared at scene creation. ``None`` means unknown (legacy
+    # sidecars written before this field existed); an empty list means the
+    # scene genuinely started with no declared cast. Used by
+    # ``truncate_scene_from`` to avoid dropping an initially-present NPC.
+    declared_character_refs: list[str] | None = None
 
     mood: str | None = None
 

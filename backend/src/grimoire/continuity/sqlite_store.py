@@ -421,6 +421,12 @@ class SqliteContinuityStore(ContinuityStore):
             )
         return [_commitment_from_row(dict(row)) for row in rows]
 
+    async def delete_commitment(self, cid: CommitmentId) -> None:
+        await self._db.execute(
+            "DELETE FROM commitments WHERE id = ? AND campaign_id = ?",
+            (cid, self._campaign_id),
+        )
+
     # ------------------------------------------------------------------
     # Knowledge
     # ------------------------------------------------------------------
