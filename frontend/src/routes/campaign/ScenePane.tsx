@@ -19,7 +19,7 @@ interface Props {
   /** Clears the stuck streaming indicator when a per-post reroll fails; called
    *  with the rerolled post's turn_id so the parent can scope the clear. */
   onRerollFailed?: (turnId: string) => void;
-  onPostDeleted?: (deletedIds: string[]) => void;
+  onPostDeleted?: (deletedIds: string[], warnings: string[]) => void;
 }
 
 export function ScenePane({

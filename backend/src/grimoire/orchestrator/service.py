@@ -637,15 +637,34 @@ class OrchestratorService:
         if scene.closed:
             raise SceneClosedError(scene_id)
 
-        # Refuse to truncate while a turn is streaming into this scene: the
-        # active turn would keep applying deltas and append its model post
-        # after the cut, leaving an orphan response and un-reversed state (the
-        # turn-owned posts don't exist yet, so they aren't in the suffix we
-        # reverse). The user must cancel/await the turn first.
+        # Refuse to truncate while any turn is active *or queued* for this
+        # campaign. An active turn would keep applying deltas and append its
+        # model post after the cut, leaving an orphan response and un-reversed
+        # state. A queued turn is just as dangerous: submit_post appends the
+        # player post before _run_turn_inner acquires the lock and records
+        # state.active, so a queued same-scene turn has no matching active entry
+        # yet; deleting its prompt post would let it continue with a now-deleted
+        # player_post_id and append an orphan response. Turns are serialized
+        # per-campaign by state.lock, so rejecting on active/queued (rather than
+        # only same-scene active) is the conservative, race-free choice — the
+        # user must cancel/await the turn first.
         state = self._state_for(campaign_id)
-        if state.active is not None and state.active.scene_id == scene_id:
+        if state.active is not None or state.queued > 0:
             raise TurnAlreadyInProgressError(campaign_id)
 
+        # Hold the turn lock across the read→reverse→truncate sequence so a
+        # concurrent turn body can't extract into / append to the scene between
+        # the snapshot we reverse and the truncation that removes it.
+        async with state.lock:
+            return await self._delete_post_cascade_locked(campaign_id, scene_id, post_id, state)
+
+    async def _delete_post_cascade_locked(
+        self,
+        campaign_id: CampaignId,
+        scene_id: SceneId,
+        post_id: PostId,
+        state: _CampaignTurnState,
+    ) -> CascadeDeleteResult:
         posts = await self._scenes.get_posts(scene_id)
         target = next((p for p in posts if p.id == post_id), None)
         if target is None:
@@ -745,6 +764,12 @@ class OrchestratorService:
         # apply a change whose evidence was deleted.
         await self._dismiss_cast_changes_for_turns(scene_id, set(fully_contained), warnings)
 
+        # Fully-removed turns may have queued low-confidence deltas for review.
+        # Those were skipped (never applied, so not reversed), but their
+        # review_queue rows stay pending — approving one later would re-apply
+        # state from a turn whose evidence is gone. Reject them outright.
+        await self._reject_review_items_for_turns(campaign_id, set(fully_contained), warnings)
+
         top = await self._recent_turn_ids(campaign_id, 1)
         state.last_turn_id = top[0] if top else None
 
@@ -770,6 +795,26 @@ class OrchestratorService:
                 await service.retract_turn(tid)
             except Exception as exc:
                 warnings.append(f"turn {tid}: continuity retraction failed: {exc}")
+
+    async def _reject_review_items_for_turns(
+        self, campaign_id: CampaignId, turn_ids: set[TurnId], warnings: list[str]
+    ) -> None:
+        if not turn_ids:
+            return
+        lister = getattr(self._store, "pending_review_items", None)
+        rejecter = getattr(self._store, "reject_review_item", None)
+        if lister is None or rejecter is None:
+            return
+        try:
+            items = await lister(campaign_id)
+        except Exception:
+            return
+        for review_id, turn_id in items:
+            if turn_id in turn_ids:
+                try:
+                    await rejecter(review_id, notes="cascade_delete")
+                except Exception as exc:
+                    warnings.append(f"review item {review_id}: reject failed: {exc}")
 
     async def _dismiss_cast_changes_for_turns(
         self, scene_id: SceneId, turn_ids: set[TurnId], warnings: list[str]

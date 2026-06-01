@@ -478,6 +478,25 @@ class SqliteContinuityStore(ContinuityStore):
         )
         return [_knowledge_from_row(dict(row)) for row in rows]
 
+    async def knowledge_learned_in(self, post_id: str) -> list[KnowledgeEntry]:
+        rows = await self._db.fetchall(
+            """
+            SELECT * FROM knowledge_state
+            WHERE learned_in_post = ? AND campaign_id = ?
+            """,
+            (post_id, self._campaign_id),
+        )
+        return [_knowledge_from_row(dict(row)) for row in rows]
+
+    async def delete_knowledge(self, character_id: str, fact_id: FactId) -> None:
+        await self._db.execute(
+            """
+            DELETE FROM knowledge_state
+            WHERE character_ref = ? AND fact_id = ? AND campaign_id = ?
+            """,
+            (character_id, fact_id, self._campaign_id),
+        )
+
     # ------------------------------------------------------------------
     # Contradiction reports
     # ------------------------------------------------------------------

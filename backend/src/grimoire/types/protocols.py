@@ -111,6 +111,7 @@ from .observability import (
     TurnAudit,
 )
 from .orchestrator import (
+    CascadeDeleteResult,
     Event,
     EventType,
     RetconResult,
@@ -1199,6 +1200,9 @@ class Orchestrator(Protocol):
 
     async def undo_turn(self, campaign_id: CampaignId, count: int = 1) -> UndoResult: ...
     async def retcon_post(self, post_id: PostId, new_text: str) -> RetconResult: ...
+    async def delete_post_cascade(
+        self, campaign_id: CampaignId, scene_id: SceneId, post_id: PostId
+    ) -> CascadeDeleteResult: ...
 
     async def turn_in_progress(self, campaign_id: CampaignId) -> TurnStatus | None: ...
     async def queue_length(self, campaign_id: CampaignId) -> int: ...

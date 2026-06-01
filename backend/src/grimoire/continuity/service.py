@@ -200,24 +200,64 @@ class ContinuityService(Continuity):
         return new_fact
 
     async def retract_turn(self, turn_id: str) -> dict:
-        """Retract continuity writes established in ``turn_id``.
+        """Retract continuity writes made in ``turn_id`` (cascade delete / undo).
 
-        Used when a turn's posts are deleted (cascade delete): facts established
-        in the turn are retired (RETCONNED) and commitments created in the turn
-        are removed, since these were written outside the reversible delta log.
-        Returns the ids touched.
+        Continuity facts/commitments/knowledge bypass the reversible delta log
+        (the DeltaApplier routes them straight here), so deleting a turn's posts
+        leaves them applied unless we undo them explicitly. This reverses every
+        such write attributable to the turn:
+
+          - facts *established* in the turn are retired (RETCONNED);
+          - commitments *created* in the turn are deleted;
+          - facts *retired* in the turn (but established earlier) are un-retired,
+            so a FACT_RETIRE from the deleted turn no longer hides a surviving
+            fact;
+          - commitments *resolved* in the turn (but created earlier) are reopened
+            to OPEN, reversing a COMMITMENT_RESOLVE from the deleted turn;
+          - knowledge *revealed* in the turn is removed, reversing KNOWLEDGE_REVEAL.
+
+        FACT_UPDATE patches are *not* reversed: no pre-image is stored, so a field
+        edited during the turn keeps its new value. Returns the ids touched.
         """
         retired_facts: list[str] = []
-        for fact in await self._store.list_facts(include_retired=False):
+        unretired_facts: list[str] = []
+        for fact in await self._store.list_facts(include_retired=True):
             if fact.established_in_post == turn_id:
-                await self.retire_fact(fact.id, in_post=turn_id, reason="retconned")
+                if not fact.retired:
+                    await self.retire_fact(fact.id, in_post=turn_id, reason="retconned")
                 retired_facts.append(fact.id)
+            elif fact.retired and fact.retired_in_post == turn_id:
+                restored = dataclasses.replace(
+                    fact, retired=False, retired_in_post=None, retired_reason=None
+                )
+                await self._store.put_fact(restored)
+                unretired_facts.append(fact.id)
         removed_commitments: list[str] = []
+        reopened_commitments: list[str] = []
         for commitment in await self._store.list_commitments():
             if commitment.created_in_post == turn_id:
                 await self._store.delete_commitment(commitment.id)
                 removed_commitments.append(commitment.id)
-        return {"retired_facts": retired_facts, "removed_commitments": removed_commitments}
+            elif commitment.resolved_in_post == turn_id:
+                restored = dataclasses.replace(
+                    commitment, status=CommitmentStatus.OPEN, resolved_in_post=None
+                )
+                await self._store.put_commitment(restored)
+                reopened_commitments.append(commitment.id)
+        removed_knowledge: list[str] = []
+        learned_in = getattr(self._store, "knowledge_learned_in", None)
+        delete_knowledge = getattr(self._store, "delete_knowledge", None)
+        if learned_in is not None and delete_knowledge is not None:
+            for entry in await learned_in(turn_id):
+                await delete_knowledge(entry.character_id, entry.fact_id)
+                removed_knowledge.append(f"{entry.character_id}:{entry.fact_id}")
+        return {
+            "retired_facts": retired_facts,
+            "removed_commitments": removed_commitments,
+            "unretired_facts": unretired_facts,
+            "reopened_commitments": reopened_commitments,
+            "removed_knowledge": removed_knowledge,
+        }
 
     # ------------------------------------------------------------------
     # Fact reads

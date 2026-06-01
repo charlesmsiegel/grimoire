@@ -835,3 +835,70 @@ async def test_cascade_delete_dismisses_pending_cast_changes_for_removed_turns(
         assert await scene_manager.list_pending_cast_changes(scene.id) == []
     finally:
         await db.close()
+
+
+async def test_cascade_delete_rejected_when_turn_queued(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    """A turn can be queued (player post appended) before _run_turn_inner sets
+    state.active; deleting its prompt while it waits would orphan the response.
+    The delete must reject on a queued turn too, not just an active one."""
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
+    )
+    appended = (await scene_manager.get_posts(scene.id))[0]
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    # No active turn, but one is queued waiting on the campaign lock.
+    state = orch._state_for("c1")
+    state.active = None
+    state.queued = 1
+
+    with pytest.raises(TurnAlreadyInProgressError):
+        await orch.delete_post_cascade("c1", scene.id, appended.id)
+    # Nothing was truncated.
+    assert len(await scene_manager.get_posts(scene.id)) == 1
+
+
+async def test_cascade_delete_rejects_review_items_for_removed_turns(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    """A fully-removed turn's pending review delta is skipped from reversal,
+    but its review-queue row must also be rejected so it can't be approved
+    later and re-apply state from a turn whose evidence is gone."""
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
+    )
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1"),
+    )
+    queued = _seed_applied(fake_store, campaign_id="c1", turn_id="T1", target_id="fact-pending")
+    fake_store.pending_delta_ids.add(queued)
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    target = next(p for p in await scene_manager.get_posts(scene.id) if p.body == "m1")
+    result = await orch.delete_post_cascade("c1", scene.id, target.id)
+
+    # The unapplied review delta is not reversed, but its review row is rejected.
+    assert queued not in fake_store.reversed_ids
+    assert f"rq_{queued}" in fake_store.rejected_review_ids
+    assert result.warnings == []
