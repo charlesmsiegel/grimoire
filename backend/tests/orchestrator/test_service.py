@@ -742,3 +742,96 @@ async def test_cascade_delete_surfaces_failed_reversals(
     assert result.reversed_turn_ids == []
     # The prose is still truncated (the user's explicit intent).
     assert [p.body for p in await scene_manager.get_posts(scene.id)] == ["hi"]
+
+
+async def test_cascade_delete_skips_unapplied_review_deltas(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
+    )
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1"),
+    )
+    applied = _seed_applied(fake_store, campaign_id="c1", turn_id="T1", target_id="fact-1")
+    # A second T1 delta that is queued for review but was never applied.
+    queued = _seed_applied(fake_store, campaign_id="c1", turn_id="T1", target_id="fact-pending")
+    fake_store.pending_delta_ids.add(queued)
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    posts = await scene_manager.get_posts(scene.id)
+    target = next(p for p in posts if p.body == "m1")
+    result = await orch.delete_post_cascade("c1", scene.id, target.id)
+
+    # The applied delta is reversed; the unapplied review delta is left alone.
+    assert applied in fake_store.reversed_ids
+    assert queued not in fake_store.reversed_ids
+    assert result.warnings == []
+
+
+async def test_cascade_delete_dismisses_pending_cast_changes_for_removed_turns(
+    tmp_path, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    from grimoire.scenes.cast_changes import CastChangeStore
+    from grimoire.scenes.manager import SceneManagerConfig
+    from grimoire.storage.db import Database
+    from grimoire.testing.db_template import stamp_migrated_db
+    from grimoire.types.scene import CastChange
+
+    db = Database(stamp_migrated_db(tmp_path / "cc.sqlite"))
+    await db.connect()
+    try:
+        scene_manager = SceneManager(
+            tmp_path,
+            config=SceneManagerConfig(running_summary_every_n_posts=0),
+            event_bus=event_bus,
+            cast_change_store=CastChangeStore(db),
+        )
+        scene = await _seed(scene_manager, fake_store)
+        await scene_manager.append_post(
+            scene.id,
+            new_post(
+                author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True
+            ),
+        )
+        await scene_manager.append_post(
+            scene.id,
+            new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1"),
+        )
+        # The deleted turn proposed an NPC entering the scene.
+        await scene_manager.queue_cast_change(
+            scene.id,
+            character_ref="library:worlds/w/characters/reyes",
+            change=CastChange.ENTER,
+            is_pc=False,
+            evidence="strides in",
+            confidence=0.8,
+            turn_id="T1",
+        )
+        assert len(await scene_manager.list_pending_cast_changes(scene.id)) == 1
+
+        orch = _build_orch(
+            scene_manager=scene_manager,
+            event_bus=event_bus,
+            fake_store=fake_store,
+            fake_gateway=fake_gateway,
+            fake_extractor=fake_extractor,
+            fake_context_builder=fake_context_builder,
+        )
+        target = next(p for p in await scene_manager.get_posts(scene.id) if p.body == "m1")
+        await orch.delete_post_cascade("c1", scene.id, target.id)
+
+        # The stale prompt for the deleted turn is dismissed.
+        assert await scene_manager.list_pending_cast_changes(scene.id) == []
+    finally:
+        await db.close()

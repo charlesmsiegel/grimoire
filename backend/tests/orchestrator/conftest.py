@@ -73,6 +73,9 @@ class FakeStateStore:
     applied: list[dict] = field(default_factory=list)
     reviewed: list[dict] = field(default_factory=list)
     reversed_ids: list[str] = field(default_factory=list)
+    # Delta ids that are queued for review but unapplied; cascade delete must
+    # skip these when reversing (they were never applied to their target).
+    pending_delta_ids: set[str] = field(default_factory=set)
     # When set, apply_delta raises on the Nth call (0-indexed) so tests can
     # simulate a mid-batch failure.
     fail_apply_on_call: int | None = None
@@ -141,6 +144,9 @@ class FakeStateStore:
 
     async def reverse_delta(self, delta_id: str) -> None:
         self.reversed_ids.append(delta_id)
+
+    async def pending_review_delta_ids(self, campaign_id: str) -> set[str]:
+        return set(self.pending_delta_ids)
 
     async def get_campaign_row(self, campaign_id: str) -> dict | None:
         if campaign_id not in self.db.campaigns:

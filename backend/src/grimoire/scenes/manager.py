@@ -476,6 +476,7 @@ class SceneManager:
             pov_character_ref=init.pov_character_ref,
             present_character_refs=list(dict.fromkeys(init.present_character_refs)),
             present_pc_refs=list(dict.fromkeys(init.present_pc_refs)),
+            declared_character_refs=list(dict.fromkeys(init.present_character_refs)),
             mood=init.mood,
             tags=list(init.tags),
         )
@@ -1276,24 +1277,31 @@ class SceneManager:
             # Undo the cast additions ``append_post`` made for removed NPC posts:
             # an NPC author is added to ``present_character_refs`` when it first
             # posts, so dropping its last surviving post must drop it too (else
-            # the HUD/speaker loop keeps a character whose posts are gone). PCs
-            # are durable scene participants and are left untouched.
-            removed_npcs = {
-                p.author_npc_ref
-                for p in removed
-                if p.author_kind == AuthorKind.NPC and p.author_npc_ref
-            }
-            if removed_npcs:
-                kept_npcs = {
+            # the HUD/speaker loop keeps a character whose posts are gone). But
+            # only for NPCs whose presence was post-derived — never drop one
+            # that was in the scene's declared cast. PCs are durable
+            # participants and are left untouched. ``declared_character_refs is
+            # None`` means a legacy sidecar with unknown initial cast, so we
+            # stay conservative and drop nothing.
+            declared = scene.declared_character_refs
+            if declared is not None:
+                declared_set = set(declared)
+                removed_npcs = {
                     p.author_npc_ref
-                    for p in kept
+                    for p in removed
                     if p.author_kind == AuthorKind.NPC and p.author_npc_ref
                 }
-                drop = removed_npcs - kept_npcs
-                if drop:
-                    scene.present_character_refs = [
-                        ref for ref in scene.present_character_refs if ref not in drop
-                    ]
+                if removed_npcs:
+                    kept_npcs = {
+                        p.author_npc_ref
+                        for p in kept
+                        if p.author_kind == AuthorKind.NPC and p.author_npc_ref
+                    }
+                    drop = removed_npcs - kept_npcs - declared_set
+                    if drop:
+                        scene.present_character_refs = [
+                            ref for ref in scene.present_character_refs if ref not in drop
+                        ]
             self._hydrate_records(scene)
             records = self._records_for(scene.id)
             self._post_records[scene.id] = {

@@ -2047,6 +2047,24 @@ class StateStore:
             # active-deltas queries.
             await mark_reversed(conn, row["delta_id"])
 
+    async def pending_review_delta_ids(self, campaign_id: str) -> set[str]:
+        """Delta ids that are queued for review but not yet applied.
+
+        These rows live in the delta table (so ``get_delta_log`` returns them)
+        but were never applied to their target, so they must not be reversed —
+        reversing a never-applied delta with ``before=None`` would delete a live
+        row. Rejected review items are already ``mark_reversed``, so only
+        ``pending`` rows need filtering.
+        """
+        async with self.db.acquire() as conn:
+            cur = await conn.execute(
+                "SELECT delta_id FROM review_queue WHERE campaign_id = ? AND status = 'pending'",
+                (campaign_id,),
+            )
+            rows = await cur.fetchall()
+            await cur.close()
+        return {row["delta_id"] for row in rows}
+
     async def get_delta_log(
         self,
         *,

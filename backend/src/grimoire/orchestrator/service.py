@@ -669,10 +669,21 @@ class OrchestratorService:
         requeued_review_ids: list[str] = []
         warnings: list[str] = []
 
+        # Queued-but-unapplied review deltas must not be reversed/re-queued.
+        skip_ids: set[str] = set()
+        getter = getattr(self._store, "pending_review_delta_ids", None)
+        if getter is not None:
+            try:
+                skip_ids = set(await getter(campaign_id))
+            except Exception:
+                skip_ids = set()
+
         for tid in sorted(fully_contained, key=lambda t: min_order[t], reverse=True):
             failed: list[str] = []
             try:
-                ids = await self._reverse_turn_deltas(campaign_id, tid, failed_out=failed)
+                ids = await self._reverse_turn_deltas(
+                    campaign_id, tid, failed_out=failed, skip_ids=skip_ids
+                )
             except Exception as exc:
                 warnings.append(f"failed to reverse turn {tid}: {exc}")
                 continue
@@ -696,7 +707,9 @@ class OrchestratorService:
 
         for tid in sorted(straddling, key=lambda t: min_order[t], reverse=True):
             try:
-                ids, review_ids, failed = await self._reverse_and_requeue_turn(campaign_id, tid)
+                ids, review_ids, failed = await self._reverse_and_requeue_turn(
+                    campaign_id, tid, skip_ids=skip_ids
+                )
             except Exception as exc:
                 warnings.append(f"failed to reverse straddling turn {tid}: {exc}")
                 continue
@@ -721,6 +734,17 @@ class OrchestratorService:
 
         await self._scenes.truncate_scene_from(post_id, source="cascade_delete")
 
+        # Continuity facts/commitments are written outside the reversible delta
+        # log (DeltaApplier routes them to the continuity service), so the
+        # reversals above don't retract them — do it explicitly for fully
+        # removed turns. Straddling turns keep theirs (a post still survives).
+        await self._retract_continuity_for_turns(campaign_id, fully_contained, warnings)
+
+        # Cast-change review prompts live in a separate store, not the delta
+        # log; dismiss any queued by fully removed turns so the HUD can't later
+        # apply a change whose evidence was deleted.
+        await self._dismiss_cast_changes_for_turns(scene_id, set(fully_contained), warnings)
+
         top = await self._recent_turn_ids(campaign_id, 1)
         state.last_turn_id = top[0] if top else None
 
@@ -730,6 +754,38 @@ class OrchestratorService:
             requeued_review_ids=requeued_review_ids,
             warnings=warnings,
         )
+
+    async def _retract_continuity_for_turns(
+        self, campaign_id: CampaignId, turn_ids: list[TurnId], warnings: list[str]
+    ) -> None:
+        if not turn_ids or self._continuity is None:
+            return
+        from grimoire.continuity.registry import resolve_continuity
+
+        service = resolve_continuity(self._continuity, campaign_id)
+        if service is None or not hasattr(service, "retract_turn"):
+            return
+        for tid in turn_ids:
+            try:
+                await service.retract_turn(tid)
+            except Exception as exc:
+                warnings.append(f"turn {tid}: continuity retraction failed: {exc}")
+
+    async def _dismiss_cast_changes_for_turns(
+        self, scene_id: SceneId, turn_ids: set[TurnId], warnings: list[str]
+    ) -> None:
+        if not turn_ids:
+            return
+        try:
+            pending = await self._scenes.list_pending_cast_changes(scene_id)
+        except Exception:
+            return
+        for change in pending:
+            if getattr(change, "turn_id", None) in turn_ids:
+                try:
+                    await self._scenes.dismiss_cast_change(scene_id, change.id)
+                except Exception as exc:
+                    warnings.append(f"cast change {change.id}: dismiss failed: {exc}")
 
     # ------------------------------------------------------------------ #
     # Retcon / replay (delegated to RetconCoordinator)
@@ -1850,6 +1906,7 @@ class OrchestratorService:
         turn_id: TurnId,
         *,
         failed_out: list[str] | None = None,
+        skip_ids: set[str] | None = None,
     ) -> list[str]:
         log = await self._store.get_delta_log(
             campaign_id=campaign_id, turn_id=turn_id, include_reversed=False
@@ -1857,8 +1914,12 @@ class OrchestratorService:
         # Reverse in LIFO order to undo most recent first. Deltas that can't be
         # reversed are logged and, when ``failed_out`` is supplied, collected so
         # the caller can surface them rather than report a clean success.
+        # ``skip_ids`` holds queued-but-unapplied review deltas, which must not
+        # be reversed (reversing a never-applied delta deletes a live row).
         reversed_ids: list[str] = []
         for record in reversed(log):
+            if skip_ids is not None and record.id in skip_ids:
+                continue
             try:
                 await self._store.reverse_delta(record.id)
                 reversed_ids.append(record.id)
@@ -1869,7 +1930,7 @@ class OrchestratorService:
         return reversed_ids
 
     async def _reverse_and_requeue_turn(
-        self, campaign_id: CampaignId, turn_id: TurnId
+        self, campaign_id: CampaignId, turn_id: TurnId, *, skip_ids: set[str] | None = None
     ) -> tuple[list[str], list[str], list[str]]:
         """Reverse a turn's deltas, then re-queue each for human review.
 
@@ -1877,7 +1938,9 @@ class OrchestratorService:
         longer be auto-trusted, so they are reversed and re-queued. Approve
         (existing review flow) re-applies; reject leaves them reversed. Returns
         ``(reversed_ids, review_ids, failed_ids)`` so the caller can surface
-        deltas that could not be reversed.
+        deltas that could not be reversed. ``skip_ids`` holds queued-but-
+        unapplied review deltas, which are left as-is (already in the review
+        queue) rather than reversed/duplicated.
         """
         log = await self._store.get_delta_log(
             campaign_id=campaign_id, turn_id=turn_id, include_reversed=False
@@ -1886,6 +1949,8 @@ class OrchestratorService:
         review_ids: list[str] = []
         failed_ids: list[str] = []
         for record in reversed(log):
+            if skip_ids is not None and record.id in skip_ids:
+                continue
             try:
                 await self._store.reverse_delta(record.id)
                 reversed_ids.append(record.id)

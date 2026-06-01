@@ -76,6 +76,10 @@ class InMemoryContinuityStore(ContinuityStore):
         wanted = set(statuses)
         return [c for c in self._commitments.values() if c.status in wanted]
 
+    async def delete_commitment(self, cid: CommitmentId) -> None:
+        async with self._lock:
+            self._commitments.pop(cid, None)
+
     async def put_knowledge(self, entry: KnowledgeEntry) -> None:
         async with self._lock:
             self._knowledge[(entry.character_id, entry.fact_id)] = entry

@@ -230,6 +230,9 @@ def _scene_to_yaml(scene: Scene, post_records: dict | None = None) -> dict:
         "pov_character_ref": scene.pov_character_ref,
         "present_character_refs": list(scene.present_character_refs),
         "present_pc_refs": list(scene.present_pc_refs),
+        "declared_character_refs": (
+            None if scene.declared_character_refs is None else list(scene.declared_character_refs)
+        ),
         "mood": scene.mood,
         "post_count": scene.post_count,
         "threads_introduced": _threads_to_yaml(scene.threads_introduced),
@@ -269,6 +272,11 @@ def _yaml_to_scene(data: dict) -> Scene:
         pov_character_ref=data.get("pov_character_ref"),
         present_character_refs=list(data.get("present_character_refs") or []),
         present_pc_refs=list(data.get("present_pc_refs") or []),
+        declared_character_refs=(
+            None
+            if data.get("declared_character_refs") is None
+            else list(data.get("declared_character_refs"))
+        ),
         mood=data.get("mood"),
         post_count=int(data.get("post_count") or 0),
         threads_introduced=_yaml_to_threads(data.get("threads_introduced")),
