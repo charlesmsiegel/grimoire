@@ -304,6 +304,58 @@ async def test_truncate_scene_from_removes_suffix(tmp_path: Path) -> None:
     assert sum(1 for e in bus.events if e.type == POST_DELETED) == 2
 
 
+async def test_truncate_scene_from_drops_npc_with_no_surviving_post(tmp_path: Path) -> None:
+    manager, _ = _manager(tmp_path)
+    scene = await manager.start_scene(
+        SceneInit(
+            campaign_id="c",
+            title="Scene",
+            present_pc_refs=["alistair"],
+            present_character_refs=["alistair"],
+        )
+    )
+    await manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
+    )
+    await manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NPC, author_npc_ref="guard", body="halt", is_player=False),
+    )
+    # The NPC was added to the cast by its post.
+    assert "guard" in (await manager.get_scene(scene.id)).present_character_refs
+
+    guard_post = (await manager.get_posts(scene.id))[1]
+    await manager.truncate_scene_from(guard_post.id, source="cascade_delete")
+
+    refreshed = await manager.get_scene(scene.id)
+    # The NPC's only post is gone, so it leaves the cast; the PC stays.
+    assert "guard" not in refreshed.present_character_refs
+    assert "alistair" in refreshed.present_character_refs
+    assert refreshed.present_pc_refs == ["alistair"]
+
+
+async def test_truncate_scene_from_keeps_npc_with_surviving_post(tmp_path: Path) -> None:
+    manager, _ = _manager(tmp_path)
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    await manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NPC, author_npc_ref="guard", body="first", is_player=False),
+    )
+    await manager.append_post(
+        scene.id,
+        new_post(
+            author_kind=AuthorKind.NPC, author_npc_ref="guard", body="second", is_player=False
+        ),
+    )
+    second = (await manager.get_posts(scene.id))[1]
+    await manager.truncate_scene_from(second.id, source="cascade_delete")
+
+    refreshed = await manager.get_scene(scene.id)
+    # A surviving post still authored by the NPC keeps it present.
+    assert "guard" in refreshed.present_character_refs
+
+
 async def test_active_scene_tracking(tmp_path: Path) -> None:
     manager, _ = _manager(tmp_path)
     s1 = await manager.start_scene(
