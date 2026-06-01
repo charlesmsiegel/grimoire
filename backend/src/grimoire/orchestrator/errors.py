@@ -38,6 +38,16 @@ class NoTurnsToUndoError(OrchestratorError):
         self.campaign_id = campaign_id
 
 
+class SceneClosedError(OrchestratorError):
+    """Raised when a mutating op (e.g. cascade delete) targets a closed scene."""
+
+    http_status = 409
+
+    def __init__(self, scene_id: str) -> None:
+        super().__init__(f"scene {scene_id!r} is closed")
+        self.scene_id = scene_id
+
+
 class TurnCancelledError(OrchestratorError):
     """Raised internally when an active turn is cooperatively cancelled."""
 
@@ -145,6 +155,7 @@ __all__ = [
     "RetconBatchClosedError",
     "RetconBatchNotFoundError",
     "RetconInFlightError",
+    "SceneClosedError",
     "TurnAlreadyInProgressError",
     "TurnCancelledError",
     "TurnTimeoutError",
