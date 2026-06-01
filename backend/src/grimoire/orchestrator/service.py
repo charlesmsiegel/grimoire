@@ -34,6 +34,7 @@ from grimoire.orchestrator.errors import (
     NoTurnsToUndoError,
     OrchestratorError,
     SceneClosedError,
+    TurnAlreadyInProgressError,
     TurnCancelledError,
     TurnTimeoutError,
     UnknownCampaignError,
@@ -636,6 +637,15 @@ class OrchestratorService:
         if scene.closed:
             raise SceneClosedError(scene_id)
 
+        # Refuse to truncate while a turn is streaming into this scene: the
+        # active turn would keep applying deltas and append its model post
+        # after the cut, leaving an orphan response and un-reversed state (the
+        # turn-owned posts don't exist yet, so they aren't in the suffix we
+        # reverse). The user must cancel/await the turn first.
+        state = self._state_for(campaign_id)
+        if state.active is not None and state.active.scene_id == scene_id:
+            raise TurnAlreadyInProgressError(campaign_id)
+
         posts = await self._scenes.get_posts(scene_id)
         target = next((p for p in posts if p.id == post_id), None)
         if target is None:
@@ -660,13 +670,19 @@ class OrchestratorService:
         warnings: list[str] = []
 
         for tid in sorted(fully_contained, key=lambda t: min_order[t], reverse=True):
+            failed: list[str] = []
             try:
-                ids = await self._reverse_turn_deltas(campaign_id, tid)
+                ids = await self._reverse_turn_deltas(campaign_id, tid, failed_out=failed)
             except Exception as exc:
                 warnings.append(f"failed to reverse turn {tid}: {exc}")
                 continue
             if ids:
                 reversed_turn_ids.append(tid)
+            if failed:
+                warnings.append(
+                    f"turn {tid}: {len(failed)} delta(s) could not be reversed "
+                    f"and remain applied: {failed}"
+                )
             await self._bus.emit(
                 Event(
                     type=events.TURN_UNDONE,
@@ -680,13 +696,18 @@ class OrchestratorService:
 
         for tid in sorted(straddling, key=lambda t: min_order[t], reverse=True):
             try:
-                ids, review_ids = await self._reverse_and_requeue_turn(campaign_id, tid)
+                ids, review_ids, failed = await self._reverse_and_requeue_turn(campaign_id, tid)
             except Exception as exc:
                 warnings.append(f"failed to reverse straddling turn {tid}: {exc}")
                 continue
             if ids:
                 reversed_turn_ids.append(tid)
             requeued_review_ids.extend(review_ids)
+            if failed:
+                warnings.append(
+                    f"turn {tid}: {len(failed)} delta(s) could not be reversed "
+                    f"and remain applied: {failed}"
+                )
             await self._bus.emit(
                 Event(
                     type=events.TURN_UNDONE,
@@ -700,7 +721,6 @@ class OrchestratorService:
 
         await self._scenes.truncate_scene_from(post_id, source="cascade_delete")
 
-        state = self._state_for(campaign_id)
         top = await self._recent_turn_ids(campaign_id, 1)
         state.last_turn_id = top[0] if top else None
 
@@ -1824,11 +1844,19 @@ class OrchestratorService:
                 break
         return seen
 
-    async def _reverse_turn_deltas(self, campaign_id: CampaignId, turn_id: TurnId) -> list[str]:
+    async def _reverse_turn_deltas(
+        self,
+        campaign_id: CampaignId,
+        turn_id: TurnId,
+        *,
+        failed_out: list[str] | None = None,
+    ) -> list[str]:
         log = await self._store.get_delta_log(
             campaign_id=campaign_id, turn_id=turn_id, include_reversed=False
         )
-        # Reverse in LIFO order to undo most recent first.
+        # Reverse in LIFO order to undo most recent first. Deltas that can't be
+        # reversed are logged and, when ``failed_out`` is supplied, collected so
+        # the caller can surface them rather than report a clean success.
         reversed_ids: list[str] = []
         for record in reversed(log):
             try:
@@ -1836,28 +1864,34 @@ class OrchestratorService:
                 reversed_ids.append(record.id)
             except Exception as exc:
                 logger.warning("reverse_delta(%s) failed: %s", record.id, exc)
+                if failed_out is not None:
+                    failed_out.append(record.id)
         return reversed_ids
 
     async def _reverse_and_requeue_turn(
         self, campaign_id: CampaignId, turn_id: TurnId
-    ) -> tuple[list[str], list[str]]:
+    ) -> tuple[list[str], list[str], list[str]]:
         """Reverse a turn's deltas, then re-queue each for human review.
 
         Used for turns that straddle a cascade-delete cut: the deltas can no
         longer be auto-trusted, so they are reversed and re-queued. Approve
-        (existing review flow) re-applies; reject leaves them reversed.
+        (existing review flow) re-applies; reject leaves them reversed. Returns
+        ``(reversed_ids, review_ids, failed_ids)`` so the caller can surface
+        deltas that could not be reversed.
         """
         log = await self._store.get_delta_log(
             campaign_id=campaign_id, turn_id=turn_id, include_reversed=False
         )
         reversed_ids: list[str] = []
         review_ids: list[str] = []
+        failed_ids: list[str] = []
         for record in reversed(log):
             try:
                 await self._store.reverse_delta(record.id)
                 reversed_ids.append(record.id)
             except Exception as exc:
                 logger.warning("reverse_delta(%s) failed: %s", record.id, exc)
+                failed_ids.append(record.id)
                 continue
             try:
                 review_id = await self._store.queue_for_review(
@@ -1880,7 +1914,7 @@ class OrchestratorService:
                         },
                     )
                 )
-        return reversed_ids, review_ids
+        return reversed_ids, review_ids, failed_ids
 
     # ------------------------------------------------------------------ #
     # Validation + utility

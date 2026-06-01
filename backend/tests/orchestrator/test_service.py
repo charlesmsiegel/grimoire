@@ -12,7 +12,7 @@ from grimoire.orchestrator import (
     UnknownCampaignError,
     UnknownPCError,
 )
-from grimoire.orchestrator.errors import SceneClosedError
+from grimoire.orchestrator.errors import SceneClosedError, TurnAlreadyInProgressError
 from grimoire.scenes import AuthorKind, new_post
 from grimoire.scenes.manager import SceneManager
 from grimoire.scenes.types import SceneInit
@@ -675,3 +675,70 @@ async def test_cascade_delete_rejects_closed_scene(
     )
     with pytest.raises(SceneClosedError):
         await orch.delete_post_cascade("c1", scene.id, appended.id)
+
+
+async def test_cascade_delete_rejected_during_active_turn(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    from types import SimpleNamespace
+
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1"),
+    )
+    appended = (await scene_manager.get_posts(scene.id))[0]
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    # Simulate a turn streaming into this scene.
+    orch._state_for("c1").active = SimpleNamespace(turn_id="T1", scene_id=scene.id)
+
+    with pytest.raises(TurnAlreadyInProgressError):
+        await orch.delete_post_cascade("c1", scene.id, appended.id)
+    # Nothing was truncated.
+    assert len(await scene_manager.get_posts(scene.id)) == 1
+
+
+async def test_cascade_delete_surfaces_failed_reversals(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
+    )
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1"),
+    )
+    _seed_applied(fake_store, campaign_id="c1", turn_id="T1", target_id="fact-1")
+
+    async def _boom(delta_id: str) -> None:
+        raise RuntimeError("cannot reverse")
+
+    fake_store.reverse_delta = _boom  # type: ignore[assignment]
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    posts = await scene_manager.get_posts(scene.id)
+    target = next(p for p in posts if p.body == "m1")
+    result = await orch.delete_post_cascade("c1", scene.id, target.id)
+
+    # The API no longer reports a clean success: the un-reversed delta is surfaced.
+    assert any("could not be reversed" in w for w in result.warnings)
+    assert result.reversed_turn_ids == []
+    # The prose is still truncated (the user's explicit intent).
+    assert [p.body for p in await scene_manager.get_posts(scene.id)] == ["hi"]
