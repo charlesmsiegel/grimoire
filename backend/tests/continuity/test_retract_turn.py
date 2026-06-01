@@ -184,3 +184,16 @@ async def test_turn_has_continuity_writes_detects_each_write_kind():
 
     # A turn nothing was attributed to stays False.
     assert await service.turn_has_continuity_writes("none") is False
+
+
+async def test_turn_had_fact_update_records_updating_turn():
+    """update_fact attributes the edit to its turn so cascade delete can warn it
+    wasn't reverted (no pre-image)."""
+    service = ContinuityService()
+    fid = await service.add_fact(make_fact(text="orig", post="T0"), source="extractor")
+    assert service.turn_had_fact_update("T1") is False
+    await service.update_fact(fid, {"text": "edited"}, in_post="T1")
+    assert service.turn_had_fact_update("T1") is True
+    # An update with no in_post is not attributed to any turn.
+    await service.update_fact(fid, {"text": "edited again"})
+    assert service.turn_had_fact_update("none") is False

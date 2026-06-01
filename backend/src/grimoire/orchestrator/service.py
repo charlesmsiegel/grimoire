@@ -528,39 +528,50 @@ class OrchestratorService:
 
     async def advance(self, campaign_id: CampaignId, scene_id: SceneId) -> AdvanceResult:
         await self._require_campaign(campaign_id)
-        adv = await self._scenes.on_advance_requested(scene_id)
-        # §10: scene manager emits ADVANCE_REQUESTED on its own (scene) bus
-        # which is a different bus type; the orchestrator owns surfacing it
-        # on the shared event bus.
-        await self._bus.emit(
-            Event(
-                type=events.ADVANCE_REQUESTED,
-                payload={
-                    "campaign_id": campaign_id,
-                    "scene_id": scene_id,
-                    "pending_post_count": len(adv.pending_posts),
-                },
+        # Like submit_post: on_advance_requested snapshots the pending PC posts
+        # and moves the advance watermark before _run_turn sets state.active/
+        # queued. Announce the in-flight advance via state.submitting and run the
+        # trigger under the turn lock, so a concurrent delete_post_cascade can't
+        # truncate the pending posts this advance turn is about to consume.
+        state = self._state_for(campaign_id)
+        state.submitting += 1
+        try:
+            async with state.lock:
+                adv = await self._scenes.on_advance_requested(scene_id)
+            # §10: scene manager emits ADVANCE_REQUESTED on its own (scene) bus
+            # which is a different bus type; the orchestrator owns surfacing it
+            # on the shared event bus.
+            await self._bus.emit(
+                Event(
+                    type=events.ADVANCE_REQUESTED,
+                    payload={
+                        "campaign_id": campaign_id,
+                        "scene_id": scene_id,
+                        "pending_post_count": len(adv.pending_posts),
+                    },
+                )
             )
-        )
-        # Build a "combined" player input from the pending PC posts so the
-        # Context Builder can pack both as the prompt; the response addresses
-        # both.
-        combined_input = "\n\n".join(
-            f"[{p.author_pc_ref or 'pc'}] {p.body}" for p in adv.pending_posts
-        )
-        turn_id = await self._run_turn(
-            campaign_id=campaign_id,
-            scene_id=scene_id,
-            player_input=combined_input,
-            triggering_pc=None,
-            player_post_id=None,
-        )
-        return AdvanceResult(
-            scene=_pydantic_scene(adv.scene),
-            pending_posts=[_pydantic_post(p) for p in adv.pending_posts],
-            turn_id=turn_id,
-            note="advance dispatched",
-        )
+            # Build a "combined" player input from the pending PC posts so the
+            # Context Builder can pack both as the prompt; the response addresses
+            # both.
+            combined_input = "\n\n".join(
+                f"[{p.author_pc_ref or 'pc'}] {p.body}" for p in adv.pending_posts
+            )
+            turn_id = await self._run_turn(
+                campaign_id=campaign_id,
+                scene_id=scene_id,
+                player_input=combined_input,
+                triggering_pc=None,
+                player_post_id=None,
+            )
+            return AdvanceResult(
+                scene=_pydantic_scene(adv.scene),
+                pending_posts=[_pydantic_post(p) for p in adv.pending_posts],
+                turn_id=turn_id,
+                note="advance dispatched",
+            )
+        finally:
+            state.submitting -= 1
 
     async def next_speaker(self, campaign_id: CampaignId) -> None:
         """Signal the speaker loop to pick and stream the next character."""
@@ -756,7 +767,7 @@ class OrchestratorService:
 
         for tid in sorted(straddling, key=lambda t: min_order[t], reverse=True):
             try:
-                ids, review_ids, failed = await self._reverse_and_requeue_turn(
+                ids, review_ids, failed, requeue_failed = await self._reverse_and_requeue_turn(
                     campaign_id, tid, skip_ids=skip_ids
                 )
             except Exception as exc:
@@ -769,6 +780,12 @@ class OrchestratorService:
                 warnings.append(
                     f"turn {tid}: {len(failed)} delta(s) could not be reversed "
                     f"and remain applied: {failed}"
+                )
+            if requeue_failed:
+                warnings.append(
+                    f"turn {tid}: {len(requeue_failed)} delta(s) were reversed but could "
+                    f"not be re-queued for review (state removed without a re-approval "
+                    f"prompt): {requeue_failed}"
                 )
             await self._bus.emit(
                 Event(
@@ -794,8 +811,14 @@ class OrchestratorService:
 
         # Cast-change review prompts live in a separate store, not the delta
         # log; dismiss any queued by fully removed turns so the HUD can't later
-        # apply a change whose evidence was deleted.
+        # apply a change whose evidence was deleted. A change the user already
+        # *confirmed* has mutated the cast through the presence APIs (no
+        # reversible delta), and reversing it soundly is ambiguous (the member
+        # may have other evidence), so surface it as a warning instead.
         await self._dismiss_cast_changes_for_turns(scene_id, set(fully_contained), warnings)
+        await self._warn_confirmed_cast_changes_for_turns(
+            scene_id, set(fully_contained), warnings
+        )
 
         # Fully-removed turns may have queued low-confidence deltas for review.
         # Those were skipped (never applied, so not reversed), but their
@@ -823,11 +846,23 @@ class OrchestratorService:
         service = resolve_continuity(self._continuity, campaign_id)
         if service is None or not hasattr(service, "retract_turn"):
             return
+        had_fact_update = getattr(service, "turn_had_fact_update", None)
         for tid in turn_ids:
             try:
                 await service.retract_turn(tid)
             except Exception as exc:
                 warnings.append(f"turn {tid}: continuity retraction failed: {exc}")
+            # FACT_UPDATE patches a fact in place with no pre-image, so
+            # retract_turn leaves them applied; surface that to the user.
+            if had_fact_update is not None:
+                try:
+                    if had_fact_update(tid):
+                        warnings.append(
+                            f"turn {tid}: a fact edit (FACT_UPDATE) could not be reverted "
+                            f"(no pre-image) and remains applied"
+                        )
+                except Exception:
+                    pass
 
     async def _warn_straddling_continuity(
         self, campaign_id: CampaignId, turn_ids: list[TurnId], warnings: list[str]
@@ -894,6 +929,27 @@ class OrchestratorService:
                     await self._scenes.dismiss_cast_change(scene_id, change.id)
                 except Exception as exc:
                     warnings.append(f"cast change {change.id}: dismiss failed: {exc}")
+
+    async def _warn_confirmed_cast_changes_for_turns(
+        self, scene_id: SceneId, turn_ids: set[TurnId], warnings: list[str]
+    ) -> None:
+        if not turn_ids:
+            return
+        lister = getattr(self._scenes, "list_confirmed_cast_changes", None)
+        if lister is None:
+            return
+        try:
+            confirmed = await lister(scene_id)
+        except Exception:
+            return
+        for change in confirmed:
+            if getattr(change, "turn_id", None) in turn_ids:
+                warnings.append(
+                    f"cast change {getattr(change, 'id', '?')} "
+                    f"({getattr(change, 'change', '?')} "
+                    f"{getattr(change, 'character_ref', '?')}) was confirmed by a removed "
+                    f"turn and already changed the scene cast; it was not reverted"
+                )
 
     # ------------------------------------------------------------------ #
     # Retcon / replay (delegated to RetconCoordinator)
@@ -2039,32 +2095,44 @@ class OrchestratorService:
 
     async def _reverse_and_requeue_turn(
         self, campaign_id: CampaignId, turn_id: TurnId, *, skip_ids: set[str] | None = None
-    ) -> tuple[list[str], list[str], list[str]]:
+    ) -> tuple[list[str], list[str], list[str], list[str]]:
         """Reverse a turn's deltas, then re-queue each for human review.
 
         Used for turns that straddle a cascade-delete cut: the deltas can no
         longer be auto-trusted, so they are reversed and re-queued. Approve
         (existing review flow) re-applies; reject leaves them reversed. Returns
-        ``(reversed_ids, review_ids, failed_ids)`` so the caller can surface
-        deltas that could not be reversed. ``skip_ids`` holds queued-but-
-        unapplied review deltas, which are left as-is (already in the review
-        queue) rather than reversed/duplicated.
+        ``(reversed_ids, review_ids, failed_ids, requeue_failed_ids)`` so the
+        caller can surface deltas that could not be reversed *or* could not be
+        re-queued. ``skip_ids`` holds queued-but-unapplied review deltas, which
+        are left as-is (already in the review queue) rather than reversed.
         """
         log = await self._store.get_delta_log(
             campaign_id=campaign_id, turn_id=turn_id, include_reversed=False
         )
         reversed_ids: list[str] = []
-        review_ids: list[str] = []
         failed_ids: list[str] = []
+        # Reverse LIFO (newest first) so dependent rows unwind in the opposite
+        # order they were applied.
+        reversed_records: list[Any] = []
         for record in reversed(log):
             if skip_ids is not None and record.id in skip_ids:
                 continue
             try:
                 await self._store.reverse_delta(record.id)
                 reversed_ids.append(record.id)
+                reversed_records.append(record)
             except Exception as exc:
                 logger.warning("reverse_delta(%s) failed: %s", record.id, exc)
                 failed_ids.append(record.id)
+        # Re-queue in original *apply* order (oldest first): approving the review
+        # items must replay the deltas in the order they were first applied (e.g.
+        # A→B then B→C lands on C), not the LIFO reversal order (which would land
+        # on B). The reversal above is only about safe unwinding.
+        reversed_set = {r.id for r in reversed_records}
+        review_ids: list[str] = []
+        requeue_failed_ids: list[str] = []
+        for record in log:
+            if record.id not in reversed_set:
                 continue
             try:
                 review_id = await self._store.queue_for_review(
@@ -2073,21 +2141,46 @@ class OrchestratorService:
                     campaign_id=campaign_id,
                 )
             except Exception as exc:
+                # The delta is already reversed; if we can't re-queue it the
+                # caller must warn so the user knows state was removed without a
+                # re-approval prompt.
                 logger.warning("queue_for_review(%s) failed: %s", record.id, exc)
+                requeue_failed_ids.append(record.id)
                 continue
             if review_id:
                 review_ids.append(str(review_id))
                 await self._bus.emit(
                     Event(
                         type=events.REVIEW_ITEM_ADDED,
-                        payload={
-                            "campaign_id": campaign_id,
-                            "review_id": review_id,
-                            "turn_id": turn_id,
-                        },
+                        payload=self._review_item_added_payload(
+                            campaign_id, review_id, record, turn_id
+                        ),
                     )
                 )
-        return reversed_ids, review_ids, failed_ids
+        return reversed_ids, review_ids, failed_ids, requeue_failed_ids
+
+    @staticmethod
+    def _review_item_added_payload(
+        campaign_id: CampaignId, review_id: Any, record: Any, turn_id: TurnId
+    ) -> dict[str, Any]:
+        """Build a REVIEW_ITEM_ADDED payload the frontend can consume live.
+
+        ``useCampaignEvent`` pushes a review onto the queue only when the message
+        carries ``item.id`` + ``item.summary``; the bare ``review_id``/``turn_id``
+        shape left the cascade-requeued items invisible until a reload. Keep the
+        legacy keys for other consumers and add the ``item`` envelope.
+        """
+        delta = getattr(record, "delta", None)
+        kind = getattr(delta, "kind", None)
+        kind_str = getattr(kind, "value", None) or (str(kind) if kind is not None else "")
+        target = getattr(delta, "target_id", None) or getattr(record, "target_id", None)
+        summary = " ".join(part for part in (kind_str, str(target) if target else "") if part)
+        return {
+            "campaign_id": campaign_id,
+            "review_id": review_id,
+            "turn_id": turn_id,
+            "item": {"id": str(review_id), "summary": summary or "review item"},
+        }
 
     # ------------------------------------------------------------------ #
     # Validation + utility

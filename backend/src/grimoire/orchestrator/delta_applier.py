@@ -359,7 +359,10 @@ class DeltaApplier:
                 if not fact_id:
                     return False
                 patch = payload.get("patch") or {}
-                await service.update_fact(fact_id, patch)
+                # Pass turn_id so the continuity service can record that this
+                # turn edited a fact (used to warn on cascade delete: FACT_UPDATE
+                # has no pre-image and is not reversed).
+                await service.update_fact(fact_id, patch, in_post=turn_id)
                 return True
 
             if delta.kind == DeltaKind.COMMITMENT_ADD:

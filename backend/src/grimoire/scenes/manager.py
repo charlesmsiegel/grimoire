@@ -904,6 +904,17 @@ class SceneManager:
             if character_ref in scene.present_character_refs:
                 scene.present_character_refs.remove(character_ref)
                 changed = True
+            # A character that leaves is no longer durably declared: drop it from
+            # declared_character_refs too. Otherwise a stale declared entry makes
+            # truncate_scene_from treat a later *post-derived* re-entry as durable
+            # and resurrect a cast member whose only surviving evidence was the
+            # post being deleted.
+            if (
+                scene.declared_character_refs is not None
+                and character_ref in scene.declared_character_refs
+            ):
+                scene.declared_character_refs.remove(character_ref)
+                changed = True
             was_pc = character_ref in scene.present_pc_refs
             if was_pc:
                 scene.present_pc_refs.remove(character_ref)
@@ -994,6 +1005,14 @@ class SceneManager:
         if self._cast_change_store is None:
             return []
         return await self._cast_change_store.list_pending(scene_id)
+
+    async def list_confirmed_cast_changes(self, scene_id: str) -> list:
+        if self._cast_change_store is None:
+            return []
+        lister = getattr(self._cast_change_store, "list_confirmed", None)
+        if lister is None:
+            return []
+        return await lister(scene_id)
 
     async def confirm_cast_change(self, scene_id: str, change_id: str) -> None:
         """Apply a pending cast change through the presence APIs and mark it
@@ -1286,8 +1305,37 @@ class SceneManager:
                 heading_pattern=self.config.files.post_heading_pattern,
             )
             scene.post_count = len(kept)
-            if scene.last_advance_at_post > scene.post_count:
-                scene.last_advance_at_post = scene.post_count
+            # Roll the advance watermark back to the last surviving model
+            # response. Merely clamping to post_count would leave PC inputs whose
+            # response we just deleted marked "already advanced"
+            # (posts_since_last_advance empty → NothingToAdvance); rolling back to
+            # the last non-player post lets the user re-advance the still-visible
+            # inputs whose batch lost its response.
+            last_model_order = max(
+                (p.order_in_scene for p in kept if not p.is_player), default=0
+            )
+            if scene.last_advance_at_post > last_model_order:
+                scene.last_advance_at_post = last_model_order
+            # Derived summaries/threads can reference the now-deleted prose. Drop
+            # the running summary + key beats (they regenerate on the next
+            # cadence) and prune thread anchors beyond the new post_count so
+            # context assembly and the HUD don't surface events from removed
+            # posts. (Final summary is untouched — delete is rejected on closed
+            # scenes.)
+            if scene.running_summary:
+                scene.running_summary = None
+            if scene.key_beats:
+                scene.key_beats = []
+            scene.threads_introduced = [
+                t
+                for t in scene.threads_introduced
+                if t.introduced_at_post is None or t.introduced_at_post <= scene.post_count
+            ]
+            scene.threads_paid_off = [
+                t
+                for t in scene.threads_paid_off
+                if t.paid_off_at_post is None or t.paid_off_at_post <= scene.post_count
+            ]
             # Undo the cast additions ``append_post`` made for removed NPC posts:
             # an NPC author is added to ``present_character_refs`` when it first
             # posts, so dropping its last surviving post must drop it too (else

@@ -952,6 +952,234 @@ async def test_cascade_delete_warns_on_straddling_continuity(
     assert "from T1" in {f.text for f in active}
 
 
+async def _seed_split_straddle(scene_manager, fake_store):
+    """Scene where deleting m2 makes split turn T1 straddle and T2 fully removed."""
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
+    )
+    for body, tid in (("m1", "T1"), ("m2", "T1"), ("m3", "T2")):
+        await scene_manager.append_post(
+            scene.id,
+            new_post(author_kind=AuthorKind.NARRATOR, body=body, is_player=False, turn_id=tid),
+        )
+    return scene
+
+
+async def test_cascade_delete_requeues_straddling_deltas_in_apply_order(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    """Straddling deltas reverse LIFO but must re-queue in original apply order
+    so approving the review items replays A→B→C (not the reversed C→B→A)."""
+    scene = await _seed_split_straddle(scene_manager, fake_store)
+    for target in ("f0", "f1", "f2"):
+        _seed_applied(fake_store, campaign_id="c1", turn_id="T1", target_id=target)
+    _seed_applied(fake_store, campaign_id="c1", turn_id="T2", target_id="g0")
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    target = next(p for p in await scene_manager.get_posts(scene.id) if p.body == "m2")
+    await orch.delete_post_cascade("c1", scene.id, target.id)
+
+    # Only the straddling turn T1 re-queues, and in apply order f0, f1, f2.
+    assert [r["delta"].target_id for r in fake_store.reviewed] == ["f0", "f1", "f2"]
+
+
+async def test_cascade_delete_warns_when_straddling_requeue_fails(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    """If queue_for_review fails after a straddling delta is already reversed,
+    the delete surfaces a warning (state removed without a re-approval prompt)."""
+    scene = await _seed_split_straddle(scene_manager, fake_store)
+    _seed_applied(fake_store, campaign_id="c1", turn_id="T1", target_id="f0")
+
+    async def _boom(**kwargs):
+        raise RuntimeError("review queue down")
+
+    fake_store.queue_for_review = _boom  # type: ignore[assignment]
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    target = next(p for p in await scene_manager.get_posts(scene.id) if p.body == "m2")
+    result = await orch.delete_post_cascade("c1", scene.id, target.id)
+    assert any("could not be re-queued" in w for w in result.warnings)
+
+
+async def test_cascade_delete_emits_review_item_in_client_shape(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    """The requeued-delta event carries item.{id,summary} so the frontend's
+    push-review handler shows it live (not just review_id/turn_id)."""
+    scene = await _seed_split_straddle(scene_manager, fake_store)
+    _seed_applied(fake_store, campaign_id="c1", turn_id="T1", target_id="f0")
+
+    seen: list = []
+    event_bus.subscribe("review_item_added", seen.append)
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    target = next(p for p in await scene_manager.get_posts(scene.id) if p.body == "m2")
+    await orch.delete_post_cascade("c1", scene.id, target.id)
+
+    assert seen
+    item = seen[0].payload["item"]
+    assert isinstance(item["id"], str) and item["id"]
+    assert isinstance(item["summary"], str) and item["summary"]
+
+
+async def test_cascade_delete_warns_on_unreverted_fact_update(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    """A FACT_UPDATE has no pre-image, so retract_turn leaves it applied; the
+    delete warns the edit was not reverted."""
+    from grimoire.continuity import ContinuityService
+    from tests.continuity.conftest import make_fact
+
+    continuity = ContinuityService()
+    fid = await continuity.add_fact(make_fact(text="orig", post="T0"), source="extractor")
+    await continuity.update_fact(fid, {"text": "edited in T1"}, in_post="T1")
+
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
+    )
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1"),
+    )
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+        continuity=continuity,
+    )
+    target = next(p for p in await scene_manager.get_posts(scene.id) if p.body == "m1")
+    result = await orch.delete_post_cascade("c1", scene.id, target.id)
+    assert any("FACT_UPDATE" in w for w in result.warnings)
+
+
+async def test_cascade_delete_warns_on_confirmed_cast_changes_for_removed_turns(
+    tmp_path, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    """A cast change the user already confirmed mutated the cast outside the
+    delta log; deleting its turn can't reverse it, so the delete warns."""
+    from grimoire.scenes.cast_changes import CastChangeStore
+    from grimoire.scenes.manager import SceneManagerConfig
+    from grimoire.storage.db import Database
+    from grimoire.testing.db_template import stamp_migrated_db
+    from grimoire.types.scene import CastChange
+
+    db = Database(stamp_migrated_db(tmp_path / "cc.sqlite"))
+    await db.connect()
+    try:
+        scene_manager = SceneManager(
+            tmp_path,
+            config=SceneManagerConfig(running_summary_every_n_posts=0),
+            event_bus=event_bus,
+            cast_change_store=CastChangeStore(db),
+        )
+        scene = await _seed(scene_manager, fake_store)
+        await scene_manager.append_post(
+            scene.id,
+            new_post(
+                author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True
+            ),
+        )
+        await scene_manager.append_post(
+            scene.id,
+            new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1"),
+        )
+        change_id = await scene_manager.queue_cast_change(
+            scene.id,
+            character_ref="library:worlds/w/characters/reyes",
+            change=CastChange.ENTER,
+            is_pc=False,
+            evidence="strides in",
+            confidence=0.8,
+            turn_id="T1",
+        )
+        await scene_manager.confirm_cast_change(scene.id, change_id)
+
+        orch = _build_orch(
+            scene_manager=scene_manager,
+            event_bus=event_bus,
+            fake_store=fake_store,
+            fake_gateway=fake_gateway,
+            fake_extractor=fake_extractor,
+            fake_context_builder=fake_context_builder,
+        )
+        target = next(p for p in await scene_manager.get_posts(scene.id) if p.body == "m1")
+        result = await orch.delete_post_cascade("c1", scene.id, target.id)
+        assert any("confirmed by a removed turn" in w for w in result.warnings)
+    finally:
+        await db.close()
+
+
+async def test_advance_blocks_concurrent_cascade_delete(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    """advance() holds the in-flight guard across on_advance_requested, so a
+    cascade delete racing the dispatch is rejected (would otherwise truncate the
+    pending PC posts the advance turn is about to consume)."""
+    scene = await _seed(scene_manager, fake_store, extra_pcs=("beatrice",))
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="p1", is_player=True),
+    )
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="beatrice", body="p2", is_player=True),
+    )
+    p1 = (await scene_manager.get_posts(scene.id))[0]
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    rejected: dict = {}
+    original = scene_manager.on_advance_requested
+
+    async def _hooked(scene_id):
+        # Mid-dispatch: a concurrent delete must be rejected by the guard.
+        try:
+            await orch.delete_post_cascade("c1", scene.id, p1.id)
+        except TurnAlreadyInProgressError:
+            rejected["ok"] = True
+        return await original(scene_id)
+
+    scene_manager.on_advance_requested = _hooked  # type: ignore[assignment]
+    await orch.advance("c1", scene.id)
+    assert rejected.get("ok") is True
+
+
 async def test_cascade_delete_rejects_review_items_for_removed_turns(
     scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
 ):

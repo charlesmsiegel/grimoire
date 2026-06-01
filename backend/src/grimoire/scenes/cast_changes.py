@@ -95,6 +95,17 @@ class CastChangeStore:
         )
         return [_row_to_model(r) for r in rows]
 
+    async def list_confirmed(self, scene_id: str) -> list[PendingCastChange]:
+        rows = await self._db.fetchall(
+            """
+            SELECT * FROM pending_cast_changes
+            WHERE scene_id = ? AND status = 'confirmed'
+            ORDER BY created_at
+            """,
+            (scene_id,),
+        )
+        return [_row_to_model(r) for r in rows]
+
     async def get(self, item_id: str) -> PendingCastChange | None:
         row = await self._db.fetchone(
             "SELECT * FROM pending_cast_changes WHERE id = ?",
