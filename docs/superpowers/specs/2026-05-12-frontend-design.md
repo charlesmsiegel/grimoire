@@ -80,9 +80,10 @@ Multi-PC flow: `InputArea` shows the Advance button when `scene.present_pc_refs.
 Submission flow:
 - `submit(text)` → `campaignApi.submitTurn(campaignId, activePcRef, text)`
 - `advance()` → `campaignApi.advance(campaignId, scene.id)`
-- `regenerate()` → `campaignApi.regenerate(campaignId)`
 - `undo()` → `campaignApi.undo(campaignId, 1)` then refresh
 - `endScene()` → `campaignApi.endScene(...)` then refresh
+
+Rerolling a response is no longer a turn-level command: the reroll consolidation (#512) removed the global `regenerate()` action in favour of the per-post swipe/alternate (`campaignApi.regeneratePost`), triggered from each post.
 - `setActivePC(ref)` — optimistic local update, swallows server failure (the next submit still records the chosen ref server-side)
 
 ### Source badges

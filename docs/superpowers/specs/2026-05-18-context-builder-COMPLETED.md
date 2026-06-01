@@ -48,6 +48,12 @@ When `ContextBuilderConfig.enable_voice_anchor` is True (default), each spotligh
 
 ### §11 — Regenerate cache
 
+> **Removed (#512).** The assembled-prompt cache (`context/cache.py`,
+> `ContextBuilderCache`, `make_cache_key`, the `_composition_hash` helper, and
+> the `context_cache` constructor argument) was deleted in the reroll
+> consolidation — it existed solely for the now-removed `regenerate_last`
+> path. The original description is kept below for historical context.
+
 New module `backend/src/grimoire/context/cache.py` provides:
 
 - `make_cache_key(campaign_id, player_input, composition_hash, scene_id, branch_id, pc_ref)` — deterministic SHA-256 over the regenerate-stable inputs.
@@ -81,7 +87,7 @@ RetrievalConfig.enable_priority_weighting: bool = True  # §13
 ## Constructor additions
 
 - `ContextBuilderService(..., time_engine=None)` — optional `TimeEngine` collaborator. Required for §4 calendar items; omitted in unit tests that don't need calendar.
-- `OrchestratorService(..., library=None, context_cache=None)` — `library` enables composition fingerprinting for the regenerate cache key. `context_cache` lets callers inject a shared `ContextBuilderCache`.
+- `OrchestratorService(..., library=None)` — `library` enables composition fingerprinting. (The `context_cache` argument and its `ContextBuilderCache` were removed in #512; see §11.)
 
 ## Test coverage
 

@@ -16,8 +16,9 @@ interface Props {
   hasMorePosts: boolean;
   onLoadMore: () => void;
   expressionsEnabledCharacters?: ReadonlySet<string>;
-  /** Clears the stuck streaming indicator when a per-post reroll fails. */
-  onRerollFailed?: () => void;
+  /** Clears the stuck streaming indicator when a per-post reroll fails; called
+   *  with the rerolled post's turn_id so the parent can scope the clear. */
+  onRerollFailed?: (turnId: string) => void;
 }
 
 export function ScenePane({

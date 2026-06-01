@@ -235,7 +235,9 @@ describe("PostItem regenerate", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Regenerate post" }));
-    await waitFor(() => expect(onRerollFailed).toHaveBeenCalledTimes(1));
+    // Passes this post's turn_id so the parent can scope the streaming-clear to
+    // this reroll and not a concurrent normal turn.
+    await waitFor(() => expect(onRerollFailed).toHaveBeenCalledWith("t1"));
   });
 
   it("does not call onRerollFailed when a reroll succeeds", async () => {
