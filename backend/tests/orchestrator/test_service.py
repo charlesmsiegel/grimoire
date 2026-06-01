@@ -12,6 +12,8 @@ from grimoire.orchestrator import (
     UnknownCampaignError,
     UnknownPCError,
 )
+from grimoire.orchestrator.errors import SceneClosedError
+from grimoire.scenes import AuthorKind, new_post
 from grimoire.scenes.manager import SceneManager
 from grimoire.scenes.types import SceneInit
 from grimoire.types.state import DeltaKind, StateDelta
@@ -533,3 +535,137 @@ async def test_submit_direction_rejects_closed_scene(
 
     with pytest.raises(OrchestratorError, match="closed"):
         await orch.submit_direction("c1", scene.id)
+
+
+# --------------------------------------------------------------------------- #
+# Cascade delete
+# --------------------------------------------------------------------------- #
+
+
+def _seed_applied(fake_store, *, campaign_id, turn_id, target_id):
+    """Record a fake applied delta for ``turn_id`` so the cascade can reverse it."""
+    delta = StateDelta(
+        kind=DeltaKind.FACT_ADD,
+        target_scope="campaign-sqlite",
+        target_id=target_id,
+        target_table="facts",
+        after={"text": target_id},
+        confidence=0.95,
+        source="extractor",
+    )
+    did = f"d_seed_{target_id}"
+    fake_store.applied.append(
+        {
+            "id": did,
+            "delta": delta,
+            "source": "extractor",
+            "turn_id": turn_id,
+            "campaign_id": campaign_id,
+        }
+    )
+    return did
+
+
+async def test_cascade_delete_reverses_fully_contained_turns(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
+    )
+    await scene_manager.append_post(
+        scene.id, new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1")
+    )
+    await scene_manager.append_post(
+        scene.id, new_post(author_kind=AuthorKind.NARRATOR, body="m2", is_player=False, turn_id="T2")
+    )
+    d1 = _seed_applied(fake_store, campaign_id="c1", turn_id="T1", target_id="fact-1")
+    d2 = _seed_applied(fake_store, campaign_id="c1", turn_id="T2", target_id="fact-2")
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    posts = await scene_manager.get_posts(scene.id)
+    target = next(p for p in posts if p.body == "m1")
+    result = await orch.delete_post_cascade("c1", scene.id, target.id)
+
+    remaining = await scene_manager.get_posts(scene.id)
+    assert [p.body for p in remaining] == ["hi"]
+    assert set(fake_store.reversed_ids) == {d1, d2}
+    assert set(result.reversed_turn_ids) == {"T1", "T2"}
+    assert result.requeued_review_ids == []
+    assert len(result.deleted_post_ids) == 2
+
+
+async def test_cascade_delete_requeues_straddling_turn(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
+    )
+    # Split turn T1 produces two model posts; T2 a third.
+    await scene_manager.append_post(
+        scene.id, new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1")
+    )
+    await scene_manager.append_post(
+        scene.id, new_post(author_kind=AuthorKind.NARRATOR, body="m2", is_player=False, turn_id="T1")
+    )
+    await scene_manager.append_post(
+        scene.id, new_post(author_kind=AuthorKind.NARRATOR, body="m3", is_player=False, turn_id="T2")
+    )
+    d1 = _seed_applied(fake_store, campaign_id="c1", turn_id="T1", target_id="fact-1")
+    d2 = _seed_applied(fake_store, campaign_id="c1", turn_id="T2", target_id="fact-2")
+
+    review_events: list = []
+    event_bus.subscribe("review_item_added", review_events.append)
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    posts = await scene_manager.get_posts(scene.id)
+    target = next(p for p in posts if p.body == "m2")  # mid-split -> T1 straddles
+    result = await orch.delete_post_cascade("c1", scene.id, target.id)
+
+    remaining = await scene_manager.get_posts(scene.id)
+    assert [p.body for p in remaining] == ["hi", "m1"]
+    # Both turns reversed; only the straddling turn (T1) is re-queued.
+    assert set(fake_store.reversed_ids) == {d1, d2}
+    assert len(fake_store.reviewed) == 1
+    assert fake_store.reviewed[0]["source"] == "cascade_delete"
+    assert len(result.requeued_review_ids) == 1
+    assert len(review_events) == 1
+
+
+async def test_cascade_delete_rejects_closed_scene(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id, new_post(author_kind=AuthorKind.NARRATOR, body="m1", is_player=False, turn_id="T1")
+    )
+    appended = (await scene_manager.get_posts(scene.id))[0]
+    await scene_manager.close_scene(scene.id, closed_at_turn="T1")
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    with pytest.raises(SceneClosedError):
+        await orch.delete_post_cascade("c1", scene.id, appended.id)
