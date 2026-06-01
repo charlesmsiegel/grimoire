@@ -131,10 +131,20 @@ export function usePlayStreamEvents(
           void refresh();
           return;
         }
+        case "alternate_added": {
+          // A per-post reroll streams "token" messages (so streaming=true) but
+          // completes with alternate_added rather than turn_complete. Clear the
+          // streaming state here, or the UI stays stuck showing "streaming"
+          // after the regenerated text has already landed.
+          if (cur.streaming) {
+            dispatch({ type: "stream-end", turn_id: cur.streaming.turn_id, post: null });
+          }
+          void refresh();
+          return;
+        }
         case "scene_started":
         case "scene_ended":
         case "scene_file_changed":
-        case "alternate_added":
           void refresh();
           return;
         case "advance_disabled": {
