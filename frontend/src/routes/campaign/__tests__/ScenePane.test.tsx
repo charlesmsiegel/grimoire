@@ -105,9 +105,11 @@ describe("ScenePane delete wiring", () => {
 describe("ScenePane cost attribution", () => {
   it("renders the turn cost once, on the user post, for a split-into-two turn", async () => {
     const { observabilityApi } = await import("../../../api/observability");
-    const spy = vi.spyOn(observabilityApi, "turnCosts").mockResolvedValue([
-      { task: "primary", total_usd: 0.02, input_tokens: 100, output_tokens: 100, call_count: 1 },
-    ]);
+    const spy = vi
+      .spyOn(observabilityApi, "turnCosts")
+      .mockResolvedValue([
+        { task: "primary", total_usd: 0.02, input_tokens: 100, output_tokens: 100, call_count: 1 },
+      ]);
     // IntersectionObserver mock that fires immediately so CostLabel fetches.
     vi.stubGlobal(
       "IntersectionObserver",

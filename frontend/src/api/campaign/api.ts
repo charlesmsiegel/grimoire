@@ -72,11 +72,7 @@ export const campaignApi = {
   deleteScene: (id: string, sceneId: string) =>
     api.delete<void>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}`),
 
-  updateSceneNarratorMode: (
-    id: string,
-    sceneId: string,
-    next: NarratorResponseMode | null,
-  ) =>
+  updateSceneNarratorMode: (id: string, sceneId: string, next: NarratorResponseMode | null) =>
     api.patch<{
       scene: ApiScene & { narrator_response_mode: NarratorResponseMode | null };
       narrator_response_mode: {
