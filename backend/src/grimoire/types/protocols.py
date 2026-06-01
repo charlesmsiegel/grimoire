@@ -113,7 +113,6 @@ from .observability import (
 from .orchestrator import (
     Event,
     EventType,
-    RegenerateResult,
     RetconResult,
     SubmitResult,
     Subscription,
@@ -1197,8 +1196,6 @@ class Orchestrator(Protocol):
     ) -> SubmitResult: ...
 
     async def advance(self, campaign_id: CampaignId, scene_id: SceneId) -> AdvanceResult: ...
-
-    async def regenerate_last(self, campaign_id: CampaignId) -> RegenerateResult: ...
 
     async def undo_turn(self, campaign_id: CampaignId, count: int = 1) -> UndoResult: ...
     async def retcon_post(self, post_id: PostId, new_text: str) -> RetconResult: ...

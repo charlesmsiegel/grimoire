@@ -183,6 +183,13 @@ export function PlayView({ campaignId }: Props) {
               hasMorePosts={play.state.hasMorePosts}
               onLoadMore={loadMorePosts}
               expressionsEnabledCharacters={expressionsEnabledCharacters}
+              onRerollFailed={() =>
+                play.dispatch({
+                  type: "stream-end",
+                  turn_id: play.state.streaming?.turn_id ?? "",
+                  post: null,
+                })
+              }
             />
           )}
           {play.state.mode === "play" && play.state.turnError && (
@@ -241,7 +248,6 @@ export function PlayView({ campaignId }: Props) {
               scene={play.state.scene}
               pcs={play.state.pcs}
               actions={{
-                onRegenerate: () => void runAction(() => play.regenerate()),
                 onUndo: () => void runAction(() => play.undo()),
                 onEndScene: () => void runAction(() => play.endScene()),
                 onAnalyzeScene: () => void runAction(() => play.analyzeScene()),

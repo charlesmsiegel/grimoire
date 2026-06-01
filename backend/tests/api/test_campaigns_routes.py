@@ -22,13 +22,6 @@ def test_submit_turn_dispatches_to_orchestrator(client, container) -> None:
     assert fake.calls == [("submit", "c1", "pc-1", "hi")]
 
 
-def test_regenerate(client, container) -> None:
-    container.orchestrator = FakeOrchestrator()
-    response = client.post("/api/campaigns/c1/turns/regenerate")
-    assert response.status_code == 200
-    assert response.json()["turn_id"] == "t_999"
-
-
 def test_undo(client, container) -> None:
     container.orchestrator = FakeOrchestrator()
     response = client.post("/api/campaigns/c1/turns/undo", json={"count": 3})

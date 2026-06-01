@@ -105,8 +105,6 @@ export const campaignApi = {
       ...(text ? { text } : {}),
     }),
 
-  regenerate: (id: string) => api.post<unknown>(`/api/campaigns/${enc(id)}/turns/regenerate`),
-
   regeneratePost: (
     campaignId: string,
     sceneId: string,

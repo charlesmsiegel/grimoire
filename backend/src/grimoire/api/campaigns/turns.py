@@ -1,4 +1,4 @@
-"""Campaign turn routes: submit, advance, regenerate, undo, proposals."""
+"""Campaign turn routes: submit, advance, undo, proposals."""
 
 from __future__ import annotations
 
@@ -73,18 +73,6 @@ async def submit_direction(
         result = await orchestrator.submit_direction(
             campaign_id, payload.scene_id, text=payload.text
         )
-    except Exception as exc:
-        raise map_lookup_errors(exc) from exc
-    return to_payload(result)
-
-
-@router.post("/{campaign_id}/turns/regenerate")
-async def regenerate_turn(
-    campaign_id: str,
-    orchestrator: OrchestratorDep,
-) -> Any:
-    try:
-        result = await orchestrator.regenerate_last(campaign_id)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return to_payload(result)

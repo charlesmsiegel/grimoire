@@ -123,12 +123,6 @@ class TurnStatus(BaseModel):
     progress_pct: float | None = None
 
 
-class RegenerateResult(BaseModel):
-    turn_id: TurnId
-    accepted: bool
-    reason: str = ""
-
-
 class RegeneratePostResult(BaseModel):
     """Outcome of :meth:`OrchestratorService.regenerate_post`.
 

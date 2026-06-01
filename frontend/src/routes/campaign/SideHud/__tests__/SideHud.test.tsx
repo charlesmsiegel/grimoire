@@ -30,7 +30,6 @@ function makeSocket(): CampaignSocket {
 }
 
 const ACTIONS = {
-  onRegenerate: vi.fn(),
   onUndo: vi.fn(),
   onEndScene: vi.fn(),
   onAnalyzeScene: vi.fn(),
@@ -160,9 +159,8 @@ describe("SideHud", () => {
       widgets: [],
     });
     await waitFor(() => {
-      expect(screen.getByText("Regenerate")).toBeInTheDocument();
+      expect(screen.getByText("Undo turn")).toBeInTheDocument();
     });
-    expect(screen.getByText("Undo turn")).toBeInTheDocument();
     expect(screen.getByText("End scene")).toBeInTheDocument();
   });
 });

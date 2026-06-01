@@ -16,6 +16,9 @@ interface Props {
   campaignId?: string;
   presentCharacterRefs?: string[];
   expressionsEnabledCharacters?: ReadonlySet<string>;
+  /** Called when a reroll request fails, so the parent can clear the streaming
+   *  indicator (the WS alternate_added event only fires on success). */
+  onRerollFailed?: () => void;
 }
 
 const AUTHOR_LABELS: Record<ApiPost["author_kind"], string> = {
@@ -61,6 +64,7 @@ export function PostItem({
   campaignId,
   presentCharacterRefs = [],
   expressionsEnabledCharacters,
+  onRerollFailed,
 }: Props) {
   const name = authorName(post, pcs);
   const isDirection = post.author_kind === "system" && post.is_player;
@@ -193,7 +197,14 @@ export function PostItem({
   async function regenerate(steeringHint?: string): Promise<boolean> {
     if (!canMutate) return false;
     const opts = steeringHint?.trim() ? { steering_hint: steeringHint.trim() } : undefined;
-    return call(() => campaignApi.regeneratePost(campaignId!, post.scene_id, post.id, opts));
+    const ok = await call(() =>
+      campaignApi.regeneratePost(campaignId!, post.scene_id, post.id, opts),
+    );
+    // On success the WS alternate_added event clears the streaming indicator;
+    // on failure no such event arrives, so clear it here or the UI stays stuck
+    // showing "streaming".
+    if (!ok) onRerollFailed?.();
+    return ok;
   }
 
   return (
