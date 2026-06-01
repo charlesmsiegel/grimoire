@@ -19,6 +19,7 @@ interface Props {
   /** Clears the stuck streaming indicator when a per-post reroll fails; called
    *  with the rerolled post's turn_id so the parent can scope the clear. */
   onRerollFailed?: (turnId: string) => void;
+  onPostDeleted?: () => void;
 }
 
 export function ScenePane({
@@ -33,6 +34,7 @@ export function ScenePane({
   onLoadMore,
   expressionsEnabledCharacters,
   onRerollFailed,
+  onPostDeleted,
 }: Props) {
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -92,6 +94,19 @@ export function ScenePane({
       latestModelPostId = p.id;
     }
   }
+
+  // Attribute each turn's cost to the user post that triggered it: the first
+  // model post after a user post carries the turn id whose cost we display.
+  // This shows cost once even when one LLM call is split into several posts.
+  const costTurnByPost: Record<string, string> = {};
+  let lastUserPostId: string | null = null;
+  for (const p of posts) {
+    if (p.is_player) {
+      lastUserPostId = p.id;
+    } else if (lastUserPostId && !(lastUserPostId in costTurnByPost) && p.turn_id) {
+      costTurnByPost[lastUserPostId] = p.turn_id;
+    }
+  }
   return (
     <section className="scene-pane" aria-label="Scene posts" aria-live="polite">
       {hasMorePosts && <div ref={topSentinelRef} className="load-more-sentinel" />}
@@ -109,6 +124,12 @@ export function ScenePane({
           presentCharacterRefs={scene?.present_character_refs ?? []}
           expressionsEnabledCharacters={expressionsEnabledCharacters}
           onRerollFailed={onRerollFailed}
+          subsequentCount={
+            scene ? Math.max(0, scene.post_count - post.order_in_scene - 1) : undefined
+          }
+          sceneClosed={scene?.closed ?? false}
+          onDeleted={onPostDeleted}
+          costTurnId={costTurnByPost[post.id]}
         />
       ))}
       {awaitingResponse && !streaming && (
