@@ -141,6 +141,47 @@ async def test_subscription_plan_reports_zero_cost(zhipu_glm_module) -> None:
 
 
 @pytest.mark.asyncio
+async def test_complete_wraps_transport_error_as_transient(zhipu_glm_module) -> None:
+    """A connection failure must surface as the gateway's retriable
+    TransientError so retry/fallback engages instead of aborting the turn."""
+    from grimoire.llm_gateway.errors import TransientError
+
+    provider = zhipu_glm_module.ZhipuGLMLLMProvider(config={"api_key": "k"})
+
+    def _boom(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    _install_mock_transport(provider, _boom)
+    with pytest.raises(TransientError):
+        await provider.complete(
+            CompletionRequest(
+                model="glm-4.6",
+                messages=[Message(role=MessageRole.USER, content="hi")],
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_stream_wraps_transport_error_as_transient(zhipu_glm_module) -> None:
+    from grimoire.llm_gateway.errors import TransientError
+
+    provider = zhipu_glm_module.ZhipuGLMLLMProvider(config={"api_key": "k"})
+
+    def _boom(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    _install_mock_transport(provider, _boom)
+    with pytest.raises(TransientError):
+        async for _ in provider.stream(
+            CompletionRequest(
+                model="glm-4.6",
+                messages=[Message(role=MessageRole.USER, content="hi")],
+            )
+        ):
+            pass
+
+
+@pytest.mark.asyncio
 async def test_stream_parses_sse(zhipu_glm_module) -> None:
     provider = zhipu_glm_module.ZhipuGLMLLMProvider(config={"api_key": "k"})
     body = b"\n".join(

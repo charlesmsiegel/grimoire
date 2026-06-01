@@ -54,6 +54,33 @@ PRESETS: dict[str, tuple[str, str, bool]] = {
 }
 
 
+def _transport_errors() -> tuple[type[BaseException], ...]:
+    """httpx transport-layer exceptions worth retrying.
+
+    ``TransportError`` is the base for connect/read/write/pool failures and
+    protocol errors — anything that means "the request never produced a usable
+    HTTP response", as opposed to an HTTP error status (surfaced as a
+    ``RuntimeError``). Returned as a tuple for use in ``except``.
+    """
+    import httpx
+
+    return (httpx.TransportError,)
+
+
+def _as_transient(exc: BaseException) -> BaseException:
+    """Wrap a transport error as the gateway's retriable ``TransientError``.
+
+    The retry/fallback policy only retries ``TransientError``/``RateLimitError``/
+    ``TimeoutError``; a raw httpx error is treated as permanent. Falls back to
+    the original exception if the gateway errors module can't be imported.
+    """
+    try:
+        from grimoire.llm_gateway.errors import TransientError
+    except Exception:  # pragma: no cover - gateway always present at runtime
+        return exc
+    return TransientError(f"transport error: {exc!r}")
+
+
 def _role(role: Any) -> str:
     return role.value if hasattr(role, "value") else str(role)
 
@@ -108,7 +135,10 @@ class OpenAICompatibleLLMProvider:
         client = await self._ensure_client()
         payload = self._build_payload(request, stream=False)
         start = time.monotonic()
-        response = await client.post("/chat/completions", json=payload)
+        try:
+            response = await client.post("/chat/completions", json=payload)
+        except _transport_errors() as exc:
+            raise _as_transient(exc) from exc
         elapsed_ms = int((time.monotonic() - start) * 1000)
         if response.status_code >= 400:
             raise RuntimeError(
@@ -138,29 +168,34 @@ class OpenAICompatibleLLMProvider:
         client = await self._ensure_client()
         payload = self._build_payload(request, stream=True)
         usage: TokenUsage | None = None
-        async with client.stream("POST", "/chat/completions", json=payload) as response:
-            if response.status_code >= 400:
-                body = (await response.aread()).decode("utf-8", errors="replace")
-                raise RuntimeError(f"{self.id}: stream failed ({response.status_code}): {body}")
-            async for line in response.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                data_str = line[len("data:") :].strip()
-                if not data_str or data_str == "[DONE]":
-                    continue
-                try:
-                    event = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
-                if event.get("usage"):
-                    usage = _usage(event["usage"])
-                choices = event.get("choices") or []
-                if not choices:
-                    continue
-                delta = choices[0].get("delta") or {}
-                text = delta.get("content")
-                if text:
-                    yield CompletionChunk(delta=str(text), is_final=False)
+        try:
+            async with client.stream("POST", "/chat/completions", json=payload) as response:
+                if response.status_code >= 400:
+                    body = (await response.aread()).decode("utf-8", errors="replace")
+                    raise RuntimeError(f"{self.id}: stream failed ({response.status_code}): {body}")
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:") :].strip()
+                    if not data_str or data_str == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("usage"):
+                        usage = _usage(event["usage"])
+                    choices = event.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    text = delta.get("content")
+                    if text:
+                        yield CompletionChunk(delta=str(text), is_final=False)
+        except _transport_errors() as exc:
+            # Transient connect/read failures → gateway's TransientError so the
+            # retry/fallback policy engages instead of aborting the turn.
+            raise _as_transient(exc) from exc
         yield CompletionChunk(delta="", is_final=True, usage=usage)
 
     async def list_models(self) -> list[ModelInfo]:
