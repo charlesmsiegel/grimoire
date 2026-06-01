@@ -1311,9 +1311,7 @@ class SceneManager:
             # (posts_since_last_advance empty → NothingToAdvance); rolling back to
             # the last non-player post lets the user re-advance the still-visible
             # inputs whose batch lost its response.
-            last_model_order = max(
-                (p.order_in_scene for p in kept if not p.is_player), default=0
-            )
+            last_model_order = max((p.order_in_scene for p in kept if not p.is_player), default=0)
             if scene.last_advance_at_post > last_model_order:
                 scene.last_advance_at_post = last_model_order
             # Derived summaries/threads can reference the now-deleted prose. Drop

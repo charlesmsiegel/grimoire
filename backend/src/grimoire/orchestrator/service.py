@@ -816,9 +816,7 @@ class OrchestratorService:
         # reversible delta), and reversing it soundly is ambiguous (the member
         # may have other evidence), so surface it as a warning instead.
         await self._dismiss_cast_changes_for_turns(scene_id, set(fully_contained), warnings)
-        await self._warn_confirmed_cast_changes_for_turns(
-            scene_id, set(fully_contained), warnings
-        )
+        await self._warn_confirmed_cast_changes_for_turns(scene_id, set(fully_contained), warnings)
 
         # Fully-removed turns may have queued low-confidence deltas for review.
         # Those were skipped (never applied, so not reversed), but their
