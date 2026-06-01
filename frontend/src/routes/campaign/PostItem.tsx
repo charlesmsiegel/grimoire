@@ -20,6 +20,14 @@ interface Props {
    *  can clear the streaming indicator for *this reroll's* stream (the WS
    *  alternate_added event only fires on success). */
   onRerollFailed?: (turnId: string) => void;
+  /** Number of posts after this one in the scene (drives the confirm copy). */
+  subsequentCount?: number;
+  /** When true, the scene is closed — deletion is not offered. */
+  sceneClosed?: boolean;
+  /** Called after a successful delete so the caller can refresh the scene. */
+  onDeleted?: () => void;
+  /** Turn id whose cost should render on this (user) post. */
+  costTurnId?: string;
 }
 
 const AUTHOR_LABELS: Record<ApiPost["author_kind"], string> = {
@@ -66,6 +74,10 @@ export function PostItem({
   presentCharacterRefs = [],
   expressionsEnabledCharacters,
   onRerollFailed,
+  subsequentCount,
+  sceneClosed = false,
+  onDeleted,
+  costTurnId,
 }: Props) {
   const name = authorName(post, pcs);
   const isDirection = post.author_kind === "system" && post.is_player;
@@ -94,8 +106,11 @@ export function PostItem({
   const [editError, setEditError] = useState<string | null>(null);
   const [bodyOverride, setBodyOverride] = useState<string | null>(null);
 
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const canDelete = !!campaignId && !sceneClosed;
+
   const isModelPost = post.author_kind !== "pc" && !post.is_player;
-  const showCost = isModelPost && !!post.turn_id;
   const authorRef = post.author_npc_ref ?? post.author_pc_ref ?? null;
   const continueCandidates = useMemo(() => {
     if (authorRef) return [authorRef];
@@ -122,6 +137,19 @@ export function PostItem({
       setEditError(e instanceof Error ? e.message : String(e));
     } finally {
       setEditBusy(false);
+    }
+  }
+
+  async function doDelete() {
+    if (!campaignId) return;
+    setDeleteBusy(true);
+    setError(null);
+    try {
+      await campaignApi.deletePost(campaignId, post.scene_id, post.id);
+      onDeleted?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setDeleteBusy(false);
     }
   }
 
@@ -227,7 +255,7 @@ export function PostItem({
         )}
         <span className="post-author">{name}</span>
         <span className="post-author-kind">{AUTHOR_LABELS[post.author_kind]}</span>
-        {showCost && <CostLabel turnId={post.turn_id} />}
+        {costTurnId && <CostLabel turnId={costTurnId} />}
         <time className="post-time" dateTime={post.created_at}>
           {new Date(post.created_at).toLocaleTimeString()}
         </time>
@@ -352,6 +380,51 @@ export function PostItem({
               🌐
             </button>
           )}
+          {canDelete && (
+            <button
+              type="button"
+              className="post-icon-btn post-delete"
+              aria-label="Delete post"
+              title="Delete"
+              disabled={deleteBusy}
+              onClick={() => setConfirmingDelete(true)}
+            >
+              🗑
+            </button>
+          )}
+        </div>
+      )}
+      {confirmingDelete && campaignId && (
+        <div className="post-delete-confirm" role="alertdialog" aria-label="Confirm delete">
+          <p className="post-delete-warning">
+            Delete this post
+            {subsequentCount && subsequentCount > 0
+              ? ` and the ${subsequentCount} following ${
+                  subsequentCount === 1 ? "post" : "posts"
+                } in this scene`
+              : ""}
+            ? Facts and changes derived from {subsequentCount ? "them" : "it"} will be reverted.
+            This cannot be undone.
+          </p>
+          <div className="post-delete-actions">
+            <button
+              type="button"
+              className="post-delete-confirm-btn"
+              aria-label="Confirm delete"
+              disabled={deleteBusy}
+              onClick={() => void doDelete()}
+            >
+              {deleteBusy ? "Deleting..." : "Delete"}
+            </button>
+            <button
+              type="button"
+              aria-label="Cancel delete"
+              disabled={deleteBusy}
+              onClick={() => setConfirmingDelete(false)}
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
       {guidedHint !== null && campaignId && (

@@ -349,41 +349,85 @@ describe("PostItem continue", () => {
   });
 });
 
+describe("PostItem delete", () => {
+  beforeEach(() => mockIntersectionObserver());
+
+  it("shows a delete button when the scene is open", () => {
+    render(<PostItem post={makePost()} pcs={PCS} images={[]} campaignId="c1" />);
+    expect(screen.getByRole("button", { name: "Delete post" })).toBeInTheDocument();
+  });
+
+  it("hides the delete button when the scene is closed", () => {
+    render(<PostItem post={makePost()} pcs={PCS} images={[]} campaignId="c1" sceneClosed />);
+    expect(screen.queryByRole("button", { name: "Delete post" })).toBeNull();
+  });
+
+  it("confirms then calls deletePost and onDeleted", async () => {
+    const spy = vi.spyOn(campaignApi, "deletePost").mockResolvedValue({
+      deleted_post_ids: ["p1"],
+      reversed_turn_ids: [],
+      requeued_review_ids: [],
+      warnings: [],
+    });
+    const onDeleted = vi.fn();
+    render(
+      <PostItem
+        post={makePost()}
+        pcs={PCS}
+        images={[]}
+        campaignId="c1"
+        subsequentCount={2}
+        onDeleted={onDeleted}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete post" }));
+    expect(screen.getByText(/2 following posts/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("c1", "s1", "p1"));
+    await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+  });
+
+  it("cancel closes the confirm without calling deletePost", () => {
+    const spy = vi.spyOn(campaignApi, "deletePost");
+    render(<PostItem post={makePost()} pcs={PCS} images={[]} campaignId="c1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Delete post" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel delete" }));
+    expect(screen.queryByRole("button", { name: "Confirm delete" })).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
 describe("PostItem cost in header", () => {
-  it("displays cost in header when visible and cost data is available", async () => {
+  it("displays cost on a post given a costTurnId when visible", async () => {
     mockIntersectionObserver();
     vi.spyOn(observabilityApi, "turnCosts").mockResolvedValue([
       { task: "primary", total_usd: 0.012, input_tokens: 800, output_tokens: 350, call_count: 1 },
-      {
-        task: "extraction",
-        total_usd: 0.001,
-        input_tokens: 400,
-        output_tokens: 50,
-        call_count: 1,
-      },
+      { task: "extraction", total_usd: 0.001, input_tokens: 400, output_tokens: 50, call_count: 1 },
     ]);
-    render(<PostItem post={makePost()} pcs={PCS} images={[]} campaignId="c1" />);
+    const post = makePost({ is_player: true, author_kind: "pc" });
+    render(<PostItem post={post} pcs={PCS} images={[]} campaignId="c1" costTurnId="t1" />);
     triggerIntersection();
     await waitFor(() => expect(screen.getByLabelText("Turn cost")).toHaveTextContent("$0.0130"));
+  });
+
+  it("does not show cost when no costTurnId is provided", () => {
+    mockIntersectionObserver();
+    render(<PostItem post={makePost()} pcs={PCS} images={[]} campaignId="c1" />);
+    expect(screen.queryByLabelText("Turn cost")).toBeNull();
   });
 
   it("does not fetch cost until element is visible", () => {
     mockIntersectionObserver();
     const spy = vi.spyOn(observabilityApi, "turnCosts").mockResolvedValue([]);
-    render(<PostItem post={makePost()} pcs={PCS} images={[]} campaignId="c1" />);
-    expect(spy).not.toHaveBeenCalled();
-  });
-
-  it("does not show cost for player posts", () => {
-    mockIntersectionObserver();
     const post = makePost({ is_player: true, author_kind: "pc" });
-    render(<PostItem post={post} pcs={PCS} images={[]} campaignId="c1" />);
-    expect(screen.queryByLabelText("Turn cost")).toBeNull();
+    render(<PostItem post={post} pcs={PCS} images={[]} campaignId="c1" costTurnId="t1" />);
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("does not render a clickable cost button", () => {
     mockIntersectionObserver();
-    render(<PostItem post={makePost()} pcs={PCS} images={[]} campaignId="c1" />);
+    const post = makePost({ is_player: true, author_kind: "pc" });
+    render(<PostItem post={post} pcs={PCS} images={[]} campaignId="c1" costTurnId="t1" />);
     expect(screen.queryByRole("button", { name: /cost/i })).toBeNull();
   });
 });
