@@ -681,14 +681,8 @@ class OrchestratorService:
         # submit_post appends the player post before _run_turn_inner acquires
         # the lock and records state.active, so a queued same-scene turn has no
         # matching active entry yet. And a submission that has only just begun
-        # has neither — submit_post bumps state.submitting before it appends, so
-        # checking it here (plus both paths sharing state.lock for the append)
-        # closes the window where a post is appended right after this check.
-        # Deleting such a prompt post would let the turn continue with a
-        # now-deleted player_post_id and append an orphan response. Turns are
-        # serialized per-campaign by state.lock, so rejecting on
-        # active/queued/submitting is the conservative, race-free choice — the
-        # user must cancel/await the turn first.
+        # has neither — submit_post bumps state.submitting before it appends.
+        # This is a fast-path rejection before we queue for the lock.
         state = self._state_for(campaign_id)
         if state.active is not None or state.queued > 0 or state.submitting > 0:
             raise TurnAlreadyInProgressError(campaign_id)
@@ -697,6 +691,18 @@ class OrchestratorService:
         # concurrent turn body can't extract into / append to the scene between
         # the snapshot we reverse and the truncation that removes it.
         async with state.lock:
+            # Re-check under the lock: the fast-path check above is *not* atomic
+            # with the acquire. submit_post/submit_direction bump state.submitting
+            # and append the player post under this same lock, then release it
+            # before _run_turn re-acquires it. So a submission can slip past the
+            # fast-path check, grab the lock first, append, and release — and we
+            # would otherwise acquire the lock next and truncate that
+            # just-appended prompt, stranding the queued turn on a deleted
+            # player_post_id. state.submitting stays > 0 for the whole submission
+            # (decremented only after _run_turn), so re-checking here closes the
+            # window. (active/queued are likewise re-evaluated for completeness.)
+            if state.active is not None or state.queued > 0 or state.submitting > 0:
+                raise TurnAlreadyInProgressError(campaign_id)
             return await self._delete_post_cascade_locked(campaign_id, scene_id, post_id, state)
 
     async def _delete_post_cascade_locked(
