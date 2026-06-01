@@ -219,6 +219,51 @@ async def test_request_without_model_raises(openai_compat_module) -> None:
 
 
 @pytest.mark.asyncio
+async def test_complete_wraps_transport_error_as_transient(openai_compat_module) -> None:
+    """A connection failure must surface as the gateway's retriable
+    TransientError so retry/fallback engages instead of aborting the turn."""
+    from grimoire.llm_gateway.errors import TransientError
+
+    provider = openai_compat_module.OpenAICompatibleLLMProvider(
+        config={"preset": "ollama", "default_model": "llama3.1"}
+    )
+
+    def _boom(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    _install_mock_transport(provider, _boom)
+    with pytest.raises(TransientError):
+        await provider.complete(
+            CompletionRequest(
+                model="llama3.1",
+                messages=[Message(role=MessageRole.USER, content="hi")],
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_stream_wraps_transport_error_as_transient(openai_compat_module) -> None:
+    from grimoire.llm_gateway.errors import TransientError
+
+    provider = openai_compat_module.OpenAICompatibleLLMProvider(
+        config={"preset": "ollama", "default_model": "llama3.1"}
+    )
+
+    def _boom(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    _install_mock_transport(provider, _boom)
+    with pytest.raises(TransientError):
+        async for _ in provider.stream(
+            CompletionRequest(
+                model="llama3.1",
+                messages=[Message(role=MessageRole.USER, content="hi")],
+            )
+        ):
+            pass
+
+
+@pytest.mark.asyncio
 async def test_stream_yields_deltas(openai_compat_module) -> None:
     provider = openai_compat_module.OpenAICompatibleLLMProvider(
         config={"preset": "ollama", "default_model": "llama3.1"}
