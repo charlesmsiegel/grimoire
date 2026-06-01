@@ -1250,6 +1250,48 @@ class SceneManager:
                 post_id=post_id,
             )
 
+    async def truncate_scene_from(self, post_id: str, source: str) -> list[Post]:
+        """Delete ``post_id`` and every post after it in the same scene.
+
+        Suffix sibling of :meth:`delete_post`: because the removed posts are a
+        contiguous tail, no order-shifting is needed. Rewrites the ``.md`` and
+        sidecar, updates counts, drops the removed records, emits one
+        ``POST_DELETED`` per removed post, and returns the removed posts.
+        """
+        scene, target = await self._find_post(post_id)
+        async with self._lock_for(scene.id):
+            posts = await self.get_posts(scene.id)
+            cut = target.order_in_scene
+            kept = [p for p in posts if p.order_in_scene < cut]
+            removed = [p for p in posts if p.order_in_scene >= cut]
+            md_path, _ = self._scene_file_paths(scene)
+            write_body(
+                md_path,
+                kept,
+                heading_pattern=self.config.files.post_heading_pattern,
+            )
+            scene.post_count = len(kept)
+            if scene.last_advance_at_post > scene.post_count:
+                scene.last_advance_at_post = scene.post_count
+            self._hydrate_records(scene)
+            records = self._records_for(scene.id)
+            self._post_records[scene.id] = {
+                key: rec for key, rec in records.items() if int(key) < cut
+            }
+            self._write_sidecar(scene)
+            self._known_body_hashes[scene.id] = content_hash(
+                md_path.read_text(encoding="utf-8")
+            )
+            for removed_post in removed:
+                await self._emit(
+                    POST_DELETED,
+                    scene,
+                    order=removed_post.order_in_scene,
+                    source=source,
+                    post_id=removed_post.id,
+                )
+        return removed
+
     async def _find_post(self, post_id: str) -> tuple[Scene, Post]:
         # Fast path: a prior get_posts populated the post_id -> scene_id
         # index. Verify the post still exists in that scene (records on
