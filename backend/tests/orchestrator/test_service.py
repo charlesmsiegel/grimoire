@@ -902,6 +902,46 @@ async def test_cascade_delete_rejected_while_submitting(
     assert len(await scene_manager.get_posts(scene.id)) == 1
 
 
+async def test_cascade_delete_rechecks_in_flight_after_acquiring_lock(
+    scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
+):
+    """The fast-path guard isn't atomic with the lock acquire: a submission can
+    slip past it, take the lock first, append, and release before _run_turn. The
+    delete must re-check under the lock (submitting stays > 0) and reject rather
+    than truncate the just-appended prompt."""
+    import asyncio
+
+    scene = await _seed(scene_manager, fake_store)
+    await scene_manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.PC, author_pc_ref="alistair", body="hi", is_player=True),
+    )
+    appended = (await scene_manager.get_posts(scene.id))[0]
+
+    orch = _build_orch(
+        scene_manager=scene_manager,
+        event_bus=event_bus,
+        fake_store=fake_store,
+        fake_gateway=fake_gateway,
+        fake_extractor=fake_extractor,
+        fake_context_builder=fake_context_builder,
+    )
+    state = orch._state_for("c1")
+    # Hold the lock so the delete passes its fast-path check (submitting == 0)
+    # and then blocks on the acquire.
+    await state.lock.acquire()
+    task = asyncio.create_task(orch.delete_post_cascade("c1", scene.id, appended.id))
+    await asyncio.sleep(0.05)  # let the delete clear the fast-path and wait on the lock
+    # A submission slips in: it bumped submitting (and would hold the lock for
+    # its append). Release so the delete acquires the lock and hits the re-check.
+    state.submitting = 1
+    state.lock.release()
+
+    with pytest.raises(TurnAlreadyInProgressError):
+        await task
+    assert len(await scene_manager.get_posts(scene.id)) == 1
+
+
 async def test_cascade_delete_warns_on_straddling_continuity(
     scene_manager, event_bus, fake_store, fake_gateway, fake_extractor, fake_context_builder
 ):
