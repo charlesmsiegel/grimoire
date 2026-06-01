@@ -143,6 +143,13 @@ class UndoResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class CascadeDeleteResult(BaseModel):
+    deleted_post_ids: list[str] = Field(default_factory=list)
+    reversed_turn_ids: list[TurnId] = Field(default_factory=list)
+    requeued_review_ids: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class RetconResult(BaseModel):
     post_id: str
     original_text: str
