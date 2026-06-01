@@ -70,6 +70,20 @@ async def _resolve_character_name(
             log.debug("library.get_entity failed for %s/%s: %s", world_id, asset_id, e)
             return asset_id
     if campaign_id is not None:
+        # Emergent (campaign-local) characters — PCs and spawned NPCs — take
+        # precedence per the read cascade and are NOT returned by
+        # list_for_composition, which only walks world refs. Their display name
+        # lives in the emergent content, so resolve that first.
+        store = getattr(library, "store", None)
+        if store is not None:
+            try:
+                emergent = await store.get_emergent(campaign_id, "character", asset_id)
+                if emergent:
+                    fm = emergent.get("frontmatter") or {}
+                    if fm.get("name"):
+                        return str(fm["name"])
+            except Exception as exc:
+                log.debug("get_emergent failed for %s/%s: %s", campaign_id, asset_id, exc)
         try:
             entities = await library.list_for_composition(campaign_id, "characters")
             for e in entities:
