@@ -127,6 +127,51 @@ async def test_complete_raises_on_http_error(openrouter_module) -> None:
 
 
 @pytest.mark.asyncio
+async def test_complete_wraps_transport_error_as_transient(openrouter_module) -> None:
+    """A connection-level failure must surface as the gateway's retriable
+    TransientError, not a raw httpx error the gateway treats as permanent.
+
+    Regression: a transient httpx.ConnectError escaped unwrapped, so the
+    gateway's retry/fallback machinery never engaged and a momentary network
+    blip aborted the whole turn.
+    """
+    from grimoire.llm_gateway.errors import TransientError
+
+    provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
+
+    def _boom(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    _install_mock_transport(provider, _boom)
+    with pytest.raises(TransientError):
+        await provider.complete(
+            CompletionRequest(
+                model="x",
+                messages=[Message(role=MessageRole.USER, content="hi")],
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_stream_wraps_transport_error_as_transient(openrouter_module) -> None:
+    """A connection failure before any chunk must surface as TransientError so
+    the gateway retries it (the campaign-killing ua-harem ConnectError)."""
+    from grimoire.llm_gateway.errors import TransientError
+
+    provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
+
+    def _boom(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    _install_mock_transport(provider, _boom)
+    with pytest.raises(TransientError):
+        async for _ in provider.stream(
+            CompletionRequest(model="x", messages=[Message(role=MessageRole.USER, content="hi")])
+        ):
+            pass
+
+
+@pytest.mark.asyncio
 async def test_stream_parses_sse_chunks(openrouter_module) -> None:
     provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
 
