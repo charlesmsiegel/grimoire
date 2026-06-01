@@ -119,6 +119,13 @@ class ContinuityService(Continuity):
         self._judge = judge or StubContradictionJudge()
         self._event_bus = event_bus
         self._campaign_id = campaign_id
+        # Turn ids that performed a FACT_UPDATE. update_fact patches a fact in
+        # place with no stored pre-image, so it can't be reversed on cascade
+        # delete; we record the turn so the delete path can *warn* that the edit
+        # was not reverted. Best-effort/in-memory: the registry caches one
+        # service per campaign, so an update and its later retraction share this
+        # instance within a session.
+        self._fact_update_turns: set[str] = set()
 
     # ------------------------------------------------------------------
     # Event emission
@@ -182,10 +189,12 @@ class ContinuityService(Continuity):
         )
         await self._store.put_fact(retired)
 
-    async def update_fact(self, fact_id: FactId, patch: dict) -> Fact:
+    async def update_fact(self, fact_id: FactId, patch: dict, in_post: str | None = None) -> Fact:
         fact = await self._store.get_fact(fact_id)
         if fact is None:
             raise FactNotFoundError(fact_id)
+        if in_post:
+            self._fact_update_turns.add(in_post)
         # Subject patches need special handling since `about` is a nested dataclass.
         about_patch = patch.pop("about", None)
         new_fact = _patch_dataclass(fact, patch)
@@ -282,6 +291,12 @@ class ContinuityService(Continuity):
         if learned_in is None:
             return False
         return bool(await learned_in(turn_id))
+
+    def turn_had_fact_update(self, turn_id: str) -> bool:
+        """Whether ``turn_id`` performed a FACT_UPDATE (un-reversible, no
+        pre-image). Cascade delete uses this to warn that the edited fact fields
+        remain applied after the turn's prose is removed."""
+        return turn_id in self._fact_update_turns
 
     # ------------------------------------------------------------------
     # Fact reads

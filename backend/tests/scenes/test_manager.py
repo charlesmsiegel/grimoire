@@ -379,6 +379,92 @@ async def test_truncate_scene_from_keeps_npc_with_surviving_post(tmp_path: Path)
     assert "guard" in refreshed.present_character_refs
 
 
+async def test_truncate_drops_npc_that_left_then_reentered_via_post(tmp_path: Path) -> None:
+    """A declared NPC that leaves is pruned from the declared cast, so a later
+    post-only re-entry is no longer durable and truncating that post drops it."""
+    manager, _ = _manager(tmp_path)
+    scene = await manager.start_scene(
+        SceneInit(
+            campaign_id="c",
+            title="Scene",
+            present_pc_refs=["alistair"],
+            present_character_refs=["alistair", "guard"],
+        )
+    )
+    # guard leaves — no longer durably declared.
+    await manager.remove_present_character(scene.id, "guard")
+    assert "guard" not in (await manager.get_scene(scene.id)).declared_character_refs
+    # guard re-enters only by authoring a post.
+    await manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NPC, author_npc_ref="guard", body="back", is_player=False),
+    )
+    assert "guard" in (await manager.get_scene(scene.id)).present_character_refs
+
+    guard_post = (await manager.get_posts(scene.id))[0]
+    await manager.truncate_scene_from(guard_post.id, source="cascade_delete")
+    refreshed = await manager.get_scene(scene.id)
+    # The only surviving evidence was the deleted post and guard is no longer
+    # declared, so it leaves the cast (no stale resurrection).
+    assert "guard" not in refreshed.present_character_refs
+
+
+async def test_truncate_rolls_back_advance_watermark_for_deleted_response(tmp_path: Path) -> None:
+    """Deleting the model response to a multi-PC advance rolls the watermark
+    back so the still-visible PC inputs can be advanced again."""
+    manager, _ = _manager(tmp_path)
+    scene = await manager.start_scene(
+        SceneInit(campaign_id="c", title="Scene", present_pc_refs=["a", "b"])
+    )
+    await manager.append_post(
+        scene.id, new_post(author_kind=AuthorKind.PC, author_pc_ref="a", body="p1", is_player=True)
+    )
+    await manager.append_post(
+        scene.id, new_post(author_kind=AuthorKind.PC, author_pc_ref="b", body="p2", is_player=True)
+    )
+    await manager.on_advance_requested(scene.id)  # watermark -> 2
+    await manager.append_post(
+        scene.id,
+        new_post(author_kind=AuthorKind.NARRATOR, body="resp", is_player=False, turn_id="T1"),
+    )
+    assert (await manager.get_scene(scene.id)).last_advance_at_post == 2
+
+    resp = (await manager.get_posts(scene.id))[2]
+    await manager.truncate_scene_from(resp.id, source="cascade_delete")
+    refreshed = await manager.get_scene(scene.id)
+    # No surviving model post → watermark back to 0; the two PC posts are pending.
+    assert refreshed.last_advance_at_post == 0
+    assert len(await manager.posts_since_last_advance(scene.id)) == 2
+
+
+async def test_truncate_clears_summary_and_prunes_threads(tmp_path: Path) -> None:
+    """Truncation drops the running summary/key beats and prunes thread anchors
+    beyond the new post_count so derived surfaces don't cite deleted prose."""
+    manager, _ = _manager(tmp_path)
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    for i in range(3):
+        await manager.append_post(
+            scene.id, new_post(author_kind=AuthorKind.NARRATOR, body=f"l{i}", is_player=False)
+        )
+    s = await manager.get_scene(scene.id)
+    s.running_summary = "covers all three posts"
+    s.key_beats = ["a beat"]
+    s.threads_introduced = [
+        Thread(text="early", introduced_at_post=1),
+        Thread(text="late", introduced_at_post=3),
+    ]
+    s.threads_paid_off = [Thread(text="paid-late", paid_off_at_post=3)]
+    manager._write_sidecar(s)
+
+    third = (await manager.get_posts(scene.id))[2]  # order 3
+    await manager.truncate_scene_from(third.id, source="cascade_delete")  # keep posts 1,2
+    r = await manager.get_scene(scene.id)
+    assert r.running_summary is None
+    assert r.key_beats == []
+    assert {t.text for t in r.threads_introduced} == {"early"}  # "late" (post 3) pruned
+    assert r.threads_paid_off == []  # paid at deleted post 3 → pruned
+
+
 async def test_truncate_scene_from_keeps_manually_added_npc(tmp_path: Path) -> None:
     """An NPC a user (or confirmed cast change) added before its only post is
     durable: add_present_character marks it declared, so truncating that post
