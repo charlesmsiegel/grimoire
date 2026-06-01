@@ -1279,9 +1279,7 @@ class SceneManager:
                 key: rec for key, rec in records.items() if int(key) < cut
             }
             self._write_sidecar(scene)
-            self._known_body_hashes[scene.id] = content_hash(
-                md_path.read_text(encoding="utf-8")
-            )
+            self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
             for removed_post in removed:
                 await self._emit(
                     POST_DELETED,

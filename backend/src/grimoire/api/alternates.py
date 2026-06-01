@@ -162,6 +162,28 @@ async def edit_post_body(
     return to_payload(post)
 
 
+@router.delete("/{campaign_id}/scenes/{scene_id}/posts/{post_id}")
+async def delete_post(
+    campaign_id: str,
+    scene_id: str,
+    post_id: str,
+    orchestrator: OrchestratorDep,
+    scenes: ScenesDep,
+) -> Any:
+    """Delete a post and every post after it in the scene, reverting state.
+
+    See ``docs/superpowers/specs/2026-05-31-post-delete-and-cost-display-design.md``.
+    """
+    await _resolve_post(scenes, campaign_id, scene_id, post_id)
+    try:
+        result = await orchestrator.delete_post_cascade(
+            campaign_id=campaign_id, scene_id=scene_id, post_id=post_id
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return to_payload(result)
+
+
 @router.delete(
     "/{campaign_id}/scenes/{scene_id}/posts/{post_id}/alternates/{alternate_id}",
     status_code=204,
