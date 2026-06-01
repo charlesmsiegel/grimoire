@@ -31,9 +31,30 @@ turns.
 ### Scope
 
 - Deletion is **scoped to the post's scene**. Later scenes are untouched.
+- Deletion is **only allowed while the scene is open**. A closed/complete
+  scene (`scene.closed`) rejects the operation. This keeps the final summary
+  stable and avoids reverting state for a sealed scene.
 - "Revert extracted state" reuses the existing delta-reversal machinery
   (`OrchestratorService._reverse_turn_deltas`, the same path `undo_turn` uses).
   It inherits that machinery's guarantees and limits.
+
+### Turn classification relative to the cut
+
+Let `cut = target_post.order_in_scene`. For each `turn_id` present in the
+scene's posts, compute `min_order` and `max_order` over the posts carrying it.
+A turn is one of:
+
+- **Before** the cut (`max_order < cut`): untouched.
+- **Fully contained** in the deleted suffix (`min_order >= cut`): its deltas are
+  reversed outright, no review (same as `undo_turn`).
+- **Straddling** the cut (`min_order < cut <= max_order`): some of its posts
+  survive and some are deleted. This only arises in "post-per-character" split
+  mode where several model posts share a `turn_id` and the cut falls between
+  them. We cannot auto-decide whether its deltas still hold, so they are
+  **reversed and then re-queued for human review** (see below).
+
+(Player/direction posts carry throwaway `turn_id`s that never appear in the
+delta log, so they never classify as fully-contained or straddling turns.)
 
 ### Backend
 
@@ -73,27 +94,44 @@ async def delete_post_cascade(
 ```
 
 1. `_require_campaign(campaign_id)`.
-2. Resolve the scene and verify it belongs to `campaign_id`; resolve the target
-   post and its `cut = order_in_scene`.
-3. Read the scene's posts. Compute, for each `turn_id` present, the minimum
-   `order_in_scene` of the posts carrying it. A turn is **fully contained** in
-   the deleted suffix iff `min_order(turn) >= cut`.
-   - This deliberately excludes a turn that *straddles* the cut (its first post
-     is before `cut` but some later split post is at/after `cut`). The surviving
-     post still represents that turn, so its deltas are left intact.
-   - Player/direction posts carry throwaway `turn_id`s that never appear in the
-     delta log; reversing a non-existent turn is a no-op, so they need no
-     special handling, but we only reverse turns we positively identify as
-     fully contained.
-4. For each fully-contained turn (process in reverse scene order so the most
-   recent turn is undone first), call `_reverse_turn_deltas` and emit
-   `TURN_UNDONE` with the reversed delta ids — identical to `undo_turn`.
-   Collect warnings on failure without aborting the whole operation.
-5. Call `self._scenes.truncate_scene_from(post_id, source="cascade_delete")`.
-6. Reset `state.last_turn_id` to the now-top turn
+2. Resolve the scene and verify it belongs to `campaign_id`. **Reject if the
+   scene is closed/complete** (`scene.closed`) with a clear error. Resolve the
+   target post and its `cut = order_in_scene`.
+3. Read the scene's posts and classify each turn relative to `cut` (see "Turn
+   classification" above) into *before* / *fully contained* / *straddling*.
+4. **Fully-contained turns** (process in reverse scene order so the most recent
+   is undone first): call `_reverse_turn_deltas` and emit `TURN_UNDONE` with the
+   reversed delta ids — identical to `undo_turn`. Collect warnings on failure
+   without aborting the whole operation.
+5. **Straddling turns**: reverse their deltas the same way, then **re-queue each
+   reversed delta for human review** so the human can decide whether it should
+   survive the partial deletion (see "Straddling turns" below). Emit
+   `TURN_UNDONE` as well so derived UIs stay consistent.
+6. Call `self._scenes.truncate_scene_from(post_id, source="cascade_delete")`.
+7. Reset `state.last_turn_id` to the now-top turn
    (`_recent_turn_ids(campaign_id, 1)`), so a subsequent `regenerate_last`
    refers to the correct turn.
-7. Return `CascadeDeleteResult(deleted_post_ids, reversed_turn_ids, warnings)`.
+8. Return
+   `CascadeDeleteResult(deleted_post_ids, reversed_turn_ids, requeued_review_ids, warnings)`.
+
+#### Straddling turns — reverse then re-queue for review
+
+For each straddling turn, after reversing its deltas:
+
+- For each reversed delta (read via `get_delta_log(turn_id=...)`), call the
+  existing `store.queue_for_review(delta=<delta-as-dict>, source="cascade_delete",
+  campaign_id=...)`. This inserts a **fresh, unapplied copy** of the delta and a
+  pending `review_queue` row, returning a `review_id`.
+- Emit `REVIEW_ITEM_ADDED` per queued item, mirroring `delta_applier`'s existing
+  emit (`{campaign_id, review_id, turn_id}`), so the frontend review queue and
+  the "Review queue" HUD widget pick it up live.
+- Resulting human semantics (the queue's existing behavior):
+  **Approve** → re-applies the delta (it survives the deletion);
+  **Reject** → leaves it reversed (it is removed).
+
+This reuses the exact approve = apply / reject = discard semantics already in
+`approve_review_item` / `reject_review_item`; no inverted review mode is
+introduced.
 
 `CascadeDeleteResult` is a small dataclass/Pydantic model alongside the other
 orchestrator result types.
@@ -117,7 +155,9 @@ async def delete_post(campaign_id, scene_id, post_id, orchestrator, scenes) -> A
     return to_payload(result)
 ```
 
-Returns `{ deleted_post_ids, reversed_turn_ids, warnings }`.
+Returns `{ deleted_post_ids, reversed_turn_ids, requeued_review_ids, warnings }`.
+Rejecting a delete on a closed scene maps to a 4xx via `map_lookup_errors` (or
+an explicit guard returning 409/400).
 
 ### Frontend
 
@@ -127,7 +167,12 @@ Returns `{ deleted_post_ids, reversed_turn_ids, warnings }`.
 
 ```
 deletePost: (campaignId: string, sceneId: string, postId: string) =>
-  api.delete<{ deleted_post_ids: string[]; reversed_turn_ids: string[]; warnings: string[] }>(
+  api.delete<{
+    deleted_post_ids: string[];
+    reversed_turn_ids: string[];
+    requeued_review_ids: string[];
+    warnings: string[];
+  }>(
     `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/posts/${enc(postId)}`,
   ),
 ```
@@ -135,7 +180,8 @@ deletePost: (campaignId: string, sceneId: string, postId: string) =>
 #### PostItem — delete button + inline confirm
 
 - Add a 🗑 delete icon button to the `post-actions` row of **every** post
-  (gated only on `campaignId` being present, like edit).
+  (gated on `campaignId` being present, like edit, **and on the scene being
+  open** — hidden/disabled when `scene.closed`).
 - Clicking it opens an **inline confirmation strip** (consistent with the
   existing guided-regenerate / translate / continue inline forms — no new modal
   dependency):
@@ -160,11 +206,16 @@ deletePost: (campaignId: string, sceneId: string, postId: string) =>
 
 ### Known limitations
 
-- Running/final scene summaries that referenced deleted posts are **not**
-  regenerated. The prose and extracted deltas are reverted; summary text may
-  still mention removed events until the next summary runs.
+- Deletion is blocked on closed/complete scenes (by design), so the **final
+  summary stays stable**. The **running summary** of an open scene is recomputed
+  on the normal cadence after the truncation, so stale running-summary text is
+  self-correcting — no special handling needed.
 - State reversal is only as complete as the delta log: anything not recorded as
   a reversible delta is not undone (same constraint as `undo_turn`).
+- Re-queued straddling-turn deltas inherit `approve_review_item`'s scope: it
+  re-applies `campaign-sqlite`-scoped deltas (via `upsert_row`). File-scoped
+  deltas, if any, are reversed but won't be auto-re-applied on approve — same
+  limitation the existing review-approve path already has.
 - Scene-post embeddings derived from the `.md` are rebuilt by the watcher when
   the file changes; no explicit embedding cleanup is performed here.
 
@@ -175,9 +226,11 @@ deletePost: (campaignId: string, sceneId: string, postId: string) =>
   posts untouched.
 - Integration (Orchestrator): after a few turns, cascade-deleting a mid-scene
   post removes the suffix **and** reverses the fully-contained turns' deltas;
-  a straddling-turn case keeps its deltas; `last_turn_id` is reset.
+  a straddling (split-mode) turn has its deltas reversed **and** re-queued as
+  pending review items (approve re-applies, reject leaves reversed);
+  `last_turn_id` is reset; deleting in a **closed scene is rejected**.
 - Scenario (API): `DELETE .../posts/{pid}` returns the summary and the scene
-  reflects the truncation on subsequent fetch.
+  reflects the truncation on subsequent fetch; closed-scene delete returns 4xx.
 - Frontend: PostItem renders the delete button, shows the confirm strip with
   the correct count, calls `deletePost` + `refresh` on confirm, and does
   nothing on cancel.
