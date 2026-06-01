@@ -190,7 +190,13 @@ export function PlayView({ campaignId }: Props) {
                 // closure and never clears a concurrent normal turn's stream.
                 play.dispatch({ type: "stream-end-if-turn", turn_id: turnId })
               }
-              onPostDeleted={play.refresh}
+              onPostDeleted={(deletedIds) => {
+                // Drop the removed suffix from view immediately: a plain
+                // refresh would re-preserve them, since the ``loaded`` reducer
+                // keeps current same-scene posts missing from the snapshot.
+                play.dispatch({ type: "remove-posts", ids: deletedIds });
+                void play.refresh();
+              }}
             />
           )}
           {play.state.mode === "play" && play.state.turnError && (

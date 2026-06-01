@@ -24,8 +24,9 @@ interface Props {
   subsequentCount?: number;
   /** When true, the scene is closed — deletion is not offered. */
   sceneClosed?: boolean;
-  /** Called after a successful delete so the caller can refresh the scene. */
-  onDeleted?: () => void;
+  /** Called after a successful delete with the ids the backend removed, so the
+   *  caller can drop them from view (and refresh the scene). */
+  onDeleted?: (deletedIds: string[]) => void;
   /** Turn id whose cost should render on this (user) post. */
   costTurnId?: string;
 }
@@ -145,8 +146,8 @@ export function PostItem({
     setDeleteBusy(true);
     setError(null);
     try {
-      await campaignApi.deletePost(campaignId, post.scene_id, post.id);
-      onDeleted?.();
+      const result = await campaignApi.deletePost(campaignId, post.scene_id, post.id);
+      onDeleted?.(result.deleted_post_ids);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setDeleteBusy(false);

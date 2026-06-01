@@ -55,6 +55,7 @@ export type PlayAction =
   | { type: "error"; message: string }
   | { type: "set-active-pc"; ref: string }
   | { type: "append-post"; post: ApiPost }
+  | { type: "remove-posts"; ids: string[] }
   | { type: "turn-pending" }
   | { type: "turn-settled" }
   | { type: "turn-failed"; message: string }
@@ -121,14 +122,11 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
       const oldSceneId = state.scene?.id ?? null;
       if (newSceneId && newSceneId === oldSceneId) {
         const snapshotIds = new Set(action.posts.map((p) => p.id));
-        const minNewOrder = action.posts.length > 0
-          ? Math.min(...action.posts.map((p) => p.order_in_scene))
-          : 0;
+        const minNewOrder =
+          action.posts.length > 0 ? Math.min(...action.posts.map((p) => p.order_in_scene)) : 0;
         const extra = state.posts.filter(
           (p) =>
-            p.scene_id === newSceneId &&
-            !snapshotIds.has(p.id) &&
-            p.order_in_scene >= minNewOrder,
+            p.scene_id === newSceneId && !snapshotIds.has(p.id) && p.order_in_scene >= minNewOrder,
         );
         if (extra.length > 0) posts = [...action.posts, ...extra];
       }
@@ -156,6 +154,11 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
       if (state.scene && action.post.scene_id !== state.scene.id) return state;
       if (state.posts.some((p) => p.id === action.post.id)) return state;
       return { ...state, posts: [...state.posts, action.post] };
+    case "remove-posts": {
+      if (action.ids.length === 0) return state;
+      const drop = new Set(action.ids);
+      return { ...state, posts: state.posts.filter((p) => !drop.has(p.id)) };
+    }
     case "turn-pending":
       return { ...state, awaitingResponse: true, turnError: null };
     case "turn-settled":

@@ -92,10 +92,13 @@ describe("usePlayState reducer", () => {
   });
 
   it("surfaces a turn failure and clears the pending placeholder", () => {
-    let state = reducer({ ...initial, awaitingResponse: true }, {
-      type: "turn-failed",
-      message: "boom",
-    });
+    let state = reducer(
+      { ...initial, awaitingResponse: true },
+      {
+        type: "turn-failed",
+        message: "boom",
+      },
+    );
     expect(state.awaitingResponse).toBe(false);
     expect(state.turnError).toBe("boom");
     // A new turn starting clears the stale error.
@@ -122,6 +125,35 @@ describe("usePlayState reducer", () => {
       { type: "stream-end", turn_id: "t1", post: null },
     );
     expect(state.awaitingResponse).toBe(false);
+  });
+
+  it("removes deleted posts and does not let a later refresh re-add them", () => {
+    const scene = makeScene("s1");
+    const p1 = { ...makePost("p1", "s1"), order_in_scene: 1 };
+    const p2 = { ...makePost("p2", "s1"), order_in_scene: 2 };
+    const p3 = { ...makePost("p3", "s1"), order_in_scene: 3 };
+    let state = reducer(initial, {
+      type: "loaded",
+      pcs: PCS,
+      activePcRef: "pc-a",
+      scene,
+      posts: [p1, p2, p3],
+    });
+
+    // Cascade delete from p2 removes the p2/p3 suffix from view immediately.
+    state = reducer(state, { type: "remove-posts", ids: ["p2", "p3"] });
+    expect(state.posts.map((p) => p.id)).toEqual(["p1"]);
+
+    // The follow-up refresh snapshot (post-truncation) must NOT re-preserve
+    // the removed suffix as "extras" — the bug this guards against.
+    state = reducer(state, {
+      type: "loaded",
+      pcs: PCS,
+      activePcRef: "pc-a",
+      scene,
+      posts: [p1],
+    });
+    expect(state.posts.map((p) => p.id)).toEqual(["p1"]);
   });
 
   it("replaces posts wholesale when the loaded scene is different", () => {
