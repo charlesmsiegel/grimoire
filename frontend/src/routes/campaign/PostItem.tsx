@@ -242,6 +242,7 @@ export function PostItem({
 
   return (
     <article
+      data-post-id={post.id}
       className={`post ${isDirection ? "post-direction" : `post-${post.author_kind}`}`}
       aria-label={isDirection ? "Direction" : `Post by ${name}`}
     >

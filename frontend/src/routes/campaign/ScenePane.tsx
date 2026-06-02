@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { Markdown } from "../../components/Markdown";
 import type { ApiPost, ApiScene, PCEntry } from "../../api/campaign";
@@ -36,25 +36,66 @@ export function ScenePane({
   onRerollFailed,
   onPostDeleted,
 }: Props) {
+  const paneRef = useRef<HTMLElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
-  // rAF-coalesce scrolls so dozens of streamed tokens in a single frame
-  // turn into one scroll, not dozens of queued animations. Also use
-  // ``auto`` (instant) for streaming deltas — smooth animations stacked
-  // and never settled. New posts still get a smooth scroll.
-  const lastPostCountRef = useRef(posts.length);
+
+  // The most recent player-authored post — the one a new turn responds to —
+  // and how many player posts exist (a new turn increments this).
+  const latestUserPostId = useMemo(() => {
+    let id: string | null = null;
+    for (const p of posts) {
+      if (p.is_player) id = p.id;
+    }
+    return id;
+  }, [posts]);
+  const userPostCount = useMemo(
+    () => posts.reduce((n, p) => (p.is_player ? n + 1 : n), 0),
+    [posts],
+  );
+  const postCount = posts.length;
+
+  // When a new turn begins, scroll the just-submitted user post to the top of
+  // the main window so the response streams in below it (read top-to-bottom,
+  // no back-scrolling). On scene load we instead jump to the most recent post.
+  //
+  // The trigger is a genuine *increase* in the user-post count — never a bare
+  // id change — so regenerate, refetch, pagination and deletes don't scroll,
+  // and a missed seed fails safe (no scroll) rather than yanking to an existing
+  // post. ``scrollIntoView`` aligns the post within whichever ancestor scrolls
+  // (the inner pane and the outer main column are both scroll containers).
+  const initializedSceneRef = useRef<string | null | undefined>(undefined);
+  const prevUserPostCountRef = useRef<number | null>(null);
   useEffect(() => {
-    const isNewPost = posts.length !== lastPostCountRef.current;
-    lastPostCountRef.current = posts.length;
-    const handle = requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView({
-        behavior: isNewPost ? "smooth" : "auto",
-        block: "end",
+    const sceneId = scene?.id ?? null;
+
+    // First populated render for this scene: show the latest post and record
+    // the user-post count so existing posts aren't treated as newly submitted.
+    if (sceneId !== initializedSceneRef.current) {
+      if (postCount === 0) return;
+      initializedSceneRef.current = sceneId;
+      prevUserPostCountRef.current = userPostCount;
+      const handle = requestAnimationFrame(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
       });
-    });
-    return () => cancelAnimationFrame(handle);
-  }, [posts.length, streaming?.text.length, awaitingResponse]);
+      return () => cancelAnimationFrame(handle);
+    }
+
+    const grew =
+      prevUserPostCountRef.current !== null && userPostCount > prevUserPostCountRef.current;
+    prevUserPostCountRef.current = userPostCount;
+
+    if (grew && latestUserPostId) {
+      const targetId = latestUserPostId;
+      const handle = requestAnimationFrame(() => {
+        paneRef.current
+          ?.querySelector<HTMLElement>(`[data-post-id="${CSS.escape(targetId)}"]`)
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return () => cancelAnimationFrame(handle);
+    }
+  }, [scene?.id, postCount, userPostCount, latestUserPostId]);
 
   useEffect(() => {
     const sentinel = topSentinelRef.current;
@@ -108,7 +149,7 @@ export function ScenePane({
     }
   }
   return (
-    <section className="scene-pane" aria-label="Scene posts" aria-live="polite">
+    <section ref={paneRef} className="scene-pane" aria-label="Scene posts" aria-live="polite">
       {hasMorePosts && <div ref={topSentinelRef} className="load-more-sentinel" />}
       {posts.length === 0 && !streaming && !awaitingResponse && (
         <p className="scene-empty">No posts yet. Begin with a post below.</p>
