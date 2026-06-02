@@ -2634,7 +2634,7 @@ pre {
   margin-left: auto;
 }
 
-.library-card:has(.library-card-actions) {
+.library-card:has(.library-card-actions, .card-icon-bar:not(:empty)) {
   display: flex;
   flex-direction: column;
   background: var(--bg-elev);
@@ -2645,11 +2645,11 @@ pre {
   transition: border-color var(--transition-fast);
 }
 
-.library-card:has(.library-card-actions):hover {
+.library-card:has(.library-card-actions, .card-icon-bar:not(:empty)):hover {
   border-color: var(--accent);
 }
 
-.library-card:has(.library-card-actions) > a {
+.library-card:has(.library-card-actions, .card-icon-bar:not(:empty)) > a {
   flex: 1 1 auto;
   background: transparent;
   border: none;
@@ -2657,7 +2657,7 @@ pre {
   box-shadow: none;
 }
 
-.library-card:has(.library-card-actions) > a:hover {
+.library-card:has(.library-card-actions, .card-icon-bar:not(:empty)) > a:hover {
   transform: none;
   box-shadow: none;
   border-color: transparent;

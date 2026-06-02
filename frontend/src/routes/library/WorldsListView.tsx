@@ -4,6 +4,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { ApiError, fetchWorldDependents, libraryApi, type CampaignRef } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { CardFilters } from "../../components/CardFilters";
+import { CardIconBar } from "../../components/CardIconBar";
+import { deleteAction } from "../../components/cardActions";
 import { useCardFilters } from "../../hooks/useCardFilters";
 import { markEnd } from "../../state/perf";
 import { AsyncBoundary } from "./AsyncBoundary";
@@ -256,30 +258,14 @@ function WorldsListBody({ worlds, onDelete }: WorldsListBodyProps) {
                   v{s.version} · {s.tags.length} tag{s.tags.length === 1 ? "" : "s"}
                 </p>
               </Link>
-              <div className="library-card-actions">
-                <button
-                  type="button"
-                  aria-label="Delete world"
-                  title="Delete world"
-                  onClick={() => onDelete(s.id, s.name || s.id)}
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    <line x1="10" y1="11" x2="10" y2="17" />
-                    <line x1="14" y1="11" x2="14" y2="17" />
-                  </svg>
-                </button>
-              </div>
+              <CardIconBar
+                actions={[
+                  deleteAction({
+                    onClick: () => onDelete(s.id, s.name || s.id),
+                    label: "Delete world",
+                  }),
+                ]}
+              />
             </li>
           ))}
         </ul>
