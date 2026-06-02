@@ -37,6 +37,7 @@ function renderPane(props: Partial<Parameters<typeof ScenePane>[0]> = {}) {
 
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.scrollTo = vi.fn();
   vi.stubGlobal(
     "IntersectionObserver",
     vi.fn(() => ({ observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn() })),
@@ -120,6 +121,64 @@ describe("ScenePane delete wiring", () => {
     const { fireEvent } = await import("@testing-library/react");
     fireEvent.click(screen.getByRole("button", { name: "Delete post" }));
     expect(screen.getByText(/2 following posts/i)).toBeInTheDocument();
+  });
+});
+
+describe("ScenePane new-turn anchoring", () => {
+  const scene = {
+    id: "s1",
+    campaign_id: "c1",
+    post_count: 2,
+    closed: false,
+    present_character_refs: [],
+  } as unknown as Parameters<typeof ScenePane>[0]["scene"];
+  const user1 = { ...makePost("u1"), is_player: true, author_kind: "pc" as const };
+  const model1 = makePost("m1");
+
+  // The anchor scrolls with block:"start"; the scene-load jump uses block:"end".
+  const anchorScroll = () =>
+    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([opts]) => (opts as ScrollIntoViewOptions | undefined)?.block === "start",
+    );
+
+  it("anchors a newly submitted user post to the top of the main window", async () => {
+    const { rerender } = renderPane({ posts: [user1, model1], scene });
+
+    const user2 = { ...makePost("u2"), is_player: true, author_kind: "pc" as const };
+    rerender(
+      <ScenePane
+        posts={[user1, model1, user2]}
+        pcs={PCS}
+        streaming={null}
+        awaitingResponse={false}
+        images={{}}
+        hasMorePosts={false}
+        onLoadMore={() => {}}
+        scene={scene}
+      />,
+    );
+    // The anchor scroll runs inside requestAnimationFrame; wait for it to flush.
+    const { waitFor } = await import("@testing-library/react");
+    await waitFor(() => expect(anchorScroll().length).toBeGreaterThan(0));
+  });
+
+  it("does not anchor when no new user post is added (e.g. streaming/regenerate)", async () => {
+    const { rerender } = renderPane({ posts: [user1, model1], scene });
+
+    rerender(
+      <ScenePane
+        posts={[user1, model1]}
+        pcs={PCS}
+        streaming={{ turn_id: "t1", text: "streaming words..." }}
+        awaitingResponse={false}
+        images={{}}
+        hasMorePosts={false}
+        onLoadMore={() => {}}
+        scene={scene}
+      />,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(anchorScroll()).toHaveLength(0);
   });
 });
 
