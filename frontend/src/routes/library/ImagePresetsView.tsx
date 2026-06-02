@@ -8,6 +8,8 @@ import {
   type LibraryEntity,
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
+import { CardIconBar } from "../../components/CardIconBar";
+import { deleteAction } from "../../components/cardActions";
 import { AsyncBoundary } from "./AsyncBoundary";
 
 export function ImagePresetsView() {
@@ -26,6 +28,11 @@ function ImagePresetList() {
   const { data, loading, error, reload } = useResource(
     useCallback(() => libraryApi.listImagePresets(), []),
   );
+  async function handleDelete(id: string, name: string) {
+    if (!window.confirm(`Delete image preset "${name}"? This cannot be undone.`)) return;
+    await libraryApi.deleteImagePreset(id);
+    reload();
+  }
   return (
     <section className="library-section">
       <header className="library-section-header">
@@ -52,6 +59,14 @@ function ImagePresetList() {
                   Edit
                 </Link>
               </div>
+              <CardIconBar
+                actions={[
+                  deleteAction({
+                    onClick: () => void handleDelete(p.asset_id, p.name || p.asset_id),
+                    label: `Delete image preset ${p.name || p.asset_id}`,
+                  }),
+                ]}
+              />
             </li>
           ))}
         </ul>

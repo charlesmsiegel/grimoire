@@ -13,6 +13,8 @@ import type {
   UpdateCalendarPayload,
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
+import { CardIconBar } from "../../components/CardIconBar";
+import { deleteAction } from "../../components/cardActions";
 import { AsyncBoundary } from "./AsyncBoundary";
 
 const SYSTEM_LABELS: Record<CalendarSystem, string> = {
@@ -88,6 +90,12 @@ function CalendarsList() {
   const builtins = data?.filter((c) => c.builtin) ?? [];
   const customs = data?.filter((c) => !c.builtin) ?? [];
 
+  async function handleDelete(id: string, name: string) {
+    if (!window.confirm(`Delete calendar "${name}"? This cannot be undone.`)) return;
+    await calendarsApi.deleteCalendar(id);
+    reload();
+  }
+
   return (
     <section className="library-section">
       <header className="library-section-header">
@@ -116,6 +124,7 @@ function CalendarsList() {
                 {c.description && <p className="library-card-meta">{c.description}</p>}
                 {c.tags.length > 0 && <p className="library-card-meta">{c.tags.join(" · ")}</p>}
               </Link>
+              <CardIconBar actions={[]} />
             </li>
           ))}
         </ul>
@@ -134,6 +143,14 @@ function CalendarsList() {
                   <div className="library-card-actions">
                     <Link to={`/library/calendars/${encodeURIComponent(c.id)}/edit`}>Edit</Link>
                   </div>
+                  <CardIconBar
+                    actions={[
+                      deleteAction({
+                        onClick: () => void handleDelete(c.id, c.name || c.id),
+                        label: `Delete calendar ${c.name || c.id}`,
+                      }),
+                    ]}
+                  />
                 </li>
               ))}
             </ul>

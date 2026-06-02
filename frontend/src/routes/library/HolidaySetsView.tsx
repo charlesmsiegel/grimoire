@@ -11,6 +11,8 @@ import type {
   UpdateHolidaySetPayload,
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
+import { CardIconBar } from "../../components/CardIconBar";
+import { deleteAction } from "../../components/cardActions";
 import { AsyncBoundary } from "./AsyncBoundary";
 
 const SYSTEM_LABELS: Record<CalendarSystem, string> = {
@@ -79,6 +81,12 @@ function List() {
   const builtins = data?.filter((s) => s.builtin) ?? [];
   const customs = data?.filter((s) => !s.builtin) ?? [];
 
+  async function handleDelete(id: string, name: string) {
+    if (!window.confirm(`Delete holiday set "${name}"? This cannot be undone.`)) return;
+    await calendarsApi.deleteHolidaySet(id);
+    reload();
+  }
+
   return (
     <section className="library-section">
       <header className="library-section-header">
@@ -106,6 +114,7 @@ function List() {
                 <p className="library-card-meta">{s.holidays.length} holidays</p>
                 {s.description && <p className="library-card-meta">{s.description}</p>}
               </Link>
+              <CardIconBar actions={[]} />
             </li>
           ))}
         </ul>
@@ -124,6 +133,14 @@ function List() {
                   <div className="library-card-actions">
                     <Link to={`/library/holiday-sets/${encodeURIComponent(s.id)}/edit`}>Edit</Link>
                   </div>
+                  <CardIconBar
+                    actions={[
+                      deleteAction({
+                        onClick: () => void handleDelete(s.id, s.name || s.id),
+                        label: `Delete holiday set ${s.name || s.id}`,
+                      }),
+                    ]}
+                  />
                 </li>
               ))}
             </ul>

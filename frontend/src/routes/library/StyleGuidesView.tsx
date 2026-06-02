@@ -4,6 +4,8 @@ import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { ApiError, libraryApi } from "../../api/library";
 import type { StyleGuideEditPayload } from "../../api/library";
 import { useResource } from "../../api/useResource";
+import { CardIconBar } from "../../components/CardIconBar";
+import { deleteAction } from "../../components/cardActions";
 import { Markdown } from "../../components/Markdown";
 import { AsyncBoundary } from "./AsyncBoundary";
 
@@ -44,6 +46,12 @@ function StyleGuideList() {
     useCallback(() => libraryApi.listStyleGuides(), []),
   );
 
+  async function handleDelete(id: string, name: string) {
+    if (!window.confirm(`Delete style guide "${name}"? This cannot be undone.`)) return;
+    await libraryApi.deleteStyleGuide(id);
+    reload();
+  }
+
   return (
     <section className="library-section">
       <header className="library-section-header">
@@ -70,6 +78,14 @@ function StyleGuideList() {
                   Edit
                 </Link>
               </div>
+              <CardIconBar
+                actions={[
+                  deleteAction({
+                    onClick: () => void handleDelete(g.asset_id, g.name || g.asset_id),
+                    label: `Delete style guide ${g.name || g.asset_id}`,
+                  }),
+                ]}
+              />
             </li>
           ))}
         </ul>
