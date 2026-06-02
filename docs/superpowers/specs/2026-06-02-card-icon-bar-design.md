@@ -1,8 +1,30 @@
 # Card Icon Bar — Design
 
 **Date:** 2026-06-02
-**Status:** Approved (pending spec review)
-**Scope:** Frontend (React/TS) + docs + ESLint config + one GitHub issue. No backend changes.
+**Status:** Approved — revised after implementation-planning reconnaissance
+**Scope:** Frontend (React/TS) + docs + ESLint config + one GitHub issue, **plus one
+backend endpoint** (`DELETE /library/style-guides/{id}`, the only card whose delete did
+not already exist on the backend).
+
+## Reconnaissance corrections (2026-06-02)
+
+Mapping the call sites for the plan surfaced several facts that revise the original
+assumptions. They are folded into the migration table below:
+
+- **`.character-card` is dead CSS.** No JSX renders the `character-card` class (it is an
+  unused form-fieldset style in `index.css`). There is no CharacterCreation card to
+  attach a delete to — the dead CSS is removed instead.
+- **PostItem already has an icon bar.** `post-actions-icons` / `post-icon-btn` is an
+  existing emoji icon bar (✎ 🔄 🎯 ➤ 🌐 🗑). Its conversion is migrating that bar onto
+  the shared `CardIconBar`, not adding one.
+- **Four library views have no existing delete** (StyleGuides, ImagePresets, Calendars,
+  HolidaySets show only an "Edit" link). Their trash is *new* delete wiring, not a
+  migration. Built-in calendars / holiday-sets stay non-deletable → empty bar.
+- **Style guides have no backend delete endpoint** → this plan adds one.
+- **The cast card is a `<button>`** and lists all resolved characters (PCs + NPCs).
+  A PC-only trash needs a new frontend `removePc` API, `listPCs` cross-referencing, and
+  de-nesting the selection button. The timeline card has the same `<button>` nesting
+  issue for its new scene-delete trash.
 
 ## Goal
 
@@ -86,36 +108,52 @@ Per-card CSS tweaks are enumerated in the implementation plan.
 
 ## Per-card migration
 
+**Migrate an existing delete into the bar** (endpoint + UI already exist):
+
 | Card | Location | Action in bar |
 |---|---|---|
 | `campaign-card` | CampaignsView | 🗑 → `deleteCampaign` (keep confirm + busy) |
-| `library-card` (world) | WorldsListView | 🗑 → `deleteWorld` |
-| `library-card` (entity) | EntityListView | 🗑 → `deleteEntity` |
-| `library-card` (style guide) | StyleGuidesView | 🗑 → delete style guide |
+| `library-card` (world) | WorldsListView | 🗑 → `deleteWorld` (replaces existing SVG trash) |
+| `library-card` (entity) | EntityListView | 🗑 → `deleteEntity` (keep `Convert` for lore) |
+| `PostItem` (chat post) | PostItem | migrate `post-icon-btn` bar (incl. 🗑 `deletePost`) onto `CardIconBar` |
+
+**New frontend delete wiring** (backend endpoint exists; view currently has no delete):
+
+| Card | Location | Action in bar |
+|---|---|---|
+| `timeline-card` (scene) | TimelineView | 🗑 → `deleteScene` (de-nest from card `<button>`) |
 | `library-card` (image preset) | ImagePresetsView | 🗑 → `deleteImagePreset` |
-| `library-card` (calendar) | CalendarsView | 🗑 → `deleteCalendar` |
-| `library-card` (holiday set) | HolidaySetsView | 🗑 → `deleteHolidaySet` |
-| `timeline-card` (scene) | TimelineView | 🗑 → `deleteScene` |
-| `entity-card` (PC) | CastView | 🗑 → `DELETE /pcs/{ref}` |
-| `character-card` (PC fieldset) | CharacterCreation | 🗑 → remove this PC |
-| `PostItem` (chat post) | ScenePane / PostItem | 🗑 → `deletePost` |
-| `library-card` (plugin) | PluginsView | empty bar (code scope; uninstall ≠ delete) |
-| `library-card` (mechanics) | MechanicsView (library) | empty bar |
-| `entity-card` (display) | LedgerView, ContentBrowser, MechanicsView (campaign) | empty bar |
-| `entity-card-static` | WorldView | empty bar (read-only) |
-| `provider-card` | ProvidersTab, StartupWizard | empty bar (config) |
-| `suggestion-card` | SceneSuggestionView | empty bar |
-| `why-character-card` | WhyCharacterPanel | empty bar (read-only diagnostic) |
+| `library-card` (custom calendar) | CalendarsView | 🗑 → `deleteCalendar` (built-ins: empty bar) |
+| `library-card` (custom holiday set) | HolidaySetsView | 🗑 → `deleteHolidaySet` (built-ins: empty bar) |
+| `entity-card` (PC) | CastView | 🗑 → new `removePc` (PC rows only; de-nest `<button>`) |
 
-All existing bespoke delete controls (`campaign-card-delete`, `library-card-action`
-delete links, etc.) are removed; their confirm dialogs, busy state, and error handling
-are preserved by wiring into the `deleteAction`.
+**New backend + frontend** :
 
-The `character-card` fieldset in CharacterCreation gets a trash that removes the PC from
-the current draft/campaign (reusing the existing `removePC` path / PC-delete endpoint;
-exact wiring decided in the plan).
+| Card | Location | Action in bar |
+|---|---|---|
+| `library-card` (style guide) | StyleGuidesView | add `DELETE /library/style-guides/{id}` → 🗑 |
 
-All delete endpoints already exist — this is a frontend-only change.
+**Empty bar** (no delete; bar present but invisible until populated):
+
+| Card | Location | Why |
+|---|---|---|
+| `library-card` (plugin) | PluginsView | code scope; uninstall ≠ delete |
+| `library-card` (mechanics) | MechanicsView (library) | code scope |
+| `library-card` (built-in calendar / holiday set) | Calendars/HolidaySetsView | built-in, not user-deletable |
+| `entity-card` (display) | LedgerView, ContentBrowser, MechanicsView (campaign) | read-only display |
+| `entity-card-static` | WorldView | read-only |
+| `provider-card` | ProvidersTab, StartupWizard | config selector |
+| `suggestion-card` | SceneSuggestionView | ephemeral |
+| `why-character-card` | WhyCharacterPanel | read-only diagnostic |
+
+The `.character-card` fieldset CSS is **dead** (nothing renders it) and is removed; there
+is no CharacterCreation card to give a delete.
+
+Existing bespoke delete controls (`campaign-card-delete`, `library-card-action` delete,
+WorldsListView SVG trash, PostItem `post-delete`) are removed and re-expressed through
+`deleteAction`, preserving their confirm dialogs, busy state, and error handling.
+
+Aside from the one style-guide endpoint, this is a frontend-only change.
 
 ## Enforcement — ESLint rule `no-bespoke-delete`
 
