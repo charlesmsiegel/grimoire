@@ -194,6 +194,7 @@ class DeltaApplier:
         campaign_id: CampaignId,
         turn_id: TurnId,
         extraction: ExtractionResult,
+        delta_set_id: str | None = None,
     ) -> tuple[list[str], list[str]]:
         routing = route_deltas(list(extraction.deltas), config=self._extractor_config)
         auto_deltas = [d for d, dec in routing.decisions() if dec is Decision.AUTO_APPLY]
@@ -237,6 +238,7 @@ class DeltaApplier:
                     source=delta.source or "extractor",
                     turn_id=turn_id,
                     campaign_id=campaign_id,
+                    delta_set_id=delta_set_id,
                 )
                 applied_ids.append(did)
         except Exception:

@@ -119,7 +119,7 @@ def _build_continuity_fact(
     about_data = payload.get("about") or {}
     if isinstance(about_data, FactSubject):
         about = about_data
-    else:
+    elif isinstance(about_data, dict):
         about = FactSubject(
             character_ids=list(about_data.get("character_ids") or []),
             location_ids=list(about_data.get("location_ids") or []),
@@ -127,6 +127,11 @@ def _build_continuity_fact(
             item_ids=list(about_data.get("item_ids") or []),
             scope=str(about_data.get("scope") or "public"),
         )
+    else:
+        # The model occasionally emits `about` as a bare string instead of the
+        # {character_ids: [...], ...} object the schema asks for. Don't drop the
+        # fact — record it with an empty (public) subject.
+        about = FactSubject(scope="public")
     src_raw = payload.get("source") or source
     try:
         fact_source = FactSource(str(src_raw))

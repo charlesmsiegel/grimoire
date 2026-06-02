@@ -91,6 +91,7 @@ class FakeStateStore:
         source: str = "",
         turn_id: str | None = None,
         campaign_id: str | None = None,
+        delta_set_id: str | None = None,
     ) -> str:
         idx = self._apply_call_count
         self._apply_call_count += 1
@@ -104,6 +105,7 @@ class FakeStateStore:
                 "source": source,
                 "turn_id": turn_id,
                 "campaign_id": campaign_id,
+                "delta_set_id": delta_set_id,
             }
         )
         return did
