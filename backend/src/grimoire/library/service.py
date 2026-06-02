@@ -377,6 +377,13 @@ class LibraryService:
         )
         return await self.get_style_guide(id)
 
+    async def delete_style_guide(self, id: str, *, source: str = "user") -> None:
+        library_id = f"style-guides/{id}"
+        row = await self.store.get_library_entity(library_id)
+        if row is None:
+            raise LibraryNotFoundError(f"style guide {id!r} not found")
+        await self.store.delete_library_file(library_id=library_id, source=source)
+
     async def get_image_preset(self, id: str) -> LibraryEntity:
         library_id = f"image-presets/{id}"
         row = await self.store.get_library_entity(library_id)

@@ -121,6 +121,9 @@ class FakeLibrary:
         self.created.append(("style_guide_update", id))
         return await self.create_style_guide(id, **kwargs)
 
+    async def delete_style_guide(self, id: str, **kwargs: Any) -> None:
+        self.created.append(("style_guide_delete", id))
+
     async def parse_style_guide(self, id: str) -> dict[str, Any]:
         return {
             "id": id,
@@ -852,6 +855,14 @@ def test_delete_image_preset(client, container) -> None:
     response = client.delete("/api/library/image-presets/noir-portraits")
     assert response.status_code == 204
     assert ("image_preset_delete", "noir-portraits") in fake.created
+
+
+def test_delete_style_guide(client, container) -> None:
+    fake = FakeLibrary()
+    container.library = fake
+    response = client.delete("/api/library/style-guides/cozy-mystery")
+    assert response.status_code == 204
+    assert ("style_guide_delete", "cozy-mystery") in fake.created
 
 
 # --------------------------------------------------------------------------- #

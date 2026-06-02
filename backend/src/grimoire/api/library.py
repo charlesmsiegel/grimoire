@@ -522,6 +522,18 @@ async def update_style_guide(
     return to_payload(result)
 
 
+@router.delete("/library/style-guides/{guide_id}", status_code=204)
+async def delete_style_guide(
+    guide_id: str,
+    library: LibraryDep,
+    source: str = "user",
+) -> None:
+    try:
+        await library.delete_style_guide(guide_id, source=source)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
 @router.get("/library/image-presets")
 async def list_image_presets(library: LibraryDep) -> Any:
     return to_payload(await library.list_image_presets())

@@ -456,6 +456,18 @@ async def test_image_preset_crud_round_trip(library: LibraryService) -> None:
         await library.get_image_preset("noir-portraits")
 
 
+async def test_delete_style_guide(library: LibraryService) -> None:
+    await library.create_style_guide("doomed", name="Doomed Guide")
+    assert (await library.get_style_guide("doomed")).asset_id == "doomed"
+
+    await library.delete_style_guide("doomed")
+    with pytest.raises(LibraryNotFoundError):
+        await library.get_style_guide("doomed")
+    # Deleting again is a not-found, not a silent success.
+    with pytest.raises(LibraryNotFoundError):
+        await library.delete_style_guide("doomed")
+
+
 async def test_delete_entity(library: LibraryService, store: StateStore) -> None:
     await _seed_world(store, "wod-london")
     await _seed_character(store, "wod-london", "alistair")
