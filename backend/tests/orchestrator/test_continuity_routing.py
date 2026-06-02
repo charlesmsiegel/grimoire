@@ -42,7 +42,7 @@ class _MinimalStore:
         self.reviewed.append((delta, source, campaign_id))
         return "review-1"
 
-    async def apply_delta(self, *, delta, source, turn_id, campaign_id):
+    async def apply_delta(self, *, delta, source, turn_id, campaign_id, delta_set_id=None):
         self.applied.append(delta)
         return "delta-1"
 
@@ -88,6 +88,39 @@ async def test_fact_add_routes_to_continuity_when_no_conflict() -> None:
     facts = await service.facts_about(limit=10)
     assert any(f.text.startswith("winifred loves") for f in facts)
     assert store.reviewed == []  # no review queue when no conflicts
+
+
+async def test_fact_add_tolerates_non_dict_about() -> None:
+    """The model sometimes emits ``about`` as a bare string instead of the
+    ``{character_ids: [...]}`` object the schema asks for. The fact must still
+    be recorded (with an empty subject), not silently dropped."""
+    registry = ContinuityRegistry(
+        store_factory=lambda c: InMemoryContinuityStore(),
+    )
+    store = _MinimalStore()
+    orch = _orchestrator(registry, store)
+
+    delta = StateDelta(
+        kind=DeltaKind.FACT_ADD,
+        target_scope=Scope.CAMPAIGN_SQLITE,
+        target_id="fact:str",
+        target_table="facts",
+        after={
+            "text": "The harem arrangement is sealed for a year.",
+            "about": "the whole class",
+        },
+        confidence=0.9,
+        source="extractor",
+    )
+    handled = await orch._delta._apply_continuity_delta(
+        delta=delta,
+        campaign_id="camp-a",
+        turn_id="t1",
+    )
+    assert handled is True
+    service: ContinuityService = registry.for_campaign("camp-a")
+    facts = await service.facts_about(limit=10)
+    assert any(f.text.startswith("The harem arrangement") for f in facts)
 
 
 async def test_fact_add_conflict_queues_for_review() -> None:

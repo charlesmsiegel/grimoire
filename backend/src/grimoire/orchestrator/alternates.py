@@ -114,7 +114,19 @@ class AlternatesManager:
 
         new_alt_id = f"a_{uuid.uuid4().hex[:16]}"
         new_ds_id = f"ds_{uuid.uuid4().hex[:16]}"
-        applied = False
+
+        # Capture the current primary's delta set up front so the rollback path
+        # can re-activate it even if generation fails before we touch state.
+        current_primary = next(
+            (a for a in post.alternates if a.id == post.primary_alternate_id),
+            None,
+        )
+        rewind_ds = (
+            current_primary.delta_set_id
+            if current_primary and current_primary.delta_set_id
+            else None
+        )
+        rewound = False
 
         try:
             extract_mode = await self._delta.select_extract_mode(campaign_id=campaign_id)
@@ -140,35 +152,26 @@ class AlternatesManager:
                 turn_id=post.turn_id,
                 mode=extract_mode,
             )
-            deltas = list(extraction.deltas) if extraction is not None else []
 
-            current_primary = next(
-                (a for a in post.alternates if a.id == post.primary_alternate_id),
-                None,
-            )
-            rewind_ds = (
-                current_primary.delta_set_id
-                if current_primary and current_primary.delta_set_id
-                else None
-            )
+            # Apply the new delta set through the same routing the main turn
+            # uses (apply_routing): continuity / inventory / weather deltas are
+            # dispatched to their owning services, while directly-applicable
+            # SQLite + file deltas are tagged with ``new_ds_id`` so the swipe
+            # swap path can rewind them. Feeding raw extractor deltas to the
+            # low-level ``apply_delta_set`` upsert instead corrupts/crashes on
+            # continuity deltas (e.g. COMMITMENT_ADD lacks the ``commitments``
+            # primary key). See swipes-alternates design §"contradiction-check
+            # already part of the _apply_routing flow".
             if rewind_ds:
-                await self._store.swap_delta_set(
-                    rewind_set_id=rewind_ds,
-                    apply_deltas=deltas,
-                    apply_set_id=new_ds_id,
+                await self._store.rewind_delta_set(rewind_ds, campaign_id=campaign_id)
+                rewound = True
+            if extraction is not None:
+                await self._delta.apply_routing(
                     campaign_id=campaign_id,
                     turn_id=post.turn_id,
-                    source="orchestrator:regenerate",
-                )
-            else:
-                await self._store.apply_delta_set(
-                    deltas=deltas,
+                    extraction=extraction,
                     delta_set_id=new_ds_id,
-                    campaign_id=campaign_id,
-                    turn_id=post.turn_id,
-                    source="orchestrator:regenerate",
                 )
-            applied = True
 
             alt = SceneAlternate(
                 id=new_alt_id,
@@ -216,27 +219,28 @@ class AlternatesManager:
                 delta_set_id=new_ds_id,
             )
         except Exception:
-            if applied:
+            # Reverse any deltas we tagged with the new set (no-op if none were
+            # applied), then restore the prior primary's set if we rewound it.
+            try:
+                await self._store.rewind_delta_set(new_ds_id, campaign_id=campaign_id)
+            except Exception:
+                logger.warning(
+                    "rollback of new delta set %s during regenerate_post failed",
+                    new_ds_id,
+                    exc_info=True,
+                )
+            if rewound and rewind_ds:
                 try:
-                    await self._store.rewind_delta_set(new_ds_id, campaign_id=campaign_id)
+                    await self._store.re_activate_delta_set(
+                        delta_set_id=rewind_ds,
+                        campaign_id=campaign_id,
+                    )
                 except Exception:
                     logger.warning(
-                        "rollback of new delta set %s during regenerate_post failed",
-                        new_ds_id,
+                        "re-activate of prior set %s during regenerate_post rollback failed",
+                        rewind_ds,
                         exc_info=True,
                     )
-                if rewind_ds:
-                    try:
-                        await self._store.re_activate_delta_set(
-                            delta_set_id=rewind_ds,
-                            campaign_id=campaign_id,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "re-activate of prior set %s during regenerate_post rollback failed",
-                            rewind_ds,
-                            exc_info=True,
-                        )
             raise
 
     async def switch_primary_alternate(

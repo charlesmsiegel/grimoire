@@ -84,7 +84,9 @@ class _OrchFakeStore:
     db: _OrchFakeDB = field(default_factory=_OrchFakeDB)
     _applied: int = 0
 
-    async def apply_delta(self, *, delta, source="", turn_id=None, campaign_id=None):
+    async def apply_delta(
+        self, *, delta, source="", turn_id=None, campaign_id=None, delta_set_id=None
+    ):
         self._applied += 1
         return f"d_{self._applied:06d}"
 

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from grimoire.continuity import ContinuityRegistry, InMemoryContinuityStore
 from grimoire.event_bus import EventBus
 from grimoire.orchestrator import OrchestratorService
 from grimoire.orchestrator.errors import (
@@ -329,6 +330,33 @@ def _new_delta(target: str, mood: str) -> StateDelta:
     )
 
 
+def _commitment_delta(*, campaign_id: str) -> StateDelta:
+    """A COMMITMENT_ADD delta shaped exactly like the live extractor's output.
+
+    Mirrors ``extractor.llm_strategy._make_commitment_delta``: a
+    ``campaign-sqlite`` delta whose ``after`` is the raw commitment payload
+    (``from``/``to``/``due``, no ``id``). Applying this through the low-level
+    ``apply_delta_set`` upsert path raises because ``commitments`` requires an
+    ``id`` primary key — it must instead route through the continuity service.
+    """
+    return StateDelta(
+        kind=DeltaKind.COMMITMENT_ADD,
+        target_scope="campaign-sqlite",
+        target_id="commitment:new",
+        target_table="commitments",
+        after={
+            "kind": "service_contract",
+            "text": "Shia provides the package for one year",
+            "from": "emergent/shia-zecil",
+            "to": "lib:winifred",
+            "due": "1 year",
+            "campaign_id": campaign_id,
+        },
+        confidence=1.0,
+        source="extractor",
+    )
+
+
 async def test_regenerate_post_creates_non_primary_alternate(
     tmp_path: Path, real_store: StateStore
 ):
@@ -361,6 +389,47 @@ async def test_regenerate_post_creates_non_primary_alternate(
     # New set is the materialized current for this post.
     current = await real_store.current_delta_set_for(post_id=post_id, campaign_id=campaign_id)
     assert current == result.delta_set_id
+
+
+async def test_regenerate_post_routes_continuity_deltas(tmp_path: Path, real_store: StateStore):
+    """Regression: regenerate must route continuity deltas through the
+    continuity service, not upsert them straight into the SQLite table.
+
+    The live extractor emits ``COMMITMENT_ADD`` deltas whose ``after`` lacks an
+    ``id`` and uses ``from``/``to``/``due`` field names. Feeding those to the
+    low-level ``apply_delta_set`` upsert path raised ``StateStoreError`` (→ HTTP
+    500). They must instead flow through ``apply_routing`` →
+    ``add_commitment``.
+    """
+    scenes_root = tmp_path / "scenes_root"
+    scenes_root.mkdir()
+    scenes = SceneManager(scenes_root, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    campaign_id, scene_id, post_id = await _seed_scene_with_one_model_post(scenes, real_store)
+    registry = ContinuityRegistry(store_factory=lambda c: InMemoryContinuityStore())
+    gateway = FakeGateway(chunks=["A ", "new ", "rendering."])
+    extractor = FakeExtractor(deltas=[_commitment_delta(campaign_id=campaign_id)])
+    orch = OrchestratorService(
+        event_bus=EventBus(),
+        scene_manager=scenes,
+        llm_gateway=gateway,
+        context_builder=FakeContextBuilder(),
+        extractor=extractor,
+        state_store=real_store,
+        ws_push=WSCollector(),
+        continuity=registry,
+    )
+
+    result = await orch.regenerate_post(campaign_id=campaign_id, post_id=post_id)
+
+    # The alternate was created (no 500), ...
+    posts = await scenes.get_posts(scene_id)
+    target = posts[-1]
+    new_alt = next(a for a in target.alternates if a.id == result.new_alternate_id)
+    assert new_alt.text == "A new rendering."
+    # ... and the commitment landed in the continuity store via add_commitment.
+    service = registry.for_campaign(campaign_id)
+    commitments = await service.all_commitments()
+    assert any("one year" in c.text for c in commitments)
 
 
 async def test_regenerate_post_rejects_non_latest_post(tmp_path: Path, real_store: StateStore):
