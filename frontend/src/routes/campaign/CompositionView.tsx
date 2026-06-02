@@ -273,6 +273,7 @@ function CompositionEditor({
                   >
                     ▼
                   </button>
+                  {/* eslint-disable-next-line local/no-bespoke-delete -- composition ref remover, not a card */}
                   <button type="button" aria-label="Remove" onClick={() => remove(ref.world_id)}>
                     ⨯
                   </button>

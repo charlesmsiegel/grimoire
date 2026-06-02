@@ -137,6 +137,7 @@ export function WorldDetailView() {
             >
               Import character card
             </button>
+            {/* eslint-disable-next-line local/no-bespoke-delete -- world detail delete action, not a card */}
             <button type="button" className="world-delete-button" onClick={() => void openDelete()}>
               Delete world
             </button>

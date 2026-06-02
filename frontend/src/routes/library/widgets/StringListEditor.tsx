@@ -40,6 +40,7 @@ export function StringListEditor({
                 }}
               />
             )}
+            {/* eslint-disable-next-line local/no-bespoke-delete -- list-item remover widget, not a card */}
             <button
               type="button"
               aria-label="Remove"

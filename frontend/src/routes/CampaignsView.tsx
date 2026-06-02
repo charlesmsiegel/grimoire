@@ -39,8 +39,7 @@ function buildForest(rows: CampaignSummary[]): CampaignNode[] {
       roots.push(node);
     }
   }
-  const sort = (a: CampaignNode, b: CampaignNode) =>
-    a.campaign.name.localeCompare(b.campaign.name);
+  const sort = (a: CampaignNode, b: CampaignNode) => a.campaign.name.localeCompare(b.campaign.name);
   const visit = (n: CampaignNode) => {
     n.children.sort(sort);
     n.children.forEach(visit);

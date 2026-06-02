@@ -30,6 +30,7 @@ export function ObjectListEditor({
               copy[idx] = next;
               onChange(copy);
             })}
+            {/* eslint-disable-next-line local/no-bespoke-delete -- list-item remover widget, not a card */}
             <button
               type="button"
               aria-label="Remove row"

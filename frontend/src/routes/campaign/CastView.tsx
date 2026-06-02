@@ -26,9 +26,7 @@ type SourceFilter = "all" | "library" | "emergent" | "override";
 export function CastView() {
   const { campaignId = "" } = useParams();
   const state = useApi(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
-  const composition = useApi(
-    useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
-  );
+  const composition = useApi(useCallback(() => viewsApi.getComposition(campaignId), [campaignId]));
   const pcState = useApi(useCallback(() => campaignApi.listPCs(campaignId), [campaignId]));
   const moduleId = composition.status === "ok" ? composition.data.mechanics : null;
 
@@ -56,9 +54,7 @@ export function CastView() {
   const [tagFilter, setTagFilter] = useState("");
   const [searchFilter, setSearchFilter] = useState("");
   const [searchParams] = useSearchParams();
-  const [selectedId, setSelectedId] = useState<string | null>(
-    searchParams.get("character"),
-  );
+  const [selectedId, setSelectedId] = useState<string | null>(searchParams.get("character"));
   const [initialRef] = useState(() => searchParams.get("ref"));
 
   return (
@@ -345,7 +341,9 @@ function CharacterDetail({ campaignId, moduleId, character: row, onReload }: Cha
             onClick={handleEditLibrary}
             disabled={!character.world_id}
             title={
-              character.world_id ? undefined : "Emergent characters live in the campaign, not the library."
+              character.world_id
+                ? undefined
+                : "Emergent characters live in the campaign, not the library."
             }
           >
             Edit library
@@ -483,8 +481,8 @@ function EditOverrideDialog({
       <div className="modal">
         <h4 id="edit-override">Edit override</h4>
         <p className="muted">
-          Patch frontmatter for <code>{characterId}</code> in world <code>{worldId}</code>. Submitted
-          as a JSON object; existing override is overwritten.
+          Patch frontmatter for <code>{characterId}</code> in world <code>{worldId}</code>.
+          Submitted as a JSON object; existing override is overwritten.
         </p>
         <textarea
           value={text}

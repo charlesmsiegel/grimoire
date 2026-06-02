@@ -33,13 +33,9 @@ import { ContentBrowser } from "./ContentBrowser";
 
 export function MechanicsView() {
   const { campaignId = "" } = useParams();
-  const composition = useApi(
-    useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
-  );
+  const composition = useApi(useCallback(() => viewsApi.getComposition(campaignId), [campaignId]));
   const installed = useResource(useCallback(() => mechanicsApi.listInstalled(), []));
-  const characters = useApi(
-    useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]),
-  );
+  const characters = useApi(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
 
   if (composition.status !== "ok") {
     return (
@@ -155,9 +151,7 @@ function SheetsPanel({ campaignId, module, moduleId, characters, onRefresh }: Sh
   );
   // Prefer the inlined `theme_css` on the RegisteredModule payload (one fewer
   // network hop); fall back to the standalone GET when missing.
-  const themeState = useApi(
-    useCallback(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]),
-  );
+  const themeState = useApi(useCallback(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]));
 
   const selectedRow = characters.find((c) => c.character.id === selected) ?? null;
 
@@ -182,8 +176,7 @@ function SheetsPanel({ campaignId, module, moduleId, characters, onRefresh }: Sh
   // Prefer the inlined `theme_css` on the RegisteredModule payload (one fewer
   // network hop); fall back to the standalone GET when missing.
   const themeCss = module?.theme_css ?? (themeState.status === "ok" ? themeState.data : "");
-  const schema =
-    schemaState.status === "ok" ? (schemaState.data as unknown as SheetSchema) : null;
+  const schema = schemaState.status === "ok" ? (schemaState.data as unknown as SheetSchema) : null;
 
   return (
     <div className="mechanics-sheets-layout">
@@ -404,4 +397,3 @@ function CharacterSheet({
     </Loading>
   );
 }
-

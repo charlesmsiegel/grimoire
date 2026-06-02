@@ -194,6 +194,7 @@ function ExtrasRow({ entryKey, extra, worldId, kind, entityId, campaignId, onCha
             Promote → library
           </button>
         ) : null}
+        {/* eslint-disable-next-line local/no-bespoke-delete -- extras table row action, not a card */}
         <button type="button" onClick={() => void remove()} disabled={saving} aria-label="Delete">
           ×
         </button>

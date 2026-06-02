@@ -95,6 +95,7 @@ export function StepComposition({ draft, update, worlds, loading, error }: Props
                   >
                     ▼
                   </button>
+                  {/* eslint-disable-next-line local/no-bespoke-delete -- composition ref remover, not a card */}
                   <button type="button" aria-label="Remove" onClick={() => removeRef(i)}>
                     ⨯
                   </button>

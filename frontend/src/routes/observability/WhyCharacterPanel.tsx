@@ -174,9 +174,7 @@ export function WhyCharacterPanel({ campaignId }: Props) {
     <section className="why-character-panel" aria-label="Why this character?">
       <header>
         <h2>Why this character?</h2>
-        <p className="why-character-sub">
-          Past-turn debug view — per-character inclusion reasons.
-        </p>
+        <p className="why-character-sub">Past-turn debug view — per-character inclusion reasons.</p>
       </header>
 
       <div className="why-character-layout">
@@ -216,13 +214,9 @@ export function WhyCharacterPanel({ campaignId }: Props) {
           {selectedTurnId && !prompt && !promptError && (
             <p className="why-character-loading">Loading audit…</p>
           )}
-          {promptError && (
-            <p className="why-character-empty">No audit available for that turn.</p>
-          )}
+          {promptError && <p className="why-character-empty">No audit available for that turn.</p>}
           {prompt && cards.length === 0 && (
-            <p className="why-character-empty">
-              This turn's context had no character sources.
-            </p>
+            <p className="why-character-empty">This turn's context had no character sources.</p>
           )}
           {cards.map((card) => (
             <article
@@ -236,19 +230,14 @@ export function WhyCharacterPanel({ campaignId }: Props) {
                   <small className="why-character-ref">{card.ref}</small>
                 )}
                 <span className="why-character-tier">{card.tier}</span>
-                <span className="why-character-tokens">
-                  {card.tokens.toLocaleString()} tok
-                </span>
+                <span className="why-character-tokens">{card.tokens.toLocaleString()} tok</span>
               </header>
               <ul className="why-character-reasons">
                 {card.reasons.length === 0 ? (
                   <li className="why-character-empty">(no declared reason)</li>
                 ) : (
                   card.reasons.map((r) => (
-                    <li
-                      key={r}
-                      className={`why-character-reason why-character-reason-${r}`}
-                    >
+                    <li key={r} className={`why-character-reason why-character-reason-${r}`}>
                       {REASON_LABELS[r] ?? r}
                     </li>
                   ))
