@@ -284,6 +284,8 @@ export const libraryApi = {
       avoid?: string[];
     },
   ) => request<LibraryEntity>("PATCH", `/library/style-guides/${encodeURIComponent(id)}`, patch),
+  deleteStyleGuide: (id: string) =>
+    request<void>("DELETE", `/library/style-guides/${encodeURIComponent(id)}`),
 
   listImagePresets: () => request<LibraryEntity[]>("GET", `/library/image-presets`),
   getImagePreset: (id: string) =>
