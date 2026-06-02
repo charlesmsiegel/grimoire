@@ -10,9 +10,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api/client";
+import { campaignApi } from "../../api/campaign";
 import { viewsApi } from "../../api/views";
 import type { ResolvedCharacter, WorldMeta } from "../../api/types";
 import { useApi } from "../../api/useApi";
+import { CardIconBar } from "../../components/CardIconBar";
+import { deleteAction } from "../../components/cardActions";
 import { Markdown } from "../../components/Markdown";
 import { SheetRenderer } from "../../sheets";
 import type { SheetSchema, SheetValue } from "../../sheets/types";
@@ -26,7 +29,27 @@ export function CastView() {
   const composition = useApi(
     useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
   );
+  const pcState = useApi(useCallback(() => campaignApi.listPCs(campaignId), [campaignId]));
   const moduleId = composition.status === "ok" ? composition.data.mechanics : null;
+
+  const pcRefs = new Set(pcState.status === "ok" ? pcState.data.map((p) => p.character_ref) : []);
+  const refForRow = (r: ResolvedCharacter): string =>
+    r.character.world_id !== null
+      ? `library:worlds/${r.character.world_id}/characters/${r.character.id}`
+      : `campaign:emergent/character/${r.character.id}`;
+  const handleRemovePc = (ref: string, name: string) => {
+    if (
+      !window.confirm(
+        `Remove "${name}" as a player character? The character itself is not deleted.`,
+      )
+    ) {
+      return;
+    }
+    void campaignApi.removePc(campaignId, ref).then(() => {
+      state.reload();
+      pcState.reload();
+    });
+  };
 
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [roleFilter, setRoleFilter] = useState<string>("all");
@@ -75,7 +98,7 @@ export function CastView() {
                 />
                 <ul className="entity-list">
                   {filtered.map((c) => (
-                    <li key={c.character.id}>
+                    <li key={c.character.id} className="cast-entity">
                       <button
                         type="button"
                         className={
@@ -93,6 +116,18 @@ export function CastView() {
                           {c.character.role} · {c.character.tags.slice(0, 3).join(", ")}
                         </small>
                       </button>
+                      <CardIconBar
+                        actions={
+                          pcRefs.has(refForRow(c))
+                            ? [
+                                deleteAction({
+                                  onClick: () => handleRemovePc(refForRow(c), c.character.name),
+                                  label: `Remove ${c.character.name} as PC`,
+                                }),
+                              ]
+                            : []
+                        }
+                      />
                     </li>
                   ))}
                   {filtered.length === 0 && (
