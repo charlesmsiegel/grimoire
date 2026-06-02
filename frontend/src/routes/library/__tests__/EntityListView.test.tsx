@@ -46,10 +46,10 @@ describe("EntityListView delete", () => {
     );
 
     await waitFor(() => screen.getByText("Ochaco"));
-    fireEvent.click(screen.getByRole("button", { name: /^Delete$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete Ochaco" }));
     await waitFor(() => screen.getByText(/permanently removes/i));
-    // No dependents loaded ⇒ confirm enabled. The dialog's Delete button is
-    // the second one in the DOM (the card-level Delete is the first).
+    // No dependents loaded ⇒ confirm enabled. The card trash is now labelled
+    // "Delete Ochaco", so the only exact-"Delete" button is the dialog's confirm.
     const buttons = screen.getAllByRole("button", { name: /^Delete$/ });
     const dialogConfirm = buttons[buttons.length - 1]!;
     await waitFor(() => expect(dialogConfirm).toBeEnabled());

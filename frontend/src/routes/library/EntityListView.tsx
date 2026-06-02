@@ -13,6 +13,8 @@ import {
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { CardFilters } from "../../components/CardFilters";
+import { CardIconBar } from "../../components/CardIconBar";
+import { deleteAction } from "../../components/cardActions";
 import { useCardFilters } from "../../hooks/useCardFilters";
 import { TokenBadge } from "../../components/TokenBadge";
 import { AsyncBoundary } from "./AsyncBoundary";
@@ -314,17 +316,14 @@ function EntityListBody({
                     Convert
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="library-card-action"
-                  onClick={(ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    onDelete(id, name);
-                  }}
-                >
-                  Delete
-                </button>
+                <CardIconBar
+                  actions={[
+                    deleteAction({
+                      onClick: () => onDelete(id, name),
+                      label: `Delete ${name}`,
+                    }),
+                  ]}
+                />
               </li>
             );
           })}
