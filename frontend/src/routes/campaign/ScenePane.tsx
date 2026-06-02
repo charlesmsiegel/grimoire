@@ -55,6 +55,7 @@ export function ScenePane({
     [posts],
   );
   const postCount = posts.length;
+  const streamingActive = !!streaming;
 
   // When a new turn begins, scroll the just-submitted user post to the top of
   // the main window so the response streams in below it (read top-to-bottom,
@@ -67,8 +68,44 @@ export function ScenePane({
   // (the inner pane and the outer main column are both scroll containers).
   const initializedSceneRef = useRef<string | null | undefined>(undefined);
   const prevUserPostCountRef = useRef<number | null>(null);
+
+  // Scroll diagnostics: log whatever scrolls the pane or main column to the
+  // top (with a stack trace), plus each scroll-effect run below. Kept in to
+  // diagnose intermittent "jump to top" reports; cheap and console-only.
+  useEffect(() => {
+    const pane = paneRef.current;
+    const main = pane?.closest<HTMLElement>(".app-main") ?? null;
+    const onScroll = (label: string) => (e: Event) => {
+      const top = (e.target as HTMLElement).scrollTop;
+      if (top <= 4) {
+        console.log(`[scroll] ${label} scrolled to top`, top, new Error().stack);
+      }
+    };
+    const ps = onScroll("pane");
+    const ms = onScroll("app-main");
+    pane?.addEventListener("scroll", ps);
+    main?.addEventListener("scroll", ms);
+    return () => {
+      pane?.removeEventListener("scroll", ps);
+      main?.removeEventListener("scroll", ms);
+    };
+  }, []);
+
   useEffect(() => {
     const sceneId = scene?.id ?? null;
+    const main = paneRef.current?.closest<HTMLElement>(".app-main") ?? null;
+    console.log("[scroll] effect", {
+      sceneId,
+      initialized: initializedSceneRef.current,
+      postCount,
+      userPostCount,
+      prevUserCount: prevUserPostCountRef.current,
+      latestUserPostId,
+      awaitingResponse,
+      streamingActive,
+      paneScrollTop: paneRef.current?.scrollTop,
+      mainScrollTop: main?.scrollTop,
+    });
 
     // First populated render for this scene: show the latest post and record
     // the user-post count so existing posts aren't treated as newly submitted.
@@ -76,6 +113,7 @@ export function ScenePane({
       if (postCount === 0) return;
       initializedSceneRef.current = sceneId;
       prevUserPostCountRef.current = userPostCount;
+      console.log("[scroll] INIT -> bottom");
       const handle = requestAnimationFrame(() => {
         bottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
       });
@@ -88,6 +126,7 @@ export function ScenePane({
 
     if (grew && latestUserPostId) {
       const targetId = latestUserPostId;
+      console.log("[scroll] ANCHOR (count grew) ->", targetId);
       const handle = requestAnimationFrame(() => {
         paneRef.current
           ?.querySelector<HTMLElement>(`[data-post-id="${CSS.escape(targetId)}"]`)
@@ -95,7 +134,7 @@ export function ScenePane({
       });
       return () => cancelAnimationFrame(handle);
     }
-  }, [scene?.id, postCount, userPostCount, latestUserPostId]);
+  }, [scene?.id, postCount, userPostCount, latestUserPostId, awaitingResponse, streamingActive]);
 
   useEffect(() => {
     const sentinel = topSentinelRef.current;
