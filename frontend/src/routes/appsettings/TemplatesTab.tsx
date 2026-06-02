@@ -272,6 +272,7 @@ export function TemplatesTab() {
                     </button>
                   )}
                   {editable && (
+                    // eslint-disable-next-line local/no-bespoke-delete -- template variant action, not a card
                     <button
                       type="button"
                       onClick={() => void onDelete()}

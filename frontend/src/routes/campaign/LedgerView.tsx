@@ -2,12 +2,7 @@ import { useCallback, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { campaignApi } from "../../api/campaign";
-import type {
-  Commitment,
-  ContinuityLedger,
-  ContradictionReport,
-  Fact,
-} from "../../api/campaign";
+import type { Commitment, ContinuityLedger, ContradictionReport, Fact } from "../../api/campaign";
 import { useApi } from "../../api/useApi";
 import { CardIconBar } from "../../components/CardIconBar";
 import { Loading } from "./common";
@@ -24,9 +19,7 @@ export function LedgerView({ campaignId }: Props) {
       <header className="route-header">
         <h2 id="ledger-heading">Continuity Ledger</h2>
       </header>
-      <Loading state={state}>
-        {(ledger) => <LedgerSections ledger={ledger} />}
-      </Loading>
+      <Loading state={state}>{(ledger) => <LedgerSections ledger={ledger} />}</Loading>
     </section>
   );
 }

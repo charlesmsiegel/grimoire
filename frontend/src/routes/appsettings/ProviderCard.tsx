@@ -1,11 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import {
-  type PluginConfig,
-  type PluginManifest,
-  pluginsApi,
-} from "../../api/library";
+import { type PluginConfig, type PluginManifest, pluginsApi } from "../../api/library";
 import { type PluginSummary } from "../../api/wizard";
 import { PluginModelPicker } from "../../components/PluginModelPicker";
 import { CardIconBar } from "../../components/CardIconBar";
@@ -59,9 +55,7 @@ function findModelPathValue(
 ): string | null {
   if (!config || !manifest) return null;
   const props = (
-    manifest.config_schema as
-      | { properties?: Record<string, Record<string, unknown>> }
-      | undefined
+    manifest.config_schema as { properties?: Record<string, Record<string, unknown>> } | undefined
   )?.properties;
   if (!props?.["model_path"]) return null;
   const val = config.values["model_path"];
@@ -70,9 +64,7 @@ function findModelPathValue(
 
 function hasRequiredFields(manifest: PluginManifest | undefined): boolean {
   if (!manifest) return false;
-  const schema = manifest.config_schema as
-    | { required?: string[] }
-    | undefined;
+  const schema = manifest.config_schema as { required?: string[] } | undefined;
   return Boolean(schema?.required?.length);
 }
 
@@ -133,9 +125,7 @@ export function ProviderCard({
   const modelPath = findModelPathValue(config, activeManifest);
 
   const showPickers =
-    activePlugin &&
-    config &&
-    (config.configured || !hasRequiredFields(activeManifest));
+    activePlugin && config && (config.configured || !hasRequiredFields(activeManifest));
 
   const stripProviderPrefix = (route: string | null): string => {
     if (!route) return "";
@@ -195,9 +185,7 @@ export function ProviderCard({
               label={slot.label}
               description={slot.sublabel}
               value={stripProviderPrefix(defaults[slot.key] ?? null)}
-              onChange={(next) =>
-                onDefaultChange(slot.key, next || null, activePlugin.id)
-              }
+              onChange={(next) => onDefaultChange(slot.key, next || null, activePlugin.id)}
             />
             {slot.clearable && defaults[slot.key] && (
               <button
@@ -211,17 +199,12 @@ export function ProviderCard({
           </section>
         ))}
 
-      {activePlugin &&
-        config &&
-        !config.configured &&
-        hasRequiredFields(activeManifest) && (
-          <p className="wizard-meta">
-            Configure your API key first.{" "}
-            <Link to={`/library/plugins/${encodeURIComponent(activePlugin.id)}`}>
-              Open settings
-            </Link>
-          </p>
-        )}
+      {activePlugin && config && !config.configured && hasRequiredFields(activeManifest) && (
+        <p className="wizard-meta">
+          Configure your API key first.{" "}
+          <Link to={`/library/plugins/${encodeURIComponent(activePlugin.id)}`}>Open settings</Link>
+        </p>
+      )}
 
       {modelPath && (
         <div className="provider-model-path">

@@ -23,12 +23,8 @@ export function TimelineView() {
   const { campaignId = "" } = useParams();
   const navigate = useNavigate();
   const state = useApi(useCallback(() => viewsApi.listScenes(campaignId), [campaignId]));
-  const charState = useApi(
-    useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]),
-  );
-  const pcState = useApi(
-    useCallback(() => campaignApi.listPCs(campaignId), [campaignId]),
-  );
+  const charState = useApi(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
+  const pcState = useApi(useCallback(() => campaignApi.listPCs(campaignId), [campaignId]));
   const nameMap = useMemo(() => {
     const m = new Map<string, string>();
     if (charState.status === "ok") {
@@ -72,11 +68,7 @@ export function TimelineView() {
     <section className="route campaign-timeline" aria-labelledby="timeline-heading">
       <header className="route-header">
         <h2 id="timeline-heading">Timeline</h2>
-        <button
-          type="button"
-          className="import-scene-btn"
-          onClick={() => setShowImport(true)}
-        >
+        <button type="button" className="import-scene-btn" onClick={() => setShowImport(true)}>
           Import Scene
         </button>
       </header>

@@ -196,6 +196,7 @@ function EntityEditorBody({
           <button onClick={handleSaveClick} disabled={!dirty || saving}>
             {saving ? "Saving…" : "Save"}
           </button>
+          {/* eslint-disable-next-line local/no-bespoke-delete -- entity detail delete action, not a card */}
           <button
             type="button"
             className="entity-editor-delete"
@@ -505,6 +506,7 @@ function GreetingEditorBody({
           <button onClick={handleSaveClick} disabled={!dirty || saving}>
             {saving ? "Saving…" : "Save"}
           </button>
+          {/* eslint-disable-next-line local/no-bespoke-delete -- entity detail delete action, not a card */}
           <button
             type="button"
             className="entity-editor-delete"

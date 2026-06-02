@@ -23,7 +23,10 @@ function lint(code: string, filename: string) {
 
 describe("no-bespoke-delete", () => {
   it("flags a bespoke delete button by className", () => {
-    const msgs = lint(`const x = <button className="campaign-card-delete">Delete</button>;`, "Foo.tsx");
+    const msgs = lint(
+      `const x = <button className="campaign-card-delete">Delete</button>;`,
+      "Foo.tsx",
+    );
     expect(msgs).toHaveLength(1);
     expect(msgs[0]?.ruleId).toBe("local/no-bespoke-delete");
   });

@@ -229,9 +229,7 @@ function GreetingsTab({ campaignId }: { campaignId: string }) {
     );
   }
 
-  return (
-    <GreetingsAcrossWorlds worldIds={composition.data.worlds.map((s) => s.world_id)} />
-  );
+  return <GreetingsAcrossWorlds worldIds={composition.data.worlds.map((s) => s.world_id)} />;
 }
 
 function GreetingsAcrossWorlds({ worldIds }: { worldIds: string[] }) {
@@ -239,9 +237,9 @@ function GreetingsAcrossWorlds({ worldIds }: { worldIds: string[] }) {
   const state = useApi<Greeting[]>(
     useCallback(
       () =>
-        Promise.all(
-          worldIds.map((id) => viewsApi.listGreetingsForWorld(id).catch(() => [])),
-        ).then((lists) => lists.flat()),
+        Promise.all(worldIds.map((id) => viewsApi.listGreetingsForWorld(id).catch(() => []))).then(
+          (lists) => lists.flat(),
+        ),
       // worldIds identity is unstable; collapse to a string key.
       // eslint-disable-next-line react-hooks/exhaustive-deps
       [idsKey],
