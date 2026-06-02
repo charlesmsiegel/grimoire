@@ -8,6 +8,7 @@ import {
 } from "../../api/library";
 import { type PluginSummary } from "../../api/wizard";
 import { PluginModelPicker } from "../../components/PluginModelPicker";
+import { CardIconBar } from "../../components/CardIconBar";
 
 export interface ModelSlot {
   key: string;
@@ -241,6 +242,7 @@ export function ProviderCard({
           <span className="provider-card-hint">Select a provider to get started.</span>
         )}
       </div>
+      <CardIconBar actions={[]} />
     </section>
   );
 }

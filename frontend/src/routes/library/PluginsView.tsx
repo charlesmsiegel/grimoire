@@ -10,6 +10,7 @@ import {
   cleanDraftForSave,
   initialDraftFromSchema,
 } from "../../components/schemaForm";
+import { CardIconBar } from "../../components/CardIconBar";
 import { AsyncBoundary } from "./AsyncBoundary";
 
 const KINDS: { kind: PluginKind | "all"; label: string }[] = [
@@ -101,6 +102,7 @@ function PluginsList() {
                 {p.description && <p className="library-card-desc">{p.description}</p>}
                 <p className="library-card-meta">{p.implements.join(", ") || "no kinds"}</p>
               </Link>
+              <CardIconBar actions={[]} />
             </li>
           ))}
         </ul>

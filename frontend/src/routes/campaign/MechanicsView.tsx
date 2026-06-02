@@ -28,6 +28,7 @@ import { SheetRenderer } from "../../sheets";
 import type { SheetSchema, SheetValue } from "../../sheets/types";
 import { Loading } from "./common";
 import { CampaignCharacterCreation } from "./CharacterCreation";
+import { CardIconBar } from "../../components/CardIconBar";
 import { ContentBrowser } from "./ContentBrowser";
 
 export function MechanicsView() {
@@ -205,6 +206,7 @@ function SheetsPanel({ campaignId, module, moduleId, characters, onRefresh }: Sh
                 </div>
                 <small className="entity-meta">{c.character.role}</small>
               </button>
+              <CardIconBar actions={[]} />
             </li>
           ))}
         </ul>

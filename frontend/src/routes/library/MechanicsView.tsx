@@ -6,6 +6,7 @@ import { useResource } from "../../api/useResource";
 import { LibraryCharacterCreationPreview } from "../campaign/CharacterCreation";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { MechanicsEditor } from "./mechanics/MechanicsEditor";
+import { CardIconBar } from "../../components/CardIconBar";
 import { ModuleCreateForm } from "./mechanics/ModuleCreateForm";
 
 export function MechanicsView() {
@@ -92,6 +93,7 @@ function MechanicsList() {
                   {m.manifest.capabilities.length === 1 ? "y" : "ies"}
                 </p>
               </Link>
+              <CardIconBar actions={[]} />
             </li>
           ))}
         </ul>
