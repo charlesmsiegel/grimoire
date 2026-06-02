@@ -4013,6 +4013,11 @@ button.primary:disabled {
   gap: 4px;
 }
 
+.cast-entity {
+  display: flex;
+  flex-direction: column;
+}
+
 .entity-card {
   display: flex;
   flex-direction: column;
