@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { auxiliaryApi, type AuxiliaryResult } from "../../api/auxiliary";
+import { CardIconBar, type CardIconAction } from "../../components/CardIconBar";
+import { deleteAction } from "../../components/cardActions";
 import { CharacterSprite } from "../../components/CharacterSprite";
 import { Markdown } from "../../components/Markdown";
 import { campaignApi, type ApiAlternate, type ApiPost, type PCEntry } from "../../api/campaign";
@@ -318,85 +320,71 @@ export function PostItem({
         </ul>
       )}
       {campaignId && editDraft === null && (
-        <div className="post-actions post-actions-icons">
-          {canEdit && (
-            <button
-              type="button"
-              className="post-icon-btn post-edit"
-              aria-label="Edit post"
-              title="Edit"
-              onClick={() => setEditDraft(displayBody)}
-            >
-              ✎
-            </button>
-          )}
-          {canRegenerate && (
-            <button
-              type="button"
-              className="post-icon-btn post-regenerate"
-              aria-label="Regenerate post"
-              title="Regenerate"
-              disabled={busy}
-              onClick={() => regenerate()}
-            >
-              🔄
-            </button>
-          )}
-          {canRegenerate && (
-            <button
-              type="button"
-              className="post-icon-btn post-guided-regenerate"
-              aria-label="Guided regenerate"
-              title="Guided regenerate..."
-              disabled={busy}
-              onClick={() => setGuidedHint("")}
-            >
-              🎯
-            </button>
-          )}
-          {canContinue && (
-            <button
-              type="button"
-              className="post-icon-btn post-continue"
-              aria-label="Continue"
-              title="Continue"
-              disabled={auxBusy}
-              onClick={() => {
-                if (continueCandidates.length === 1) {
-                  void runContinue(continueCandidates[0]!);
-                } else {
-                  setAuxForm({ kind: "continue", characterRef: continueCandidates[0]! });
-                }
-              }}
-            >
-              ➤
-            </button>
-          )}
-          {campaignId && (
-            <button
-              type="button"
-              className="post-icon-btn post-translate"
-              aria-label="Translate this post"
-              title="Translate..."
-              onClick={() => setAuxForm({ kind: "translate", targetLanguage: "" })}
-              disabled={auxBusy}
-            >
-              🌐
-            </button>
-          )}
-          {canDelete && (
-            <button
-              type="button"
-              className="post-icon-btn post-delete"
-              aria-label="Delete post"
-              title="Delete"
-              disabled={deleteBusy}
-              onClick={() => setConfirmingDelete(true)}
-            >
-              🗑
-            </button>
-          )}
-        </div>
+        <CardIconBar
+          actions={[
+            ...(canEdit
+              ? [
+                  {
+                    key: "edit",
+                    icon: "✎",
+                    label: "Edit post",
+                    onClick: () => setEditDraft(displayBody),
+                  } satisfies CardIconAction,
+                ]
+              : []),
+            ...(canRegenerate
+              ? [
+                  {
+                    key: "regenerate",
+                    icon: "🔄",
+                    label: "Regenerate post",
+                    disabled: busy,
+                    onClick: () => void regenerate(),
+                  } satisfies CardIconAction,
+                  {
+                    key: "guided-regenerate",
+                    icon: "🎯",
+                    label: "Guided regenerate",
+                    disabled: busy,
+                    onClick: () => setGuidedHint(""),
+                  } satisfies CardIconAction,
+                ]
+              : []),
+            ...(canContinue
+              ? [
+                  {
+                    key: "continue",
+                    icon: "➤",
+                    label: "Continue",
+                    disabled: auxBusy,
+                    onClick: () => {
+                      if (continueCandidates.length === 1) {
+                        void runContinue(continueCandidates[0]!);
+                      } else {
+                        setAuxForm({ kind: "continue", characterRef: continueCandidates[0]! });
+                      }
+                    },
+                  } satisfies CardIconAction,
+                ]
+              : []),
+            {
+              key: "translate",
+              icon: "🌐",
+              label: "Translate this post",
+              disabled: auxBusy,
+              onClick: () => setAuxForm({ kind: "translate", targetLanguage: "" }),
+            } satisfies CardIconAction,
+            ...(canDelete
+              ? [
+                  deleteAction({
+                    onClick: () => setConfirmingDelete(true),
+                    label: "Delete post",
+                    busy: deleteBusy,
+                  }),
+                ]
+              : []),
+          ]}
+        />
       )}
       {confirmingDelete && campaignId && (
         <div className="post-delete-confirm" role="alertdialog" aria-label="Confirm delete">
@@ -411,6 +399,7 @@ export function PostItem({
             This cannot be undone.
           </p>
           <div className="post-delete-actions">
+            {/* eslint-disable-next-line local/no-bespoke-delete -- confirm-dialog action, not a card control */}
             <button
               type="button"
               className="post-delete-confirm-btn"

@@ -1862,51 +1862,6 @@ pre {
   box-shadow: var(--shadow-xs);
 }
 
-.post-actions-icons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1, 0.25rem);
-  margin-top: var(--space-2, 0.5rem);
-  padding-top: var(--space-2, 0.5rem);
-  border-top: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
-}
-
-.post-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.75rem;
-  height: 1.75rem;
-  padding: 0;
-  background: transparent;
-  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
-  border-radius: var(--radius-sm, 0.25rem);
-  cursor: pointer;
-  font-size: 0.95rem;
-  line-height: 1;
-  color: var(--text-muted, currentColor);
-  transition:
-    background-color 0.12s ease,
-    color 0.12s ease,
-    border-color 0.12s ease;
-}
-
-.post-icon-btn:hover:not(:disabled) {
-  background: var(--surface-hover, rgba(0, 0, 0, 0.04));
-  border-color: var(--border-strong, rgba(0, 0, 0, 0.2));
-  color: var(--text, currentColor);
-}
-
-.post-icon-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.post-icon-btn[aria-expanded="true"] {
-  background: var(--surface-hover, rgba(0, 0, 0, 0.06));
-  border-color: var(--border-strong, rgba(0, 0, 0, 0.25));
-}
-
 .post-edit-form {
   display: flex;
   flex-direction: column;
