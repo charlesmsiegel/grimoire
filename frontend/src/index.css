@@ -989,15 +989,6 @@ pre {
   border-color: var(--accent);
 }
 
-.campaign-card-delete {
-  margin-left: auto;
-}
-
-.campaign-card-delete:hover:not(:disabled) {
-  color: var(--danger, #c0392b);
-  border-color: var(--danger, #c0392b);
-}
-
 /* ----- Card icon bar (shared per-card action row) ----- */
 .card-icon-bar {
   display: flex;

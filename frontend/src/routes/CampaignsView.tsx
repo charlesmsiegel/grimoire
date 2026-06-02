@@ -11,6 +11,8 @@ import {
 } from "../api/wizard";
 import { useStore } from "../state/useStore";
 import type { CampaignSummary } from "../state/storeContext";
+import { CardIconBar } from "../components/CardIconBar";
+import { deleteAction } from "../components/cardActions";
 import { ForkDialog } from "./campaign/ForkDialog";
 
 interface CampaignNode {
@@ -85,17 +87,16 @@ function CampaignCard({ node, depth, onFork, onDelete, busyDeleting }: CampaignC
           Fork
         </button>
         <Link to={`/campaigns/${node.campaign.id}/settings`}>Settings</Link>
-        <button
-          type="button"
-          className="campaign-card-delete"
-          aria-label={`Delete campaign ${node.campaign.name}`}
-          title="Delete campaign"
-          onClick={() => onDelete(node.campaign)}
-          disabled={busyDeleting}
-        >
-          {busyDeleting ? "Deleting…" : "Delete"}
-        </button>
       </div>
+      <CardIconBar
+        actions={[
+          deleteAction({
+            onClick: () => onDelete(node.campaign),
+            label: `Delete campaign ${node.campaign.name}`,
+            busy: busyDeleting,
+          }),
+        ]}
+      />
     </li>
   );
 }
