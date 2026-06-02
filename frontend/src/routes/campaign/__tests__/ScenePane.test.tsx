@@ -180,6 +180,27 @@ describe("ScenePane new-turn anchoring", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(anchorScroll()).toHaveLength(0);
   });
+
+  it("re-anchors the user post to the top when the turn completes", async () => {
+    // A turn is in flight (awaiting a response).
+    const { rerender } = renderPane({ posts: [user1, model1], scene, awaitingResponse: true });
+
+    // Completion: streaming/awaiting return to idle.
+    rerender(
+      <ScenePane
+        posts={[user1, model1]}
+        pcs={PCS}
+        streaming={null}
+        awaitingResponse={false}
+        images={{}}
+        hasMorePosts={false}
+        onLoadMore={() => {}}
+        scene={scene}
+      />,
+    );
+    const { waitFor } = await import("@testing-library/react");
+    await waitFor(() => expect(anchorScroll().length).toBeGreaterThan(0));
+  });
 });
 
 describe("ScenePane cost attribution", () => {

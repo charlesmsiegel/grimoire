@@ -56,18 +56,24 @@ export function ScenePane({
   );
   const postCount = posts.length;
   const streamingActive = !!streaming;
+  const turnActive = streamingActive || awaitingResponse;
 
-  // When a new turn begins, scroll the just-submitted user post to the top of
-  // the main window so the response streams in below it (read top-to-bottom,
-  // no back-scrolling). On scene load we instead jump to the most recent post.
-  //
-  // The trigger is a genuine *increase* in the user-post count — never a bare
-  // id change — so regenerate, refetch, pagination and deletes don't scroll,
-  // and a missed seed fails safe (no scroll) rather than yanking to an existing
-  // post. ``scrollIntoView`` aligns the post within whichever ancestor scrolls
-  // (the inner pane and the outer main column are both scroll containers).
+  // Keep the most recent user post at the top of the main window across a turn,
+  // so the response is read top-to-bottom with no back-scrolling. We anchor on
+  // two edges:
+  //   • submit — the user-post count *increases* (never a bare id change, so
+  //     regenerate / refetch / pagination / deletes don't scroll, and a missed
+  //     seed fails safe);
+  //   • completion — the turn goes from streaming/awaiting back to idle. This
+  //     re-asserts the anchor after the completion refetch settles, correcting
+  //     any scroll reset it caused.
+  // On scene load we instead jump to the most recent post. ``scrollIntoView``
+  // aligns the post within whichever ancestor scrolls (the inner pane and the
+  // outer main column are both scroll containers); re-anchoring when already at
+  // the top is a no-op, so it doesn't fight a steady view.
   const initializedSceneRef = useRef<string | null | undefined>(undefined);
   const prevUserPostCountRef = useRef<number | null>(null);
+  const prevTurnActiveRef = useRef(false);
 
   // Scroll diagnostics: log whatever scrolls the pane or main column to the
   // top (with a stack trace), plus each scroll-effect run below. Kept in to
@@ -93,6 +99,8 @@ export function ScenePane({
 
   useEffect(() => {
     const sceneId = scene?.id ?? null;
+    const wasActive = prevTurnActiveRef.current;
+    prevTurnActiveRef.current = turnActive;
     const main = paneRef.current?.closest<HTMLElement>(".app-main") ?? null;
     console.log("[scroll] effect", {
       sceneId,
@@ -101,11 +109,21 @@ export function ScenePane({
       userPostCount,
       prevUserCount: prevUserPostCountRef.current,
       latestUserPostId,
-      awaitingResponse,
-      streamingActive,
+      turnActive,
+      wasActive,
       paneScrollTop: paneRef.current?.scrollTop,
       mainScrollTop: main?.scrollTop,
     });
+
+    // Scroll the latest user post to the top of the main window.
+    const anchorTop = (id: string) => {
+      const handle = requestAnimationFrame(() => {
+        paneRef.current
+          ?.querySelector<HTMLElement>(`[data-post-id="${CSS.escape(id)}"]`)
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return () => cancelAnimationFrame(handle);
+    };
 
     // First populated render for this scene: show the latest post and record
     // the user-post count so existing posts aren't treated as newly submitted.
@@ -123,18 +141,16 @@ export function ScenePane({
     const grew =
       prevUserPostCountRef.current !== null && userPostCount > prevUserPostCountRef.current;
     prevUserPostCountRef.current = userPostCount;
+    const completed = wasActive && !turnActive;
 
-    if (grew && latestUserPostId) {
-      const targetId = latestUserPostId;
-      console.log("[scroll] ANCHOR (count grew) ->", targetId);
-      const handle = requestAnimationFrame(() => {
-        paneRef.current
-          ?.querySelector<HTMLElement>(`[data-post-id="${CSS.escape(targetId)}"]`)
-          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if ((grew || completed) && latestUserPostId) {
+      console.log("[scroll] ANCHOR ->", {
+        reason: grew ? "submit" : "completed",
+        latestUserPostId,
       });
-      return () => cancelAnimationFrame(handle);
+      return anchorTop(latestUserPostId);
     }
-  }, [scene?.id, postCount, userPostCount, latestUserPostId, awaitingResponse, streamingActive]);
+  }, [scene?.id, postCount, userPostCount, latestUserPostId, turnActive]);
 
   useEffect(() => {
     const sentinel = topSentinelRef.current;
