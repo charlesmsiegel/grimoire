@@ -9,6 +9,7 @@ import type {
   Fact,
 } from "../../api/campaign";
 import { useApi } from "../../api/useApi";
+import { CardIconBar } from "../../components/CardIconBar";
 import { Loading } from "./common";
 
 interface Props {
@@ -94,6 +95,7 @@ function CommitmentSection({
                   {c.owed_to && <>to {c.owed_to}</>}
                 </small>
               )}
+              <CardIconBar actions={[]} />
             </li>
           ))}
         </ul>
@@ -164,6 +166,7 @@ function ContradictionItem({ report }: { report: ContradictionReport }) {
           ))}
         </ul>
       )}
+      <CardIconBar actions={[]} />
     </li>
   );
 }

@@ -21,6 +21,7 @@ import {
 } from "../../api/observability";
 import { viewsApi } from "../../api/views";
 import type { ResolvedCharacter } from "../../api/types";
+import { CardIconBar } from "../../components/CardIconBar";
 import { REASON_LABELS } from "./inclusionReasonLabels";
 
 interface Props {
@@ -253,6 +254,7 @@ export function WhyCharacterPanel({ campaignId }: Props) {
                   ))
                 )}
               </ul>
+              <CardIconBar actions={[]} />
             </article>
           ))}
         </main>

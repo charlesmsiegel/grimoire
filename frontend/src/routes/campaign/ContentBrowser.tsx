@@ -16,6 +16,7 @@ import { ApiError } from "../../api/client";
 import { mechanicsApi, type RegisteredModule } from "../../api/library";
 import { SheetRenderer } from "../../sheets/SheetRenderer";
 import type { SheetSchema } from "../../sheets/types";
+import { CardIconBar } from "../../components/CardIconBar";
 
 interface ContentBrowserProps {
   campaignId: string;
@@ -155,6 +156,7 @@ function ContentKindPanel({ campaignId, module, kind }: PanelProps) {
                   </div>
                   <small className="entity-meta">{e.id}</small>
                 </button>
+                <CardIconBar actions={[]} />
               </li>
             );
           })}

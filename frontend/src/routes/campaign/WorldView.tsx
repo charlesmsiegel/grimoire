@@ -14,6 +14,7 @@ import { viewsApi } from "../../api/views";
 import type { Composition, Greeting, ResolvedEntity } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { CardFilters } from "../../components/CardFilters";
+import { CardIconBar } from "../../components/CardIconBar";
 import { useCardFilters } from "../../hooks/useCardFilters";
 import { Markdown } from "../../components/Markdown";
 import { ChainBadge, Loading, Tabs } from "./common";
@@ -298,6 +299,7 @@ function FilteredGreetings({ rows }: { rows: Greeting[] }) {
                   <Markdown>{g.body}</Markdown>
                 </details>
               )}
+              <CardIconBar actions={[]} />
             </li>
           ))}
         </ul>
@@ -321,6 +323,7 @@ function EntityCard({ row, children }: { row: ResolvedEntity; children?: React.R
           <Markdown>{row.body}</Markdown>
         </details>
       )}
+      <CardIconBar actions={[]} />
     </li>
   );
 }
