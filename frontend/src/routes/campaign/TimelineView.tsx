@@ -14,6 +14,8 @@ import { campaignApi } from "../../api/campaign";
 import { viewsApi } from "../../api/views";
 import type { SceneSummary, Thread } from "../../api/types";
 import { useApi } from "../../api/useApi";
+import { CardIconBar } from "../../components/CardIconBar";
+import { deleteAction } from "../../components/cardActions";
 import { Loading } from "./common";
 import { ImportSceneDialog } from "./ImportSceneDialog";
 
@@ -54,6 +56,17 @@ export function TimelineView() {
   };
 
   const toggleExpand = (id: string) => setExpanded((prev) => (prev === id ? null : id));
+
+  const handleDeleteScene = (sceneId: string, title: string) => {
+    if (
+      !window.confirm(
+        `Delete scene "${title}"? This removes the scene and its posts from disk. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    void campaignApi.deleteScene(campaignId, sceneId).then(() => state.reload());
+  };
 
   return (
     <section className="route campaign-timeline" aria-labelledby="timeline-heading">
@@ -128,6 +141,7 @@ export function TimelineView() {
                     onAnalyze={() =>
                       campaignApi.analyzeScene(campaignId, scene.id).then(() => state.reload())
                     }
+                    onDelete={() => handleDeleteScene(scene.id, scene.title || scene.slug)}
                   />
                 ))}
                 {visible.length === 0 && (
@@ -166,6 +180,7 @@ function SceneCard({
   onToggle,
   onJump,
   onAnalyze,
+  onDelete,
 }: {
   scene: SceneSummary;
   nameMap: Map<string, string>;
@@ -173,6 +188,7 @@ function SceneCard({
   onToggle: () => void;
   onJump: () => void;
   onAnalyze: () => void;
+  onDelete: () => void;
 }) {
   const time = scene.in_game_start?.moment ?? "";
   const pcSet = new Set(scene.present_pc_refs);
@@ -236,6 +252,14 @@ function SceneCard({
           </div>
         </div>
       )}
+      <CardIconBar
+        actions={[
+          deleteAction({
+            onClick: onDelete,
+            label: `Delete scene ${scene.title || scene.slug}`,
+          }),
+        ]}
+      />
     </li>
   );
 }
