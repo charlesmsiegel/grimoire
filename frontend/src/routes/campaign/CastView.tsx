@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api/client";
-import { campaignApi } from "../../api/campaign";
+import { campaignApi, canonicalizeCharacterRef } from "../../api/campaign";
 import { viewsApi } from "../../api/views";
 import type { ResolvedCharacter, WorldMeta } from "../../api/types";
 import { useApi } from "../../api/useApi";
@@ -30,11 +30,21 @@ export function CastView() {
   const pcState = useApi(useCallback(() => campaignApi.listPCs(campaignId), [campaignId]));
   const moduleId = composition.status === "ok" ? composition.data.mechanics : null;
 
-  const pcRefs = new Set(pcState.status === "ok" ? pcState.data.map((p) => p.character_ref) : []);
+  // PCs are stored under whatever ref spelling the campaign wizard registered
+  // (e.g. the `<world>/<id>` shorthand), while `refForRow` produces the canonical
+  // form. Normalize both sides so the remove-PC action shows up regardless of
+  // which spelling was stored (#517).
+  const pcRefs = new Set(
+    pcState.status === "ok"
+      ? pcState.data.map((p) => canonicalizeCharacterRef(p.character_ref))
+      : [],
+  );
   const refForRow = (r: ResolvedCharacter): string =>
-    r.character.world_id !== null
-      ? `library:worlds/${r.character.world_id}/characters/${r.character.id}`
-      : `campaign:emergent/character/${r.character.id}`;
+    canonicalizeCharacterRef(
+      r.character.world_id !== null
+        ? `library:worlds/${r.character.world_id}/characters/${r.character.id}`
+        : `campaign:emergent/character/${r.character.id}`,
+    );
   const handleRemovePc = (ref: string, name: string) => {
     if (
       !window.confirm(

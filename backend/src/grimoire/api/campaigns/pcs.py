@@ -61,9 +61,24 @@ async def remove_pc(
     campaign_id: str,
     character_ref: str,
     characters: CharactersDep,
+    scenes: ScenesDep,
 ) -> None:
     try:
         await characters.remove_pc(campaign_id, character_ref)
+        # Mirror add_pc: a removed PC must also leave the active scene, or it
+        # keeps counting toward present_pc_refs and gates multi-PC advance until
+        # a separate cast-change removal happens (#517).
+        try:
+            active = await scenes.active_scene_for_campaign(campaign_id)
+            if active is not None:
+                await scenes.remove_present_character(active.id, character_ref)
+        except Exception:
+            logger.warning(
+                "could not detach removed PC %s from active scene in campaign %s",
+                character_ref,
+                campaign_id,
+                exc_info=True,
+            )
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 

@@ -68,6 +68,7 @@ from grimoire.scenes.types import (
     Thread,
 )
 from grimoire.types.scene import CastChange
+from grimoire.util import canonicalize_character_ref
 
 logger = logging.getLogger(__name__)
 
@@ -900,26 +901,39 @@ class SceneManager:
     async def remove_present_character(self, scene_id: str, character_ref: str) -> None:
         async with self._lock_for(scene_id):
             scene = await self.get_scene(scene_id)
+            # Match by canonical form so a character removed under one spelling
+            # (e.g. the canonical ref the frontend sends) clears an entry the
+            # scene stored under an equivalent shorthand (#517).
+            canon = canonicalize_character_ref(character_ref)
             changed = False
-            if character_ref in scene.present_character_refs:
-                scene.present_character_refs.remove(character_ref)
+            present_matches = [
+                r for r in scene.present_character_refs if canonicalize_character_ref(r) == canon
+            ]
+            for r in present_matches:
+                scene.present_character_refs.remove(r)
                 changed = True
             # A character that leaves is no longer durably declared: drop it from
             # declared_character_refs too. Otherwise a stale declared entry makes
             # truncate_scene_from treat a later *post-derived* re-entry as durable
             # and resurrect a cast member whose only surviving evidence was the
             # post being deleted.
-            if (
-                scene.declared_character_refs is not None
-                and character_ref in scene.declared_character_refs
-            ):
-                scene.declared_character_refs.remove(character_ref)
+            if scene.declared_character_refs is not None:
+                declared_matches = [
+                    r
+                    for r in scene.declared_character_refs
+                    if canonicalize_character_ref(r) == canon
+                ]
+                for r in declared_matches:
+                    scene.declared_character_refs.remove(r)
+                    changed = True
+            pc_matches = [
+                r for r in scene.present_pc_refs if canonicalize_character_ref(r) == canon
+            ]
+            was_pc = bool(pc_matches)
+            for r in pc_matches:
+                scene.present_pc_refs.remove(r)
                 changed = True
-            was_pc = character_ref in scene.present_pc_refs
-            if was_pc:
-                scene.present_pc_refs.remove(character_ref)
-                changed = True
-                self._pc_current_scene.pop((scene.campaign_id, character_ref), None)
+                self._pc_current_scene.pop((scene.campaign_id, r), None)
             # §8 — when a PC leaves and we drop to ≤1 PCs, auto-respond resumes.
             # The advance watermark must catch up to the current post count so
             # the now-single PC's pending posts don't get treated as fresh
