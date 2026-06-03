@@ -13,8 +13,8 @@ import {
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { CardFilters } from "../../components/CardFilters";
-import { CardIconBar } from "../../components/CardIconBar";
-import { deleteAction } from "../../components/cardActions";
+import { CardIconBar, type CardIconAction } from "../../components/CardIconBar";
+import { CONVERT_ICON, deleteAction } from "../../components/cardActions";
 import { useCardFilters } from "../../hooks/useCardFilters";
 import { TokenBadge } from "../../components/TokenBadge";
 import { AsyncBoundary } from "./AsyncBoundary";
@@ -303,21 +303,19 @@ function EntityListBody({
                 <p className="library-card-meta">
                   <TokenBadge text={tokenText} />
                 </p>
-                {kindPlural === "lore" && (
-                  <button
-                    type="button"
-                    className="library-card-action"
-                    onClick={(ev) => {
-                      ev.preventDefault();
-                      ev.stopPropagation();
-                      onConvert(id);
-                    }}
-                  >
-                    Convert
-                  </button>
-                )}
                 <CardIconBar
                   actions={[
+                    ...(kindPlural === "lore"
+                      ? [
+                          {
+                            key: "convert",
+                            icon: CONVERT_ICON,
+                            label: `Convert ${name} to another category`,
+                            align: "start",
+                            onClick: () => onConvert(id),
+                          } satisfies CardIconAction,
+                        ]
+                      : []),
                     deleteAction({
                       onClick: () => onDelete(id, name),
                       label: `Delete ${name}`,

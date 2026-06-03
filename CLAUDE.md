@@ -220,7 +220,9 @@ bottom edge — it is the single home for per-card actions. Cards are the block-
 `timeline-card`, `provider-card`, `why-character-card`) plus chat posts (`PostItem`).
 Cards backing a deletable artifact under `~/.grimoire/` start with a Delete (🗑) icon
 built via `deleteAction()`; cards with no delete render an empty bar (invisible until
-populated). **Never render a bespoke delete/remove button** — the custom
+populated). Actions are right-aligned by default; pass `align: "start"` to pin one to
+the left edge (e.g. the campaign card's Fork icon, with Settings + Delete on the right).
+**Never render a bespoke delete/remove button** — the custom
 `no-bespoke-delete` ESLint rule (`frontend/eslint-rules/`) enforces this; confirm-dialog
 buttons (`*Dialog*`/`*Confirm*` files) are exempt. Card-root `<button>`s (timeline, cast)
 place the bar in the wrapping `<li>`, not inside the button. Sub-element classes
