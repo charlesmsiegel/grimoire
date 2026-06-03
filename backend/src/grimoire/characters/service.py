@@ -684,8 +684,24 @@ class CharactersService:
         )
 
     async def remove_pc(self, campaign_id: CampaignId, character_ref: CharacterRef) -> None:
-        await self.store.remove_pc(campaign_id=campaign_id, character_ref=character_ref)
-        if self._cache.get_active_pc(campaign_id) == character_ref:
+        # PCs may be registered under any equivalent ref spelling (the wizard
+        # often stores a ``<world>/<id>`` shorthand) while callers delete by the
+        # canonical ref the frontend builds. The store deletes by exact match,
+        # so resolve the row by canonical form first — otherwise the delete
+        # silently affects zero rows and the PC reappears on reload (#517).
+        canon = canonicalize_character_ref(character_ref)
+        rows = await self.store.list_pcs(campaign_id)
+        stored_ref = next(
+            (
+                r["character_ref"]
+                for r in rows
+                if canonicalize_character_ref(r["character_ref"]) == canon
+            ),
+            character_ref,
+        )
+        await self.store.remove_pc(campaign_id=campaign_id, character_ref=stored_ref)
+        active = self._cache.get_active_pc(campaign_id)
+        if active is not None and canonicalize_character_ref(active) == canon:
             self._cache.pop_active_pc(campaign_id)
 
     async def set_active_pc(self, campaign_id: CampaignId, character_ref: CharacterRef) -> None:

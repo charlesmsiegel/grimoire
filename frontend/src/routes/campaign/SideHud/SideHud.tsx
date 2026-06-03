@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { ApiScene, PCEntry } from "../../../api/campaign";
+import { canonicalizeCharacterRef, type ApiScene, type PCEntry } from "../../../api/campaign";
 import { ApiError } from "../../../api/client";
 import type { WidgetSnapshot } from "../../../api/hud";
 import type { ResolvedCharacter } from "../../../api/types";
@@ -17,13 +17,7 @@ import { ChipListWidget } from "./widgets/ChipListWidget";
 import { CompositeWidget } from "./widgets/CompositeWidget";
 import { InventoryFlagsPanel } from "./widgets/InventoryFlagsPanel";
 import { RowWidget } from "./widgets/RowWidget";
-import {
-  asArray,
-  asNumber,
-  asRecord,
-  asString,
-  primaryScalar,
-} from "./widgets/widget-common";
+import { asArray, asNumber, asRecord, asString, primaryScalar } from "./widgets/widget-common";
 
 export interface QuickActions {
   onUndo: () => void;
@@ -125,13 +119,7 @@ function SceneSettingBlock({ widgets }: { widgets: HudWidgetState[] }) {
   );
 }
 
-function CastBlock({
-  widget,
-  campaignId,
-}: {
-  widget: HudWidgetState | null;
-  campaignId: string;
-}) {
+function CastBlock({ widget, campaignId }: { widget: HudWidgetState | null; campaignId: string }) {
   if (!widget || widget.snapshot.status !== "ok") return null;
   const chips = parsePresentCast(widget.snapshot.data);
   if (chips.length === 0) return null;
@@ -183,9 +171,14 @@ function InfoListBlock({ widget, onRefresh }: { widget: HudWidgetState; onRefres
         <div className="scene-setting-entry">
           <span className="scene-setting-label">{title}</span>
           <span className="scene-setting-value scene-setting-error">
-            {snapshot.status === "timeout" ? "Timed out" : snapshot.error ?? "Error"}
+            {snapshot.status === "timeout" ? "Timed out" : (snapshot.error ?? "Error")}
             {onRefresh && (
-              <button type="button" className="scene-setting-retry" onClick={onRefresh} title="Retry">
+              <button
+                type="button"
+                className="scene-setting-retry"
+                onClick={onRefresh}
+                title="Retry"
+              >
                 ↻
               </button>
             )}
@@ -240,34 +233,41 @@ function formatScalar(value: unknown): string {
   return "{…}";
 }
 
-function useActivePcCharacters(
-  campaignId: string,
-  pcs: PCEntry[],
-): { rows: ResolvedCharacter[] } {
+function useActivePcCharacters(campaignId: string, pcs: PCEntry[]): { rows: ResolvedCharacter[] } {
   const [rows, setRows] = useState<ResolvedCharacter[]>([]);
   useEffect(() => {
     let cancelled = false;
     if (pcs.length === 0) {
       setRows([]);
-      return () => { cancelled = true; };
+      return () => {
+        cancelled = true;
+      };
     }
     viewsApi
       .listCharacters(campaignId)
       .then((all) => {
         if (cancelled) return;
-        const activeRefs = new Set(pcs.map((p) => p.character_ref));
+        // Normalize both sides: PCs are stored under whatever ref spelling was
+        // registered (often a wizard shorthand), while the ref built here is
+        // canonical (#517).
+        const activeRefs = new Set(pcs.map((p) => canonicalizeCharacterRef(p.character_ref)));
         setRows(
           all.filter((c) => {
-            const ref =
+            const ref = canonicalizeCharacterRef(
               c.character.world_id !== null
                 ? `library:worlds/${c.character.world_id}/characters/${c.character.id}`
-                : `campaign:emergent/character/${c.character.id}`;
+                : `campaign:emergent/character/${c.character.id}`,
+            );
             return activeRefs.has(ref);
           }),
         );
       })
-      .catch(() => { if (!cancelled) setRows([]); });
-    return () => { cancelled = true; };
+      .catch(() => {
+        if (!cancelled) setRows([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [campaignId, pcs]);
   return { rows };
 }
@@ -280,7 +280,9 @@ function MechanicsBlock({ campaignId, pcs }: { campaignId: string; pcs: PCEntry[
     let cancelled = false;
     if (rows.length === 0) {
       setSheets({});
-      return () => { cancelled = true; };
+      return () => {
+        cancelled = true;
+      };
     }
     Promise.all(
       rows.map(async (row) => {
@@ -300,7 +302,9 @@ function MechanicsBlock({ campaignId, pcs }: { campaignId: string; pcs: PCEntry[
       for (const [id, sheet] of pairs) next[id] = sheet;
       setSheets(next);
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [campaignId, rows]);
 
   const sections = rows
@@ -350,13 +354,7 @@ function MechanicsBlock({ campaignId, pcs }: { campaignId: string; pcs: PCEntry[
 
 /* ---- Quick Actions ---- */
 
-function QuickActionsBlock({
-  actions,
-  scene,
-}: {
-  actions: QuickActions;
-  scene: ApiScene | null;
-}) {
+function QuickActionsBlock({ actions, scene }: { actions: QuickActions; scene: ApiScene | null }) {
   return (
     <div className="scene-setting-block" aria-label="Quick actions">
       <div className="scene-setting-entry scene-setting-entry-full">
@@ -372,11 +370,7 @@ function QuickActionsBlock({
           >
             End scene
           </button>
-          <button
-            type="button"
-            onClick={actions.onAnalyzeScene}
-            disabled={actions.busy || !scene}
-          >
+          <button type="button" onClick={actions.onAnalyzeScene} disabled={actions.busy || !scene}>
             Analyze scene
           </button>
           <button
@@ -411,7 +405,16 @@ function QuickActionsBlock({
 
 /* ---- Main component ---- */
 
-export function SideHud({ campaignId, sceneId, scene, pcs, actions, playerInput, pcRef, latestNarratorTurnId }: Props) {
+export function SideHud({
+  campaignId,
+  sceneId,
+  scene,
+  pcs,
+  actions,
+  playerInput,
+  pcRef,
+  latestNarratorTurnId,
+}: Props) {
   const hud = useHud(campaignId, sceneId);
 
   const { sceneSetting, castWidget, orderedWidgets } = useMemo(() => {

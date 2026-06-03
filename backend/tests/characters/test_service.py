@@ -191,6 +191,29 @@ async def test_pc_lifecycle(characters: CharactersService, store: StateStore) ->
     assert await characters.list_pcs("camp-1") == []
 
 
+async def test_remove_pc_matches_stored_shorthand_ref(
+    characters: CharactersService, store: StateStore
+) -> None:
+    """A PC registered under a wizard shorthand is removable by canonical ref.
+
+    The frontend builds the canonical ``library:worlds/.../characters/...`` ref,
+    but the wizard often registers PCs under the ``<world>/<id>`` shorthand. The
+    store deletes by exact match, so remove_pc must resolve the stored spelling
+    by canonical form or the delete affects zero rows (#517).
+    """
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data("vivienne", role=CharacterRole.PC))
+
+    # Registered under the bare shorthand the wizard uses.
+    await characters.add_pc("camp-1", "wod-london/vivienne", "vivienne", owner="local")
+    assert len(await characters.list_pcs("camp-1")) == 1
+
+    # Removed by the canonical ref the frontend sends.
+    await characters.remove_pc("camp-1", "library:worlds/wod-london/characters/vivienne")
+    assert await characters.list_pcs("camp-1") == []
+
+
 async def test_set_active_pc_rejects_unknown(
     characters: CharactersService, store: StateStore
 ) -> None:
