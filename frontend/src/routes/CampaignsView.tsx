@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { ApiError } from "../api/client";
 import {
@@ -12,7 +12,7 @@ import {
 import { useStore } from "../state/useStore";
 import type { CampaignSummary } from "../state/storeContext";
 import { CardIconBar } from "../components/CardIconBar";
-import { deleteAction } from "../components/cardActions";
+import { deleteAction, FORK_ICON, SETTINGS_ICON } from "../components/cardActions";
 import { ForkDialog } from "./campaign/ForkDialog";
 
 interface CampaignNode {
@@ -70,6 +70,7 @@ interface CampaignCardProps {
 
 function CampaignCard({ node, depth, onFork, onDelete, busyDeleting }: CampaignCardProps) {
   const isChild = depth > 0;
+  const navigate = useNavigate();
   return (
     <li className={`campaign-card${isChild ? " is-child" : ""}`}>
       <Link to={`/campaigns/${node.campaign.id}`} className="campaign-card-title">
@@ -81,14 +82,21 @@ function CampaignCard({ node, depth, onFork, onDelete, busyDeleting }: CampaignC
           {node.forkedAtPostId && <>at {node.forkedAtPostId}</>}
         </p>
       )}
-      <div className="campaign-card-actions">
-        <button type="button" onClick={() => onFork(node.campaign)}>
-          Fork
-        </button>
-        <Link to={`/campaigns/${node.campaign.id}/settings`}>Settings</Link>
-      </div>
       <CardIconBar
         actions={[
+          {
+            key: "fork",
+            icon: FORK_ICON,
+            label: `Fork campaign ${node.campaign.name}`,
+            align: "start",
+            onClick: () => onFork(node.campaign),
+          },
+          {
+            key: "settings",
+            icon: SETTINGS_ICON,
+            label: `Settings for campaign ${node.campaign.name}`,
+            onClick: () => navigate(`/campaigns/${node.campaign.id}/settings`),
+          },
           deleteAction({
             onClick: () => onDelete(node.campaign),
             label: `Delete campaign ${node.campaign.name}`,
