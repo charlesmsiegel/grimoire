@@ -30,6 +30,17 @@ EVENT_TYPE_BY_KIND: dict[str, str] = {
     "campaign_config": events.CAMPAIGN_FILE_CHANGED,
 }
 
+# Flat single-file library assets stored as ``<head>/<asset_id>.<ext>``. They
+# differ only in directory, file extension, and the kind/entity_kind they map
+# to, so they're table-driven rather than copy-pasted one ``if`` per directory.
+_FLAT_LIBRARY_ASSETS: dict[str, tuple[str, str, str]] = {
+    # head: (extension, kind, entity_kind)
+    "style-guides": (".md", "library_style_guide", "style_guide"),
+    "image-presets": (".yaml", "library_image_preset", "image_preset"),
+    "calendars": (".yaml", "library_calendar", "calendar"),
+    "holiday-sets": (".yaml", "library_holiday_set", "holiday_set"),
+}
+
 
 @dataclass(frozen=True, slots=True)
 class WatchedFile:
@@ -161,55 +172,18 @@ def _classify_library(abs_path: Path, rel: Path) -> WatchedFile | None:
             )
         return None
 
-    if head == "style-guides":
-        if len(parts) == 2 and parts[1].endswith(".md"):
-            asset_id = parts[1][:-3]
+    flat = _FLAT_LIBRARY_ASSETS.get(head)
+    if flat is not None:
+        extension, kind, entity_kind = flat
+        if len(parts) == 2 and parts[1].endswith(extension):
+            asset_id = parts[1][: -len(extension)]
             return WatchedFile(
                 scope="library",
-                kind="library_style_guide",
+                kind=kind,
                 path=abs_path,
-                entity_kind="style_guide",
+                entity_kind=entity_kind,
                 asset_id=asset_id,
-                library_id=f"style-guides/{asset_id}",
-            )
-        return None
-
-    if head == "image-presets":
-        if len(parts) == 2 and parts[1].endswith(".yaml"):
-            asset_id = parts[1][:-5]
-            return WatchedFile(
-                scope="library",
-                kind="library_image_preset",
-                path=abs_path,
-                entity_kind="image_preset",
-                asset_id=asset_id,
-                library_id=f"image-presets/{asset_id}",
-            )
-        return None
-
-    if head == "calendars":
-        if len(parts) == 2 and parts[1].endswith(".yaml"):
-            asset_id = parts[1][:-5]
-            return WatchedFile(
-                scope="library",
-                kind="library_calendar",
-                path=abs_path,
-                entity_kind="calendar",
-                asset_id=asset_id,
-                library_id=f"calendars/{asset_id}",
-            )
-        return None
-
-    if head == "holiday-sets":
-        if len(parts) == 2 and parts[1].endswith(".yaml"):
-            asset_id = parts[1][:-5]
-            return WatchedFile(
-                scope="library",
-                kind="library_holiday_set",
-                path=abs_path,
-                entity_kind="holiday_set",
-                asset_id=asset_id,
-                library_id=f"holiday-sets/{asset_id}",
+                library_id=f"{head}/{asset_id}",
             )
         return None
 

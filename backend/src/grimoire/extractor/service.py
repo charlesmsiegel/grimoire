@@ -273,8 +273,20 @@ class ExtractorService:
 
         flags: list[ExtractionFlag] = []
         rule_deltas = self._unwrap_list(results[0], strategy="rule_based", flags=flags)
-        llm_out = self._unwrap_llm(results[1], flags=flags)
-        heur = self._unwrap_heuristic(results[2], flags=flags)
+        llm_out = self._unwrap_strategy(
+            results[1],
+            flags=flags,
+            output_type=LLMStrategyOutput,
+            code="structured_llm_failed",
+            label="structured-llm",
+        )
+        heur = self._unwrap_strategy(
+            results[2],
+            flags=flags,
+            output_type=HeuristicOutput,
+            code="heuristic_failed",
+            label="heuristic",
+        )
 
         # Merge deltas (rule + llm). Heuristic strategy emits only flags.
         merged_deltas = merge_deltas(rule_deltas, llm_out.deltas)
@@ -981,36 +993,33 @@ class ExtractorService:
         return []
 
     @staticmethod
-    def _unwrap_llm(value: object, *, flags: list[ExtractionFlag]) -> LLMStrategyOutput:
-        if isinstance(value, BaseException):
-            flags.append(
-                ExtractionFlag(
-                    level=FlagLevel.WARNING,
-                    code="structured_llm_failed",
-                    message=f"structured-llm strategy raised {type(value).__name__}",
-                    evidence=str(value)[:200],
-                )
-            )
-            return LLMStrategyOutput()
-        if isinstance(value, LLMStrategyOutput):
-            return value
-        return LLMStrategyOutput()
+    def _unwrap_strategy[OutputT](
+        value: object,
+        *,
+        flags: list[ExtractionFlag],
+        output_type: type[OutputT],
+        code: str,
+        label: str,
+    ) -> OutputT:
+        """Coerce a strategy result (or a raised exception) into its output type.
 
-    @staticmethod
-    def _unwrap_heuristic(value: object, *, flags: list[ExtractionFlag]) -> HeuristicOutput:
+        A strategy run via ``asyncio.gather(return_exceptions=True)`` yields
+        either its output or the exception it raised; on failure we record a
+        warning flag and fall back to an empty ``output_type()``.
+        """
         if isinstance(value, BaseException):
             flags.append(
                 ExtractionFlag(
                     level=FlagLevel.WARNING,
-                    code="heuristic_failed",
-                    message=f"heuristic strategy raised {type(value).__name__}",
+                    code=code,
+                    message=f"{label} strategy raised {type(value).__name__}",
                     evidence=str(value)[:200],
                 )
             )
-            return HeuristicOutput()
-        if isinstance(value, HeuristicOutput):
+            return output_type()
+        if isinstance(value, output_type):
             return value
-        return HeuristicOutput()
+        return output_type()
 
 
 def _author_pc(scene: Scene) -> str | None:
