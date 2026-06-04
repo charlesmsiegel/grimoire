@@ -30,6 +30,23 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def parse_iso_datetime(value: Any) -> datetime | None:
+    """Parse a stored ISO-8601 value to a ``datetime``; ``None`` if unparseable.
+
+    Accepts an existing ``datetime`` (returned unchanged), an ISO string, or any
+    falsy/empty value (-> ``None``). Malformed strings yield ``None`` rather than
+    raising — callers that need a hard failure should parse explicitly.
+    """
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
 def slugify_id(raw: str, *, fallback: str = "") -> str:
     """Lower-case ``raw`` and collapse non-alphanumeric runs into ``-``.
 
@@ -106,6 +123,7 @@ __all__ = [
     "canonicalize_character_ref",
     "new_id",
     "now_iso",
+    "parse_iso_datetime",
     "safe_json_dumps",
     "safe_json_loads",
     "slugify_id",

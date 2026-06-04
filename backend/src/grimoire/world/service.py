@@ -63,7 +63,7 @@ from grimoire.types.world import (
     Weather,
     WorldCalendar,
 )
-from grimoire.util import canonicalize_character_ref, now_iso
+from grimoire.util import canonicalize_character_ref, now_iso, parse_iso_datetime
 
 from .atmosphere import generate_atmosphere
 from .calendar import holiday_at, parse_calendar, season_for
@@ -1585,7 +1585,7 @@ def _faction_state_from_row(row: Any) -> FactionStateData:
             id=str(g.get("id") or ""),
             description=str(g.get("description") or ""),
             progress=float(g.get("progress") or 0.0),
-            deadline=_parse_dt(g.get("deadline")),
+            deadline=parse_iso_datetime(g.get("deadline")),
         )
         for g in (decoded.get("goals") or [])
         if isinstance(g, dict)
@@ -1600,14 +1600,3 @@ def _faction_state_from_row(row: Any) -> FactionStateData:
         secrets=[str(s) for s in (decoded.get("secrets") or [])],
         updated_at_turn=row["updated_at_turn"],
     )
-
-
-def _parse_dt(value: Any) -> datetime | None:
-    if not value:
-        return None
-    if isinstance(value, datetime):
-        return value
-    try:
-        return datetime.fromisoformat(str(value))
-    except ValueError:
-        return None

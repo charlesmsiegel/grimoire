@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel
@@ -47,7 +46,13 @@ from grimoire.types.composition import LibraryEntity, ResolutionLayer, Resolutio
 from grimoire.types.mechanics import Capability
 from grimoire.types.scene import Post, Scene
 from grimoire.types.state import CharacterState, ContextTier, DeltaKind, StateDelta
-from grimoire.util import canonicalize_character_ref, new_id, now_iso, slugify_id
+from grimoire.util import (
+    canonicalize_character_ref,
+    new_id,
+    now_iso,
+    parse_iso_datetime,
+    slugify_id,
+)
 
 from .config import CharactersConfig
 from .drift import (
@@ -626,7 +631,7 @@ class CharactersService:
                 current_location_ref = state.location_ref
             except Exception:
                 pass
-            last_played_at = _parse_iso_dt(row.get("last_played_at"))
+            last_played_at = parse_iso_datetime(row.get("last_played_at"))
             raw_tags = row.get("role_tags") or "[]"
             role_tags = _json.loads(raw_tags) if isinstance(raw_tags, str) else list(raw_tags)
             out.append(
@@ -1380,17 +1385,6 @@ def _relationship_row_to_dict(row: Any) -> dict:
         "updated_at_turn": row["updated_at_turn"],
         "history": _relationship_history_from_json(history_raw),
     }
-
-
-def _parse_iso_dt(value: Any) -> datetime | None:
-    if not value:
-        return None
-    if isinstance(value, datetime):
-        return value
-    try:
-        return datetime.fromisoformat(str(value))
-    except ValueError:
-        return None
 
 
 _TIER_RANK: dict[ContextTier | None, int] = {
