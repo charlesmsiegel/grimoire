@@ -203,6 +203,30 @@ pnpm format:check                          # prettier --check .
 - **pytest-asyncio** with `asyncio_mode = auto` — async tests just work
 - Source under `backend/src/grimoire/`, tests under `backend/tests/`
 
+### Shared helpers — reach for these first
+
+Recurring needs already have canonical helpers; a private reimplementation is a
+review smell. Grep before adding a `_parse_*` / `_slug*` / `_json*` / `_now*`.
+
+- **Data modeling**: Pydantic `BaseModel` for anything parsed from YAML/JSON,
+  validated, or serialized (config loaders, API + persisted models) — keep
+  `from_yaml` a one-line `model_validate`, not hand-rolled `bool()/int()/str()`
+  coercion. `@dataclass(frozen=True)` is fine for internal value objects that
+  never cross a serialization boundary.
+- **`grimoire.util`**: `now_iso()` / `parse_iso_datetime()` (time),
+  `safe_json_loads` / `safe_json_dumps` (nullable/pre-parsed JSON),
+  `extract_json_object()` (JSON in LLM output), `new_id("prefix")` (ids — not
+  `uuid4().hex[:n]`), `slugify_id` / `canonicalize_character_ref` (refs).
+- **`grimoire.files`**: `slug.slugify`, `yaml_io` (`load_yaml` / `dump_yaml` /
+  `write_yaml`), `frontmatter` (`read_markdown` / `write_markdown`) — never call
+  `yaml.safe_load` / `safe_dump` or re-split `---` by hand.
+- **API not-found**: raise the module's domain `*NotFoundError` (it carries
+  `http_status`) and let `api.util.map_lookup_errors` translate it — don't inline
+  `raise HTTPException(404, …)`. Service-present-or-503 goes through the
+  `api.deps` `get_*` providers.
+- **Carving up a large service**: follow the `host=self` coordinator pattern
+  (`AuxiliaryCoordinator` / `RetconCoordinator` / `ForkCoordinator`).
+
 ### Frontend (TypeScript)
 
 - **Zod** for runtime validation of API responses
@@ -293,6 +317,7 @@ User data lives at `~/.grimoire/` by default (override with `GRIMOIRE_DATA_ROOT`
 - **Don't add telemetry or phone-home.** Grimoire is local-first with zero external data collection. No analytics, no crash reporting, no usage tracking.
 - **Don't import across module boundaries** that shouldn't know about each other. Follow the module map — if there's no arrow between two modules, they shouldn't import each other. Use the event bus for fan-out.
 - **Don't forget to update both file and index.** When changing content programmatically, write the file and let the watcher handle the index — or explicitly trigger an index update if the watcher isn't running (e.g., in tests).
+- **Don't hand-roll what a shared helper already does.** datetime/JSON/id/slug strings, YAML + frontmatter I/O, and HTTP not-found translation all have canonical helpers (Code Conventions → *Shared helpers*). Reuse keeps behaviour consistent and fixes land in one place.
 
 ## Keep Documentation Up to Date
 
