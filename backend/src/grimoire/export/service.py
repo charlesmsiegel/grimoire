@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -31,6 +30,7 @@ from grimoire.types.export import (
     ExportResult,
     ExportSelection,
 )
+from grimoire.util import new_id
 
 
 @runtime_checkable
@@ -231,7 +231,7 @@ class ExportService:
         world_versions: list[dict[str, Any]],
     ) -> None:
         record = ExportRecord(
-            id=f"export_{uuid.uuid4().hex[:12]}",
+            id=new_id("export"),
             campaign_id=campaign_id,
             adapter_id=adapter_id,
             selection=selection,

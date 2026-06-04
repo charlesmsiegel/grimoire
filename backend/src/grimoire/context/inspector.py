@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import time
-import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
@@ -27,6 +26,7 @@ from grimoire.types.common import CampaignId, TurnId
 from grimoire.types.context import AssembledPrompt, ContextSource
 from grimoire.types.inclusion_reasons import InclusionReason
 from grimoire.types.state import ContextTier
+from grimoire.util import new_id
 
 logger = logging.getLogger(__name__)
 
@@ -380,7 +380,7 @@ class ContextInspector:
         )
 
     def _make_handle(self) -> str:
-        return f"ph_{uuid.uuid4().hex[:16]}"
+        return new_id("ph", length=16)
 
     def _evict_old(self) -> None:
         now = time.time()

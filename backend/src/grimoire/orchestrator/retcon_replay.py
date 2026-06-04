@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -38,6 +37,7 @@ from grimoire.orchestrator.errors import (
 )
 from grimoire.types.common import CampaignId, PostId
 from grimoire.types.orchestrator import EventType, ReplayBatchStateView
+from grimoire.util import new_id
 
 if TYPE_CHECKING:
     from grimoire.orchestrator.service import OrchestratorService
@@ -154,7 +154,7 @@ class RetconReplaySession:
             self._closed = {
                 bid: s for bid, s in self._closed.items() if s.campaign_id != campaign_id
             }
-            batch_id = f"rb_{uuid.uuid4().hex[:16]}"
+            batch_id = new_id("rb", length=16)
             subsequent = await self._collect_subsequent_post_ids(campaign_id, edited_post_id)
             state = ReplayBatchState(
                 batch_id=batch_id,

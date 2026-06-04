@@ -26,7 +26,6 @@ import contextlib
 import json
 import logging
 import re
-import uuid
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -56,7 +55,7 @@ from grimoire.types.imagegen import (
     JobStatus,
 )
 from grimoire.types.protocols import LLMGateway
-from grimoire.util import now_iso
+from grimoire.util import new_id, now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -217,11 +216,11 @@ def _validate_campaign_id(campaign_id: str) -> None:
 
 
 def _new_image_id() -> str:
-    return f"img_{uuid.uuid4().hex[:12]}"
+    return new_id("img")
 
 
 def _new_job_id() -> str:
-    return f"job_{uuid.uuid4().hex[:12]}"
+    return new_id("job")
 
 
 def _backend_info(

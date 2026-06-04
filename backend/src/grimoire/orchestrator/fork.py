@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import sqlite3
-import uuid
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -22,7 +21,7 @@ from grimoire.scenes.manager import SceneManager
 from grimoire.state_store.fork import bulk_copy, fingerprint, replay_to_turn
 from grimoire.types.common import CampaignId
 from grimoire.types.orchestrator import ForkCampaignResult
-from grimoire.util import now_iso
+from grimoire.util import new_id, now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -284,7 +283,7 @@ class ForkCoordinator:
         description: str | None,
         make_active: bool,
     ) -> ForkCampaignResult:
-        pending_id = f"pf_{uuid.uuid4().hex[:16]}"
+        pending_id = new_id("pf", length=16)
         await self._store.db.execute(
             """
             INSERT INTO pending_forks (

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -25,6 +24,7 @@ from grimoire.scenes.types import Post as SceneFilePost
 from grimoire.scenes.types import Scene as SceneFileScene
 from grimoire.types.common import CampaignId, CharacterRef, PostId
 from grimoire.types.orchestrator import RegeneratePostResult
+from grimoire.util import new_id
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +112,8 @@ class AlternatesManager:
                 pc_ref = prior.author_pc_ref
                 break
 
-        new_alt_id = f"a_{uuid.uuid4().hex[:16]}"
-        new_ds_id = f"ds_{uuid.uuid4().hex[:16]}"
+        new_alt_id = new_id("a", length=16)
+        new_ds_id = new_id("ds", length=16)
 
         # Capture the current primary's delta set up front so the rollback path
         # can re-activate it even if generation fails before we touch state.

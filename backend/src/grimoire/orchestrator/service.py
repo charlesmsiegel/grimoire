@@ -75,6 +75,7 @@ from grimoire.types.orchestrator import (
 )
 from grimoire.types.scene import AdvanceResult
 from grimoire.types.scene import SceneContext as PydanticSceneContext
+from grimoire.util import new_id
 
 logger = logging.getLogger(__name__)
 
@@ -1013,7 +1014,7 @@ class OrchestratorService:
         """
         from grimoire.types.state import DeltaKind
 
-        turn_id = f"analysis:{uuid.uuid4().hex[:12]}"
+        turn_id = new_id("analysis")
 
         filtered = ExtractionResult(
             deltas=[d for d in extraction.deltas if d.kind != DeltaKind.TIME_ADVANCE],
@@ -1106,7 +1107,7 @@ class OrchestratorService:
             raise
         state.queued = max(0, state.queued - 1)
 
-        turn_id = f"t_{uuid.uuid4().hex[:16]}"
+        turn_id = new_id("t", length=16)
         active = _ActiveTurn(
             turn_id=turn_id,
             campaign_id=campaign_id,
