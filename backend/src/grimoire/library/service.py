@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import re as _re
-from datetime import datetime
 from typing import Any
 
 from grimoire.event_bus import Event, EventBus
@@ -41,6 +40,7 @@ from grimoire.types.composition import (
     WorldMeta,
 )
 from grimoire.types.world import LoreEntry
+from grimoire.util import parse_iso_datetime
 
 # Entity kinds that live inside a world directory.
 _World_ENTITY_KINDS: frozenset[str] = frozenset(
@@ -103,17 +103,6 @@ def _deep_merge_frontmatter(base: dict[str, Any], patch: dict[str, Any]) -> dict
     return out
 
 
-def _parse_iso(value: Any) -> datetime | None:
-    if not value:
-        return None
-    if isinstance(value, datetime):
-        return value
-    try:
-        return datetime.fromisoformat(str(value))
-    except ValueError:
-        return None
-
-
 def _entity_from_row(row: dict) -> LibraryEntity:
     """Project a ``library_index`` row dict into a :class:`LibraryEntity`."""
     frontmatter = row.get("frontmatter") or {}
@@ -133,9 +122,9 @@ def _entity_from_row(row: dict) -> LibraryEntity:
         body_compressed=row.get("body_compressed"),
         tags=list(row.get("tags") or []),
         keywords=list(row.get("keywords") or []),
-        file_mtime=_parse_iso(row.get("file_mtime")),
+        file_mtime=parse_iso_datetime(row.get("file_mtime")),
         content_hash=row.get("content_hash") or "",
-        indexed_at=_parse_iso(row.get("indexed_at")),
+        indexed_at=parse_iso_datetime(row.get("indexed_at")),
         version=int(row.get("version") or 0),
     )
 

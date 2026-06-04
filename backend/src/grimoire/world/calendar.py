@@ -8,7 +8,6 @@ questions Time Engine and Context Builder need.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from grimoire.types.common import InGameTime
@@ -18,6 +17,7 @@ from grimoire.types.world import (
     Season,
     WorldCalendar,
 )
+from grimoire.util import parse_iso_datetime
 
 
 def parse_calendar(world_id: str, raw: dict[str, Any] | None) -> WorldCalendar:
@@ -49,7 +49,7 @@ def parse_calendar(world_id: str, raw: dict[str, Any] | None) -> WorldCalendar:
     ]
     return WorldCalendar(
         world_id=world_id,
-        epoch=_parse_dt(raw.get("epoch")),
+        epoch=parse_iso_datetime(raw.get("epoch")),
         months=months,
         days_per_week=int(raw.get("days_per_week") or 7),
         week_day_names=list(raw.get("week_day_names") or []),
@@ -88,17 +88,6 @@ def holiday_at(calendar: WorldCalendar, when: InGameTime) -> Holiday | None:
         if h.month == moment.month and h.day == moment.day:
             return h
     return None
-
-
-def _parse_dt(value: Any) -> datetime | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, datetime):
-        return value
-    try:
-        return datetime.fromisoformat(str(value))
-    except ValueError:
-        return None
 
 
 def _hemisphere_default(when: InGameTime) -> Season:

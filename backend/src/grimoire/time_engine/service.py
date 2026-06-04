@@ -53,7 +53,7 @@ from grimoire.types.time import (
     WeatherChange,
 )
 from grimoire.types.world import WorldCalendar
-from grimoire.util import new_id, now_iso
+from grimoire.util import new_id, now_iso, parse_iso_datetime
 from grimoire.world import WorldService
 
 from .config import TimeEngineConfig, TimePrecision
@@ -124,17 +124,6 @@ async def _default_faction_leader_actions(_payload: dict[str, Any]) -> list[str]
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _parse_dt(value: Any) -> datetime | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, datetime):
-        return value
-    try:
-        return datetime.fromisoformat(str(value))
-    except ValueError:
-        return None
 
 
 def _duration_from_timedelta(td: timedelta) -> Duration:
@@ -313,7 +302,7 @@ class TimeEngineService:
         )
         if row is None:
             return None
-        moment = _parse_dt(row["current_in_game_time"])
+        moment = parse_iso_datetime(row["current_in_game_time"])
         if moment is None:
             return None
         return InGameTime(moment=moment)
@@ -1621,7 +1610,7 @@ def _scheduled_event_from_row(row: Any, *, triggered: bool | None = None) -> Sch
         decoded = json.loads(payload) if payload else {}
     except (TypeError, json.JSONDecodeError):
         decoded = {}
-    moment = _parse_dt(row["at"])
+    moment = parse_iso_datetime(row["at"])
     if moment is None:
         # Defensive: an unparsable timestamp is treated as the epoch so the
         # event can still be inspected by the caller.

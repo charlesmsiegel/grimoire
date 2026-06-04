@@ -13,6 +13,7 @@ from typing import Any
 from grimoire.files import load_yaml
 from grimoire.scenes.storage import PostTuple, parse_body, scene_paths, write_sidecar
 from grimoire.scenes.types import AuthorKind, Post, SceneInit
+from grimoire.util import parse_iso_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -95,22 +96,12 @@ async def run_import_pipeline(
 
     from grimoire.scenes.storage import slugify
 
-    def _parse_dt(raw: Any) -> datetime | None:
-        if isinstance(raw, datetime):
-            return raw
-        if isinstance(raw, str):
-            try:
-                return datetime.fromisoformat(raw)
-            except ValueError:
-                return None
-        return None
-
     init = SceneInit(
         campaign_id=campaign_id,
         title=title,
         slug=slugify(title),
         location_ref=metadata.get("location_ref"),
-        in_game_start=_parse_dt(metadata.get("in_game_start")),
+        in_game_start=parse_iso_datetime(metadata.get("in_game_start")),
         present_character_refs=metadata.get("present_character_refs", []),
         present_pc_refs=metadata.get("present_pc_refs", []),
         mood=metadata.get("mood"),
@@ -143,7 +134,7 @@ async def run_import_pipeline(
     for pc_key, prev_id in prev_pc_scenes.items():
         scene_manager._pc_current_scene[pc_key] = prev_id
 
-    in_game_end = _parse_dt(metadata.get("in_game_end"))
+    in_game_end = parse_iso_datetime(metadata.get("in_game_end"))
     if in_game_end is not None:
         scene.in_game_end = in_game_end
         naming = getattr(
