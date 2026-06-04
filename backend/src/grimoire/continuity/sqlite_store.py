@@ -36,21 +36,7 @@ from grimoire.continuity.types import (
     RetirementReason,
 )
 from grimoire.storage import Database
-from grimoire.util import now_iso
-
-
-def _dumps(value: object) -> str | None:
-    if value is None:
-        return None
-    return json.dumps(value, sort_keys=True, default=str)
-
-
-def _loads(value: object) -> object:
-    if value is None or value == "":
-        return None
-    if isinstance(value, (dict, list)):
-        return value
-    return json.loads(value)
+from grimoire.util import now_iso, safe_json_dumps, safe_json_loads
 
 
 def _ingame_to_str(t: InGameTime | None) -> str | None:
@@ -64,7 +50,7 @@ def _ingame_from_str(raw: object) -> InGameTime | None:
         return None
     if isinstance(raw, InGameTime):
         return raw
-    data = _loads(raw)
+    data = safe_json_loads(raw)
     if not isinstance(data, dict):
         return None
     return InGameTime(day_count=int(data.get("day_count", 0)), label=str(data.get("label", "")))
@@ -84,15 +70,15 @@ def _fact_to_row(fact: Fact, campaign_id: str) -> dict:
         "text": fact.text,
         "established_in_post": fact.established_in_post,
         "in_game_when": _ingame_to_str(fact.established_at_in_game),
-        "about": _dumps(about_payload),
+        "about": safe_json_dumps(about_payload),
         "source": fact.source.value if isinstance(fact.source, FactSource) else fact.source,
         "speaker_ref": fact.speaker_id,
         "confidence": float(fact.confidence),
-        "keywords": _dumps(list(fact.keywords)),
+        "keywords": safe_json_dumps(list(fact.keywords)),
         "retired": 1 if fact.retired else 0,
         "retired_in_post": fact.retired_in_post,
-        "contradicts": _dumps(list(fact.contradicts)),
-        "tags": _dumps(_tags_with_retired_reason(fact)),
+        "contradicts": safe_json_dumps(list(fact.contradicts)),
+        "tags": safe_json_dumps(_tags_with_retired_reason(fact)),
     }
 
 
@@ -109,7 +95,7 @@ def _tags_with_retired_reason(fact: Fact) -> list[str]:
 
 
 def _fact_from_row(row: dict) -> Fact:
-    about_raw = _loads(row.get("about")) or {}
+    about_raw = safe_json_loads(row.get("about")) or {}
     if isinstance(about_raw, dict):
         about = FactSubject(
             character_ids=list(about_raw.get("character_ids") or []),
@@ -121,7 +107,7 @@ def _fact_from_row(row: dict) -> Fact:
     else:
         about = FactSubject()
 
-    tags_raw = _loads(row.get("tags")) or []
+    tags_raw = safe_json_loads(row.get("tags")) or []
     retired_reason: RetirementReason | None = None
     tags: list[str] = []
     for tag in tags_raw:
@@ -146,11 +132,11 @@ def _fact_from_row(row: dict) -> Fact:
         source=source,
         speaker_id=row.get("speaker_ref"),
         about=about,
-        keywords=list(_loads(row.get("keywords")) or []),
+        keywords=list(safe_json_loads(row.get("keywords")) or []),
         retired=bool(int(row.get("retired") or 0)),
         retired_in_post=row.get("retired_in_post"),
         retired_reason=retired_reason,
-        contradicts=list(_loads(row.get("contradicts")) or []),
+        contradicts=list(safe_json_loads(row.get("contradicts")) or []),
         tags=tags,
     )
 
@@ -176,13 +162,13 @@ def _commitment_to_row(c: Commitment, campaign_id: str) -> dict:
         "created_in_post": c.created_in_post,
         "in_game_created_at": _ingame_to_str(c.in_game_created_at),
         "resolved_in_post": c.resolved_in_post,
-        "tags": _dumps(tags),
-        "related_fact_ids": _dumps(list(c.related_fact_ids)),
+        "tags": safe_json_dumps(tags),
+        "related_fact_ids": safe_json_dumps(list(c.related_fact_ids)),
     }
 
 
 def _commitment_from_row(row: dict) -> Commitment:
-    tags_raw = _loads(row.get("tags")) or []
+    tags_raw = safe_json_loads(row.get("tags")) or []
     last_activity: InGameTime | None = None
     plain_tags: list[str] = []
     for tag in tags_raw:
@@ -219,7 +205,7 @@ def _commitment_from_row(row: dict) -> Commitment:
         resolved_in_post=row.get("resolved_in_post"),
         last_activity_at=last_activity,
         tags=plain_tags,
-        related_fact_ids=list(_loads(row.get("related_fact_ids")) or []),
+        related_fact_ids=list(safe_json_loads(row.get("related_fact_ids")) or []),
     )
 
 
@@ -520,10 +506,10 @@ class SqliteContinuityStore(ContinuityStore):
                 (
                     report.id,
                     self._campaign_id,
-                    _dumps(candidate_payload),
-                    _dumps(conflicts_payload),
+                    safe_json_dumps(candidate_payload),
+                    safe_json_dumps(conflicts_payload),
                     1 if report.resolved else 0,
-                    _dumps(report.resolution),
+                    safe_json_dumps(report.resolution),
                     now_iso(),
                     now_iso() if report.resolved else None,
                 ),
@@ -540,10 +526,10 @@ class SqliteContinuityStore(ContinuityStore):
                 WHERE id = ?
                 """,
                 (
-                    _dumps(candidate_payload),
-                    _dumps(conflicts_payload),
+                    safe_json_dumps(candidate_payload),
+                    safe_json_dumps(conflicts_payload),
                     1 if report.resolved else 0,
-                    _dumps(report.resolution),
+                    safe_json_dumps(report.resolution),
                     now_iso() if report.resolved else None,
                     report.id,
                 ),
@@ -561,15 +547,15 @@ class SqliteContinuityStore(ContinuityStore):
         )
         if row is None:
             return None
-        candidate = _deserialise_fact(_loads(row["candidate_fact"]) or {})
-        conflicts_raw = _loads(row["conflicts"]) or []
+        candidate = _deserialise_fact(safe_json_loads(row["candidate_fact"]) or {})
+        conflicts_raw = safe_json_loads(row["conflicts"]) or []
         conflicts = [_deserialise_candidate(c) for c in conflicts_raw if isinstance(c, dict)]
         return ContradictionReport(
             id=row["id"],
             candidate_fact=candidate,
             conflicts=conflicts,
             resolved=bool(int(row["resolved"])),
-            resolution=_loads(row["resolution"]) if row["resolution"] else None,
+            resolution=safe_json_loads(row["resolution"]) if row["resolution"] else None,
         )
 
     async def list_contradiction_reports(
@@ -592,8 +578,8 @@ class SqliteContinuityStore(ContinuityStore):
         rows = await self._db.fetchall(sql, (*params, limit))
         out: list[ContradictionReport] = []
         for row in rows:
-            candidate = _deserialise_fact(_loads(row["candidate_fact"]) or {})
-            conflicts_raw = _loads(row["conflicts"]) or []
+            candidate = _deserialise_fact(safe_json_loads(row["candidate_fact"]) or {})
+            conflicts_raw = safe_json_loads(row["conflicts"]) or []
             conflicts = [_deserialise_candidate(c) for c in conflicts_raw if isinstance(c, dict)]
             out.append(
                 ContradictionReport(
@@ -601,7 +587,7 @@ class SqliteContinuityStore(ContinuityStore):
                     candidate_fact=candidate,
                     conflicts=conflicts,
                     resolved=bool(int(row["resolved"])),
-                    resolution=_loads(row["resolution"]) if row["resolution"] else None,
+                    resolution=safe_json_loads(row["resolution"]) if row["resolution"] else None,
                 )
             )
         return out
