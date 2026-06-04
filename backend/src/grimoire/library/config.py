@@ -1,8 +1,8 @@
 """Top-level Library YAML config (spec 18 §Configuration).
 
-Mirrors the WorldConfig shape: nested dataclasses with sensible defaults, an
-optional ``from_yaml`` loader. Threaded into :class:`LibraryService` and
-:class:`FileWatcher` at construction time.
+Nested pydantic models with sensible defaults and an optional ``from_yaml``
+loader. Threaded into :class:`LibraryService` and :class:`FileWatcher` at
+construction time.
 
 Spec items 14-17 in ``2026-05-18-library-remaining-design.md`` (the
 ``files.*_filename_pattern`` / ``files.encoding`` knobs) are intentionally
@@ -11,36 +11,46 @@ omitted: they are marked v2/deferred in the design.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from grimoire.files import load_yaml
 
-_PINNING_DEFAULTS: frozenset[str] = frozenset({"pinned", "track_latest"})
+
+def _expand_path(value: object) -> Path | None:
+    """Empty/missing -> None; otherwise an expanded path (``~`` resolved)."""
+    if not value:
+        return None
+    return Path(str(value)).expanduser()
 
 
-@dataclass(frozen=True, slots=True)
-class LibraryIndexingConfig:
+class LibraryIndexingConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     embed_on_index: bool = False
     embedding_provider: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class LibraryVersionPinningConfig:
-    # 'pinned' or 'track_latest'. Controls the default ``track_latest`` value
-    # used when set_composition fills in a missing flag on a new WorldRef.
-    default: str = "pinned"
+class LibraryVersionPinningConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    # Controls the default ``track_latest`` value used when set_composition
+    # fills in a missing flag on a new WorldRef.
+    default: Literal["pinned", "track_latest"] = "pinned"
     snapshot_on_bind: bool = True
 
 
-@dataclass(frozen=True, slots=True)
-class LibraryPromotionConfig:
+class LibraryPromotionConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     confirm_required: bool = False
 
 
-@dataclass(frozen=True, slots=True)
-class LibraryReclassificationConfig:
+class LibraryReclassificationConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     # Override for the audit-log path. ``None`` means
     # ``<data_root>/library/imports/reclassifications.jsonl``.
     audit_log: Path | None = None
@@ -50,21 +60,28 @@ class LibraryReclassificationConfig:
     # links past this window.
     undo_window_days: int = 30
 
+    @field_validator("audit_log", mode="before")
+    @classmethod
+    def _expand_audit_log(cls, value: object) -> Path | None:
+        return _expand_path(value)
 
-@dataclass(frozen=True, slots=True)
-class LibraryConfig:
+
+class LibraryConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     # ``None`` means "use <data_root>/library"; an absolute path overrides.
     root: Path | None = None
     watch: bool = True
     scan_on_startup: bool = True
-    indexing: LibraryIndexingConfig = field(default_factory=LibraryIndexingConfig)
-    version_pinning: LibraryVersionPinningConfig = field(
-        default_factory=LibraryVersionPinningConfig
-    )
-    promotion: LibraryPromotionConfig = field(default_factory=LibraryPromotionConfig)
-    reclassification: LibraryReclassificationConfig = field(
-        default_factory=LibraryReclassificationConfig
-    )
+    indexing: LibraryIndexingConfig = LibraryIndexingConfig()
+    version_pinning: LibraryVersionPinningConfig = LibraryVersionPinningConfig()
+    promotion: LibraryPromotionConfig = LibraryPromotionConfig()
+    reclassification: LibraryReclassificationConfig = LibraryReclassificationConfig()
+
+    @field_validator("root", mode="before")
+    @classmethod
+    def _expand_root(cls, value: object) -> Path | None:
+        return _expand_path(value)
 
     @property
     def default_track_latest(self) -> bool:
@@ -80,47 +97,7 @@ class LibraryConfig:
         # Accept either a top-level mapping or a {"library": {...}} envelope.
         if "library" in raw and isinstance(raw["library"], dict):
             raw = raw["library"]
-        return cls._from_mapping(raw)
-
-    @classmethod
-    def _from_mapping(cls, raw: dict[str, Any]) -> LibraryConfig:
-        idx = raw.get("indexing") or {}
-        pin = raw.get("version_pinning") or {}
-        prom = raw.get("promotion") or {}
-        reclass = raw.get("reclassification") or {}
-        default = str(pin.get("default") or "pinned")
-        if default not in _PINNING_DEFAULTS:
-            raise ValueError(
-                f"version_pinning.default must be one of {sorted(_PINNING_DEFAULTS)!r}, "
-                f"got {default!r}"
-            )
-        root_raw = raw.get("root")
-        root = Path(root_raw).expanduser() if root_raw else None
-        audit_log_raw = reclass.get("audit_log")
-        audit_log = Path(audit_log_raw).expanduser() if audit_log_raw else None
-        return cls(
-            root=root,
-            watch=bool(raw.get("watch", True)),
-            scan_on_startup=bool(raw.get("scan_on_startup", True)),
-            indexing=LibraryIndexingConfig(
-                embed_on_index=bool(idx.get("embed_on_index", False)),
-                embedding_provider=(
-                    str(idx["embedding_provider"]) if idx.get("embedding_provider") else None
-                ),
-            ),
-            version_pinning=LibraryVersionPinningConfig(
-                default=default,
-                snapshot_on_bind=bool(pin.get("snapshot_on_bind", True)),
-            ),
-            promotion=LibraryPromotionConfig(
-                confirm_required=bool(prom.get("confirm_required", False)),
-            ),
-            reclassification=LibraryReclassificationConfig(
-                audit_log=audit_log,
-                suggestion_threshold=float(reclass.get("suggestion_threshold", 0.6)),
-                undo_window_days=int(reclass.get("undo_window_days", 30)),
-            ),
-        )
+        return cls.model_validate(raw)
 
 
 __all__ = [
