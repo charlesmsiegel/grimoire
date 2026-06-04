@@ -10,7 +10,6 @@ Keyword search runs against ``facts_fts`` (and could be extended to
 
 from __future__ import annotations
 
-import json
 import struct
 from dataclasses import dataclass
 
@@ -219,14 +218,6 @@ async def keyword_search_library(
         )
         for row in rows
     ]
-
-
-def _decode_json(value: object) -> object:
-    if value is None or value == "":
-        return None
-    if isinstance(value, (dict, list)):
-        return value
-    return json.loads(value)
 
 
 __all__ = [

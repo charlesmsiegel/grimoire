@@ -45,6 +45,7 @@ from grimoire.scenes.storage import (
     scene_paths,
 )
 from grimoire.scenes.types import AuthorKind, Scene
+from grimoire.util import safe_json_dumps
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +79,6 @@ def _excerpt(body: str) -> str:
     if len(body) <= _BODY_EXCERPT_CHARS:
         return body
     return body[: _BODY_EXCERPT_CHARS - 1].rstrip() + "…"
-
-
-def _json_or_none(value: object | None) -> str | None:
-    if value is None:
-        return None
-    return json.dumps(value, sort_keys=True, default=str)
 
 
 def _threads_to_json(threads: list) -> str | None:
@@ -170,12 +165,12 @@ async def upsert_scene_row(
             scene.in_game_start.isoformat() if scene.in_game_start else None,
             scene.in_game_end.isoformat() if scene.in_game_end else None,
             scene.pov_character_ref,
-            _json_or_none(list(scene.present_character_refs)),
-            _json_or_none(list(scene.present_pc_refs)),
+            safe_json_dumps(list(scene.present_character_refs)),
+            safe_json_dumps(list(scene.present_pc_refs)),
             scene.final_summary,
             scene.running_summary,
-            _json_or_none(list(scene.key_beats)),
-            _json_or_none(list(scene.tags)),
+            safe_json_dumps(list(scene.key_beats)),
+            safe_json_dumps(list(scene.tags)),
             None,  # emotional_arc not modelled on dataclass Scene
             scene.post_count,
             _threads_to_json(scene.threads_introduced),

@@ -9,7 +9,6 @@ module set's extension labels, plus the closed core enum.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 
 from grimoire.storage.db import Database
 from grimoire.types.expressions import (
@@ -18,12 +17,9 @@ from grimoire.types.expressions import (
     VocabularyError,
     is_known_label,
 )
+from grimoire.util import now_iso
 
 logger = logging.getLogger(__name__)
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _record_from_row(row) -> ExpressionRecord:
@@ -81,7 +77,7 @@ class ExpressionStateService:
                 character_id,
             )
             return None
-        ts = set_at or _now_iso()
+        ts = set_at or now_iso()
         await self._db.execute(
             """
             INSERT INTO expression_state (

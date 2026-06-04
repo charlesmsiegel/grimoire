@@ -9,17 +9,14 @@ failure-rate window stays current.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Protocol
+
+from grimoire.util import now_iso
 
 
 class _DBLike(Protocol):
     async def execute(self, sql: str, params: tuple = ...) -> None: ...
     async def fetchone(self, sql: str, params: tuple = ...) -> object | None: ...
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 class AutoDisableState:
@@ -73,7 +70,7 @@ class AutoDisableState:
             "ON CONFLICT(provider_id, model, mode) DO UPDATE SET "
             "  total_calls = total_calls + 1, "
             "  failures = failures + excluded.failures",
-            (provider_id, model, mode, _now_iso(), 0 if success else 1),
+            (provider_id, model, mode, now_iso(), 0 if success else 1),
         )
         # If the latest write pushed us past the threshold, stamp disabled_at.
         threshold = self._threshold_for(mode)
@@ -93,7 +90,7 @@ class AutoDisableState:
             await self._db.execute(
                 "UPDATE extractor_mode_health "
                 "SET disabled_at=? WHERE provider_id=? AND model=? AND mode=?",
-                (_now_iso(), provider_id, model, mode),
+                (now_iso(), provider_id, model, mode),
             )
 
     async def re_enable(self, provider_id: str, model: str, mode: str) -> None:
@@ -103,7 +100,7 @@ class AutoDisableState:
         "fresh row" from "recently revived" without needing a separate
         audit log.
         """
-        now = _now_iso()
+        now = now_iso()
         await self._db.execute(
             "UPDATE extractor_mode_health "
             "SET re_enabled_at=?, total_calls=0, failures=0, "
