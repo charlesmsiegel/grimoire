@@ -10,10 +10,10 @@ typed values (``LibraryEntity``, ``WorldMeta``, ``Greeting``,
 from __future__ import annotations
 
 import json
-import re as _re
 from typing import Any
 
 from grimoire.event_bus import Event, EventBus
+from grimoire.files import slugify
 from grimoire.library.config import LibraryConfig
 from grimoire.library.errors import (
     LibraryConflictError,
@@ -1010,10 +1010,7 @@ def _json_equal(left: Any, right: Any) -> bool:
 
 
 def _slugify(value: str) -> str:
-    """Crude ASCII slugifier: lowercase, non-alphanum -> hyphens, collapse + trim."""
-    value = value.strip().lower()
-    value = _re.sub(r"[^a-z0-9]+", "-", value).strip("-")
-    return value or "entity"
+    return slugify(value, fallback="entity")
 
 
 def _lore_from_entity(entity: LibraryEntity) -> LoreEntry:

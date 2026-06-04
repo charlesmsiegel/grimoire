@@ -21,6 +21,7 @@ from grimoire.export.config import ExportConfig, ExportFiltersConfig
 from grimoire.export.errors import UnknownAdapterError
 from grimoire.export.snapshot import build_snapshot
 from grimoire.export.sources import DataSources
+from grimoire.files import slugify
 from grimoire.types.common import CampaignId, JsonSchema
 from grimoire.types.export import (
     ExportCapabilities,
@@ -299,16 +300,7 @@ class ExportService:
 
 
 def _slugify(text: str) -> str:
-    out: list[str] = []
-    last_dash = False
-    for ch in text.lower():
-        if ch.isalnum():
-            out.append(ch)
-            last_dash = False
-        elif not last_dash:
-            out.append("-")
-            last_dash = True
-    return "".join(out).strip("-")
+    return slugify(text, fallback="")
 
 
 __all__ = [

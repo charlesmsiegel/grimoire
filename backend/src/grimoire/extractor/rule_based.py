@@ -17,6 +17,7 @@ from datetime import timedelta
 from typing import Final
 
 from grimoire.extractor.config import ExtractorConfig
+from grimoire.files import slugify
 from grimoire.types.common import CampaignId, Duration, Scope
 from grimoire.types.state import DeltaKind, StateDelta
 
@@ -122,8 +123,7 @@ _ENTERING_LOCATION = re.compile(
 
 
 def _slug(text: str) -> str:
-    cleaned = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return cleaned[:40] or "emergent-location"
+    return slugify(text, max_len=40, fallback="emergent-location")
 
 
 # §5 Player-prose weather overrides. Each pattern maps to a WeatherKind.

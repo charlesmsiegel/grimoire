@@ -13,17 +13,15 @@ from __future__ import annotations
 
 import re
 
+from grimoire.files import slugify
 from grimoire.types.characters import CharacterData, CharacterRole, IngestOptions, VoiceAnchor
 
 from .errors import ImportError_
 from .ingest import ingest_character_card_v2
 
-_SLUG_RE = re.compile(r"[^a-z0-9]+")
-
 
 def _slugify(value: str) -> str:
-    slug = _SLUG_RE.sub("-", value.strip().lower()).strip("-")
-    return slug or "character"
+    return slugify(value, fallback="character")
 
 
 def parse_sillytavern(

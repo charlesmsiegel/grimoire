@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from grimoire.files import slugify
 from grimoire.types.common import CampaignId, EntityKind
 from grimoire.types.extraction import (
     EntityCandidate,
@@ -168,8 +169,7 @@ def _known_names(scene: Scene | None, snapshot: StateSnapshot | None) -> set[str
 
 
 def _slugify(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return slug or "unknown"
+    return slugify(name, fallback="unknown")
 
 
 def find_proper_noun_candidates(
