@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from grimoire.files import slugify
 from grimoire.library import LibraryService
 from grimoire.library.reclassify import _lore_entry_from_ingested, apply_mapping
 from grimoire.state_store import StateStore
@@ -35,8 +35,6 @@ from .view_cache import CharacterViewCache
 from .views import render_capsule, render_compressed, render_full, render_voice_only
 
 LLMCapsuleDrafter = Callable[[CharacterData], Awaitable[CapsuleDraft]]
-
-_LORE_SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
 class CharacterSheetManager:
@@ -868,7 +866,7 @@ def _slug_for_lore_entry(entry: IngestedLoreEntry, char_slug: str) -> str:
         candidates.append(entry.name)
     candidates.extend(entry.keys[:1])
     for candidate in candidates:
-        slug = _LORE_SLUG_RE.sub("-", candidate.strip().lower()).strip("-")
+        slug = slugify(candidate, fallback="")
         if slug:
             return slug
     return f"entry-{entry.source_index:02d}"

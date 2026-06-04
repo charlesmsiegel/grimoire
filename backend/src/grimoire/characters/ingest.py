@@ -39,6 +39,7 @@ from datetime import UTC, datetime
 from io import BytesIO
 from typing import Any
 
+from grimoire.files import slugify
 from grimoire.types.characters import (
     CharacterData,
     CharacterImage,
@@ -69,7 +70,6 @@ the ingestor directly.
 """
 
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
-_SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
 class LLMEnrichment(dict):
@@ -851,8 +851,7 @@ def strip_avatar_metadata(payload: bytes) -> bytes:
 
 
 def _slugify(value: str) -> str:
-    slug = _SLUG_RE.sub("-", value.strip().lower()).strip("-")
-    return slug or "character"
+    return slugify(value, fallback="character")
 
 
 def _coalesce(candidate: Any, fallback: str) -> str:
