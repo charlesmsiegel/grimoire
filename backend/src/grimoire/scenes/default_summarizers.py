@@ -13,13 +13,12 @@ are filled by the caller.
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 from typing import Protocol
 
 from grimoire.scenes.types import Post, Scene
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
+from grimoire.util import extract_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -98,25 +97,6 @@ def make_default_running_summarizer(
     return _summarize
 
 
-_JSON_FENCE = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
-
-
-def _extract_json(text: str) -> dict | None:
-    text = text.strip()
-    fence = _JSON_FENCE.search(text)
-    if fence is not None:
-        text = fence.group(1)
-    # Find the outermost JSON object.
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-    try:
-        return json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-
-
 def make_default_final_summarizer(
     gateway: _Gateway,
     *,
@@ -165,7 +145,7 @@ def make_default_final_summarizer(
         text = getattr(response, "text", None)
         if not isinstance(text, str) or not text.strip():
             return _trivial_summary(scene, posts), []
-        parsed = _extract_json(text)
+        parsed = extract_json_object(text)
         if parsed is None:
             return text.strip(), []
         summary = str(parsed.get("summary") or "").strip()
@@ -308,7 +288,7 @@ def make_adaptive_summarizer(
         text = getattr(response, "text", None)
         if not isinstance(text, str) or not text.strip():
             return running or _trivial_summary(scene, posts), []
-        parsed = _extract_json(text)
+        parsed = extract_json_object(text)
         if parsed is None:
             return text.strip(), []
         summary = str(parsed.get("summary") or "").strip()

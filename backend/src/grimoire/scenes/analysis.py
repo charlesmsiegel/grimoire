@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -19,6 +18,7 @@ from grimoire.scenes.types import Post, Scene, Thread
 from grimoire.types.common import CampaignId
 from grimoire.types.extraction import ExtractionResult
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
+from grimoire.util import extract_json_object
 
 PayloadParser = Callable[..., Any]
 SchemaFactory = Callable[[], dict]
@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TASK = "scene_analysis"
 _DEFAULT_MAX_TOKENS = 4096
 _FALLBACK_CONTEXT_WINDOW = 100_000
-_JSON_FENCE = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
 
 
 class SceneAnalysisResult(BaseModel):
@@ -99,21 +98,6 @@ def _post_window(posts: list[Post], n: int | None = None) -> str:
     for p in target:
         parts.append(f"[Post {p.order_in_scene} — {p.author_label}]\n{p.body.strip()}")
     return "\n\n".join(parts)
-
-
-def _extract_json(text: str) -> dict | None:
-    text = text.strip()
-    fence = _JSON_FENCE.search(text)
-    if fence is not None:
-        text = fence.group(1)
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-    try:
-        return json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
 
 
 def _build_system_prompt(schema: dict) -> str:
@@ -259,7 +243,7 @@ def make_scene_analyzer(
         if not isinstance(text, str) or not text.strip():
             return SceneAnalysisResult()
 
-        parsed = _extract_json(text)
+        parsed = extract_json_object(text)
         if parsed is None:
             return SceneAnalysisResult()
 
@@ -330,7 +314,7 @@ def make_adaptive_scene_analyzer(
         if not isinstance(text, str) or not text.strip():
             return SceneAnalysisResult()
 
-        parsed = _extract_json(text)
+        parsed = extract_json_object(text)
         if parsed is None:
             return SceneAnalysisResult()
 
@@ -382,7 +366,7 @@ def make_adaptive_scene_analyzer(
         if not isinstance(text, str) or not text.strip():
             return previous_summary or "", ExtractionResult()
 
-        parsed = _extract_json(text)
+        parsed = extract_json_object(text)
         if parsed is None:
             return previous_summary or "", ExtractionResult()
 
@@ -442,7 +426,7 @@ def make_adaptive_scene_analyzer(
         if not isinstance(text, str) or not text.strip():
             return accumulated_summary, [], [], []
 
-        parsed = _extract_json(text)
+        parsed = extract_json_object(text)
         if parsed is None:
             return accumulated_summary, [], [], []
 

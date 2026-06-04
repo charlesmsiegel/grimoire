@@ -14,6 +14,7 @@ from typing import Any
 
 _DEFAULT_ID_HEX_WIDTH = 12
 _SLUGIFY_ID_RE = re.compile(r"[^a-z0-9]+")
+_JSON_FENCE = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL)
 
 
 def new_id(prefix: str, *, length: int = _DEFAULT_ID_HEX_WIDTH) -> str:
@@ -78,6 +79,27 @@ def safe_json_dumps(value: Any) -> str | None:
     return json.dumps(value, sort_keys=True, default=str)
 
 
+def extract_json_object(text: str) -> dict | None:
+    """Pull the first JSON object out of LLM output, tolerating ``` fences.
+
+    Strips an optional Markdown code fence, then takes the substring from the
+    first ``{`` to the last ``}``. Returns ``None`` if no object is found or it
+    doesn't parse — callers treat that as "model didn't produce usable JSON".
+    """
+    text = text.strip()
+    fence = _JSON_FENCE.search(text)
+    if fence is not None:
+        text = fence.group(1)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+
+
 def canonicalize_character_ref(ref: str) -> str:
     """Collapse any recognized character-ref spelling to one canonical string.
 
@@ -121,6 +143,7 @@ def canonicalize_character_ref(ref: str) -> str:
 
 __all__ = [
     "canonicalize_character_ref",
+    "extract_json_object",
     "new_id",
     "now_iso",
     "parse_iso_datetime",
