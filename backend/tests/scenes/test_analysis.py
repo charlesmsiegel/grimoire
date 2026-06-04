@@ -12,7 +12,6 @@ import pytest
 from grimoire.extractor.llm_strategy import parse_llm_payload
 from grimoire.extractor.schema import output_schema
 from grimoire.scenes.analysis import (
-    _extract_json,
     _parse_analysis_response,
     _parse_threads,
     analysis_schema,
@@ -20,6 +19,7 @@ from grimoire.scenes.analysis import (
     make_scene_analyzer,
 )
 from grimoire.scenes.types import AuthorKind, Post, Scene
+from grimoire.util import extract_json_object
 
 
 class _FakeResponse:
@@ -103,16 +103,16 @@ def test_analysis_schema_extends_extraction():
 
 def test_extract_json_plain():
     raw = '{"summary": "hello"}'
-    assert _extract_json(raw) == {"summary": "hello"}
+    assert extract_json_object(raw) == {"summary": "hello"}
 
 
 def test_extract_json_fenced():
     raw = '```json\n{"summary": "hello"}\n```'
-    assert _extract_json(raw) == {"summary": "hello"}
+    assert extract_json_object(raw) == {"summary": "hello"}
 
 
 def test_extract_json_garbage():
-    assert _extract_json("not json at all") is None
+    assert extract_json_object("not json at all") is None
 
 
 # -- Thread parsing --------------------------------------------------------
