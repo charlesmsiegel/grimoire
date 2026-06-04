@@ -10,7 +10,6 @@ import asyncio
 import logging
 import os
 import shutil
-from collections.abc import Awaitable
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -27,6 +26,7 @@ from grimoire.lifecycle import QueueBundle
 
 if TYPE_CHECKING:
     from grimoire.storage import Database
+    from grimoire.watcher import EmbeddingQueue
 
 log = logging.getLogger(__name__)
 
@@ -89,14 +89,6 @@ def _seed_defaults(data_root: Path) -> None:
         log.info("seeded default %s", rel)
 
 
-async def _safe(name: str, coro: Awaitable[Any]) -> None:
-    """Await *coro*; swallow and log any exception."""
-    try:
-        await coro
-    except Exception:
-        log.exception("%s failed at startup", name)
-
-
 # ----------------------------------------------------------------------- #
 # Phase 1: content services (no LLM gateway required)
 # ----------------------------------------------------------------------- #
@@ -126,6 +118,10 @@ async def build_content_services(
     from grimoire.state_store import StateStore, StateStoreConfig
     from grimoire.world import WorldConfig, WorldService
 
+    if container.lifecycle is None:
+        from grimoire.lifecycle import LifecycleManager
+
+        container.lifecycle = LifecycleManager()
     lifecycle = container.lifecycle
 
     if container.event_bus is None:
@@ -242,6 +238,11 @@ async def build_content_services(
     if container.scene_indexer is not None:
         lifecycle.register_async("scene_indexer", container.scene_indexer)
 
+    if container.scene_ledger is None:
+        from grimoire.scenes.ledger import SceneLedger
+
+        container.scene_ledger = SceneLedger(db)
+
     if container.continuity is None:
         continuity_config = ContinuityConfig()
         container.continuity = ContinuityRegistry(
@@ -284,6 +285,12 @@ async def build_content_services(
         container.imagegen_health_prober = prober
     if container.imagegen_health_prober is not None:
         lifecycle.register_async("imagegen_health_prober", container.imagegen_health_prober)
+
+    # §8 Reload any image-generation jobs that were queued at the last shutdown.
+    try:
+        await container.imagegen.reload_pending_jobs()
+    except Exception:
+        log.exception("imagegen: reload_pending_jobs failed at startup")
 
 
 # ----------------------------------------------------------------------- #
@@ -453,6 +460,15 @@ async def build_llm_services(
             metrics=obs.metrics(),
         )
 
+    if container.context_inspector is None:
+        from grimoire.context.inspector import ContextInspector
+
+        container.context_inspector = ContextInspector(
+            builder=container.context_builder,
+            store=container.state_store,
+            observability=obs,
+        )
+
     if container.time_engine is None:
         container.time_engine = TimeEngineService(
             store=container.state_store,
@@ -563,16 +579,15 @@ async def build_play_services(
 async def start_background_workers(
     settings: Settings,
     container: ServiceContainer,
-) -> None:
-    """Seed defaults, start the file watcher, and launch background workers."""
+) -> EmbeddingQueue:
+    """Seed defaults and start the always-on background workers.
+
+    Returns the embedding queue so the deferred :func:`background_reconcile`
+    can re-enqueue rows that are missing embeddings.
+    """
     from grimoire.library import LibraryConfig
     from grimoire.mechanics.file_watcher import MechanicsFileWatcher
-    from grimoire.state_store import (
-        BackupScheduler,
-        EmbeddingWorker,
-        RetentionSweeper,
-        reenqueue_missing_embeddings,
-    )
+    from grimoire.state_store import BackupScheduler, EmbeddingWorker, RetentionSweeper
     from grimoire.watcher.watcher import FileWatcher
 
     lifecycle = container.lifecycle
@@ -584,7 +599,7 @@ async def start_background_workers(
     library_cfg = LibraryConfig.from_yaml(data_root / "config" / "library.yaml")
 
     if library_cfg.watch:
-        file_watcher = FileWatcher(
+        container.file_watcher = FileWatcher(
             data_root=data_root,
             store=container.state_store,
             bus=container.event_bus,
@@ -592,7 +607,6 @@ async def start_background_workers(
             config=library_cfg,
             embedding_queue=queues.embedding,
         )
-        container.file_watcher = file_watcher
 
     embedding_worker = EmbeddingWorker(
         store=container.state_store,
@@ -622,30 +636,78 @@ async def start_background_workers(
     container.backup_scheduler = backup_scheduler
     lifecycle.register_sync("backup_scheduler", backup_scheduler)
 
-    mechanics_watcher: MechanicsFileWatcher | None = None
     if container.mechanics.config.reload_on_file_change:
         mechanics_watcher = MechanicsFileWatcher(container.mechanics)
-    if mechanics_watcher is not None:
-        lifecycle.register_async("mechanics_watcher", mechanics_watcher)
+        try:
+            await mechanics_watcher.start()
+        except Exception:
+            log.exception("mechanics file watcher failed to start")
+        else:
+            lifecycle.register_async("mechanics_watcher", mechanics_watcher)
 
     if container.state_store_config.library.embed_on_index:
-        try:
-            await reenqueue_missing_embeddings(container.state_store, queues.embedding)
-        except Exception:
-            log.exception("reenqueue_missing_embeddings failed at startup")
         await embedding_worker.start()
     else:
         log.info("embedding worker disabled (embed_on_index=false)")
     await retention_sweeper.start()
 
-    coros: list[Awaitable[Any]] = []
-    if container.scene_indexer is not None:
-        coros.append(_safe("scene_backfill", container.scene_indexer.backfill()))
-    if container.imagegen is not None:
-        coros.append(_safe("imagegen_reload", container.imagegen.reload_pending_jobs()))
-    if container.file_watcher is not None and library_cfg.scan_on_startup:
-        coros.append(_safe("library_scan", container.file_watcher.scan_now()))
-    if mechanics_watcher is not None:
-        coros.append(_safe("mechanics_watcher", mechanics_watcher.start()))
-    if coros:
-        await asyncio.gather(*coros)
+    return queues.embedding
+
+
+# ----------------------------------------------------------------------- #
+# Phase 5: deferred reconciliation (backfill + library scan)
+# ----------------------------------------------------------------------- #
+
+
+async def background_reconcile(
+    container: ServiceContainer,
+    embedding_queue: EmbeddingQueue,
+    *,
+    scan_library: bool = True,
+    delay: float = 1.0,
+) -> None:
+    """Backfill the scene index and scan the library, then flip ``sync_status``.
+
+    Awaited inline when the container was pre-wired (tests need state ready
+    before the first request); scheduled as a background task on a cold start
+    so the API serves immediately. Each step is isolated so one failure still
+    lets the others run and the status still flips to ``"ready"``.
+    """
+    from grimoire.state_store import reenqueue_missing_embeddings
+
+    if delay:
+        await asyncio.sleep(delay)
+    errors: list[str] = []
+    try:
+        if container.scene_indexer is not None:
+            try:
+                await container.scene_indexer.backfill()
+            except Exception as exc:
+                log.exception("background scene indexer backfill failed")
+                errors.append(f"backfill: {exc}")
+
+        if scan_library and container.file_watcher is not None:
+            try:
+                await container.file_watcher.scan_now()
+            except Exception as exc:
+                log.exception("background library scan failed")
+                errors.append(f"scan: {exc}")
+
+            if (
+                container.state_store_config is not None
+                and container.state_store_config.library.embed_on_index
+            ):
+                try:
+                    await reenqueue_missing_embeddings(container.state_store, embedding_queue)
+                except Exception as exc:
+                    log.exception("reenqueue_missing_embeddings failed")
+                    errors.append(f"reenqueue: {exc}")
+
+        container.sync_status = "ready"
+        container.sync_error = "; ".join(errors) if errors else None
+        suffix = f" with errors: {errors}" if errors else ""
+        log.info("background reconciliation complete%s", suffix)
+    except Exception as exc:
+        log.exception("background reconciliation failed")
+        container.sync_status = "ready"
+        container.sync_error = f"{type(exc).__name__}: {exc}"
