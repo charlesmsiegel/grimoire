@@ -14,13 +14,13 @@ import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
 from typing import Protocol
 
 from grimoire.observability.config import HealthCheckConfig
 from grimoire.storage.db import Database
 from grimoire.types.common import HealthLevel, HealthStatus, SubscriptionId
 from grimoire.types.observability import HealthTarget
+from grimoire.util import now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ class HealthMonitorService:
                 level=HealthLevel.UNCONFIGURED,
                 target_id=target.id,
                 message="no probe registered",
-                checked_at=datetime.now(UTC).isoformat(),
+                checked_at=now_iso(),
             )
         else:
             _, fn = entry
@@ -105,10 +105,10 @@ class HealthMonitorService:
                     level=HealthLevel.UNHEALTHY,
                     target_id=target.id,
                     message=str(exc),
-                    checked_at=datetime.now(UTC).isoformat(),
+                    checked_at=now_iso(),
                 )
             if not status.checked_at:
-                status = status.model_copy(update={"checked_at": datetime.now(UTC).isoformat()})
+                status = status.model_copy(update={"checked_at": now_iso()})
             if not status.target_id:
                 status = status.model_copy(update={"target_id": target.id})
         await self._persist(target, status)
@@ -140,7 +140,7 @@ class HealthMonitorService:
                 status.level.value,
                 status.message,
                 json.dumps(status.details or {}),
-                status.checked_at or datetime.now(UTC).isoformat(),
+                status.checked_at or now_iso(),
             ),
         )
 

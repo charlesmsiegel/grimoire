@@ -11,7 +11,7 @@ migrations.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel
@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from grimoire.storage.db import Database
 from grimoire.types.common import CampaignId, TurnId
 from grimoire.types.observability import TurnAudit
+from grimoire.util import now_iso
 
 
 def _dump(value: Any) -> str:
@@ -211,7 +212,7 @@ class AuditStore:
                 review_ids,
                 side_effects,
                 errors,
-                audit.started_at.isoformat() if audit.started_at else datetime.now(UTC).isoformat(),
+                audit.started_at.isoformat() if audit.started_at else now_iso(),
             ),
         )
 

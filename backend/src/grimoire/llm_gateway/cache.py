@@ -10,9 +10,9 @@ from __future__ import annotations
 import array
 import asyncio
 import hashlib
-from datetime import UTC, datetime
 
 from grimoire.storage.db import Database
+from grimoire.util import now_iso
 
 _FLOAT_TYPECODE = "f"  # 32-bit float, native byte order
 
@@ -79,7 +79,7 @@ class EmbeddingCache:
     async def set_many(self, items: list[tuple[str, list[float]]], model_id: str) -> None:
         if not items:
             return
-        now = datetime.now(UTC).isoformat()
+        now = now_iso()
         async with self._write_lock, self._db.acquire() as conn:
             for text, vector in items:
                 await conn.execute(
@@ -100,7 +100,7 @@ class EmbeddingCache:
     async def _touch(self, text_hash: str, model_id: str) -> None:
         await self._db.execute(
             "UPDATE embedding_cache SET cached_at = ? WHERE text_hash = ? AND model_id = ?",
-            (datetime.now(UTC).isoformat(), text_hash, model_id),
+            (now_iso(), text_hash, model_id),
         )
 
     async def _touch_many(self, hashes: list[str], model_id: str) -> None:
@@ -110,7 +110,7 @@ class EmbeddingCache:
         await self._db.execute(
             f"UPDATE embedding_cache SET cached_at = ? "
             f"WHERE model_id = ? AND text_hash IN ({placeholders})",
-            (datetime.now(UTC).isoformat(), model_id, *hashes),
+            (now_iso(), model_id, *hashes),
         )
 
     async def _evict_if_needed(self, conn) -> None:

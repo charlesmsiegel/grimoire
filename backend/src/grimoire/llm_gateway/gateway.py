@@ -12,7 +12,6 @@ import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +44,7 @@ from grimoire.types.llm import (
 )
 from grimoire.types.observability import HealthTarget
 from grimoire.types.protocols import EmbeddingProvider, HealthMonitor, LLMProvider, Plugins
+from grimoire.util import now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -1635,7 +1635,7 @@ class LLMGatewayService:
     # ------------------------------------------------------------------ #
 
     async def health_check(self, provider_id: str) -> HealthStatus:
-        now_iso = datetime.now(UTC).isoformat()
+        now_str = now_iso()
         provider = self._plugins.get_llm_provider(
             provider_id
         ) or self._plugins.get_embedding_provider(provider_id)
@@ -1643,14 +1643,14 @@ class LLMGatewayService:
             return HealthStatus(
                 level=HealthLevel.UNCONFIGURED,
                 target_id=provider_id,
-                checked_at=now_iso,
+                checked_at=now_str,
             )
         probe = getattr(provider, "health_check", None)
         if probe is None:
             return HealthStatus(
                 level=HealthLevel.HEALTHY,
                 target_id=provider_id,
-                checked_at=now_iso,
+                checked_at=now_str,
             )
         try:
             result = await probe()
@@ -1659,19 +1659,19 @@ class LLMGatewayService:
                 level=HealthLevel.UNHEALTHY,
                 target_id=provider_id,
                 message=f"{type(exc).__name__}: {exc}",
-                checked_at=now_iso,
+                checked_at=now_str,
             )
         if isinstance(result, HealthStatus):
             return result.model_copy(
                 update={
                     "target_id": provider_id,
-                    "checked_at": result.checked_at or now_iso,
+                    "checked_at": result.checked_at or now_str,
                 }
             )
         return HealthStatus(
             level=HealthLevel.HEALTHY,
             target_id=provider_id,
-            checked_at=now_iso,
+            checked_at=now_str,
         )
 
     async def health_check_all(self) -> dict[str, HealthStatus]:

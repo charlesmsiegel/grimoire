@@ -8,11 +8,12 @@ same kind aggregate into a single entry with a count.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from grimoire.storage.db import Database
 from grimoire.types.observability import ErrorRecord
+from grimoire.util import now_iso
 
 
 class ErrorStore:
@@ -46,7 +47,7 @@ class ErrorStore:
                 err.message,
                 attribution,
                 payload,
-                err.timestamp.isoformat() if err.timestamp else datetime.now(UTC).isoformat(),
+                err.timestamp.isoformat() if err.timestamp else now_iso(),
             ),
         )
 

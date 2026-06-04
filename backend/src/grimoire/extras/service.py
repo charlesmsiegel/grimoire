@@ -61,10 +61,6 @@ class ExtrasSearchHit:
     value_text: str
 
 
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
 def _kind_str(kind: EntityKind | str) -> str:
     return kind.value if isinstance(kind, EntityKind) else str(kind)
 
@@ -180,7 +176,7 @@ class ExtrasService:
         projected = dict(current)
         extra = ExtraValue(
             value=value,
-            set_at=_now(),
+            set_at=datetime.now(UTC),
             set_by=actor,
             source_evidence=evidence,
             scope=scope,
@@ -772,7 +768,7 @@ def _decode_extras(raw: dict[str, Any]) -> dict[str, ExtraValue]:
         else:
             out[key] = ExtraValue(
                 value=entry,
-                set_at=_now(),
+                set_at=datetime.now(UTC),
                 set_by="legacy",
                 scope=ExtraScope.LIBRARY,
             )

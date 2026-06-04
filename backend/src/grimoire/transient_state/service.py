@@ -29,6 +29,7 @@ from grimoire.types.transient import (
     TransientValue,
     _ProvenanceMechanics,
 )
+from grimoire.util import now_iso
 
 _TABLE = {
     EntityKind.CHARACTER: "transient_character_state",
@@ -49,10 +50,6 @@ def _priority_for(provenance: Provenance | _ProvenanceMechanics | str) -> int:
     if raw == "extractor:auto":
         return 1
     return 0
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
 
 
 def _parse_dt(s: str | None) -> datetime | None:
@@ -76,7 +73,7 @@ def _row_to_value(row: Any) -> TransientValue:
         provenance=_parse_provenance(row["provenance"]),
         confidence=row["confidence"],
         source_post_id=row["source_post_id"],
-        created_at=_parse_dt(row["created_at"]) or _now(),
+        created_at=_parse_dt(row["created_at"]) or datetime.now(UTC),
         expires_at=_parse_dt(row["expires_at"]),
         in_game_at=_parse_dt(row["in_game_at"]),
         decayed=False,
@@ -107,14 +104,14 @@ class TransientStateService:
         for_observer: ObserverKind | None = None,
     ) -> TransientValue | dict[str, TransientValue] | None:
         table = _TABLE[entity_kind]
-        now_iso = _now().isoformat()
+        now_str = now_iso()
         if field is None:
             rows = await self.store.db.fetchall(
                 f"SELECT * FROM {table} "
                 "WHERE campaign_id=? AND entity_id=? "
                 "AND superseded_by IS NULL "
                 "AND (expires_at IS NULL OR expires_at > ?)",
-                (campaign_id, entity_id, now_iso),
+                (campaign_id, entity_id, now_str),
             )
             bundle = {r["field"]: _row_to_value(r) for r in rows}
             if for_observer is not None:
@@ -132,7 +129,7 @@ class TransientStateService:
             "WHERE campaign_id=? AND entity_id=? AND field=? "
             "AND superseded_by IS NULL "
             "AND (expires_at IS NULL OR expires_at > ?)",
-            (campaign_id, entity_id, field, now_iso),
+            (campaign_id, entity_id, field, now_str),
         )
         if row is None:
             return None
@@ -168,7 +165,7 @@ class TransientStateService:
             "AND superseded_by IS NULL "
             "AND (expires_at IS NULL OR expires_at > ?)"
         )
-        params: list[Any] = [campaign_id, *entity_ids, _now().isoformat()]
+        params: list[Any] = [campaign_id, *entity_ids, now_iso()]
         if fields:
             field_placeholders = ",".join("?" * len(fields))
             sql += f" AND field IN ({field_placeholders})"
@@ -231,9 +228,9 @@ class TransientStateService:
                         provenance_str,
                         source_post_id,
                         confidence,
-                        _now().isoformat(),
+                        now_iso(),
                         expires_at.isoformat() if expires_at else None,
-                        (in_game_at or _now()).isoformat(),
+                        (in_game_at or datetime.now(UTC)).isoformat(),
                     ),
                 )
                 new_id = cursor.lastrowid
@@ -271,14 +268,14 @@ class TransientStateService:
         reason: str = "user:reset",
     ) -> None:
         table = _TABLE[entity_kind]
-        now_iso = _now().isoformat()
+        now_str = now_iso()
         if field is None:
             await self.store.db.execute(
                 f"UPDATE {table} SET expires_at=? "
                 "WHERE campaign_id=? AND entity_id=? "
                 "AND superseded_by IS NULL "
                 "AND (expires_at IS NULL OR expires_at > ?)",
-                (now_iso, campaign_id, entity_id, now_iso),
+                (now_str, campaign_id, entity_id, now_str),
             )
         else:
             await self.store.db.execute(
@@ -286,7 +283,7 @@ class TransientStateService:
                 "WHERE campaign_id=? AND entity_id=? AND field=? "
                 "AND superseded_by IS NULL "
                 "AND (expires_at IS NULL OR expires_at > ?)",
-                (now_iso, campaign_id, entity_id, field, now_iso),
+                (now_str, campaign_id, entity_id, field, now_str),
             )
 
     async def history(
@@ -358,7 +355,7 @@ class TransientStateService:
                     provenance=_parse_provenance(r["l_prov"]),
                     confidence=r["l_conf"],
                     source_post_id=r["l_src"],
-                    created_at=_parse_dt(r["l_ca"]) or _now(),
+                    created_at=_parse_dt(r["l_ca"]) or datetime.now(UTC),
                     expires_at=_parse_dt(r["l_exp"]),
                     in_game_at=_parse_dt(r["l_iga"]),
                     decayed=False,
@@ -371,7 +368,7 @@ class TransientStateService:
                     provenance=_parse_provenance(r["w_prov"]),
                     confidence=r["w_conf"],
                     source_post_id=r["w_src"],
-                    created_at=_parse_dt(r["w_ca"]) or _now(),
+                    created_at=_parse_dt(r["w_ca"]) or datetime.now(UTC),
                     expires_at=_parse_dt(r["w_exp"]),
                     in_game_at=_parse_dt(r["w_iga"]),
                     decayed=False,
@@ -450,5 +447,5 @@ class TransientStateService:
         table = _TABLE[entity_kind]
         await self.store.db.execute(
             f"UPDATE {table} SET expires_at=? WHERE id=? AND superseded_by IS NULL",
-            (_now().isoformat(), transient_id),
+            (now_iso(), transient_id),
         )

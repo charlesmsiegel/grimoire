@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from grimoire.files.frontmatter import ParsedDocument, read_markdown, write_markdown
 from grimoire.state_store.paths import pc_profile_path, pc_profile_revisions_dir
+from grimoire.util import now_iso
 
 
 class PCProfile(BaseModel):
@@ -115,7 +116,7 @@ def _snapshot_revision(
     rev_dir.mkdir(parents=True, exist_ok=True)
     doc = read_markdown(current_path)
     fm = doc.frontmatter
-    ts_raw = fm.get("updated_at", datetime.now(UTC).isoformat())
+    ts_raw = fm.get("updated_at", now_iso())
     ts = str(ts_raw).replace(":", "-").replace("+", "_")
     dest = rev_dir / f"{ts}.md"
     shutil.copy2(current_path, dest)

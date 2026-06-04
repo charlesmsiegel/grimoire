@@ -10,10 +10,10 @@ from __future__ import annotations
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from grimoire.storage.db import Database
+from grimoire.util import now_iso
 
 MIGRATION_FILENAME_RE = re.compile(r"^(\d+)_([A-Za-z0-9][\w\-]*)\.sql$")
 DEFAULT_MIGRATIONS_DIR = Path(__file__).parent / "migrations"
@@ -119,7 +119,7 @@ async def apply_migrations(
                             raise
                 await conn.execute(
                     "INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, ?)",
-                    (migration.version, migration.name, datetime.now(UTC).isoformat()),
+                    (migration.version, migration.name, now_iso()),
                 )
                 await conn.execute("COMMIT")
             except Exception:

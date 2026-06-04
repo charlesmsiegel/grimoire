@@ -15,6 +15,7 @@ from grimoire.storage.db import Database
 from grimoire.types.common import CampaignId
 from grimoire.types.llm import LLMCallRecord
 from grimoire.types.observability import CostTotal, DailyCost
+from grimoire.util import now_iso
 
 
 class CostTrackerService:
@@ -37,7 +38,7 @@ class CostTrackerService:
                 call.cost_usd,
                 call.input_tokens,
                 call.output_tokens,
-                datetime.now(UTC).isoformat(),
+                now_iso(),
             ),
         )
 
