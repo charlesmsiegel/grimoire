@@ -11,6 +11,7 @@ from grimoire.state_store.indexers import make_library_id
 from grimoire.state_store.paths import parse_library_id
 from grimoire.types.common import EntityKind
 from grimoire.types.composition import CampaignRef, Composition, LibraryEntity, WorldRef
+from grimoire.util import json_equal
 
 if TYPE_CHECKING:
     from grimoire.event_bus import EventBus
@@ -224,7 +225,7 @@ class CompositionManager:
 
         current_fm = current.get("frontmatter") or {}
         current_body = current.get("body") or ""
-        fm_match = _json_equal(current_fm, promoted_frontmatter)
+        fm_match = json_equal(current_fm, promoted_frontmatter)
         body_match = current_body == promoted_body
 
         if fm_match and body_match:
@@ -433,16 +434,10 @@ def _maybe_json(value: Any) -> Any:
         return value
 
 
-def _json_equal(left: Any, right: Any) -> bool:
-    return json.dumps(left, sort_keys=True, default=str) == json.dumps(
-        right, sort_keys=True, default=str
-    )
-
-
 def _frontmatter_diff(current: dict, baseline: dict) -> dict:
     out: dict[str, Any] = {}
     for key, value in current.items():
-        if not _json_equal(value, baseline.get(key)):
+        if not json_equal(value, baseline.get(key)):
             out[key] = value
     for key in baseline:
         if key not in current:
