@@ -79,6 +79,11 @@ def safe_json_dumps(value: Any) -> str | None:
     return json.dumps(value, sort_keys=True, default=str)
 
 
+def json_equal(left: Any, right: Any) -> bool:
+    """Structural equality of two JSON-serializable values (key order ignored)."""
+    return safe_json_dumps(left) == safe_json_dumps(right)
+
+
 def extract_json_object(text: str) -> dict | None:
     """Pull the first JSON object out of LLM output, tolerating ``` fences.
 
@@ -144,6 +149,7 @@ def canonicalize_character_ref(ref: str) -> str:
 __all__ = [
     "canonicalize_character_ref",
     "extract_json_object",
+    "json_equal",
     "new_id",
     "now_iso",
     "parse_iso_datetime",

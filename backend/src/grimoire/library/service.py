@@ -40,7 +40,7 @@ from grimoire.types.composition import (
     WorldMeta,
 )
 from grimoire.types.world import LoreEntry
-from grimoire.util import parse_iso_datetime
+from grimoire.util import json_equal, parse_iso_datetime
 
 # Entity kinds that live inside a world directory.
 _World_ENTITY_KINDS: frozenset[str] = frozenset(
@@ -1002,13 +1002,6 @@ _SCOPE_BY_SOURCE = {
 }
 
 
-def _json_equal(left: Any, right: Any) -> bool:
-    """Structural equality after canonical JSON serialization."""
-    return json.dumps(left, sort_keys=True, default=str) == json.dumps(
-        right, sort_keys=True, default=str
-    )
-
-
 def _slugify(value: str) -> str:
     return slugify(value, fallback="entity")
 
@@ -1038,7 +1031,7 @@ def _frontmatter_diff(current: dict, baseline: dict) -> dict:
     """
     out: dict[str, Any] = {}
     for key, value in current.items():
-        if not _json_equal(value, baseline.get(key)):
+        if not json_equal(value, baseline.get(key)):
             out[key] = value
     for key in baseline:
         if key not in current:

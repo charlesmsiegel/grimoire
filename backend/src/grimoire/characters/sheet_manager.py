@@ -27,6 +27,7 @@ from grimoire.types.characters import (
 )
 from grimoire.types.common import CampaignId, EntityKind
 from grimoire.types.composition import LibraryEntity
+from grimoire.util import canonicalize_character_ref
 
 from .errors import CharacterNotFoundError
 from .imports import parse_plaintext
@@ -839,6 +840,10 @@ def _parse_character_ref(ref: str) -> _CharacterRefView:
 
     if not ref:
         raise CharactersError("empty character_ref")
+    # Normalize over-qualified / shorthand spellings before matching, to
+    # match _parse_character_ref in characters/service.py (previously this
+    # copy raised on refs the service path accepts).
+    ref = canonicalize_character_ref(ref)
     if ref.startswith("campaign:emergent/"):
         _, _, rest = ref.partition("campaign:emergent/")
         parts = rest.strip("/").split("/")
