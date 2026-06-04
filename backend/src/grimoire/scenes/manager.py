@@ -68,7 +68,7 @@ from grimoire.scenes.types import (
     Thread,
 )
 from grimoire.types.scene import CastChange
-from grimoire.util import canonicalize_character_ref
+from grimoire.util import canonicalize_character_ref, new_id
 
 logger = logging.getLogger(__name__)
 
@@ -1454,7 +1454,7 @@ class SceneManager:
                 raise KeyError(f"no post record for {post_id}")
             if not record.alternates:
                 implicit = Alternate(
-                    id=f"a_{uuid.uuid4().hex[:16]}",
+                    id=new_id("a", length=16),
                     post_id=post_id,
                     text=post.body,
                     delta_set_id="",

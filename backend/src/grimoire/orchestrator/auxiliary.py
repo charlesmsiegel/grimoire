@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +14,7 @@ from grimoire.scenes.types import AuthorKind as SceneAuthorKind
 from grimoire.types.common import CampaignId, CharacterRef
 from grimoire.types.extraction_modes import ExtractionMode
 from grimoire.types.state import StateSnapshot
+from grimoire.util import new_id
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +215,8 @@ class AuxiliaryCoordinator:
         if not post_id:
             raise OrchestratorError("rewrite_post auxiliary missing target_post_id")
         scene, post = await self._host._alternates.find_scene_and_post(post_id)
-        new_alt_id = f"a_{uuid.uuid4().hex[:16]}"
-        new_ds_id = f"ds_{uuid.uuid4().hex[:16]}"
+        new_alt_id = new_id("a", length=16)
+        new_ds_id = new_id("ds", length=16)
 
         deltas: list[Any] = []
         try:

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import uuid
-
 from grimoire.storage.db import Database
-from grimoire.util import now_iso
+from grimoire.util import new_id, now_iso
 
 
 class SceneLedger:
@@ -22,7 +20,7 @@ class SceneLedger:
         proposed_location: str | None = None,
         proposed_cast: str | None = None,
     ) -> str:
-        item_id = f"ledger-{uuid.uuid4().hex[:12]}"
+        item_id = new_id("ledger")
         await self._db.execute(
             """
             INSERT INTO scene_ledger

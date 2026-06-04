@@ -8,11 +8,9 @@ pending changes are ephemeral review state, not durable campaign content.
 
 from __future__ import annotations
 
-import uuid
-
 from grimoire.storage.db import Database
 from grimoire.types.scene import CastChange, PendingCastChange
-from grimoire.util import now_iso
+from grimoire.util import new_id, now_iso
 
 
 def _row_to_model(row) -> PendingCastChange:
@@ -47,7 +45,7 @@ class CastChangeStore:
         confidence: float = 0.0,
         turn_id: str | None = None,
     ) -> str:
-        item_id = f"cc-{uuid.uuid4().hex[:12]}"
+        item_id = new_id("cc")
         await self._db.execute(
             """
             INSERT INTO pending_cast_changes
