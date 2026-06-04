@@ -3,19 +3,25 @@
 Only the knobs that actually flow through to the service are surfaced here.
 Plugin-specific knobs (e.g. ``diffusers.active_model``) live in the plugin's
 ``manifest.yaml`` ``config_schema`` and are not duplicated here.
+
+The public shape is flat (``config.caching_enabled``); the YAML is nested
+(``caching.enabled``). ``from_yaml`` does the pure key remap, then pydantic
+owns all coercion, defaults, and validation.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from grimoire.files import load_yaml
 
 
-@dataclass(frozen=True, slots=True)
-class ImageGenConfig:
+class ImageGenConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     default_backend: str | None = None
     queue_max_concurrent_per_backend: int = 1
     queue_persist_pending: bool = False
@@ -30,6 +36,11 @@ class ImageGenConfig:
     thumbnails_quality: int = 85
     storage_image_format: str = "PNG"
 
+    @field_validator("thumbnails_format", "storage_image_format")
+    @classmethod
+    def _normalize_format(cls, value: str) -> str:
+        return value.upper()
+
     @classmethod
     def from_yaml(cls, path: Path) -> ImageGenConfig:
         """Load top-level config; return defaults if the file is missing."""
@@ -38,28 +49,30 @@ class ImageGenConfig:
         raw = load_yaml(path) or {}
         if not isinstance(raw, dict):
             return cls()
-        return cls._from_mapping(raw)
+        return cls.model_validate(_flatten(raw))
 
-    @classmethod
-    def _from_mapping(cls, raw: dict[str, Any]) -> ImageGenConfig:
-        queue = raw.get("queue") or {}
-        caching = raw.get("caching") or {}
-        thumbs = raw.get("thumbnails") or {}
-        storage = raw.get("storage") or {}
-        size_raw = thumbs.get("size") or (256, 256)
-        if isinstance(size_raw, list | tuple) and len(size_raw) == 2:
-            size = (int(size_raw[0]), int(size_raw[1]))
-        else:
-            size = (256, 256)
-        return cls(
-            default_backend=raw.get("default_backend") or None,
-            queue_max_concurrent_per_backend=int(queue.get("max_concurrent_per_backend") or 1),
-            queue_persist_pending=bool(queue.get("persist_pending", False)),
-            caching_enabled=bool(caching.get("enabled", True)),
-            caching_cache_dir=caching.get("cache_dir") or None,
-            caching_max_entries=int(caching.get("max_entries", 256)),
-            thumbnails_size=size,
-            thumbnails_format=str(thumbs.get("format") or "JPEG").upper(),
-            thumbnails_quality=int(thumbs.get("quality") or 85),
-            storage_image_format=str(storage.get("image_format") or "PNG").upper(),
-        )
+
+def _flatten(raw: dict[str, Any]) -> dict[str, Any]:
+    """Remap the nested YAML sections onto the flat field names.
+
+    Only keys actually present are emitted, so anything omitted falls back to
+    the field default. Empty strings collapse to "omitted" (matching the old
+    ``... or None`` handling for the optional string knobs).
+    """
+    queue = raw.get("queue") or {}
+    caching = raw.get("caching") or {}
+    thumbs = raw.get("thumbnails") or {}
+    storage = raw.get("storage") or {}
+    candidates = {
+        "default_backend": raw.get("default_backend"),
+        "queue_max_concurrent_per_backend": queue.get("max_concurrent_per_backend"),
+        "queue_persist_pending": queue.get("persist_pending"),
+        "caching_enabled": caching.get("enabled"),
+        "caching_cache_dir": caching.get("cache_dir"),
+        "caching_max_entries": caching.get("max_entries"),
+        "thumbnails_size": thumbs.get("size"),
+        "thumbnails_format": thumbs.get("format"),
+        "thumbnails_quality": thumbs.get("quality"),
+        "storage_image_format": storage.get("image_format"),
+    }
+    return {key: value for key, value in candidates.items() if value not in (None, "")}
