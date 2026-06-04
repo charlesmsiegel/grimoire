@@ -56,6 +56,7 @@ from grimoire.types.imagegen import (
     JobStatus,
 )
 from grimoire.types.protocols import LLMGateway
+from grimoire.util import now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -221,10 +222,6 @@ def _new_image_id() -> str:
 
 def _new_job_id() -> str:
     return f"job_{uuid.uuid4().hex[:12]}"
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
 
 
 def _backend_info(
@@ -516,7 +513,7 @@ class ImageGenService:
             request=request,
             status=JobStatus.QUEUED,
             priority=priority,
-            queued_at=_now(),
+            queued_at=datetime.now(UTC),
             scene_id=scene_id,
             post_id=post_id,
         )
@@ -541,7 +538,7 @@ class ImageGenService:
                     request.model_dump_json(),
                     scene_id,
                     post_id,
-                    _now().isoformat(),
+                    now_iso(),
                 ),
             )
         await handle.queue.put(_QueueEntry(job_id=job_id))
@@ -603,7 +600,7 @@ class ImageGenService:
                 await self.store.db.execute(
                     "UPDATE imagegen_jobs SET status = 'failed', error = ?, "
                     "finished_at = ? WHERE id = ?",
-                    ("interrupted by shutdown", _now().isoformat(), job_id),
+                    ("interrupted by shutdown", now_iso(), job_id),
                 )
                 continue
             request = GenerationRequest.model_validate_json(row["request_json"])
@@ -614,7 +611,7 @@ class ImageGenService:
                 request=request,
                 status=JobStatus.QUEUED,
                 priority=int(row["priority"]),
-                queued_at=_now(),
+                queued_at=datetime.now(UTC),
                 scene_id=row["scene_id"],
                 post_id=row["post_id"],
             )
@@ -628,7 +625,7 @@ class ImageGenService:
                     job_id,
                     status=JobStatus.FAILED.value,
                     error=job.error,
-                    finished_at=_now(),
+                    finished_at=datetime.now(UTC),
                 )
                 continue
             self._ensure_handle(backend_id)
@@ -743,7 +740,7 @@ class ImageGenService:
                 for job in self._jobs.values()
                 if job.campaign_id == campaign_id and (status is None or job.status == status)
             ]
-        jobs.sort(key=lambda j: (-j.priority, j.queued_at or _now()))
+        jobs.sort(key=lambda j: (-j.priority, j.queued_at or datetime.now(UTC)))
         return jobs
 
     async def cancel_job(self, job_id: str) -> None:
@@ -755,7 +752,7 @@ class ImageGenService:
                 return
             was_running = job.status == JobStatus.RUNNING
             job.status = JobStatus.CANCELLED
-            job.finished_at = _now()
+            job.finished_at = datetime.now(UTC)
             handle = self._handles.get(job.backend)
             if handle is not None:
                 handle._pending_jobs.discard(job_id)
@@ -763,7 +760,7 @@ class ImageGenService:
         if token is not None:
             token.set()
         await self._update_persistent_job(
-            job_id, status=JobStatus.CANCELLED.value, finished_at=_now()
+            job_id, status=JobStatus.CANCELLED.value, finished_at=datetime.now(UTC)
         )
         await self._emit(events.IMAGEGEN_JOB_FAILED, {"job_id": job_id, "reason": "cancelled"})
 
@@ -1178,7 +1175,7 @@ class ImageGenService:
                     continue
                 handle._pending_jobs.discard(job_id)
                 job.status = JobStatus.RUNNING
-                job.started_at = _now()
+                job.started_at = datetime.now(UTC)
             await self._update_persistent_job(
                 job_id, status=JobStatus.RUNNING.value, started_at=job.started_at
             )
@@ -1204,7 +1201,7 @@ class ImageGenService:
                     # caller already saw `imagegen_job_failed`.
                     if job.status != JobStatus.CANCELLED:
                         job.status = JobStatus.FAILED
-                        job.finished_at = _now()
+                        job.finished_at = datetime.now(UTC)
                         job.error = str(exc)
                 if job.status == JobStatus.FAILED:
                     await self._update_persistent_job(
@@ -1227,7 +1224,7 @@ class ImageGenService:
                     # while the backend was still running; respect it.
                     if job.status != JobStatus.CANCELLED:
                         job.status = JobStatus.COMPLETE
-                        job.finished_at = _now()
+                        job.finished_at = datetime.now(UTC)
                         job.result = result
                 if job.status == JobStatus.COMPLETE:
                     await self._update_persistent_job(
@@ -1368,7 +1365,7 @@ class ImageGenService:
         )
         thumb_path.write_bytes(thumb_bytes)
 
-        now_iso = _now().isoformat()
+        now_str = now_iso()
         metadata_payload = {
             "id": image_id,
             "campaign_id": job.campaign_id,
@@ -1384,7 +1381,7 @@ class ImageGenService:
             "height": job.request.height,
             "backend": result.backend,
             "model": result.model,
-            "created_at": now_iso,
+            "created_at": now_str,
             "duration_ms": result.duration_ms,
             "user_starred": False,
             "tags": [],
@@ -1417,7 +1414,7 @@ class ImageGenService:
                 result.backend,
                 result.model,
                 int(result.seed),
-                now_iso,
+                now_str,
                 0,
                 json.dumps([]),
             ),

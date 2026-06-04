@@ -9,10 +9,10 @@ pending changes are ephemeral review state, not durable campaign content.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 
 from grimoire.storage.db import Database
 from grimoire.types.scene import CastChange, PendingCastChange
+from grimoire.util import now_iso
 
 
 def _row_to_model(row) -> PendingCastChange:
@@ -65,7 +65,7 @@ class CastChangeStore:
                 evidence,
                 confidence,
                 turn_id,
-                datetime.now(UTC).isoformat(),
+                now_iso(),
             ),
         )
         return item_id

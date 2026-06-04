@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 
 from grimoire.storage.db import Database
+from grimoire.util import now_iso
 
 
 class SceneLedger:
@@ -36,7 +36,7 @@ class SceneLedger:
                 summary,
                 greeting_id,
                 source,
-                datetime.now(UTC).isoformat(),
+                now_iso(),
                 proposed_location,
                 proposed_cast,
             ),

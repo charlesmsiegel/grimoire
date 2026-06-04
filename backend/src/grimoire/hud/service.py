@@ -18,7 +18,6 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
 from grimoire.hud.config import HudConfig, HudConfigService
@@ -31,6 +30,7 @@ from grimoire.types.hud import (
     WidgetSnapshot,
     WidgetStatus,
 )
+from grimoire.util import now_iso
 
 log = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ class HudService:
         return AggregateResult(
             campaign_id=campaign_id,
             scene_id=scene_id,
-            generated_at=datetime.now(UTC).isoformat(),
+            generated_at=now_iso(),
             widgets=list(snapshots),
         )
 

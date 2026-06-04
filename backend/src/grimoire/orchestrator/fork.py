@@ -7,7 +7,7 @@ import logging
 import sqlite3
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from grimoire import events
@@ -22,6 +22,7 @@ from grimoire.scenes.manager import SceneManager
 from grimoire.state_store.fork import bulk_copy, fingerprint, replay_to_turn
 from grimoire.types.common import CampaignId
 from grimoire.types.orchestrator import ForkCampaignResult
+from grimoire.util import now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +176,7 @@ class ForkCoordinator:
             if make_active:
                 await db.execute(
                     "UPDATE campaigns SET last_played_at = ? WHERE id = ?",
-                    (datetime.now(UTC).isoformat(), new_campaign_id),
+                    (now_iso(), new_campaign_id),
                 )
         except sqlite3.IntegrityError as exc:
             await self._bus.emit(
@@ -253,7 +254,7 @@ class ForkCoordinator:
             "id": new_id,
             "name": new_name,
             "description": description if description is not None else src["description"],
-            "created_at": datetime.now(UTC).isoformat(),
+            "created_at": now_iso(),
             "last_played_at": None,
             "forked_from_campaign_id": source_id,
             "forked_at_post_id": fork_at_post_id,
@@ -299,7 +300,7 @@ class ForkCoordinator:
                 fork_at_post_id,
                 description,
                 1 if make_active else 0,
-                datetime.now(UTC).isoformat(),
+                now_iso(),
             ),
         )
         await self._bus.emit(
@@ -361,7 +362,7 @@ class ForkCoordinator:
             async with self._store.db.acquire() as conn:
                 cur = await conn.execute(
                     "UPDATE pending_forks SET started_at = ? WHERE id = ? AND started_at IS NULL",
-                    (datetime.now(UTC).isoformat(), pending_id),
+                    (now_iso(), pending_id),
                 )
                 claimed = cur.rowcount
                 await cur.close()
@@ -378,13 +379,13 @@ class ForkCoordinator:
                 )
                 await self._store.db.execute(
                     "UPDATE pending_forks SET completed_at = ? WHERE id = ?",
-                    (datetime.now(UTC).isoformat(), pending_id),
+                    (now_iso(), pending_id),
                 )
                 results.append(result)
             except Exception as exc:
                 await self._store.db.execute(
                     "UPDATE pending_forks SET completed_at = ?, error = ? WHERE id = ?",
-                    (datetime.now(UTC).isoformat(), str(exc), pending_id),
+                    (now_iso(), str(exc), pending_id),
                 )
                 logger.warning("pending fork %s failed: %s", pending_id, exc)
         return results

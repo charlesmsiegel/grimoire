@@ -10,11 +10,11 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import UTC, datetime
 
 from grimoire.storage.db import Database
 from grimoire.types.common import CampaignId, TurnId
 from grimoire.types.llm import CompletionRequest, TokenUsage
+from grimoire.util import now_iso
 
 
 def request_hash(request: CompletionRequest) -> str:
@@ -99,7 +99,7 @@ class LLMRequestLog:
                 error,
                 retry_json,
                 timeout_json,
-                datetime.now(UTC).isoformat(),
+                now_iso(),
             ),
         )
         return record_id

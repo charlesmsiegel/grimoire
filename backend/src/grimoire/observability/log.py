@@ -15,12 +15,13 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from grimoire.observability.config import DebugLogConfig
 from grimoire.storage.db import Database
 from grimoire.types.observability import LogEvent, LogLevel, LogQuery
+from grimoire.util import now_iso
 
 LEVEL_ORDER: dict[LogLevel, int] = {
     LogLevel.DEBUG: 10,
@@ -125,7 +126,7 @@ class LogStore:
                 event.level.value,
                 message,
                 json.dumps(body),
-                event.timestamp.isoformat() if event.timestamp else datetime.now(UTC).isoformat(),
+                event.timestamp.isoformat() if event.timestamp else now_iso(),
             ),
         )
         self._notify(event)

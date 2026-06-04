@@ -21,7 +21,6 @@ import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -34,6 +33,7 @@ from grimoire.types.llm import (
     CompletionResponse,
     TokenUsage,
 )
+from grimoire.util import now_iso
 
 
 class ReplayMode(StrEnum):
@@ -237,7 +237,7 @@ class RecordReplayLLM:
                 "finish_reason": response.finish_reason,
                 "usage": response.usage.model_dump(),
                 "latency_ms": response.latency_ms,
-                "recorded_at": datetime.now(UTC).isoformat(),
+                "recorded_at": now_iso(),
             },
         }
         if chunks is not None:
