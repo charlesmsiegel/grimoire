@@ -1,169 +1,165 @@
 ---
 name: python-simplifier
-description: Simplify overly complex Python code. Use when user asks to simplify, refactor, clean up, make more readable, reduce complexity, improve code quality, find code smells, detect duplicates, or analyze coupling in Python code. Triggers on requests like "simplify this code", "this is too complex", "make this more readable", "refactor this", "clean this up", "find issues", "analyze this codebase", or when reviewing code that exhibits complexity anti-patterns. For Django-specific analysis, use the django-simplifier skill instead.
+description: Critically review and simplify Python code — aggressively. Use whenever the user wants to simplify, refactor, clean up, make more readable, reduce complexity, improve code quality, find code smells, find bugs from shared mutable state or bad exception handling, detect duplication or data clumps, fix naming, remove dead code or over-engineering, enforce consistent patterns, or audit a Python codebase. Triggers on "simplify this", "this is too complex", "make this cleaner/more readable", "refactor this", "clean this up", "review my code", "find issues", "is this over-engineered", "analyze this codebase", or any review where the goal is simpler, more consistent, more correct Python. Combines deterministic AST detectors (run them) with judgment-based review guides in references/ (load them). Use this even when the user just pastes Python and asks "what do you think?". For Django-specific analysis, use the django-simplifier skill instead.
 ---
 
 # Python Code Simplifier
 
-Transform complex, hard-to-maintain Python code into clean, readable, idiomatic solutions.
+A critical-reviewer skill. Its job is to make Python **simpler, more consistent, and
+more correct** — by deleting what isn't needed, flattening what's tangled, fixing
+real bugs, and converging the codebase on one good way of doing each thing.
 
-## Analysis Scripts
+## Reviewer mindset (read this first)
 
-```bash
-# Comprehensive analysis (runs all checks)
-python scripts/analyze_all.py /path/to/project
+Approach the code as **too complex until proven otherwise.** The default question is
+not "is this OK?" but **"why isn't this simpler?"** Be specific and unsparing. Two
+hard limits keep the criticism honest:
 
-# Individual analyzers:
-python scripts/analyze_complexity.py .       # Cyclomatic/cognitive complexity
-python scripts/find_code_smells.py .         # Mutable defaults, bare excepts, etc.
-python scripts/find_overengineering.py .     # YAGNI violations, unused abstractions
-python scripts/find_dead_code.py .           # Unused imports, functions, variables
-python scripts/find_unpythonic.py .          # Non-idiomatic patterns
-python scripts/find_coupling_issues.py .     # Feature envy, low cohesion
-python scripts/find_duplicates.py .          # Structural duplicate detection
+1. **Behavior is sacred.** Never change what the code does. If it isn't tested, write
+   a characterization test that pins current behavior *before* refactoring.
+2. **Simpler, not cleverer.** Aim for code a tired developer reads at a glance — not
+   a showcase of techniques. A clever line that needs a comment has failed.
 
-# JSON output for CI/tooling
-python scripts/analyze_all.py . --format json > report.json
-```
+Bias toward: **deleting** code, **flattening** structure, the **standard library**
+over hand-rolled machinery, **one canonical pattern** applied everywhere, and small
+behavior-preserving steps. The burden of proof is on complexity, not on its removal.
+
+## How the skill works: two pronged
+
+- **Deterministic scripts** find what can be found mechanically (AST/tokenize, low
+  false-positive). **Run them first** and triage their output before reviewing by hand.
+- **Judgment guides** in `references/` cover what needs a reading brain — whether an
+  abstraction earns its keep, whether duplication is real, whether a pattern is the
+  right one applied consistently. **Load the relevant guide** when doing that review.
 
 ## Workflow
 
-1. **Analyze**: Run `analyze_all.py` to identify all issues
-2. **Prioritize**: Address high-severity issues (🔴) first
-3. **Simplify**: Apply patterns below incrementally
-4. **Verify**: Ensure simplified code is functionally equivalent
+1. **Run the analyzer.** `python scripts/analyze_all.py <path>` (add `--format json`
+   for tooling). Triage deterministic findings first — don't spend judgment on what a
+   tool already caught.
+2. **Find the hot files.** Effort follows *change frequency*, not line count:
+   ```bash
+   git log --since="1 year ago" --name-only --pretty=format: \
+     | grep '\.py$' | sort | uniq -c | sort -rn | head -30
+   ```
+   High-churn × high-complexity = top priority. **Don't refactor cold code.**
+3. **Review the hot files with the judgment guides open** (see the reference index).
+4. **Produce a findings artifact.** One smell → one entry → one small PR. Turn any
+   script's JSON into a list/cards/JSON file: `python scripts/analyze_all.py .
+   --format json | python scripts/format_findings.py`. This is the deliverable — see
+   *Output & ticketing* below; never create tickets in a tracker without asking.
+5. **Ratchet.** When a whole class of problem is cleared, turn on the check that keeps
+   it gone (a Ruff rule, a complexity gate, one of these scripts in CI).
 
-## Simplification Principles
+## Output & ticketing
 
-1. **YAGNI**: Don't add abstractions until needed
-2. **Preserve behavior**: Simplification ≠ changing functionality
-3. **One change at a time**: Incremental is safer
-4. **Readability over cleverness**: Clear beats "smart"
-5. **Keep related code together**: Locality matters
+The deliverable is always an **artifact, never a side effect.** Produce one of: a
+findings **list** (markdown table), detailed **cards**, a **JSON** array, or the full
+report from `analyze_all.py` — saved as a file in the workspace or returned inline.
+`scripts/format_findings.py` renders any detector's JSON into these shapes.
 
-## Common Simplification Patterns
+This skill does **not** create tickets in any system on its own. When the user wants
+findings filed as real tickets, **ask which ticket software or MCP to use** (e.g.
+Jira, Linear, GitHub Issues, Asana, or a connected MCP) and create them through that
+tool — never assume or fabricate a tracker. Absent that, hand back the artifact and
+let the user import it.
 
-### Extract and Name
+## Deterministic scripts
 
-```python
-# Before: Complex inline condition
-if user.age >= 18 and user.country in ALLOWED and not user.banned:
+```bash
+python scripts/analyze_all.py /path           # Run everything, unified report
+python scripts/analyze_all.py . --format json > report.json
 
-# After: Named condition
-is_eligible = user.age >= 18 and user.country in ALLOWED and not user.banned
-if is_eligible:
+# Complexity & structure
+python scripts/analyze_complexity.py .         # Cyclomatic/cognitive complexity, nesting, size
+python scripts/find_duplicates.py .            # AST-normalized duplicate blocks
+python scripts/find_coupling_issues.py .       # Feature envy, low cohesion (LCOM), message chains
+
+# Smells, dead code, over-engineering
+python scripts/find_code_smells.py .           # Mutable defaults, bare excepts, magic numbers, god classes
+python scripts/find_dead_code.py .             # Unused imports/functions/params, unreachable code
+python scripts/find_overengineering.py .       # Single-impl interfaces, factories, thin wrappers (YAGNI)
+python scripts/find_unpythonic.py .            # range(len), == True/None, manual index tracking
+
+# Correctness bugs (these find real bugs, not style)
+python scripts/find_mutation_hazards.py .      # Mutable class attrs, modify-during-iteration, mutated defaults
+python scripts/find_exception_issues.py .      # raise-without-from, unreachable except, BaseException, assert-validation
+python scripts/find_global_state.py .          # Mutated module globals, global-rebinding functions
+
+# Design & simplification
+python scripts/find_parameter_objects.py .     # Data clumps: parameter groups recurring across functions
+python scripts/find_boolean_params.py .        # Boolean flag parameters at definitions
+python scripts/find_return_issues.py .         # Inconsistent returns, if/else-returns-bool
+python scripts/find_loop_simplifications.py .  # Loop→comprehension, += string concat, manual any()/all()
+python scripts/find_naming_issues.py .         # Shadowed builtins, non-snake_case funcs, non-PascalCase classes
+python scripts/find_comment_smells.py .        # Commented-out code, TODO/FIXME inventory
+
+# Format findings as a portable artifact (does NOT create tickets)
+python scripts/format_findings.py report.json                       # markdown list
+<any detector> --format json | python scripts/format_findings.py --format cards
+<any detector> --format json | python scripts/format_findings.py --format json --min-severity high
 ```
 
-### Early Returns
+All detectors share one interface: `--format text|json`, `--ignore type1,type2`, and
+🔴/🟡/🟢 severities. JSON output is a flat list of findings; `analyze_all.py`
+aggregates them. They are deliberately conservative (false negatives over false
+positives) so the output stays trustworthy.
 
-```python
-# Before: Deep nesting
-def process(data):
-    if data:
-        if data.valid:
-            if data.ready:
-                return compute(data)
-    return None
+## Reference index (load on demand)
 
-# After: Guard clauses
-def process(data):
-    if not data or not data.valid or not data.ready:
-        return None
-    return compute(data)
-```
+Keep `SKILL.md` lean; pull in depth only when a review needs it.
 
-### Comprehensions
+| Load this when… | File |
+|---|---|
+| Starting any review — the master stance, workflow, critical-questions checklist, triage | `references/critical-review-guide.md` |
+| Deciding whether an abstraction should exist; DRY vs the wrong abstraction; YAGNI | `references/overengineering-and-abstraction.md` |
+| You see design smells by reading (feature envy, divergent change, shotgun surgery, primitive obsession, temporal coupling, god class, message chains) | `references/refactoring-catalog.md` |
+| Judging names, comments, and function shape; deleting comments that lie | `references/naming-comments-readability.md` |
+| Choosing the right Python pattern AND making the codebase use it consistently | `references/patterns-and-consistency.md` |
+| You want concrete before/after idiom swaps | `references/python-idioms.md` |
 
-```python
-# Before: Manual loop
-result = []
-for item in items:
-    if item.active:
-        result.append(item.name)
+## Over-engineering anti-patterns (quick reference)
 
-# After: List comprehension
-result = [item.name for item in items if item.active]
-```
-
-### Dictionary Techniques
-
-```python
-# Before: Verbose key checking
-if key in d:
-    value = d[key]
-else:
-    value = default
-
-# After: get() with default
-value = d.get(key, default)
-
-# Before: Manual grouping
-groups = {}
-for item in items:
-    if item.category not in groups:
-        groups[item.category] = []
-    groups[item.category].append(item)
-
-# After: defaultdict
-from collections import defaultdict
-groups = defaultdict(list)
-for item in items:
-    groups[item.category].append(item)
-```
-
-### Context Managers
-
-```python
-# Before: Manual cleanup
-f = open('file.txt')
-try:
-    data = f.read()
-finally:
-    f.close()
-
-# After: with statement
-with open('file.txt') as f:
-    data = f.read()
-```
-
-## Over-Engineering Anti-Patterns
-
-| Pattern | Problem | Solution |
-|---------|---------|----------|
-| Single-impl interface | Abstract class with one subclass | Merge or wait for need |
-| Unnecessary factory | Factory that creates one type | Direct instantiation |
-| Premature strategy | Strategy pattern with one strategy | Simple function |
-| Thin wrapper | Class that just delegates | Use wrapped class directly |
+| Pattern | Problem | Fix |
+|---|---|---|
+| Single-impl interface/ABC | Abstraction over one thing | Merge; a mock is not a second impl |
+| Unnecessary factory | Builds one type | Direct instantiation |
+| Premature strategy | One strategy | A function |
+| Thin wrapper / middle man | Only forwards calls | Use the wrapped object |
 | Speculative generality | Code for "future needs" | Delete it (YAGNI) |
-| Deep inheritance | 4+ levels of inheritance | Composition over inheritance |
+| Config never varied | A param with one value | Hardcode; drop the param |
+| Deep inheritance | 4+ levels / reuse-by-inheritance | Composition |
 
-## Code Smells Quick Reference
+## Code smells (quick reference → fix)
 
-| Smell | Detection | Fix |
-|-------|-----------|-----|
-| Mutable default | `def f(x=[])` | Use `None`, create inside |
-| Bare except | `except:` | `except Exception:` |
-| God class | 15+ methods, 10+ attrs | Split into focused classes |
-| Long function | 50+ lines | Extract helper functions |
-| Deep nesting | 4+ levels | Early returns, extract |
-| Feature envy | Method uses other class more | Move method |
-| Magic numbers | Unexplained numeric literals | Named constants |
+| Smell | Fix |
+|---|---|
+| Mutable default `def f(x=[])` | Default `None`, create inside |
+| Mutated shared mutable (class attr / global / default) | Encapsulate or make per-instance |
+| Bare/broad except, swallowed error, `raise` without `from` | Catch narrow, chain with `from`, never `pass` |
+| God class / long function / deep nesting | Extract class/method; guard clauses |
+| Feature envy / message chains | Move method; hide delegate |
+| Data clump (params travelling together) | Bundle into a dataclass |
+| Boolean flag parameter | Split the function or use an enum |
+| if/elif type-switch | Dispatch dict or polymorphism |
+| Magic numbers/strings | Named constants / enums |
+| Commented-out code | Delete it (git remembers) |
 
-## Script Reference
+## When NOT to simplify
 
-| Script | What It Detects |
-|--------|-----------------|
-| `analyze_complexity.py` | Cyclomatic complexity, cognitive complexity, nesting depth, function length, parameter count, class size |
-| `find_code_smells.py` | Mutable defaults, bare excepts, magic numbers, type comparisons, god classes, data classes, boolean blindness |
-| `find_overengineering.py` | Single-implementation interfaces, unused abstractions, unnecessary factories/builders, thin wrappers, premature strategies |
-| `find_dead_code.py` | Unused imports, unused functions/classes, unused parameters, unreachable code, constant conditions |
-| `find_unpythonic.py` | `range(len())`, `== True/False/None`, swallowed exceptions, manual index tracking |
-| `find_coupling_issues.py` | Feature envy, low cohesion (LCOM), message chains, middle man classes |
-| `find_duplicates.py` | Structurally similar code blocks using AST normalization |
+- Untested code — write a characterization test first, *then* refactor.
+- Hot paths — measure before trading clarity for speed.
+- Code being replaced or retired soon.
+- Complexity genuinely forced by an external API or a real, present requirement.
+- Cold code that never changes and blocks nothing — leave it; fix what churns.
 
-## When NOT to Simplify
+## Relationship to Ruff and type checkers
 
-- Working legacy code with no tests
-- Performance-critical hot paths (measure first)
-- Code that will be replaced soon
-- External API constraints requiring complexity
+These scripts complement linters; they don't replace them. Some detectors overlap
+Ruff rule sets — naming (`N`), flake8-builtins (`A`), commented-out code (`ERA`),
+TODOs (`TD`), some return/loop simplifications (`RET`, `SIM`, `PERF`), boolean traps
+(`FBT`). If the repo already runs those Ruff rules, disable the matching detector via
+`--ignore` to avoid double-reporting. The unique value here is the **bug-finding and
+design detectors** (mutation hazards, exception chaining, global state, data clumps,
+coupling, duplication) plus the **judgment guides** — which no linter provides.
+```
