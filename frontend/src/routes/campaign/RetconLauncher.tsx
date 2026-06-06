@@ -112,7 +112,12 @@ export function RetconLauncher({
 
   if (step === "fork-nudge") {
     return (
-      <div className="retcon-launcher-modal" role="dialog" aria-modal aria-label="Fork before retcon?">
+      <div
+        className="retcon-launcher-modal"
+        role="dialog"
+        aria-modal
+        aria-label="Fork before retcon?"
+      >
         <p>
           This is a substantial change ({subsequentModelPostCount} posts will replay). Fork the
           campaign first?
@@ -173,7 +178,12 @@ export function RetconLauncher({
 
   // step === "edit"
   return (
-    <div className="retcon-launcher-modal" role="dialog" aria-modal aria-label="Edit post for retcon">
+    <div
+      className="retcon-launcher-modal"
+      role="dialog"
+      aria-modal
+      aria-label="Edit post for retcon"
+    >
       <label className="retcon-launcher-label">
         New post text
         <textarea

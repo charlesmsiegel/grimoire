@@ -28,12 +28,7 @@ afterEach(() => {
 describe("RetconReplay", () => {
   it("renders the [n of N] indicator and the current row", () => {
     render(
-      <RetconReplay
-        campaignId="c1"
-        batchId="rb_x"
-        initialState={makeView()}
-        onClose={() => {}}
-      />,
+      <RetconReplay campaignId="c1" batchId="rb_x" initialState={makeView()} onClose={() => {}} />,
     );
     expect(screen.getByText("[3 of 5]")).toBeInTheDocument();
     expect(screen.getByText("alt: a_new")).toBeInTheDocument();
@@ -46,12 +41,7 @@ describe("RetconReplay", () => {
       .spyOn(campaignApi, "acceptRetconReplay")
       .mockResolvedValue(makeView({ current_index: 3, current_post_id: "p_5" }));
     render(
-      <RetconReplay
-        campaignId="c1"
-        batchId="rb_x"
-        initialState={makeView()}
-        onClose={() => {}}
-      />,
+      <RetconReplay campaignId="c1" batchId="rb_x" initialState={makeView()} onClose={() => {}} />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Accept" }));
     await waitFor(() => expect(spy).toHaveBeenCalledWith("c1", "rb_x"));
@@ -63,12 +53,7 @@ describe("RetconReplay", () => {
       .spyOn(campaignApi, "tryAgainRetconReplay")
       .mockResolvedValue(makeView({ current_alternate_id: "a_retry" }));
     render(
-      <RetconReplay
-        campaignId="c1"
-        batchId="rb_x"
-        initialState={makeView()}
-        onClose={() => {}}
-      />,
+      <RetconReplay campaignId="c1" batchId="rb_x" initialState={makeView()} onClose={() => {}} />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(spy).toHaveBeenCalledWith("c1", "rb_x"));
@@ -80,12 +65,7 @@ describe("RetconReplay", () => {
       makeView({ completed: true, cancelled_at_post_id: "p_4" }),
     );
     render(
-      <RetconReplay
-        campaignId="c1"
-        batchId="rb_x"
-        initialState={makeView()}
-        onClose={() => {}}
-      />,
+      <RetconReplay campaignId="c1" batchId="rb_x" initialState={makeView()} onClose={() => {}} />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(await screen.findByRole("button", { name: "Close" })).toBeInTheDocument();
@@ -100,12 +80,7 @@ describe("RetconReplay", () => {
         }),
     );
     render(
-      <RetconReplay
-        campaignId="c1"
-        batchId="rb_x"
-        initialState={makeView()}
-        onClose={() => {}}
-      />,
+      <RetconReplay campaignId="c1" batchId="rb_x" initialState={makeView()} onClose={() => {}} />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Accept" }));
     expect(screen.getByRole("button", { name: "Accept" })).toBeDisabled();

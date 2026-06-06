@@ -9,7 +9,11 @@ function snap(overrides: Partial<WidgetSnapshot> = {}): WidgetSnapshot {
     id: "core.drift-alerts",
     status: "ok",
     data: [
-      { id: "a1", character_ref: "library:worlds/wod/characters/winifred", text: "winifred drifting" },
+      {
+        id: "a1",
+        character_ref: "library:worlds/wod/characters/winifred",
+        text: "winifred drifting",
+      },
     ],
     error: null,
     stale: false,

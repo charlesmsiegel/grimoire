@@ -286,10 +286,9 @@ export const observabilityApi = {
   },
 
   turnDeltas(turnId: string, signal?: AbortSignal): Promise<TurnDeltaDiff> {
-    return api.get<TurnDeltaDiff>(
-      `/api/observability/turns/${encodeURIComponent(turnId)}/deltas`,
-      { signal },
-    );
+    return api.get<TurnDeltaDiff>(`/api/observability/turns/${encodeURIComponent(turnId)}/deltas`, {
+      signal,
+    });
   },
 
   healthLatest: (signal?: AbortSignal) =>

@@ -133,25 +133,31 @@ function base(campaignId: string) {
 
 export const inspectorApi = {
   preview(campaignId: string, args: PreviewArgs, signal?: AbortSignal): Promise<PreviewResponse> {
-    return api.post(`${base(campaignId)}/preview`, {
-      player_input: args.playerInput,
-      session_id: args.sessionId,
-      pc_ref: args.pcRef ?? null,
-    }, { signal });
+    return api.post(
+      `${base(campaignId)}/preview`,
+      {
+        player_input: args.playerInput,
+        session_id: args.sessionId,
+        pc_ref: args.pcRef ?? null,
+      },
+      { signal },
+    );
   },
 
   getPreview(campaignId: string, handle: string, sessionId: string): Promise<PreviewDetail> {
-    return api.get(
-      `${base(campaignId)}/preview/${encodeURIComponent(handle)}`,
-      { query: { session_id: sessionId } },
-    );
+    return api.get(`${base(campaignId)}/preview/${encodeURIComponent(handle)}`, {
+      query: { session_id: sessionId },
+    });
   },
 
-  explain(campaignId: string, handle: string, sessionId: string): Promise<ContextSourceExplanation[]> {
-    return api.get(
-      `${base(campaignId)}/preview/${encodeURIComponent(handle)}/explain`,
-      { query: { session_id: sessionId } },
-    );
+  explain(
+    campaignId: string,
+    handle: string,
+    sessionId: string,
+  ): Promise<ContextSourceExplanation[]> {
+    return api.get(`${base(campaignId)}/preview/${encodeURIComponent(handle)}/explain`, {
+      query: { session_id: sessionId },
+    });
   },
 
   pin(campaignId: string, args: PinArgs): Promise<{ pin_id: string; kind: "pin" | "exclude" }> {
@@ -171,12 +177,7 @@ export const inspectorApi = {
     return api.get(`${base(campaignId)}/pins`);
   },
 
-  diff(
-    campaignId: string,
-    a: string,
-    b: string,
-    sessionId: string | null,
-  ): Promise<ContextDiff> {
+  diff(campaignId: string, a: string, b: string, sessionId: string | null): Promise<ContextDiff> {
     return api.post(`${base(campaignId)}/diff`, {
       a,
       b,

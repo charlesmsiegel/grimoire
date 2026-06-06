@@ -45,9 +45,7 @@ interface CatalogOption {
 
 export function CompositionView() {
   const { campaignId = "" } = useParams();
-  const composition = useApi(
-    useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
-  );
+  const composition = useApi(useCallback(() => viewsApi.getComposition(campaignId), [campaignId]));
   const worlds = useApi(useCallback(() => viewsApi.listWorlds(), []));
   const mechanics = useApi(useCallback(() => viewsApi.installedMechanics(), []));
   const styleGuides = useApi(useCallback(() => viewsApi.listStyleGuides(), []));
@@ -67,12 +65,8 @@ export function CompositionView() {
                 initial={comp}
                 catalog={worldsList}
                 mechanicsList={mechanics.status === "ok" ? mechanics.data : []}
-                styleGuides={
-                  styleGuides.status === "ok" ? styleGuides.data.map(asOption) : []
-                }
-                imagePresets={
-                  imagePresets.status === "ok" ? imagePresets.data.map(asOption) : []
-                }
+                styleGuides={styleGuides.status === "ok" ? styleGuides.data.map(asOption) : []}
+                imagePresets={imagePresets.status === "ok" ? imagePresets.data.map(asOption) : []}
               />
             )}
           </Loading>
@@ -217,9 +211,7 @@ function CompositionEditor({
           {reorderedRefs.map((ref, idx) => (
             <li
               key={ref.world_id}
-              className={
-                dragIndex === idx ? "world-ref world-ref-dragging" : "world-ref"
-              }
+              className={dragIndex === idx ? "world-ref world-ref-dragging" : "world-ref"}
               draggable
               onDragStart={(e) => {
                 setDragIndex(idx);
@@ -243,11 +235,7 @@ function CompositionEditor({
               onDragEnd={() => setDragIndex(null)}
             >
               <div className="world-ref-head">
-                <span
-                  className="drag-handle"
-                  aria-hidden="true"
-                  title="Drag to reorder"
-                >
+                <span className="drag-handle" aria-hidden="true" title="Drag to reorder">
                   ⠿
                 </span>
                 <span className="priority">{idx + 1}.</span>
@@ -372,9 +360,7 @@ function CompositionEditor({
         )}
       </div>
 
-      {diffOpenFor && (
-        <DiffPreviewModal hint={diffOpenFor} onClose={() => setDiffOpenFor(null)} />
-      )}
+      {diffOpenFor && <DiffPreviewModal hint={diffOpenFor} onClose={() => setDiffOpenFor(null)} />}
     </div>
   );
 }
@@ -468,10 +454,7 @@ function DiffPreviewModal({ hint, onClose }: { hint: UpgradeHint; onClose: () =>
       aria-labelledby="diff-title"
       onClick={onClose}
     >
-      <div
-        className="modal-panel diff-modal"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="modal-panel diff-modal" onClick={(e) => e.stopPropagation()}>
         <header>
           <h3 id="diff-title">
             Diff: {hint.world_id} v{hint.bound} → v{hint.latest}
@@ -495,8 +478,7 @@ function DiffPreviewModal({ hint, onClose }: { hint: UpgradeHint; onClose: () =>
 }
 
 function DiffRenderer({ diff }: { diff: WorldDiff }) {
-  const nothing =
-    diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0;
+  const nothing = diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0;
   if (nothing) {
     return <p className="muted">No changes detected between these versions.</p>;
   }

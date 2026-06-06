@@ -2,11 +2,7 @@ import { useState } from "react";
 
 import { patchCampaign } from "../../../api/wizard";
 import { SaveIndicator } from "./SaveIndicator";
-import {
-  type CampaignRecord,
-  errorMessage,
-  useAutoSavedResource,
-} from "./shared";
+import { type CampaignRecord, errorMessage, useAutoSavedResource } from "./shared";
 
 export function GeneralTab({
   campaign,

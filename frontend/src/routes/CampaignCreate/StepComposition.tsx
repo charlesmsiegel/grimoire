@@ -62,8 +62,8 @@ export function StepComposition({ draft, update, worlds, loading, error }: Props
     <div className="wizard-step">
       <h3>Step 2 — Composition</h3>
       <p className="wizard-step-help">
-        Pick one or more library worlds. Higher priority refs override lower ones during
-        resolution. Uncheck a kind to exclude it from this world.
+        Pick one or more library worlds. Higher priority refs override lower ones during resolution.
+        Uncheck a kind to exclude it from this world.
       </p>
 
       {loading && <p className="wizard-meta">Loading worlds…</p>}

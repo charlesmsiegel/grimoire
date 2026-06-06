@@ -48,9 +48,7 @@ describe("usePlayStreamEvents — alternate_added", () => {
 
     h.captured?.({ type: "alternate_added" });
 
-    expect(dispatch).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "stream-end" }),
-    );
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "stream-end" }));
     expect(refresh).toHaveBeenCalled();
   });
 });

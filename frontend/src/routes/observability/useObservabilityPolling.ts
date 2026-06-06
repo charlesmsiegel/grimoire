@@ -9,10 +9,7 @@ import { useEffect, useRef } from "react";
  *   handle its own failure UX; we don't want a transient fetch error to
  *   tear down the polling loop).
  */
-export function useObservabilityPolling(
-  callback: () => Promise<void>,
-  intervalMs: number,
-): void {
+export function useObservabilityPolling(callback: () => Promise<void>, intervalMs: number): void {
   const cbRef = useRef(callback);
   cbRef.current = callback;
 

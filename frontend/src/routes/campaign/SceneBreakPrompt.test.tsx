@@ -39,11 +39,12 @@ describe("SceneBreakPrompt", () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    fetchSpy = vi.fn(async () =>
-      new Response(
-        JSON.stringify({ resolved: true, turn_id: "t_42", choice: "continue" }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+    fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ resolved: true, turn_id: "t_42", choice: "continue" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
     );
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
   });

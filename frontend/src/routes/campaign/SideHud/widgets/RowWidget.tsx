@@ -18,9 +18,12 @@ export function RowWidget({ snapshot, onRefresh }: Props) {
   let body: React.ReactNode;
   if (snapshot.status === "ok") {
     const scalar = primaryScalar(snapshot.data);
-    body = scalar !== null ? <span className="hud-row-value">{scalar}</span> : (
-      <span className="hud-row-value hud-row-empty">—</span>
-    );
+    body =
+      scalar !== null ? (
+        <span className="hud-row-value">{scalar}</span>
+      ) : (
+        <span className="hud-row-value hud-row-empty">—</span>
+      );
   } else if (snapshot.status === "hidden") {
     return null;
   } else {

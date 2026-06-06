@@ -19,9 +19,7 @@ const enc = encodeURIComponent;
 
 export const pcProfileApi = {
   get: (campaignId: string, characterRef: string) =>
-    api.get<PCProfilePayload>(
-      `/api/campaigns/${enc(campaignId)}/pcs/${enc(characterRef)}/profile`,
-    ),
+    api.get<PCProfilePayload>(`/api/campaigns/${enc(campaignId)}/pcs/${enc(characterRef)}/profile`),
 
   save: (campaignId: string, characterRef: string, profile: PCProfilePayload) =>
     api.put<PCProfilePayload>(

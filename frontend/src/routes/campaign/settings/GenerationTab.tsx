@@ -23,10 +23,9 @@ export function GenerationTab({ campaignId }: { campaignId: string }) {
   return (
     <div className="settings-form">
       <p className="wizard-step-help">
-        Per-campaign overrides for the language model's generation parameters.
-        Leave a field blank to use the app-wide default (currently 4096 max
-        output tokens, temperature 1.0). Raise <code>max_tokens</code> if long
-        narrator responses are being cut off.
+        Per-campaign overrides for the language model's generation parameters. Leave a field blank
+        to use the app-wide default (currently 4096 max output tokens, temperature 1.0). Raise{" "}
+        <code>max_tokens</code> if long narrator responses are being cut off.
       </p>
       {!ready && <p className="wizard-meta">Loading saved settings…</p>}
       <label className="wizard-field">

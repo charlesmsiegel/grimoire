@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  createDefaultFields,
-  getDescriptor,
-  managedKeys,
-  primaryLabelKey,
-} from "../entitySchemas";
+import { createDefaultFields, getDescriptor, managedKeys, primaryLabelKey } from "../entitySchemas";
 import type { EntityKind } from "../../../api/library";
 import characterProps from "./fixtures/character-schema-properties.json";
 import locationProps from "./fixtures/location-schema-properties.json";

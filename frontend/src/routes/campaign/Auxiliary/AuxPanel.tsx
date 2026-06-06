@@ -9,7 +9,11 @@
 
 import { useCallback, useState } from "react";
 
-import { auxiliaryApi, type AcceptAuxiliaryResponse, type AuxiliaryResult } from "../../../api/auxiliary";
+import {
+  auxiliaryApi,
+  type AcceptAuxiliaryResponse,
+  type AuxiliaryResult,
+} from "../../../api/auxiliary";
 
 const KIND_LABEL: Record<AuxiliaryResult["kind"], string> = {
   impersonate_pc: "Draft",

@@ -2,10 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { configApi } from "../../../api/config";
 import { pluginsApi, type PluginModelInfo } from "../../../api/library";
-import {
-  type PluginSummary,
-  fetchInstalledPlugins,
-} from "../../../api/wizard";
+import { type PluginSummary, fetchInstalledPlugins } from "../../../api/wizard";
 import { cleanRoutes, type RoutingValue } from "../../campaignRouting";
 import { SaveIndicator } from "./SaveIndicator";
 import { errorMessage, useAutoSavedResource } from "./shared";
@@ -20,17 +17,9 @@ const LLM_TASKS = [
   "validation",
 ] as const;
 
-const EMBEDDING_TASKS = [
-  "embed:context",
-  "library.embed",
-] as const;
+const EMBEDDING_TASKS = ["embed:context", "library.embed"] as const;
 
-const IMAGEGEN_TASKS = [
-  "scene_open",
-  "portrait",
-  "location",
-  "combat",
-] as const;
+const IMAGEGEN_TASKS = ["scene_open", "portrait", "location", "combat"] as const;
 
 type RoutingKind = "llm" | "embedding" | "imagegen";
 
@@ -258,10 +247,9 @@ export function RoutingTab({ campaignId }: { campaignId: string }) {
   return (
     <div className="settings-form">
       <p className="wizard-step-help">
-        Heavy handles generation (narrator, summaries, rewrites). Light
-        handles classification and short transforms (drift checks,
-        scene-break, translate). Embedding handles vector embeddings.
-        Leave a field blank to use the app-wide default.
+        Heavy handles generation (narrator, summaries, rewrites). Light handles classification and
+        short transforms (drift checks, scene-break, translate). Embedding handles vector
+        embeddings. Leave a field blank to use the app-wide default.
       </p>
       {!ready && <p className="wizard-meta">Loading saved settings…</p>}
       <label className="wizard-field">
@@ -274,9 +262,7 @@ export function RoutingTab({ campaignId }: { campaignId: string }) {
               : "e.g. deepseek.deepseek-v4-pro"
           }
           value={value.heavy ?? ""}
-          onChange={(e) =>
-            setValue((prev) => ({ ...prev, heavy: e.target.value.trim() || null }))
-          }
+          onChange={(e) => setValue((prev) => ({ ...prev, heavy: e.target.value.trim() || null }))}
           disabled={!ready}
         />
       </label>
@@ -290,9 +276,7 @@ export function RoutingTab({ campaignId }: { campaignId: string }) {
               : "e.g. deepseek.deepseek-v4-flash"
           }
           value={value.light ?? ""}
-          onChange={(e) =>
-            setValue((prev) => ({ ...prev, light: e.target.value.trim() || null }))
-          }
+          onChange={(e) => setValue((prev) => ({ ...prev, light: e.target.value.trim() || null }))}
           disabled={!ready}
         />
       </label>
@@ -301,9 +285,7 @@ export function RoutingTab({ campaignId }: { campaignId: string }) {
         <input
           type="text"
           placeholder={
-            appDefaults.embedding
-              ? `App default: ${appDefaults.embedding}`
-              : "e.g. voyage.voyage-3"
+            appDefaults.embedding ? `App default: ${appDefaults.embedding}` : "e.g. voyage.voyage-3"
           }
           value={value.embedding ?? ""}
           onChange={(e) =>

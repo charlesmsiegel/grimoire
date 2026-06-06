@@ -29,9 +29,7 @@ export function ForkDialog({
   onClose,
   onForked,
 }: ForkDialogProps) {
-  const [mode, setMode] = useState<"current" | "earlier">(
-    defaultPostId ? "earlier" : "current",
-  );
+  const [mode, setMode] = useState<"current" | "earlier">(defaultPostId ? "earlier" : "current");
   const [postId, setPostId] = useState<string>(defaultPostId ?? "");
   const [newName, setNewName] = useState<string>("");
   const [newId, setNewId] = useState<string>("");
@@ -154,21 +152,12 @@ export function ForkDialog({
 
         <label className="fork-dialog-field">
           <span>New campaign id</span>
-          <input
-            type="text"
-            value={newId}
-            onChange={(e) => setNewId(e.target.value)}
-            required
-          />
+          <input type="text" value={newId} onChange={(e) => setNewId(e.target.value)} required />
         </label>
 
         <label className="fork-dialog-field">
           <span>Describe the divergence (optional)</span>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            rows={3}
-          />
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
         </label>
 
         <label className="fork-dialog-checkbox">

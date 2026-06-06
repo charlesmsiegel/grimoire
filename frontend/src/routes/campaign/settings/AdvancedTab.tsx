@@ -28,9 +28,7 @@ export function AdvancedTab({ campaignId }: { campaignId: string }) {
         <input
           type="checkbox"
           checked={value.debug_log}
-          onChange={(e) =>
-            setValue((prev) => ({ ...prev, debug_log: e.target.checked }))
-          }
+          onChange={(e) => setValue((prev) => ({ ...prev, debug_log: e.target.checked }))}
           disabled={!ready}
         />
         <span>Verbose debug log for this campaign</span>

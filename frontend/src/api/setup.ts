@@ -13,6 +13,5 @@ export interface SetupStatus {
 
 export const setupApi = {
   status: () => api.get<SetupStatus>("/api/setup/status"),
-  setCompleted: (completed: boolean) =>
-    api.post<SetupStatus>("/api/setup/status", { completed }),
+  setCompleted: (completed: boolean) => api.post<SetupStatus>("/api/setup/status", { completed }),
 };

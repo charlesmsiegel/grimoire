@@ -11,9 +11,7 @@ const enc = encodeURIComponent;
 
 export const newSceneApi = {
   suggest: (campaignId: string) =>
-    api.post<SuggestResponse>(
-      `/api/campaigns/${enc(campaignId)}/scenes/suggest`,
-    ),
+    api.post<SuggestResponse>(`/api/campaigns/${enc(campaignId)}/scenes/suggest`),
 
   preview: (
     campaignId: string,
@@ -23,11 +21,7 @@ export const newSceneApi = {
       custom_text?: string;
       greeting_id?: string;
     },
-  ) =>
-    api.post<PreviewResponse>(
-      `/api/campaigns/${enc(campaignId)}/scenes/preview`,
-      body,
-    ),
+  ) => api.post<PreviewResponse>(`/api/campaigns/${enc(campaignId)}/scenes/preview`, body),
 
   start: (
     campaignId: string,
@@ -43,18 +37,12 @@ export const newSceneApi = {
       `/api/campaigns/${enc(campaignId)}/scene-ledger${status ? `?status=${enc(status)}` : ""}`,
     ),
 
-  updateLedger: (
-    campaignId: string,
-    itemId: string,
-    status: "active" | "dismissed",
-  ) =>
+  updateLedger: (campaignId: string, itemId: string, status: "active" | "dismissed") =>
     api.patch<{ id: string; status: string }>(
       `/api/campaigns/${enc(campaignId)}/scene-ledger/${enc(itemId)}`,
       { status },
     ),
 
   backfillLedger: (campaignId: string) =>
-    api.post<{ added: number }>(
-      `/api/campaigns/${enc(campaignId)}/scene-ledger/backfill`,
-    ),
+    api.post<{ added: number }>(`/api/campaigns/${enc(campaignId)}/scene-ledger/backfill`),
 };

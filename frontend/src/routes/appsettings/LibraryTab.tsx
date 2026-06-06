@@ -42,10 +42,7 @@ function useLibrarySettings() {
     setError(null);
     void (async () => {
       try {
-        const result = await api.patch<LibrarySettings>(
-          "/api/config/state-store/library",
-          next,
-        );
+        const result = await api.patch<LibrarySettings>("/api/config/state-store/library", next);
         setData(result);
         setStatus("saved");
       } catch (err) {
@@ -82,8 +79,8 @@ export function LibraryTab() {
         />
         <span>Enable embeddings</span>
         <small>
-          Generate vector embeddings when indexing library content. Disable to stop
-          embedding API calls. Takes effect on next restart.
+          Generate vector embeddings when indexing library content. Disable to stop embedding API
+          calls. Takes effect on next restart.
         </small>
       </label>
       <p className="wizard-meta">Changes save automatically and take effect on next restart.</p>

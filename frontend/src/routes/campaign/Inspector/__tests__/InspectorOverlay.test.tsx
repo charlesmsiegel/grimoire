@@ -99,7 +99,9 @@ describe("InspectorOverlay", () => {
 
     // A pin/refresh produces a new handle while the overlay stays open in raw
     // mode: the stale prompt must be replaced, not reused.
-    rerender(<InspectorOverlay {...props} handle="ph_2" summary={{ ...summary, handle: "ph_2" }} />);
+    rerender(
+      <InspectorOverlay {...props} handle="ph_2" summary={{ ...summary, handle: "ph_2" }} />,
+    );
     await waitFor(() => expect(screen.getByText("BODY ph_2")).toBeInTheDocument());
     expect(screen.queryByText("BODY ph_1")).not.toBeInTheDocument();
   });

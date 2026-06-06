@@ -13,11 +13,7 @@ export function PresentCastChip({ chip, campaignId }: Props) {
   const castUrl = `/campaigns/${encodeURIComponent(campaignId)}/cast?${params}`;
 
   return (
-    <Link
-      to={castUrl}
-      className="hud-present-cast-chip"
-      aria-label={`${chip.name} — view in cast`}
-    >
+    <Link to={castUrl} className="hud-present-cast-chip" aria-label={`${chip.name} — view in cast`}>
       {chip.name}
     </Link>
   );

@@ -8,13 +8,7 @@
 import type { WidgetSnapshot } from "../../../../api/hud";
 import { PresentCastChip } from "../PresentCastChip";
 import { parsePresentCast } from "../presentCastShape";
-import {
-  asArray,
-  asRecord,
-  asString,
-  errorMessage,
-  statusLabel,
-} from "./widget-common";
+import { asArray, asRecord, asString, errorMessage, statusLabel } from "./widget-common";
 
 interface Props {
   snapshot: WidgetSnapshot;
@@ -73,9 +67,7 @@ export function ChipListWidget({ snapshot, campaignId, onRefresh }: Props) {
           </button>
         )}
       </header>
-      <div className="hud-chip-list-body">
-        {renderBody(snapshot, isPresentCast, campaignId)}
-      </div>
+      <div className="hud-chip-list-body">{renderBody(snapshot, isPresentCast, campaignId)}</div>
     </section>
   );
 }

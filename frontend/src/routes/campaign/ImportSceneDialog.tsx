@@ -115,7 +115,19 @@ export function ImportSceneDialog({ campaignId, onClose, onImported }: Props) {
       setImportErr(err instanceof Error ? err.message : String(err));
       setPhase("error");
     }
-  }, [campaignId, filePath, title, locationRef, inGameStart, inGameEnd, mood, tags, pcRefs, npcRefs, onImported]);
+  }, [
+    campaignId,
+    filePath,
+    title,
+    locationRef,
+    inGameStart,
+    inGameEnd,
+    mood,
+    tags,
+    pcRefs,
+    npcRefs,
+    onImported,
+  ]);
 
   if (phase === "importing" || phase === "done" || phase === "error") {
     const pct = progress ? Math.round((progress.current / progress.total) * 100) : 0;

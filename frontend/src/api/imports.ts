@@ -49,17 +49,11 @@ export interface IngestedCardPreview {
   greetings: IngestedGreetingPreview[];
 }
 
-export type LoreOverrideKind =
-  | "lore"
-  | "character"
-  | "location"
-  | "faction"
-  | "item"
-  | "skip";
+export type LoreOverrideKind = "lore" | "character" | "location" | "faction" | "item" | "skip";
 
 export interface LoreSuggestion {
   source_index: number;
-  kind: LoreOverrideKind;          // "lore" when below threshold, never "skip"
+  kind: LoreOverrideKind; // "lore" when below threshold, never "skip"
   confidence: number;
   reason: string;
 }
@@ -173,9 +167,7 @@ export async function listImportReports(): Promise<ImportReportRow[]> {
 }
 
 export async function getImportReport(id: string): Promise<string> {
-  const res = await fetch(
-    `${API_BASE}/library/imports/${encodeURIComponent(id)}`,
-  );
+  const res = await fetch(`${API_BASE}/library/imports/${encodeURIComponent(id)}`);
   if (!res.ok) {
     throw new ApiError(res.status, await res.text().catch(() => ""));
   }

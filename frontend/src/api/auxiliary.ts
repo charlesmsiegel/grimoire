@@ -106,6 +106,5 @@ export const auxiliaryApi = {
       `${base(campaignId)}/${enc(resultId)}/discard`,
     ),
 
-  inFlight: (campaignId: string) =>
-    api.get<AuxiliaryResult[]>(`${base(campaignId)}/in-flight`),
+  inFlight: (campaignId: string) => api.get<AuxiliaryResult[]>(`${base(campaignId)}/in-flight`),
 };

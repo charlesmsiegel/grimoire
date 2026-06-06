@@ -22,9 +22,7 @@ export type Loadable<T> =
   | { status: "error"; error: Error }
   | { status: "ok"; data: T };
 
-export function useApi<T>(
-  fetcher: () => Promise<T>,
-): Loadable<T> & { reload: () => void } {
+export function useApi<T>(fetcher: () => Promise<T>): Loadable<T> & { reload: () => void } {
   const [state, setState] = useState<Loadable<T>>({ status: "idle" });
   const [nonce, setNonce] = useState(0);
 

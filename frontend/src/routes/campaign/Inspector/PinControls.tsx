@@ -37,7 +37,11 @@ export function PinControls({ campaignId, source, onChanged }: Props) {
   };
 
   return (
-    <div className="inspector-pin-controls" role="group" aria-label={`Pin controls for ${source.source_id}`}>
+    <div
+      className="inspector-pin-controls"
+      role="group"
+      aria-label={`Pin controls for ${source.source_id}`}
+    >
       <label className="inspector-ttl">
         TTL:&nbsp;
         <select

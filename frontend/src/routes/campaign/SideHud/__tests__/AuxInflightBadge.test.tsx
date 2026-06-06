@@ -11,11 +11,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 import { auxiliaryApi, type AuxiliaryResult } from "../../../../api/auxiliary";
 import { CampaignStreamContext } from "../../../../state/campaignStreamContext";
-import {
-  CampaignSocket,
-  type WSListener,
-  type WSStatusListener,
-} from "../../../../ws/client";
+import { CampaignSocket, type WSListener, type WSStatusListener } from "../../../../ws/client";
 import { AuxInflightBadge } from "../AuxInflightBadge";
 
 function makeSocket(): { socket: CampaignSocket; emit: (msg: { type: string }) => void } {

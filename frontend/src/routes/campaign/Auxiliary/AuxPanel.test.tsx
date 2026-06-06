@@ -20,11 +20,12 @@ describe("AuxPanel", () => {
   let fetchSpy: any;
 
   beforeEach(() => {
-    fetchSpy = vi.fn(async () =>
-      new Response(
-        JSON.stringify({ committed: true, action: "copy", result_id: "ar_001", text: "x" }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+    fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ committed: true, action: "copy", result_id: "ar_001", text: "x" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
     );
     globalThis.fetch = fetchSpy;
   });

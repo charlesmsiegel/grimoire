@@ -10,10 +10,7 @@ function renderAt(path: string) {
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="campaigns/:campaignId/debug/prompt" element={<PromptDebugView />} />
-        <Route
-          path="campaigns/:campaignId/debug/prompt/:turnId"
-          element={<PromptDebugView />}
-        />
+        <Route path="campaigns/:campaignId/debug/prompt/:turnId" element={<PromptDebugView />} />
       </Routes>
     </MemoryRouter>,
   );

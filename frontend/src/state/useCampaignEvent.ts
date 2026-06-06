@@ -134,10 +134,7 @@ export function routeToStore(message: WSMessage, dispatch: (a: Action) => void):
           scene_id: stringField(message, "scene_id"),
         },
       });
-      setTimeout(
-        () => dispatch({ type: "image-job-remove", jobId }),
-        TERMINAL_IMAGE_JOB_TTL_MS,
-      );
+      setTimeout(() => dispatch({ type: "image-job-remove", jobId }), TERMINAL_IMAGE_JOB_TTL_MS);
       break;
     }
     case "imagegen_job_failed": {
@@ -154,10 +151,7 @@ export function routeToStore(message: WSMessage, dispatch: (a: Action) => void):
           reason: stringField(message, "reason"),
         },
       });
-      setTimeout(
-        () => dispatch({ type: "image-job-remove", jobId }),
-        TERMINAL_IMAGE_JOB_TTL_MS,
-      );
+      setTimeout(() => dispatch({ type: "image-job-remove", jobId }), TERMINAL_IMAGE_JOB_TTL_MS);
       break;
     }
     default:

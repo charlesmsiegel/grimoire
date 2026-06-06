@@ -6,11 +6,7 @@
  * bar's title (hover) so the inline block stays compact.
  */
 
-import type {
-  ContextSourceExplanation,
-  ContextTier,
-  PreviewSummary,
-} from "../../../api/inspector";
+import type { ContextSourceExplanation, ContextTier, PreviewSummary } from "../../../api/inspector";
 
 const TIERS: ContextTier[] = ["lock-in", "spotlight", "background", "archive"];
 

@@ -1,1 +1,15 @@
-["world_id","id","name","kind","base_location","leaders","members","allies","rivals","tags","description","body","extras"]
+[
+  "world_id",
+  "id",
+  "name",
+  "kind",
+  "base_location",
+  "leaders",
+  "members",
+  "allies",
+  "rivals",
+  "tags",
+  "description",
+  "body",
+  "extras"
+]

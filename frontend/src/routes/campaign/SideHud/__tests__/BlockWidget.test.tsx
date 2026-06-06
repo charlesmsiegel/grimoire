@@ -8,7 +8,10 @@ function snap(overrides: Partial<WidgetSnapshot> = {}): WidgetSnapshot {
   return {
     id: "core.recent-events",
     status: "ok",
-    data: [{ id: "f1", text: "Door slammed shut." }, { id: "f2", text: "Light flickered." }],
+    data: [
+      { id: "f1", text: "Door slammed shut." },
+      { id: "f2", text: "Light flickered." },
+    ],
     error: null,
     stale: false,
     title: "Recent events",
@@ -37,9 +40,7 @@ describe("BlockWidget", () => {
 
   it("renders an error body when status is error", () => {
     render(
-      <BlockWidget
-        snapshot={snap({ status: "error", error: "owner returned 500", data: null })}
-      />,
+      <BlockWidget snapshot={snap({ status: "error", error: "owner returned 500", data: null })} />,
     );
     expect(screen.getByText(/owner returned 500/i)).toBeInTheDocument();
   });

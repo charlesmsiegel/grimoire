@@ -93,7 +93,9 @@ describe("WhatChangedPanel", () => {
     // Both applied entries land under fact_add; the queued one lands
     // under commitment_add in its own section.
     expect(screen.getByText("The mayor announces a curfew.", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("Someone whispers about wolves.", { exact: false })).toBeInTheDocument();
+    expect(
+      screen.getByText("Someone whispers about wolves.", { exact: false }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Queued for review/i })).toBeInTheDocument();
     expect(screen.getByText("You promise to meet again.", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("pending")).toBeInTheDocument();
@@ -103,7 +105,9 @@ describe("WhatChangedPanel", () => {
     vi.spyOn(observabilityApi, "turnDeltas").mockResolvedValue(diff());
     render(<WhatChangedPanel turnId="t_abc" />);
     await waitFor(() =>
-      expect(screen.getByText("The mayor announces a curfew.", { exact: false })).toBeInTheDocument(),
+      expect(
+        screen.getByText("The mayor announces a curfew.", { exact: false }),
+      ).toBeInTheDocument(),
     );
     const slider = screen.getByLabelText(/Minimum confidence/i);
     fireEvent.change(slider, { target: { value: "0.5" } });
@@ -117,7 +121,9 @@ describe("WhatChangedPanel", () => {
     vi.spyOn(observabilityApi, "turnDeltas").mockResolvedValue(diff());
     render(<WhatChangedPanel turnId="t_abc" />);
     await waitFor(() =>
-      expect(screen.getByText("The mayor announces a curfew.", { exact: false })).toBeInTheDocument(),
+      expect(
+        screen.getByText("The mayor announces a curfew.", { exact: false }),
+      ).toBeInTheDocument(),
     );
     fireEvent.change(screen.getByLabelText(/Filter by source/i), {
       target: { value: "mechanics" },

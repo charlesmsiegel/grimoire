@@ -1,10 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../../api/client";
-import {
-  type MechanicsModuleSummary,
-  fetchInstalledMechanics,
-} from "../../api/wizard";
+import { type MechanicsModuleSummary, fetchInstalledMechanics } from "../../api/wizard";
 import { errorMessage } from "./shared";
 
 export function MechanicsTab() {

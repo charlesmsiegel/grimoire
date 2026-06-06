@@ -85,7 +85,12 @@ export function InspectorOverlay({
   const toggleRaw = () => setRaw((v) => !v);
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Context for next post">
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Context for next post"
+    >
       <div className="modal inspector-overlay">
         <header className="inspector-overlay-header">
           <h2>Context for next post</h2>

@@ -1,1 +1,18 @@
-["world_id","id","name","parent_id","kind","aliases","tags","climate_zone","indoor","coordinates","permanent_features","connections","typical_occupants","description","body","extras"]
+[
+  "world_id",
+  "id",
+  "name",
+  "parent_id",
+  "kind",
+  "aliases",
+  "tags",
+  "climate_zone",
+  "indoor",
+  "coordinates",
+  "permanent_features",
+  "connections",
+  "typical_occupants",
+  "description",
+  "body",
+  "extras"
+]

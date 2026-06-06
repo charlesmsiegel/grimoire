@@ -47,7 +47,10 @@ function collectRefreshEvents(descriptors: HudWidget[]): string[] {
   return [...seen].sort();
 }
 
-export function useHud(campaignId: string, activeSceneId?: string | null): HudState & {
+export function useHud(
+  campaignId: string,
+  activeSceneId?: string | null,
+): HudState & {
   refresh: () => void;
   refreshWidget: (widgetId: string) => void;
 } {
@@ -128,10 +131,7 @@ export function useHud(campaignId: string, activeSceneId?: string | null): HudSt
   // Build a stable string of the union of refresh_on events so the WS
   // subscription only re-binds when the descriptor set changes.
   const eventsKey = useMemo(() => collectRefreshEvents(descriptors).join(","), [descriptors]);
-  const eventTypes = useMemo(
-    () => (eventsKey ? eventsKey.split(",") : []),
-    [eventsKey],
-  );
+  const eventTypes = useMemo(() => (eventsKey ? eventsKey.split(",") : []), [eventsKey]);
 
   useCampaignEvent(
     eventTypes,

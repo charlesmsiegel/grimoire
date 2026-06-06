@@ -28,16 +28,12 @@ describe("observabilityApi", () => {
   }
 
   it("getMetricsKnown calls /api/observability/metrics/known", async () => {
-    mockJsonResponse([
-      { module: "orchestrator", operation: "turn", last_recorded_at: "x" },
-    ]);
+    mockJsonResponse([{ module: "orchestrator", operation: "turn", last_recorded_at: "x" }]);
     const result = await observabilityApi.getMetricsKnown();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const url = String(fetchSpy.mock.calls[0]![0]);
     expect(url).toContain("/api/observability/metrics/known");
-    expect(result).toEqual([
-      { module: "orchestrator", operation: "turn", last_recorded_at: "x" },
-    ]);
+    expect(result).toEqual([{ module: "orchestrator", operation: "turn", last_recorded_at: "x" }]);
   });
 
   it("getMetricsSummary forwards module + operation + windowSeconds", async () => {
@@ -98,9 +94,7 @@ describe("observabilityApi", () => {
       summary: null,
     });
     await observabilityApi.getTurnPrompt("turn id/with slash");
-    expect(lastFetchUrl()).toContain(
-      "/api/observability/turns/turn%20id%2Fwith%20slash/prompt",
-    );
+    expect(lastFetchUrl()).toContain("/api/observability/turns/turn%20id%2Fwith%20slash/prompt");
   });
 
   it("getTurnPrompt parses sources with inclusion_reasons", async () => {
@@ -130,9 +124,6 @@ describe("observabilityApi", () => {
     const first = result.sources[0];
     if (!first) throw new Error("expected one source");
     expect(first.kind).toBe("character");
-    expect(first.inclusion_reasons).toEqual([
-      "present_in_scene",
-      "mentioned_in_recent_posts",
-    ]);
+    expect(first.inclusion_reasons).toEqual(["present_in_scene", "mentioned_in_recent_posts"]);
   });
 });

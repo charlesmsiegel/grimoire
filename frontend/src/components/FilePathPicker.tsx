@@ -138,7 +138,11 @@ export function FilePathPicker({
               <ul className="file-browser-list">
                 {parent && (
                   <li>
-                    <button type="button" className="fb-entry fb-dir" onClick={() => browse(parent)}>
+                    <button
+                      type="button"
+                      className="fb-entry fb-dir"
+                      onClick={() => browse(parent)}
+                    >
                       ..
                     </button>
                   </li>
@@ -154,9 +158,7 @@ export function FilePathPicker({
                     </button>
                   </li>
                 ))}
-                {entries.length === 0 && !parent && (
-                  <li className="fb-empty">No matching files</li>
-                )}
+                {entries.length === 0 && !parent && <li className="fb-empty">No matching files</li>}
               </ul>
             )}
           </div>

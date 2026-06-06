@@ -105,7 +105,9 @@ function useSyncStatus(): "syncing" | "ready" {
       }
     };
     void check();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useCampaignEvent("library_indexed", () => setStatus("ready"));

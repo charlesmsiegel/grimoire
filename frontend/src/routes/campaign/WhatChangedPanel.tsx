@@ -115,13 +115,7 @@ export function WhatChangedPanel({ turnId }: Props) {
   );
 }
 
-function Body({
-  state,
-  filtered,
-}: {
-  state: State;
-  filtered: TurnDeltaDiff | null;
-}) {
+function Body({ state, filtered }: { state: State; filtered: TurnDeltaDiff | null }) {
   if (state.status === "idle") {
     return <p className="side-empty">Waiting for the first turn of the scene.</p>;
   }
@@ -187,15 +181,12 @@ function DeltaSection({
 }
 
 function DeltaItem({ entry }: { entry: TurnDeltaEntry }) {
-  const confidencePct =
-    entry.confidence == null ? null : Math.round(entry.confidence * 100);
+  const confidencePct = entry.confidence == null ? null : Math.round(entry.confidence * 100);
   return (
     <li className="what-changed-item">
       <div className="what-changed-target">
         <code>{entry.target_id ?? "—"}</code>
-        {entry.target_scope && (
-          <span className="what-changed-scope">{entry.target_scope}</span>
-        )}
+        {entry.target_scope && <span className="what-changed-scope">{entry.target_scope}</span>}
       </div>
       {entry.evidence && <p className="what-changed-evidence">“{entry.evidence}”</p>}
       <div className="what-changed-meta">
@@ -210,10 +201,7 @@ function DeltaItem({ entry }: { entry: TurnDeltaEntry }) {
           </span>
         )}
         {entry.review_status && (
-          <span
-            className="what-changed-chip what-changed-chip-review"
-            title="Review queue status"
-          >
+          <span className="what-changed-chip what-changed-chip-review" title="Review queue status">
             {entry.review_status}
           </span>
         )}
