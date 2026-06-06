@@ -580,6 +580,54 @@ def test_bulk_create_missing_sheets_404_for_unknown_campaign(client, container) 
     assert response.status_code == 404
 
 
+# World-view list endpoints ------------------------------------------- #
+
+
+def test_world_view_list_returns_resolved_entity_shape(client, container) -> None:
+    """World-view list endpoints must emit ResolvedEntity-shaped payloads.
+
+    Regression: ``_list_kind`` returned raw ``LibraryEntity`` rows with no
+    ``source_chain``. The World view's ``ChainBadge`` then read ``chain[0]`` on
+    ``undefined`` and white-screened the whole app (blank page + a dangling
+    stream WebSocket reported as "Connection closed").
+    """
+    from grimoire.types.common import EntityKind
+    from grimoire.types.composition import LibraryEntity
+
+    ent = LibraryEntity(
+        id="worlds/wod-london/items/amulet",
+        world_id="wod-london",
+        kind=EntityKind.ITEM,
+        asset_id="amulet",
+        name="Amulet",
+        path="library/worlds/wod-london/items/amulet.md",
+        frontmatter={"id": "amulet", "name": "Amulet"},
+        body="An old amulet.",
+        version=3,
+    )
+
+    class FakeWorld:
+        async def list_for_campaign(self, campaign_id: str, kind: str) -> list[Any]:
+            assert kind == "item"
+            return [ent]
+
+    container.world = FakeWorld()
+
+    response = client.get("/api/campaigns/c1/items")
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["asset_id"] == "amulet"
+    assert row["name"] == "Amulet"
+    assert row["world_id"] == "wod-london"
+    # Contract fields the frontend ResolvedEntity / ChainBadge depend on.
+    assert row["source_chain"], "source_chain must be populated so ChainBadge renders"
+    assert row["source_chain"][0]["world_id"] == "wod-london"
+    assert row["overrides_applied"] == []
+    assert "extras" in row
+
+
 # Export routes -------------------------------------------------------- #
 
 
