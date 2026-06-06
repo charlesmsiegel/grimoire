@@ -408,9 +408,10 @@ describe("PostItem delete", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete post" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
     await waitFor(() =>
-      expect(onDeleted).toHaveBeenCalledWith(["p1"], [
-        "turn T1: 1 delta(s) could not be reversed and remain applied",
-      ]),
+      expect(onDeleted).toHaveBeenCalledWith(
+        ["p1"],
+        ["turn T1: 1 delta(s) could not be reversed and remain applied"],
+      ),
     );
   });
 

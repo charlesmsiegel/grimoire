@@ -48,9 +48,7 @@ export const KIND_LABELS: Record<string, string> = {
 };
 
 export function kindLabel(kind: string): string {
-  return (
-    KIND_LABELS[kind] ?? kind.replace(/[_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
-  );
+  return KIND_LABELS[kind] ?? kind.replace(/[_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 /**

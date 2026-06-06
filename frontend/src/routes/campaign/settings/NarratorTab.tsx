@@ -16,8 +16,8 @@ export function NarratorTab({ campaignId }: { campaignId: string }) {
   return (
     <div className="settings-form">
       <p className="wizard-step-help">
-        How the narrator addresses the present cast on each beat. Individual scenes
-        can override this default from the scene side panel.
+        How the narrator addresses the present cast on each beat. Individual scenes can override
+        this default from the scene side panel.
       </p>
       {!ready && <p className="wizard-meta">Loading saved settings…</p>}
       <label className="wizard-field">

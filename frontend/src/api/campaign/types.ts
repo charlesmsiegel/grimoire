@@ -90,10 +90,7 @@ export interface ReplayBatchView {
   cancelled_at_post_id: string | null;
 }
 
-export type NarratorResponseMode =
-  | "all_at_once"
-  | "per_character"
-  | "per_character_multi_call";
+export type NarratorResponseMode = "all_at_once" | "per_character" | "per_character_multi_call";
 
 export interface ApiScene {
   id: string;

@@ -14,11 +14,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 
 import { hudApi, type AggregateResult, type HudWidget } from "../../../../api/hud";
 import { CampaignStreamContext } from "../../../../state/campaignStreamContext";
-import {
-  CampaignSocket,
-  type WSListener,
-  type WSStatusListener,
-} from "../../../../ws/client";
+import { CampaignSocket, type WSListener, type WSStatusListener } from "../../../../ws/client";
 import { useHud } from "../useHud";
 
 function makeSocket(): { socket: CampaignSocket; emit: (msg: { type: string }) => void } {
@@ -67,8 +63,24 @@ const aggregate = (): AggregateResult => ({
   scene_id: "s1",
   generated_at: "2026-05-19T14:00:00Z",
   widgets: [
-    { id: "core.in-game-date", status: "ok", data: { date: "1894-10-13" }, error: null, stale: false, title: "Date", render_hint: "row" },
-    { id: "core.weather", status: "ok", data: { conditions: "Rain" }, error: null, stale: false, title: "Weather", render_hint: "row" },
+    {
+      id: "core.in-game-date",
+      status: "ok",
+      data: { date: "1894-10-13" },
+      error: null,
+      stale: false,
+      title: "Date",
+      render_hint: "row",
+    },
+    {
+      id: "core.weather",
+      status: "ok",
+      data: { conditions: "Rain" },
+      error: null,
+      stale: false,
+      title: "Weather",
+      render_hint: "row",
+    },
   ],
 });
 
@@ -76,13 +88,17 @@ function Probe({ campaignId }: { campaignId: string }) {
   const hud = useHud(campaignId);
   return (
     <div>
-      <p data-testid="status">{hud.loading ? "loading" : hud.error ? `error:${hud.error}` : "ready"}</p>
+      <p data-testid="status">
+        {hud.loading ? "loading" : hud.error ? `error:${hud.error}` : "ready"}
+      </p>
       <ul>
         {hud.widgets.map((w) => (
           <li key={w.snapshot.id} data-testid={`widget-${w.snapshot.id}`}>
-            {String((w.snapshot.data as Record<string, unknown> | null)?.["date"] ??
-              (w.snapshot.data as Record<string, unknown> | null)?.["conditions"] ??
-              "")}
+            {String(
+              (w.snapshot.data as Record<string, unknown> | null)?.["date"] ??
+                (w.snapshot.data as Record<string, unknown> | null)?.["conditions"] ??
+                "",
+            )}
           </li>
         ))}
       </ul>
@@ -124,17 +140,15 @@ describe("useHud", () => {
       widgetDescriptor("core.in-game-date", ["time_advanced"]),
       widgetDescriptor("core.weather", ["weather_changed"]),
     ]);
-    const widgetSpy = vi
-      .spyOn(hudApi, "widget")
-      .mockResolvedValue({
-        id: "core.weather",
-        status: "ok",
-        data: { conditions: "Snow" },
-        error: null,
-        stale: false,
-        title: "Weather",
-        render_hint: "row",
-      });
+    const widgetSpy = vi.spyOn(hudApi, "widget").mockResolvedValue({
+      id: "core.weather",
+      status: "ok",
+      data: { conditions: "Snow" },
+      error: null,
+      stale: false,
+      title: "Weather",
+      render_hint: "row",
+    });
 
     const { socket, emit } = makeSocket();
     renderWithStream(socket);

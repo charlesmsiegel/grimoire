@@ -39,9 +39,7 @@ export function usePlayDataLoader(
       const active = pcs.find((p) => p.active) ?? pcs[0] ?? null;
       const activePcRef = active?.character_ref ?? null;
       const scenes = await campaignApi.listScenes(campaignId);
-      const explicitScene = sceneJumpId
-        ? scenes.find((s) => s.id === sceneJumpId)
-        : null;
+      const explicitScene = sceneJumpId ? scenes.find((s) => s.id === sceneJumpId) : null;
       const pcScene = active?.current_scene_id
         ? scenes.find((s) => s.id === active.current_scene_id)
         : null;

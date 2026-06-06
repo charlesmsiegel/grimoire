@@ -72,9 +72,7 @@ export function InspectorPanel({
         {live.error && <p className="inspector-error">{live.error}</p>}
 
         <div className="scene-setting-entry scene-setting-entry-full">
-          <span className="scene-setting-label">
-            Next-post context{live.loading ? " …" : ""}
-          </span>
+          <span className="scene-setting-label">Next-post context{live.loading ? " …" : ""}</span>
           <TokenBars summary={live.summary} sources={explanations} loading={live.loading} />
         </div>
 

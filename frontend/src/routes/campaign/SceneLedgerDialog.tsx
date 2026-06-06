@@ -65,11 +65,7 @@ export function SceneLedgerDialog({ campaignId, open, onClose }: Props) {
       <div className="ledger-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="ledger-header">
           <h2>Scene Ledger</h2>
-          <button
-            onClick={getGreetings}
-            className="ledger-action"
-            disabled={backfilling}
-          >
+          <button onClick={getGreetings} className="ledger-action" disabled={backfilling}>
             {backfilling ? "Adding…" : "Get greetings"}
           </button>
           <button onClick={onClose} className="close-btn">
@@ -116,9 +112,7 @@ export function SceneLedgerDialog({ campaignId, open, onClose }: Props) {
                 ))}
               </section>
             )}
-            {items.length === 0 && (
-              <p className="ledger-empty">No scene ideas yet.</p>
-            )}
+            {items.length === 0 && <p className="ledger-empty">No scene ideas yet.</p>}
           </div>
         )}
       </div>

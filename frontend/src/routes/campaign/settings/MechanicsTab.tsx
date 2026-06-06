@@ -3,10 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
 import { campaignApi, type MissingSheet } from "../../../api/campaign";
 import { mechanicsApi } from "../../../api/library";
-import {
-  type MechanicsModuleSummary,
-  fetchInstalledMechanics,
-} from "../../../api/wizard";
+import { type MechanicsModuleSummary, fetchInstalledMechanics } from "../../../api/wizard";
 import { BulkSheetCreation } from "../BulkSheetCreation";
 import { type CampaignRecord, errorMessage } from "./shared";
 

@@ -80,7 +80,10 @@ export function StepPCs({ draft, update, candidates, loading, error, worlds }: P
     const updatedPCs = draft.pcs.map((p) => {
       if (p.character_ref !== pcRef) return p;
       const has = p.role_tags.includes(tag);
-      return { ...p, role_tags: has ? p.role_tags.filter((t) => t !== tag) : [...p.role_tags, tag] };
+      return {
+        ...p,
+        role_tags: has ? p.role_tags.filter((t) => t !== tag) : [...p.role_tags, tag],
+      };
     });
     update({ pcs: updatedPCs });
   };

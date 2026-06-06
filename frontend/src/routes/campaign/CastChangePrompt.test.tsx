@@ -69,14 +69,20 @@ describe("CastChangePrompt", () => {
 
   it("renders nothing until a turn_complete carries pending cast changes", () => {
     const socket = new FakeSocket();
-    const { container } = render(withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" />));
+    const { container } = render(
+      withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" />),
+    );
     expect(container.firstChild).toBeNull();
   });
 
   it("renders a pending change and confirms it", async () => {
     const socket = new FakeSocket();
     render(withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" />));
-    socket.emit({ type: "turn_complete", turn_id: "t_42", pending_cast_changes: PENDING } as WSMessage);
+    socket.emit({
+      type: "turn_complete",
+      turn_id: "t_42",
+      pending_cast_changes: PENDING,
+    } as WSMessage);
 
     await screen.findByText(/reyes enters the scene/i);
     fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
@@ -95,7 +101,11 @@ describe("CastChangePrompt", () => {
     render(
       withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" onApplied={onApplied} />),
     );
-    socket.emit({ type: "turn_complete", turn_id: "t_42", pending_cast_changes: PENDING } as WSMessage);
+    socket.emit({
+      type: "turn_complete",
+      turn_id: "t_42",
+      pending_cast_changes: PENDING,
+    } as WSMessage);
 
     await screen.findByText(/reyes enters the scene/i);
     fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
@@ -109,7 +119,11 @@ describe("CastChangePrompt", () => {
     render(
       withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" onApplied={onApplied} />),
     );
-    socket.emit({ type: "turn_complete", turn_id: "t_42", pending_cast_changes: PENDING } as WSMessage);
+    socket.emit({
+      type: "turn_complete",
+      turn_id: "t_42",
+      pending_cast_changes: PENDING,
+    } as WSMessage);
 
     await screen.findByText(/reyes enters the scene/i);
     fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
@@ -121,7 +135,11 @@ describe("CastChangePrompt", () => {
   it("dismisses a pending change", async () => {
     const socket = new FakeSocket();
     render(withSocket(socket, <CastChangePrompt campaignId="c1" sceneId="s1" />));
-    socket.emit({ type: "turn_complete", turn_id: "t_42", pending_cast_changes: PENDING } as WSMessage);
+    socket.emit({
+      type: "turn_complete",
+      turn_id: "t_42",
+      pending_cast_changes: PENDING,
+    } as WSMessage);
 
     await screen.findByText(/reyes enters the scene/i);
     fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));

@@ -26,13 +26,9 @@ describe("SceneLedgerDialog", () => {
       .spyOn(newSceneApi, "listLedger")
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([entry()]);
-    const backfillSpy = vi
-      .spyOn(newSceneApi, "backfillLedger")
-      .mockResolvedValue({ added: 1 });
+    const backfillSpy = vi.spyOn(newSceneApi, "backfillLedger").mockResolvedValue({ added: 1 });
 
-    render(
-      <SceneLedgerDialog campaignId="c1" open={true} onClose={() => {}} />,
-    );
+    render(<SceneLedgerDialog campaignId="c1" open={true} onClose={() => {}} />);
 
     await waitFor(() => expect(screen.getByText(/No scene ideas yet/i)).toBeInTheDocument());
 
@@ -50,15 +46,11 @@ describe("SceneLedgerDialog", () => {
     vi.spyOn(newSceneApi, "listLedger").mockResolvedValue([]);
     vi.spyOn(newSceneApi, "backfillLedger").mockResolvedValue({ added: 0 });
 
-    render(
-      <SceneLedgerDialog campaignId="c1" open={true} onClose={() => {}} />,
-    );
+    render(<SceneLedgerDialog campaignId="c1" open={true} onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/No scene ideas yet/i)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("button", { name: /Get greetings/i }));
 
-    await waitFor(() =>
-      expect(screen.getByText(/No new greetings to add\./i)).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText(/No new greetings to add\./i)).toBeInTheDocument());
   });
 });

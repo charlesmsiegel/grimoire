@@ -8,14 +8,7 @@
  */
 
 import type { WidgetSnapshot } from "../../../../api/hud";
-import {
-  asArray,
-  asNumber,
-  asRecord,
-  asString,
-  errorMessage,
-  statusLabel,
-} from "./widget-common";
+import { asArray, asNumber, asRecord, asString, errorMessage, statusLabel } from "./widget-common";
 
 interface Props {
   snapshot: WidgetSnapshot;
@@ -51,9 +44,7 @@ function extractSummary(data: unknown): CompositeSummary {
         .map((x) =>
           typeof x === "string"
             ? x
-            : asString(asRecord(x)?.text) ??
-              asString(asRecord(x)?.summary) ??
-              null,
+            : (asString(asRecord(x)?.text) ?? asString(asRecord(x)?.summary) ?? null),
         )
         .filter((s): s is string => s !== null)
     : [];

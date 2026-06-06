@@ -60,9 +60,7 @@ export function AuxInflightBadge({ campaignId }: Props) {
         <ul className="aux-inflight-badge-list" role="list">
           {results.map((r) => (
             <li key={r.id}>
-              <span className="aux-inflight-badge-kind">
-                {KIND_LABELS[r.kind] ?? r.kind}
-              </span>
+              <span className="aux-inflight-badge-kind">{KIND_LABELS[r.kind] ?? r.kind}</span>
               <button
                 type="button"
                 className="aux-inflight-badge-discard"

@@ -104,9 +104,7 @@ export const viewsApi = {
 
   installedMechanics: () => api.get<RegisteredMechanicsModule[]>(`/api/mechanics/installed`),
   getSheetSchema: (moduleId: string, kind: string) =>
-    api.get<Record<string, unknown>>(
-      `/api/mechanics/${enc(moduleId)}/sheets/${enc(kind)}`,
-    ),
+    api.get<Record<string, unknown>>(`/api/mechanics/${enc(moduleId)}/sheets/${enc(kind)}`),
   getMechanicsThemeCss: (moduleId: string) =>
     api.getText(`/api/mechanics/${enc(moduleId)}/theme.css`),
 

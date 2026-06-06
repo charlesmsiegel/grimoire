@@ -174,8 +174,7 @@ export const calendarsApi = {
     year: number;
     month: number;
     day: number;
-  }) =>
-    request<Record<string, CalendarDate>>("POST", `/library/calendars/convert`, body),
+  }) => request<Record<string, CalendarDate>>("POST", `/library/calendars/convert`, body),
   holidaysInYear: (calendarId: string, year: number, setIds: string[]) =>
     request<HolidayOccurrence[]>(
       "GET",
@@ -188,11 +187,7 @@ export const calendarsApi = {
   createHolidaySet: (payload: CreateHolidaySetPayload) =>
     request<HolidaySet>("POST", `/library/holiday-sets`, payload),
   updateHolidaySet: (id: string, patch: UpdateHolidaySetPayload) =>
-    request<HolidaySet>(
-      "PATCH",
-      `/library/holiday-sets/${encodeURIComponent(id)}`,
-      patch,
-    ),
+    request<HolidaySet>("PATCH", `/library/holiday-sets/${encodeURIComponent(id)}`, patch),
   deleteHolidaySet: (id: string) =>
     request<void>("DELETE", `/library/holiday-sets/${encodeURIComponent(id)}`),
 };

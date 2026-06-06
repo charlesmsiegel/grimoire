@@ -2,10 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  observabilityApi,
-  type ContextSourceFromAudit,
-} from "../../../api/observability";
+import { observabilityApi, type ContextSourceFromAudit } from "../../../api/observability";
 import { viewsApi } from "../../../api/views";
 import { WhyCharacterPanel } from "../WhyCharacterPanel";
 
@@ -26,9 +23,7 @@ const listTurns = observabilityApi.listTurns as unknown as ReturnType<typeof vi.
 const getTurnPrompt = observabilityApi.getTurnPrompt as unknown as ReturnType<typeof vi.fn>;
 const listCharacters = viewsApi.listCharacters as unknown as ReturnType<typeof vi.fn>;
 
-function characterSource(
-  overrides: Partial<ContextSourceFromAudit> = {},
-): ContextSourceFromAudit {
+function characterSource(overrides: Partial<ContextSourceFromAudit> = {}): ContextSourceFromAudit {
   return {
     source_id: "src_1",
     owner_id: "library:world1",
@@ -44,9 +39,7 @@ function characterSource(
   };
 }
 
-function turn(
-  overrides: Partial<{ turn_id: string; player_input: string }> = {},
-) {
+function turn(overrides: Partial<{ turn_id: string; player_input: string }> = {}) {
   return {
     turn_id: "turn-1",
     campaign_id: "camp-1",
@@ -266,9 +259,7 @@ describe("WhyCharacterPanel", () => {
     listCharacters.mockResolvedValue([]);
     getTurnPrompt.mockResolvedValue({
       messages: [],
-      sources: [
-        characterSource({ summary: "alice", inclusion_reasons: ["present_in_scene"] }),
-      ],
+      sources: [characterSource({ summary: "alice", inclusion_reasons: ["present_in_scene"] })],
       budget_used: {},
       messages_hash: "h",
       composition_snapshot: null,
@@ -297,8 +288,6 @@ describe("WhyCharacterPanel", () => {
   it("shows the no-audits message when listTurns returns []", async () => {
     listTurns.mockResolvedValue([]);
     renderPanel();
-    expect(
-      await screen.findByText(/no audits yet for this campaign/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/no audits yet for this campaign/i)).toBeInTheDocument();
   });
 });

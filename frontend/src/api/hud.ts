@@ -72,8 +72,7 @@ export interface HudConfigPayload {
   pinned_extras: Record<string, string[]>;
 }
 
-const base = (campaignId: string) =>
-  `/api/campaigns/${encodeURIComponent(campaignId)}/hud`;
+const base = (campaignId: string) => `/api/campaigns/${encodeURIComponent(campaignId)}/hud`;
 
 export const hudApi = {
   aggregate(
@@ -95,8 +94,7 @@ export const hudApi = {
     const url = sceneId
       ? `${base(campaignId)}/widgets/${encodeURIComponent(widgetId)}?scene_id=${encodeURIComponent(sceneId)}`
       : `${base(campaignId)}/widgets/${encodeURIComponent(widgetId)}`;
-    return api.get<WidgetSnapshot>(url, { signal },
-    );
+    return api.get<WidgetSnapshot>(url, { signal });
   },
   available(campaignId: string, signal?: AbortSignal): Promise<HudWidget[]> {
     return api.get<HudWidget[]>(`${base(campaignId)}/widgets/available`, { signal });
@@ -104,10 +102,7 @@ export const hudApi = {
   getConfig(campaignId: string, signal?: AbortSignal): Promise<HudConfigPayload> {
     return api.get<HudConfigPayload>(`${base(campaignId)}/config`, { signal });
   },
-  putConfig(
-    campaignId: string,
-    config: HudConfigPayload,
-  ): Promise<HudConfigPayload> {
+  putConfig(campaignId: string, config: HudConfigPayload): Promise<HudConfigPayload> {
     return api.put<HudConfigPayload>(`${base(campaignId)}/config`, config);
   },
   resetConfig(campaignId: string): Promise<HudConfigPayload> {

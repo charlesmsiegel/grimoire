@@ -6,13 +6,7 @@
  */
 
 import type { WidgetSnapshot } from "../../../../api/hud";
-import {
-  asArray,
-  asRecord,
-  asString,
-  errorMessage,
-  statusLabel,
-} from "./widget-common";
+import { asArray, asRecord, asString, errorMessage, statusLabel } from "./widget-common";
 
 interface Props {
   snapshot: WidgetSnapshot;

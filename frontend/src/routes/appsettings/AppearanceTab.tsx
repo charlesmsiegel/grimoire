@@ -18,9 +18,7 @@ export function AppearanceTab() {
         <span>Font family</span>
         <select
           value={fontFamily}
-          onChange={(e) =>
-            setFontFamily(e.target.value as "system" | "serif" | "dyslexia")
-          }
+          onChange={(e) => setFontFamily(e.target.value as "system" | "serif" | "dyslexia")}
         >
           <option value="system">System</option>
           <option value="serif">Serif</option>

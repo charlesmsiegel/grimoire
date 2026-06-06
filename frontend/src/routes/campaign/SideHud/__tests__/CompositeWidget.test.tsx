@@ -8,7 +8,11 @@ function snap(overrides: Partial<WidgetSnapshot> = {}): WidgetSnapshot {
   return {
     id: "core.review-queue",
     status: "ok",
-    data: { count: 3, label: "3 items awaiting review", items: [{ text: "winifred: missing fact" }] },
+    data: {
+      count: 3,
+      label: "3 items awaiting review",
+      items: [{ text: "winifred: missing fact" }],
+    },
     error: null,
     stale: false,
     title: "Review queue",
@@ -33,9 +37,7 @@ describe("CompositeWidget", () => {
 
   it("shows error message on error status", () => {
     render(
-      <CompositeWidget
-        snapshot={snap({ status: "error", error: "extractor down", data: null })}
-      />,
+      <CompositeWidget snapshot={snap({ status: "error", error: "extractor down", data: null })} />,
     );
     expect(screen.getByText(/extractor down/i)).toBeInTheDocument();
   });

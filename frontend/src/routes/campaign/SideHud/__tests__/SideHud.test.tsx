@@ -132,8 +132,18 @@ describe("SideHud", () => {
           status: "ok",
           data: {
             chips: [
-              { character_id: "kyoka", character_ref: "kyoka", name: "Kyoka Jiro", source: "library" },
-              { character_id: "shia", character_ref: "emergent/shia", name: "Shia", source: "campaign-local" },
+              {
+                character_id: "kyoka",
+                character_ref: "kyoka",
+                name: "Kyoka Jiro",
+                source: "library",
+              },
+              {
+                character_id: "shia",
+                character_ref: "emergent/shia",
+                name: "Shia",
+                source: "campaign-local",
+              },
             ],
           },
           error: null,

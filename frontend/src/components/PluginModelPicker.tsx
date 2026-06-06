@@ -154,9 +154,7 @@ function formatPriceTag(m: PluginModelInfo): string {
   return ` · ${fmt(inP)}/${fmt(outP)} per 1M`;
 }
 
-function groupModels(
-  models: PluginModelInfo[],
-): { provider: string; items: PluginModelInfo[] }[] {
+function groupModels(models: PluginModelInfo[]): { provider: string; items: PluginModelInfo[] }[] {
   const buckets = new Map<string, PluginModelInfo[]>();
   for (const m of models) {
     const provider = m.id.includes("/") ? m.id.split("/", 1)[0]! : "other";

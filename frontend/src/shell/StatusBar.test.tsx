@@ -9,8 +9,7 @@ import { useStore } from "../state/useStore";
 import * as observabilityModule from "../api/observability";
 
 vi.mock("../api/observability", async () => {
-  const actual =
-    await vi.importActual<typeof observabilityModule>("../api/observability");
+  const actual = await vi.importActual<typeof observabilityModule>("../api/observability");
   return {
     ...actual,
     observabilityApi: {

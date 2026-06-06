@@ -11,10 +11,7 @@ import { api } from "./client";
 export type ExtrasScope = "library" | "campaign-local" | "override";
 
 export type ExtraScalar = string | number | boolean | null;
-export type ExtraValueShape =
-  | ExtraScalar
-  | ExtraScalar[]
-  | Record<string, ExtraScalar>;
+export type ExtraValueShape = ExtraScalar | ExtraScalar[] | Record<string, ExtraScalar>;
 
 export interface ExtraValue {
   value: ExtraValueShape;

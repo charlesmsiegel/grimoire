@@ -32,12 +32,23 @@ export interface ImportProgress {
   detail: string;
 }
 
+// SSE `data:` frames can arrive malformed or truncated. Parse at the boundary so
+// a bad chunk surfaces a clear, typed error instead of an opaque SyntaxError.
+function tryParseFrame(data: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(data);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 export const importSceneApi = {
   preview: (campaignId: string, path: string) =>
-    api.post<ImportPreviewResponse>(
-      `/api/campaigns/${enc(campaignId)}/scenes/import/preview`,
-      { path },
-    ),
+    api.post<ImportPreviewResponse>(`/api/campaigns/${enc(campaignId)}/scenes/import/preview`, {
+      path,
+    }),
 
   import: async (
     campaignId: string,
@@ -70,18 +81,28 @@ export const importSceneApi = {
         const type = eventMatch[1]!;
         const data = eventMatch[2]!;
         if (type === "progress") {
-          onProgress(JSON.parse(data));
+          // Skip a single malformed progress frame rather than aborting the import.
+          const payload = tryParseFrame(data);
+          if (payload) onProgress(payload as unknown as ImportProgress);
         }
         if (type === "result") {
-          sceneId = JSON.parse(data).scene_id;
           void reader.cancel();
+          const payload = tryParseFrame(data);
+          if (!payload || typeof payload.scene_id !== "string") {
+            throw new ApiError(0, "malformed import payload", "malformed import payload");
+          }
+          sceneId = payload.scene_id;
           break outer;
         }
         if (type === "error") {
           void reader.cancel();
-          const errPayload = JSON.parse(data);
-          const errMsg = errPayload.detail ?? "Import pipeline error";
-          const errStatus = typeof errPayload.status === "number" ? errPayload.status : 500;
+          const payload = tryParseFrame(data);
+          if (!payload) {
+            throw new ApiError(0, "malformed import payload", "malformed import payload");
+          }
+          const errMsg =
+            typeof payload.detail === "string" ? payload.detail : "Import pipeline error";
+          const errStatus = typeof payload.status === "number" ? payload.status : 500;
           throw new ApiError(errStatus, errMsg, errMsg);
         }
       }

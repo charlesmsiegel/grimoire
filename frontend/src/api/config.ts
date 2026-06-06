@@ -45,17 +45,14 @@ export interface BrowseFilesResponse {
 export const configApi = {
   getLLMDefaults: () => api.get<LLMDefaults>("/api/config/llm-defaults"),
 
-  setLLMDefaults: (body: LLMDefaults) =>
-    api.put<LLMDefaults>("/api/config/llm-defaults", body),
+  setLLMDefaults: (body: LLMDefaults) => api.put<LLMDefaults>("/api/config/llm-defaults", body),
 
-  getEmbeddingDefaults: () =>
-    api.get<EmbeddingDefaults>("/api/config/embedding-defaults"),
+  getEmbeddingDefaults: () => api.get<EmbeddingDefaults>("/api/config/embedding-defaults"),
 
   patchEmbeddingDefaults: (body: Partial<EmbeddingDefaults>) =>
     api.patch<EmbeddingDefaults>("/api/config/embedding-defaults", body),
 
-  getImagegenDefaults: () =>
-    api.get<ImagegenDefaults>("/api/config/imagegen-defaults"),
+  getImagegenDefaults: () => api.get<ImagegenDefaults>("/api/config/imagegen-defaults"),
 
   patchImagegenDefaults: (body: Partial<ImagegenDefaults>) =>
     api.patch<ImagegenDefaults>("/api/config/imagegen-defaults", body),

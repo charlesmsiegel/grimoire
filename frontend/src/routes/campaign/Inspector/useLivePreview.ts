@@ -54,11 +54,7 @@ export function useLivePreview({
     const myId = ++counterRef.current;
     setState((s) => ({ ...s, loading: true, error: null }));
     inspectorApi
-      .preview(
-        campaignId,
-        { playerInput, sessionId, pcRef },
-        controller.signal,
-      )
+      .preview(campaignId, { playerInput, sessionId, pcRef }, controller.signal)
       .then((res) => {
         if (myId !== counterRef.current) return;
         setState({

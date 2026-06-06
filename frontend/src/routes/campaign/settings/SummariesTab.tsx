@@ -16,10 +16,10 @@ export function SummariesTab({ campaignId }: { campaignId: string }) {
   return (
     <div className="settings-form">
       <p className="wizard-step-help">
-        Controls how often the running scene summary is regenerated and
-        whether a final summary is produced when the scene closes. Set
-        <code> Running every N posts </code> to <code>0</code> to disable
-        in-scene summaries entirely.
+        Controls how often the running scene summary is regenerated and whether a final summary is
+        produced when the scene closes. Set
+        <code> Running every N posts </code> to <code>0</code> to disable in-scene summaries
+        entirely.
       </p>
       {!ready && <p className="wizard-meta">Loading saved settings…</p>}
       <label className="wizard-field">
@@ -45,9 +45,7 @@ export function SummariesTab({ campaignId }: { campaignId: string }) {
         <input
           type="checkbox"
           checked={value.final_on_close}
-          onChange={(e) =>
-            setValue((prev) => ({ ...prev, final_on_close: e.target.checked }))
-          }
+          onChange={(e) => setValue((prev) => ({ ...prev, final_on_close: e.target.checked }))}
           disabled={!ready}
         />
         <span>Generate final summary when scene closes</span>

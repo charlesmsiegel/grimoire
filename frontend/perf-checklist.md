@@ -20,19 +20,19 @@ list, or the campaign switcher.
 2. Use a clean Chrome profile (no extensions) with devtools open.
 3. In the devtools console, enable the in-app perf log for this session:
    ```js
-   localStorage.debug = "perf";  // optional, not used today
+   localStorage.debug = "perf"; // optional, not used today
    ```
    The recommended path is to launch the preview with `VITE_PERF_LOG=true`
    in the environment so `markEnd` calls `console.debug("[perf] …")`.
 
 ## Budgets
 
-| Budget                                | Number          | Span name           |
-| ------------------------------------- | --------------- | ------------------- |
-| Initial load                          | < 2 000 ms      | `app:initial-load`  |
-| Library list (100 assets) render      | < 500 ms        | `library:render`    |
-| Campaign switch (library cached)      | < 300 ms        | `campaign:switch`   |
-| Scene jump within a campaign          | < 500 ms        | `scene:jump`        |
+| Budget                           | Number     | Span name          |
+| -------------------------------- | ---------- | ------------------ |
+| Initial load                     | < 2 000 ms | `app:initial-load` |
+| Library list (100 assets) render | < 500 ms   | `library:render`   |
+| Campaign switch (library cached) | < 300 ms   | `campaign:switch`  |
+| Scene jump within a campaign     | < 500 ms   | `scene:jump`       |
 
 The spans show up in the Performance tab under **User Timing** as well as in
 the console when `VITE_PERF_LOG=true`.
@@ -46,8 +46,9 @@ the console when `VITE_PERF_LOG=true`.
 3. Pass if `N < 2000`. Repeat 3 times; median wins.
 
 Manual fallback (paste in devtools when launching from a fresh tab):
+
 ```js
-performance.now();  // record before navigation
+performance.now(); // record before navigation
 // after the app renders:
 performance.now();
 ```
@@ -61,6 +62,7 @@ performance.now();
 4. Pass if `N < 500`.
 
 Manual fallback:
+
 ```js
 const t0 = performance.now();
 // click Library, wait for the list to appear
@@ -81,6 +83,7 @@ To verify the cache: open the Network tab, filter `library`, switch back to
 campaign A within 30 seconds. Cached calls show no new request rows.
 
 Manual fallback:
+
 ```js
 const t0 = performance.now();
 // click campaign B in the sidebar
@@ -97,6 +100,7 @@ performance.now() - t0;
 3. Pass if `N < 500`.
 
 Manual fallback:
+
 ```js
 const t0 = performance.now();
 // trigger the scene change

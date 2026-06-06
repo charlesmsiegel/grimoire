@@ -13,10 +13,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import type { PCEntry } from "../../api/campaign";
 import { pcProfileApi } from "../../api/campaign";
-import {
-  PCProfileFields,
-  type ProfileFieldValues,
-} from "../CampaignCreate/PCProfileFields";
+import { PCProfileFields, type ProfileFieldValues } from "../CampaignCreate/PCProfileFields";
 
 interface Props {
   pcs: PCEntry[];
@@ -124,9 +121,7 @@ export function PCSwitcher({ pcs, activePcRef, onChange, campaignId }: Props) {
                     <button
                       type="button"
                       className={
-                        isActive
-                          ? "pc-switcher-row pc-switcher-row-active"
-                          : "pc-switcher-row"
+                        isActive ? "pc-switcher-row pc-switcher-row-active" : "pc-switcher-row"
                       }
                       role="option"
                       aria-selected={isActive}
@@ -186,11 +181,7 @@ export function PCSwitcher({ pcs, activePcRef, onChange, campaignId }: Props) {
                 <button type="button" onClick={() => setEditingRef(null)}>
                   Cancel
                 </button>
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={() => void saveEdit()}
-                >
+                <button type="button" className="primary" onClick={() => void saveEdit()}>
                   Save
                 </button>
               </footer>

@@ -51,20 +51,17 @@ export function PreRollConfirmation({ campaignId }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleEvent = useCallback(
-    (m: { type: string } & Record<string, unknown>) => {
-      if (m.type !== "pre_roll_pending") return;
-      // The WS stream is scoped to /ws/campaigns/{id}/stream, so every
-      // event delivered here is already for this campaign — no need to
-      // filter on a campaign_id field (the backend doesn't include one
-      // on the WS payload).
-      const event = m as unknown as PreRollPendingEvent;
-      setPending(event);
-      setRows(event.proposals.map(initialRow));
-      setError(null);
-    },
-    [],
-  );
+  const handleEvent = useCallback((m: { type: string } & Record<string, unknown>) => {
+    if (m.type !== "pre_roll_pending") return;
+    // The WS stream is scoped to /ws/campaigns/{id}/stream, so every
+    // event delivered here is already for this campaign — no need to
+    // filter on a campaign_id field (the backend doesn't include one
+    // on the WS payload).
+    const event = m as unknown as PreRollPendingEvent;
+    setPending(event);
+    setRows(event.proposals.map(initialRow));
+    setError(null);
+  }, []);
 
   useCampaignEvent("pre_roll_pending", handleEvent);
 

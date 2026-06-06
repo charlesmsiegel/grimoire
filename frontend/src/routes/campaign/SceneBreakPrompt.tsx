@@ -133,11 +133,7 @@ export function SceneBreakPrompt({ campaignId }: Props) {
           </p>
         )}
         <div className="modal-actions">
-          <button
-            type="button"
-            onClick={() => void submit("continue")}
-            disabled={submitting}
-          >
+          <button type="button" onClick={() => void submit("continue")} disabled={submitting}>
             Continue here
           </button>
           <button

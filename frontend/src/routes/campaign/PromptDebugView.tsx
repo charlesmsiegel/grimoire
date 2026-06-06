@@ -93,15 +93,12 @@ export function PromptDebugView() {
   };
 
   return (
-    <section
-      className="route campaign-prompt-debug"
-      aria-labelledby="prompt-debug-heading"
-    >
+    <section className="route campaign-prompt-debug" aria-labelledby="prompt-debug-heading">
       <header className="route-header">
         <h2 id="prompt-debug-heading">What did the model see?</h2>
         <p className="muted">
-          The verbatim prompt captured for a turn, with per-message tier, token
-          estimate, and source attribution.
+          The verbatim prompt captured for a turn, with per-message tier, token estimate, and source
+          attribution.
         </p>
       </header>
 
@@ -170,7 +167,14 @@ interface DetailsProps {
   onClearDiff: () => void;
 }
 
-function PromptDetails({ prompt, onDiff, hasPrevious, previousTurnId, diff, onClearDiff }: DetailsProps) {
+function PromptDetails({
+  prompt,
+  onDiff,
+  hasPrevious,
+  previousTurnId,
+  diff,
+  onClearDiff,
+}: DetailsProps) {
   const totalTokens = prompt.messages.reduce((acc, m) => acc + (m.tokens || 0), 0);
   return (
     <>

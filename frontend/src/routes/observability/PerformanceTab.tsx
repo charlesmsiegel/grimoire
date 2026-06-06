@@ -89,10 +89,7 @@ export function PerformanceTab() {
       <header className="observability-controls">
         <label>
           Window:&nbsp;
-          <select
-            value={windowSeconds}
-            onChange={(e) => setWindowSeconds(Number(e.target.value))}
-          >
+          <select value={windowSeconds} onChange={(e) => setWindowSeconds(Number(e.target.value))}>
             {WINDOW_OPTIONS.map((opt) => (
               <option key={opt.seconds} value={opt.seconds}>
                 {opt.label}
@@ -102,10 +99,7 @@ export function PerformanceTab() {
         </label>
         <label>
           Bucket:&nbsp;
-          <select
-            value={bucket}
-            onChange={(e) => setBucket(e.target.value as TrendBucketSize)}
-          >
+          <select value={bucket} onChange={(e) => setBucket(e.target.value as TrendBucketSize)}>
             {BUCKETS.map((b) => (
               <option key={b} value={b}>
                 {b}
@@ -134,10 +128,8 @@ export function PerformanceTab() {
                 {s && (
                   <p className="observability-summary">
                     count {s.count}{" "}
-                    {s.failures > 0 && (
-                      <span className="failed">({s.failures} failed)</span>
-                    )}{" "}
-                    p50 {formatMs(s.p50_ms)} p95 {formatMs(s.p95_ms)} p99 {formatMs(s.p99_ms)}
+                    {s.failures > 0 && <span className="failed">({s.failures} failed)</span>} p50{" "}
+                    {formatMs(s.p50_ms)} p95 {formatMs(s.p95_ms)} p99 {formatMs(s.p99_ms)}
                   </p>
                 )}
                 <Sparkline

@@ -38,9 +38,7 @@ export function ImageGenTab({ campaignId }: { campaignId: string }) {
         <span>Backend</span>
         <select
           value={value.backend ?? ""}
-          onChange={(e) =>
-            setValue((prev) => ({ ...prev, backend: e.target.value || null }))
-          }
+          onChange={(e) => setValue((prev) => ({ ...prev, backend: e.target.value || null }))}
           disabled={!ready}
         >
           <option value="">(integrated diffusers)</option>

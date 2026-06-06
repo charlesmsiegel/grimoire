@@ -1,10 +1,7 @@
 import { type Dispatch, useCallback, useState } from "react";
 
 import { newSceneApi } from "../../api/campaign/newScene";
-import type {
-  PreviewResponse,
-  SuggestResponse,
-} from "../../api/campaign/types";
+import type { PreviewResponse, SuggestResponse } from "../../api/campaign/types";
 import type { PlayAction } from "./playReducer";
 
 interface Props {
@@ -73,10 +70,7 @@ export function ScenePreviewPanel({
         </label>
         <label>
           Location
-          <input
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-          />
+          <input value={location} onChange={(e) => setLocation(e.target.value)} />
         </label>
         <div className="preview-row">
           <span className="preview-label">Time</span>
@@ -100,11 +94,7 @@ export function ScenePreviewPanel({
         <button onClick={back} disabled={creating}>
           Back
         </button>
-        <button
-          onClick={confirm}
-          disabled={creating}
-          className="primary"
-        >
+        <button onClick={confirm} disabled={creating} className="primary">
           {creating ? "Creating..." : "Start Scene"}
         </button>
       </div>

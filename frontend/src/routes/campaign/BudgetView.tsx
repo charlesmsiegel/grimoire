@@ -84,7 +84,10 @@ function ThresholdsCard({ data }: { data: BudgetSummary }) {
         <dt>Campaign total</dt>
         <dd>{formatUsd(sessionUsd)}</dd>
       </div>
-      <div data-warn={severity === "warn" ? "true" : undefined} data-alert={severity === "alert" ? "true" : undefined}>
+      <div
+        data-warn={severity === "warn" ? "true" : undefined}
+        data-alert={severity === "alert" ? "true" : undefined}
+      >
         <dt>Today</dt>
         <dd>{formatUsd(todayUsd)}</dd>
       </div>

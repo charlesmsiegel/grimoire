@@ -11,11 +11,7 @@ import { useParams } from "react-router-dom";
 
 import { ApiError, libraryApi } from "../../api/library";
 import { viewsApi } from "../../api/views";
-import type {
-  ImageMetadata,
-  ResolutionSource,
-  ResolvedCharacter,
-} from "../../api/types";
+import type { ImageMetadata, ResolutionSource, ResolvedCharacter } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import type { ImageJobEntry } from "../../state/storeContext";
 import { useStore } from "../../state/useStore";
@@ -102,9 +98,7 @@ function encodePath(p: string): string {
 
 function ImageTile({ image }: { image: ImageMetadata }) {
   const url = `/api/files/${encodePath(image.file_path)}`;
-  const thumbUrl = image.thumbnail_path
-    ? `/api/files/${encodePath(image.thumbnail_path)}`
-    : url;
+  const thumbUrl = image.thumbnail_path ? `/api/files/${encodePath(image.thumbnail_path)}` : url;
   return (
     <li className="image-tile">
       <figure>
@@ -191,12 +185,7 @@ function ImageQueueRow({ campaignId, job }: { campaignId: string; job: ImageJobE
       {job.scene_id && <span className="muted">scene {job.scene_id}</span>}
       {job.reason && <span className="image-queue-reason">{job.reason}</span>}
       {canCancel && (
-        <button
-          type="button"
-          className="image-queue-cancel"
-          onClick={cancel}
-          disabled={cancelling}
-        >
+        <button type="button" className="image-queue-cancel" onClick={cancel} disabled={cancelling}>
           {cancelling ? "Cancelling…" : "Cancel"}
         </button>
       )}
@@ -303,8 +292,7 @@ function PromptTemplate({
         {
           base_prompt: base,
           negative_prompt: negative,
-          canonical_seed:
-            seedNumber !== null && Number.isFinite(seedNumber) ? seedNumber : null,
+          canonical_seed: seedNumber !== null && Number.isFinite(seedNumber) ? seedNumber : null,
         },
       );
       setDirty(false);

@@ -20,8 +20,7 @@ export interface PresentCastChipData {
 }
 
 export function parsePresentCast(data: unknown): PresentCastChipData[] {
-  const arr =
-    asArray(data) ?? asArray(asRecord(data)?.chips ?? asRecord(data)?.cast);
+  const arr = asArray(data) ?? asArray(asRecord(data)?.chips ?? asRecord(data)?.cast);
   if (!arr) return [];
   return arr
     .map((raw): PresentCastChipData | null => {

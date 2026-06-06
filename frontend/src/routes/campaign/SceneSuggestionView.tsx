@@ -1,11 +1,7 @@
 import { type Dispatch, useCallback, useState } from "react";
 
 import { newSceneApi } from "../../api/campaign/newScene";
-import type {
-  GeneratedSuggestion,
-  LedgerItem,
-  SuggestResponse,
-} from "../../api/campaign/types";
+import type { GeneratedSuggestion, LedgerItem, SuggestResponse } from "../../api/campaign/types";
 import type { PlayAction } from "./playReducer";
 
 interface Props {
@@ -72,9 +68,7 @@ export function SceneSuggestionView({ campaignId, suggestions, dispatch }: Props
           >
             <span className="suggestion-number">{i + 1}</span>
             <span className="suggestion-text">{item.summary}</span>
-            {item.greeting_id && (
-              <span className="greeting-badge">Greeting</span>
-            )}
+            {item.greeting_id && <span className="greeting-badge">Greeting</span>}
           </button>
         ))}
 
@@ -84,9 +78,7 @@ export function SceneSuggestionView({ campaignId, suggestions, dispatch }: Props
             className="suggestion-card generated"
             onClick={() => pickGenerated(g)}
           >
-            <span className="suggestion-number">
-              {suggestions.ledger_picks.length + i + 1}
-            </span>
+            <span className="suggestion-number">{suggestions.ledger_picks.length + i + 1}</span>
             <span className="suggestion-text">{g.summary}</span>
           </button>
         ))}
@@ -103,11 +95,7 @@ export function SceneSuggestionView({ campaignId, suggestions, dispatch }: Props
           placeholder="Or describe the next scene in your own words..."
           className="custom-scene-input"
         />
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="refresh-btn"
-        >
+        <button onClick={refresh} disabled={refreshing} className="refresh-btn">
           {refreshing ? "..." : "Refresh"}
         </button>
       </div>

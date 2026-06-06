@@ -15,9 +15,7 @@ const LLM_SLOTS: ModelSlot[] = [
   },
 ];
 
-const EMBED_SLOTS: ModelSlot[] = [
-  { key: "route", label: "Embedding model", clearable: true },
-];
+const EMBED_SLOTS: ModelSlot[] = [{ key: "route", label: "Embedding model", clearable: true }];
 
 const IMAGEGEN_SLOTS: ModelSlot[] = [];
 
