@@ -238,6 +238,133 @@ async def test_list_models_parses_pricing(openrouter_module) -> None:
     assert by_id["no-pricing"].input_cost_per_1k is None
 
 
+def _provider_of(provider, model: str) -> dict:
+    """Resolve the `provider` routing object that would be sent for `model`."""
+    request = CompletionRequest(
+        model=model, messages=[Message(role=MessageRole.USER, content="hi")]
+    )
+    payload = provider._build_payload(request, stream=False)
+    return payload.get("provider", {})
+
+
+def test_default_provider_routing_is_cost_safe(openrouter_module) -> None:
+    """With no provider config, every request gets the cost-safe default:
+    prefer the cheapest provider and don't silently fall back to a pricier one.
+    """
+    provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
+    routing = _provider_of(provider, "openai/gpt-4o")
+    assert routing["sort"] == "price"
+    assert routing["allow_fallbacks"] is False
+
+
+def test_usage_accounting_requested_for_cost_observability(openrouter_module) -> None:
+    """Requests ask OpenRouter to return real cost so provider-price variance
+    can be logged and diagnosed (catalog pricing hides per-provider variance).
+    """
+    provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
+    request = CompletionRequest(model="x", messages=[Message(role=MessageRole.USER, content="hi")])
+    payload = provider._build_payload(request, stream=False)
+    assert payload["usage"] == {"include": True}
+
+
+def test_builtin_max_price_guard_for_deepseek_v4_pro(openrouter_module) -> None:
+    """The known cost-variance model ships with a per-million price ceiling so a
+    pricier provider can't silently serve it (issue #515)."""
+    provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
+    routing = _provider_of(provider, "deepseek/deepseek-v4-pro")
+    assert routing["allow_fallbacks"] is False
+    assert routing["max_price"] == {"prompt": 0.435, "completion": 0.87}
+
+
+def test_user_provider_config_overrides_default(openrouter_module) -> None:
+    provider = openrouter_module.OpenRouterLLMProvider(
+        config={"api_key": "k", "provider": {"only": ["deepinfra"], "allow_fallbacks": False}}
+    )
+    routing = _provider_of(provider, "openai/gpt-4o")
+    assert routing == {"only": ["deepinfra"], "allow_fallbacks": False}
+
+
+def test_user_provider_overrides_apply_per_model(openrouter_module) -> None:
+    provider = openrouter_module.OpenRouterLLMProvider(
+        config={
+            "api_key": "k",
+            "provider_overrides": {
+                "anthropic/claude-opus-4-7": {"max_price": {"prompt": 15.0, "completion": 75.0}}
+            },
+        }
+    )
+    # The targeted model merges its ceiling over the default base.
+    opus = _provider_of(provider, "anthropic/claude-opus-4-7")
+    assert opus["sort"] == "price"
+    assert opus["max_price"] == {"prompt": 15.0, "completion": 75.0}
+    # User-supplied overrides replace the builtin set, so deepseek no longer
+    # carries its builtin ceiling unless re-declared.
+    assert "max_price" not in _provider_of(provider, "deepseek/deepseek-v4-pro")
+
+
+def test_empty_provider_config_omits_routing(openrouter_module) -> None:
+    """Setting `provider: {}` opts out of routing constraints entirely; the
+    payload then carries no `provider` key (original wire shape)."""
+    provider = openrouter_module.OpenRouterLLMProvider(
+        config={"api_key": "k", "provider": {}, "provider_overrides": {}}
+    )
+    request = CompletionRequest(
+        model="openai/gpt-4o", messages=[Message(role=MessageRole.USER, content="hi")]
+    )
+    payload = provider._build_payload(request, stream=False)
+    assert "provider" not in payload
+
+
+@pytest.mark.asyncio
+async def test_complete_logs_usage_and_cost(openrouter_module, caplog) -> None:
+    """After a completion we log provider/tokens/cost so a 4x provider-price
+    surprise is visible in the logs immediately (issue #515)."""
+    import logging
+
+    provider = openrouter_module.OpenRouterLLMProvider(
+        config={"api_key": "k", "active_model": "deepseek/deepseek-v4-pro"}
+    )
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "gen-xyz",
+                "model": "deepseek/deepseek-v4-pro",
+                "provider": "Pricey Inc",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 33542,
+                    "completion_tokens": 1884,
+                    "total_tokens": 35426,
+                    "cost": 0.064919,
+                },
+            },
+        )
+
+    _install_mock_transport(provider, _handler)
+    with caplog.at_level(logging.INFO, logger=openrouter_module.logger.name):
+        await provider.complete(
+            CompletionRequest(
+                model="deepseek/deepseek-v4-pro",
+                messages=[Message(role=MessageRole.USER, content="hi")],
+            )
+        )
+    record = next(r for r in caplog.records if "usage" in r.getMessage())
+    msg = record.getMessage()
+    assert "Pricey Inc" in msg
+    assert "gen-xyz" in msg
+    assert "33542" in msg
+    assert "1884" in msg
+    assert "0.064919" in msg
+
+
 @pytest.mark.asyncio
 async def test_health_check_unconfigured_without_key(openrouter_module) -> None:
     provider = openrouter_module.OpenRouterLLMProvider()
