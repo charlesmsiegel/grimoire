@@ -29,18 +29,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_reconciled_campaigns: set[str] = set()
-
 
 async def _reconcile_emergent_pcs(
-    campaign_id: str, scene: Any, characters: Any, store: Any
+    campaign_id: str, scene: Any, characters: Any, store: Any, container: Any
 ) -> None:
     """Auto-create stub emergent characters and PC registrations for
     ``present_pc_refs`` entries with the ``emergent/`` prefix that don't
-    exist yet. Runs at most once per campaign per process lifetime."""
-    if campaign_id in _reconciled_campaigns:
+    exist yet. Runs at most once per campaign per app instance — the memo
+    lives on ``container.reconciled_campaigns`` (#560), so it resets with the
+    app rather than persisting for the whole interpreter lifetime."""
+    if campaign_id in container.reconciled_campaigns:
         return
-    _reconciled_campaigns.add(campaign_id)
+    container.reconciled_campaigns.add(campaign_id)
     from grimoire.types.characters import CharacterData, CharacterRole
 
     existing_pcs = {p["character_ref"] for p in await store.list_pcs(campaign_id)}
@@ -101,10 +101,11 @@ async def get_scene(
     scenes: ScenesDep,
     characters: CharactersDep,
     state_store: StateStoreDep,
+    container: ContainerDep,
 ) -> Any:
     try:
         scene = await _require_scene_owned(scenes, campaign_id, scene_id)
-        await _reconcile_emergent_pcs(campaign_id, scene, characters, state_store)
+        await _reconcile_emergent_pcs(campaign_id, scene, characters, state_store, container)
         body = await scenes.load_scene_body(scene_id)
     except HTTPException:
         raise

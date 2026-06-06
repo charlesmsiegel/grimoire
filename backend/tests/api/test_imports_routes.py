@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import json
 import struct
+import time
 import zlib
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from grimoire.api import imports as imports_module
 from grimoire.api.container import ServiceContainer
 from grimoire.api.imports import router as imports_router
 from grimoire.characters import CharactersService
@@ -343,3 +345,49 @@ async def test_list_and_get_reports(client) -> None:
     body = await ac.get(f"/api/library/imports/{reports[0]['id']}")
     assert body.status_code == 200
     assert "Beatrice" in body.json()["body"]
+
+
+def test_store_preview_evicts_expired_entries() -> None:
+    """``_store_preview`` sweeps already-expired slots before inserting."""
+    imports_module._PREVIEW_CACHE.clear()
+    now = time.time()
+    expired = imports_module._PreviewSlot(
+        ingested=object(),  # type: ignore[arg-type]  # slot only stores it
+        world_id="w",
+        filename="old",
+        expires_at=now - 1,
+    )
+    imports_module._PREVIEW_CACHE["stale"] = expired
+    fresh = imports_module._PreviewSlot(
+        ingested=object(),  # type: ignore[arg-type]
+        world_id="w",
+        filename="new",
+        expires_at=now + 1000,
+    )
+    imports_module._store_preview("fresh", fresh)
+    assert "stale" not in imports_module._PREVIEW_CACHE
+    assert "fresh" in imports_module._PREVIEW_CACHE
+    imports_module._PREVIEW_CACHE.clear()
+
+
+def test_store_preview_is_bounded_by_max_entries() -> None:
+    """The preview cache can never grow past ``MAX_PREVIEW_ENTRIES``; the
+    oldest (soonest-to-expire) slots are evicted when the cap is reached."""
+    imports_module._PREVIEW_CACHE.clear()
+    now = time.time()
+    overflow = imports_module.MAX_PREVIEW_ENTRIES + 10
+    for i in range(overflow):
+        slot = imports_module._PreviewSlot(
+            ingested=object(),  # type: ignore[arg-type]
+            world_id="w",
+            filename=f"f{i}",
+            # Strictly increasing expiry → id0 is the oldest.
+            expires_at=now + 1000 + i,
+        )
+        imports_module._store_preview(f"id{i}", slot)
+
+    assert len(imports_module._PREVIEW_CACHE) == imports_module.MAX_PREVIEW_ENTRIES
+    # The earliest-inserted (soonest-expiring) ids were evicted.
+    assert "id0" not in imports_module._PREVIEW_CACHE
+    assert f"id{overflow - 1}" in imports_module._PREVIEW_CACHE
+    imports_module._PREVIEW_CACHE.clear()
