@@ -521,6 +521,29 @@ def _reject_oversized_charx(zf: zipfile.ZipFile) -> None:
         )
 
 
+def _read_charx_member(zf: zipfile.ZipFile, name: str) -> bytes:
+    """Read a ``.charx`` member, bounding the *decompressed* output.
+
+    The central-directory ``file_size`` checked by :func:`_reject_oversized_charx`
+    is attacker-controlled and is not validated by CPython before decompression,
+    so a crafted archive can forge a small declared size over a DEFLATE stream
+    that expands to gigabytes (CWE-409). Reading ``MAX_CHARX_MEMBER_BYTES + 1``
+    decompressed bytes caps the allocation regardless of the declared size: a bomb
+    is rejected before a larger buffer is materialised.
+    """
+    try:
+        with zf.open(name) as fh:
+            data = fh.read(MAX_CHARX_MEMBER_BYTES + 1)
+    except zipfile.BadZipFile as exc:
+        raise ImportError_(f"charx member {name!r} is corrupt: {exc}") from exc
+    if len(data) > MAX_CHARX_MEMBER_BYTES:
+        raise ImportError_(
+            f"charx member {name!r} decompressed output exceeds "
+            f"per-member limit {MAX_CHARX_MEMBER_BYTES}"
+        )
+    return data
+
+
 def _extract_card_from_charx(
     payload: bytes,
 ) -> tuple[dict[str, Any], bytes | None, str, list[str]]:
@@ -538,15 +561,13 @@ def _extract_card_from_charx(
     if candidate is None:
         raise ImportError_("charx bundle missing card.json/character.json/data.json")
     warnings = [f"charx: extracted from {candidate}"]
-    with zf.open(candidate) as fh:
-        envelope = _parse_json_payload(fh.read())
+    envelope = _parse_json_payload(_read_charx_member(zf, candidate))
 
     avatar_bytes: bytes | None = None
     avatar_mime = ""
     for name in ("card.png", "avatar.png", "image.png"):
         if name in names:
-            with zf.open(name) as fh:
-                avatar_bytes = fh.read()
+            avatar_bytes = _read_charx_member(zf, name)
             avatar_mime = "image/png"
             break
     return envelope, avatar_bytes, avatar_mime, warnings
