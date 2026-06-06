@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 
 import { Markdown } from "../../components/Markdown";
 import type { ApiPost, ApiScene, PCEntry } from "../../api/campaign";
@@ -22,7 +22,10 @@ interface Props {
   onPostDeleted?: (deletedIds: string[], warnings: string[]) => void;
 }
 
-export function ScenePane({
+// Memoized: PlayView re-renders on every keystroke in the compose box, but the
+// post list doesn't depend on the draft. With stable props from PlayView this
+// skips re-rendering (and re-parsing the markdown of) every post per keystroke.
+export const ScenePane = memo(function ScenePane({
   posts,
   pcs,
   streaming,
@@ -270,4 +273,4 @@ export function ScenePane({
       <div ref={bottomRef} aria-hidden />
     </section>
   );
-}
+});
