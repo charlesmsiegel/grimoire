@@ -979,7 +979,7 @@ class StateStore:
 
         dir_to_kind = {dir_name: kind for kind, dir_name in KIND_TO_DIR.items()}
         wanted = {"character", "location"}
-        # (campaign_id, kind, holder_id, entries)
+        # Rows hold campaign_id, kind, holder_id, entries
         discovered: list[tuple[str, str, str, list]] = []
         skipped = 0
 

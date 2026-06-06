@@ -448,7 +448,7 @@ class FileWatcher:
         self._expected_writes.pop(Path(path).resolve(), None)
 
     # ------------------------------------------------------------------ #
-    # Internal: reindex + emit
+    # Internal reindex and emit helpers
     # ------------------------------------------------------------------ #
 
     async def _reindex(self, watched: WatchedFile, *, emit: bool) -> None:

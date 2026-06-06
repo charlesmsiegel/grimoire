@@ -34,7 +34,7 @@ EVENT_TYPE_BY_KIND: dict[str, str] = {
 # differ only in directory, file extension, and the kind/entity_kind they map
 # to, so they're table-driven rather than copy-pasted one ``if`` per directory.
 _FLAT_LIBRARY_ASSETS: dict[str, tuple[str, str, str]] = {
-    # head: (extension, kind, entity_kind)
+    # Each value is the extension, kind, entity_kind for that directory.
     "style-guides": (".md", "library_style_guide", "style_guide"),
     "image-presets": (".yaml", "library_image_preset", "image_preset"),
     "calendars": (".yaml", "library_calendar", "calendar"),

@@ -73,19 +73,22 @@ class ExportCapabilities(BaseModel):
     mime_type: str = ""
 
 
-# Discriminated union of per-kind capability shapes, keyed by `PluginKind`
-# value strings so a manifest can carry capabilities for each kind it
-# implements:
-#
-# ```yaml
-# capabilities:
-#   llm_provider:
-#     streaming: true
-#     max_context: 200000
-#   embedding_provider:
-#     dimensions: 1536
-# ```
 class PluginCapabilities(BaseModel):
+    """Per-kind capability shapes, keyed by ``PluginKind`` value strings so a
+    manifest can carry capabilities for each kind it implements.
+
+    Example manifest fragment:
+
+    .. code-block:: yaml
+
+        capabilities:
+          llm_provider:
+            streaming: true
+            max_context: 200000
+          embedding_provider:
+            dimensions: 1536
+    """
+
     llm_provider: LLMCapabilities | None = None
     embedding_provider: EmbeddingCapabilities | None = None
     imagegen_backend: ImageGenCapabilities | None = None

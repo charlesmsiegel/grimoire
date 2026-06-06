@@ -196,7 +196,7 @@ class CharactersService:
         return await self._sheets.delete(world_id, character_id)
 
     # ------------------------------------------------------------------ #
-    # Emergent (campaign-local) + override
+    # Emergent campaign-local content and overrides
     # ------------------------------------------------------------------ #
 
     async def create_emergent(
@@ -818,7 +818,7 @@ class CharactersService:
         )
 
     # ------------------------------------------------------------------ #
-    # Relationships (campaign-scoped)
+    # Campaign-scoped relationships
     # ------------------------------------------------------------------ #
 
     async def get_relationships(self, ref: CharacterRef, campaign_id: CampaignId) -> list[dict]:

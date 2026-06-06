@@ -17,7 +17,7 @@ class WorldRef(BaseModel):
     # None / missing means "include every kind"; an explicit list (even empty)
     # is treated literally — `[]` means include nothing from this world.
     include: list[str] | None = None
-    # ['characters', 'items', 'locations', 'lore', 'factions', 'greetings']
+    # Valid kinds are characters, items, locations, lore, factions, greetings.
     bound_at_version: int = 0
     track_latest: bool = False
 

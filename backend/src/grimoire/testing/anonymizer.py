@@ -60,7 +60,7 @@ DEFAULT_PLACE_NAMES: tuple[str, ...] = (
 # Tables/columns the in-place sqlite anonymizer will rewrite. Tolerant
 # of tables that don't exist yet in older snapshots.
 SQLITE_TARGETS: tuple[tuple[str, str, str], ...] = (
-    # (table, primary_key, column_to_rewrite)
+    # Columns are table, primary_key, column_to_rewrite
     ("posts", "id", "body_excerpt"),
     ("scenes", "id", "summary"),
     ("scenes", "id", "running_summary"),
