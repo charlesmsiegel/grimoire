@@ -960,7 +960,7 @@ class StateStore:
             (campaign_id, holder_kind, holder_id),
         )
 
-    async def rebuild_inventory_holdings_from_files(self) -> None:
+    async def rebuild_inventory_holdings_from_files(self) -> int:
         """Rebuild the derived ``inventory_holdings`` table by reading the
         ``inventory:`` sections directly from campaign overlay files (the SSOT).
 
@@ -969,6 +969,11 @@ class StateStore:
         ``kind`` while the watcher classifies by directory). A full
         truncate-and-repopulate, so removed sections and removed holders leave
         no stale rows. The storage layer owns this derived table and file I/O.
+
+        A holder file that fails to parse is logged (with its path + exception)
+        and skipped rather than aborting the whole rebuild — the SSOT file is
+        intact, so this is a recoverable partial rebuild. Returns the number of
+        holder files skipped so a bad file is observable to callers.
         """
         from grimoire.state_store.paths import KIND_TO_DIR
 
@@ -976,6 +981,7 @@ class StateStore:
         wanted = {"character", "location"}
         # (campaign_id, kind, holder_id, entries)
         discovered: list[tuple[str, str, str, list]] = []
+        skipped = 0
 
         def _subdirs(parent: Path) -> list[Path]:
             if not parent.is_dir():
@@ -997,6 +1003,8 @@ class StateStore:
                     try:
                         fm = read_markdown(f).frontmatter or {}
                     except Exception:
+                        logger.warning("inventory rebuild: failed to parse %s", f, exc_info=True)
+                        skipped += 1
                         continue
                     entries = _entries(fm.get("inventory"))
                     if entries:
@@ -1011,6 +1019,10 @@ class StateStore:
                         try:
                             data = load_yaml(f) or {}
                         except Exception:
+                            logger.warning(
+                                "inventory rebuild: failed to parse %s", f, exc_info=True
+                            )
+                            skipped += 1
                             continue
                         entries = _entries(data.get("inventory"))
                         if entries:
@@ -1046,6 +1058,7 @@ class StateStore:
                             e.get("notes"),
                         ),
                     )
+        return skipped
 
     async def list_inventory_holdings(
         self,
