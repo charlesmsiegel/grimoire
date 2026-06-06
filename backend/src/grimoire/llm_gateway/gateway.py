@@ -1142,7 +1142,8 @@ class LLMGatewayService:
                 last_exc = exc
 
         # All attempts failed with zero chunks delivered.
-        assert last_exc is not None
+        if last_exc is None:
+            raise GatewayError("all gateway attempts failed but no error was recorded")
         raise last_exc
 
     async def _stream_one(
@@ -1383,10 +1384,7 @@ class LLMGatewayService:
             # audit/event payload is the SUM across all batches (i.e. how many
             # extra network round-trips this request required overall).
             batch_size: int | None = getattr(provider, "max_batch_size", None)
-            use_batching = batch_size is not None and batch_size > 0 and batch_size < len(missing)
-
-            if use_batching:
-                assert batch_size is not None  # narrowing for type checker
+            if batch_size is not None and 0 < batch_size < len(missing):
                 batches = [missing[i : i + batch_size] for i in range(0, len(missing), batch_size)]
             else:
                 batches = [missing]

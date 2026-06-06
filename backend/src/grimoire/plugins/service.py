@@ -227,7 +227,10 @@ class PluginsService:
         )
 
     async def _install(self, result: LoadResult) -> None:
-        assert result.manifest is not None
+        if result.manifest is None:
+            raise RuntimeError(
+                f"cannot install plugin {result.plugin_id!r}: load result has no manifest"
+            )
         manifest = result.manifest
         plugin_id = manifest.id
 
@@ -741,7 +744,8 @@ class PluginsService:
     async def stop_periodic_health(self) -> None:
         if self._health_task is None:
             return
-        assert self._health_stop is not None
+        if self._health_stop is None:
+            raise RuntimeError("plugins: health loop task is running but its stop event is missing")
         self._health_stop.set()
         import contextlib
 
@@ -751,7 +755,8 @@ class PluginsService:
         self._health_stop = None
 
     async def _run_health_loop(self) -> None:
-        assert self._health_stop is not None
+        if self._health_stop is None:
+            raise RuntimeError("plugins: health loop started without a stop event")
         interval = max(1, int(self._config.health.check_interval_minutes) * 60)
         while not self._health_stop.is_set():
             try:

@@ -96,7 +96,10 @@ class RetentionMaintainer:
     async def stop(self) -> None:
         if self._task is None:
             return
-        assert self._stop is not None
+        if self._stop is None:
+            raise RuntimeError(
+                "observability retention task is running but its stop event is missing"
+            )
         self._stop.set()
         with contextlib.suppress(asyncio.CancelledError):
             await self._task
@@ -108,7 +111,8 @@ class RetentionMaintainer:
     # ------------------------------------------------------------------ #
 
     async def _loop(self) -> None:
-        assert self._stop is not None
+        if self._stop is None:
+            raise RuntimeError("observability retention started without a stop event")
         while not self._stop.is_set():
             try:
                 await self.run_once()

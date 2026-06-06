@@ -203,7 +203,8 @@ class HealthMonitorService:
     async def stop(self) -> None:
         if self._task is None:
             return
-        assert self._stop_event is not None
+        if self._stop_event is None:
+            raise RuntimeError("health probe task is running but its stop event is missing")
         self._stop_event.set()
         with contextlib.suppress(asyncio.CancelledError):
             await self._task
@@ -211,7 +212,8 @@ class HealthMonitorService:
         self._stop_event = None
 
     async def _run_loop(self) -> None:
-        assert self._stop_event is not None
+        if self._stop_event is None:
+            raise RuntimeError("health probe started without a stop event")
         interval = max(1, int(self._config.probe_interval_seconds))
         while not self._stop_event.is_set():
             try:

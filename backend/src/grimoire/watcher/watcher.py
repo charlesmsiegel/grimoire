@@ -482,7 +482,8 @@ class FileWatcher:
             await self._apply_delete(watched)
         else:
             self._known_hashes[path] = new_hash
-            assert parsed is not None
+            if parsed is None:
+                raise RuntimeError(f"watcher: cannot upsert {path} with no parsed content")
             await self._apply_upsert(watched, parsed.frontmatter, parsed.body)
             if (
                 self.config.indexing.embed_on_index

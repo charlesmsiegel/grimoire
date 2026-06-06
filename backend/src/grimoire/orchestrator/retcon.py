@@ -76,7 +76,8 @@ class RetconCoordinator:
         base = await self._retcon_leave_as_is(post_id, new_text)
         if not replay_subsequent:
             return base
-        assert campaign_id is not None
+        if campaign_id is None:
+            raise RuntimeError("retcon: campaign_id must be resolved before starting replay")
         state = await self.retcon_replay.start(campaign_id=campaign_id, edited_post_id=post_id)
         return base.model_copy(update={"replay_batch_id": state.batch_id})
 
