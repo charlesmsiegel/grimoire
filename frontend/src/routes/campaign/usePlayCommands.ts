@@ -1,4 +1,4 @@
-import { type Dispatch, type MutableRefObject, useCallback } from "react";
+import { type Dispatch, type MutableRefObject, useCallback, useMemo } from "react";
 
 import { campaignApi } from "../../api/campaign";
 import { newSceneApi } from "../../api/campaign/newScene";
@@ -113,16 +113,35 @@ export function usePlayCommands(
     [dispatch],
   );
 
-  return {
-    setActivePC,
-    submit,
-    advance,
-    direct,
-    undo,
-    endScene,
-    analyzeScene,
-    deleteScene,
-    newScene,
-    suppressDrift,
-  };
+  // Memoize the container object, not just its members. Each command above is
+  // already useCallback-stable; without this wrapper the returned object would
+  // still be a fresh literal every render, which churns the `play` identity in
+  // usePlayState (its useMemo depends on `commands`) on every keystroke and
+  // defeats the ScenePane memoization downstream.
+  return useMemo(
+    () => ({
+      setActivePC,
+      submit,
+      advance,
+      direct,
+      undo,
+      endScene,
+      analyzeScene,
+      deleteScene,
+      newScene,
+      suppressDrift,
+    }),
+    [
+      setActivePC,
+      submit,
+      advance,
+      direct,
+      undo,
+      endScene,
+      analyzeScene,
+      deleteScene,
+      newScene,
+      suppressDrift,
+    ],
+  );
 }

@@ -42,8 +42,11 @@ export function PlayView({ campaignId }: Props) {
 
   // Stable handlers so ScenePane (memoized) skips re-rendering the whole post
   // list on every keystroke in the compose box. Typing only updates ``draft``
-  // (PlayView-local); ``play`` is unchanged across keystrokes, so these
-  // useCallbacks keep a stable identity and only churn when play state changes.
+  // (PlayView-local); ``play`` keeps a stable identity across keystrokes —
+  // usePlayState memoizes it and every dependency (reducer state, dispatch, the
+  // memoized commands object, refresh) is unchanged while typing — so these
+  // useCallbacks stay stable and only churn on a real turn (which re-renders
+  // the post list anyway).
   const handleRerollFailed = useCallback(
     (turnId: string) =>
       // Clear the streaming indicator only if it belongs to this reroll's
