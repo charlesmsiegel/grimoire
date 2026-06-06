@@ -35,6 +35,24 @@ async def _wait_for(predicate, timeout: float = 2.0) -> None:
     raise AssertionError("predicate never became truthy")
 
 
+async def _job(svc, campaign_id: str, job_id: str):
+    """Look up a single job through the public ``list_jobs`` API."""
+    for job in await svc.list_jobs(campaign_id):
+        if job.id == job_id:
+            return job
+    raise AssertionError(f"job {job_id!r} not found for campaign {campaign_id!r}")
+
+
+async def _wait_done(svc, campaign_id: str, job_id: str, timeout: float = 2.0) -> None:
+    """Poll the public job listing until ``job_id`` reports COMPLETE."""
+
+    async def _done() -> bool:
+        job = next((j for j in await svc.list_jobs(campaign_id) if j.id == job_id), None)
+        return job is not None and job.status == JobStatus.COMPLETE
+
+    await _wait_for(_done, timeout=timeout)
+
+
 def _request(prompt: str = "noir alley") -> GenerationRequest:
     return GenerationRequest(
         prompt=prompt, width=32, height=32, steps=1, cfg_scale=1.0, sampler="UniPC", seed=7
@@ -191,9 +209,9 @@ async def test_queue_generation_writes_files_and_index(service, tmp_path: Path) 
         request=_request(prompt="scene shot"),
     )
 
-    await _wait_for(lambda: any(j.status == JobStatus.COMPLETE for j in svc._jobs.values()))
+    await _wait_done(svc, "camp-1", job_id)
 
-    job = svc._jobs[job_id]
+    job = await _job(svc, "camp-1", job_id)
     assert job.status == JobStatus.COMPLETE
     images = await svc.list_images("camp-1")
     assert len(images) == 1
@@ -227,7 +245,7 @@ async def test_queue_generation_cache_hit_skips_re_render(service) -> None:
         post_id=None,
         request=_request(prompt="dup"),
     )
-    await _wait_for(lambda: svc._jobs[job1].status == JobStatus.COMPLETE)
+    await _wait_done(svc, "camp-1", job1)
 
     cached_flags: list[bool] = []
     bus.subscribe("image_ready", lambda ev: cached_flags.append(bool(ev.payload.get("cached"))))
@@ -238,7 +256,7 @@ async def test_queue_generation_cache_hit_skips_re_render(service) -> None:
         post_id=None,
         request=_request(prompt="dup"),
     )
-    await _wait_for(lambda: svc._jobs[job2].status == JobStatus.COMPLETE)
+    await _wait_done(svc, "camp-1", job2)
 
     images = await svc.list_images("camp-1")
     # Only one image row — the second job reused the cached image.
@@ -262,7 +280,7 @@ async def test_cancel_queued_job_skips_generation(service) -> None:
         request=_request(prompt="second"),
     )
     await svc.cancel_job(job2)
-    await _wait_for(lambda: svc._jobs[job1].status == JobStatus.COMPLETE)
+    await _wait_done(svc, "camp-1", job1)
     # The cancelled job should never have produced an image.
     images = await svc.list_images("camp-1")
     assert len(images) == 1
@@ -277,7 +295,7 @@ async def test_prioritize_job_updates_priority(service) -> None:
         request=_request(),
     )
     await svc.prioritize_job(job_id, 10)
-    job = svc._jobs[job_id]
+    job = await _job(svc, "camp-1", job_id)
     assert job.priority == 10
 
 
@@ -294,7 +312,7 @@ async def test_star_filter_and_delete(service) -> None:
         post_id=None,
         request=_request(prompt="starring"),
     )
-    await _wait_for(lambda: svc._jobs[job_id].status == JobStatus.COMPLETE)
+    await _wait_done(svc, "camp-1", job_id)
     image = (await svc.list_images("camp-1"))[0]
     await svc.star_image(image.id, True)
     starred = await svc.list_images("camp-1", starred_only=True)
@@ -321,11 +339,11 @@ async def test_reroll_clears_seed_and_keeps_prompt(service) -> None:
         post_id=None,
         request=_request(prompt="reroll subject"),
     )
-    await _wait_for(lambda: svc._jobs[job1].status == JobStatus.COMPLETE)
+    await _wait_done(svc, "camp-1", job1)
     original = (await svc.list_images("camp-1"))[0]
 
     job2 = await svc.reroll(original.id)
-    await _wait_for(lambda: svc._jobs[job2].status == JobStatus.COMPLETE)
+    await _wait_done(svc, "camp-1", job2)
 
     images = await svc.list_images("camp-1")
     assert len(images) == 2
@@ -343,12 +361,12 @@ async def test_variation_runs_img2img_with_strength(service) -> None:
         post_id=None,
         request=_request(prompt="variation source"),
     )
-    await _wait_for(lambda: svc._jobs[job1].status == JobStatus.COMPLETE)
+    await _wait_done(svc, "camp-1", job1)
     original = (await svc.list_images("camp-1"))[0]
 
     job2 = await svc.variation(original.id, 0.4)
-    await _wait_for(lambda: svc._jobs[job2].status == JobStatus.COMPLETE)
-    follow_up_job = svc._jobs[job2]
+    await _wait_done(svc, "camp-1", job2)
+    follow_up_job = await _job(svc, "camp-1", job2)
     assert follow_up_job.request.init_image is not None
     assert follow_up_job.request.init_image_strength == 0.4
 
@@ -407,13 +425,11 @@ async def test_multiple_backends_have_independent_queues(store) -> None:
     await svc.set_active_backend("camp-b", "slow-stub")
 
     try:
-        await svc.queue_generation("camp-a", None, None, request=_request("fast a"))
-        await svc.queue_generation("camp-b", None, None, request=_request("slow b"))
+        job_a = await svc.queue_generation("camp-a", None, None, request=_request("fast a"))
+        job_b = await svc.queue_generation("camp-b", None, None, request=_request("slow b"))
 
-        async def all_done() -> bool:
-            return all(j.status == JobStatus.COMPLETE for j in svc._jobs.values())
-
-        await _wait_for(all_done, timeout=3.0)
+        await _wait_done(svc, "camp-a", job_a, timeout=3.0)
+        await _wait_done(svc, "camp-b", job_b, timeout=3.0)
     finally:
         await svc.aclose()
 
@@ -459,8 +475,12 @@ async def test_cancel_running_job_skips_persist_and_complete(store) -> None:
         await asyncio.wait_for(started.wait(), timeout=2.0)
         await svc.cancel_job(job_id)
         release.set()
-        await _wait_for(lambda: svc._jobs[job_id].finished_at is not None)
-        assert svc._jobs[job_id].status == JobStatus.CANCELLED
+
+        async def _finished() -> bool:
+            return (await _job(svc, "camp-x", job_id)).finished_at is not None
+
+        await _wait_for(_finished)
+        assert (await _job(svc, "camp-x", job_id)).status == JobStatus.CANCELLED
         # No persisted image despite the backend completing.
         assert await svc.list_images("camp-x") == []
     finally:
@@ -469,9 +489,9 @@ async def test_cancel_running_job_skips_persist_and_complete(store) -> None:
 
 
 async def test_init_image_bytes_are_part_of_cache_key(service) -> None:
-    """Two seeded img2img requests with different sources must not collide."""
+    """Two seeded img2img requests differing only in source bytes must not
+    collide in the render cache — each produces its own image."""
     svc, _ = service
-    backend = svc.registry.get("diffusers-memory")
 
     req_a = GenerationRequest(
         prompt="img2img",
@@ -485,15 +505,14 @@ async def test_init_image_bytes_are_part_of_cache_key(service) -> None:
     )
     req_b = req_a.model_copy(update={"init_image": b"BBBB"})
 
-    res_a = await backend.generate(req_a)
-    res_b = await backend.generate(req_b)
-    svc._store_in_cache("camp-1", req_a, backend=backend, result=res_a)
-    svc._store_in_cache("camp-1", req_b, backend=backend, result=res_b)
-    hit_a = svc._lookup_cache("camp-1", req_a, backend=backend)
-    hit_b = svc._lookup_cache("camp-1", req_b, backend=backend)
-    assert hit_a is res_a
-    assert hit_b is res_b
-    assert hit_a is not hit_b
+    job_a = await svc.queue_generation("camp-1", None, None, request=req_a)
+    await _wait_done(svc, "camp-1", job_a)
+    job_b = await svc.queue_generation("camp-1", None, None, request=req_b)
+    await _wait_done(svc, "camp-1", job_b)
+
+    images = await svc.list_images("camp-1")
+    # Distinct init_image bytes ⇒ no cache hit ⇒ two separate images.
+    assert len({i.id for i in images}) == 2
 
 
 async def test_cache_does_not_leak_across_campaigns(store) -> None:
@@ -510,9 +529,9 @@ async def test_cache_does_not_leak_across_campaigns(store) -> None:
     await store.upsert_campaign(campaign_id="camp-b", name="B")
     try:
         job_a = await svc.queue_generation("camp-a", None, None, request=_request("shared"))
-        await _wait_for(lambda: svc._jobs[job_a].status == JobStatus.COMPLETE)
+        await _wait_done(svc, "camp-a", job_a)
         job_b = await svc.queue_generation("camp-b", None, None, request=_request("shared"))
-        await _wait_for(lambda: svc._jobs[job_b].status == JobStatus.COMPLETE)
+        await _wait_done(svc, "camp-b", job_b)
 
         images_a = await svc.list_images("camp-a")
         images_b = await svc.list_images("camp-b")
@@ -535,7 +554,13 @@ async def test_unsafe_campaign_id_is_rejected(service) -> None:
 
 async def test_prioritize_job_mutates_in_place(service) -> None:
     """``prioritize_job`` must update the live job record the worker holds,
-    not swap the dict entry for a copy that the worker won't see."""
+    not swap the dict entry for a copy that the worker won't see.
+
+    Deliberately white-box: object *identity* (the worker and the registry
+    sharing one record) has no external observable, so this guard inspects
+    the internal job table directly. The behavioural effect of prioritising
+    is covered by ``test_prioritize_job_updates_priority``.
+    """
     svc, _ = service
     job_id = await svc.queue_generation("camp-1", None, None, request=_request("priority probe"))
     live = svc._jobs[job_id]
