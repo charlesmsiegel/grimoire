@@ -41,7 +41,7 @@ interface ChainBadgeProps {
 }
 
 export function ChainBadge({ chain, overrides }: ChainBadgeProps) {
-  const top = chain[0];
+  const top = chain?.[0];
   if (!top) {
     return <SourceBadge source="emergent" />;
   }
