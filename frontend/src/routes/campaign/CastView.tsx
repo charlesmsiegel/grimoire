@@ -18,7 +18,7 @@ import { CardIconBar } from "../../components/CardIconBar";
 import { deleteAction } from "../../components/cardActions";
 import { Markdown } from "../../components/Markdown";
 import { SheetRenderer } from "../../sheets";
-import type { SheetSchema, SheetValue } from "../../sheets/types";
+import type { SheetValue } from "../../sheets/types";
 import { ChainBadge, Loading } from "./common";
 
 type SourceFilter = "all" | "library" | "emergent" | "override";
@@ -425,7 +425,7 @@ function CastMechanicalSheet({ campaignId, moduleId, characterId }: CastMechanic
       ) : sheet.status === "ok" && schema.status === "ok" ? (
         <SheetRenderer
           moduleId={moduleId}
-          schema={schema.data as unknown as SheetSchema}
+          schema={schema.data}
           value={(sheet.data ?? {}) as SheetValue}
           themeCss={theme.status === "ok" ? theme.data || undefined : undefined}
           onChange={() => {

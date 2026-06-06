@@ -8,6 +8,8 @@
  */
 
 import { api } from "./client";
+import { SheetSchemaSchema } from "./schemas/sheetSchema";
+import type { SheetSchema } from "../sheets/types";
 import type {
   Composition,
   Greeting,
@@ -104,7 +106,9 @@ export const viewsApi = {
 
   installedMechanics: () => api.get<RegisteredMechanicsModule[]>(`/api/mechanics/installed`),
   getSheetSchema: (moduleId: string, kind: string) =>
-    api.get<Record<string, unknown>>(`/api/mechanics/${enc(moduleId)}/sheets/${enc(kind)}`),
+    api.get<SheetSchema>(`/api/mechanics/${enc(moduleId)}/sheets/${enc(kind)}`, {
+      schema: SheetSchemaSchema,
+    }),
   getMechanicsThemeCss: (moduleId: string) =>
     api.getText(`/api/mechanics/${enc(moduleId)}/theme.css`),
 

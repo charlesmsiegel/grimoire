@@ -176,7 +176,7 @@ function SheetsPanel({ campaignId, module, moduleId, characters, onRefresh }: Sh
   // Prefer the inlined `theme_css` on the RegisteredModule payload (one fewer
   // network hop); fall back to the standalone GET when missing.
   const themeCss = module?.theme_css ?? (themeState.status === "ok" ? themeState.data : "");
-  const schema = schemaState.status === "ok" ? (schemaState.data as unknown as SheetSchema) : null;
+  const schema = schemaState.status === "ok" ? schemaState.data : null;
 
   return (
     <div className="mechanics-sheets-layout">
