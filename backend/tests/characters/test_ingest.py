@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import struct
+import tracemalloc
 import zipfile
 import zlib
 from io import BytesIO
@@ -275,6 +276,52 @@ def test_ingest_charx_rejects_oversized_total(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(ImportError_, match="total uncompressed size"):
         ingest_character_card_v2(buf.getvalue())
+
+
+def test_ingest_charx_rejects_forged_file_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bomb that forges a small central-directory ``file_size`` slips past the
+    declared-size guard, but bounded decompression caps the allocation (CWE-409).
+
+    ``writestr`` always records an honest ``file_size``, so the other charx tests
+    only cover bombs that *truthfully* declare a large size. This one hand-patches
+    the central directory to declare a tiny ``file_size`` over a stream that really
+    expands to 4 MiB — the exact bypass the per-member declared-size check misses.
+    """
+    from grimoire.characters import ingest as ingest_mod
+
+    monkeypatch.setattr(ingest_mod, "MAX_CHARX_MEMBER_BYTES", 64 * 1024)
+    monkeypatch.setattr(ingest_mod, "MAX_CHARX_TOTAL_BYTES", 256 * 1024)
+
+    # 4 MiB of highly-compressible JSON: archive stays a few KiB, real output 4 MiB.
+    big = b'{"data":{"name":"vivienne","description":"' + b"A" * (4 * 1024 * 1024) + b'"}}'
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("card.json", big)
+    archive = bytearray(buf.getvalue())
+
+    # Forge the uncompressed-size field (offset +24) in the central-directory
+    # header (signature ``PK\x01\x02``) down to 64 bytes — well under the 64 KiB cap.
+    cd = archive.rfind(b"PK\x01\x02")
+    assert cd != -1
+    struct.pack_into("<I", archive, cd + 24, 64)
+    archive = bytes(archive)
+
+    # The forged size sails past _reject_oversized_charx's declared-size check...
+    assert zipfile.ZipFile(BytesIO(archive)).getinfo("card.json").file_size == 64
+    assert len(archive) < 64 * 1024
+
+    # ...so only the bounded read stands between the bomb and the heap. Measure the
+    # peak allocation: the unbounded read this PR replaced inflated the full 4 MiB
+    # (~9 MiB peak) before truncating; the bounded read stays well under 1 MiB.
+    tracemalloc.start()
+    try:
+        with pytest.raises(ImportError_):
+            ingest_character_card_v2(archive)
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak < 1 * 1024 * 1024, f"bounded read should cap allocation; peaked at {peak} bytes"
 
 
 def test_ingest_charx_allows_member_at_limit(monkeypatch: pytest.MonkeyPatch) -> None:
