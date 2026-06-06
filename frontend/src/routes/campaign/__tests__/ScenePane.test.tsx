@@ -72,6 +72,22 @@ describe("ScenePane pending-response marker", () => {
   });
 });
 
+describe("ScenePane generated images", () => {
+  it("gives orphan content images meaningful alt text from the prompt", () => {
+    renderPane({
+      images: { img1: { id: "img1", url: "/api/files/x.png", prompt: "A glowing rune" } },
+    });
+    expect(screen.getByRole("img", { name: "A glowing rune" })).toBeInTheDocument();
+  });
+
+  it("falls back to a descriptive, non-empty alt when an orphan image has no prompt", () => {
+    renderPane({ images: { img1: { id: "img1", url: "/api/files/x.png" } } });
+    const img = screen.getByRole("img");
+    expect(img.getAttribute("alt")).toBe("Generated scene image");
+    expect(img.getAttribute("alt")).not.toBe("");
+  });
+});
+
 describe("ScenePane delete wiring", () => {
   it("passes a delete button and forwards onPostDeleted", async () => {
     const { campaignApi } = await import("../../../api/campaign");

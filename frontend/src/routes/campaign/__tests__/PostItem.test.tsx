@@ -459,3 +459,35 @@ describe("PostItem cost in header", () => {
     expect(screen.queryByRole("button", { name: /cost/i })).toBeNull();
   });
 });
+
+describe("PostItem generated images", () => {
+  beforeEach(() => mockIntersectionObserver());
+
+  it("gives a content image meaningful alt text from the prompt", () => {
+    render(
+      <PostItem
+        post={makePost()}
+        pcs={PCS}
+        images={[
+          { id: "img1", url: "/api/files/x.png", post_id: "p1", prompt: "A misty castle at dawn" },
+        ]}
+        campaignId="c1"
+      />,
+    );
+    expect(screen.getByRole("img", { name: "A misty castle at dawn" })).toBeInTheDocument();
+  });
+
+  it("falls back to a descriptive, non-empty alt when the image has no prompt", () => {
+    render(
+      <PostItem
+        post={makePost()}
+        pcs={PCS}
+        images={[{ id: "img1", url: "/api/files/x.png", post_id: "p1" }]}
+        campaignId="c1"
+      />,
+    );
+    const img = screen.getByRole("img");
+    expect(img.getAttribute("alt")).toBe("Generated scene image");
+    expect(img.getAttribute("alt")).not.toBe("");
+  });
+});

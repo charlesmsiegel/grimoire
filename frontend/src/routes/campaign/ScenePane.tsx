@@ -225,7 +225,7 @@ export const ScenePane = memo(function ScenePane({
         <ul className="scene-orphan-images" aria-label="Recently generated images">
           {orphans.map((img) => (
             <li key={img.id}>
-              <img src={img.url} alt="" loading="lazy" />
+              <img src={img.url} alt={img.prompt || "Generated scene image"} loading="lazy" />
             </li>
           ))}
         </ul>

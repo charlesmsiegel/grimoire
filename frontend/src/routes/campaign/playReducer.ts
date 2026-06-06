@@ -11,6 +11,10 @@ export interface SceneImage {
   id: string;
   url: string;
   post_id?: string;
+  /** Generation prompt, when the originating event carries it. Used as the
+   *  image's accessible name (`alt`); falls back to a generic description when
+   *  absent so screen readers never hit an empty `alt` on this content image. */
+  prompt?: string;
 }
 
 export interface PlayState {

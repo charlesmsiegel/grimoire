@@ -160,8 +160,9 @@ export function usePlayStreamEvents(
           const id = typeof message.image_id === "string" ? message.image_id : null;
           const url = typeof message.url === "string" ? message.url : null;
           const post_id = typeof message.post_id === "string" ? message.post_id : undefined;
+          const prompt = typeof message.prompt === "string" ? message.prompt : undefined;
           if (id && url) {
-            dispatch({ type: "image-ready", image: { id, url, post_id } });
+            dispatch({ type: "image-ready", image: { id, url, post_id, prompt } });
           }
           return;
         }
