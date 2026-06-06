@@ -8,7 +8,10 @@ ingest and writes the import report.
 
 The preview cache is process-local; the cache key returned to the
 client is opaque. It expires after :data:`PREVIEW_TTL_SECONDS` (default
-15 minutes).
+15 minutes) and is hard-capped at :data:`MAX_PREVIEW_ENTRIES` slots, so a
+burst of previewed-but-never-committed cards can't leak memory: expired
+slots are swept and, if the cap is still reached, the oldest slots are
+evicted before a new one is inserted.
 """
 
 from __future__ import annotations
@@ -32,6 +35,12 @@ router = APIRouter()
 
 
 PREVIEW_TTL_SECONDS = 15 * 60
+
+# Hard cap on concurrently cached previews. Combined with the TTL sweep this
+# bounds the cache regardless of client behaviour: a single local user is never
+# realistically mid-preview on hundreds of cards at once, so the cap only ever
+# bites under abuse, where it degrades to evicting the oldest in-flight preview.
+MAX_PREVIEW_ENTRIES = 256
 
 
 class _PreviewSlot:
@@ -60,6 +69,20 @@ def _gc_expired() -> None:
         _PREVIEW_CACHE.pop(key, None)
 
 
+def _store_preview(preview_id: str, slot: _PreviewSlot) -> None:
+    """Cache a preview slot, keeping the cache bounded.
+
+    Sweeps expired slots first; if the cache is still at
+    :data:`MAX_PREVIEW_ENTRIES`, evicts the soonest-to-expire slots until
+    there is room. This guarantees the cache never exceeds the cap.
+    """
+    _gc_expired()
+    while len(_PREVIEW_CACHE) >= MAX_PREVIEW_ENTRIES:
+        oldest = min(_PREVIEW_CACHE, key=lambda k: _PREVIEW_CACHE[k].expires_at)
+        _PREVIEW_CACHE.pop(oldest, None)
+    _PREVIEW_CACHE[preview_id] = slot
+
+
 class CommitPayload(BaseModel):
     preview_id: str
     options: dict[str, Any] = Field(default_factory=dict)
@@ -85,13 +108,15 @@ async def preview_sillytavern_import(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"could not parse card: {exc}") from exc
 
-    _gc_expired()
     preview_id = uuid.uuid4().hex
-    _PREVIEW_CACHE[preview_id] = _PreviewSlot(
-        ingested=ingested,
-        world_id=world_id,
-        filename=file.filename or "card",
-        expires_at=time.time() + PREVIEW_TTL_SECONDS,
+    _store_preview(
+        preview_id,
+        _PreviewSlot(
+            ingested=ingested,
+            world_id=world_id,
+            filename=file.filename or "card",
+            expires_at=time.time() + PREVIEW_TTL_SECONDS,
+        ),
     )
     # Avatar bytes don't survive JSON encoding and aren't useful to the
     # client (the preview UI shows the raw upload). Drop them before

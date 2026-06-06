@@ -8,7 +8,7 @@ what they need; an endpoint that requires an absent service returns ``503``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -121,6 +121,12 @@ class ServiceContainer:
     # Lazy-init services (previously in extras dict)
     expressions: ExpressionStateService | None = None
     context_inspector: ContextInspector | None = None
+
+    # Per-app memoization (scoped to this container's lifetime, i.e. the
+    # process/app instance). Campaign ids whose emergent PCs have already been
+    # reconciled on a scene GET (#560); kept here rather than module-level so a
+    # fresh app instance reconciles anew and tests don't leak the set.
+    reconciled_campaigns: set[str] = field(default_factory=set)
 
 
 __all__ = ["ServiceContainer"]
