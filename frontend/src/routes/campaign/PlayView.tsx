@@ -39,6 +39,40 @@ export function PlayView({ campaignId }: Props) {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+
+  // Stable handlers so ScenePane (memoized) skips re-rendering the whole post
+  // list on every keystroke in the compose box. Typing only updates ``draft``
+  // (PlayView-local); ``play`` is unchanged across keystrokes, so these
+  // useCallbacks keep a stable identity and only churn when play state changes.
+  const handleRerollFailed = useCallback(
+    (turnId: string) =>
+      // Clear the streaming indicator only if it belongs to this reroll's
+      // stream. The turn-id match happens in the reducer against live state, so
+      // it survives the stale click-time closure and never clears a concurrent
+      // normal turn's stream.
+      play.dispatch({ type: "stream-end-if-turn", turn_id: turnId }),
+    [play],
+  );
+  const handlePostDeleted = useCallback(
+    (deletedIds: string[], warnings: string[]) => {
+      // Drop the removed suffix from view immediately: a plain refresh would
+      // re-preserve them, since the ``loaded`` reducer keeps current same-scene
+      // posts missing from the snapshot.
+      play.dispatch({ type: "remove-posts", ids: deletedIds });
+      // Surface any state the backend couldn't revert (e.g. a delta or
+      // continuity write that failed to reverse) so the prose doesn't just
+      // vanish with derived state silently left behind.
+      if (warnings.length > 0) {
+        play.dispatch({
+          type: "turn-failed",
+          message:
+            "Post deleted, but some derived state could not be reverted:\n" + warnings.join("\n"),
+        });
+      }
+      void play.refresh();
+    },
+    [play],
+  );
   const [timeDigest, setTimeDigest] = useState<TimeAdvanceResult | null>(null);
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [hudCollapsed, setHudCollapsed] = useState(false);
@@ -183,31 +217,8 @@ export function PlayView({ campaignId }: Props) {
               hasMorePosts={play.state.hasMorePosts}
               onLoadMore={loadMorePosts}
               expressionsEnabledCharacters={expressionsEnabledCharacters}
-              onRerollFailed={(turnId) =>
-                // Clear the streaming indicator only if it belongs to this
-                // reroll's stream. The turn-id match happens in the reducer
-                // against live state, so it survives the stale click-time
-                // closure and never clears a concurrent normal turn's stream.
-                play.dispatch({ type: "stream-end-if-turn", turn_id: turnId })
-              }
-              onPostDeleted={(deletedIds, warnings) => {
-                // Drop the removed suffix from view immediately: a plain
-                // refresh would re-preserve them, since the ``loaded`` reducer
-                // keeps current same-scene posts missing from the snapshot.
-                play.dispatch({ type: "remove-posts", ids: deletedIds });
-                // Surface any state the backend couldn't revert (e.g. a delta
-                // or continuity write that failed to reverse) so the prose
-                // doesn't just vanish with derived state silently left behind.
-                if (warnings.length > 0) {
-                  play.dispatch({
-                    type: "turn-failed",
-                    message:
-                      "Post deleted, but some derived state could not be reverted:\n" +
-                      warnings.join("\n"),
-                  });
-                }
-                void play.refresh();
-              }}
+              onRerollFailed={handleRerollFailed}
+              onPostDeleted={handlePostDeleted}
             />
           )}
           {play.state.mode === "play" && play.state.turnError && (
