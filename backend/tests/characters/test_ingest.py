@@ -238,6 +238,57 @@ def test_ingest_charx_missing_card_json_raises() -> None:
         ingest_character_card_v2(buf.getvalue())
 
 
+def test_ingest_charx_rejects_zip_bomb_member(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A member whose declared uncompressed size exceeds the per-member cap is
+    rejected from the central directory, without decompressing the bomb."""
+    from grimoire.characters import ingest as ingest_mod
+
+    monkeypatch.setattr(ingest_mod, "MAX_CHARX_MEMBER_BYTES", 64 * 1024)
+
+    # 4 MiB of zeros compresses to a few KB, but declares a 4 MiB file_size.
+    bomb = b"\x00" * (4 * 1024 * 1024)
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("card.json", json.dumps(_v2_card_json()))
+        zf.writestr("bomb.bin", bomb)
+    archive = buf.getvalue()
+    # The crafted archive itself stays tiny — that is the bomb's whole point.
+    assert len(archive) < 64 * 1024
+
+    with pytest.raises(ImportError_, match="per-member limit"):
+        ingest_character_card_v2(archive)
+
+
+def test_ingest_charx_rejects_oversized_total(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Many individually-OK members can still blow the total uncompressed cap."""
+    from grimoire.characters import ingest as ingest_mod
+
+    monkeypatch.setattr(ingest_mod, "MAX_CHARX_MEMBER_BYTES", 256 * 1024)
+    monkeypatch.setattr(ingest_mod, "MAX_CHARX_TOTAL_BYTES", 512 * 1024)
+
+    chunk = b"\x00" * (200 * 1024)  # under the per-member cap
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("card.json", json.dumps(_v2_card_json()))
+        for i in range(5):  # 5 * 200 KiB = 1 MiB > 512 KiB total cap
+            zf.writestr(f"pad-{i}.bin", chunk)
+
+    with pytest.raises(ImportError_, match="total uncompressed size"):
+        ingest_character_card_v2(buf.getvalue())
+
+
+def test_ingest_charx_allows_member_at_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bundle within the caps still imports normally — the guard isn't trigger-happy."""
+    from grimoire.characters import ingest as ingest_mod
+
+    monkeypatch.setattr(ingest_mod, "MAX_CHARX_MEMBER_BYTES", 1024 * 1024)
+    monkeypatch.setattr(ingest_mod, "MAX_CHARX_TOTAL_BYTES", 2 * 1024 * 1024)
+
+    archive = _charx_with_card(_v2_card_json())
+    card = ingest_character_card_v2(archive)
+    assert card.data.name == "vivienne"
+
+
 # --------------------------------------------------------------------------- #
 # Deterministic relationship + faction extraction
 # --------------------------------------------------------------------------- #

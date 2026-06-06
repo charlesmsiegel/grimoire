@@ -71,6 +71,15 @@ the ingestor directly.
 
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
 
+# Uncompressed-size caps for ``.charx`` (ZIP) members. Character cards are
+# untrusted content users routinely download from the internet, so a crafted
+# bundle (tiny compressed, huge declared size — CWE-409 zip bomb) could exhaust
+# memory on extraction. We reject members by their declared uncompressed size
+# from the ZIP central directory *before* reading any bytes, so the bomb never
+# gets the large allocation it's designed to trigger.
+MAX_CHARX_MEMBER_BYTES = 50 * 1024 * 1024  # 50 MiB per member
+MAX_CHARX_TOTAL_BYTES = 200 * 1024 * 1024  # 200 MiB total uncompressed
+
 
 class LLMEnrichment(dict):
     """Loose dict-typed enrichment patch returned by an LLM hook.
@@ -490,6 +499,28 @@ def _decode_b64_json(value: bytes) -> dict[str, Any] | None:
     return decoded if isinstance(decoded, dict) else None
 
 
+def _reject_oversized_charx(zf: zipfile.ZipFile) -> None:
+    """Reject ``.charx`` bundles whose declared uncompressed size is too large.
+
+    Reads the per-member ``file_size`` recorded in the ZIP central directory, so
+    the check runs *before* any member is decompressed — a zip bomb is rejected
+    without the large allocation it is designed to trigger (CWE-409). Enforces
+    both a per-member and a total-uncompressed cap.
+    """
+    total = 0
+    for info in zf.infolist():
+        if info.file_size > MAX_CHARX_MEMBER_BYTES:
+            raise ImportError_(
+                f"charx member {info.filename!r} uncompressed size "
+                f"{info.file_size} exceeds per-member limit {MAX_CHARX_MEMBER_BYTES}"
+            )
+        total += info.file_size
+    if total > MAX_CHARX_TOTAL_BYTES:
+        raise ImportError_(
+            f"charx total uncompressed size {total} exceeds limit {MAX_CHARX_TOTAL_BYTES}"
+        )
+
+
 def _extract_card_from_charx(
     payload: bytes,
 ) -> tuple[dict[str, Any], bytes | None, str, list[str]]:
@@ -497,6 +528,7 @@ def _extract_card_from_charx(
         zf = zipfile.ZipFile(BytesIO(payload))
     except zipfile.BadZipFile as exc:
         raise ImportError_(f"charx is not a valid zip: {exc}") from exc
+    _reject_oversized_charx(zf)
     names = set(zf.namelist())
     candidate: str | None = None
     for name in ("card.json", "character.json", "data.json"):
