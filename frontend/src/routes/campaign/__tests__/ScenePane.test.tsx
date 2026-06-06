@@ -203,6 +203,39 @@ describe("ScenePane new-turn anchoring", () => {
   });
 });
 
+describe("ScenePane console hygiene", () => {
+  const scene = {
+    id: "s1",
+    campaign_id: "c1",
+    post_count: 2,
+    closed: false,
+    present_character_refs: [],
+  } as unknown as Parameters<typeof ScenePane>[0]["scene"];
+  const user1 = { ...makePost("u1"), is_player: true, author_kind: "pc" as const };
+  const model1 = makePost("m1");
+
+  it("does not log scroll diagnostics during render or anchoring", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { rerender } = renderPane({ posts: [user1, model1], scene });
+
+    const user2 = { ...makePost("u2"), is_player: true, author_kind: "pc" as const };
+    rerender(
+      <ScenePane
+        posts={[user1, model1, user2]}
+        pcs={PCS}
+        streaming={null}
+        awaitingResponse={false}
+        images={{}}
+        hasMorePosts={false}
+        onLoadMore={() => {}}
+        scene={scene}
+      />,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("ScenePane cost attribution", () => {
   it("renders the turn cost once, on the user post, for a split-into-two turn", async () => {
     const { observabilityApi } = await import("../../../api/observability");
