@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -30,8 +31,30 @@ from grimoire.types.llm import (
     TokenUsage,
 )
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
+
+# Default `provider` routing applied to every request when the user hasn't
+# configured their own. OpenRouter can serve one model slug from several
+# upstream providers at wildly different prices, so the cost-safe default is to
+# prefer the cheapest (`sort: price`) and *not* silently fall back to a pricier
+# provider when the cheap one is unavailable — fail clearly instead (#515).
+DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
+    "sort": "price",
+    "allow_fallbacks": False,
+}
+
+# Per-model price ceilings for models with known cost-variance traps. `max_price`
+# is a hard cap in USD per million tokens — OpenRouter refuses (rather than
+# silently upgrades to) any provider above it. Seeded from the issue's observed
+# DeepSeek V4 Pro rates; fully overridable via the `provider_overrides` config.
+BUILTIN_PROVIDER_OVERRIDES: dict[str, dict[str, Any]] = {
+    "deepseek/deepseek-v4-pro": {
+        "max_price": {"prompt": 0.435, "completion": 0.87},
+    },
+}
 
 
 def _verify() -> Any:
@@ -103,6 +126,21 @@ class OpenRouterLLMProvider:
         self._extra_headers: dict[str, str] = (
             {str(k): str(v) for k, v in extra.items()} if isinstance(extra, dict) else {}
         )
+        # Provider routing: a default object merged into every request, plus
+        # per-model overrides merged on top for that model (#515). An explicit
+        # `provider: {}` opts out of the cost-safe default entirely; supplying
+        # `provider_overrides` replaces the builtin price-guard set.
+        self._provider_default: dict[str, Any] = (
+            dict(cfg["provider"])
+            if isinstance(cfg.get("provider"), dict)
+            else dict(DEFAULT_PROVIDER_CONFIG)
+        )
+        overrides = cfg.get("provider_overrides")
+        self._provider_overrides: dict[str, dict[str, Any]] = (
+            {str(k): dict(v) for k, v in overrides.items() if isinstance(v, dict)}
+            if isinstance(overrides, dict)
+            else dict(BUILTIN_PROVIDER_OVERRIDES)
+        )
         self._client: Any = None
         self._client_lock = asyncio.Lock()
         self._models_cache: list[ModelInfo] | None = None
@@ -131,6 +169,7 @@ class OpenRouterLLMProvider:
         finish = str(choice.get("finish_reason") or "stop")
         usage = _usage(data.get("usage"))
         model_id = str(data.get("model") or request.model or self._active_model)
+        _log_usage(model_id, usage, data)
         return CompletionResponse(
             text=text,
             model=model_id,
@@ -148,6 +187,8 @@ class OpenRouterLLMProvider:
         client = await self._ensure_client()
         payload = self._build_payload(request, stream=True)
         usage: TokenUsage | None = None
+        model_id = str(request.model or self._active_model)
+        meta: dict[str, Any] = {}
         try:
             async with client.stream("POST", "/chat/completions", json=payload) as response:
                 if response.status_code >= 400:
@@ -167,6 +208,13 @@ class OpenRouterLLMProvider:
                         continue
                     if event.get("usage"):
                         usage = _usage(event["usage"])
+                        meta["usage"] = event["usage"]
+                    if event.get("provider"):
+                        meta.setdefault("provider", event["provider"])
+                    if event.get("id"):
+                        meta.setdefault("id", event["id"])
+                    if event.get("model"):
+                        meta.setdefault("model", event["model"])
                     choices = event.get("choices") or []
                     if not choices:
                         continue
@@ -180,6 +228,8 @@ class OpenRouterLLMProvider:
             # instead of treating the raw httpx error as a permanent failure and
             # aborting the turn on a momentary network blip.
             raise _as_transient(exc) from exc
+        if usage is not None:
+            _log_usage(str(meta.get("model") or model_id), usage, meta)
         yield CompletionChunk(delta="", is_final=True, usage=usage)
 
     async def list_models(self) -> list[ModelInfo]:
@@ -312,16 +362,31 @@ class OpenRouterLLMProvider:
             messages.append({"role": "system", "content": request.system})
         for m in request.messages:
             messages.append({"role": _role(m.role), "content": m.content})
+        model = request.model or self._active_model
         payload: dict[str, Any] = {
-            "model": request.model or self._active_model,
+            "model": model,
             "messages": messages,
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
             "stream": stream,
+            # Ask OpenRouter to return the *actual* charged cost so we can log it
+            # and detect provider-price variance — catalog pricing reflects the
+            # headline rate, not whichever provider actually served the call.
+            "usage": {"include": True},
         }
+        provider = self._resolve_provider(model)
+        if provider:
+            payload["provider"] = provider
         if request.stop_sequences:
             payload["stop"] = list(request.stop_sequences)
         return payload
+
+    def _resolve_provider(self, model: str) -> dict[str, Any]:
+        """Provider routing object for `model`: the default base with this
+        model's overrides merged on top. Empty when routing is opted out."""
+        routing = dict(self._provider_default)
+        routing.update(self._provider_overrides.get(model, {}))
+        return routing
 
     def _fallback_model_info(self) -> ModelInfo:
         return ModelInfo(id=self._active_model, name=self._active_model, context_window=0)
@@ -360,6 +425,45 @@ def _usage(payload: Any) -> TokenUsage:
     completion = int(payload.get("completion_tokens") or 0)
     total = int(payload.get("total_tokens") or (prompt + completion))
     return TokenUsage(input_tokens=prompt, output_tokens=completion, total_tokens=total)
+
+
+def _reasoning_tokens(raw: dict[str, Any]) -> int:
+    direct = raw.get("reasoning_tokens")
+    if direct:
+        return int(direct)
+    details = raw.get("completion_tokens_details")
+    if isinstance(details, dict) and details.get("reasoning_tokens"):
+        return int(details["reasoning_tokens"])
+    return 0
+
+
+def _log_usage(model_id: str, usage: TokenUsage, data: Any) -> None:
+    """Log per-request usage and cost so provider-price variance is visible the
+    moment it happens (#515). The blended cost-per-million makes a request that
+    landed on a pricier provider stand out against the model's headline rate.
+    """
+    raw = data.get("usage") if isinstance(data, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    provider = data.get("provider") if isinstance(data, dict) else None
+    gen_id = data.get("id") if isinstance(data, dict) else None
+    reasoning = _reasoning_tokens(raw)
+    cost = raw.get("cost")
+    billed = usage.input_tokens + usage.output_tokens
+    cost_per_million: float | None = None
+    if isinstance(cost, int | float) and billed:
+        cost_per_million = round(cost / billed * 1_000_000, 4)
+    logger.info(
+        "openrouter usage model=%s provider=%s gen_id=%s prompt=%d completion=%d "
+        "reasoning=%d total_cost=%s blended_$/M=%s",
+        model_id,
+        provider,
+        gen_id,
+        usage.input_tokens,
+        usage.output_tokens,
+        reasoning,
+        cost,
+        cost_per_million,
+    )
 
 
 __all__ = ["OpenRouterLLMProvider"]
