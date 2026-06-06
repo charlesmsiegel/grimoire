@@ -771,7 +771,7 @@ class LibraryService:
         )
 
     # ------------------------------------------------------------------ #
-    # Composition (delegated)
+    # Delegated composition methods
     # ------------------------------------------------------------------ #
 
     async def get_composition(self, campaign_id: str) -> Composition:
@@ -781,7 +781,7 @@ class LibraryService:
         return await self._composition.set_composition(campaign_id, composition)
 
     # ------------------------------------------------------------------ #
-    # Scanner (delegated)
+    # Delegated scanner methods
     # ------------------------------------------------------------------ #
 
     async def world_diff(

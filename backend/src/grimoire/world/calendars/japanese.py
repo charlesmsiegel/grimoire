@@ -16,7 +16,7 @@ from .gregorian import (
     gregorian_to_jdn,
 )
 
-# (era_name, start_gregorian_year, start_gregorian_month, start_gregorian_day)
+# Columns are era_name, start_gregorian_year, start_gregorian_month, start_gregorian_day
 ERAS = [
     ("Reiwa", 2019, 5, 1),
     ("Heisei", 1989, 1, 8),

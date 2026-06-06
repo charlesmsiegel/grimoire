@@ -95,9 +95,9 @@ def _month_lengths(year: int) -> list[int]:
     leap = is_hebrew_leap(year)
     year_len = hebrew_year_length(year)
     # Determine Cheshvan & Kislev lengths from year length.
-    # Defective: 353/383 (Cheshvan=29, Kislev=29)
-    # Regular:   354/384 (Cheshvan=29, Kislev=30)
-    # Complete:  355/385 (Cheshvan=30, Kislev=30)
+    # Defective year of 353 or 383 days has Cheshvan 29 and Kislev 29.
+    # Regular year of 354 or 384 days has Cheshvan 29 and Kislev 30.
+    # Complete year of 355 or 385 days has Cheshvan 30 and Kislev 30.
     cheshvan = 30 if year_len in (355, 385) else 29
     kislev = 29 if year_len in (353, 383) else 30
     if leap:

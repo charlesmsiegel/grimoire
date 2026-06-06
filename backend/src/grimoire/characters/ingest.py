@@ -890,8 +890,8 @@ def strip_avatar_metadata(payload: bytes) -> bytes:
             key, _, _ = chunk_data.partition(b"\x00")
             if key.decode("ascii", errors="replace").lower() in _PRESERVE_TEXT_KEYS:
                 out.extend(chunk)
-            # else: drop
-        # else: drop unknown / decorative chunks
+            # otherwise drop this text chunk
+        # otherwise drop unknown / decorative chunks
         pos = data_end + 4
         if chunk_type == b"IEND":
             break

@@ -505,7 +505,7 @@ __all__ = [  # noqa: RUF022 — grouped by topic for readability
     "ReplaySubstitution",
     "TurnAudit",
     "WarningRecord",
-    # protocols (plugin-shaped)
+    # plugin-shaped protocols
     "EmbeddingProvider",
     "EventBus",
     "EventHandler",
@@ -514,7 +514,7 @@ __all__ = [  # noqa: RUF022 — grouped by topic for readability
     "ImageGenBackend",
     "LLMProvider",
     "MechanicsModule",
-    # protocols (module-shaped)
+    # module-shaped protocols
     "CharactersProtocol",
     "ContextBuilderProtocol",
     "ContinuityProtocol",
