@@ -318,6 +318,27 @@ async def test_shared_secret_unset_when_neither_side_configured(
     assert "api_key" not in cfg or not cfg["api_key"]
 
 
+async def test_install_raises_explicit_error_when_manifest_missing(
+    plugins_root: Path, config_root: Path
+) -> None:
+    """``_install`` must reject a manifest-less ``LoadResult`` with a raised
+    error, not a bare ``assert`` (which vanishes under ``python -O``)."""
+    from grimoire.plugins.loader import LoadResult
+
+    svc = _service(plugins_root, config_root)
+    bad = LoadResult(
+        plugin_dir=plugins_root / "broken",
+        plugin_id="broken",
+        manifest=None,
+        instances=[],
+        errors=[],
+        bundled=False,
+    )
+
+    with pytest.raises(RuntimeError, match="manifest"):
+        await svc._install(bad)
+
+
 async def test_unload_clears_record(plugins_root: Path, config_root: Path) -> None:
     write_plugin(plugins_root, "alpha")
     svc = _service(plugins_root, config_root)
