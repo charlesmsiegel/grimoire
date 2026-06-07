@@ -59,10 +59,16 @@ pythonpath = ["src"]
 # command-line `-m` overrides this, so CI's layered `-m ...` jobs are unaffected.
 addopts = ["-m", "not perf"]
 # Un-awaited-coroutine mistakes (e.g. a blanket AsyncMock leaking child
-# coroutines) are silent footguns — promote that specific RuntimeWarning to a
-# test failure so it can't regress. Other RuntimeWarning classes stay warnings.
+# coroutines) are silent footguns — promote them to a test failure so they
+# can't regress. A leaked coroutine is finalized by the GC, so its
+# "was never awaited" RuntimeWarning surfaces through Python's unraisable hook,
+# which pytest re-wraps as PytestUnraisableExceptionWarning — the bare
+# RuntimeWarning rule alone never fires under pytest, so the wrapper category
+# must be promoted too (matched narrowly on "coroutine object" so only coroutine
+# leaks fail, not every unraisable). Other RuntimeWarning classes stay warnings.
 filterwarnings = [
     "error:coroutine .* was never awaited:RuntimeWarning",
+    "error:Exception ignored in.*coroutine object:pytest.PytestUnraisableExceptionWarning",
 ]
 markers = [
     "conformance: plugin conformance contract tests (spec 17 §L2)",

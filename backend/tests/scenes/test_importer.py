@@ -175,36 +175,51 @@ def test_import_endpoint_error_frame_carries_status(tmp_path: Path) -> None:
 
 
 class _RecordingDb:
-    """Minimal async DB double recording the cadence reads/writes."""
+    """Minimal async DB double recording cadence reads/writes into a shared log.
 
-    def __init__(self, config_json: str | None) -> None:
+    Cadence writes and ``append_post`` calls share one ordered ``events`` list so
+    the test can assert the *interleaving* — suppression must precede every
+    append and restoration must follow them — not merely that two writes happen
+    in value order.
+    """
+
+    def __init__(self, config_json: str | None, events: list[tuple[str, object]]) -> None:
         self._config_json = config_json
-        self.executed: list[tuple[str, tuple]] = []
+        self.events = events
 
     async def fetchone(self, _sql: str, _params: tuple) -> dict | None:
         return {"config": self._config_json}
 
-    async def execute(self, sql: str, params: tuple) -> None:
-        self.executed.append((sql, params))
+    async def execute(self, _sql: str, params: tuple) -> None:
+        # params for a cadence write are (value, campaign_id).
+        self.events.append(("cadence", params[0], params[-1]))
 
 
 class _RecordingStateStore:
-    def __init__(self, config_json: str | None) -> None:
-        self.db = _RecordingDb(config_json)
+    def __init__(self, config_json: str | None, events: list[tuple[str, object]]) -> None:
+        self.db = _RecordingDb(config_json, events)
 
 
 @pytest.mark.asyncio
 async def test_run_import_pipeline_suppresses_then_restores_cadence(tmp_path: Path) -> None:
     """The wired state-store path overrides the running-summary cadence to 0
-    during bulk append, then restores the saved value afterwards."""
+    *before* bulk append and restores the saved value *after* — so cadence is
+    suppressed for the duration of the append loop, not merely at some point."""
     md = tmp_path / "scene.md"
     md.write_text(
         "## Post 1 — narrator\n\nHello.\n\n## Post 2 — pc:alice\n\nHi.\n",
         encoding="utf-8",
     )
     config_json = json.dumps({"summaries": {"running_every_n_posts": 3}})
-    state_store = _RecordingStateStore(config_json)
+    # One ordered history shared by the cadence writes and the append calls.
+    events: list[tuple[str, object]] = []
+    state_store = _RecordingStateStore(config_json, events)
     scene_manager = _make_scene_manager(tmp_path, state_store=state_store)
+
+    async def _record_append(_scene_id: str, post: object) -> None:
+        events.append(("append", getattr(post, "id", None)))
+
+    scene_manager.append_post.side_effect = _record_append
 
     async for _ in run_import_pipeline(
         scene_manager=scene_manager,
@@ -215,7 +230,11 @@ async def test_run_import_pipeline_suppresses_then_restores_cadence(tmp_path: Pa
     ):
         pass
 
-    # First write suppresses the cadence (0), final write restores the saved 3.
-    written_values = [params[0] for _sql, params in state_store.db.executed]
-    assert written_values == [0, 3]
-    assert all(params[-1] == "camp" for _sql, params in state_store.db.executed)
+    kinds = [event[0] for event in events]
+    # Suppression (0) is the first event; restoration (3) is the last — both
+    # targeting this campaign.
+    assert events[0] == ("cadence", 0, "camp")
+    assert events[-1] == ("cadence", 3, "camp")
+    # Exactly the two cadence writes bracket the appends — none interleaved.
+    assert kinds == ["cadence"] + ["append"] * kinds.count("append") + ["cadence"]
+    assert kinds.count("append") == 2
