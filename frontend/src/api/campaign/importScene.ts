@@ -45,16 +45,22 @@ function tryParseFrame(data: string): Record<string, unknown> | null {
   }
 }
 
-// Valid JSON is not necessarily a valid progress frame (e.g. `{}` or string-valued
-// counters). Validate the shape so the UI never renders `NaN%` or undefined text.
+// Valid JSON is not necessarily a valid progress frame (e.g. `{}`, string-valued
+// counters, or `total: 0`). The dialog computes `current / total * 100`, so the
+// counters must be finite with a positive total — otherwise the bar renders a
+// `NaN%`/`Infinity%` width. Validate the shape and bounds before accepting it.
 function isImportProgress(
   p: Record<string, unknown>,
 ): p is ImportProgress & Record<string, unknown> {
   return (
     typeof p.step === "string" &&
+    typeof p.detail === "string" &&
     typeof p.current === "number" &&
+    Number.isFinite(p.current) &&
+    p.current >= 0 &&
     typeof p.total === "number" &&
-    typeof p.detail === "string"
+    Number.isFinite(p.total) &&
+    p.total > 0
   );
 }
 
