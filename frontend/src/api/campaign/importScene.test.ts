@@ -65,13 +65,68 @@ describe("importSceneApi.import", () => {
     expect((err as ApiError).message).toBe("malformed import payload");
   });
 
-  it("surfaces a well-formed error frame as its declared ApiError", async () => {
-    mockImport(['event: error\ndata: {"detail":"pipeline boom","status":422}']);
+  it("surfaces a well-formed error frame with the backend-supplied status", async () => {
+    mockImport(['event: error\ndata: {"detail":"bad input","status":400}']);
 
     const err = await importSceneApi.import("camp-1", body, () => {}).catch((e) => e);
 
     expect(err).toBeInstanceOf(ApiError);
-    expect((err as ApiError).status).toBe(422);
+    expect((err as ApiError).status).toBe(400);
+    expect((err as ApiError).message).toBe("bad input");
+  });
+
+  it("defaults to status 500 when the error frame omits a status", async () => {
+    mockImport(['event: error\ndata: {"detail":"pipeline boom"}']);
+
+    const err = await importSceneApi.import("camp-1", body, () => {}).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(500);
     expect((err as ApiError).message).toBe("pipeline boom");
+  });
+
+  it("rejects an empty scene id as a malformed payload", async () => {
+    mockImport(['event: result\ndata: {"scene_id":""}']);
+
+    const err = await importSceneApi.import("camp-1", body, () => {}).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).message).toBe("malformed import payload");
+  });
+
+  it("skips a well-formed JSON progress frame that is the wrong shape", async () => {
+    const progress: ImportProgress[] = [];
+    mockImport([
+      'event: progress\ndata: {"step":"parse","current":"x","total":2,"detail":"reading"}',
+      "event: progress\ndata: {}",
+      'event: result\ndata: {"scene_id":"scene-7"}',
+    ]);
+
+    const id = await importSceneApi.import("camp-1", body, (p) => progress.push(p));
+
+    expect(id).toBe("scene-7");
+    expect(progress).toHaveLength(0);
+  });
+
+  it("parses a final result frame that arrives without a trailing blank line", async () => {
+    // Construct the body directly so no trailing "\n\n" delimiter is appended.
+    globalThis.fetch = vi.fn(
+      async () => new Response('event: result\ndata: {"scene_id":"scene-eof"}', { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    const id = await importSceneApi.import("camp-1", body, () => {});
+
+    expect(id).toBe("scene-eof");
+  });
+
+  it("surfaces a mid-frame truncated result at EOF as a typed error", async () => {
+    globalThis.fetch = vi.fn(
+      async () => new Response('event: result\ndata: {"scene_id":"scen', { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    const err = await importSceneApi.import("camp-1", body, () => {}).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).message).toBe("malformed import payload");
   });
 });

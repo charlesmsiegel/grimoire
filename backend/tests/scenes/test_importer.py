@@ -119,3 +119,28 @@ async def test_run_import_pipeline_progress_events(tmp_path: Path) -> None:
     assert "done" in steps
     assert scene_manager.start_scene.called
     assert scene_manager.append_post.call_count == 2
+
+
+def test_import_endpoint_error_frame_carries_status(tmp_path: Path) -> None:
+    """A pipeline ValueError surfaces as an error frame with an HTTP status."""
+    from grimoire.api.deps import get_container, get_scenes, get_state_store
+
+    md = tmp_path / "plain.md"
+    md.write_text("Just some prose with no post headings.", encoding="utf-8")
+
+    app = _make_test_app()
+    state_store = MagicMock()
+    state_store.db.fetchone = AsyncMock(return_value={"id": "camp"})
+    app.dependency_overrides[get_state_store] = lambda: state_store
+    app.dependency_overrides[get_scenes] = lambda: AsyncMock()
+    app.dependency_overrides[get_container] = lambda: MagicMock()
+
+    client = TestClient(app)
+    resp = client.post(
+        "/campaigns/camp/scenes/import",
+        json={"path": str(md), "title": "Plain"},
+    )
+
+    assert resp.status_code == 200
+    assert "event: error" in resp.text
+    assert '"status": 400' in resp.text

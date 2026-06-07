@@ -37,11 +37,25 @@ export interface ImportProgress {
 function tryParseFrame(data: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(data);
-    if (!parsed || typeof parsed !== "object") return null;
+    // Arrays are typeof "object" too — require a plain object shape.
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
     return parsed as Record<string, unknown>;
   } catch {
     return null;
   }
+}
+
+// Valid JSON is not necessarily a valid progress frame (e.g. `{}` or string-valued
+// counters). Validate the shape so the UI never renders `NaN%` or undefined text.
+function isImportProgress(
+  p: Record<string, unknown>,
+): p is ImportProgress & Record<string, unknown> {
+  return (
+    typeof p.step === "string" &&
+    typeof p.current === "number" &&
+    typeof p.total === "number" &&
+    typeof p.detail === "string"
+  );
 }
 
 export const importSceneApi = {
@@ -65,46 +79,64 @@ export const importSceneApi = {
       const msg = detail.detail ?? "Import failed";
       throw new ApiError(res.status, msg, msg);
     }
+    // Handle one SSE frame. Returns the scene id for a terminal `result` frame,
+    // null for progress/unrecognized frames, and throws a typed ApiError on a
+    // malformed result/error frame or a well-formed error frame.
+    const handleFrame = (part: string): string | null => {
+      const eventMatch = part.match(/^event:\s*(\w+)\ndata:\s*(.+)$/s);
+      if (!eventMatch) return null;
+      const type = eventMatch[1]!;
+      const data = eventMatch[2]!;
+      if (type === "progress") {
+        // Skip a malformed or wrong-shaped progress frame rather than aborting.
+        const payload = tryParseFrame(data);
+        if (payload && isImportProgress(payload)) onProgress(payload);
+        return null;
+      }
+      if (type === "result") {
+        const payload = tryParseFrame(data);
+        if (!payload || typeof payload.scene_id !== "string" || !payload.scene_id) {
+          throw new ApiError(0, "malformed import payload", "malformed import payload");
+        }
+        return payload.scene_id;
+      }
+      if (type === "error") {
+        const payload = tryParseFrame(data);
+        if (!payload) {
+          throw new ApiError(0, "malformed import payload", "malformed import payload");
+        }
+        const errMsg =
+          typeof payload.detail === "string" ? payload.detail : "Import pipeline error";
+        const errStatus = typeof payload.status === "number" ? payload.status : 500;
+        throw new ApiError(errStatus, errMsg, errMsg);
+      }
+      return null;
+    };
+
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buf = "";
-    let sceneId = "";
-    outer: for (;;) {
+    let sceneId: string | null = null;
+    for (;;) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        // A truncated stream may leave a final frame in `buf` without its
+        // trailing blank-line delimiter — process it so it still surfaces a
+        // typed result/error instead of the generic "ended without result".
+        const tail = buf.trim();
+        if (tail) sceneId = handleFrame(tail);
+        break;
+      }
       buf += decoder.decode(value, { stream: true });
       const parts = buf.split("\n\n");
       buf = parts.pop()!;
       for (const part of parts) {
-        const eventMatch = part.match(/^event:\s*(\w+)\ndata:\s*(.+)$/s);
-        if (!eventMatch) continue;
-        const type = eventMatch[1]!;
-        const data = eventMatch[2]!;
-        if (type === "progress") {
-          // Skip a single malformed progress frame rather than aborting the import.
-          const payload = tryParseFrame(data);
-          if (payload) onProgress(payload as unknown as ImportProgress);
-        }
-        if (type === "result") {
-          void reader.cancel();
-          const payload = tryParseFrame(data);
-          if (!payload || typeof payload.scene_id !== "string") {
-            throw new ApiError(0, "malformed import payload", "malformed import payload");
-          }
-          sceneId = payload.scene_id;
-          break outer;
-        }
-        if (type === "error") {
-          void reader.cancel();
-          const payload = tryParseFrame(data);
-          if (!payload) {
-            throw new ApiError(0, "malformed import payload", "malformed import payload");
-          }
-          const errMsg =
-            typeof payload.detail === "string" ? payload.detail : "Import pipeline error";
-          const errStatus = typeof payload.status === "number" ? payload.status : 500;
-          throw new ApiError(errStatus, errMsg, errMsg);
-        }
+        sceneId = handleFrame(part);
+        if (sceneId !== null) break;
+      }
+      if (sceneId !== null) {
+        void reader.cancel();
+        break;
       }
     }
     if (!sceneId) throw new Error("Import ended without result");
