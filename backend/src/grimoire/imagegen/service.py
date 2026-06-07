@@ -1033,6 +1033,23 @@ class ImageGenService:
     # Internals
     # ------------------------------------------------------------------ #
 
+    async def preview_prompt(
+        self,
+        campaign_id: str,
+        scene_id: str | None,
+        post_id: str | None,
+    ) -> GenerationRequest:
+        """Compose (but do not queue) the illustrate prompt for review.
+
+        Backs the "preview prompt before generating" flow: the frontend
+        shows the returned prompt for editing, then submits it back through
+        :meth:`queue_generation` as an explicit request.
+        """
+        _validate_campaign_id(campaign_id)
+        return await self._compose_request(
+            campaign_id=campaign_id, scene_id=scene_id, post_id=post_id
+        )
+
     async def _compose_request(
         self,
         *,
@@ -1042,9 +1059,9 @@ class ImageGenService:
     ) -> GenerationRequest:
         composed: ComposedPrompt | None = None
         if self.composer is not None:
-            post_body: str | None = None
-            if post_id is not None:
-                post_body = await self._fetch_post_body(post_id)
+            # Feed the light LLM the recent run of prose (last few posts) so
+            # the prompt reflects the current moment, not just one line.
+            post_body = await self._recent_scene_prose(scene_id, post_id)
             preset_id = await self._campaign_image_preset_id(campaign_id)
             composed = await self.composer.compose(
                 campaign_id=campaign_id,
@@ -1075,13 +1092,66 @@ class ImageGenService:
             return None
         return row["body_excerpt"] or None
 
+    async def _recent_scene_prose(
+        self, scene_id: str | None, post_id: str | None, *, limit: int = 3
+    ) -> str | None:
+        """Concatenate the last ``limit`` posts of the scene, chronologically.
+
+        When ``post_id`` is given the window ends at (and includes) that post,
+        so illustrating a specific post uses it plus its lead-up. Falls back to
+        the single post body when there is no scene to scan.
+        """
+        if scene_id is None:
+            return await self._fetch_post_body(post_id) if post_id is not None else None
+        where = "scene_id = ?"
+        params: list[Any] = [scene_id]
+        if post_id is not None:
+            anchor = await self.store.db.fetchone(
+                "SELECT order_in_scene FROM posts WHERE id = ?", (post_id,)
+            )
+            if anchor is not None:
+                where += " AND order_in_scene <= ?"
+                params.append(anchor["order_in_scene"])
+        rows = await self.store.db.fetchall(
+            f"SELECT body_excerpt FROM posts WHERE {where} ORDER BY order_in_scene DESC LIMIT ?",
+            (*params, limit),
+        )
+        bodies = [r["body_excerpt"] for r in reversed(rows) if r["body_excerpt"]]
+        return "\n\n".join(bodies) or None
+
+    async def image_file(self, image_id: str, *, thumbnail: bool = False) -> Path:
+        """Resolve an image's on-disk path, guarded against escaping data_root.
+
+        Raises ``KeyError`` if the image is unknown and ``FileNotFoundError``
+        if the metadata points at a missing/!out-of-root file — both map to
+        404 via :func:`grimoire.api.util.map_lookup_errors`.
+        """
+        meta = await self.get_image(image_id)
+        rel = meta.thumbnail_path if thumbnail else meta.file_path
+        if not rel:
+            raise FileNotFoundError(
+                f"image {image_id!r} has no {'thumbnail' if thumbnail else 'file'}"
+            )
+        root = self.data_root.resolve()
+        path = (root / rel).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise FileNotFoundError(f"image file for {image_id!r} not found")
+        return path
+
     async def _campaign_image_preset_id(self, campaign_id: str) -> str | None:
         row = await self.store.db.fetchone(
             "SELECT image_preset_id FROM campaigns WHERE id = ?", (campaign_id,)
         )
         if row is None:
             return None
-        return row["image_preset_id"]
+        raw = row["image_preset_id"]
+        if not raw:
+            return None
+        # The composition stores the preset as a library ref
+        # ("image-presets/<id>"), but get_image_preset re-adds that folder
+        # prefix — strip it here so we don't look up "image-presets/image-
+        # presets/<id>".
+        return raw.removeprefix("image-presets/")
 
     def _request_from_metadata(self, meta: ImageMetadata, *, new_seed: bool) -> GenerationRequest:
         params = meta.params or {}

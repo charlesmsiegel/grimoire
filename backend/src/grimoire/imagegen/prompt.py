@@ -207,8 +207,14 @@ class PromptComposer:
         preset_negative = ""
         preset_params: dict[str, Any] = {}
         if image_preset_id and self.library is not None:
-            preset = await self.library.get_image_preset(image_preset_id)
-            fm = getattr(preset, "frontmatter", None) or {}
+            # A missing/misconfigured preset must not sink the whole
+            # illustrate request — degrade to no preset, like the location
+            # and character lookups below.
+            try:
+                preset = await self.library.get_image_preset(image_preset_id)
+            except Exception:
+                preset = None
+            fm = (getattr(preset, "frontmatter", None) or {}) if preset is not None else {}
             preset_preamble = str(fm.get("style_preamble") or fm.get("preamble") or "")
             preset_negative = str(fm.get("negative_prompt") or "")
             preset_params = dict(fm.get("default_params") or {})

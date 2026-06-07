@@ -153,6 +153,11 @@ class ImageGenPayload(BaseModel):
     priority: int = 5
 
 
+class ComposePromptPayload(BaseModel):
+    scene_id: str | None = None
+    post_id: str | None = None
+
+
 class ExportPayload(BaseModel):
     adapter_id: str
     selection: dict[str, Any] = Field(default_factory=dict)

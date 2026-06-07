@@ -5,11 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter
+from fastapi.responses import FileResponse
 
 from grimoire.api.deps import ImageGenDep
 from grimoire.api.util import map_lookup_errors, to_payload
 
 from .schemas import (
+    ComposePromptPayload,
     EditAndRegeneratePayload,
     FallbackBackendPayload,
     ImageGenPayload,
@@ -48,6 +50,29 @@ async def generate_image(
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return {"job_id": job_id}
+
+
+@router.post("/{campaign_id}/images/compose-prompt")
+async def compose_image_prompt(
+    campaign_id: str,
+    payload: ComposePromptPayload,
+    imagegen: ImageGenDep,
+) -> Any:
+    """Compose the illustrate prompt without generating, for preview/edit."""
+    try:
+        request = await imagegen.preview_prompt(campaign_id, payload.scene_id, payload.post_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {
+        "prompt": request.prompt,
+        "negative_prompt": request.negative_prompt or "",
+        "width": request.width,
+        "height": request.height,
+        "steps": request.steps,
+        "cfg_scale": request.cfg_scale,
+        "sampler": request.sampler,
+        "seed": request.seed,
+    }
 
 
 @router.get("/{campaign_id}/images")
@@ -190,6 +215,34 @@ async def get_image(
         return to_payload(await imagegen.get_image(image_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+
+
+@router.get("/{campaign_id}/images/{image_id}/file")
+async def get_image_file(
+    campaign_id: str,
+    image_id: str,
+    imagegen: ImageGenDep,
+) -> FileResponse:
+    del campaign_id
+    try:
+        path = await imagegen.image_file(image_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return FileResponse(path, media_type="image/png")
+
+
+@router.get("/{campaign_id}/images/{image_id}/thumbnail")
+async def get_image_thumbnail(
+    campaign_id: str,
+    image_id: str,
+    imagegen: ImageGenDep,
+) -> FileResponse:
+    del campaign_id
+    try:
+        path = await imagegen.image_file(image_id, thumbnail=True)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @router.put("/{campaign_id}/images/{image_id}/star")

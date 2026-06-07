@@ -109,6 +109,7 @@ async def build_content_services(
         ImageGenHealthProber,
         ImageGenIntegration,
         ImageGenService,
+        PromptComposer,
     )
     from grimoire.library import LibraryConfig, LibraryService
     from grimoire.mechanics import MechanicsConfig, MechanicsService
@@ -263,11 +264,32 @@ async def build_content_services(
 
     if container.imagegen is None:
         imagegen_cfg = ImageGenConfig.from_yaml(data_root / "config" / "imagegen.yaml")
+        # Bridge plugin-loaded imagegen backends (A1111, ComfyUI, DALL-E, ...)
+        # into the service registry. Without this the registry is empty and
+        # every generate call raises KeyError -> 404, even when imagegen.yaml
+        # names a default_backend.
+        registry = BackendRegistry()
+        plugin_backend_ids: list[str] = []
+        if container.plugins is not None:
+            for backend in container.plugins.imagegen_backends():
+                registry.register(backend)
+                plugin_backend_ids.append(backend.id)
+        # The composer assembles the prompt from the campaign style preset,
+        # in-scene character prompts, and location; its light-LLM visual
+        # extractor is attached in Phase 2 once the gateway exists.
+        composer = PromptComposer(
+            scene_manager=container.scenes,
+            library=container.library,
+            world=container.world,
+            characters=container.characters,
+        )
         container.imagegen = ImageGenService(
             store=container.state_store,
-            registry=BackendRegistry(),
+            registry=registry,
             default_backend_id=None,
             event_bus=container.event_bus,
+            composer=composer,
+            plugin_backend_ids=plugin_backend_ids,
             config=imagegen_cfg,
         )
     lifecycle.register_async("imagegen", _StopAdapter(container.imagegen.aclose))
@@ -308,6 +330,7 @@ async def build_llm_services(
     from grimoire.extractor.llm_strategy import parse_llm_payload
     from grimoire.extractor.schema import output_schema
     from grimoire.extractor.service import ExtractorService
+    from grimoire.imagegen import LLMVisualExtractor
     from grimoire.llm_gateway.gateway import LLMGatewayService
     from grimoire.observability.replayer import TurnReplayerService
     from grimoire.observability.service import ObservabilityService
@@ -385,6 +408,11 @@ async def build_llm_services(
 
     if container.imagegen is not None:
         container.imagegen.set_gateway(llm_gateway)
+        # Now that the gateway exists, give the prompt composer its light-LLM
+        # visual extractor (LIGHT tier) so illustrate prompts are built from
+        # recent prose rather than the deterministic keyword fallback.
+        if container.imagegen.composer is not None and llm_gateway is not None:
+            container.imagegen.composer.visual_extractor = LLMVisualExtractor(llm_gateway)
     if obs.replayer is None:
         obs.replayer = TurnReplayerService(
             audit_store=obs.audit_store,

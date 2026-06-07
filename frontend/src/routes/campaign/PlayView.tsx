@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { campaignApi, type TimeAdvanceResult } from "../../api/campaign";
 import { fetchExpressionsConfig } from "../../api/expressions";
 
+import { IllustrateDialog } from "./IllustrateDialog";
 import { SceneLedgerDialog } from "./SceneLedgerDialog";
 import { ScenePreviewPanel } from "./ScenePreviewPanel";
 import { SceneSuggestionView } from "./SceneSuggestionView";
@@ -79,6 +80,7 @@ export function PlayView({ campaignId }: Props) {
   );
   const [timeDigest, setTimeDigest] = useState<TimeAdvanceResult | null>(null);
   const [ledgerOpen, setLedgerOpen] = useState(false);
+  const [illustrateOpen, setIllustrateOpen] = useState(false);
   const [hudCollapsed, setHudCollapsed] = useState(false);
 
   const [expressionsEnabledList, setExpressionsEnabledList] = useState<string[]>([]);
@@ -323,6 +325,7 @@ export function PlayView({ campaignId }: Props) {
                 onOpenLedger: () => setLedgerOpen(true),
                 onSkipTime: handleSkipTime,
                 onManualFact: handleManualFact,
+                onIllustrate: () => setIllustrateOpen(true),
                 busy,
               }}
               playerInput={draft}
@@ -336,6 +339,13 @@ export function PlayView({ campaignId }: Props) {
         campaignId={campaignId}
         open={ledgerOpen}
         onClose={() => setLedgerOpen(false)}
+      />
+      <IllustrateDialog
+        open={illustrateOpen}
+        campaignId={campaignId}
+        sceneId={play.state.scene?.id ?? null}
+        postId={play.state.posts.at(-1)?.id ?? null}
+        onClose={() => setIllustrateOpen(false)}
       />
     </section>
   );

@@ -38,6 +38,18 @@ const enc = encodeURIComponent;
 const ResolvedCharacterList = z.array(ResolvedCharacterSchema);
 const ResolvedEntityList = z.array(ResolvedEntitySchema);
 
+/** Auto-composed image prompt returned by the compose-prompt endpoint. */
+export interface ComposedImagePrompt {
+  prompt: string;
+  negative_prompt: string;
+  width: number;
+  height: number;
+  steps: number;
+  cfg_scale: number;
+  sampler: string;
+  seed: number | null;
+}
+
 export const viewsApi = {
   listCharacters: (campaignId: string) =>
     api.get<ResolvedCharacter[]>(`/api/campaigns/${enc(campaignId)}/characters`, {
@@ -105,6 +117,16 @@ export const viewsApi = {
     campaignId: string,
     body: { scene_id?: string; post_id?: string; request?: Record<string, unknown> },
   ) => api.post<{ job_id: string }>(`/api/campaigns/${enc(campaignId)}/images/generate`, body),
+
+  /** Compose (but don't render) the illustrate prompt, for preview/edit. */
+  composeImagePrompt: (campaignId: string, body: { scene_id?: string; post_id?: string }) =>
+    api.post<ComposedImagePrompt>(`/api/campaigns/${enc(campaignId)}/images/compose-prompt`, body),
+
+  /** URL of a generated image's bytes (campaign-scoped file endpoint). */
+  imageFileUrl: (campaignId: string, imageId: string, opts: { thumbnail?: boolean } = {}) =>
+    `/api/campaigns/${enc(campaignId)}/images/${enc(imageId)}/${
+      opts.thumbnail ? "thumbnail" : "file"
+    }`,
 
   getSheet: (campaignId: string, kind: string, entityId: string) =>
     api.get<Record<string, unknown>>(

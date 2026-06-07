@@ -28,6 +28,7 @@ export interface QuickActions {
   onOpenLedger: () => void;
   onSkipTime: () => void;
   onManualFact: () => void;
+  onIllustrate: () => void;
   busy: boolean;
 }
 
@@ -396,6 +397,9 @@ function QuickActionsBlock({ actions, scene }: { actions: QuickActions; scene: A
           </button>
           <button type="button" onClick={actions.onManualFact} disabled={actions.busy}>
             Manual fact
+          </button>
+          <button type="button" onClick={actions.onIllustrate} disabled={actions.busy || !scene}>
+            Illustrate
           </button>
         </div>
       </div>
