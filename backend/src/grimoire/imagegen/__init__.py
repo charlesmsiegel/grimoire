@@ -38,6 +38,7 @@ from grimoire.imagegen.service import (
     TriggerConfig,
     should_illustrate,
 )
+from grimoire.imagegen.visual_extractor import LLMVisualExtractor
 
 __all__ = [
     "BackendRegistry",
@@ -48,6 +49,7 @@ __all__ = [
     "ImageGenService",
     "InMemoryDiffusersBackend",
     "IntegratedDiffusersBackend",
+    "LLMVisualExtractor",
     "PromptComposer",
     "TriggerConfig",
     "cache_key_for_request",

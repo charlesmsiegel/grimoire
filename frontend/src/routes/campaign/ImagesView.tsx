@@ -9,7 +9,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { fileUrl } from "../../api/files";
 import { ApiError, libraryApi } from "../../api/library";
 import { viewsApi } from "../../api/views";
 import type { ImageMetadata, ResolutionSource, ResolvedCharacter } from "../../api/types";
@@ -82,7 +81,7 @@ function Gallery({ campaignId }: { campaignId: string }) {
         {(images) => (
           <ul className="grid-cards image-grid">
             {images.map((img) => (
-              <ImageTile key={img.id} image={img} />
+              <ImageTile key={img.id} image={img} campaignId={campaignId} />
             ))}
           </ul>
         )}
@@ -91,9 +90,11 @@ function Gallery({ campaignId }: { campaignId: string }) {
   );
 }
 
-function ImageTile({ image }: { image: ImageMetadata }) {
-  const url = fileUrl(image.file_path);
-  const thumbUrl = image.thumbnail_path ? fileUrl(image.thumbnail_path) : url;
+function ImageTile({ image, campaignId }: { image: ImageMetadata; campaignId: string }) {
+  const url = viewsApi.imageFileUrl(campaignId, image.id);
+  const thumbUrl = image.thumbnail_path
+    ? viewsApi.imageFileUrl(campaignId, image.id, { thumbnail: true })
+    : url;
   return (
     <li className="image-tile">
       <figure>

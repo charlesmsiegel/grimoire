@@ -38,6 +38,7 @@ const ACTIONS = {
   onOpenLedger: vi.fn(),
   onSkipTime: vi.fn(),
   onManualFact: vi.fn(),
+  onIllustrate: vi.fn(),
   busy: false,
 };
 

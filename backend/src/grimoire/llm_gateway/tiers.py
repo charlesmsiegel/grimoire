@@ -44,6 +44,7 @@ _TASK_TIER: dict[str, Tier] = {
     "extractor": Tier.LIGHT,
     "scene_suggest": Tier.LIGHT,
     "scene_preview": Tier.LIGHT,
+    "imagegen.prompt": Tier.LIGHT,
     # Embedding
     "library.embed": Tier.EMBEDDING,
 }
