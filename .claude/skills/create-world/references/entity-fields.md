@@ -150,6 +150,24 @@ Lore prose goes in the markdown body.
 
 Greeting prose (the opening scene shown to the player) goes in the body.
 
+## extras (narrative traits, on every entity kind)
+
+`extras` is a free-form trait tier present on characters, locations, items,
+factions, and monsters. Use it for color details and for the traits a mechanics
+sheet will later draw from (see `traits-and-sheets.md`).
+
+- Keys: snake_case, 1–40 chars, `[a-z0-9_]`. Reserved prefixes (never use):
+  `_internal_`, `mechanics_`, `system_`.
+- Values: scalar (str/int/float/bool/null), list of scalars, or a flat dict of
+  scalars (one level). Bare scalars are fine — no provenance wrapper needed:
+
+```yaml
+extras:
+  archetype: "duelist"
+  attributes: { strength: 3, dexterity: 4, wits: 3 }
+  notable_skills: ["fencing", "streetwise"]
+```
+
 ## Minimal valid examples
 
 A location:

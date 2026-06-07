@@ -33,6 +33,9 @@ Resolve once: `GRIMOIRE_DATA_ROOT` if set, else `~/.grimoire`. Worlds live at
   and the field→Grimoire mapping. Read only when ingesting a card/lorebook.
 - `references/quality-bar.md` — what "sakura-high quality" means, concretely.
   Read before generating prose/voice.
+- `references/traits-and-sheets.md` — how mechanics sheets relate to library
+  worlds, and how to pre-author the traits a sheet will use in `extras`. Read
+  when the user wants mechanics-aware characters or a specific game system.
 
 ## Workflow
 
@@ -77,6 +80,31 @@ Resolve once: `GRIMOIRE_DATA_ROOT` if set, else `~/.grimoire`. Worlds live at
 7. **Report.** Summarize created/updated files. Note the running app's watcher
    will index them automatically; if the app isn't running it will index on next
    start.
+
+## Character variants (multiple versions of a character)
+
+Grimoire's only built-in "variant" mechanism is **cross-world**: the same
+character `id` (filename stem) authored in more than one world is treated as a
+variant of that character (`GET /library/variants/...`, cross-world lookup). So
+to make alternate versions today, author the character with the **same id in
+different worlds** (e.g. `alistair` in `wod-london` and in `wod-chicago`), each a
+different portrayal.
+
+There is **no in-world way to hold multiple coexisting versions of one
+character** — within a single world an `id` is unique (one id, one file), and
+`version` is just a content-revision counter. If the user wants in-world
+alternates, explain this limitation rather than faking it with near-duplicate
+ids. The concept is tracked for clarification in app issue
+[#579](https://github.com/charlesmsiegel/grimoire/issues/579).
+
+## Mechanics traits & sheets
+
+Mechanical sheets are **campaign + mechanics scoped**, so a library world can't
+carry them. But you can pre-author the **traits a sheet will draw from** in each
+entity's `extras` when the intended game system is obvious — see
+`references/traits-and-sheets.md`. Use the system's own vocabulary, keep keys
+consistent across the cast, and never use the reserved `mechanics_` /
+`system_` / `_internal_` key prefixes.
 
 ## Conventions to honor
 
