@@ -64,11 +64,15 @@ addopts = ["-m", "not perf"]
 # "was never awaited" RuntimeWarning surfaces through Python's unraisable hook,
 # which pytest re-wraps as PytestUnraisableExceptionWarning — the bare
 # RuntimeWarning rule alone never fires under pytest, so the wrapper category
-# must be promoted too (matched narrowly on "coroutine object" so only coroutine
-# leaks fail, not every unraisable). Other RuntimeWarning classes stay warnings.
+# must be promoted too. The wrapper message differs across the supported Python
+# range ("Exception ignored in: <coroutine object …>" on 3.12/3.13,
+# "Exception ignored while finalizing coroutine <coroutine object …>" on 3.14),
+# so match the common "Exception ignored …coroutine object" prefix — narrow
+# enough that only coroutine leaks fail, not every unraisable. Other
+# RuntimeWarning classes stay warnings.
 filterwarnings = [
     "error:coroutine .* was never awaited:RuntimeWarning",
-    "error:Exception ignored in.*coroutine object:pytest.PytestUnraisableExceptionWarning",
+    "error:Exception ignored .*coroutine object:pytest.PytestUnraisableExceptionWarning",
 ]
 markers = [
     "conformance: plugin conformance contract tests (spec 17 §L2)",
