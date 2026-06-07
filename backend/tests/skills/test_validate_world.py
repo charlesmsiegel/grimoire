@@ -103,6 +103,34 @@ def test_unresolved_connection_is_warning_not_error(tmp_path: Path) -> None:
     assert any("ghost-alley" in w for w in report.warnings)
 
 
+def test_bare_scalar_extras_pass(tmp_path: Path) -> None:
+    # The app wraps bare-scalar extras (extras: {k: v}); the validator must too.
+    mod = _load()
+    world = _valid_world(tmp_path)
+    _write(
+        world / "characters" / "mara.md",
+        "---\nid: mara\nname: Mara\nrole: major_npc\n"
+        'extras:\n  favorite_drink: "rum"\n  notable_skills: ["lockpicking", "knives"]\n'
+        "---\nA smuggler.\n",
+    )
+    report = mod.validate_world(world)
+    assert report.errors == [], report.errors
+    assert report.ok is True
+
+
+def test_reserved_extras_key_is_error(tmp_path: Path) -> None:
+    mod = _load()
+    world = _valid_world(tmp_path)
+    _write(
+        world / "characters" / "mara.md",
+        "---\nid: mara\nname: Mara\nrole: major_npc\n"
+        "extras:\n  mechanics_strength: 3\n---\nA smuggler.\n",
+    )
+    report = mod.validate_world(world)
+    assert report.ok is False
+    assert any("mara.md" in e for e in report.errors)
+
+
 def test_seed_world_is_error_free() -> None:
     mod = _load()
     report = mod.validate_world(SEED_WORLD)

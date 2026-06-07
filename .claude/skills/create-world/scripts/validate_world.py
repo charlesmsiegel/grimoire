@@ -75,6 +75,31 @@ def _allows_none(annotation: object) -> bool:
     return type(None) in get_args(annotation)
 
 
+# Synthetic provenance used when wrapping bare-scalar extras for validation.
+_EXTRA_PROVENANCE = {"set_at": "1970-01-01T00:00:00Z", "set_by": "skill-validate"}
+
+
+def _normalize_extras(data: dict) -> None:
+    """Wrap bare-scalar ``extras`` values into ExtraValue shape in place.
+
+    Mirrors the app's ``_decode_extras`` leniency so hand-authored
+    ``extras: {favorite_drink: rum}`` round-trips through the strict
+    ``dict[str, ExtraValue]`` model field. Entries already in full ExtraValue
+    form (``{value, set_at, ...}``) are left untouched; key/value rules are
+    still enforced by the model's own validators.
+    """
+    raw = data.get("extras")
+    if not isinstance(raw, dict):
+        return
+    wrapped: dict = {}
+    for key, entry in raw.items():
+        if isinstance(entry, dict) and "value" in entry and "set_at" in entry:
+            wrapped[key] = entry
+        else:
+            wrapped[key] = {"value": entry, **_EXTRA_PROVENANCE}
+    data["extras"] = wrapped
+
+
 def _rel(path: Path, world: Path) -> str:
     try:
         return str(path.relative_to(world))
@@ -125,6 +150,8 @@ def _load_entities(world: Path, report: Report) -> Loaded:
             for fname, finfo in model.model_fields.items():
                 if fname not in data and finfo.is_required() and _allows_none(finfo.annotation):
                     data[fname] = None
+            if "extras" in model.model_fields:
+                _normalize_extras(data)
             try:
                 inst = model.model_validate(data)
             except ValidationError as exc:
