@@ -110,6 +110,9 @@ async def import_scene(
             yield f"event: result\ndata: {json.dumps({'scene_id': scene_id})}\n\n"
         except Exception as exc:
             logger.exception("import: pipeline failed")
-            yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+            # ValueError signals bad input (no posts, source already in dest);
+            # anything else is an unexpected server-side failure.
+            status = 400 if isinstance(exc, ValueError) else 500
+            yield f"event: error\ndata: {json.dumps({'detail': str(exc), 'status': status})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
