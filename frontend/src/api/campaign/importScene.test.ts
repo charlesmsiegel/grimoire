@@ -108,6 +108,21 @@ describe("importSceneApi.import", () => {
     expect(progress).toHaveLength(0);
   });
 
+  it("skips progress frames with non-finite values or a non-positive total", async () => {
+    const progress: ImportProgress[] = [];
+    mockImport([
+      'event: progress\ndata: {"step":"parse","current":1,"total":0,"detail":"reading"}',
+      'event: progress\ndata: {"step":"parse","current":1e400,"total":2,"detail":"reading"}',
+      'event: progress\ndata: {"step":"parse","current":-1,"total":2,"detail":"reading"}',
+      'event: result\ndata: {"scene_id":"scene-8"}',
+    ]);
+
+    const id = await importSceneApi.import("camp-1", body, (p) => progress.push(p));
+
+    expect(id).toBe("scene-8");
+    expect(progress).toHaveLength(0);
+  });
+
   it("parses a final result frame that arrives without a trailing blank line", async () => {
     // Construct the body directly so no trailing "\n\n" delimiter is appended.
     globalThis.fetch = vi.fn(
