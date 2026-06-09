@@ -7,6 +7,7 @@ import { AsyncBoundary } from "./AsyncBoundary";
 import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
 import { ImportDialog } from "./ImportDialog";
 import { PromptDialog } from "../../components/PromptDialog";
+import { errorMessage } from "../../api/client";
 
 const ENTITY_TABS = [
   { to: ".", label: "Overview", end: true },
@@ -46,8 +47,10 @@ export function WorldDetailView() {
     try {
       const deps = await fetchWorldDependents(worldId);
       setDeleting((d) => (d ? { ...d, dependents: deps } : d));
-    } catch {
-      setDeleting((d) => (d ? { ...d, dependents: [] } : d));
+    } catch (err) {
+      // A failed lookup is not "no dependents": keep confirm blocked
+      // (dependents stays "loading") and say why.
+      setDeleting((d) => (d ? { ...d, err: `Dependents lookup failed: ${errorMessage(err)}` } : d));
     }
   }
 

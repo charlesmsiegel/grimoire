@@ -26,6 +26,7 @@ import { type Frontmatter } from "./frontmatter";
 import { emptyGreetingForm, greetingFormToPayload, type GreetingFormValue } from "./greeting-form";
 import { GreetingFormFields } from "./GreetingFormFields";
 import { IdField } from "./IdField";
+import { errorMessage } from "../../api/client";
 
 interface Props {
   /** Plural kind from URL: characters, items, locations, lore, factions, greetings. */
@@ -70,8 +71,14 @@ export function EntityListView({ kindOverride }: Props) {
     try {
       const deps = await libraryApi.dependents(worldId, kindPlural, entityId);
       setDeleting((d) => (d && d.entityId === entityId ? { ...d, dependents: deps } : d));
-    } catch {
-      setDeleting((d) => (d && d.entityId === entityId ? { ...d, dependents: [] } : d));
+    } catch (err) {
+      // A failed lookup is not "no dependents": keep confirm blocked
+      // (dependents stays "loading") and say why.
+      setDeleting((d) =>
+        d && d.entityId === entityId
+          ? { ...d, err: `Dependents lookup failed: ${errorMessage(err)}` }
+          : d,
+      );
     }
   }
 

@@ -11,6 +11,7 @@ import { markEnd } from "../../state/perf";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
 import { IdField } from "./IdField";
+import { errorMessage } from "../../api/client";
 
 export function WorldsListView() {
   const navigate = useNavigate();
@@ -66,8 +67,14 @@ export function WorldsListView() {
     try {
       const deps = await fetchWorldDependents(worldId);
       setDeleting((d) => (d && d.worldId === worldId ? { ...d, dependents: deps } : d));
-    } catch {
-      setDeleting((d) => (d && d.worldId === worldId ? { ...d, dependents: [] } : d));
+    } catch (err) {
+      // A failed lookup is not "no dependents": keep confirm blocked
+      // (dependents stays "loading") and say why.
+      setDeleting((d) =>
+        d && d.worldId === worldId
+          ? { ...d, err: `Dependents lookup failed: ${errorMessage(err)}` }
+          : d,
+      );
     }
   }
 
