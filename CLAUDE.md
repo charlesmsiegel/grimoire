@@ -225,7 +225,23 @@ review smell. Grep before adding a `_parse_*` / `_slug*` / `_json*` / `_now*`.
   `raise HTTPException(404, …)`. Service-present-or-503 goes through the
   `api.deps` `get_*` providers.
 - **Carving up a large service**: follow the `host=self` coordinator pattern
-  (`AuxiliaryCoordinator` / `RetconCoordinator` / `ForkCoordinator`).
+  (`AuxiliaryCoordinator` / `RetconCoordinator` / `ForkCoordinator`) — coordinators
+  use the host surface they're handed, not `host._privates` (#589 introduces a
+  typed `OrchestratorHost` Protocol).
+
+### Error handling
+
+- **Callers must be able to tell *empty* from *broken*.** A read/maintenance path
+  may degrade gracefully, but it must log at WARNING with context (path, id) and
+  surface a signal — a count, marker, or error event — never bare
+  `except Exception: pass`. The UI showing "no data" because a file failed to
+  parse is a bug, not a degradation.
+- **Write/mutation paths never catch-and-continue.** A failed multi-step write
+  either compensates (file snapshot/restore, delta reversal — `write_library_file`
+  in `state_store/store.py` is the pattern) or raises. Applying half of a turn's
+  effects is worse than failing the turn (#583–#586).
+- Catch the narrowest exception the failure actually produces; reserve broad
+  `except Exception` for top-level loop/job guards that log *and* surface.
 
 ### Frontend (TypeScript)
 
@@ -332,8 +348,10 @@ overlay (override YAML / emergent frontmatter), with a derived
 - **Mechanics authoring is the sanctioned write path into `data/mechanics/`.** The Library → Mechanics UI can scaffold a new module and edit the *declarative* parts of any module (manifest, sheet/content JSON Schemas, theme CSS), writing through `MechanicsAuthor` (`backend/src/grimoire/mechanics/authoring.py`). The `mechanics.py` behavioral logic is generated once as a green-loading stub and then hand-edited on disk — the UI never rewrites it. This is a deliberate dev-time action and does not contradict "modules are read-only at *runtime*".
 - **Don't add telemetry or phone-home.** Grimoire is local-first with zero external data collection. No analytics, no crash reporting, no usage tracking.
 - **Don't import across module boundaries** that shouldn't know about each other. Follow the module map — if there's no arrow between two modules, they shouldn't import each other. Use the event bus for fan-out.
+- **Don't call another module's `_private` members.** If a neighbor needs `_find_post`-style access, promote the method to the owner's public API first. New `self._host._x` or `getattr(service, "_attr", …)` reach-ins are review blockers (#589 tracks retiring the existing ones).
 - **Don't forget to update both file and index.** When changing content programmatically, write the file and let the watcher handle the index — or explicitly trigger an index update if the watcher isn't running (e.g., in tests).
 - **Don't hand-roll what a shared helper already does.** datetime/JSON/id/slug strings, YAML + frontmatter I/O, and HTTP not-found translation all have canonical helpers (Code Conventions → *Shared helpers*). Reuse keeps behaviour consistent and fixes land in one place.
+- **Don't re-flag sanctioned patterns when auditing or reviewing.** Table-gateway classes (one domain's SQL behind one small class), single-implementation Protocols (the documented boundary mechanism), and mutable Pydantic field defaults (Pydantic deep-copies them per instance) are deliberate choices or known false positives — see `docs/audits/2026-06-09-code-quality-audit.md` §6 before filing smell reports.
 
 ## Keep Documentation Up to Date
 
