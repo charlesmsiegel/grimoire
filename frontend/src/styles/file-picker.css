@@ -1,0 +1,137 @@
+/* ---- File path picker ---- */
+
+.file-path-picker {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.file-path-picker input {
+  flex: 1;
+}
+
+.browse-btn {
+  flex-shrink: 0;
+  padding: var(--space-1) var(--space-3);
+  background: var(--bg-elev);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.browse-btn:hover {
+  background: var(--bg-hover, var(--bg-elev));
+  border-color: var(--border);
+}
+
+.file-browser-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.file-browser {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  width: min(600px, 90vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lg, 0 4px 24px rgba(0, 0, 0, 0.25));
+}
+
+.file-browser-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.file-browser-path {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  margin-right: var(--space-2);
+}
+
+.file-browser-header button {
+  background: none;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  color: var(--fg-muted);
+  padding: 0 var(--space-1);
+}
+
+.file-browser-loading,
+.file-browser-error {
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.file-browser-error {
+  color: var(--danger, #d9534f);
+}
+
+.file-browser-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.file-browser-list li {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.file-browser-list li:last-child {
+  border-bottom: none;
+}
+
+.fb-entry {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-4);
+  background: none;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.fb-entry:hover {
+  background: var(--bg-elev);
+}
+
+.fb-dir {
+  font-weight: 500;
+}
+
+.fb-empty {
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+
+.gguf-status {
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+.gguf-info {
+  color: var(--accent, var(--fg-muted));
+}
