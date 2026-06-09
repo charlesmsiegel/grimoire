@@ -22,6 +22,8 @@ import { Markdown } from "../../components/Markdown";
 import { SheetRenderer } from "../../sheets";
 import type { SheetValue } from "../../sheets/types";
 import { ChainBadge, Loading } from "./common";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
+import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
 
 type SourceFilter = "all" | "library" | "emergent" | "override";
 
@@ -47,19 +49,11 @@ export function CastView() {
         ? `library:worlds/${r.character.world_id}/characters/${r.character.id}`
         : `campaign:emergent/character/${r.character.id}`,
     );
-  const handleRemovePc = (ref: string, name: string) => {
-    if (
-      !window.confirm(
-        `Remove "${name}" as a player character? The character itself is not deleted.`,
-      )
-    ) {
-      return;
-    }
-    void campaignApi.removePc(campaignId, ref).then(() => {
-      state.reload();
-      pcState.reload();
-    });
-  };
+  const removePc = useDestructiveConfirm<{ ref: string; name: string }>(async ({ ref }) => {
+    await campaignApi.removePc(campaignId, ref);
+    state.reload();
+    pcState.reload();
+  });
 
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [roleFilter, setRoleFilter] = useState<string>("all");
@@ -74,6 +68,19 @@ export function CastView() {
       <header className="route-header">
         <h2 id="cast-heading">Cast</h2>
       </header>
+      {removePc.target && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Remove "${removePc.target.name}" as a player character?`}
+          body={<p>The character itself is not deleted; it just stops being a PC.</p>}
+          confirmLabel="Remove"
+          busyLabel="Removing…"
+          busy={removePc.busy}
+          error={removePc.error}
+          onConfirm={removePc.confirm}
+          onCancel={removePc.cancel}
+        />
+      )}
       <Loading
         state={state}
         emptyMessage="No cast yet. PCs and emergent characters join automatically; library characters join once they appear in a scene."
@@ -132,7 +139,11 @@ export function CastView() {
                           pcRefs.has(refForRow(c))
                             ? [
                                 deleteAction({
-                                  onClick: () => handleRemovePc(refForRow(c), c.character.name),
+                                  onClick: () =>
+                                    removePc.request({
+                                      ref: refForRow(c),
+                                      name: c.character.name,
+                                    }),
                                   label: `Remove ${c.character.name} as PC`,
                                 }),
                               ]

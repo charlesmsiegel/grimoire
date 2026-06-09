@@ -11,6 +11,8 @@ import { useResource } from "../../api/useResource";
 import { CardIconBar } from "../../components/CardIconBar";
 import { deleteAction } from "../../components/cardActions";
 import { AsyncBoundary } from "./AsyncBoundary";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
+import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
 
 export function ImagePresetsView() {
   return (
@@ -28,17 +30,27 @@ function ImagePresetList() {
   const { data, loading, error, reload } = useResource(
     useCallback(() => libraryApi.listImagePresets(), []),
   );
-  async function handleDelete(id: string, name: string) {
-    if (!window.confirm(`Delete image preset "${name}"? This cannot be undone.`)) return;
+  const del = useDestructiveConfirm<{ id: string; name: string }>(async ({ id }) => {
     await libraryApi.deleteImagePreset(id);
     reload();
-  }
+  });
   return (
     <section className="library-section">
       <header className="library-section-header">
         <h3>Image presets</h3>
         <button onClick={() => navigate("/library/image-presets/new")}>+ New image preset</button>
       </header>
+      {del.target && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete image preset "${del.target.name}"?`}
+          body={<p>This cannot be undone.</p>}
+          busy={del.busy}
+          error={del.error}
+          onConfirm={del.confirm}
+          onCancel={del.cancel}
+        />
+      )}
       <AsyncBoundary
         loading={loading}
         error={error}
@@ -62,7 +74,7 @@ function ImagePresetList() {
               <CardIconBar
                 actions={[
                   deleteAction({
-                    onClick: () => void handleDelete(p.asset_id, p.name || p.asset_id),
+                    onClick: () => del.request({ id: p.asset_id, name: p.name || p.asset_id }),
                     label: `Delete image preset ${p.name || p.asset_id}`,
                   }),
                 ]}

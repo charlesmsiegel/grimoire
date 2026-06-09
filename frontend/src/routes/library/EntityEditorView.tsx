@@ -13,7 +13,7 @@ import { useResource } from "../../api/useResource";
 import { Markdown } from "../../components/Markdown";
 import { TokenBadge } from "../../components/TokenBadge";
 import { AsyncBoundary } from "./AsyncBoundary";
-import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
 import { EntityForm } from "./EntityForm";
 import { getDescriptor } from "./entitySchemas";
 import { ExtrasTable } from "./ExtrasTable";

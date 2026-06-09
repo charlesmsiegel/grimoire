@@ -9,7 +9,7 @@ import { deleteAction } from "../../components/cardActions";
 import { useCardFilters } from "../../hooks/useCardFilters";
 import { markEnd } from "../../state/perf";
 import { AsyncBoundary } from "./AsyncBoundary";
-import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
 import { IdField } from "./IdField";
 
 export function WorldsListView() {

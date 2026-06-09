@@ -4,7 +4,7 @@ import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 import { ApiError, fetchWorldDependents, libraryApi, type CampaignRef } from "../../api/library";
 import { useResource } from "../../api/useResource";
 import { AsyncBoundary } from "./AsyncBoundary";
-import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
 import { ImportDialog } from "./ImportDialog";
 
 const ENTITY_TABS = [

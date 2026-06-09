@@ -14,6 +14,8 @@ import type { CampaignSummary } from "../state/storeContext";
 import { CardIconBar } from "../components/CardIconBar";
 import { deleteAction, FORK_ICON, SETTINGS_ICON } from "../components/cardActions";
 import { ForkDialog } from "./campaign/ForkDialog";
+import { ConfirmDestructiveDialog } from "../components/ConfirmDestructiveDialog";
+import { useDestructiveConfirm } from "../hooks/useDestructiveConfirm";
 
 interface CampaignNode {
   campaign: CampaignSummary;
@@ -116,7 +118,6 @@ export function CampaignsView() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
   async function refresh() {
     setRefreshing(true);
@@ -151,25 +152,15 @@ export function CampaignsView() {
     }
   }
 
-  async function handleDelete(c: CampaignSummary) {
-    if (
-      !window.confirm(
-        `Delete campaign "${c.name}"? This removes the campaign and all of its scenes from disk. This cannot be undone.`,
-      )
-    ) {
-      return;
-    }
+  const del = useDestructiveConfirm<CampaignSummary>(async (c) => {
     setDeletingId(c.id);
-    setDeleteErr(null);
     try {
       await deleteCampaign(c.id);
       await reload();
-    } catch (err) {
-      setDeleteErr(err instanceof ApiError ? err.message : String(err));
     } finally {
       setDeletingId(null);
     }
-  }
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -231,11 +222,6 @@ export function CampaignsView() {
           {refreshErr}
         </p>
       )}
-      {deleteErr && (
-        <p className="wizard-error" role="alert">
-          {deleteErr}
-        </p>
-      )}
       {!loading && state.campaigns.length === 0 && !error && (
         <p>No campaigns yet. Click "New campaign" to start the creation wizard.</p>
       )}
@@ -247,11 +233,31 @@ export function CampaignsView() {
               node={node}
               depth={depth}
               onFork={(c) => setForkSource(c)}
-              onDelete={(c) => void handleDelete(c)}
+              onDelete={(c) => del.request(c)}
               busyDeleting={deletingId === node.campaign.id}
             />
           ))}
         </ul>
+      )}
+      {del.target && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete campaign "${del.target.name}"?`}
+          body={
+            <p>
+              This removes the campaign directory — scenes, overrides, emergent content, sheets,
+              and images — from disk. Cannot be undone.
+            </p>
+          }
+          typedConfirmation={{
+            expected: del.target.id,
+            label: `Type id "${del.target.id}" to confirm`,
+          }}
+          busy={del.busy}
+          error={del.error}
+          onConfirm={del.confirm}
+          onCancel={del.cancel}
+        />
       )}
       {forkSource && (
         <ForkDialog

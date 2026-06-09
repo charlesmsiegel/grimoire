@@ -16,6 +16,8 @@ import { useResource } from "../../api/useResource";
 import { CardIconBar } from "../../components/CardIconBar";
 import { deleteAction } from "../../components/cardActions";
 import { AsyncBoundary } from "./AsyncBoundary";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
+import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
 
 const SYSTEM_LABELS: Record<CalendarSystem, string> = {
   gregorian: "Gregorian",
@@ -90,11 +92,10 @@ function CalendarsList() {
   const builtins = data?.filter((c) => c.builtin) ?? [];
   const customs = data?.filter((c) => !c.builtin) ?? [];
 
-  async function handleDelete(id: string, name: string) {
-    if (!window.confirm(`Delete calendar "${name}"? This cannot be undone.`)) return;
+  const del = useDestructiveConfirm<{ id: string; name: string }>(async ({ id }) => {
     await calendarsApi.deleteCalendar(id);
     reload();
-  }
+  });
 
   return (
     <section className="library-section">
@@ -102,6 +103,17 @@ function CalendarsList() {
         <h3>Calendars</h3>
         <button onClick={() => navigate("/library/calendars/new")}>+ New calendar</button>
       </header>
+      {del.target && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete calendar "${del.target.name}"?`}
+          body={<p>This cannot be undone.</p>}
+          busy={del.busy}
+          error={del.error}
+          onConfirm={del.confirm}
+          onCancel={del.cancel}
+        />
+      )}
       <p className="library-section-intro">
         Worlds and campaigns can attach multiple calendars at once; dates in one calendar reconcile
         to any other via a shared Julian Day Number. Pick one as the "display" calendar for scene
@@ -146,7 +158,7 @@ function CalendarsList() {
                   <CardIconBar
                     actions={[
                       deleteAction({
-                        onClick: () => void handleDelete(c.id, c.name || c.id),
+                        onClick: () => del.request({ id: c.id, name: c.name || c.id }),
                         label: `Delete calendar ${c.name || c.id}`,
                       }),
                     ]}
@@ -167,16 +179,11 @@ function CalendarDetail() {
     useCallback(() => calendarsApi.getCalendar(calendarId), [calendarId]),
   );
 
-  async function handleDelete() {
-    if (!data || data.builtin) return;
-    if (!confirm(`Delete calendar "${data.name}"?`)) return;
-    try {
-      await calendarsApi.deleteCalendar(calendarId);
-      window.location.href = "/library/calendars";
-    } catch (err) {
-      alert(err instanceof ApiError ? err.message : String(err));
-    }
-  }
+  const navigate = useNavigate();
+  const del = useDestructiveConfirm<{ name: string }>(async () => {
+    await calendarsApi.deleteCalendar(calendarId);
+    navigate("/library/calendars");
+  });
 
   return (
     <section className="library-section">
@@ -197,8 +204,19 @@ function CalendarDetail() {
                     >
                       Edit
                     </Link>{" "}
-                    <button onClick={handleDelete}>Delete</button>
+                    <button onClick={() => del.request({ name: data.name })}>Delete</button>
                   </>
+                )}
+                {del.target && (
+                  <ConfirmDestructiveDialog
+                    open
+                    title={`Delete calendar "${del.target.name}"?`}
+                    body={<p>This cannot be undone.</p>}
+                    busy={del.busy}
+                    error={del.error}
+                    onConfirm={del.confirm}
+                    onCancel={del.cancel}
+                  />
                 )}
               </div>
             </header>

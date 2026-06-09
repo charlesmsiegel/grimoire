@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 
 import { templatesApi, type TemplateSummary } from "../../api/library";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
+import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
 import { errorMessage } from "./shared";
 
 export function TemplatesTab() {
@@ -111,18 +113,18 @@ export function TemplatesTab() {
     }
   };
 
-  const onDelete = async () => {
-    if (!selected || !variant || !editable) return;
-    if (!window.confirm(`Delete user variant "${variant}" of ${selected}?`)) return;
+  const del = useDestructiveConfirm<{ template: string; variant: string }>((t) =>
+    deleteVariant(t.template, t.variant),
+  );
+
+  const deleteVariant = async (template: string, v: string) => {
     setSaving(true);
     setError(null);
     try {
-      await templatesApi.remove(selected, variant);
-      setStatus(`Deleted ${variant}.`);
+      await templatesApi.remove(template, v);
+      setStatus(`Deleted ${v}.`);
       setVariant("default");
       await refresh();
-    } catch (err) {
-      setError(errorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -275,7 +277,11 @@ export function TemplatesTab() {
                     // eslint-disable-next-line local/no-bespoke-delete -- template variant action, not a card
                     <button
                       type="button"
-                      onClick={() => void onDelete()}
+                      onClick={() => {
+                        if (selected && variant && editable) {
+                          del.request({ template: selected, variant });
+                        }
+                      }}
                       disabled={saving}
                       className="templates-delete"
                     >
@@ -289,6 +295,17 @@ export function TemplatesTab() {
             )}
           </section>
         </div>
+      )}
+      {del.target && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete user variant "${del.target.variant}" of ${del.target.template}?`}
+          body={<p>This cannot be undone.</p>}
+          busy={del.busy}
+          error={del.error}
+          onConfirm={del.confirm}
+          onCancel={del.cancel}
+        />
       )}
     </div>
   );

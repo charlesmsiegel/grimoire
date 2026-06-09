@@ -14,6 +14,8 @@ import { useResource } from "../../api/useResource";
 import { CardIconBar } from "../../components/CardIconBar";
 import { deleteAction } from "../../components/cardActions";
 import { AsyncBoundary } from "./AsyncBoundary";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
+import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
 
 const SYSTEM_LABELS: Record<CalendarSystem, string> = {
   gregorian: "Gregorian",
@@ -81,11 +83,10 @@ function List() {
   const builtins = data?.filter((s) => s.builtin) ?? [];
   const customs = data?.filter((s) => !s.builtin) ?? [];
 
-  async function handleDelete(id: string, name: string) {
-    if (!window.confirm(`Delete holiday set "${name}"? This cannot be undone.`)) return;
+  const del = useDestructiveConfirm<{ id: string; name: string }>(async ({ id }) => {
     await calendarsApi.deleteHolidaySet(id);
     reload();
-  }
+  });
 
   return (
     <section className="library-section">
@@ -93,6 +94,17 @@ function List() {
         <h3>Holiday sets</h3>
         <button onClick={() => navigate("/library/holiday-sets/new")}>+ New holiday set</button>
       </header>
+      {del.target && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete holiday set "${del.target.name}"?`}
+          body={<p>This cannot be undone.</p>}
+          busy={del.busy}
+          error={del.error}
+          onConfirm={del.confirm}
+          onCancel={del.cancel}
+        />
+      )}
       <p className="library-section-intro">
         Each holiday set binds to a specific calendar system. Attach sets to a world to overlay
         multiple traditions onto its calendars.
@@ -136,7 +148,7 @@ function List() {
                   <CardIconBar
                     actions={[
                       deleteAction({
-                        onClick: () => void handleDelete(s.id, s.name || s.id),
+                        onClick: () => del.request({ id: s.id, name: s.name || s.id }),
                         label: `Delete holiday set ${s.name || s.id}`,
                       }),
                     ]}
@@ -157,16 +169,11 @@ function Detail() {
     useCallback(() => calendarsApi.getHolidaySet(setId), [setId]),
   );
 
-  async function handleDelete() {
-    if (!data || data.builtin) return;
-    if (!confirm(`Delete holiday set "${data.name}"?`)) return;
-    try {
-      await calendarsApi.deleteHolidaySet(setId);
-      window.location.href = "/library/holiday-sets";
-    } catch (err) {
-      alert(err instanceof ApiError ? err.message : String(err));
-    }
-  }
+  const navigate = useNavigate();
+  const del = useDestructiveConfirm<{ name: string }>(async () => {
+    await calendarsApi.deleteHolidaySet(setId);
+    navigate("/library/holiday-sets");
+  });
 
   return (
     <section className="library-section">
@@ -187,8 +194,19 @@ function Detail() {
                     >
                       Edit
                     </Link>{" "}
-                    <button onClick={handleDelete}>Delete</button>
+                    <button onClick={() => del.request({ name: data.name })}>Delete</button>
                   </>
+                )}
+                {del.target && (
+                  <ConfirmDestructiveDialog
+                    open
+                    title={`Delete holiday set "${del.target.name}"?`}
+                    body={<p>This cannot be undone.</p>}
+                    busy={del.busy}
+                    error={del.error}
+                    onConfirm={del.confirm}
+                    onCancel={del.cancel}
+                  />
                 )}
               </div>
             </header>

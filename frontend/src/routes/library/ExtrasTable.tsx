@@ -21,6 +21,8 @@ import {
   promoteToLibrary,
   putLibraryExtra,
 } from "../../api/extras";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
+import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
 
 interface Props {
   worldId: string;
@@ -143,18 +145,15 @@ function ExtrasRow({ entryKey, extra, worldId, kind, entityId, campaignId, onCha
     }
   }
 
-  async function remove() {
-    if (!window.confirm(`Delete extras key "${entryKey}"?`)) return;
+  const del = useDestructiveConfirm<string>(async (key) => {
     setSaving(true);
     try {
-      await deleteLibraryExtra(worldId, kind, entityId, entryKey);
+      await deleteLibraryExtra(worldId, kind, entityId, key);
       onChanged();
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : String(e));
     } finally {
       setSaving(false);
     }
-  }
+  });
 
   async function promote() {
     if (!campaignId) return;
@@ -171,6 +170,17 @@ function ExtrasRow({ entryKey, extra, worldId, kind, entityId, campaignId, onCha
 
   return (
     <li className="extras-row">
+      {del.target !== null && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete extras key "${del.target}"?`}
+          body={<p>This cannot be undone.</p>}
+          busy={del.busy}
+          error={del.error}
+          onConfirm={del.confirm}
+          onCancel={del.cancel}
+        />
+      )}
       <span className="extras-badge" title={SCOPE_TITLE[extra.scope]} aria-label={extra.scope}>
         {SCOPE_BADGE[extra.scope]}
       </span>
@@ -195,7 +205,7 @@ function ExtrasRow({ entryKey, extra, worldId, kind, entityId, campaignId, onCha
           </button>
         ) : null}
         {/* eslint-disable-next-line local/no-bespoke-delete -- extras table row action, not a card */}
-        <button type="button" onClick={() => void remove()} disabled={saving} aria-label="Delete">
+        <button type="button" onClick={() => del.request(entryKey)} disabled={saving} aria-label="Delete">
           ×
         </button>
       </span>

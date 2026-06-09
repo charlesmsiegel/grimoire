@@ -18,6 +18,8 @@ import { CardIconBar } from "../../components/CardIconBar";
 import { deleteAction } from "../../components/cardActions";
 import { Loading } from "./common";
 import { ImportSceneDialog } from "./ImportSceneDialog";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
+import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
 
 export function TimelineView() {
   const { campaignId = "" } = useParams();
@@ -53,16 +55,10 @@ export function TimelineView() {
 
   const toggleExpand = (id: string) => setExpanded((prev) => (prev === id ? null : id));
 
-  const handleDeleteScene = (sceneId: string, title: string) => {
-    if (
-      !window.confirm(
-        `Delete scene "${title}"? This removes the scene and its posts from disk. This cannot be undone.`,
-      )
-    ) {
-      return;
-    }
-    void campaignApi.deleteScene(campaignId, sceneId).then(() => state.reload());
-  };
+  const del = useDestructiveConfirm<{ sceneId: string; title: string }>(async ({ sceneId }) => {
+    await campaignApi.deleteScene(campaignId, sceneId);
+    state.reload();
+  });
 
   return (
     <section className="route campaign-timeline" aria-labelledby="timeline-heading">
@@ -71,6 +67,17 @@ export function TimelineView() {
         <button type="button" className="import-scene-btn" onClick={() => setShowImport(true)}>
           Import Scene
         </button>
+        {del.target && (
+          <ConfirmDestructiveDialog
+            open
+            title={`Delete scene "${del.target.title}"?`}
+            body={<p>This removes the scene and its posts from disk. Cannot be undone.</p>}
+            busy={del.busy}
+            error={del.error}
+            onConfirm={del.confirm}
+            onCancel={del.cancel}
+          />
+        )}
       </header>
       {showImport && (
         <ImportSceneDialog
@@ -133,7 +140,7 @@ export function TimelineView() {
                     onAnalyze={() =>
                       campaignApi.analyzeScene(campaignId, scene.id).then(() => state.reload())
                     }
-                    onDelete={() => handleDeleteScene(scene.id, scene.title || scene.slug)}
+                    onDelete={() => del.request({ sceneId: scene.id, title: scene.title || scene.slug })}
                   />
                 ))}
                 {visible.length === 0 && (
