@@ -59,7 +59,10 @@ re-raises — so the gap is cross-stage, not total.)* The cross-stage gap is con
 (`"inventory apply failed; continuing turn"`).
 **Fix:** extend the existing batch unwind across stages rather than building a parallel mechanism —
 reverse the committed batch when a later stage fails, and don't clear `pending_pre_roll` until the
-pipeline commits.
+pipeline commits. *(Review note: the compensation must also cover the inventory stage itself —
+`InventoryService.apply_from_deltas` persists per-holder (`inventory/service.py:138`), so one holder
+can commit before a later one fails; stage or compensate those file/derived-row writes in the same
+cross-stage unit.)*
 
 ### 1.3 ✅ High — Seven StateStore write paths can leave file and index/delta-log diverged
 `state_store/store.py:369-754` — `write_override`, `delete_override`, `delete_emergent`,
@@ -113,6 +116,17 @@ original "orchestrator's background jobs make it reachable" was unsupported — 
 production caller** (definition + tests only), so this is a latent hazard on unused public API,
 not a current correctness risk. Decide: delete the method, or fix the read-merge-write before
 wiring a caller.)*
+
+### 1.7 ✅ High — Speaker-loop pipeline silently discards inventory deltas *(found in PR review)*
+In `per_character_multi_call` mode, `_run_speaker_loop` (`orchestrator/service.py:1552+`) runs
+extract → `apply_routing` per speaker round, but `delta_applier.py:232` deliberately skips every
+`INVENTORY_CHANGE` (by contract the InventoryService applies them afterward) — and unlike
+`_continue_turn_after_pre_roll` (`service.py:1490`), the speaker loop **never calls
+`inventory.apply_from_deltas`**. Items picked up/consumed/handed over during speaker rounds never
+reach holdings — no log, no flag, success reported. This is §5.5's predicted pipeline drift
+*realized*, not hypothetical. Tracked as #603.
+**Fix:** apply inventory deltas in the speaker loop with the single-response path's semantics, then
+unify the two pipelines (#518) so a stage can't be added to one and missed in the other.
 
 ---
 
@@ -288,6 +302,8 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
 5. **Turn pipeline ×2** — `orchestrator/service.py:1404-1476` vs `1616-1642`
    (`_continue_turn_after_pre_roll` vs `_run_speaker_loop`): extract → resolve cast changes →
    apply-routing implemented twice. This is the duplication most likely to cause a real bug.
+   *(Validated during PR review: the copies have already drifted — the speaker loop drops inventory
+   deltas, §1.7 / #603.)*
 6. **Inline `_Gateway` Protocol ×4** — `scenes/default_summarizers.py:27` (+ second copy at 176)
    and `scenes/analysis.py:42` + `analysis.py:53`. *(Corrected after PR review: `_AdaptiveGateway`
    is not identical — it additionally requires `resolve_route()` and `get_model_info()`.)*
@@ -356,7 +372,10 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
    `yaml.safe_load`/`yaml.safe_dump` (→ `grimoire.files.yaml_io`, with a per-file exemption for
    `files/yaml_io.py` itself — the canonical helper necessarily calls both), `uuid.uuid4`
    (→ `util.new_id`) outside `util.py` — **both bans scoped to `src/`** (tests legitimately
-   hand-roll YAML fixtures; exempt `tests/` or apply via per-path config). Add `BLE001` (blind
+   hand-roll YAML fixtures; exempt `tests/` or apply via per-path config), and the uuid ban targets
+   *id-minting only*: exempt protocol-semantic UUIDs such as `export/epub.py:375`, where
+   `urn:uuid:` identifiers must remain real UUIDs (`new_id` would emit malformed EPUB metadata).
+   Add `BLE001` (blind
    `except`) with **inline `# noqa: BLE001` on existing sites or a diff-aware baseline — not
    per-file ignores**, which would exempt every *new* broad catch in exactly the god-service files
    where most work happens.
@@ -374,8 +393,13 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
    the split form (`raise HTTPException(` ↵ `status_code=404`) used at e.g.
    `api/campaigns/scenes.py:392`, `entities.py:111`, `turns.py:136` (use `rg -U` or a small AST
    checker).
-4. **Frontend:** ESLint `no-restricted-syntax` for `as unknown as`; make the API client's Zod schema
-   parameter required (use `z.unknown()` as the explicit opt-out so exceptions are visible).
+4. **Frontend:** ESLint `no-restricted-syntax` for `as unknown as` — scoped to production sources
+   (test mocks exempt) and landed **report-only first**: beyond the five schema casts there are
+   other production uses (WS-event narrowing in `SceneBreakPrompt.tsx:57` /
+   `PreRollConfirmation.tsx:60`, `sheets/widgets/index.ts`) that need triage, not a flag day. Make
+   the Zod schema parameter required in **both transports** — `api/client.ts` *and* the separate
+   library transport (`api/library/request.ts:37-68`, which parses with `as T` and serves every
+   `libraryApi` method); best is consolidating the library helper onto the validated client.
 
 ---
 
@@ -448,6 +472,15 @@ test first (pin current behavior, then fix).
 > legitimately), inline `# noqa`/diff-aware baselines instead of per-file ignores (which would
 > exempt new code in the god-service files), and the private-reach check generalized beyond
 > `_(host|orch)\._` to the other §2.3 patterns.
+>
+> **Post-review corrections, round 5:** the review found a **live bug** validating §5.5's drift
+> prediction — the speaker loop discards inventory deltas (new §1.7, filed as #603); §1.2's remedy
+> now stages/compensates the per-holder inventory writes too; §8's uuid ban exempts
+> protocol-semantic UUIDs (`urn:uuid:` in EPUB metadata); §8.4 scopes the `as unknown as` rule and
+> extends the required-schema rule to the separate library transport (`api/library/request.ts`);
+> the CLAUDE/AGENTS error-handling rule is scoped to domain state with best-effort diagnostics
+> exempt, and the sanctioned-Protocols pitfall is qualified to documented cross-module boundaries.
+> #584, #595, #598 updated to match.
 
 Checked 2026-06-09 against all 45 open issues plus targeted closed-issue searches. The repo has
 already run three audit passes (orchestrator simplification audit → #518–#523; code-quality /
