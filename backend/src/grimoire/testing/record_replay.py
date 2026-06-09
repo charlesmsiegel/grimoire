@@ -126,7 +126,12 @@ class RecordReplayLLM:
             # observe end-state still work; for token-by-token replay,
             # tests should record `stream_chunks` separately.
             yield CompletionChunk(delta=response.text, is_final=False)
-            yield CompletionChunk(delta="", is_final=True, usage=response.usage)
+            yield CompletionChunk(
+                delta="",
+                is_final=True,
+                usage=response.usage,
+                cost_estimate_usd=response.cost_estimate_usd,
+            )
             return
         if self.mode is ReplayMode.PASSTHROUGH:
             async for chunk in self._real.stream(task, request, campaign_id):
@@ -135,10 +140,13 @@ class RecordReplayLLM:
         # RECORD: drain the underlying stream while collecting chunks.
         collected: list[str] = []
         usage: TokenUsage | None = None
+        cost: float | None = None
         async for chunk in self._real.stream(task, request, campaign_id):
             collected.append(chunk.delta)
             if chunk.usage is not None:
                 usage = chunk.usage
+            if chunk.cost_estimate_usd is not None:
+                cost = chunk.cost_estimate_usd
             yield chunk
         text = "".join(collected)
         response = CompletionResponse(
@@ -146,6 +154,7 @@ class RecordReplayLLM:
             model=request.model,
             finish_reason="stop",
             usage=usage or TokenUsage(input_tokens=1, output_tokens=max(1, len(text) // 4)),
+            cost_estimate_usd=cost,
             latency_ms=0,
         )
         self._save_completion(request_hash(request), task, request, response, chunks=collected)
@@ -186,6 +195,7 @@ class RecordReplayLLM:
             data = json.load(f)
         response = data["response"]
         usage = response.get("usage") or {}
+        cost = response.get("cost_estimate_usd")
         return CompletionResponse(
             text=response["text"],
             model=response.get("model", data["request"].get("model", "")),
@@ -195,6 +205,7 @@ class RecordReplayLLM:
                 output_tokens=int(usage.get("output_tokens", 0)),
                 total_tokens=int(usage.get("total_tokens", 0)),
             ),
+            cost_estimate_usd=float(cost) if cost is not None else None,
             latency_ms=int(response.get("latency_ms", 0)),
         )
 
@@ -236,6 +247,7 @@ class RecordReplayLLM:
                 "model": response.model,
                 "finish_reason": response.finish_reason,
                 "usage": response.usage.model_dump(),
+                "cost_estimate_usd": response.cost_estimate_usd,
                 "latency_ms": response.latency_ms,
                 "recorded_at": now_iso(),
             },
