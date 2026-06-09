@@ -14,8 +14,11 @@ interface Props {
   open: boolean;
   title: string;
   body?: React.ReactNode;
-  /** `undefined` = lookup in flight; `[]` = no dependents. */
-  dependents?: CampaignRef[];
+  /**
+   * Omit when the action has no dependents concept. Pass `"loading"` while a
+   * lookup is in flight (confirm stays disabled), then the resolved list.
+   */
+  dependents?: CampaignRef[] | "loading";
   typedConfirmation?: { expected: string; label: string };
   confirmLabel?: string;
   busyLabel?: string;
@@ -40,14 +43,14 @@ export function ConfirmDestructiveDialog({
 }: Props) {
   const [typed, setTyped] = useState("");
 
-  const dependentsLoading = dependents === undefined;
+  const dependentsLoading = dependents === "loading";
   const typedOk = !typedConfirmation || typed === typedConfirmation.expected;
   const confirmDisabled = busy || dependentsLoading || !typedOk;
 
   return (
     <Dialog open={open} onClose={onCancel} title={title}>
       {body && <div>{body}</div>}
-      {dependents && dependents.length > 0 && (
+      {Array.isArray(dependents) && dependents.length > 0 && (
         <>
           <p>
             Affects {dependents.length} campaign

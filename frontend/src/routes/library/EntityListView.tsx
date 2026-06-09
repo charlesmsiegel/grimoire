@@ -58,7 +58,7 @@ export function EntityListView({ kindOverride }: Props) {
   const [deleting, setDeleting] = useState<{
     entityId: string;
     entityName: string;
-    dependents: CampaignRef[] | undefined;
+    dependents: CampaignRef[] | "loading";
     busy: boolean;
     err: string | null;
   } | null>(null);
@@ -66,7 +66,7 @@ export function EntityListView({ kindOverride }: Props) {
   const isGreetingKind = kindPlural === "greetings";
 
   async function openDelete(entityId: string, entityName: string) {
-    setDeleting({ entityId, entityName, dependents: undefined, busy: false, err: null });
+    setDeleting({ entityId, entityName, dependents: "loading", busy: false, err: null });
     try {
       const deps = await libraryApi.dependents(worldId, kindPlural, entityId);
       setDeleting((d) => (d && d.entityId === entityId ? { ...d, dependents: deps } : d));

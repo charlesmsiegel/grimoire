@@ -64,7 +64,42 @@ describe("useResource fetcher identity", () => {
 });
 
 describe("useResource", () => {
-  it("does not flash loading=true on a re-load once data exists", async () => {
+  it("reload() keeps prior data visible without a loading flash", async () => {
+    let resolveLoad: (v: number) => void = () => {};
+    let calls = 0;
+    let reloadFn!: () => void;
+
+    function Probe() {
+      const loader = useCallback(
+        () =>
+          new Promise<number>((resolve) => {
+            calls += 1;
+            if (calls === 1) resolve(1);
+            else resolveLoad = resolve;
+          }),
+        [],
+      );
+      const { data, loading, reload } = useResource(loader);
+      reloadFn = reload;
+      return (
+        <span>
+          {loading ? "L" : "_"}|{data ?? "null"}
+        </span>
+      );
+    }
+
+    const { container } = render(<Probe />);
+    await waitFor(() => expect(container.textContent).toBe("_|1"));
+
+    await act(async () => reloadFn());
+    // Same resource: old data stays visible, loading must NOT flip back.
+    expect(container.textContent).toBe("_|1");
+
+    await act(async () => resolveLoad(2));
+    await waitFor(() => expect(container.textContent).toBe("_|2"));
+  });
+
+  it("a loader identity change resets to loading (different resource)", async () => {
     let resolveLoad: (v: number) => void = () => {};
     let calls = 0;
     let setX!: (n: number) => void;
@@ -93,9 +128,9 @@ describe("useResource", () => {
     await waitFor(() => expect(container.textContent).toBe("_|1"));
 
     await act(async () => setX(2));
-    // Old data must still be visible — and loading must NOT have flipped
-    // back to true — while the second load is in flight.
-    expect(container.textContent).toBe("_|1");
+    // Different resource: the previous query's data must NOT remain visible
+    // (a CompositionEditor seeded from it would save campaign A's data to B).
+    await waitFor(() => expect(container.textContent).toBe("L|null"));
 
     await act(async () => resolveLoad(2));
     await waitFor(() => expect(container.textContent).toBe("_|2"));

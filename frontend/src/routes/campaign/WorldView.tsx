@@ -12,6 +12,7 @@
 import { useCallback, useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
+import { characterRefFor } from "../../api/campaign";
 import { viewsApi } from "../../api/views";
 import type { Composition, Greeting, ResolvedCharacter, ResolvedEntity } from "../../api/types";
 import { useResource } from "../../api/useResource";
@@ -116,10 +117,12 @@ function EntityTab({
 function CharactersTab({ campaignId }: { campaignId: string }) {
   const state = useResource(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
   const cast = useResource(useCallback(() => viewsApi.listCast(campaignId), [campaignId]));
-  const castIds = new Set(cast.data?.map((r) => r.character.id) ?? []);
+  // Key membership by canonical ref, not bare id — cross-world variants
+  // share asset ids (#517).
+  const castRefs = new Set(cast.data?.map((r) => characterRefFor(r.character)) ?? []);
   return (
     <AsyncSection state={state} emptyMessage="No characters resolved for this campaign yet.">
-      {(rows) => <FilteredCharacters rows={rows} campaignId={campaignId} castIds={castIds} />}
+      {(rows) => <FilteredCharacters rows={rows} campaignId={campaignId} castRefs={castRefs} />}
     </AsyncSection>
   );
 }
@@ -127,10 +130,10 @@ function CharactersTab({ campaignId }: { campaignId: string }) {
 interface FilteredCharactersProps {
   rows: ResolvedCharacter[];
   campaignId: string;
-  castIds: Set<string>;
+  castRefs: Set<string>;
 }
 
-function FilteredCharacters({ rows, campaignId, castIds }: FilteredCharactersProps) {
+function FilteredCharacters({ rows, campaignId, castRefs }: FilteredCharactersProps) {
   const { filtered, search, setSearch, selectedTags, toggleTag, clearTags, availableTags } =
     useCardFilters(rows, {
       text: (r) => [
@@ -182,10 +185,10 @@ function FilteredCharacters({ rows, campaignId, castIds }: FilteredCharactersPro
                     <Markdown>{c.body}</Markdown>
                   </details>
                 )}
-                {castIds.has(c.id) && (
+                {castRefs.has(characterRefFor(c)) && (
                   <p>
                     <Link
-                      to={`/campaigns/${encodeURIComponent(campaignId)}/cast?character=${encodeURIComponent(c.id)}`}
+                      to={`/campaigns/${encodeURIComponent(campaignId)}/cast?ref=${encodeURIComponent(characterRefFor(c))}`}
                     >
                       In cast — open
                     </Link>

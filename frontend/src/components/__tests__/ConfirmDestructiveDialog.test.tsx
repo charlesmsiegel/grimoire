@@ -35,8 +35,13 @@ describe("ConfirmDestructiveDialog", () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
-  it("confirm is disabled while dependents=undefined", () => {
-    renderOpen({ dependents: undefined, body: "Loading dependents…" });
+  it("confirm is enabled when the action has no dependents concept", () => {
+    renderOpen({});
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+  });
+
+  it('confirm is disabled while dependents="loading"', () => {
+    renderOpen({ dependents: "loading", body: "Loading dependents…" });
     expect(screen.getByRole("button", { name: /^Delete$/ })).toBeDisabled();
   });
 

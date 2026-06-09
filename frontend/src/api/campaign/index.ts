@@ -1,5 +1,5 @@
 export { campaignApi } from "./api";
-export { canonicalizeCharacterRef } from "./characterRef";
+export { canonicalizeCharacterRef, characterRefFor } from "./characterRef";
 export { pcProfileApi } from "./pcProfile";
 export type { PCProfilePayload, PCProfileRevision } from "./pcProfile";
 export type {
