@@ -3,6 +3,7 @@ import { z } from "zod";
 import { api } from "../client";
 import { CampaignSummarySchema } from "../schemas/campaign";
 import { PendingCastChangeArraySchema } from "../schemas/castChange";
+import { ApiSceneSchema, PaginatedPostsResponseSchema, SceneDetailSchema } from "../schemas/scene";
 import type {
   AdvanceTurnResult,
   AlternateListResponse,
@@ -39,7 +40,7 @@ const enc = encodeURIComponent;
 export const campaignApi = {
   list: () =>
     api.get<CampaignSummary[]>("/api/campaigns", {
-      schema: z.array(CampaignSummarySchema),
+      checkSchema: z.array(CampaignSummarySchema),
     }),
 
   get: (id: string) => api.get<CampaignSummary>(`/api/campaigns/${enc(id)}`),
@@ -52,14 +53,20 @@ export const campaignApi = {
   removePc: (id: string, characterRef: string) =>
     api.delete<void>(`/api/campaigns/${enc(id)}/pcs/${enc(characterRef)}`),
 
-  listScenes: (id: string) => api.get<ApiScene[]>(`/api/campaigns/${enc(id)}/scenes`),
+  listScenes: (id: string) =>
+    api.get<ApiScene[]>(`/api/campaigns/${enc(id)}/scenes`, {
+      checkSchema: z.array(ApiSceneSchema),
+    }),
 
   getScene: (id: string, sceneId: string) =>
-    api.get<SceneDetail>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}`),
+    api.get<SceneDetail>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}`, {
+      checkSchema: SceneDetailSchema,
+    }),
 
   getPostsPaginated: (id: string, sceneId: string, params?: { limit?: number; before?: number }) =>
     api.get<PaginatedPostsResponse>(`/api/campaigns/${enc(id)}/scenes/${enc(sceneId)}/posts`, {
       query: params,
+      checkSchema: PaginatedPostsResponseSchema,
     }),
 
   endScene: (id: string, sceneId: string) =>
@@ -302,7 +309,7 @@ export const campaignApi = {
   listCastChanges: (campaignId: string, sceneId: string) =>
     api.get<PendingCastChange[]>(
       `/api/campaigns/${enc(campaignId)}/scenes/${enc(sceneId)}/cast-changes`,
-      { schema: PendingCastChangeArraySchema },
+      { checkSchema: PendingCastChangeArraySchema },
     ),
 
   confirmCastChange: (campaignId: string, sceneId: string, changeId: string) =>

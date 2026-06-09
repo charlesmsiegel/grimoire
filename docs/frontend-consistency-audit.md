@@ -335,7 +335,10 @@ one form-row class), make section-specific classes modifiers, and consider split
 - **Zod coverage ≈ 3 endpoints** (`api/campaign/api.ts:42,123`, `api/inventory.ts:38`)
   against a stated convention of validating API responses. Either wire `schema:` into
   the high-traffic list endpoints or drop the convention from CLAUDE.md; the half-state
-  is the worst option.
+  is the worst option. ✔ *Resolved (#599): list/grid-feeding endpoints pass a
+  `checkSchema` (dev-only `safeParse` + once-per-endpoint `console.warn`, raw payload
+  returned either way), with the payload types `z.infer`'d from `api/schemas/`; strict
+  `schema` parsing is reserved for transforming boundary parsers like sheet schemas.*
 - **Raw `fetch()` escapes**: `WorldDependentsView.tsx` (bespoke `fetchJson`) and
   `ImagesView.tsx` (DELETE image job with no error handling) bypass ApiError handling
   entirely.
@@ -407,15 +410,17 @@ shippable.
 > `SaveIndicator`; one async stack (`useResource` +
 > `AsyncSection`/`AsyncBoundary`, `useApi` deleted); one HTTP layer (library
 > cache wraps `api/client`, raw-fetch escapes gone); Cast filters on
-> `CardFilters`; duplicate `.button-link` and hardcoded badge colors fixed.
+> `CardFilters`; duplicate `.button-link` and hardcoded badge colors fixed;
+> the Zod stance decided and wired (item 11, #599 — observational
+> `checkSchema` on list endpoints, types inferred from `api/schemas/`).
 > Phase 4 (#602): `index.css` split into per-section `src/styles/*.css`
 > imports; `.card`/`.chip`/`.grid-cards`/`.form-field` primitives with section
 > classes as modifiers; bespoke `*-empty` classes folded into `.empty-state`;
 > `var(--x, literal)` fallbacks swept and never-defined token names re-pointed
 > at real theme tokens. `.library-card` keeps its own chrome until the
-> `EntityBrowser` extraction (#601). **Still open:** the Zod stance (item 11,
-> #599) and Phase 3's cascade-truthful backend lists (#600) + `EntityBrowser`
-> extraction and override-editing parity (#601).
+> `EntityBrowser` extraction (#601). **Still open:** Phase 3's
+> cascade-truthful backend lists (#600) + `EntityBrowser` extraction and
+> override-editing parity (#601).
 
 **Phase 0 — Quick wins (no design decisions, hours each)**
 1. Add `viewsApi.listMonsters` + Monsters tab in campaign `WorldView` (backend is
@@ -447,7 +452,7 @@ shippable.
     re-point `mechanicsApi`/`libraryApi`; remove the two raw `fetch` escapes.
 11. Decide the Zod stance: add schemas for the entity/campaign list endpoints (the ones
     that feed grids) or amend the convention. Prefer `safeParse` + console.warn in dev
-    so drift is visible without crashing play.
+    so drift is visible without crashing play. ✔ *Done — #599.*
 
 **Phase 3 — Unify the world-contents experience (the §1-§5 fix)**
 12. Backend: make campaign kind-list endpoints resolve through the cascade (emergent +

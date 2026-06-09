@@ -28,7 +28,46 @@ import type { ZodType } from "zod";
 interface RequestOptions {
   signal?: AbortSignal;
   query?: Record<string, string | number | boolean | undefined | null>;
+  /**
+   * Strict boundary parser: the response is `.parse`d and the *transformed*
+   * output is returned, throwing on mismatch. Reserve this for payloads whose
+   * parsed form is actually consumed (e.g. sheet schemas, which normalize
+   * Draft 2020-12 variants). For plain drift detection use {@link
+   * RequestOptions.checkSchema} instead.
+   */
   schema?: ZodType;
+  /**
+   * Observational drift check for high-traffic reads: in dev builds the
+   * response is `safeParse`d and a mismatch logs one `console.warn` per
+   * endpoint; the raw payload is returned either way, so backend drift is
+   * visible without crashing a play session (issue #599).
+   */
+  checkSchema?: ZodType;
+}
+
+/** Endpoints already warned about, so poll loops don't spam the console. */
+const warnedEndpoints = new Set<string>();
+
+/** Test-only: let tests assert the once-per-endpoint warning repeatedly. */
+export function _resetSchemaWarningsForTests(): void {
+  warnedEndpoints.clear();
+}
+
+function checkResponseShape(schema: ZodType, data: unknown, method: string, path: string): void {
+  if (!import.meta.env.DEV) return;
+  const result = schema.safeParse(data);
+  if (result.success) return;
+  const key = `${method} ${path}`;
+  if (warnedEndpoints.has(key)) return;
+  warnedEndpoints.add(key);
+  const issues = result.error.issues
+    .slice(0, 5)
+    .map((issue) => `  ${issue.path.join(".") || "(root)"}: ${issue.message}`);
+  const extra = result.error.issues.length - issues.length;
+  if (extra > 0) issues.push(`  … and ${extra} more`);
+  console.warn(
+    `[api] response shape drift on ${key} — update the schema in src/api/schemas/ or the backend payload:\n${issues.join("\n")}`,
+  );
 }
 
 function buildUrl(path: string, query?: RequestOptions["query"]): string {
@@ -83,6 +122,7 @@ async function request<T>(
   }
   const data = await parseBody(res);
   if (opts.schema) return opts.schema.parse(data) as T;
+  if (opts.checkSchema) checkResponseShape(opts.checkSchema, data, method, path);
   return data as T;
 }
 

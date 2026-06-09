@@ -5,10 +5,21 @@
  * Co-locating these next to `api/client.ts` keeps the views free of URL
  * construction and lets task 33's `api/campaign.ts` retain its narrower
  * play-view surface without import cycles.
+ *
+ * List endpoints pass a `checkSchema` so backend payload drift surfaces as a
+ * dev console warning instead of a silently broken grid (issue #599).
  */
 
+import { z } from "zod";
+
 import { api } from "./client";
+import { ImageMetadataSchema } from "./schemas/image";
+import { LibraryEntitySchema } from "./schemas/libraryEntity";
+import { RegisteredMechanicsModuleSchema } from "./schemas/mechanics";
+import { ResolvedCharacterSchema, ResolvedEntitySchema } from "./schemas/resolved";
+import { SceneSummarySchema } from "./schemas/scene";
 import { SheetSchemaSchema } from "./schemas/sheetSchema";
+import { GreetingSchema, WorldMetaSchema } from "./schemas/world";
 import type { SheetSchema } from "../sheets/types";
 import type {
   Composition,
@@ -25,28 +36,47 @@ import type {
 
 const enc = encodeURIComponent;
 
+const ResolvedCharacterList = z.array(ResolvedCharacterSchema);
+const ResolvedEntityList = z.array(ResolvedEntitySchema);
+
 export const viewsApi = {
   listCharacters: (campaignId: string) =>
-    api.get<ResolvedCharacter[]>(`/api/campaigns/${enc(campaignId)}/characters`),
+    api.get<ResolvedCharacter[]>(`/api/campaigns/${enc(campaignId)}/characters`, {
+      checkSchema: ResolvedCharacterList,
+    }),
   /** Dramatis personae: PCs + emergent characters + library characters that
    * have appeared in at least one scene. The full composition is
    * `listCharacters`. */
   listCast: (campaignId: string) =>
-    api.get<ResolvedCharacter[]>(`/api/campaigns/${enc(campaignId)}/cast`),
+    api.get<ResolvedCharacter[]>(`/api/campaigns/${enc(campaignId)}/cast`, {
+      checkSchema: ResolvedCharacterList,
+    }),
 
   listItems: (campaignId: string) =>
-    api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/items`),
+    api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/items`, {
+      checkSchema: ResolvedEntityList,
+    }),
   listLocations: (campaignId: string) =>
-    api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/locations`),
+    api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/locations`, {
+      checkSchema: ResolvedEntityList,
+    }),
   listLore: (campaignId: string) =>
-    api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/lore`),
+    api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/lore`, {
+      checkSchema: ResolvedEntityList,
+    }),
   listFactions: (campaignId: string) =>
-    api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/factions`),
+    api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/factions`, {
+      checkSchema: ResolvedEntityList,
+    }),
   listMonsters: (campaignId: string) =>
-    api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/monsters`),
+    api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/monsters`, {
+      checkSchema: ResolvedEntityList,
+    }),
 
   listScenes: (campaignId: string) =>
-    api.get<SceneSummary[]>(`/api/campaigns/${enc(campaignId)}/scenes`),
+    api.get<SceneSummary[]>(`/api/campaigns/${enc(campaignId)}/scenes`, {
+      checkSchema: z.array(SceneSummarySchema),
+    }),
 
   getComposition: (campaignId: string) =>
     api.get<Composition>(`/api/campaigns/${enc(campaignId)}/composition`),
@@ -64,6 +94,7 @@ export const viewsApi = {
   listImages: (campaignId: string, opts: { sceneId?: string; starredOnly?: boolean } = {}) =>
     api.get<ImageMetadata[]>(`/api/campaigns/${enc(campaignId)}/images`, {
       query: { scene_id: opts.sceneId, starred_only: opts.starredOnly },
+      checkSchema: z.array(ImageMetadataSchema),
     }),
   generateImage: (
     campaignId: string,
@@ -107,11 +138,17 @@ export const viewsApi = {
 
   // ---------- Library / mechanics ----------
 
-  listWorlds: () => api.get<WorldMeta[]>(`/api/library/worlds`),
+  listWorlds: () =>
+    api.get<WorldMeta[]>(`/api/library/worlds`, { checkSchema: z.array(WorldMetaSchema) }),
   listGreetingsForWorld: (worldId: string) =>
-    api.get<Greeting[]>(`/api/library/worlds/${enc(worldId)}/greetings`),
+    api.get<Greeting[]>(`/api/library/worlds/${enc(worldId)}/greetings`, {
+      checkSchema: z.array(GreetingSchema),
+    }),
 
-  installedMechanics: () => api.get<RegisteredMechanicsModule[]>(`/api/mechanics/installed`),
+  installedMechanics: () =>
+    api.get<RegisteredMechanicsModule[]>(`/api/mechanics/installed`, {
+      checkSchema: z.array(RegisteredMechanicsModuleSchema),
+    }),
   getSheetSchema: (moduleId: string, kind: string) =>
     api.get<SheetSchema>(`/api/mechanics/${enc(moduleId)}/sheets/${enc(kind)}`, {
       schema: SheetSchemaSchema,
@@ -120,7 +157,11 @@ export const viewsApi = {
     api.getText(`/api/mechanics/${enc(moduleId)}/theme.css`),
 
   listStyleGuides: () =>
-    api.get<{ id: string; asset_id: string; name: string }[]>(`/api/library/style-guides`),
+    api.get<{ id: string; asset_id: string; name: string }[]>(`/api/library/style-guides`, {
+      checkSchema: z.array(LibraryEntitySchema),
+    }),
   listImagePresets: () =>
-    api.get<{ id: string; asset_id: string; name: string }[]>(`/api/library/image-presets`),
+    api.get<{ id: string; asset_id: string; name: string }[]>(`/api/library/image-presets`, {
+      checkSchema: z.array(LibraryEntitySchema),
+    }),
 };

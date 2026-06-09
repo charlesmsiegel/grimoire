@@ -35,7 +35,7 @@ export const inventoryApi = {
   flags: (campaignId: string, resolved = false) =>
     api.get<{ flags: InventoryFlag[] }>(
       `/api/campaigns/${enc(campaignId)}/inventory/flags?resolved=${resolved}`,
-      { schema: z.object({ flags: z.array(InventoryFlagSchema) }) },
+      { checkSchema: z.object({ flags: z.array(InventoryFlagSchema) }) },
     ),
   resolveFlag: (campaignId: string, flagId: string) =>
     api.post<{ ok: boolean }>(
