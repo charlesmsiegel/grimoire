@@ -30,7 +30,11 @@ repo's own CLAUDE.md already names as a review smell.
 
 ## 1. Correctness risks (fix first)
 
-### 1.1 ✅ P0 — Retcon can silently destroy state deltas
+### 1.1 ✅ P0 — Retcon can silently destroy state deltas *(conditional trigger)*
+
+*(P0 here is a work-ordering tier, not a release gate: the trigger is conditional — a leave-as-is
+retcon plus an extraction/apply failure — but it ranks first because the failure mode is silent
+state regression reported as success.)*
 `orchestrator/retcon.py:136-173` — `_retcon_leave_as_is` reverses the turn's deltas
 (`self._host._reverse_turn_deltas`), edits the post, then re-extracts and re-applies inside a
 `try/except Exception` that only logs a warning. If extraction or re-application fails, the old deltas
@@ -57,16 +61,19 @@ re-raises — so the gap is cross-stage, not total.)* The cross-stage gap is con
 reverse the committed batch when a later stage fails, and don't clear `pending_pre_roll` until the
 pipeline commits.
 
-### 1.3 ✅ High — Eight StateStore write methods can leave file and index/delta-log diverged
-`state_store/store.py:369-754` — `write_override`, `merge_override`, `delete_override`,
-`delete_emergent`, `write_emergent`, `write_sheet`, `write_content`, `write_image_metadata` all write
-the file to disk first, then update the index + delta log inside `_txn()`. `write_library_file`
+### 1.3 ✅ High — Seven StateStore write paths can leave file and index/delta-log diverged
+`state_store/store.py:369-754` — `write_override`, `delete_override`, `delete_emergent`,
+`write_emergent`, `write_sheet`, `write_content`, `write_image_metadata` all write
+the file to disk first, then update the index + delta log inside `_txn()`. *(Corrected after PR
+review: `merge_override` is not an eighth independent path — `store.py:435-444` only merges dicts
+and delegates to `write_override`, so it inherits both the hazard and the fix.)* `write_library_file`
 (store.py:221-305) handles exactly this hazard with `except BaseException: _restore_file(...)` — the
-other eight have no recovery, so a transaction failure leaves the file changed with no delta-log record
-(undo history now lies about the file). Files-as-SSOT means a watcher pass eventually re-indexes, but
-the delta log divergence does not self-heal.
-**Fix:** apply `write_library_file`'s snapshot/restore pattern to all eight (one shared
-`_snapshot_file_before()` helper — see §5.2 — makes this a small change).
+other seven have no recovery, so a transaction failure leaves the file changed with no delta-log
+record (undo history now lies about the file). Files-as-SSOT means a watcher pass eventually
+re-indexes, but the delta log divergence does not self-heal.
+**Fix:** apply `write_library_file`'s snapshot/restore pattern to the seven independent
+implementations (one shared `_snapshot_file_before()` helper — see §5.2 — makes this a small change);
+`merge_override` is covered through its delegation — don't nest compensation there.
 
 ### 1.4 High — Scene append/delete sequencing can desync file, sidecar, and memory
 `scenes/manager.py:727-754` (append_post: `.md` write → in-memory mutation → sidecar write, no
@@ -245,10 +252,13 @@ false positives (Protocol params, re-exports). What survives verification:
   review: both are consumed — `tier_pin` is applied during tier computation
   (`characters/service.py:483-489`) and `drift_score` gates corrective context
   (`service.py:554` → `context/cast.py:243`). Live feature, keep.)*
-- `orchestrator/service.py:134-151` — `_NullAutoDisable` is the permanent production default: a real
-  implementation exists (`extractor/auto_disable.py:AutoDisableState`, fully unit-tested) but no
-  production composition constructs it — bootstrap never passes `auto_disable=`. Decide: wire it or
-  remove the seam. Also never-read config fields in `orchestrator/config.py` *(list extended after
+- `extractor/auto_disable.py:AutoDisableState` — fully implemented and unit-tested failure tracker
+  that **no production composition ever constructs** (bootstrap never passes `auto_disable=`).
+  *(Reframed after PR review: `_NullAutoDisable` itself is **live, deliberate policy**, not a dead
+  seam — its `tool_use_disabled() → True` intentionally gates AUTO away from tool-use mode until
+  the gateway streams tool calls (`orchestrator/service.py:134-151`). The dangling piece is the
+  unwired persistent tracker: wire `AutoDisableState` only together with tool-call streaming, or
+  remove the tracker; keep the null gate meanwhile.)* Also never-read config fields in `orchestrator/config.py` *(list extended after
   PR review)*: `per_campaign_concurrency` (:78), `MultiPCConfig.advance_required` (:40),
   `BackgroundWorkConfig.npc_tick_after_each_turn` (:46), `OrchestratorConfig.stream_response` (:80 —
   the `stream_response=` at `service.py:346` is the unrelated AlternatesManager callback).
@@ -339,14 +349,19 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
 ## 8. Ratchets — keep the cleared classes cleared
 
 1. **Ban the bypasses mechanically** (ruff `lint.flake8-tidy-imports.banned-api`):
-   `yaml.safe_load`/`yaml.safe_dump` (→ `grimoire.files.yaml_io`), `uuid.uuid4` (→ `util.new_id`)
-   outside `util.py`, and add `BLE001` (blind `except`) — start with per-file ignores for the existing
-   556 sites and shrink.
+   `yaml.safe_load`/`yaml.safe_dump` (→ `grimoire.files.yaml_io`, with a per-file exemption for
+   `files/yaml_io.py` itself — the canonical helper necessarily calls both), `uuid.uuid4`
+   (→ `util.new_id`) outside `util.py`, and add `BLE001` (blind `except`) — start with per-file
+   ignores for the existing 556 sites and shrink.
 2. **Complexity gate for new code:** enable mccabe (`C901`, max ~15). The existing offenders get
    per-file ignores; new code holds the line.
 3. **Greppable boundary checks in CI** (the module-boundary reviewer exists for diffs; add repo-wide):
    `\.db\.(fetch|execute|acquire)` outside `state_store/`/`storage/`/table-gateway modules;
-   `_host\._` outside a documented host interface; `HTTPException\(status_code=404` outside `api/util.py`.
+   `_(host|orch)\._` outside a documented host interface; and the inline-404 check **must be
+   multiline-aware or AST-based** — a single-line grep for `HTTPException\(status_code=404` misses
+   the split form (`raise HTTPException(` ↵ `status_code=404`) used at e.g.
+   `api/campaigns/scenes.py:392`, `entities.py:111`, `turns.py:136` (use `rg -U` or a small AST
+   checker).
 4. **Frontend:** ESLint `no-restricted-syntax` for `as unknown as`; make the API client's Zod schema
    parameter required (use `z.unknown()` as the explicit opt-out so exceptions are visible).
 
@@ -365,8 +380,9 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
 | 5 | Frontend Zod ratchet + dialog component + PostItem split | medium |
 | opportunistic | God-class seams (§3) when next touching each file — not as a standalone project | — |
 
-Everything in priority 2 is behavior-preserving and safe to batch; the P0 items need a
-characterization test first (pin current behavior, then fix).
+Priority 2 is safe to batch **except** the §5.7 id-convergence item flagged in the table (persisted,
+API-visible formats — compatibility review + tests required); the P0 items need a characterization
+test first (pin current behavior, then fix).
 
 ---
 
@@ -402,6 +418,16 @@ characterization test first (pin current behavior, then fix).
 > never-read `orchestrator/config.py` fields added to §4; §5.6's "character-identical" claim fixed
 > (`_AdaptiveGateway` extends the contract); §9's "zero risk" label removed from the id-convergence
 > item. #583, #584, #588, #591, #593 updated to match.
+>
+> **Post-review corrections, round 3:** §1.3 counts seven independent write paths
+> (`merge_override` delegates to `write_override` and inherits the fix — don't nest compensation);
+> §4's `_NullAutoDisable` reframed — the null object is live, deliberate policy gating tool-use
+> mode until tool-call streaming exists, and only the unwired `AutoDisableState` tracker is the
+> dangling piece; §8's ratchets hardened (exempt `files/yaml_io.py` from its own ban; the inline-404
+> check must be multiline-aware — three current bypasses split the call across lines); §9's leftover
+> "behavior-preserving" concluding sentence aligned with the id-convergence flag; §1.1 keeps its
+> P0 rank with the conditional-trigger qualifier made explicit (work-ordering tier, not a release
+> gate). #585, #593, #598 updated to match.
 
 Checked 2026-06-09 against all 45 open issues plus targeted closed-issue searches. The repo has
 already run three audit passes (orchestrator simplification audit → #518–#523; code-quality /
