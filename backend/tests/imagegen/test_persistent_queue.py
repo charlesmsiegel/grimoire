@@ -18,7 +18,6 @@ from grimoire.types.imagegen import (
     BackendCapabilities,
     GenerationRequest,
     GenerationResult,
-    JobStatus,
 )
 
 
@@ -196,12 +195,18 @@ async def test_persistence_with_normal_completion(store) -> None:
             post_id=None,
             request=GenerationRequest(prompt="x", width=8, height=8, seed=42),
         )
+        # Poll the persisted row itself: the worker flips the in-memory job
+        # to COMPLETE before awaiting the DB update, so observing the
+        # in-memory status says nothing about the row yet (#578).
+        status = None
         for _ in range(100):
             await asyncio.sleep(0.02)
-            jobs = await svc.list_jobs("camp-1")
-            if any(j.id == job_id and j.status == JobStatus.COMPLETE for j in jobs):
+            rows = await store.db.fetchall(
+                "SELECT status FROM imagegen_jobs WHERE id = ?", (job_id,)
+            )
+            status = rows[0]["status"] if rows else None
+            if status in ("complete", "failed", "cancelled"):
                 break
-        rows = await store.db.fetchall("SELECT status FROM imagegen_jobs WHERE id = ?", (job_id,))
-        assert rows[0]["status"] == "complete"
+        assert status == "complete"
     finally:
         await svc.aclose()
