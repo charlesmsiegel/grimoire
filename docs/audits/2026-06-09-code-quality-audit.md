@@ -338,6 +338,13 @@ characterization test first (pin current behavior, then fix).
 
 ## 10. Cross-reference against the GitHub issue backlog
 
+> **Update (same day):** every "not tracked" entry below has since been filed as #583–#598
+> (correctness: #583 retcon, #584 pre-roll, #585 state-store writes, #586 scenes, #587 silent reads,
+> #588 relationship race; encapsulation: #589 privates, #590 raw SQL, #591 export cascade, #592 api
+> hygiene; cleanup: #593 dead code, #594 continuity perf; frontend: #595 Zod, #596 dialog,
+> #597 InputArea; gates: #598), with detail comments added to #518, #521, #522, #538, #545, #550,
+> #551, #561, #564. The table is kept as the as-audited snapshot.
+
 Checked 2026-06-09 against all 45 open issues plus targeted closed-issue searches. The repo has
 already run three audit passes (orchestrator simplification audit → #518–#523; code-quality /
 coding-standards sweep → #535–#556; python-simplifier + API-surface audits → #530–#533, #561–#565),
