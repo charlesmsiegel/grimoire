@@ -408,10 +408,10 @@ shippable.
 > (`useResource` + `AsyncSection`/`AsyncBoundary`, `useApi` deleted);
 > one HTTP layer (library cache wraps `api/client`, raw-fetch escapes gone);
 > Cast filters on `CardFilters`; duplicate `.button-link` and hardcoded badge
-> colors fixed. **Still open:** the Zod stance (item 11), Phase 3's
-> cascade-truthful backend lists + `EntityBrowser` extraction + override
-> editing parity, and Phase 4's card/chip/grid/form CSS primitive
-> consolidation.
+> colors fixed. **Still open:** the Zod stance (item 11, #599), Phase 3's
+> cascade-truthful backend lists (#600) + `EntityBrowser` extraction and
+> override-editing parity (#601), and Phase 4's card/chip/grid/form CSS
+> primitive consolidation (#602).
 
 **Phase 0 — Quick wins (no design decisions, hours each)**
 1. Add `viewsApi.listMonsters` + Monsters tab in campaign `WorldView` (backend is
