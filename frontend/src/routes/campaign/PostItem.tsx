@@ -314,7 +314,11 @@ export function PostItem({
         <ul className="post-images" aria-label="Generated images">
           {images.map((img) => (
             <li key={img.id}>
-              <img src={img.url} alt={img.prompt || "Generated scene image"} loading="lazy" />
+              <img
+                src={img.url}
+                alt={img.prompt?.trim() || "Generated scene image"}
+                loading="lazy"
+              />
             </li>
           ))}
         </ul>
