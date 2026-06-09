@@ -303,16 +303,194 @@ def test_user_provider_overrides_apply_per_model(openrouter_module) -> None:
 
 
 def test_empty_provider_config_omits_routing(openrouter_module) -> None:
-    """Setting `provider: {}` opts out of routing constraints entirely; the
-    payload then carries no `provider` key (original wire shape)."""
+    """Setting `provider: {}` alone opts out of routing constraints entirely —
+    including the builtin price guards — so the payload carries no `provider`
+    key (original wire shape) for any model."""
+    provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k", "provider": {}})
+    for model in ("openai/gpt-4o", "deepseek/deepseek-v4-pro"):
+        request = CompletionRequest(
+            model=model, messages=[Message(role=MessageRole.USER, content="hi")]
+        )
+        payload = provider._build_payload(request, stream=False)
+        assert "provider" not in payload, model
+
+
+def test_explicit_overrides_still_apply_under_opt_out(openrouter_module) -> None:
+    """`provider: {}` drops the builtin guards, but a user-supplied
+    `provider_overrides` is explicit config and still applies."""
     provider = openrouter_module.OpenRouterLLMProvider(
-        config={"api_key": "k", "provider": {}, "provider_overrides": {}}
+        config={
+            "api_key": "k",
+            "provider": {},
+            "provider_overrides": {"deepseek/deepseek-v4-pro": {"max_price": {"prompt": 1.0}}},
+        }
     )
-    request = CompletionRequest(
-        model="openai/gpt-4o", messages=[Message(role=MessageRole.USER, content="hi")]
+    assert _provider_of(provider, "openai/gpt-4o") == {}
+    assert _provider_of(provider, "deepseek/deepseek-v4-pro") == {"max_price": {"prompt": 1.0}}
+
+
+def test_provider_override_deep_merges_nested_objects(openrouter_module) -> None:
+    """Overriding one `max_price` limit must not silently drop the default's
+    other limit — nested routing objects merge field-by-field."""
+    provider = openrouter_module.OpenRouterLLMProvider(
+        config={
+            "api_key": "k",
+            "provider": {"max_price": {"prompt": 1.0, "completion": 2.0}},
+            "provider_overrides": {"openai/gpt-4o": {"max_price": {"prompt": 0.5}}},
+        }
     )
+    routing = _provider_of(provider, "openai/gpt-4o")
+    assert routing["max_price"] == {"prompt": 0.5, "completion": 2.0}
+
+
+def test_usage_accounting_can_be_disabled(openrouter_module) -> None:
+    """`usage_accounting: false` restores the standard chat-completions shape
+    (with `provider: {}`) for strict OpenAI-compatible gateways that reject
+    OpenRouter-only request fields."""
+    provider = openrouter_module.OpenRouterLLMProvider(
+        config={"api_key": "k", "usage_accounting": False, "provider": {}}
+    )
+    request = CompletionRequest(model="x", messages=[Message(role=MessageRole.USER, content="hi")])
     payload = provider._build_payload(request, stream=False)
+    assert "usage" not in payload
     assert "provider" not in payload
+
+
+@pytest.mark.asyncio
+async def test_complete_prefers_actual_cost_over_catalog_estimate(openrouter_module) -> None:
+    """`usage.cost` is what OpenRouter actually charged; it must reach
+    `cost_estimate_usd` (which the gateway preserves and persists) instead of
+    the catalog estimate — otherwise provider-price variance corrupts cost
+    records even when the real number is in hand (issue #515)."""
+    provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "deepseek/deepseek-v4-pro",
+                            "name": "DeepSeek",
+                            "context_length": 64000,
+                            # Headline rate that would *under*-estimate the call.
+                            "pricing": {"prompt": "0.0000004", "completion": "0.0000008"},
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "model": "deepseek/deepseek-v4-pro",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 500,
+                    "total_tokens": 1500,
+                    "cost": 0.064919,
+                },
+            },
+        )
+
+    _install_mock_transport(provider, _handler)
+    await provider.list_models()  # prime the catalog cache with headline rates
+    response = await provider.complete(
+        CompletionRequest(
+            model="deepseek/deepseek-v4-pro",
+            messages=[Message(role=MessageRole.USER, content="hi")],
+        )
+    )
+    assert response.cost_estimate_usd == pytest.approx(0.064919)
+
+
+@pytest.mark.asyncio
+async def test_complete_falls_back_to_estimate_without_actual_cost(openrouter_module) -> None:
+    """Without `usage.cost` in the response, the catalog estimate still fills
+    `cost_estimate_usd` as before."""
+    provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "openai/gpt-4o",
+                            "name": "GPT-4o",
+                            "context_length": 128000,
+                            "pricing": {"prompt": "0.0025", "completion": "0.01"},
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "model": "openai/gpt-4o",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100},
+            },
+        )
+
+    _install_mock_transport(provider, _handler)
+    await provider.list_models()
+    response = await provider.complete(
+        CompletionRequest(
+            model="openai/gpt-4o",
+            messages=[Message(role=MessageRole.USER, content="hi")],
+        )
+    )
+    expected = 1000 / 1000.0 * 2.5 + 100 / 1000.0 * 10.0
+    assert response.cost_estimate_usd == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+async def test_stream_final_chunk_carries_actual_cost(openrouter_module) -> None:
+    """The streamed usage event's `cost` rides the final chunk so the gateway's
+    streaming path records the actual charge instead of a catalog estimate."""
+    provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
+
+    usage_event = (
+        b'data: {"choices":[{"delta":{}}],'
+        b'"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5,"cost":0.0123}}'
+    )
+    body = b"\n".join(
+        [
+            b'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+            usage_event,
+            b"data: [DONE]",
+            b"",
+        ]
+    )
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+    _install_mock_transport(provider, _handler)
+    chunks = [
+        c
+        async for c in provider.stream(
+            CompletionRequest(model="x", messages=[Message(role=MessageRole.USER, content="hi")])
+        )
+    ]
+    final = chunks[-1]
+    assert final.is_final
+    assert final.cost_estimate_usd == pytest.approx(0.0123)
 
 
 @pytest.mark.asyncio

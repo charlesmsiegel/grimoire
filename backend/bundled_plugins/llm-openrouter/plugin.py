@@ -126,21 +126,30 @@ class OpenRouterLLMProvider:
         self._extra_headers: dict[str, str] = (
             {str(k): str(v) for k, v in extra.items()} if isinstance(extra, dict) else {}
         )
+        # OpenRouter usage accounting (`usage: {include: true}`) returns the
+        # actual charged cost on every response. On by default; turn off when
+        # `base_url` points at a strict OpenAI-compatible gateway that rejects
+        # the OpenRouter-only request field.
+        self._usage_accounting: bool = bool(cfg.get("usage_accounting", True))
         # Provider routing: a default object merged into every request, plus
         # per-model overrides merged on top for that model (#515). An explicit
-        # `provider: {}` opts out of the cost-safe default entirely; supplying
-        # `provider_overrides` replaces the builtin price-guard set.
+        # `provider: {}` opts out of routing entirely — including the builtin
+        # price guards; supplying `provider_overrides` replaces the builtin
+        # price-guard set (and still applies even under the `{}` opt-out).
+        user_provider = cfg.get("provider")
         self._provider_default: dict[str, Any] = (
-            dict(cfg["provider"])
-            if isinstance(cfg.get("provider"), dict)
+            dict(user_provider)
+            if isinstance(user_provider, dict)
             else dict(DEFAULT_PROVIDER_CONFIG)
         )
+        routing_opted_out = isinstance(user_provider, dict) and not user_provider
         overrides = cfg.get("provider_overrides")
-        self._provider_overrides: dict[str, dict[str, Any]] = (
-            {str(k): dict(v) for k, v in overrides.items() if isinstance(v, dict)}
-            if isinstance(overrides, dict)
-            else dict(BUILTIN_PROVIDER_OVERRIDES)
-        )
+        if isinstance(overrides, dict):
+            self._provider_overrides: dict[str, dict[str, Any]] = {
+                str(k): dict(v) for k, v in overrides.items() if isinstance(v, dict)
+            }
+        else:
+            self._provider_overrides = {} if routing_opted_out else dict(BUILTIN_PROVIDER_OVERRIDES)
         self._client: Any = None
         self._client_lock = asyncio.Lock()
         self._models_cache: list[ModelInfo] | None = None
@@ -170,13 +179,21 @@ class OpenRouterLLMProvider:
         usage = _usage(data.get("usage"))
         model_id = str(data.get("model") or request.model or self._active_model)
         _log_usage(model_id, usage, data)
+        # Prefer the *actual* charge from usage accounting over the catalog
+        # estimate — the gateway preserves a provider-supplied cost, so this is
+        # what lands in cost records when a pricier provider served the call.
+        actual_cost = _actual_cost(data)
         return CompletionResponse(
             text=text,
             model=model_id,
             finish_reason=finish,
             usage=usage,
             raw=data if isinstance(data, dict) else {},
-            cost_estimate_usd=await self._estimate_cost(usage, model_id),
+            cost_estimate_usd=(
+                actual_cost
+                if actual_cost is not None
+                else await self._estimate_cost(usage, model_id)
+            ),
             latency_ms=elapsed_ms,
         )
 
@@ -230,7 +247,11 @@ class OpenRouterLLMProvider:
             raise _as_transient(exc) from exc
         if usage is not None:
             _log_usage(str(meta.get("model") or model_id), usage, meta)
-        yield CompletionChunk(delta="", is_final=True, usage=usage)
+        # Carry the actual charge on the final chunk so the gateway's streaming
+        # path records it instead of recomputing an estimate from catalog rates.
+        yield CompletionChunk(
+            delta="", is_final=True, usage=usage, cost_estimate_usd=_actual_cost(meta)
+        )
 
     async def list_models(self) -> list[ModelInfo]:
         if self._models_cache is not None:
@@ -369,11 +390,12 @@ class OpenRouterLLMProvider:
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
             "stream": stream,
+        }
+        if self._usage_accounting:
             # Ask OpenRouter to return the *actual* charged cost so we can log it
             # and detect provider-price variance — catalog pricing reflects the
             # headline rate, not whichever provider actually served the call.
-            "usage": {"include": True},
-        }
+            payload["usage"] = {"include": True}
         provider = self._resolve_provider(model)
         if provider:
             payload["provider"] = provider
@@ -383,9 +405,16 @@ class OpenRouterLLMProvider:
 
     def _resolve_provider(self, model: str) -> dict[str, Any]:
         """Provider routing object for `model`: the default base with this
-        model's overrides merged on top. Empty when routing is opted out."""
+        model's overrides merged on top. Nested objects (e.g. `max_price`)
+        merge field-by-field so overriding one limit can't silently drop the
+        default's others. Empty when routing is opted out."""
         routing = dict(self._provider_default)
-        routing.update(self._provider_overrides.get(model, {}))
+        for key, value in self._provider_overrides.get(model, {}).items():
+            base = routing.get(key)
+            if isinstance(base, dict) and isinstance(value, dict):
+                routing[key] = {**base, **value}
+            else:
+                routing[key] = value
         return routing
 
     def _fallback_model_info(self) -> ModelInfo:
@@ -427,6 +456,17 @@ def _usage(payload: Any) -> TokenUsage:
     return TokenUsage(input_tokens=prompt, output_tokens=completion, total_tokens=total)
 
 
+def _actual_cost(data: Any) -> float | None:
+    """The actual charge OpenRouter reported for this call in USD, parsed from
+    `usage.cost` (present when the request set `usage: {include: true}`).
+    None when absent or non-numeric."""
+    raw = data.get("usage") if isinstance(data, dict) else None
+    cost = raw.get("cost") if isinstance(raw, dict) else None
+    if isinstance(cost, int | float) and not isinstance(cost, bool):
+        return float(cost)
+    return None
+
+
 def _reasoning_tokens(raw: dict[str, Any]) -> int:
     direct = raw.get("reasoning_tokens")
     if direct:
@@ -447,10 +487,10 @@ def _log_usage(model_id: str, usage: TokenUsage, data: Any) -> None:
     provider = data.get("provider") if isinstance(data, dict) else None
     gen_id = data.get("id") if isinstance(data, dict) else None
     reasoning = _reasoning_tokens(raw)
-    cost = raw.get("cost")
+    cost = _actual_cost(data)
     billed = usage.input_tokens + usage.output_tokens
     cost_per_million: float | None = None
-    if isinstance(cost, int | float) and billed:
+    if cost is not None and billed:
         cost_per_million = round(cost / billed * 1_000_000, 4)
     logger.info(
         "openrouter usage model=%s provider=%s gen_id=%s prompt=%d completion=%d "

@@ -1201,6 +1201,7 @@ class LLMGatewayService:
         )
         stream = provider.stream(request)
         usage: TokenUsage | None = None
+        provider_cost: float | None = None
         text_parts: list[str] = []
         first = True
         try:
@@ -1219,6 +1220,8 @@ class LLMGatewayService:
                 text_parts.append(chunk.delta)
                 if chunk.usage is not None:
                     usage = chunk.usage
+                if chunk.cost_estimate_usd is not None:
+                    provider_cost = chunk.cost_estimate_usd
                 yield chunk
                 if chunk.is_final:
                     break
@@ -1245,10 +1248,17 @@ class LLMGatewayService:
                 with contextlib.suppress(Exception):
                     await close()
         latency_ms = int((time.monotonic() - started) * 1000)
-        # Compute cost from usage + price book so streaming calls populate
-        # cost_records on the same footing as non-streaming complete() does.
-        cost_estimate_usd: float | None = None
-        if usage is not None and (usage.input_tokens or usage.output_tokens):
+        # Prefer the provider-reported actual charge (final-chunk
+        # cost_estimate_usd); otherwise compute from usage + price book so
+        # streaming calls populate cost_records on the same footing as
+        # non-streaming complete() does (which likewise preserves a
+        # provider-supplied cost).
+        cost_estimate_usd: float | None = provider_cost
+        if (
+            cost_estimate_usd is None
+            and usage is not None
+            and (usage.input_tokens or usage.output_tokens)
+        ):
             info = await self._get_pricing(route.provider_id, route.model)
             if info is not None and not (
                 info.input_cost_per_1k is None and info.output_cost_per_1k is None

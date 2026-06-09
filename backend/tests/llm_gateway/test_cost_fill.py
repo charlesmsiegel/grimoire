@@ -331,6 +331,60 @@ async def test_cost_appears_in_response_received_event(db, plugins) -> None:
     assert received_events[0].payload["cost_estimate_usd"] == pytest.approx(expected)
 
 
+async def test_stream_prefers_provider_reported_cost(db, plugins) -> None:
+    """A cost on the final chunk (actual charge) wins over the price book,
+    mirroring how complete() preserves a provider-supplied cost."""
+    provider = FakeLLMProvider(
+        id="prov",
+        response_usage=TokenUsage(input_tokens=1000, output_tokens=500),
+        stream_cost=0.99,
+        models=[
+            ModelInfo(
+                id="model-a",
+                name="Model A",
+                input_cost_per_1k=0.01,
+                output_cost_per_1k=0.02,
+            )
+        ],
+    )
+    plugins.add_llm(provider)
+    gw = LLMGatewayService(plugins, db, _config())
+
+    async for _ in gw.stream("main", _request()):
+        pass
+
+    row = await db.fetchone("SELECT cost_usd FROM llm_requests")
+    assert row is not None
+    assert row["cost_usd"] == pytest.approx(0.99)
+
+
+async def test_stream_cost_falls_back_to_price_book(db, plugins) -> None:
+    """Without a chunk-supplied cost, streaming still computes from usage."""
+    provider = FakeLLMProvider(
+        id="prov",
+        response_usage=TokenUsage(input_tokens=1000, output_tokens=500),
+        stream_cost=None,
+        models=[
+            ModelInfo(
+                id="model-a",
+                name="Model A",
+                input_cost_per_1k=0.01,
+                output_cost_per_1k=0.02,
+            )
+        ],
+    )
+    plugins.add_llm(provider)
+    gw = LLMGatewayService(plugins, db, _config())
+
+    async for _ in gw.stream("main", _request()):
+        pass
+
+    row = await db.fetchone("SELECT cost_usd FROM llm_requests")
+    assert row is not None
+    expected = 1000 / 1000.0 * 0.01 + 500 / 1000.0 * 0.02
+    assert row["cost_usd"] == pytest.approx(expected)
+
+
 # --------------------------------------------------------------------------- #
 # Pricing overrides
 # --------------------------------------------------------------------------- #
