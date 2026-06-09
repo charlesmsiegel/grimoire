@@ -313,9 +313,14 @@ function EntityEditorBody({
               This permanently removes <code>{entity.path}</code>. Cannot be undone.
             </p>
           }
-          dependents={dependents.data ?? (dependents.loading ? "loading" : [])}
+          dependents={dependents.data ?? "loading"}
           busy={deleting.busy}
-          error={deleting.err}
+          error={
+            deleting.err ??
+            (dependents.error
+              ? `Dependents lookup failed: ${dependents.error.message}. Reload to retry.`
+              : null)
+          }
           onConfirm={() => void confirmDelete()}
           onCancel={() => setDeleting(null)}
         />
@@ -577,9 +582,14 @@ function GreetingEditorBody({
               This permanently removes greeting <code>{greeting.id}</code>. Cannot be undone.
             </p>
           }
-          dependents={dependents.data ?? (dependents.loading ? "loading" : [])}
+          dependents={dependents.data ?? "loading"}
           busy={deleting.busy}
-          error={deleting.err}
+          error={
+            deleting.err ??
+            (dependents.error
+              ? `Dependents lookup failed: ${dependents.error.message}. Reload to retry.`
+              : null)
+          }
           onConfirm={() => void confirmDelete()}
           onCancel={() => setDeleting(null)}
         />

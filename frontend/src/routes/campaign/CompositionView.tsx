@@ -152,7 +152,7 @@ function CompositionEditor({
     const next: WorldRef = {
       world_id: worldId,
       priority: comp.worlds.length + 1,
-      include: [],
+      include: null,
       bound_at_version: meta?.version ?? 0,
       track_latest: false,
     };
@@ -375,15 +375,16 @@ function IncludeEditor({
   worldRef: WorldRef;
   onChange: (patch: Partial<WorldRef>) => void;
 }) {
-  const all = worldRef.include.length === 0;
+  // null/missing = include every kind; an explicit list (even []) is literal
+  // — `[]` means "include nothing from this world" (types/composition.py).
+  const all = worldRef.include === null;
   const toggle = (kind: string) => {
     if (all) {
       onChange({ include: KINDS.filter((k) => k !== kind) });
       return;
     }
-    const next = worldRef.include.includes(kind)
-      ? worldRef.include.filter((k) => k !== kind)
-      : [...worldRef.include, kind];
+    const current = worldRef.include ?? [];
+    const next = current.includes(kind) ? current.filter((k) => k !== kind) : [...current, kind];
     onChange({ include: next });
   };
   return (
@@ -392,7 +393,7 @@ function IncludeEditor({
         <input
           type="checkbox"
           checked={all}
-          onChange={(e) => onChange({ include: e.target.checked ? [] : [...KINDS] })}
+          onChange={(e) => onChange({ include: e.target.checked ? null : [...KINDS] })}
         />
         include all
       </label>
@@ -403,7 +404,7 @@ function IncludeEditor({
               <label className="field-inline">
                 <input
                   type="checkbox"
-                  checked={worldRef.include.includes(k)}
+                  checked={(worldRef.include ?? []).includes(k)}
                   onChange={() => toggle(k)}
                 />
                 {k}

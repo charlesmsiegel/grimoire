@@ -69,7 +69,8 @@ export interface ResolvedEntity {
 export interface WorldRef {
   world_id: string;
   priority: number;
-  include: string[];
+  /** `null`/missing = include every kind; an explicit list (even `[]`) is literal. */
+  include: string[] | null;
   bound_at_version: number;
   track_latest: boolean;
 }

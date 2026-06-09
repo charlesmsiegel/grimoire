@@ -40,7 +40,7 @@ export function PromptDialog({
   const [value, setValue] = useState(initialValue);
 
   return (
-    <Dialog open={open} onClose={onCancel} title={title}>
+    <Dialog open={open} onClose={busy ? () => undefined : onCancel} title={title}>
       <form
         onSubmit={(e) => {
           e.preventDefault();

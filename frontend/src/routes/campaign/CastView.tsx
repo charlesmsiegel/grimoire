@@ -54,7 +54,10 @@ export function CastView() {
   });
 
   const [searchParams] = useSearchParams();
-  const [selectedId, setSelectedId] = useState<string | null>(searchParams.get("character"));
+  // Selection is keyed by canonical ref — cross-world variants share bare
+  // asset ids. ?character= remains as a legacy id hint; ?ref= is canonical.
+  const [selectedRef, setSelectedRef] = useState<string | null>(null);
+  const [initialId] = useState(() => searchParams.get("character"));
   const [initialRef] = useState(() => searchParams.get("ref"));
 
   return (
@@ -84,8 +87,9 @@ export function CastView() {
             rows={rows}
             campaignId={campaignId}
             moduleId={moduleId}
-            selectedId={selectedId}
-            setSelectedId={setSelectedId}
+            selectedRef={selectedRef}
+            setSelectedRef={setSelectedRef}
+            initialId={initialId}
             initialRef={initialRef}
             pcRefs={pcRefs}
             refForRow={refForRow}
@@ -102,8 +106,9 @@ interface CastBodyProps {
   rows: ResolvedCharacter[];
   campaignId: string;
   moduleId: string | null;
-  selectedId: string | null;
-  setSelectedId: (id: string) => void;
+  selectedRef: string | null;
+  setSelectedRef: (ref: string) => void;
+  initialId: string | null;
   initialRef: string | null;
   pcRefs: Set<string>;
   refForRow: (r: ResolvedCharacter) => string;
@@ -115,8 +120,9 @@ function CastBody({
   rows,
   campaignId,
   moduleId,
-  selectedId,
-  setSelectedId,
+  selectedRef,
+  setSelectedRef,
+  initialId,
   initialRef,
   pcRefs,
   refForRow,
@@ -141,9 +147,15 @@ function CastBody({
     tags: (r) => r.character.tags,
   });
   const filtered = textFiltered.filter((r) => matchesFacets(r, sourceFilter, roleFilter));
-  const byId = filtered.find((r) => r.character.id === selectedId);
-  const byRef = !byId && initialRef ? filtered.find((r) => refForRow(r) === initialRef) : undefined;
-  const selected = byId ?? byRef ?? filtered[0] ?? null;
+  const bySelection = selectedRef ? filtered.find((r) => refForRow(r) === selectedRef) : undefined;
+  const byInitialId =
+    !selectedRef && initialId ? filtered.find((r) => r.character.id === initialId) : undefined;
+  const byInitialRef =
+    !selectedRef && !byInitialId && initialRef
+      ? filtered.find((r) => refForRow(r) === initialRef)
+      : undefined;
+  const selected = bySelection ?? byInitialId ?? byInitialRef ?? filtered[0] ?? null;
+  const selectedRowRef = selected ? refForRow(selected) : null;
   return (
     <div className="cast-layout">
       <aside className="cast-list" aria-label="Character list">
@@ -189,13 +201,11 @@ function CastBody({
         </div>
         <ul className="entity-list">
           {filtered.map((c) => (
-            <li key={c.character.id} className="cast-entity">
+            <li key={refForRow(c)} className="cast-entity">
               <button
                 type="button"
-                className={
-                  selected?.character.id === c.character.id ? "entity-card active" : "entity-card"
-                }
-                onClick={() => setSelectedId(c.character.id)}
+                className={selectedRowRef === refForRow(c) ? "entity-card active" : "entity-card"}
+                onClick={() => setSelectedRef(refForRow(c))}
               >
                 <div className="entity-card-head">
                   <span className="entity-name">{c.character.name}</span>

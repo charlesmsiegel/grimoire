@@ -24,10 +24,13 @@ export function useDestructiveConfirm<T>(action: (target: T) => Promise<void>) {
   };
   const confirm = () => {
     if (target === null) return;
+    const acting = target;
     setBusy(true);
     setError(null);
-    void action(target)
-      .then(() => setTarget(null))
+    void action(acting)
+      // Only clear the confirmation this action belongs to — a later
+      // request() must not be closed by an earlier action resolving.
+      .then(() => setTarget((current) => (current === acting ? null : current)))
       .catch((err: unknown) => setError(errorMessage(err)))
       .finally(() => setBusy(false));
   };

@@ -344,9 +344,10 @@ function GreetingsTab({ campaignId }: { campaignId: string }) {
   return (
     <AsyncSection state={composition}>
       {(comp) => {
-        // Honor each ref's include filter: an empty list means "all kinds".
+        // Honor each ref's include filter: null/missing means "every kind";
+        // an explicit list (even []) is literal.
         const worldIds = comp.worlds
-          .filter((ref) => ref.include.length === 0 || ref.include.includes("greetings"))
+          .filter((ref) => ref.include === null || ref.include.includes("greetings"))
           .map((ref) => ref.world_id);
         return <GreetingsAcrossWorlds worldIds={worldIds} />;
       }}

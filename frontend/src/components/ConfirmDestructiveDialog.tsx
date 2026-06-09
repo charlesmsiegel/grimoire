@@ -47,8 +47,10 @@ export function ConfirmDestructiveDialog({
   const typedOk = !typedConfirmation || typed === typedConfirmation.expected;
   const confirmDisabled = busy || dependentsLoading || !typedOk;
 
+  // While the action runs, dismissal is blocked: closing wouldn't cancel the
+  // request — it would just hide a destructive operation mid-flight.
   return (
-    <Dialog open={open} onClose={onCancel} title={title}>
+    <Dialog open={open} onClose={busy ? () => undefined : onCancel} title={title}>
       {body && <div>{body}</div>}
       {Array.isArray(dependents) && dependents.length > 0 && (
         <>
@@ -81,7 +83,7 @@ export function ConfirmDestructiveDialog({
         </p>
       )}
       <div className="modal-actions">
-        <button type="button" onClick={onCancel}>
+        <button type="button" onClick={onCancel} disabled={busy}>
           Cancel
         </button>
         <button type="button" onClick={onConfirm} disabled={confirmDisabled}>
