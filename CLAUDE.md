@@ -255,6 +255,27 @@ review smell. Grep before adding a `_parse_*` / `_slug*` / `_json*` / `_now*`.
 - **Prettier** for formatting, **ESLint** with TypeScript plugin for linting
 - Source under `frontend/src/`
 
+#### Shared frontend helpers — reach for these first
+
+Like the backend, recurring frontend needs have canonical homes; a private
+reimplementation is a review smell.
+
+- **Dialogs**: `components/Dialog` (Radix-based; Escape/backdrop/focus handled)
+  is the only modal shell. Destructive actions confirm through
+  `components/ConfirmDestructiveDialog` + `hooks/useDestructiveConfirm`;
+  single-input prompts use `components/PromptDialog`. `window.confirm` /
+  `window.prompt` / `window.alert` are banned by ESLint.
+- **Async data**: `api/useResource` is the data-fetching hook (wrap loaders in
+  `useCallback`); render through `components/AsyncSection` (render-prop) or the
+  library's plain-children `AsyncBoundary`. Don't hand-roll
+  `useEffect`+`useState` fetch loops.
+- **HTTP**: everything goes through `api/client.ts` (`api.get/post/…`,
+  `errorMessage`, `ApiError`); `api/library/request.ts` is a 30s GET cache over
+  it. Raw `fetch` only for streams/multipart, with a comment saying why.
+- **UI bits**: `components/Tabs` (keyboard-accessible tablist),
+  `components/EmptyState`, `components/SaveIndicator`, `components/CardFilters`
+  + `hooks/useCardFilters` for list search/tag toolbars, `lib/slugify` for ids.
+
 #### Card icon bar
 
 Every card renders a `CardIconBar` (`frontend/src/components/CardIconBar.tsx`) at its

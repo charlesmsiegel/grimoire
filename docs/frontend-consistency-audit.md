@@ -397,6 +397,22 @@ one form-row class), make section-specific classes modifiers, and consider split
 Ordered so user-visible consistency lands early and each phase is independently
 shippable.
 
+> **Status (2026-06-09, this branch):** Phases 0–2 are implemented, plus the
+> CSS quick wins from Phase 4 and the Cast/World restructure's first slice
+> (§5 decision note). Concretely: Monsters tab + URL-synced world tabs +
+> greetings fan-out fixes; shared `errorMessage`/`slugify`; `components/Dialog`
+> (Radix) with every modal ported; `ConfirmDestructiveDialog`/`PromptDialog`
+> replacing all native popups (now lint-banned); keyboard-accessible
+> `components/Tabs` adopted by the world view, content browser, and both
+> settings screens; merged `SaveIndicator`; one async stack
+> (`useResource` + `AsyncSection`/`AsyncBoundary`, `useApi` deleted);
+> one HTTP layer (library cache wraps `api/client`, raw-fetch escapes gone);
+> Cast filters on `CardFilters`; duplicate `.button-link` and hardcoded badge
+> colors fixed. **Still open:** the Zod stance (item 11), Phase 3's
+> cascade-truthful backend lists + `EntityBrowser` extraction + override
+> editing parity, and Phase 4's card/chip/grid/form CSS primitive
+> consolidation.
+
 **Phase 0 — Quick wins (no design decisions, hours each)**
 1. Add `viewsApi.listMonsters` + Monsters tab in campaign `WorldView` (backend is
    ready). *(frontend only)* ✔ *Done — landed with the Cast decision (§5 note).*
