@@ -542,7 +542,7 @@ class _FakeFileWatcher:
 
     async def scan_now(self, *, scope: str = "all") -> dict[str, Any]:
         self.calls.append(scope)
-        return {"scope": scope, "library_files": 3, "campaign_files": 2}
+        return {"scope": scope, "library_files": 3, "campaign_files": 2, "failures": 0}
 
 
 def test_rescan_worlds_invokes_file_watcher_with_library_scope(client, container) -> None:
@@ -550,7 +550,12 @@ def test_rescan_worlds_invokes_file_watcher_with_library_scope(client, container
     container.file_watcher = fw
     response = client.post("/api/library/worlds/rescan")
     assert response.status_code == 200
-    assert response.json() == {"scope": "library", "library_files": 3, "campaign_files": 2}
+    assert response.json() == {
+        "scope": "library",
+        "library_files": 3,
+        "campaign_files": 2,
+        "failures": 0,
+    }
     assert fw.calls == ["library"]
 
 

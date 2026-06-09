@@ -746,7 +746,7 @@ class _FakeFileWatcher:
 
     async def scan_now(self, *, scope: str = "all") -> dict[str, Any]:
         self.calls.append(scope)
-        return {"scope": scope, "library_files": 0, "campaign_files": 7}
+        return {"scope": scope, "library_files": 0, "campaign_files": 7, "failures": 0}
 
 
 def test_rescan_campaigns_invokes_file_watcher_with_campaigns_scope(client, container) -> None:
@@ -754,7 +754,12 @@ def test_rescan_campaigns_invokes_file_watcher_with_campaigns_scope(client, cont
     container.file_watcher = fw
     response = client.post("/api/campaigns/rescan")
     assert response.status_code == 200
-    assert response.json() == {"scope": "campaigns", "library_files": 0, "campaign_files": 7}
+    assert response.json() == {
+        "scope": "campaigns",
+        "library_files": 0,
+        "campaign_files": 7,
+        "failures": 0,
+    }
     assert fw.calls == ["campaigns"]
 
 

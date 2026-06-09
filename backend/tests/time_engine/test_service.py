@@ -275,6 +275,60 @@ async def test_npcs_tick_via_injected_callable(
     assert summary.secrets_kept == ["working on something"]
 
 
+async def test_failed_npc_tick_is_marked_degraded(
+    time_engine: TimeEngineService,
+    store: StateStore,
+    characters: CharactersService,
+):
+    """#587: a failing tick callable falls back to the default empty tick,
+    but the summary, digest, and ``npc_tick_complete`` event must say so —
+    a failed tick must be distinguishable from a quiet day."""
+    bus = EventBus()
+    time_engine._event_bus = bus  # type: ignore[attr-defined]
+
+    await _seed_campaign(store)
+    await characters.create(World, _character("alistair", CharacterRole.MAJOR_NPC))
+    await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1))
+
+    async def tick_fn(_payload):
+        raise RuntimeError("tick provider exploded")
+
+    time_engine._npc_tick_fn = tick_fn  # type: ignore[attr-defined]
+
+    received: list[Event] = []
+    bus.subscribe("npc_tick_complete", lambda e: received.append(e))
+
+    result = await time_engine.advance(CAMPAIGN, _duration_days(1), TimeAdvanceReason.EXPLICIT_USER)
+
+    summary = result.npc_summaries["alistair"]
+    assert summary.degraded is True
+    assert summary.activities == []
+    assert "alistair" in result.digest
+    assert "[tick failed; defaults applied]" in result.digest
+    assert len(received) == 1
+    assert received[0].payload["degraded"] is True
+
+
+async def test_quiet_npc_tick_is_not_marked_degraded(
+    time_engine: TimeEngineService,
+    store: StateStore,
+    characters: CharactersService,
+):
+    await _seed_campaign(store)
+    await characters.create(World, _character("alistair", CharacterRole.MAJOR_NPC))
+    await time_engine.set_current(CAMPAIGN, _time(2024, 1, 1))
+
+    async def tick_fn(_payload):
+        return {}
+
+    time_engine._npc_tick_fn = tick_fn  # type: ignore[attr-defined]
+    result = await time_engine.advance(CAMPAIGN, _duration_days(1), TimeAdvanceReason.EXPLICIT_USER)
+
+    assert result.npc_summaries["alistair"].degraded is False
+    assert "no activity" in result.digest
+    assert "[tick failed; defaults applied]" not in result.digest
+
+
 async def test_pcs_are_not_ticked(
     time_engine: TimeEngineService,
     store: StateStore,

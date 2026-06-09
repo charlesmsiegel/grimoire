@@ -224,6 +224,8 @@ export interface CampaignsRescanReport {
   scope: "all" | "library" | "campaigns";
   library_files: number;
   campaign_files: number;
+  /** Files whose change was dropped during the scan (parse/index errors). */
+  failures: number;
 }
 
 /** Force the file watcher to re-walk ``data/campaigns`` and pick up edits

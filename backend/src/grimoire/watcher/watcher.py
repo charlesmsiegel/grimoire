@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -166,6 +166,11 @@ class FileWatcher:
         # subtree's destination path; an entry's ``src`` and ``dest`` together
         # define the prefixes whose per-file events should be suppressed.
         self._pending_renames: dict[Path, _PendingRename] = {}
+        # Cumulative per-stage failure counts (parse, process, ...). A failed
+        # path means the index may have drifted from disk, so each failure is
+        # also emitted as a ``watcher_error`` event — log lines alone are not
+        # a signal callers can react to (#587).
+        self._failure_counts: Counter[str] = Counter()
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -201,6 +206,40 @@ class FileWatcher:
         self._observer = None
         observer.stop()
         await asyncio.get_running_loop().run_in_executor(None, observer.join, 5.0)
+
+    # ------------------------------------------------------------------ #
+    # Failure signal
+    # ------------------------------------------------------------------ #
+
+    @property
+    def failure_count(self) -> int:
+        """Total watcher failures (parse/reindex/processing) since startup."""
+        return sum(self._failure_counts.values())
+
+    def failure_counts(self) -> dict[str, int]:
+        """Cumulative failure counts keyed by stage."""
+        return dict(self._failure_counts)
+
+    async def _record_failure(self, *, stage: str, path: Path | str, error: BaseException) -> None:
+        """Count a failure and emit ``watcher_error`` so it is observable.
+
+        Called wherever the watcher degrades by dropping a change (parse
+        error, scene reindex failure, processing crash). The counter and
+        event let callers and the UI distinguish "nothing changed" from
+        "a change was dropped and the index drifted from disk".
+        """
+        self._failure_counts[stage] += 1
+        await self.bus.emit(
+            Event(
+                type=events.WATCHER_ERROR,
+                payload={
+                    "stage": stage,
+                    "path": str(path),
+                    "error": f"{type(error).__name__}: {error}",
+                    "failure_count": self.failure_count,
+                },
+            )
+        )
 
     # ------------------------------------------------------------------ #
     # Public processing API
@@ -242,8 +281,9 @@ class FileWatcher:
         produce a thundering herd of changes for state that's just being
         catching up to disk.
 
-        Returns a summary dict with the scope and the per-root file counts
-        the caller can surface to the UI.
+        Returns a summary dict with the scope, the per-root file counts, and
+        the number of failures incurred during the scan (files whose change
+        was dropped), so the caller can surface both to the UI.
         """
         if scope not in {"all", "library", "campaigns"}:
             raise ValueError(f"unknown scan scope {scope!r}")
@@ -255,6 +295,7 @@ class FileWatcher:
         seen_content: set[str] = set()
         library_files = 0
         campaign_files = 0
+        failures_before = self.failure_count
 
         mtime_cache = await self.store.bulk_load_index_mtimes()
 
@@ -306,6 +347,7 @@ class FileWatcher:
             await self._drop_orphan_content_rows(seen_content)
             await self._rebuild_inventory_holdings()
 
+        failures = self.failure_count - failures_before
         await self.bus.emit(
             Event(
                 type=events.LIBRARY_INDEXED,
@@ -313,6 +355,7 @@ class FileWatcher:
                     "library_files": library_files,
                     "campaign_files": campaign_files,
                     "embedding_queue_depth": self.embedding_queue.pending,
+                    "failures": failures,
                 },
             )
         )
@@ -320,6 +363,7 @@ class FileWatcher:
             "scope": scope,
             "library_files": library_files,
             "campaign_files": campaign_files,
+            "failures": failures,
         }
 
     async def process_path(self, path: Path) -> None:
@@ -461,6 +505,7 @@ class FileWatcher:
             parsed = _parse_file(watched)
         except (FrontmatterError, YamlError, OSError) as exc:
             logger.warning("watcher: failed to parse %s: %s", path, exc)
+            await self._record_failure(stage="parse", path=path, error=exc)
             return
 
         prior = self._known_hashes.get(path)
@@ -510,8 +555,9 @@ class FileWatcher:
                 # New scene file (not yet known to the manager) — fall back to
                 # the watcher's own emit so consumers still see the change.
                 pass
-            except Exception:
+            except Exception as exc:
                 logger.exception("scene manager reindex failed for %s", path)
+                await self._record_failure(stage="scene_reindex", path=path, error=exc)
             else:
                 return
 
@@ -612,8 +658,9 @@ class FileWatcher:
         if ref is not None:
             try:
                 await self.store.delete_embeddings(ref)
-            except Exception:
+            except Exception as exc:
                 logger.exception("watcher: failed to delete embeddings for %s", ref)
+                await self._record_failure(stage="delete_embeddings", path=ref, error=exc)
 
     async def _emit(
         self,
@@ -706,14 +753,16 @@ class FileWatcher:
     async def _safe_process(self, path: Path) -> None:
         try:
             await self.process_path(path)
-        except Exception:
+        except Exception as exc:
             logger.exception("watcher: process_path failed for %s", path)
+            await self._record_failure(stage="process", path=path, error=exc)
 
     async def _safe_handle_directory_move(self, src: Path, dest: Path) -> None:
         try:
             await self.handle_directory_move(src, dest)
-        except Exception:
+        except Exception as exc:
             logger.exception("watcher: handle_directory_move failed for %s -> %s", src, dest)
+            await self._record_failure(stage="directory_move", path=f"{src} -> {dest}", error=exc)
 
     # ------------------------------------------------------------------ #
     # Suppression + rename bookkeeping
@@ -780,8 +829,9 @@ class FileWatcher:
         for ref in (*pending.library_ids, *pending.content_index_ids):
             try:
                 await self.store.delete_embeddings(ref)
-            except Exception:
+            except Exception as exc:
                 logger.exception("watcher: failed to delete embeddings for %s", ref)
+                await self._record_failure(stage="delete_embeddings", path=ref, error=exc)
 
     def _forget_hashes_under(self, root: Path) -> None:
         root_resolved = Path(root).resolve(strict=False)

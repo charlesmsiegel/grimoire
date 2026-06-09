@@ -1003,8 +1003,20 @@ class ImageGenService:
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "imagegen: corrupt imagegen_config JSON for campaign %s; treating as empty",
+                campaign_id,
+                exc_info=True,
+            )
             return {}
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            logger.warning(
+                "imagegen: imagegen_config for campaign %s is %s, not an object; treating as empty",
+                campaign_id,
+                type(data).__name__,
+            )
+            return {}
+        return data
 
     async def _mutate_imagegen_config_row(
         self, campaign_id: str, *, update: dict[str, Any]

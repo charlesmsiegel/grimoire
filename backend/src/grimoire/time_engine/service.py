@@ -795,7 +795,11 @@ class TimeEngineService:
             "precision": self._config.precision,
             "scheduled_events": [e.label for e in triggered],
             "npc_summaries": [
-                {"character_id": s.character_id, "activities": s.activities}
+                {
+                    "character_id": s.character_id,
+                    "activities": s.activities,
+                    "degraded": s.degraded,
+                }
                 for s in npc_summaries.values()
             ],
             "faction_summaries": [
@@ -1014,12 +1018,14 @@ class TimeEngineService:
                         for e in my_events
                     ],
                 }
+                degraded = False
                 try:
                     result = await self._npc_tick_fn(payload)
-                except Exception:  # pragma: no cover - defensive
+                except Exception:
                     logger.exception("npc_tick callable raised for %s", p.ref)
                     result = await _default_npc_tick(payload)
-                summary = _npc_summary_from_payload(p, duration, result)
+                    degraded = True
+                summary = _npc_summary_from_payload(p, duration, result, degraded=degraded)
                 await self._emit(
                     events.NPC_TICK_COMPLETE,
                     {
@@ -1027,6 +1033,7 @@ class TimeEngineService:
                         "character_ref": p.ref,
                         "activities": summary.activities,
                         "duration_iso": duration.iso8601,
+                        "degraded": summary.degraded,
                     },
                 )
                 return p.asset_id, summary
@@ -1538,6 +1545,8 @@ def _structured_digest(payload: dict[str, Any]) -> str:
         for s in payload["npc_summaries"]:
             acts = s["activities"]
             line = f"- {s['character_id']}: " + ("; ".join(acts) if acts else "no activity")
+            if s.get("degraded"):
+                line += " [tick failed; defaults applied]"
             parts.append(line)
     if payload["faction_summaries"]:
         parts.append(
@@ -1557,7 +1566,11 @@ def _structured_digest(payload: dict[str, Any]) -> str:
 
 
 def _npc_summary_from_payload(
-    p: _PresentCharacter, duration: Duration, payload: dict[str, Any]
+    p: _PresentCharacter,
+    duration: Duration,
+    payload: dict[str, Any],
+    *,
+    degraded: bool = False,
 ) -> NpcTickSummary:
     state_at_end: dict[str, Any] = {}
     loc = payload.get("location_at_end")
@@ -1577,6 +1590,7 @@ def _npc_summary_from_payload(
         next_intent=str(payload.get("next_intent") or ""),
         should_seek_pc=bool(payload.get("should_seek_pc") or False),
         events_pc_would_witness=[str(e) for e in (payload.get("events_pc_would_witness") or [])],
+        degraded=degraded,
     )
 
 
