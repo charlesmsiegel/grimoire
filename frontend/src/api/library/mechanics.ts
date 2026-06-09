@@ -1,4 +1,4 @@
-import { ApiError } from "../client";
+import { ApiError, api } from "../client";
 import { request } from "./request";
 
 const API_BASE = "/api";
@@ -87,21 +87,20 @@ export const mechanicsApi = {
       `/library/mechanics/${encodeURIComponent(moduleId)}/content/${encodeURIComponent(kind)}`,
       schema,
     ),
-  putThemeCss: async (moduleId: string, css: string): Promise<RescanReport> => {
-    const res = await fetch(
+  putThemeCss: (moduleId: string, css: string): Promise<RescanReport> =>
+    api.putText<RescanReport>(
       `${API_BASE}/library/mechanics/${encodeURIComponent(moduleId)}/theme.css`,
-      { method: "PUT", headers: { "Content-Type": "text/plain" }, body: css },
-    );
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => ""));
-    return (await res.json()) as RescanReport;
-  },
+      css,
+    ),
   themeCss: async (moduleId: string): Promise<string | null> => {
-    const res = await fetch(
-      `${API_BASE}/library/mechanics/${encodeURIComponent(moduleId)}/theme.css`,
-    );
-    if (res.status === 404) return null;
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => ""));
-    return res.text();
+    try {
+      return await api.getText(
+        `${API_BASE}/library/mechanics/${encodeURIComponent(moduleId)}/theme.css`,
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
   },
   contentSchema: (moduleId: string, kind: string) =>
     request<Record<string, unknown>>(

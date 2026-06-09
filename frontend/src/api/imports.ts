@@ -5,7 +5,7 @@
  * ``docs/superpowers/specs/2026-05-19-card-imports-design.md`` §REST.
  */
 
-import { ApiError } from "./client";
+import { ApiError, api } from "./client";
 
 const API_BASE = "/api";
 
@@ -123,6 +123,7 @@ export async function previewSillyTavernImport(
 ): Promise<PreviewResponse> {
   const form = new FormData();
   form.append("file", file);
+  // Raw fetch on purpose: multipart upload — the shared api client is JSON-only.
   const res = await fetch(
     `${API_BASE}/library/worlds/${encodeURIComponent(worldId)}/imports/sillytavern/preview`,
     { method: "POST", body: form },
@@ -133,44 +134,26 @@ export async function previewSillyTavernImport(
   return (await res.json()) as PreviewResponse;
 }
 
-export async function commitSillyTavernImport(
+export function commitSillyTavernImport(
   worldId: string,
   previewId: string,
   options: IngestOptionsPayload,
   loreOverrides: LoreOverridePayload[] = [],
 ): Promise<CommitResponse> {
-  const res = await fetch(
+  return api.post<CommitResponse>(
     `${API_BASE}/library/worlds/${encodeURIComponent(worldId)}/imports/sillytavern/commit`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        preview_id: previewId,
-        options,
-        lore_overrides: loreOverrides,
-      }),
-    },
+    { preview_id: previewId, options, lore_overrides: loreOverrides },
   );
-  if (!res.ok) {
-    throw new ApiError(res.status, await res.text().catch(() => ""));
-  }
-  return (await res.json()) as CommitResponse;
 }
 
 export async function listImportReports(): Promise<ImportReportRow[]> {
-  const res = await fetch(`${API_BASE}/library/imports`);
-  if (!res.ok) {
-    throw new ApiError(res.status, await res.text().catch(() => ""));
-  }
-  const body = (await res.json()) as { reports: ImportReportRow[] };
+  const body = await api.get<{ reports: ImportReportRow[] }>(`${API_BASE}/library/imports`);
   return body.reports;
 }
 
 export async function getImportReport(id: string): Promise<string> {
-  const res = await fetch(`${API_BASE}/library/imports/${encodeURIComponent(id)}`);
-  if (!res.ok) {
-    throw new ApiError(res.status, await res.text().catch(() => ""));
-  }
-  const body = (await res.json()) as { id: string; body: string };
+  const body = await api.get<{ id: string; body: string }>(
+    `${API_BASE}/library/imports/${encodeURIComponent(id)}`,
+  );
   return body.body;
 }
