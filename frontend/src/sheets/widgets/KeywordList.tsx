@@ -35,7 +35,7 @@ export function KeywordListWidget({
     >
       <ul className="sheet-keyword-chips">
         {tags.map((tag) => (
-          <li key={tag} className="sheet-keyword-chip">
+          <li key={tag} className="chip sheet-keyword-chip">
             <span>{tag}</span>
             {!readOnly && (
               <button type="button" onClick={() => remove(tag)} aria-label={`Remove ${tag}`}>

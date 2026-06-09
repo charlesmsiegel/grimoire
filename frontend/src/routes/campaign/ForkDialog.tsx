@@ -119,7 +119,7 @@ export function ForkDialog({
             Earlier post
           </label>
           {mode === "earlier" && (
-            <label className="fork-dialog-field">
+            <label className="form-field field">
               <span>Post id</span>
               <input
                 type="text"
@@ -132,7 +132,7 @@ export function ForkDialog({
           )}
         </fieldset>
 
-        <label className="fork-dialog-field">
+        <label className="form-field field">
           <span>
             New campaign name <em>(required)</em>
           </span>
@@ -145,12 +145,12 @@ export function ForkDialog({
           />
         </label>
 
-        <label className="fork-dialog-field">
+        <label className="form-field field">
           <span>New campaign id</span>
           <input type="text" value={newId} onChange={(e) => setNewId(e.target.value)} required />
         </label>
 
-        <label className="fork-dialog-field">
+        <label className="form-field field">
           <span>Describe the divergence (optional)</span>
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
         </label>

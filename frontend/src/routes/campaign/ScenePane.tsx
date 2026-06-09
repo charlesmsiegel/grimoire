@@ -195,7 +195,7 @@ export const ScenePane = memo(function ScenePane({
       ))}
       {awaitingResponse && !streaming && (
         <article
-          className="post post-streaming post-pending"
+          className="card post post-streaming post-pending"
           aria-label="Narrator response, working"
           aria-busy="true"
         >
@@ -213,7 +213,7 @@ export const ScenePane = memo(function ScenePane({
         </article>
       )}
       {streaming && (
-        <article className="post post-streaming" aria-label="Narrator response, streaming">
+        <article className="card post post-streaming" aria-label="Narrator response, streaming">
           <header className="post-header">
             <span className="post-author">Narrator</span>
             <span className="post-author-kind streaming-pulse">streaming…</span>
@@ -222,7 +222,7 @@ export const ScenePane = memo(function ScenePane({
         </article>
       )}
       {orphans.length > 0 && (
-        <ul className="scene-orphan-images" aria-label="Recently generated images">
+        <ul className="grid-cards scene-orphan-images" aria-label="Recently generated images">
           {orphans.map((img) => (
             <li key={img.id}>
               <img

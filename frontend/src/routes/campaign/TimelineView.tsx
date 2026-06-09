@@ -106,7 +106,7 @@ export function TimelineView() {
                   onChange={(e) => setSearch(e.target.value)}
                   aria-label="Search scenes"
                 />
-                <label className="field">
+                <label className="form-field field">
                   <span>Mood</span>
                   <select value={moodFilter} onChange={(e) => setMoodFilter(e.target.value)}>
                     <option value="all">All</option>
@@ -117,7 +117,7 @@ export function TimelineView() {
                     ))}
                   </select>
                 </label>
-                <label className="field">
+                <label className="form-field field">
                   <span>Status</span>
                   <select
                     value={statusFilter}
@@ -197,7 +197,7 @@ function SceneCard({
   const pcSet = new Set(scene.present_pc_refs);
   return (
     <li className={expanded ? "timeline-item active" : "timeline-item"}>
-      <button type="button" onClick={onToggle} className="timeline-card">
+      <button type="button" onClick={onToggle} className="card timeline-card">
         <div className="timeline-card-head">
           <span className="ordinal">#{scene.ordinal}</span>
           <span className="title">{scene.title || scene.slug}</span>
@@ -214,7 +214,7 @@ function SceneCard({
         {scene.present_character_refs.length > 0 && (
           <ul className="timeline-cast">
             {scene.present_character_refs.map((ref) => (
-              <li key={ref} className={pcSet.has(ref) ? "cast-chip pc" : "cast-chip"}>
+              <li key={ref} className={pcSet.has(ref) ? "chip cast-chip pc" : "chip cast-chip"}>
                 {nameMap.get(ref) ?? ref}
               </li>
             ))}
@@ -224,7 +224,7 @@ function SceneCard({
         {scene.tags.length > 0 && (
           <ul className="tag-row">
             {scene.tags.map((t) => (
-              <li key={t} className="tag">
+              <li key={t} className="chip tag">
                 {t}
               </li>
             ))}

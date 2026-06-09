@@ -47,7 +47,7 @@ export function PromptDialog({
           onSubmit(value);
         }}
       >
-        <label className="field">
+        <label className="form-field field">
           <span>{label}</span>
           <input
             type={inputType}

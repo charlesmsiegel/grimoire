@@ -252,7 +252,7 @@ export function RoutingTab({ campaignId }: { campaignId: string }) {
         embeddings. Leave a field blank to use the app-wide default.
       </p>
       {!ready && <p className="wizard-meta">Loading saved settings…</p>}
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Heavy model</span>
         <input
           type="text"
@@ -266,7 +266,7 @@ export function RoutingTab({ campaignId }: { campaignId: string }) {
           disabled={!ready}
         />
       </label>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Light model</span>
         <input
           type="text"
@@ -280,7 +280,7 @@ export function RoutingTab({ campaignId }: { campaignId: string }) {
           disabled={!ready}
         />
       </label>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Embedding model</span>
         <input
           type="text"

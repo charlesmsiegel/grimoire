@@ -71,7 +71,7 @@ export function ExpressionsTab({ campaignId }: { campaignId: string }) {
       <ul className="expressions-character-list" style={{ listStyle: "none", padding: 0 }}>
         {characters.map((rc) => (
           <li key={rc.character.id}>
-            <label className="wizard-field wizard-field-inline">
+            <label className="form-field wizard-field wizard-field-inline">
               <input
                 type="checkbox"
                 checked={enabledSet.has(rc.character.id)}

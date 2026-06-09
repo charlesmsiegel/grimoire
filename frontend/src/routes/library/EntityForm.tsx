@@ -134,7 +134,7 @@ export function EntityForm({
         return (
           <fieldset className="entity-form-object">
             {(field.fields ?? []).map((child) => (
-              <label key={child.key} className="entity-form-field">
+              <label key={child.key} className="form-field entity-form-field">
                 <span>{child.label}</span>
                 {renderField(child, obj[child.key], (next) =>
                   onChange({ ...obj, [child.key]: next }),
@@ -153,7 +153,7 @@ export function EntityForm({
             renderRow={(row, patch) => (
               <div className="object-list-fields">
                 {(field.fields ?? []).map((child) => (
-                  <label key={child.key} className="entity-form-field">
+                  <label key={child.key} className="form-field entity-form-field">
                     <span>{child.label}</span>
                     {renderField(child, row[child.key] as FrontmatterValue, (next) =>
                       patch({ ...row, [child.key]: next }),
@@ -175,7 +175,7 @@ export function EntityForm({
     return (
       <div className="entity-form entity-form-create">
         {createDefaultFields(descriptor).map((field) => (
-          <label key={field.key} className="entity-form-field">
+          <label key={field.key} className="form-field entity-form-field">
             <span>{field.label}</span>
             {renderField(field, frontmatter[field.key], (next) => setKey(field.key, next))}
           </label>
@@ -188,7 +188,7 @@ export function EntityForm({
     <div className="entity-form">
       {descriptor.sections.map((section) => {
         const sectionFields = section.fields.map((field) => (
-          <label key={field.key} className="entity-form-field">
+          <label key={field.key} className="form-field entity-form-field">
             <span>{field.label}</span>
             {renderField(field, frontmatter[field.key], (next) => setKey(field.key, next))}
           </label>

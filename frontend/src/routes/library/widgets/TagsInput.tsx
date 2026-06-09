@@ -22,7 +22,7 @@ export function TagsInput({
     <div className="tags-input">
       <ul className="tags-input-chips">
         {value.map((t) => (
-          <li key={t} className="tags-input-chip">
+          <li key={t} className="chip tags-input-chip">
             {t}
             <button
               type="button"

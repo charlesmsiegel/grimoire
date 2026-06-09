@@ -40,11 +40,11 @@ export function GeneralTab({
           void save();
         }}
       >
-        <label className="wizard-field">
+        <label className="form-field wizard-field">
           <span>Name</span>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
         </label>
-        <label className="wizard-field">
+        <label className="form-field wizard-field">
           <span>Description</span>
           <textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} />
         </label>
@@ -72,7 +72,7 @@ function IntegratedDeltasToggle({ campaignId }: { campaignId: string }) {
 
   return (
     <div className="settings-form" style={{ marginTop: "var(--space-4)" }}>
-      <label className="wizard-field wizard-field-inline">
+      <label className="form-field wizard-field wizard-field-inline">
         <input
           type="checkbox"
           checked={value.enabled}

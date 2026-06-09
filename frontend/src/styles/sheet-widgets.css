@@ -21,11 +21,8 @@
   gap: var(--space-3);
 }
 
-.sheet-field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
+/* .sheet-field carries no extra styling beyond the .form-field primitive;
+   the class stays in the markup as a hook for mechanics theme CSS. */
 
 .sheet-field-label {
   font-size: 0.8rem;
@@ -331,16 +328,11 @@
 }
 
 .sheet-keyword-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
   background: var(--accent-soft);
-  border: 1px solid transparent;
+  border-color: transparent;
   color: var(--accent);
-  border-radius: var(--radius-pill);
   padding: 0.15rem 0.65rem;
   font-size: 0.85rem;
-  font-weight: 500;
 }
 
 .sheet-keyword-chip button {

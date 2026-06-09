@@ -175,7 +175,7 @@ function CastBody({
           }
         />
         <div className="cast-filters">
-          <label className="field">
+          <label className="form-field field">
             <span>Source</span>
             <select
               value={sourceFilter}
@@ -187,7 +187,7 @@ function CastBody({
               <option value="override">Has override</option>
             </select>
           </label>
-          <label className="field">
+          <label className="form-field field">
             <span>Role</span>
             <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
               <option value="all">All</option>
@@ -204,7 +204,9 @@ function CastBody({
             <li key={refForRow(c)} className="cast-entity">
               <button
                 type="button"
-                className={selectedRowRef === refForRow(c) ? "entity-card active" : "entity-card"}
+                className={
+                  selectedRowRef === refForRow(c) ? "card entity-card active" : "card entity-card"
+                }
                 onClick={() => setSelectedRef(refForRow(c))}
               >
                 <div className="entity-card-head">
@@ -611,7 +613,7 @@ function PromoteToLibraryDialog({
       ) : worlds.length === 0 ? (
         <p className="error">No worlds available. Create a world first.</p>
       ) : (
-        <label className="field">
+        <label className="form-field field">
           <span>Target world</span>
           <select value={target} onChange={(e) => setTarget(e.target.value)}>
             {worlds.map((w) => (

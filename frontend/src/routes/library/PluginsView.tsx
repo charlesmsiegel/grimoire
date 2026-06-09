@@ -91,7 +91,7 @@ function PluginsList() {
         emptyMessage="No plugins match this filter."
         onRetry={reload}
       >
-        <ul className="library-card-grid">
+        <ul className="grid-cards">
           {filtered.map((p) => (
             <li key={p.id} className="library-card">
               <Link to={`/library/plugins/${encodeURIComponent(p.id)}`}>

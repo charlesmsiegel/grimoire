@@ -22,7 +22,7 @@ export function SummariesTab({ campaignId }: { campaignId: string }) {
         entirely.
       </p>
       {!ready && <p className="wizard-meta">Loading saved settings…</p>}
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Running summary every N posts</span>
         <input
           type="number"
@@ -41,7 +41,7 @@ export function SummariesTab({ campaignId }: { campaignId: string }) {
           disabled={!ready}
         />
       </label>
-      <label className="wizard-field wizard-field-inline">
+      <label className="form-field wizard-field wizard-field-inline">
         <input
           type="checkbox"
           checked={value.final_on_close}

@@ -211,9 +211,6 @@
 }
 
 .post {
-  background: var(--bg-elev);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
   box-shadow: var(--shadow-xs);
   position: relative;
@@ -362,11 +359,8 @@
 
 .post-images,
 .scene-orphan-images {
-  list-style: none;
-  padding: 0;
+  --grid-min: 8rem;
   margin: var(--space-2) 0 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
   gap: var(--space-2);
 }
 

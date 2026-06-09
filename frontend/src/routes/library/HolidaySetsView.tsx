@@ -117,7 +117,7 @@ function List() {
         onRetry={reload}
       >
         <h4>Built-in</h4>
-        <ul className="library-card-grid">
+        <ul className="grid-cards">
           {builtins.map((s) => (
             <li key={s.id} className="library-card">
               <Link to={`/library/holiday-sets/${encodeURIComponent(s.id)}`}>
@@ -134,7 +134,7 @@ function List() {
         {customs.length > 0 && (
           <>
             <h4>Custom</h4>
-            <ul className="library-card-grid">
+            <ul className="grid-cards">
               {customs.map((s) => (
                 <li key={s.id} className="library-card">
                   <Link to={`/library/holiday-sets/${encodeURIComponent(s.id)}`}>

@@ -102,7 +102,10 @@ function renderBody(
   return (
     <ul className="hud-chip-list hud-generic-chip-list">
       {generic.map((c) => (
-        <li key={c.key} className={`hud-generic-chip${c.tone ? ` hud-chip-tone-${c.tone}` : ""}`}>
+        <li
+          key={c.key}
+          className={`chip hud-generic-chip${c.tone ? ` hud-chip-tone-${c.tone}` : ""}`}
+        >
           {c.label}
         </li>
       ))}

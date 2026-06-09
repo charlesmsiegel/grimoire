@@ -195,7 +195,9 @@ function SheetsPanel({ campaignId, module, moduleId, characters, onRefresh }: Sh
             <li key={c.character.id}>
               <button
                 type="button"
-                className={selected === c.character.id ? "entity-card active" : "entity-card"}
+                className={
+                  selected === c.character.id ? "card entity-card active" : "card entity-card"
+                }
                 onClick={() => setSelected(c.character.id)}
               >
                 <div className="entity-card-head">

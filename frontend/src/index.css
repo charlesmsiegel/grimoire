@@ -3,6 +3,7 @@
    win specificity ties, so section files may override earlier ones. */
 
 @import "./styles/tokens.css";
+@import "./styles/primitives.css";
 @import "./styles/app-shell.css";
 @import "./styles/markdown.css";
 @import "./styles/campaign-list.css";
@@ -10,7 +11,6 @@
 @import "./styles/play-view.css";
 @import "./styles/library.css";
 @import "./styles/campaign-views.css";
-@import "./styles/generic-helpers.css";
 @import "./styles/wizard.css";
 @import "./styles/settings.css";
 @import "./styles/providers.css";

@@ -136,7 +136,7 @@ export function PreRollConfirmation({ campaignId }: Props) {
                   <p className="pre-roll-rationale muted">{proposal.rationale}</p>
                 )}
                 <div className="pre-roll-grid">
-                  <label className="field">
+                  <label className="form-field field">
                     <span>Pool</span>
                     <input
                       type="number"
@@ -147,7 +147,7 @@ export function PreRollConfirmation({ campaignId }: Props) {
                       }
                     />
                   </label>
-                  <label className="field">
+                  <label className="form-field field">
                     <span>Difficulty</span>
                     <input
                       type="number"

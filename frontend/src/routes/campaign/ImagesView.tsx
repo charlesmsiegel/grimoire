@@ -79,7 +79,7 @@ function Gallery({ campaignId }: { campaignId: string }) {
       </div>
       <AsyncSection state={state} emptyMessage="No images generated yet for this campaign.">
         {(images) => (
-          <ul className="image-grid">
+          <ul className="grid-cards image-grid">
             {images.map((img) => (
               <ImageTile key={img.id} image={img} />
             ))}
@@ -316,7 +316,7 @@ function PromptTemplate({
         <strong>{character.character.name}</strong>
         <span className="muted">{character.character.role}</span>
       </header>
-      <label className="field">
+      <label className="form-field field">
         <span>Base prompt</span>
         <textarea
           value={base}
@@ -327,7 +327,7 @@ function PromptTemplate({
           }}
         />
       </label>
-      <label className="field">
+      <label className="form-field field">
         <span>Negative prompt</span>
         <textarea
           value={negative}
@@ -338,7 +338,7 @@ function PromptTemplate({
           }}
         />
       </label>
-      <label className="field">
+      <label className="form-field field">
         <span>Canonical seed</span>
         <input
           type="number"

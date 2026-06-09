@@ -36,8 +36,6 @@
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
   background: var(--bg-elev-2);
   cursor: pointer;
   text-align: left;
@@ -76,9 +74,10 @@
 
 .greeting-badge {
   font-size: 0.7rem;
+  font-weight: 400;
   padding: 0.125rem 0.5rem;
-  border-radius: 1rem;
   background: var(--accent-soft);
+  border-color: transparent;
   color: var(--accent);
   white-space: nowrap;
 }

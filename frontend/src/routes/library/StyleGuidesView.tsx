@@ -77,7 +77,7 @@ function StyleGuideList() {
         emptyMessage="No style guides yet."
         onRetry={reload}
       >
-        <ul className="library-card-grid">
+        <ul className="grid-cards">
           {data?.map((g) => (
             <li key={g.id} className="library-card">
               <Link to={`/library/style-guides/${encodeURIComponent(g.asset_id)}`}>

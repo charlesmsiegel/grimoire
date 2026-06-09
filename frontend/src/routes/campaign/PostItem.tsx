@@ -245,7 +245,7 @@ export function PostItem({
   return (
     <article
       data-post-id={post.id}
-      className={`post ${isDirection ? "post-direction" : `post-${post.author_kind}`}`}
+      className={`card post ${isDirection ? "post-direction" : `post-${post.author_kind}`}`}
       aria-label={isDirection ? "Direction" : `Post by ${name}`}
     >
       <header className="post-header">
@@ -311,7 +311,7 @@ export function PostItem({
         </form>
       )}
       {images.length > 0 && (
-        <ul className="post-images" aria-label="Generated images">
+        <ul className="grid-cards post-images" aria-label="Generated images">
           {images.map((img) => (
             <li key={img.id}>
               <img

@@ -222,7 +222,7 @@ export function WhyCharacterPanel({ campaignId }: Props) {
             <article
               key={card.ref}
               data-testid={`character-card-${card.ref}`}
-              className={`why-character-card why-character-tier-${card.tier}`}
+              className={`card why-character-card why-character-tier-${card.tier}`}
             >
               <header>
                 <h3>{card.displayName}</h3>
@@ -237,7 +237,7 @@ export function WhyCharacterPanel({ campaignId }: Props) {
                   <li className="why-character-empty">(no declared reason)</li>
                 ) : (
                   card.reasons.map((r) => (
-                    <li key={r} className={`why-character-reason why-character-reason-${r}`}>
+                    <li key={r} className={`chip why-character-reason why-character-reason-${r}`}>
                       {REASON_LABELS[r] ?? r}
                     </li>
                   ))

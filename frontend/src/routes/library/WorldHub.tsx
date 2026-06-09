@@ -69,7 +69,7 @@ function WorldHubBody({ summary, worldId }: { summary: WorldSummary; worldId: st
       </div>
 
       <h4>Contents</h4>
-      <ul className="world-hub-counts">
+      <ul className="grid-cards world-hub-counts">
         {KIND_TABS.map((k) => {
           const n = summary.counts[k.plural] ?? 0;
           return (

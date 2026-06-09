@@ -275,7 +275,7 @@ function CompositionEditor({
           ))}
         </ol>
         {addable.length > 0 ? (
-          <label className="field">
+          <label className="form-field field">
             <span>Add world ref</span>
             <select
               value=""
@@ -297,7 +297,7 @@ function CompositionEditor({
       </section>
 
       <section className="composition-extras">
-        <label className="field">
+        <label className="form-field field">
           <span>Mechanics module</span>
           <select
             value={comp.mechanics ?? ""}
@@ -311,7 +311,7 @@ function CompositionEditor({
             ))}
           </select>
         </label>
-        <label className="field">
+        <label className="form-field field">
           <span>Style guide</span>
           <select
             value={comp.style_guide_id ?? ""}
@@ -325,7 +325,7 @@ function CompositionEditor({
             ))}
           </select>
         </label>
-        <label className="field">
+        <label className="form-field field">
           <span>Image preset</span>
           <select
             value={comp.image_preset_id ?? ""}

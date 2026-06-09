@@ -33,7 +33,7 @@ export function AdvancedTab({ campaignId }: { campaignId: string }) {
         />
         <span>Verbose debug log for this campaign</span>
       </label>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Per-task system prompt override (main)</span>
         <textarea
           rows={6}

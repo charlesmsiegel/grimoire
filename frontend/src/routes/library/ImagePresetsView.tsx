@@ -58,7 +58,7 @@ function ImagePresetList() {
         emptyMessage="No image presets yet."
         onRetry={reload}
       >
-        <ul className="library-card-grid">
+        <ul className="grid-cards">
           {data?.map((p) => (
             <li key={p.id} className="library-card">
               <Link to={`/library/image-presets/${encodeURIComponent(p.asset_id)}`}>

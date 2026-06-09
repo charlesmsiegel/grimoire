@@ -74,7 +74,7 @@ function CampaignCard({ node, depth, onFork, onDelete, busyDeleting }: CampaignC
   const isChild = depth > 0;
   const navigate = useNavigate();
   return (
-    <li className={`campaign-card${isChild ? " is-child" : ""}`}>
+    <li className={`card campaign-card${isChild ? " is-child" : ""}`}>
       <Link to={`/campaigns/${node.campaign.id}`} className="campaign-card-title">
         {node.campaign.name}
       </Link>
@@ -226,7 +226,7 @@ export function CampaignsView() {
         <p>No campaigns yet. Click "New campaign" to start the creation wizard.</p>
       )}
       {flat.length > 0 && (
-        <ul className="campaign-list">
+        <ul className="grid-cards campaign-list">
           {flat.map(({ node, depth }) => (
             <CampaignCard
               key={node.campaign.id}

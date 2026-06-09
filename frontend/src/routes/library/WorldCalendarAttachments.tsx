@@ -102,7 +102,7 @@ export function WorldCalendarAttachments({
       </p>
 
       <h5>Built-in calendars</h5>
-      <ul className="calendar-checkbox-grid">
+      <ul className="grid-cards calendar-checkbox-grid">
         {groupedCalendars.builtin.map((c) => (
           <li key={c.id}>
             <label>
@@ -120,7 +120,7 @@ export function WorldCalendarAttachments({
       {groupedCalendars.custom.length > 0 && (
         <>
           <h5>Custom calendars</h5>
-          <ul className="calendar-checkbox-grid">
+          <ul className="grid-cards calendar-checkbox-grid">
             {groupedCalendars.custom.map((c) => (
               <li key={c.id}>
                 <label>
@@ -158,7 +158,7 @@ export function WorldCalendarAttachments({
       )}
 
       <h5>Built-in holiday sets</h5>
-      <ul className="calendar-checkbox-grid">
+      <ul className="grid-cards calendar-checkbox-grid">
         {groupedSets.builtin.map((s) => (
           <li key={s.id}>
             <label>
@@ -176,7 +176,7 @@ export function WorldCalendarAttachments({
       {groupedSets.custom.length > 0 && (
         <>
           <h5>Custom holiday sets</h5>
-          <ul className="calendar-checkbox-grid">
+          <ul className="grid-cards calendar-checkbox-grid">
             {groupedSets.custom.map((s) => (
               <li key={s.id}>
                 <label>

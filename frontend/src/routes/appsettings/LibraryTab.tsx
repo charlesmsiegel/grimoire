@@ -60,7 +60,7 @@ export function LibraryTab() {
   const lib = useLibrarySettings();
   return (
     <div className="settings-form">
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Library path</span>
         <input
           type="text"
