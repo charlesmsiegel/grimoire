@@ -7,6 +7,7 @@ import { MechanicsTab } from "./MechanicsTab";
 import { PluginsTab } from "./PluginsTab";
 import { ProvidersTab } from "./ProvidersTab";
 import { TemplatesTab } from "./TemplatesTab";
+import { Tabs } from "../../components/Tabs";
 
 type Tab =
   | "library"
@@ -34,20 +35,13 @@ export function AppSettings() {
       <header>
         <h2 id="app-settings-heading">Settings</h2>
       </header>
-      <nav className="tab-bar" aria-label="App settings tabs">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            className={tab === t.id ? "tab active" : "tab"}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
+      <Tabs
+        tabs={TABS.map((t) => ({ key: t.id, label: t.label }))}
+        active={tab}
+        onSelect={setTab}
+        ariaLabel="App settings tabs"
+        className="tab-bar"
+      />
 
       <div className="tab-panel">
         {tab === "library" && <LibraryTab />}

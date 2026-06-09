@@ -17,6 +17,7 @@ import { mechanicsApi, type RegisteredModule } from "../../api/library";
 import { SheetRenderer } from "../../sheets/SheetRenderer";
 import type { SheetSchema } from "../../sheets/types";
 import { CardIconBar } from "../../components/CardIconBar";
+import { Tabs } from "../../components/Tabs";
 
 interface ContentBrowserProps {
   campaignId: string;
@@ -51,19 +52,12 @@ export function ContentBrowser({ campaignId, module, kinds }: ContentBrowserProp
       <header className="route-header">
         <h3 id="content-browser-heading">Content</h3>
       </header>
-      <div className="tab-row" role="tablist" aria-label="Content kinds">
-        {declared.map((k) => (
-          <button
-            key={k}
-            role="tab"
-            aria-selected={activeKind === k}
-            className={activeKind === k ? "tab active" : "tab"}
-            onClick={() => setActiveKind(k)}
-          >
-            {k}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        tabs={declared.map((k) => ({ key: k, label: k }))}
+        active={activeKind ?? ""}
+        onSelect={setActiveKind}
+        ariaLabel="Content kinds"
+      />
       {activeKind && (
         <ContentKindPanel
           key={activeKind}

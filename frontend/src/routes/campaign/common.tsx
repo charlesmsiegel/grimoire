@@ -59,27 +59,4 @@ export function ChainBadge({ chain, overrides }: ChainBadgeProps) {
   return <SourceBadge source="library" detail={detail} />;
 }
 
-interface TabsProps<K extends string> {
-  tabs: { key: K; label: string }[];
-  active: K;
-  onSelect: (key: K) => void;
-  ariaLabel: string;
-}
-
-export function Tabs<K extends string>({ tabs, active, onSelect, ariaLabel }: TabsProps<K>) {
-  return (
-    <div className="tab-row" role="tablist" aria-label={ariaLabel}>
-      {tabs.map((t) => (
-        <button
-          key={t.key}
-          role="tab"
-          aria-selected={active === t.key}
-          className={active === t.key ? "tab active" : "tab"}
-          onClick={() => onSelect(t.key)}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
-  );
-}
+export { Tabs } from "../../components/Tabs";

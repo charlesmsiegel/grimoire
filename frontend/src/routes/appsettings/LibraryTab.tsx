@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../../api/client";
-import { ConfigSaveIndicator } from "./ConfigSaveIndicator";
+import { SaveIndicator } from "../../components/SaveIndicator";
 import { errorMessage, useAppConfig } from "./shared";
 
 interface LibrarySettings {
@@ -84,7 +84,7 @@ export function LibraryTab() {
         </small>
       </label>
       <p className="wizard-meta">Changes save automatically and take effect on next restart.</p>
-      <ConfigSaveIndicator status={status} error={error ?? lib.error} />
+      <SaveIndicator status={status} error={error ?? lib.error} />
     </div>
   );
 }
