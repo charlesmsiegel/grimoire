@@ -378,7 +378,7 @@
 
 .budget-summary > div[data-alert="true"] {
   border-color: var(--danger);
-  background: var(--danger-soft, var(--bg-elev));
+  background: var(--danger-soft);
 }
 
 .budget-summary dt {

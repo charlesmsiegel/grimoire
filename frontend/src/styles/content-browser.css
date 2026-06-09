@@ -114,7 +114,7 @@
   padding: var(--space-2) var(--space-3);
   margin: var(--space-3) 0;
   border: 1px solid var(--border);
-  border-left: 4px solid var(--warn, #b88200);
+  border-left: 4px solid var(--warn);
   background: var(--bg-elev);
   border-radius: var(--radius-sm);
   font-size: 0.92rem;

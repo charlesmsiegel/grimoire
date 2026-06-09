@@ -44,7 +44,7 @@
 
 .health-table tbody tr[data-level="unhealthy"] th,
 .health-table tbody tr[data-level="degraded"] th {
-  color: var(--fg-default);
+  color: var(--fg);
 }
 
 .health-message {
@@ -64,18 +64,18 @@
 }
 
 .health-badge[data-level="healthy"] {
-  color: var(--ok-fg, #1f7a3f);
-  border-color: var(--ok-fg, #1f7a3f);
+  color: var(--ok);
+  border-color: var(--ok);
 }
 
 .health-badge[data-level="degraded"] {
-  color: var(--warn-fg, #a86b00);
-  border-color: var(--warn-fg, #a86b00);
+  color: var(--warn);
+  border-color: var(--warn);
 }
 
 .health-badge[data-level="unhealthy"] {
-  color: var(--danger-fg, #b22a2a);
-  border-color: var(--danger-fg, #b22a2a);
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 .health-badge[data-level="unconfigured"] {
