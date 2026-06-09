@@ -22,28 +22,31 @@ import { ApiError } from "../../api/client";
 import { mechanicsApi, type RegisteredModule } from "../../api/library";
 import { viewsApi } from "../../api/views";
 import type { ResolvedCharacter } from "../../api/types";
-import { useApi } from "../../api/useApi";
 import { useResource } from "../../api/useResource";
 import { SheetRenderer } from "../../sheets";
 import type { SheetSchema, SheetValue } from "../../sheets/types";
-import { Loading } from "./common";
+import { AsyncSection } from "../../components/AsyncSection";
 import { CampaignCharacterCreation } from "./CharacterCreation";
 import { CardIconBar } from "../../components/CardIconBar";
 import { ContentBrowser } from "./ContentBrowser";
 
 export function MechanicsView() {
   const { campaignId = "" } = useParams();
-  const composition = useApi(useCallback(() => viewsApi.getComposition(campaignId), [campaignId]));
+  const composition = useResource(
+    useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
+  );
   const installed = useResource(useCallback(() => mechanicsApi.listInstalled(), []));
-  const characters = useApi(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
+  const characters = useResource(
+    useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]),
+  );
 
-  if (composition.status !== "ok") {
+  if (!composition.data) {
     return (
       <section className="route campaign-mechanics" aria-labelledby="mech-heading">
         <header className="route-header">
           <h2 id="mech-heading">Mechanics</h2>
         </header>
-        <Loading state={composition}>{() => <p className="muted">Loading composition…</p>}</Loading>
+        <AsyncSection state={composition}>{() => null}</AsyncSection>
       </section>
     );
   }
@@ -92,7 +95,7 @@ export function MechanicsView() {
         </article>
       )}
 
-      <Loading state={characters} emptyMessage="No characters in this campaign yet.">
+      <AsyncSection state={characters} emptyMessage="No characters in this campaign yet.">
         {(rows) => (
           <SheetsPanel
             campaignId={campaignId}
@@ -102,7 +105,7 @@ export function MechanicsView() {
             onRefresh={() => characters.reload()}
           />
         )}
-      </Loading>
+      </AsyncSection>
 
       {active && active.manifest.content_kinds.length > 0 && (
         <ContentBrowser campaignId={campaignId} module={active} />
@@ -146,12 +149,14 @@ function SheetsPanel({ campaignId, module, moduleId, characters, onRefresh }: Sh
   // "missing" badge flips to "present" without reloading the whole page.
   const [sheetNonce, setSheetNonce] = useState(0);
 
-  const schemaState = useApi(
+  const schemaState = useResource(
     useCallback(() => viewsApi.getSheetSchema(moduleId, "character"), [moduleId]),
   );
   // Prefer the inlined `theme_css` on the RegisteredModule payload (one fewer
   // network hop); fall back to the standalone GET when missing.
-  const themeState = useApi(useCallback(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]));
+  const themeState = useResource(
+    useCallback(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]),
+  );
 
   const selectedRow = characters.find((c) => c.character.id === selected) ?? null;
 
@@ -175,8 +180,8 @@ function SheetsPanel({ campaignId, module, moduleId, characters, onRefresh }: Sh
 
   // Prefer the inlined `theme_css` on the RegisteredModule payload (one fewer
   // network hop); fall back to the standalone GET when missing.
-  const themeCss = module?.theme_css ?? (themeState.status === "ok" ? themeState.data : "");
-  const schema = schemaState.status === "ok" ? schemaState.data : null;
+  const themeCss = module?.theme_css ?? themeState.data ?? "";
+  const schema = schemaState.data;
 
   return (
     <div className="mechanics-sheets-layout">
@@ -287,7 +292,7 @@ function CharacterSheet({
   onStatus,
   onStartCreation,
 }: SheetProps) {
-  const state = useApi<Record<string, unknown> | null>(
+  const state = useResource<Record<string, unknown> | null>(
     useCallback(
       () =>
         viewsApi.getSheet(campaignId, "character", characterId).then(
@@ -318,7 +323,7 @@ function CharacterSheet({
   // Reset working copy when the underlying sheet changes (e.g. switching
   // characters). The `key={...}` on the parent makes this remount on
   // bulk-create completion as well.
-  const fetchedSheet = state.status === "ok" ? state.data : null;
+  const fetchedSheet = state.data;
   useEffect(() => {
     if (fetchedSheet !== null) {
       setWorking(fetchedSheet as SheetValue);
@@ -339,7 +344,7 @@ function CharacterSheet({
   );
 
   return (
-    <Loading state={state}>
+    <AsyncSection state={state}>
       {(sheet) => {
         if (sheet === null) {
           return (
@@ -394,6 +399,6 @@ function CharacterSheet({
           </>
         );
       }}
-    </Loading>
+    </AsyncSection>
   );
 }

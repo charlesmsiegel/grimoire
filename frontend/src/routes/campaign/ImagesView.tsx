@@ -12,10 +12,10 @@ import { useParams } from "react-router-dom";
 import { ApiError, libraryApi } from "../../api/library";
 import { viewsApi } from "../../api/views";
 import type { ImageMetadata, ResolutionSource, ResolvedCharacter } from "../../api/types";
-import { useApi } from "../../api/useApi";
+import { useResource } from "../../api/useResource";
 import type { ImageJobEntry } from "../../state/storeContext";
 import { useStore } from "../../state/useStore";
-import { Loading } from "./common";
+import { AsyncSection } from "../../components/AsyncSection";
 
 type ImagesTab = "gallery" | "queue" | "templates";
 
@@ -55,7 +55,7 @@ export function ImagesView() {
 
 function Gallery({ campaignId }: { campaignId: string }) {
   const [starredOnly, setStarredOnly] = useState(false);
-  const state = useApi(
+  const state = useResource(
     useCallback(() => viewsApi.listImages(campaignId, { starredOnly }), [campaignId, starredOnly]),
   );
   return (
@@ -76,7 +76,7 @@ function Gallery({ campaignId }: { campaignId: string }) {
           Generate from current scene
         </button>
       </div>
-      <Loading state={state} emptyMessage="No images generated yet for this campaign.">
+      <AsyncSection state={state} emptyMessage="No images generated yet for this campaign.">
         {(images) => (
           <ul className="image-grid">
             {images.map((img) => (
@@ -84,7 +84,7 @@ function Gallery({ campaignId }: { campaignId: string }) {
             ))}
           </ul>
         )}
-      </Loading>
+      </AsyncSection>
     </div>
   );
 }
@@ -194,9 +194,9 @@ function ImageQueueRow({ campaignId, job }: { campaignId: string; job: ImageJobE
 }
 
 function Templates({ campaignId }: { campaignId: string }) {
-  const state = useApi(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
+  const state = useResource(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
   return (
-    <Loading state={state} emptyMessage="No characters to template prompts for.">
+    <AsyncSection state={state} emptyMessage="No characters to template prompts for.">
       {(rows) => (
         <ul className="template-list">
           {rows.map((row) => (
@@ -204,7 +204,7 @@ function Templates({ campaignId }: { campaignId: string }) {
           ))}
         </ul>
       )}
-    </Loading>
+    </AsyncSection>
   );
 }
 

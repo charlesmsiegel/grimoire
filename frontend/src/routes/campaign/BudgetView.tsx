@@ -12,8 +12,8 @@ import { useCallback } from "react";
 import { useParams } from "react-router-dom";
 
 import { observabilityApi, type CostConfig, type DailyCost } from "../../api/observability";
-import { useApi } from "../../api/useApi";
-import { Loading } from "./common";
+import { useResource } from "../../api/useResource";
+import { AsyncSection } from "../../components/AsyncSection";
 
 function formatUsd(value: number): string {
   return `$${value.toFixed(2)}`;
@@ -51,21 +51,21 @@ async function loadBudget(campaignId: string): Promise<BudgetSummary> {
 
 export function BudgetView() {
   const { campaignId = "" } = useParams();
-  const state = useApi(useCallback(() => loadBudget(campaignId), [campaignId]));
+  const state = useResource(useCallback(() => loadBudget(campaignId), [campaignId]));
 
   return (
     <section className="route campaign-budget" aria-labelledby="budget-heading">
       <header className="route-header">
         <h2 id="budget-heading">Budget</h2>
       </header>
-      <Loading state={state}>
+      <AsyncSection state={state}>
         {(data) => (
           <>
             <ThresholdsCard data={data} />
             <RollupTable rollup={data.rollup} />
           </>
         )}
-      </Loading>
+      </AsyncSection>
     </section>
   );
 }

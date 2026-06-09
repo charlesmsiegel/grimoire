@@ -14,12 +14,13 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { viewsApi } from "../../api/views";
 import type { Composition, Greeting, ResolvedCharacter, ResolvedEntity } from "../../api/types";
-import { useApi } from "../../api/useApi";
+import { useResource } from "../../api/useResource";
 import { CardFilters } from "../../components/CardFilters";
 import { CardIconBar } from "../../components/CardIconBar";
 import { useCardFilters } from "../../hooks/useCardFilters";
 import { Markdown } from "../../components/Markdown";
-import { ChainBadge, Loading, Tabs } from "./common";
+import { AsyncSection } from "../../components/AsyncSection";
+import { ChainBadge, Tabs } from "./common";
 
 type WorldTab =
   | "characters"
@@ -94,9 +95,9 @@ function EntityTab({
   campaignId: string;
   kind: Exclude<WorldTab, "greetings" | "locations" | "lore" | "characters">;
 }) {
-  const state = useApi(useCallback(() => fetcherFor(campaignId, kind)(), [campaignId, kind]));
+  const state = useResource(useCallback(() => fetcherFor(campaignId, kind)(), [campaignId, kind]));
   return (
-    <Loading state={state} emptyMessage={`No ${kind} resolved for this campaign yet.`}>
+    <AsyncSection state={state} emptyMessage={`No ${kind} resolved for this campaign yet.`}>
       {(rows) => (
         <FilteredEntityGrid
           rows={rows}
@@ -108,18 +109,18 @@ function EntityTab({
           }
         />
       )}
-    </Loading>
+    </AsyncSection>
   );
 }
 
 function CharactersTab({ campaignId }: { campaignId: string }) {
-  const state = useApi(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
-  const cast = useApi(useCallback(() => viewsApi.listCast(campaignId), [campaignId]));
-  const castIds = new Set(cast.status === "ok" ? cast.data.map((r) => r.character.id) : []);
+  const state = useResource(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
+  const cast = useResource(useCallback(() => viewsApi.listCast(campaignId), [campaignId]));
+  const castIds = new Set(cast.data?.map((r) => r.character.id) ?? []);
   return (
-    <Loading state={state} emptyMessage="No characters resolved for this campaign yet.">
+    <AsyncSection state={state} emptyMessage="No characters resolved for this campaign yet.">
       {(rows) => <FilteredCharacters rows={rows} campaignId={campaignId} castIds={castIds} />}
-    </Loading>
+    </AsyncSection>
   );
 }
 
@@ -252,9 +253,9 @@ function entityTags(row: ResolvedEntity): string[] {
 }
 
 function LocationsTab({ campaignId }: { campaignId: string }) {
-  const state = useApi(useCallback(() => viewsApi.listLocations(campaignId), [campaignId]));
+  const state = useResource(useCallback(() => viewsApi.listLocations(campaignId), [campaignId]));
   return (
-    <Loading state={state} emptyMessage="No locations resolved for this campaign yet.">
+    <AsyncSection state={state} emptyMessage="No locations resolved for this campaign yet.">
       {(rows) => {
         const tree = buildLocationTree(rows);
         return (
@@ -275,16 +276,16 @@ function LocationsTab({ campaignId }: { campaignId: string }) {
           </div>
         );
       }}
-    </Loading>
+    </AsyncSection>
   );
 }
 
 function LoreTab({ campaignId }: { campaignId: string }) {
-  const state = useApi(useCallback(() => viewsApi.listLore(campaignId), [campaignId]));
+  const state = useResource(useCallback(() => viewsApi.listLore(campaignId), [campaignId]));
   return (
-    <Loading state={state} emptyMessage="No lore entries resolved for this campaign yet.">
+    <AsyncSection state={state} emptyMessage="No lore entries resolved for this campaign yet.">
       {(rows) => <FilteredLore rows={rows} />}
-    </Loading>
+    </AsyncSection>
   );
 }
 
@@ -333,12 +334,12 @@ function FilteredLore({ rows }: { rows: ResolvedEntity[] }) {
 }
 
 function GreetingsTab({ campaignId }: { campaignId: string }) {
-  const composition = useApi<Composition>(
+  const composition = useResource<Composition>(
     useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
   );
 
   return (
-    <Loading state={composition}>
+    <AsyncSection state={composition}>
       {(comp) => {
         // Honor each ref's include filter: an empty list means "all kinds".
         const worldIds = comp.worlds
@@ -346,7 +347,7 @@ function GreetingsTab({ campaignId }: { campaignId: string }) {
           .map((ref) => ref.world_id);
         return <GreetingsAcrossWorlds worldIds={worldIds} />;
       }}
-    </Loading>
+    </AsyncSection>
   );
 }
 
@@ -358,7 +359,7 @@ interface GreetingsFanout {
 
 function GreetingsAcrossWorlds({ worldIds }: { worldIds: string[] }) {
   const idsKey = useMemo(() => worldIds.join("|"), [worldIds]);
-  const state = useApi<GreetingsFanout>(
+  const state = useResource<GreetingsFanout>(
     useCallback(
       async () => {
         const settled = await Promise.allSettled(
@@ -381,7 +382,7 @@ function GreetingsAcrossWorlds({ worldIds }: { worldIds: string[] }) {
     return <p className="muted">No world refs in the composition include greetings.</p>;
   }
   return (
-    <Loading state={state}>
+    <AsyncSection state={state}>
       {({ greetings, failures }) => (
         <>
           {failures.length > 0 && (
@@ -398,7 +399,7 @@ function GreetingsAcrossWorlds({ worldIds }: { worldIds: string[] }) {
           )}
         </>
       )}
-    </Loading>
+    </AsyncSection>
   );
 }
 

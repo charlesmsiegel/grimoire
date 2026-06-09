@@ -1,5 +1,5 @@
 /**
- * Regression for the BUGS.md HIGH item: useApi/useResource took a deps
+ * Regression for the BUGS.md HIGH item: useResource took a deps
  * array with exhaustive-deps disabled, so a caller who omitted a dep
  * could ship stale data forever. The hooks now drive off fetcher
  * identity, forcing callers to wrap in useCallback (exhaustive-deps
@@ -11,10 +11,9 @@ import { act, render, waitFor } from "@testing-library/react";
 import { useCallback, useState } from "react";
 import { describe, expect, it } from "vitest";
 
-import { useApi } from "../useApi";
 import { useResource } from "../useResource";
 
-describe("useApi", () => {
+describe("useResource fetcher identity", () => {
   it("re-fetches when fetcher identity changes", async () => {
     let calls = 0;
     let setX!: (n: number) => void;
@@ -26,8 +25,8 @@ describe("useApi", () => {
         calls += 1;
         return x;
       }, [x]);
-      const state = useApi(fetcher);
-      return <span>{state.status === "ok" ? `value:${state.data}` : state.status}</span>;
+      const state = useResource(fetcher);
+      return <span>{state.data !== null ? `value:${state.data}` : "loading"}</span>;
     }
 
     const { container } = render(<Probe />);
@@ -50,8 +49,8 @@ describe("useApi", () => {
         calls += 1;
         return "stable";
       }, []);
-      const state = useApi(fetcher);
-      return <span>{state.status === "ok" ? state.data : state.status}</span>;
+      const state = useResource(fetcher);
+      return <span>{state.data ?? "loading"}</span>;
     }
 
     const { container } = render(<Probe />);

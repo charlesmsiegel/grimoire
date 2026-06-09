@@ -15,13 +15,14 @@ import { ApiError } from "../../api/client";
 import { campaignApi, canonicalizeCharacterRef } from "../../api/campaign";
 import { viewsApi } from "../../api/views";
 import type { ResolvedCharacter, WorldMeta } from "../../api/types";
-import { useApi } from "../../api/useApi";
+import { useResource } from "../../api/useResource";
 import { CardIconBar } from "../../components/CardIconBar";
 import { deleteAction } from "../../components/cardActions";
 import { Markdown } from "../../components/Markdown";
 import { SheetRenderer } from "../../sheets";
 import type { SheetValue } from "../../sheets/types";
-import { ChainBadge, Loading } from "./common";
+import { AsyncSection } from "../../components/AsyncSection";
+import { ChainBadge } from "./common";
 import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
 import { Dialog } from "../../components/Dialog";
 import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
@@ -30,20 +31,18 @@ type SourceFilter = "all" | "library" | "emergent" | "override";
 
 export function CastView() {
   const { campaignId = "" } = useParams();
-  const state = useApi(useCallback(() => viewsApi.listCast(campaignId), [campaignId]));
-  const composition = useApi(useCallback(() => viewsApi.getComposition(campaignId), [campaignId]));
-  const pcState = useApi(useCallback(() => campaignApi.listPCs(campaignId), [campaignId]));
-  const moduleId = composition.status === "ok" ? composition.data.mechanics : null;
+  const state = useResource(useCallback(() => viewsApi.listCast(campaignId), [campaignId]));
+  const composition = useResource(
+    useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
+  );
+  const pcState = useResource(useCallback(() => campaignApi.listPCs(campaignId), [campaignId]));
+  const moduleId = composition.data?.mechanics ?? null;
 
   // PCs are stored under whatever ref spelling the campaign wizard registered
   // (e.g. the `<world>/<id>` shorthand), while `refForRow` produces the canonical
   // form. Normalize both sides so the remove-PC action shows up regardless of
   // which spelling was stored (#517).
-  const pcRefs = new Set(
-    pcState.status === "ok"
-      ? pcState.data.map((p) => canonicalizeCharacterRef(p.character_ref))
-      : [],
-  );
+  const pcRefs = new Set(pcState.data?.map((p) => canonicalizeCharacterRef(p.character_ref)) ?? []);
   const refForRow = (r: ResolvedCharacter): string =>
     canonicalizeCharacterRef(
       r.character.world_id !== null
@@ -82,7 +81,7 @@ export function CastView() {
           onCancel={removePc.cancel}
         />
       )}
-      <Loading
+      <AsyncSection
         state={state}
         emptyMessage="No cast yet. PCs and emergent characters join automatically; library characters join once they appear in a scene."
       >
@@ -173,7 +172,7 @@ export function CastView() {
             </div>
           );
         }}
-      </Loading>
+      </AsyncSection>
     </section>
   );
 }
@@ -417,34 +416,39 @@ interface CastMechanicalSheetProps {
 }
 
 function CastMechanicalSheet({ campaignId, moduleId, characterId }: CastMechanicalSheetProps) {
-  const sheet = useApi<Record<string, unknown> | null>(
+  // The sheet value is wrapped so a 404 ("entity has no sheet") stays
+  // distinguishable from "not loaded yet" in the Resource shape.
+  const sheet = useResource<{ value: Record<string, unknown> | null }>(
     useCallback(
       () =>
-        viewsApi.getSheet(campaignId, "character", characterId).catch((err: unknown) => {
-          if (err instanceof ApiError && err.status === 404) return null;
-          throw err;
-        }),
+        viewsApi.getSheet(campaignId, "character", characterId).then(
+          (value) => ({ value }),
+          (err: unknown) => {
+            if (err instanceof ApiError && err.status === 404) return { value: null };
+            throw err;
+          },
+        ),
       [campaignId, characterId],
     ),
   );
-  const schema = useApi(
+  const schema = useResource(
     useCallback(() => viewsApi.getSheetSchema(moduleId, "character"), [moduleId]),
   );
-  const theme = useApi(useCallback(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]));
+  const theme = useResource(useCallback(() => viewsApi.getMechanicsThemeCss(moduleId), [moduleId]));
 
-  if (sheet.status === "ok" && sheet.data === null) return null;
-  if (sheet.status === "error") return null;
+  if (sheet.data?.value === null) return null;
+  if (sheet.error) return null;
   return (
     <section>
       <h4>Mechanical sheet</h4>
-      {sheet.status === "loading" || schema.status === "loading" ? (
+      {sheet.loading || schema.loading ? (
         <p className="muted">Loading sheet…</p>
-      ) : sheet.status === "ok" && schema.status === "ok" ? (
+      ) : sheet.data && schema.data ? (
         <SheetRenderer
           moduleId={moduleId}
           schema={schema.data}
-          value={(sheet.data ?? {}) as SheetValue}
-          themeCss={theme.status === "ok" ? theme.data || undefined : undefined}
+          value={(sheet.data.value ?? {}) as SheetValue}
+          themeCss={theme.data || undefined}
           onChange={() => {
             /* read-only */
           }}

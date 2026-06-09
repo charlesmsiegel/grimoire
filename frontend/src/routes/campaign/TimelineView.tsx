@@ -13,10 +13,10 @@ import { useNavigate, useParams } from "react-router-dom";
 import { campaignApi } from "../../api/campaign";
 import { viewsApi } from "../../api/views";
 import type { SceneSummary, Thread } from "../../api/types";
-import { useApi } from "../../api/useApi";
+import { useResource } from "../../api/useResource";
 import { CardIconBar } from "../../components/CardIconBar";
 import { deleteAction } from "../../components/cardActions";
-import { Loading } from "./common";
+import { AsyncSection } from "../../components/AsyncSection";
 import { ImportSceneDialog } from "./ImportSceneDialog";
 import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
 import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
@@ -24,18 +24,20 @@ import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
 export function TimelineView() {
   const { campaignId = "" } = useParams();
   const navigate = useNavigate();
-  const state = useApi(useCallback(() => viewsApi.listScenes(campaignId), [campaignId]));
-  const charState = useApi(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
-  const pcState = useApi(useCallback(() => campaignApi.listPCs(campaignId), [campaignId]));
+  const state = useResource(useCallback(() => viewsApi.listScenes(campaignId), [campaignId]));
+  const charState = useResource(
+    useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]),
+  );
+  const pcState = useResource(useCallback(() => campaignApi.listPCs(campaignId), [campaignId]));
   const nameMap = useMemo(() => {
     const m = new Map<string, string>();
-    if (charState.status === "ok") {
+    if (charState.data) {
       for (const rc of charState.data) {
         m.set(rc.character.id, rc.character.name);
         m.set(`emergent/${rc.character.id}`, rc.character.name);
       }
     }
-    if (pcState.status === "ok") {
+    if (pcState.data) {
       for (const pc of pcState.data) {
         m.set(pc.character_ref, pc.name);
       }
@@ -89,7 +91,7 @@ export function TimelineView() {
           }}
         />
       )}
-      <Loading state={state} emptyMessage="No scenes recorded yet.">
+      <AsyncSection state={state} emptyMessage="No scenes recorded yet.">
         {(scenes) => {
           const moods = collectMoods(scenes);
           const visible = filterScenes(scenes, search, moodFilter, statusFilter);
@@ -169,7 +171,7 @@ export function TimelineView() {
             </div>
           );
         }}
-      </Loading>
+      </AsyncSection>
     </section>
   );
 }
