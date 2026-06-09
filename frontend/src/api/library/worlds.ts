@@ -349,7 +349,7 @@ interface _Composition {
 }
 
 export async function fetchWorldDependents(worldId: string): Promise<CampaignRef[]> {
-  const campaigns = await request<_CampaignSummary[]>("GET", `/campaigns`, undefined, undefined, {
+  const campaigns = await request<_CampaignSummary[]>("GET", `/campaigns`, undefined, {
     cache: false,
   });
   const out: CampaignRef[] = [];
@@ -358,7 +358,6 @@ export async function fetchWorldDependents(worldId: string): Promise<CampaignRef
       const comp = await request<_Composition>(
         "GET",
         `/campaigns/${encodeURIComponent(c.id)}/composition`,
-        undefined,
         undefined,
         { cache: false },
       );
