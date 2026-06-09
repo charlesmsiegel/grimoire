@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+import pytest
+
 from tests.api.conftest import _FakeAttr
 from tests.mocks import FakeCharacters, FakeContinuity, FakeOrchestrator
 
@@ -592,22 +594,31 @@ def test_world_view_list_returns_resolved_entity_shape(client, container) -> Non
     stream WebSocket reported as "Connection closed").
     """
     from grimoire.types.common import EntityKind
-    from grimoire.types.composition import LibraryEntity
+    from grimoire.types.composition import (
+        ResolutionLayer,
+        ResolutionSource,
+        ResolvedEntity,
+    )
 
-    ent = LibraryEntity(
-        id="worlds/wod-london/items/amulet",
-        world_id="wod-london",
+    ent = ResolvedEntity(
         kind=EntityKind.ITEM,
         asset_id="amulet",
+        world_id="wod-london",
         name="Amulet",
-        path="library/worlds/wod-london/items/amulet.md",
         frontmatter={"id": "amulet", "name": "Amulet"},
         body="An old amulet.",
-        version=3,
+        source_chain=[
+            ResolutionSource(
+                layer=ResolutionLayer.LIBRARY_LIVE,
+                scope="library",
+                world_id="wod-london",
+                version=3,
+            )
+        ],
     )
 
     class FakeWorld:
-        async def list_for_campaign(self, campaign_id: str, kind: str) -> list[Any]:
+        async def list_resolved_for_campaign(self, campaign_id: str, kind: str) -> list[Any]:
             assert kind == "item"
             return [ent]
 
@@ -626,6 +637,152 @@ def test_world_view_list_returns_resolved_entity_shape(client, container) -> Non
     assert row["source_chain"][0]["world_id"] == "wod-london"
     assert row["overrides_applied"] == []
     assert "extras" in row
+
+
+# Cascade-resolved list + override endpoints (#600) -------------------- #
+
+
+_CASCADE_KIND_CASES = [
+    ("items", "item"),
+    ("locations", "location"),
+    ("lore", "lore"),
+    ("factions", "faction"),
+    ("monsters", "monster"),
+    ("greetings", "greeting"),
+]
+
+
+def _seed_cascade_campaign(client, container, *, kind: str, kind_dir: str) -> None:
+    """Seed the lifespan-built real services with one row per cascade layer.
+
+    ``c1`` composes world ``w1`` carrying ``plain`` (untouched) and ``tweaked``
+    (campaign override applied); ``spawned`` exists only as campaign-local
+    emergent content. Async store calls cross into the app's loop via
+    ``client.portal``.
+    """
+    from functools import partial
+
+    store = container.state_store
+    call = client.portal.call
+    call(partial(store.upsert_campaign, campaign_id="c1", name="C1"))
+    for asset_id, name in (("plain", "Plain"), ("tweaked", "Tweaked")):
+        call(
+            partial(
+                store.write_library_file,
+                library_id=f"worlds/w1/{kind_dir}/{asset_id}",
+                frontmatter={"id": asset_id, "name": name},
+                body=f"{name} body",
+                source="test",
+            )
+        )
+    call(
+        partial(
+            store.upsert_world_ref,
+            campaign_id="c1",
+            world_id="w1",
+            priority=1,
+            include=None,
+            track_latest=True,
+        )
+    )
+    call(
+        partial(
+            store.write_override,
+            campaign_id="c1",
+            library_id=f"worlds/w1/{kind_dir}/tweaked",
+            patch={"name": "Tweaked (Override)"},
+            source="test",
+        )
+    )
+    call(
+        partial(
+            store.write_emergent,
+            campaign_id="c1",
+            kind=kind,
+            entity_id="spawned",
+            frontmatter={"id": "spawned", "name": "Spawned"},
+            body="emergent body",
+            source="extractor",
+        )
+    )
+
+
+@pytest.mark.parametrize(("kind_dir", "kind"), _CASCADE_KIND_CASES)
+def test_list_kind_returns_cascade_resolved_rows(client, container, kind_dir, kind) -> None:
+    """Route contract (#600): every kind list runs the read cascade — a plain
+    library row, an overridden row, and an emergent row, each with a truthful
+    ``source_chain``."""
+    _seed_cascade_campaign(client, container, kind=kind, kind_dir=kind_dir)
+
+    response = client.get(f"/api/campaigns/c1/{kind_dir}")
+    assert response.status_code == 200
+    rows = {row["asset_id"]: row for row in response.json()}
+    assert set(rows) == {"plain", "tweaked", "spawned"}
+
+    plain = rows["plain"]
+    assert plain["world_id"] == "w1"
+    assert plain["source_chain"][0]["layer"] == "library_live"
+    assert plain["overrides_applied"] == []
+
+    tweaked = rows["tweaked"]
+    assert tweaked["name"] == "Tweaked (Override)"
+    assert tweaked["source_chain"][0]["layer"] == "override"
+    assert tweaked["overrides_applied"]
+
+    spawned = rows["spawned"]
+    assert spawned["world_id"] is None
+    assert spawned["source_chain"][0]["layer"] == "emergent"
+    assert spawned["source_chain"][0]["scope"] == "campaign-local"
+
+
+def test_patch_entity_override_writes_and_lists(client, container) -> None:
+    """PATCH …/{kind}/{id}/override resolves the owning world from the
+    composition and the next list shows the overridden row (#600)."""
+    _seed_cascade_campaign(client, container, kind="item", kind_dir="items")
+
+    response = client.patch(
+        "/api/campaigns/c1/items/plain/override",
+        json={"override": {"name": "Plain (Renamed)"}},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["world_id"] == "w1"
+    assert body["ref"] == "library:worlds/w1/items/plain"
+
+    rows = {row["asset_id"]: row for row in client.get("/api/campaigns/c1/items").json()}
+    assert rows["plain"]["name"] == "Plain (Renamed)"
+    assert rows["plain"]["source_chain"][0]["layer"] == "override"
+
+
+def test_patch_entity_override_accepts_explicit_world(client, container) -> None:
+    from functools import partial
+
+    client.portal.call(partial(container.state_store.upsert_campaign, campaign_id="c1", name="C1"))
+    response = client.patch(
+        "/api/campaigns/c1/factions/camarilla/override",
+        json={"override": {"name": "X"}, "world_id": "w9"},
+    )
+    assert response.status_code == 200
+    assert response.json()["ref"] == "library:worlds/w9/factions/camarilla"
+
+
+def test_patch_entity_override_404_when_world_unresolvable(client, container) -> None:
+    from functools import partial
+
+    client.portal.call(partial(container.state_store.upsert_campaign, campaign_id="c1", name="C1"))
+    response = client.patch(
+        "/api/campaigns/c1/items/ghost/override",
+        json={"override": {}},
+    )
+    assert response.status_code == 404
+
+
+def test_patch_entity_override_404_for_unknown_kind(client, container) -> None:
+    response = client.patch(
+        "/api/campaigns/c1/pcs/p1/override",
+        json={"override": {}},
+    )
+    assert response.status_code == 404
 
 
 # Export routes -------------------------------------------------------- #

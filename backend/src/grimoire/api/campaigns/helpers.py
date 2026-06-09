@@ -283,46 +283,18 @@ async def _require_scene_owned(scenes: Any, campaign_id: str, scene_id: str) -> 
     return scene
 
 
-def _resolved_from_library_entity(ent: Any) -> Any:
-    """Wrap a composed ``LibraryEntity`` in the ``ResolvedEntity`` shape the UI expects.
-
-    The World view types every row as ``ResolvedEntity`` and renders a
-    ``ChainBadge`` from ``source_chain``; a raw ``LibraryEntity`` (no
-    ``source_chain``) made the badge read ``chain[0]`` on ``undefined`` and
-    crash the whole page. World-view listings walk the composition's world refs,
-    which are all library-sourced, so each entity gets a single library source.
-    Per-entity campaign overrides are applied on the detail resolve path, not on
-    these list endpoints.
-    """
-    from grimoire.types.composition import (
-        ResolutionLayer,
-        ResolutionSource,
-        ResolvedEntity,
-    )
-
-    return ResolvedEntity(
-        kind=ent.kind,
-        asset_id=ent.asset_id,
-        world_id=ent.world_id,
-        name=ent.name,
-        frontmatter=ent.frontmatter,
-        body=ent.body,
-        source_chain=[
-            ResolutionSource(
-                layer=ResolutionLayer.LIBRARY_LIVE,
-                scope="library",
-                world_id=ent.world_id,
-                version=ent.version,
-            )
-        ],
-    )
-
-
 async def _list_kind(campaign_id: str, kind: str, world: Any) -> Any:
+    """Cascade-resolved listing of one world-owned kind (#600).
+
+    Rows are ``ResolvedEntity`` payloads straight from the read cascade:
+    campaign-local emergent entities included, per-entity overrides applied,
+    ``source_chain`` reflecting the actual resolution layer the World view's
+    ``ChainBadge`` renders.
+    """
     from grimoire.api.util import to_payload
 
-    entities = await world.list_for_campaign(campaign_id, kind)
-    return to_payload([_resolved_from_library_entity(ent) for ent in entities])
+    entities = await world.list_resolved_for_campaign(campaign_id, kind)
+    return to_payload(entities)
 
 
 def _continuity_for(continuity_dep: Any, campaign_id: str) -> Any:

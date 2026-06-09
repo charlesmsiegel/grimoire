@@ -15,6 +15,7 @@ from grimoire.library import LibraryService
 from grimoire.state_store import StateStore
 from grimoire.state_store.errors import InvalidRefError
 from grimoire.types.common import EntityKind, InGameTime
+from grimoire.types.composition import ResolutionLayer
 from grimoire.types.world import Weather, WeatherKind
 from grimoire.world import WorldService
 from grimoire.world.errors import WorldError, WorldNotFoundError
@@ -317,6 +318,139 @@ async def test_list_for_campaign_applies_include_filter(
 
     lore = await world.list_for_campaign("camp1", EntityKind.LORE)
     assert {ent.asset_id for ent in lore} == {"masquerade", "weave"}
+
+
+# ---------------------------------------------------------------------------
+# Cascade-resolved listing + campaign overrides (#600)
+# ---------------------------------------------------------------------------
+
+
+async def test_list_resolved_for_campaign_runs_cascade(
+    world: WorldService, store: StateStore
+) -> None:
+    """Lists carry one row per cascade layer: library-live, override, emergent."""
+    await _seed_world(world, "wod-london")
+    await _seed_location(world, "wod-london", "camden-market")
+    await _seed_location(world, "wod-london", "elysium")
+    await _bind_campaign(store, "camp1", [("wod-london", [])])
+
+    await world.upsert_override(
+        "camp1", "location", "elysium", {"name": "Elysium (Condemned)"}, world_id="wod-london"
+    )
+    await store.write_emergent(
+        campaign_id="camp1",
+        kind="location",
+        entity_id="bone-orchard",
+        frontmatter={"id": "bone-orchard", "name": "Bone Orchard"},
+        body="A grim orchard at the edge of town.",
+        source="extractor",
+    )
+
+    rows = await world.list_resolved_for_campaign("camp1", EntityKind.LOCATION)
+    by_id = {r.asset_id: r for r in rows}
+    assert set(by_id) == {"camden-market", "elysium", "bone-orchard"}
+
+    plain = by_id["camden-market"]
+    assert plain.source_chain[0].layer == ResolutionLayer.LIBRARY_LIVE
+    assert plain.overrides_applied == []
+
+    overridden = by_id["elysium"]
+    assert overridden.name == "Elysium (Condemned)"
+    assert overridden.source_chain[0].layer == ResolutionLayer.OVERRIDE
+    assert overridden.overrides_applied
+
+    emergent = by_id["bone-orchard"]
+    assert emergent.world_id is None
+    assert emergent.source_chain[0].layer == ResolutionLayer.EMERGENT
+
+
+async def test_list_resolved_for_campaign_emergent_shadows_library(
+    world: WorldService, store: StateStore
+) -> None:
+    """An emergent sharing a composed asset_id wins the cascade and lists once."""
+    await _seed_world(world, "wod-london")
+    await _seed_location(world, "wod-london", "elysium")
+    await _bind_campaign(store, "camp1", [("wod-london", [])])
+    await store.write_emergent(
+        campaign_id="camp1",
+        kind="location",
+        entity_id="elysium",
+        frontmatter={"id": "elysium", "name": "Elysium (Rebuilt)"},
+        body="",
+        source="extractor",
+    )
+
+    rows = await world.list_resolved_for_campaign("camp1", EntityKind.LOCATION)
+    assert [r.asset_id for r in rows] == ["elysium"]
+    assert rows[0].name == "Elysium (Rebuilt)"
+    assert rows[0].source_chain[0].layer == ResolutionLayer.EMERGENT
+
+
+async def test_list_resolved_for_campaign_respects_include_filter(
+    world: WorldService, store: StateStore
+) -> None:
+    """Excluded worlds stay excluded; campaign-local emergent rows still list."""
+    await _seed_world(world, "wod-london")
+    await _seed_world(world, "faerun")
+    await _seed_location(world, "wod-london", "elysium")
+    await _seed_location(world, "faerun", "waterdeep")
+    await _bind_campaign(
+        store,
+        "camp1",
+        [("wod-london", ["locations"]), ("faerun", ["lore"])],
+    )
+    await store.write_emergent(
+        campaign_id="camp1",
+        kind="location",
+        entity_id="bone-orchard",
+        frontmatter={"id": "bone-orchard", "name": "Bone Orchard"},
+        body="",
+        source="extractor",
+    )
+
+    rows = await world.list_resolved_for_campaign("camp1", EntityKind.LOCATION)
+    assert {r.asset_id for r in rows} == {"elysium", "bone-orchard"}
+
+
+async def test_list_resolved_for_campaign_greetings(world: WorldService, store: StateStore) -> None:
+    await _seed_world(world, "wod-london")
+    await world.create_entity(
+        "wod-london",
+        "greeting",
+        "first-night",
+        {"id": "first-night", "name": "First Night", "mood": "tense"},
+        body="The city holds its breath.",
+    )
+    await _bind_campaign(store, "camp1", [("wod-london", [])])
+
+    rows = await world.list_resolved_for_campaign("camp1", "greeting")
+    assert [r.asset_id for r in rows] == ["first-night"]
+    assert rows[0].source_chain[0].layer == ResolutionLayer.LIBRARY_LIVE
+
+
+async def test_upsert_override_visible_on_detail_resolve(
+    world: WorldService, store: StateStore
+) -> None:
+    await _seed_world(world, "wod-london")
+    await _seed_faction(world, "wod-london", "camarilla", name="Camarilla")
+    await _bind_campaign(store, "camp1", [("wod-london", [])])
+
+    await world.upsert_override(
+        "camp1", "factions", "camarilla", {"name": "Camarilla (Fractured)"}, world_id="wod-london"
+    )
+
+    resolved = await world.resolve("worlds/wod-london/factions/camarilla", "camp1")
+    assert resolved.name == "Camarilla (Fractured)"
+    assert resolved.overrides_applied
+
+
+async def test_upsert_override_rejects_characters_and_unknown_kinds(
+    world: WorldService,
+) -> None:
+    with pytest.raises(WorldError):
+        await world.upsert_override("camp1", "character", "alistair", {}, world_id="wod-london")
+    with pytest.raises(WorldError):
+        await world.upsert_override("camp1", "widget", "x", {}, world_id="wod-london")
 
 
 async def test_cross_world_lookup_by_asset_id(world: WorldService) -> None:
