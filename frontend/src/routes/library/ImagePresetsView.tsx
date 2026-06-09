@@ -291,18 +291,15 @@ function ImagePresetEdit() {
     }
   }
 
-  async function doDelete() {
-    if (!confirm(`Delete image preset ${presetId}? This cannot be undone.`)) return;
+  const editDel = useDestructiveConfirm<string>(async (id) => {
     setDeleting(true);
     try {
-      await libraryApi.deleteImagePreset(presetId);
+      await libraryApi.deleteImagePreset(id);
       navigate("/library/image-presets");
-    } catch (err) {
-      setSubmitErr(err instanceof ApiError ? err.message : String(err));
     } finally {
       setDeleting(false);
     }
-  }
+  });
 
   if (loading) return <p>Loading…</p>;
   if (loadErr)
@@ -372,12 +369,23 @@ function ImagePresetEdit() {
           <button
             type="button"
             className="library-button-danger"
-            onClick={doDelete}
+            onClick={() => editDel.request(presetId)}
             disabled={busy || deleting}
           >
             {deleting ? "Deleting…" : "Delete"}
           </button>
         </div>
+        {editDel.target !== null && (
+          <ConfirmDestructiveDialog
+            open
+            title={`Delete image preset "${editDel.target}"?`}
+            body={<p>This cannot be undone.</p>}
+            busy={editDel.busy}
+            error={editDel.error}
+            onConfirm={editDel.confirm}
+            onCancel={editDel.cancel}
+          />
+        )}
         {submitErr && (
           <p className="library-error" role="alert">
             {submitErr}

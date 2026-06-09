@@ -6,6 +6,7 @@ import { useResource } from "../../api/useResource";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
 import { ImportDialog } from "./ImportDialog";
+import { PromptDialog } from "../../components/PromptDialog";
 
 const ENTITY_TABS = [
   { to: ".", label: "Overview", end: true },
@@ -27,6 +28,7 @@ export function WorldDetailView() {
   const navigate = useNavigate();
   const [forkErr, setForkErr] = useState<string | null>(null);
   const [forking, setForking] = useState(false);
+  const [forkOpen, setForkOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
@@ -77,23 +79,19 @@ export function WorldDetailView() {
     }
   }
 
-  async function handleFork() {
-    setForkErr(null);
-    const targetId = window.prompt(
-      `Fork "${worldId}" to a new world id (lowercase letters, digits, ._-):`,
-      "",
-    );
-    if (!targetId) return;
-    if (!WORLD_ID_PATTERN.test(targetId)) {
+  async function handleFork(targetId: string) {
+    if (!targetId || !WORLD_ID_PATTERN.test(targetId)) {
       setForkErr(`Invalid id "${targetId}". Use [A-Za-z0-9][A-Za-z0-9._-]*.`);
       return;
     }
     setForking(true);
+    setForkErr(null);
     try {
       // Fork copies the directory and preserves every entity's asset_id, so
       // the forked world's characters / items / locations / etc. appear as
       // cross-world variants of the source (see VariantsBreadcrumb).
       await libraryApi.forkWorld(worldId, targetId);
+      setForkOpen(false);
       navigate(`/library/worlds/${encodeURIComponent(targetId)}`);
     } catch (err) {
       setForkErr(err instanceof ApiError ? err.message : String(err));
@@ -125,7 +123,10 @@ export function WorldDetailView() {
             <button
               type="button"
               className="world-fork-button"
-              onClick={() => void handleFork()}
+              onClick={() => {
+                setForkErr(null);
+                setForkOpen(true);
+              }}
               disabled={forking}
             >
               {forking ? "Forking…" : "Fork world"}
@@ -142,11 +143,6 @@ export function WorldDetailView() {
               Delete world
             </button>
           </div>
-          {forkErr && (
-            <p className="library-error" role="alert">
-              {forkErr}
-            </p>
-          )}
           {refreshErr && (
             <p className="library-error" role="alert">
               {refreshErr}
@@ -172,6 +168,19 @@ export function WorldDetailView() {
           ))}
         </nav>
       </header>
+      {forkOpen && (
+        <PromptDialog
+          open
+          title={`Fork "${data?.name || worldId}"`}
+          label="New world id"
+          hint="Lowercase letters, digits, ._- — the fork keeps every entity's asset id, so entities appear as cross-world variants."
+          confirmLabel="Fork"
+          busy={forking}
+          error={forkErr}
+          onSubmit={(v) => void handleFork(v)}
+          onCancel={() => setForkOpen(false)}
+        />
+      )}
       {importOpen && (
         <ImportDialog
           worldId={worldId}
