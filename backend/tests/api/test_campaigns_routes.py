@@ -880,3 +880,101 @@ def test_suggest_lazily_backfills_empty_ledger(client, container) -> None:
     # The empty ledger was backfilled from the applicable greeting.
     listed = client.get("/api/campaigns/c1/scene-ledger?status=active").json()
     assert {i["greeting_id"] for i in listed} == {"gr-universal"}
+
+
+# ---------------------------------------------------------------------------
+# Cast view (dramatis personae): GET /api/campaigns/{id}/cast
+# ---------------------------------------------------------------------------
+
+
+def _resolved_character(char_id: str, world_id: str | None):
+    from grimoire.types.characters import Character, CharacterRole, ResolvedCharacter
+    from grimoire.types.state import CharacterState
+
+    ref = (
+        f"library:worlds/{world_id}/characters/{char_id}"
+        if world_id
+        else f"campaign:emergent/character/{char_id}"
+    )
+    return ResolvedCharacter(
+        character=Character(
+            id=char_id, name=char_id.title(), role=CharacterRole.MAJOR_NPC, world_id=world_id
+        ),
+        current_state=CharacterState(character_ref=ref, campaign_id="c1"),
+    )
+
+
+def _scene(scene_id: str, **kwargs) -> object:
+    from grimoire.scenes.types import Scene
+
+    return Scene(id=scene_id, campaign_id="c1", ordinal=1, slug=scene_id, title=scene_id, **kwargs)
+
+
+def test_cast_filters_to_pcs_emergent_and_appeared(client, container) -> None:
+    from tests.mocks import FakeScenes
+
+    chars = FakeCharacters()
+    chars.resolved["c1"] = [
+        _resolved_character("alice", "w1"),  # PC (registered via shorthand spelling)
+        _resolved_character("bram", "w1"),  # appeared in a scene
+        _resolved_character("celia", "w1"),  # never appeared → excluded
+        _resolved_character("ghost", None),  # emergent → always included
+    ]
+    chars.pcs["c1"] = [
+        {"character_ref": "w1/alice", "name": "Alice", "owner": "local", "active": True}
+    ]
+    scenes = FakeScenes()
+    scenes.scenes["c1"] = [
+        _scene("s1", present_character_refs=["library:worlds/w1/characters/bram"])
+    ]
+    container.characters = chars
+    container.scenes = scenes
+
+    resp = client.get("/api/campaigns/c1/cast")
+    assert resp.status_code == 200
+    assert [row["character"]["id"] for row in resp.json()] == ["alice", "bram", "ghost"]
+
+
+def test_cast_counts_declared_refs_and_shorthand_spellings(client, container) -> None:
+    from tests.mocks import FakeScenes
+
+    chars = FakeCharacters()
+    chars.resolved["c1"] = [
+        _resolved_character("celia", "w1"),
+        _resolved_character("dora", "w1"),
+    ]
+    scenes = FakeScenes()
+    # Declared-at-creation cast counts as appearing, and shorthand spellings
+    # normalize to the canonical ref.
+    scenes.scenes["c1"] = [_scene("s1", declared_character_refs=["w1/celia"])]
+    container.characters = chars
+    container.scenes = scenes
+
+    resp = client.get("/api/campaigns/c1/cast")
+    assert resp.status_code == 200
+    assert [row["character"]["id"] for row in resp.json()] == ["celia"]
+
+
+def test_cast_with_no_scenes_keeps_pcs_and_emergent_only(client, container) -> None:
+    from tests.mocks import FakeScenes
+
+    chars = FakeCharacters()
+    chars.resolved["c1"] = [
+        _resolved_character("alice", "w1"),
+        _resolved_character("bram", "w1"),
+        _resolved_character("ghost", None),
+    ]
+    chars.pcs["c1"] = [
+        {
+            "character_ref": "library:worlds/w1/characters/alice",
+            "name": "Alice",
+            "owner": "local",
+            "active": True,
+        }
+    ]
+    container.characters = chars
+    container.scenes = FakeScenes()
+
+    resp = client.get("/api/campaigns/c1/cast")
+    assert resp.status_code == 200
+    assert [row["character"]["id"] for row in resp.json()] == ["alice", "ghost"]

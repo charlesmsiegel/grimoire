@@ -1,17 +1,19 @@
 /**
  * World view (spec 14 §World view).
  *
- * Tabbed listing of resolved items / locations / lore / factions / greetings
- * for the campaign. Locations get a hierarchy view by parent; items show
- * current-holder when the resolved frontmatter records one; lore is grouped
- * by keyword.
+ * Tabbed listing of the campaign's resolved world contents, one tab per
+ * entity kind in the same order as the library world detail. Characters here
+ * are the full composition (the Cast view is the dramatis personae — PCs,
+ * emergent characters, and anyone who has appeared in a scene). Locations get
+ * a hierarchy view by parent; items show current-holder when the resolved
+ * frontmatter records one; lore is grouped by keyword.
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { viewsApi } from "../../api/views";
-import type { Composition, Greeting, ResolvedEntity } from "../../api/types";
+import type { Composition, Greeting, ResolvedCharacter, ResolvedEntity } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { CardFilters } from "../../components/CardFilters";
 import { CardIconBar } from "../../components/CardIconBar";
@@ -19,9 +21,18 @@ import { useCardFilters } from "../../hooks/useCardFilters";
 import { Markdown } from "../../components/Markdown";
 import { ChainBadge, Loading, Tabs } from "./common";
 
-type WorldTab = "items" | "locations" | "lore" | "factions" | "greetings";
+type WorldTab =
+  | "characters"
+  | "monsters"
+  | "items"
+  | "locations"
+  | "lore"
+  | "factions"
+  | "greetings";
 
 const TABS: { key: WorldTab; label: string }[] = [
+  { key: "characters", label: "Characters" },
+  { key: "monsters", label: "Monsters" },
   { key: "items", label: "Items" },
   { key: "locations", label: "Locations" },
   { key: "lore", label: "Lore" },
@@ -31,7 +42,7 @@ const TABS: { key: WorldTab; label: string }[] = [
 
 export function WorldView() {
   const { campaignId = "" } = useParams();
-  const [tab, setTab] = useState<WorldTab>("items");
+  const [tab, setTab] = useState<WorldTab>("characters");
 
   return (
     <section className="route campaign-world" aria-labelledby="world-heading">
@@ -39,6 +50,8 @@ export function WorldView() {
         <h2 id="world-heading">World</h2>
         <Tabs tabs={TABS} active={tab} onSelect={setTab} ariaLabel="World tabs" />
       </header>
+      {tab === "characters" && <CharactersTab campaignId={campaignId} />}
+      {tab === "monsters" && <EntityTab campaignId={campaignId} kind="monsters" />}
       {tab === "items" && <EntityTab campaignId={campaignId} kind="items" />}
       {tab === "locations" && <LocationsTab campaignId={campaignId} />}
       {tab === "lore" && <LoreTab campaignId={campaignId} />}
@@ -48,8 +61,10 @@ export function WorldView() {
   );
 }
 
-function fetcherFor(campaignId: string, kind: Exclude<WorldTab, "greetings">) {
+function fetcherFor(campaignId: string, kind: Exclude<WorldTab, "greetings" | "characters">) {
   switch (kind) {
+    case "monsters":
+      return () => viewsApi.listMonsters(campaignId);
     case "items":
       return () => viewsApi.listItems(campaignId);
     case "locations":
@@ -66,7 +81,7 @@ function EntityTab({
   kind,
 }: {
   campaignId: string;
-  kind: Exclude<WorldTab, "greetings" | "locations" | "lore">;
+  kind: Exclude<WorldTab, "greetings" | "locations" | "lore" | "characters">;
 }) {
   const state = useApi(useCallback(() => fetcherFor(campaignId, kind)(), [campaignId, kind]));
   return (
@@ -83,6 +98,94 @@ function EntityTab({
         />
       )}
     </Loading>
+  );
+}
+
+function CharactersTab({ campaignId }: { campaignId: string }) {
+  const state = useApi(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
+  const cast = useApi(useCallback(() => viewsApi.listCast(campaignId), [campaignId]));
+  const castIds = new Set(cast.status === "ok" ? cast.data.map((r) => r.character.id) : []);
+  return (
+    <Loading state={state} emptyMessage="No characters resolved for this campaign yet.">
+      {(rows) => <FilteredCharacters rows={rows} campaignId={campaignId} castIds={castIds} />}
+    </Loading>
+  );
+}
+
+interface FilteredCharactersProps {
+  rows: ResolvedCharacter[];
+  campaignId: string;
+  castIds: Set<string>;
+}
+
+function FilteredCharacters({ rows, campaignId, castIds }: FilteredCharactersProps) {
+  const { filtered, search, setSearch, selectedTags, toggleTag, clearTags, availableTags } =
+    useCardFilters(rows, {
+      text: (r) => [
+        r.character.name,
+        r.character.id,
+        r.character.world_id,
+        r.character.description,
+        r.character.body,
+      ],
+      tags: (r) => r.character.tags,
+    });
+  return (
+    <>
+      <CardFilters
+        search={search}
+        onSearch={setSearch}
+        availableTags={availableTags}
+        selectedTags={selectedTags}
+        onToggleTag={toggleTag}
+        onClearTags={clearTags}
+        searchPlaceholder="Search characters by name, id, or text…"
+        searchLabel="Search characters"
+        resultSummary={
+          filtered.length === rows.length
+            ? `${rows.length} character${rows.length === 1 ? "" : "s"}`
+            : `${filtered.length} of ${rows.length}`
+        }
+      />
+      {filtered.length === 0 ? (
+        <p className="muted">No characters match the current filters.</p>
+      ) : (
+        <ul className="entity-grid">
+          {filtered.map((r) => {
+            const c = r.character;
+            return (
+              <li key={`${c.world_id ?? "campaign"}:${c.id}`} className="entity-card-static">
+                <header>
+                  <h4>{c.name || c.id}</h4>
+                  <ChainBadge chain={r.source_chain} overrides={r.overrides_applied} />
+                </header>
+                <p className="muted">
+                  {c.role}
+                  {c.world_id && ` · ${c.world_id}`}
+                </p>
+                {c.description && <p>{c.description}</p>}
+                {c.body && (
+                  <details>
+                    <summary>Preview</summary>
+                    <Markdown>{c.body}</Markdown>
+                  </details>
+                )}
+                {castIds.has(c.id) && (
+                  <p>
+                    <Link
+                      to={`/campaigns/${encodeURIComponent(campaignId)}/cast?character=${encodeURIComponent(c.id)}`}
+                    >
+                      In cast — open
+                    </Link>
+                  </p>
+                )}
+                <CardIconBar actions={[]} />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </>
   );
 }
 

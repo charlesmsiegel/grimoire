@@ -96,9 +96,13 @@ class FakeContinuity:
 class FakeCharacters:
     def __init__(self) -> None:
         self.pcs: dict[str, list[dict]] = {}
+        self.resolved: dict[str, list[Any]] = {}
 
     async def list_pcs(self, campaign_id: str) -> list[dict]:
         return self.pcs.get(campaign_id, [])
+
+    async def list_for_campaign(self, campaign_id: str) -> list[Any]:
+        return self.resolved.get(campaign_id, [])
 
     async def add_pc(
         self,
@@ -126,3 +130,11 @@ class FakeCharacters:
     async def set_active_pc(self, campaign_id: str, character_ref: str) -> None:
         for p in self.pcs.get(campaign_id, []):
             p["active"] = p["character_ref"] == character_ref
+
+
+class FakeScenes:
+    def __init__(self) -> None:
+        self.scenes: dict[str, list[Any]] = {}
+
+    async def list_scenes(self, campaign_id: str) -> list[Any]:
+        return self.scenes.get(campaign_id, [])
