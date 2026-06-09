@@ -397,21 +397,25 @@ one form-row class), make section-specific classes modifiers, and consider split
 Ordered so user-visible consistency lands early and each phase is independently
 shippable.
 
-> **Status (2026-06-09, this branch):** Phases 0–2 are implemented, plus the
-> CSS quick wins from Phase 4 and the Cast/World restructure's first slice
-> (§5 decision note). Concretely: Monsters tab + URL-synced world tabs +
-> greetings fan-out fixes; shared `errorMessage`/`slugify`; `components/Dialog`
-> (Radix) with every modal ported; `ConfirmDestructiveDialog`/`PromptDialog`
-> replacing all native popups (now lint-banned); keyboard-accessible
-> `components/Tabs` adopted by the world view, content browser, and both
-> settings screens; merged `SaveIndicator`; one async stack
-> (`useResource` + `AsyncSection`/`AsyncBoundary`, `useApi` deleted);
-> one HTTP layer (library cache wraps `api/client`, raw-fetch escapes gone);
-> Cast filters on `CardFilters`; duplicate `.button-link` and hardcoded badge
-> colors fixed. **Still open:** the Zod stance (item 11, #599), Phase 3's
-> cascade-truthful backend lists (#600) + `EntityBrowser` extraction and
-> override-editing parity (#601), and Phase 4's card/chip/grid/form CSS
-> primitive consolidation (#602).
+> **Status (2026-06-09, this branch):** Phases 0–2 and 4 are implemented, plus
+> the Cast/World restructure's first slice (§5 decision note). Concretely:
+> Monsters tab + URL-synced world tabs + greetings fan-out fixes; shared
+> `errorMessage`/`slugify`; `components/Dialog` (Radix) with every modal
+> ported; `ConfirmDestructiveDialog`/`PromptDialog` replacing all native
+> popups (now lint-banned); keyboard-accessible `components/Tabs` adopted by
+> the world view, content browser, and both settings screens; merged
+> `SaveIndicator`; one async stack (`useResource` +
+> `AsyncSection`/`AsyncBoundary`, `useApi` deleted); one HTTP layer (library
+> cache wraps `api/client`, raw-fetch escapes gone); Cast filters on
+> `CardFilters`; duplicate `.button-link` and hardcoded badge colors fixed.
+> Phase 4 (#602): `index.css` split into per-section `src/styles/*.css`
+> imports; `.card`/`.chip`/`.grid-cards`/`.form-field` primitives with section
+> classes as modifiers; bespoke `*-empty` classes folded into `.empty-state`;
+> `var(--x, literal)` fallbacks swept and never-defined token names re-pointed
+> at real theme tokens. `.library-card` keeps its own chrome until the
+> `EntityBrowser` extraction (#601). **Still open:** the Zod stance (item 11,
+> #599) and Phase 3's cascade-truthful backend lists (#600) + `EntityBrowser`
+> extraction and override-editing parity (#601).
 
 **Phase 0 — Quick wins (no design decisions, hours each)**
 1. Add `viewsApi.listMonsters` + Monsters tab in campaign `WorldView` (backend is
@@ -459,7 +463,10 @@ shippable.
 **Phase 4 — CSS consolidation**
 14. Introduce `.card` / `.chip` / `.grid-cards` / `.empty` / one form-row primitive;
     convert section classes to modifiers; split `index.css` by section; sweep the
-    `var(--x, #literal)` fallbacks.
+    `var(--x, #literal)` fallbacks. ✔ *Done (#602) — primitives live in
+    `src/styles/primitives.css` (`.form-field` is the form-row class and
+    `.empty-state` the empty primitive); `.library-card` deferred to the
+    `EntityBrowser` extraction (#601).*
 
 ---
 

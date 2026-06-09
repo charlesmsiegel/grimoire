@@ -276,6 +276,15 @@ reimplementation is a review smell.
 - **UI bits**: `components/Tabs` (keyboard-accessible tablist),
   `components/EmptyState`, `components/SaveIndicator`, `components/CardFilters`
   + `hooks/useCardFilters` for list search/tag toolbars, `lib/slugify` for ids.
+- **CSS primitives**: `src/index.css` is an ordered @import list over
+  `src/styles/*.css` (one file per app area; import order is the cascade, so
+  later files win specificity ties). `styles/primitives.css` defines the base
+  shapes — `.card`, `.chip`, `.grid-cards` (column minimum via `--grid-min`),
+  `.form-field`, `.button-link`, `.empty-state` — and section classes are
+  modifiers layered on them in the markup (`class="card entity-card"`). New
+  card/chip/grid/form styling starts from a primitive plus a modifier; don't
+  re-declare the base chrome, and don't add `var(--token, literal)` fallbacks
+  (every token is defined in both themes in `styles/tokens.css`).
 
 #### Card icon bar
 
