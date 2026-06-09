@@ -25,9 +25,9 @@ import type {
   WorldRef,
   WorldMeta,
 } from "../../api/types";
-import { useApi } from "../../api/useApi";
+import { useResource } from "../../api/useResource";
 import { Dialog, DialogClose } from "../../components/Dialog";
-import { Loading } from "./common";
+import { AsyncSection } from "../../components/AsyncSection";
 
 const KINDS = [
   "characters",
@@ -46,33 +46,35 @@ interface CatalogOption {
 
 export function CompositionView() {
   const { campaignId = "" } = useParams();
-  const composition = useApi(useCallback(() => viewsApi.getComposition(campaignId), [campaignId]));
-  const worlds = useApi(useCallback(() => viewsApi.listWorlds(), []));
-  const mechanics = useApi(useCallback(() => viewsApi.installedMechanics(), []));
-  const styleGuides = useApi(useCallback(() => viewsApi.listStyleGuides(), []));
-  const imagePresets = useApi(useCallback(() => viewsApi.listImagePresets(), []));
+  const composition = useResource(
+    useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
+  );
+  const worlds = useResource(useCallback(() => viewsApi.listWorlds(), []));
+  const mechanics = useResource(useCallback(() => viewsApi.installedMechanics(), []));
+  const styleGuides = useResource(useCallback(() => viewsApi.listStyleGuides(), []));
+  const imagePresets = useResource(useCallback(() => viewsApi.listImagePresets(), []));
 
   return (
     <section className="route campaign-composition" aria-labelledby="comp-heading">
       <header className="route-header">
         <h2 id="comp-heading">Composition</h2>
       </header>
-      <Loading state={composition}>
+      <AsyncSection state={composition}>
         {(comp) => (
-          <Loading state={worlds}>
+          <AsyncSection state={worlds}>
             {(worldsList) => (
               <CompositionEditor
                 campaignId={campaignId}
                 initial={comp}
                 catalog={worldsList}
-                mechanicsList={mechanics.status === "ok" ? mechanics.data : []}
-                styleGuides={styleGuides.status === "ok" ? styleGuides.data.map(asOption) : []}
-                imagePresets={imagePresets.status === "ok" ? imagePresets.data.map(asOption) : []}
+                mechanicsList={mechanics.data ?? []}
+                styleGuides={styleGuides.data?.map(asOption) ?? []}
+                imagePresets={imagePresets.data?.map(asOption) ?? []}
               />
             )}
-          </Loading>
+          </AsyncSection>
         )}
-      </Loading>
+      </AsyncSection>
     </section>
   );
 }

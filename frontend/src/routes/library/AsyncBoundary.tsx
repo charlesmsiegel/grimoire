@@ -1,4 +1,12 @@
+/**
+ * Plain-children async boundary for library views. Renders the same shared
+ * status markup as components/AsyncSection (the render-prop variant used by
+ * the campaign views) so loading/error/empty look identical everywhere.
+ */
+
 import type { ReactNode } from "react";
+
+import { EmptyState } from "../../components/EmptyState";
 
 interface AsyncBoundaryProps {
   loading: boolean;
@@ -19,21 +27,25 @@ export function AsyncBoundary({
 }: AsyncBoundaryProps) {
   if (loading) {
     return (
-      <p className="library-status" role="status">
+      <p className="async-status" role="status">
         Loading…
       </p>
     );
   }
   if (error) {
     return (
-      <div className="library-status library-error" role="alert">
+      <div className="async-status async-error" role="alert">
         <p>Failed to load: {error.message}</p>
-        {onRetry && <button onClick={onRetry}>Retry</button>}
+        {onRetry && (
+          <button type="button" onClick={onRetry}>
+            Retry
+          </button>
+        )}
       </div>
     );
   }
   if (empty) {
-    return <p className="library-status">{emptyMessage}</p>;
+    return <EmptyState message={emptyMessage} />;
   }
   return <>{children}</>;
 }

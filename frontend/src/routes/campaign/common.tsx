@@ -7,33 +7,8 @@
  * 14 §Source attribution).
  */
 
-import type { Loadable } from "../../api/useApi";
 import type { ResolutionSource } from "../../api/types";
 import { SourceBadge } from "./SourceBadge";
-
-interface LoadingProps<T> {
-  state: Loadable<T>;
-  children: (data: T) => React.ReactNode;
-  /** Override for the empty-list case; receives the list. */
-  emptyMessage?: string;
-}
-
-export function Loading<T>({ state, children, emptyMessage }: LoadingProps<T>) {
-  if (state.status === "loading" || state.status === "idle") {
-    return <p className="muted">Loading…</p>;
-  }
-  if (state.status === "error") {
-    return (
-      <p className="error" role="alert">
-        Failed to load: {state.error.message}
-      </p>
-    );
-  }
-  if (Array.isArray(state.data) && state.data.length === 0 && emptyMessage) {
-    return <p className="muted">{emptyMessage}</p>;
-  }
-  return <>{children(state.data)}</>;
-}
 
 interface ChainBadgeProps {
   chain: ResolutionSource[];

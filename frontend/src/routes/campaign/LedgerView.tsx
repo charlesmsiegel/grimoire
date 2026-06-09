@@ -3,23 +3,23 @@ import { useParams } from "react-router-dom";
 
 import { campaignApi } from "../../api/campaign";
 import type { Commitment, ContinuityLedger, ContradictionReport, Fact } from "../../api/campaign";
-import { useApi } from "../../api/useApi";
+import { useResource } from "../../api/useResource";
 import { CardIconBar } from "../../components/CardIconBar";
-import { Loading } from "./common";
+import { AsyncSection } from "../../components/AsyncSection";
 
 interface Props {
   campaignId: string;
 }
 
 export function LedgerView({ campaignId }: Props) {
-  const state = useApi(useCallback(() => campaignApi.getLedger(campaignId), [campaignId]));
+  const state = useResource(useCallback(() => campaignApi.getLedger(campaignId), [campaignId]));
 
   return (
     <section className="route campaign-ledger" aria-labelledby="ledger-heading">
       <header className="route-header">
         <h2 id="ledger-heading">Continuity Ledger</h2>
       </header>
-      <Loading state={state}>{(ledger) => <LedgerSections ledger={ledger} />}</Loading>
+      <AsyncSection state={state}>{(ledger) => <LedgerSections ledger={ledger} />}</AsyncSection>
     </section>
   );
 }
