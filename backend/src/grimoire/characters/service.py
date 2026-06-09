@@ -628,7 +628,13 @@ class CharactersService:
                 current_scene_id = state.current_scene_id
                 current_location_ref = state.location_ref
             except Exception:
-                pass
+                _log.warning(
+                    "list_pcs: failed to load state for %s in campaign %s; "
+                    "entry returned without scene/location",
+                    char_ref,
+                    campaign_id,
+                    exc_info=True,
+                )
             last_played_at = parse_iso_datetime(row.get("last_played_at"))
             raw_tags = row.get("role_tags") or "[]"
             role_tags = _json.loads(raw_tags) if isinstance(raw_tags, str) else list(raw_tags)

@@ -185,11 +185,23 @@ class ArchiveRetriever:
         try:
             triggered = await self._world.lore_for_post(player_input, campaign_id, turn_id=turn_id)
         except TypeError:
+            # Compat shim: older lore_for_post implementations don't accept
+            # turn_id. Retry without it; only the retry's failure is a real one.
             try:
                 triggered = await self._world.lore_for_post(player_input, campaign_id)
             except Exception:
+                logger.warning(
+                    "lore_for_post failed for campaign %s; lore triggers omitted from context",
+                    campaign_id,
+                    exc_info=True,
+                )
                 return [], [], []
         except Exception:
+            logger.warning(
+                "lore_for_post failed for campaign %s; lore triggers omitted from context",
+                campaign_id,
+                exc_info=True,
+            )
             return [], [], []
         spotlight: list[TierItem] = []
         background: list[TierItem] = []
@@ -223,6 +235,11 @@ class ArchiveRetriever:
                 turn_id=turn_id,
             )
         except Exception:
+            logger.warning(
+                "query embedding failed for campaign %s; vector search omitted from context",
+                campaign_id,
+                exc_info=True,
+            )
             return []
         if not vectors:
             return []
@@ -255,17 +272,33 @@ class ArchiveRetriever:
         return await self._invoke_store_search(self._store.keyword_search, kwargs)
 
     async def _invoke_store_search(self, fn: Any, kwargs: dict[str, Any]) -> list[Any]:
+        name = getattr(fn, "__name__", repr(fn))
+        campaign_id = kwargs.get("campaign_id")
+
+        def _warn() -> None:
+            logger.warning(
+                "%s failed for campaign %s; archive retrieval omitted from context",
+                name,
+                campaign_id,
+                exc_info=True,
+            )
+
         try:
             return await fn(**kwargs)
         except TypeError as exc:
+            # Compat shim: older store search implementations don't accept
+            # priority_hints. Retry without it; any other TypeError is real.
             if "priority_hints" in kwargs and "priority_hints" in str(exc):
                 kwargs = {k: v for k, v in kwargs.items() if k != "priority_hints"}
                 try:
                     return await fn(**kwargs)
                 except Exception:
+                    _warn()
                     return []
+            _warn()
             return []
         except Exception:
+            _warn()
             return []
 
     def _priority_hints(self, composition: Composition | None) -> dict[str, int]:
@@ -298,6 +331,13 @@ class ArchiveRetriever:
                 try:
                     scene = await getter(scene_id)
                 except Exception:
+                    logger.warning(
+                        "get_scene(%s) failed while resolving explicit scene refs "
+                        "for campaign %s; rendering as not found",
+                        scene_id,
+                        campaign_id,
+                        exc_info=True,
+                    )
                     scene = None
             text = _render_scene_reference(scene_id, scene)
             items.append(

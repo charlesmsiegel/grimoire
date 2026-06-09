@@ -98,6 +98,7 @@ WEATHER_CHANGED = "weather_changed"
 
 # Library & watcher
 LIBRARY_INDEXED = "library_indexed"
+WATCHER_ERROR = "watcher_error"
 LIBRARY_FILE_CHANGED = "library_file_changed"
 CAMPAIGN_FILE_CHANGED = "campaign_file_changed"
 SCENE_FILE_CHANGED = "scene_file_changed"

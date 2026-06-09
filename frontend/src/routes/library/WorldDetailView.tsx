@@ -73,7 +73,12 @@ export function WorldDetailView() {
     setRefreshing(true);
     setRefreshErr(null);
     try {
-      await libraryApi.rescanWorlds();
+      const report = await libraryApi.rescanWorlds();
+      if (report.failures > 0) {
+        setRefreshErr(
+          `Rescan skipped ${report.failures} unreadable file${report.failures === 1 ? "" : "s"} — see backend log.`,
+        );
+      }
       reload();
     } catch (err) {
       setRefreshErr(err instanceof ApiError ? err.message : String(err));

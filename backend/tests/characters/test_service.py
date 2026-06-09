@@ -8,6 +8,7 @@ promotion, and search.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 
 import pytest
@@ -190,6 +191,39 @@ async def test_pc_lifecycle(characters: CharactersService, store: StateStore) ->
 
     await characters.remove_pc("camp-1", "library:worlds/wod-london/characters/vivienne")
     assert await characters.list_pcs("camp-1") == []
+
+
+async def test_list_pcs_logs_warning_when_state_load_fails(
+    characters: CharactersService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#587: a corrupt state row must not silently read as "PC has no scene".
+
+    The entry still degrades to scene/location ``None``, but the failure is
+    logged at WARNING so it is distinguishable from an idle PC.
+    """
+
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data("vivienne", role=CharacterRole.PC))
+    await characters.add_pc("camp-1", "library:worlds/wod-london/characters/vivienne", "vivienne")
+
+    async def boom(**_kwargs):
+        raise RuntimeError("corrupt state row")
+
+    monkeypatch.setattr(characters.store, "resolve_character_state", boom)
+
+    with caplog.at_level(logging.WARNING, logger="grimoire.characters.service"):
+        listed = await characters.list_pcs("camp-1")
+
+    assert len(listed) == 1
+    assert listed[0].current_scene_id is None
+    assert listed[0].current_location_ref is None
+    assert any(
+        "failed to load state" in r.message and "camp-1" in r.message for r in caplog.records
+    )
 
 
 async def test_remove_pc_matches_stored_shorthand_ref(

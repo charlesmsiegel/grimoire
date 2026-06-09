@@ -122,6 +122,8 @@ export interface LibraryRescanReport {
   scope: "all" | "library" | "campaigns";
   library_files: number;
   campaign_files: number;
+  /** Files whose change was dropped during the scan (parse/index errors). */
+  failures: number;
 }
 
 export const libraryApi = {

@@ -367,7 +367,7 @@ async def test_scan_now_library_scope_skips_campaign_root(
     # library_index row; the campaign_content_index row must survive.
     lib.unlink()
     report = await watcher.scan_now(scope="library")
-    assert report == {"scope": "library", "library_files": 0, "campaign_files": 0}
+    assert report == {"scope": "library", "library_files": 0, "campaign_files": 0, "failures": 0}
     assert await store.get_library_entity("worlds/wod-london/characters/a") is None
 
     # The campaign content row should still be present since the campaigns

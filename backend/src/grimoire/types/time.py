@@ -77,6 +77,9 @@ class NpcTickSummary(BaseModel):
     next_intent: str = ""
     should_seek_pc: bool = False
     events_pc_would_witness: list[str] = Field(default_factory=list)
+    # True when the tick callable failed and the empty default tick was
+    # substituted — distinguishes "quiet day" from "tick broke" in the digest.
+    degraded: bool = False
 
 
 class FactionTickSummary(BaseModel):
