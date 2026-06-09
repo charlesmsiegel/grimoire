@@ -109,13 +109,18 @@ a counter/metric; write/mutation paths must not catch-and-continue.* The 47 `# p
 defensive` blocks (largely in time_engine) should each get either a test that triggers them or a
 narrower exception type.
 
-### 1.6 Latent (downgraded after PR review) — Concurrent read-merge-write on relationships
+### 1.6 ✅ Latent (downgraded after PR review) — Concurrent read-merge-write on relationships
 `characters/service.py:835-920` — `update_relationship` fetches, merges in memory, upserts; two
 concurrent calls would lose one update (no version column, no per-ref lock). *(Corrected: the
 original "orchestrator's background jobs make it reachable" was unsupported — the method has **no
 production caller** (definition + tests only), so this is a latent hazard on unused public API,
 not a current correctness risk. Decide: delete the method, or fix the read-merge-write before
 wiring a caller.)*
+**Resolution (#588): deleted.** The method was not part of the `Characters` Protocol contract
+(`types/protocols.py` declares only `get_relationships`), and production relationship rows are
+written by the extractor's `RELATIONSHIP_UPDATE` deltas through `StateStore.apply_delta` (single
+transactional upsert). The read paths (`get_relationships`, `get_relationship_history`) and their
+row-parsing helpers stay; their tests now seed rows directly the way the delta path writes them.
 
 ### 1.7 ✅ High — Speaker-loop pipeline silently discards inventory deltas *(found in PR review)*
 In `per_character_multi_call` mode, `_run_speaker_loop` (`orchestrator/service.py:1552+`) runs

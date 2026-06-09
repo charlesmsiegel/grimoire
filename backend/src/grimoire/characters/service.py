@@ -36,19 +36,17 @@ from grimoire.types.characters import (
     LoreOverride,
     PCEntry,
     PromotionProposal,
-    RelationshipEvent,
     RelationshipState,
     ResolvedCharacter,
     VoiceAnchor,
 )
-from grimoire.types.common import CampaignId, CharacterRef, PostId, Scope
+from grimoire.types.common import CampaignId, CharacterRef, Scope
 from grimoire.types.composition import LibraryEntity, ResolutionLayer, ResolutionSource
 from grimoire.types.mechanics import Capability
 from grimoire.types.scene import Post, Scene
 from grimoire.types.state import CharacterState, ContextTier, DeltaKind, StateDelta
 from grimoire.util import (
     canonicalize_character_ref,
-    new_id,
     now_iso,
     parse_iso_datetime,
     slugify_id,
@@ -818,7 +816,12 @@ class CharactersService:
         )
 
     # ------------------------------------------------------------------ #
-    # Campaign-scoped relationships
+    # Campaign-scoped relationships (read-only)
+    #
+    # Relationship rows are written by the extractor's RELATIONSHIP_UPDATE
+    # deltas via StateStore.apply_delta (single transactional upsert). A
+    # service-level writer must not reintroduce fetch→merge-in-memory→upsert:
+    # that read-merge-write races with itself under concurrency (#588).
     # ------------------------------------------------------------------ #
 
     async def get_relationships(self, ref: CharacterRef, campaign_id: CampaignId) -> list[dict]:
@@ -831,93 +834,6 @@ class CharactersService:
             (campaign_id, ref, ref),
         )
         return [_relationship_row_to_dict(r) for r in rows]
-
-    async def update_relationship(
-        self,
-        from_ref: CharacterRef,
-        to_ref: CharacterRef,
-        campaign_id: CampaignId,
-        delta: dict,
-        *,
-        types: list[str] | None = None,
-        turn_id: str | None = None,
-        in_post: PostId | None = None,
-        summary: str | None = None,
-    ) -> dict:
-        existing = await self.store.db.fetchone(
-            """
-            SELECT * FROM relationships
-            WHERE campaign_id = ?
-              AND from_character_ref = ? AND to_character_ref = ?
-            """,
-            (campaign_id, from_ref, to_ref),
-        )
-        if existing is None:
-            state = RelationshipState()
-            existing_types = types or []
-            row_id = new_id("rel")
-            history = []
-        else:
-            state = _relationship_state_from_json(existing["state"])
-            existing_types = json.loads(existing["types"]) if existing["types"] else []
-            if types:
-                merged = list(dict.fromkeys(existing_types + types))
-                existing_types = merged
-            row_id = existing["id"]
-            history = _relationship_history_from_json(existing["history"])
-
-        merged_state = state.model_dump()
-        for key in ("affection", "trust", "dominance", "intimacy"):
-            if key in delta:
-                merged_state[key] = int(merged_state.get(key) or 0) + int(delta[key])
-        for key in ("awareness",):
-            if key in delta:
-                merged_state[key] = delta[key]
-        if "custom" in delta and isinstance(delta["custom"], dict):
-            merged_state["custom"] = {**(merged_state.get("custom") or {}), **delta["custom"]}
-
-        if summary:
-            event = RelationshipEvent(
-                in_post=in_post,
-                summary=summary,
-                delta=dict(delta),
-                at=now_iso(),
-            )
-            history.append(event.model_dump())
-
-        await self.store.db.execute(
-            """
-            INSERT INTO relationships (
-              id, campaign_id, from_character_ref, to_character_ref,
-              types, state, updated_at_turn, history
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              types = excluded.types,
-              state = excluded.state,
-              updated_at_turn = excluded.updated_at_turn,
-              history = excluded.history
-            """,
-            (
-                row_id,
-                campaign_id,
-                from_ref,
-                to_ref,
-                json.dumps(existing_types),
-                json.dumps(merged_state, default=str),
-                turn_id or now_iso(),
-                json.dumps(history, default=str),
-            ),
-        )
-        return {
-            "id": row_id,
-            "campaign_id": campaign_id,
-            "from_ref": from_ref,
-            "to_ref": to_ref,
-            "types": existing_types,
-            "state": merged_state,
-            "history": history,
-        }
 
     async def get_relationship_history(
         self,
