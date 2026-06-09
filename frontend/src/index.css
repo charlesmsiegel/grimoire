@@ -2715,22 +2715,6 @@ pre {
   color: var(--accent);
 }
 
-.button-link {
-  display: inline-block;
-  padding: 0.35rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg);
-  text-decoration: none;
-  font-size: 0.85rem;
-  background: var(--bg);
-}
-
-.button-link:hover {
-  border-color: var(--accent);
-  text-decoration: none;
-}
-
 .library-card-grid {
   list-style: none;
   margin: 0;
@@ -4733,6 +4717,7 @@ button.primary:disabled {
   text-decoration: none;
   background: var(--bg-elev);
   font-weight: 500;
+  font-size: 0.85rem;
   transition:
     border-color var(--transition-fast),
     background var(--transition-fast),
@@ -6367,18 +6352,18 @@ button.primary:disabled {
 }
 
 .source-badge.greeting {
-  background: var(--accent-soft, #f5e6d3);
+  background: var(--accent-soft);
   color: var(--accent);
 }
 
 .source-badge.llm {
-  background: #e3e8f0;
-  color: #4a5568;
+  background: var(--bg-elev-2);
+  color: var(--fg-muted);
 }
 
 .source-badge.user {
-  background: #e8f5e9;
-  color: #2e7d32;
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 
 .ledger-summary {
