@@ -26,6 +26,7 @@ import type {
   WorldMeta,
 } from "../../api/types";
 import { useApi } from "../../api/useApi";
+import { Dialog, DialogClose } from "../../components/Dialog";
 import { Loading } from "./common";
 
 const KINDS = [
@@ -447,33 +448,23 @@ function DiffPreviewModal({ hint, onClose }: { hint: UpgradeHint; onClose: () =>
   }, [hint.world_id, hint.bound, hint.latest]);
 
   return (
-    <div
-      className="modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="diff-title"
-      onClick={onClose}
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Diff: ${hint.world_id} v${hint.bound} → v${hint.latest}`}
+      panelClassName="diff-modal"
     >
-      <div className="modal-panel diff-modal" onClick={(e) => e.stopPropagation()}>
-        <header>
-          <h3 id="diff-title">
-            Diff: {hint.world_id} v{hint.bound} → v{hint.latest}
-          </h3>
-          <button type="button" aria-label="Close" onClick={onClose}>
-            ×
-          </button>
-        </header>
-        <div className="diff-body">
-          {loading && <p>Loading diff…</p>}
-          {error && (
-            <p className="error" role="alert">
-              {error}
-            </p>
-          )}
-          {diff && <DiffRenderer diff={diff} />}
-        </div>
+      <DialogClose />
+      <div className="diff-body">
+        {loading && <p>Loading diff…</p>}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        {diff && <DiffRenderer diff={diff} />}
       </div>
-    </div>
+    </Dialog>
   );
 }
 

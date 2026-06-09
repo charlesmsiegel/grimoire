@@ -23,6 +23,7 @@ import { SheetRenderer } from "../../sheets";
 import type { SheetValue } from "../../sheets/types";
 import { ChainBadge, Loading } from "./common";
 import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
+import { Dialog } from "../../components/Dialog";
 import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
 
 type SourceFilter = "all" | "library" | "emergent" | "override";
@@ -503,35 +504,32 @@ function EditOverrideDialog({
   }, [campaignId, characterId, worldId, text, onSaved]);
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="edit-override">
-      <div className="modal">
-        <h4 id="edit-override">Edit override</h4>
-        <p className="muted">
-          Patch frontmatter for <code>{characterId}</code> in world <code>{worldId}</code>.
-          Submitted as a JSON object; existing override is overwritten.
+    <Dialog open onClose={onClose} title="Edit override">
+      <p className="muted">
+        Patch frontmatter for <code>{characterId}</code> in world <code>{worldId}</code>. Submitted
+        as a JSON object; existing override is overwritten.
+      </p>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={12}
+        spellCheck={false}
+        aria-label="Override JSON"
+      />
+      {error && (
+        <p className="error" role="alert">
+          {error}
         </p>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={12}
-          spellCheck={false}
-          aria-label="Override JSON"
-        />
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-        <div className="modal-actions">
-          <button type="button" onClick={onClose} disabled={busy}>
-            Cancel
-          </button>
-          <button type="button" onClick={() => void save()} disabled={busy}>
-            {busy ? "Saving…" : "Save override"}
-          </button>
-        </div>
+      )}
+      <div className="modal-actions">
+        <button type="button" onClick={onClose} disabled={busy}>
+          Cancel
+        </button>
+        <button type="button" onClick={() => void save()} disabled={busy}>
+          {busy ? "Saving…" : "Save override"}
+        </button>
       </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -589,44 +587,41 @@ function PromoteToLibraryDialog({
   }, [campaignId, characterId, target, onPromoted]);
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="promote-char">
-      <div className="modal">
-        <h4 id="promote-char">Promote {characterId} to library</h4>
-        {worlds === null ? (
-          <p className="muted">Loading worlds…</p>
-        ) : worlds.length === 0 ? (
-          <p className="error">No worlds available. Create a world first.</p>
-        ) : (
-          <label className="field">
-            <span>Target world</span>
-            <select value={target} onChange={(e) => setTarget(e.target.value)}>
-              {worlds.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name || w.id}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-        <div className="modal-actions">
-          <button type="button" onClick={onClose} disabled={busy}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => void promote()}
-            disabled={busy || !target || worlds === null || worlds.length === 0}
-          >
-            {busy ? "Promoting…" : "Promote"}
-          </button>
-        </div>
+    <Dialog open onClose={onClose} title={`Promote ${characterId} to library`}>
+      {worlds === null ? (
+        <p className="muted">Loading worlds…</p>
+      ) : worlds.length === 0 ? (
+        <p className="error">No worlds available. Create a world first.</p>
+      ) : (
+        <label className="field">
+          <span>Target world</span>
+          <select value={target} onChange={(e) => setTarget(e.target.value)}>
+            {worlds.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name || w.id}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="modal-actions">
+        <button type="button" onClick={onClose} disabled={busy}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => void promote()}
+          disabled={busy || !target || worlds === null || worlds.length === 0}
+        >
+          {busy ? "Promoting…" : "Promote"}
+        </button>
       </div>
-    </div>
+    </Dialog>
   );
 }
 

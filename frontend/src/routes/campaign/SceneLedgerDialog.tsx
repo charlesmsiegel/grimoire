@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { newSceneApi } from "../../api/campaign/newScene";
 import type { LedgerEntry } from "../../api/campaign/types";
+import { Dialog, DialogClose } from "../../components/Dialog";
 
 interface Props {
   campaignId: string;
@@ -61,62 +62,57 @@ export function SceneLedgerDialog({ campaignId, open, onClose }: Props) {
   const dismissed = items.filter((i) => i.status === "dismissed");
 
   return (
-    <div className="ledger-dialog-backdrop" onClick={onClose}>
-      <div className="ledger-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="ledger-header">
-          <h2>Scene Ledger</h2>
-          <button onClick={getGreetings} className="ledger-action" disabled={backfilling}>
-            {backfilling ? "Adding…" : "Get greetings"}
-          </button>
-          <button onClick={onClose} className="close-btn">
-            &times;
-          </button>
-        </div>
-        {backfillNote && <p className="ledger-note">{backfillNote}</p>}
-
-        {loading ? (
-          <p className="ledger-loading">Loading...</p>
-        ) : (
-          <div className="ledger-content">
-            {active.length > 0 && (
-              <section>
-                <h3>Active</h3>
-                {active.map((item) => (
-                  <LedgerRow
-                    key={item.id}
-                    item={item}
-                    onToggle={() => toggleStatus(item)}
-                    actionLabel="Dismiss"
-                  />
-                ))}
-              </section>
-            )}
-            {used.length > 0 && (
-              <section>
-                <h3>Used</h3>
-                {used.map((item) => (
-                  <LedgerRow key={item.id} item={item} />
-                ))}
-              </section>
-            )}
-            {dismissed.length > 0 && (
-              <section>
-                <h3>Dismissed</h3>
-                {dismissed.map((item) => (
-                  <LedgerRow
-                    key={item.id}
-                    item={item}
-                    onToggle={() => toggleStatus(item)}
-                    actionLabel="Restore"
-                  />
-                ))}
-              </section>
-            )}
-            {items.length === 0 && <p className="ledger-empty">No scene ideas yet.</p>}
-          </div>
-        )}
+    <Dialog open onClose={onClose} title="Scene Ledger" panelClassName="ledger-dialog">
+      <DialogClose />
+      <div className="ledger-header">
+        <button onClick={getGreetings} className="ledger-action" disabled={backfilling}>
+          {backfilling ? "Adding…" : "Get greetings"}
+        </button>
       </div>
-    </div>
+      {backfillNote && <p className="ledger-note">{backfillNote}</p>}
+
+      {loading ? (
+        <p className="ledger-loading">Loading...</p>
+      ) : (
+        <div className="ledger-content">
+          {active.length > 0 && (
+            <section>
+              <h3>Active</h3>
+              {active.map((item) => (
+                <LedgerRow
+                  key={item.id}
+                  item={item}
+                  onToggle={() => toggleStatus(item)}
+                  actionLabel="Dismiss"
+                />
+              ))}
+            </section>
+          )}
+          {used.length > 0 && (
+            <section>
+              <h3>Used</h3>
+              {used.map((item) => (
+                <LedgerRow key={item.id} item={item} />
+              ))}
+            </section>
+          )}
+          {dismissed.length > 0 && (
+            <section>
+              <h3>Dismissed</h3>
+              {dismissed.map((item) => (
+                <LedgerRow
+                  key={item.id}
+                  item={item}
+                  onToggle={() => toggleStatus(item)}
+                  actionLabel="Restore"
+                />
+              ))}
+            </section>
+          )}
+          {items.length === 0 && <p className="ledger-empty">No scene ideas yet.</p>}
+        </div>
+      )}
+    </Dialog>
   );
 }
 

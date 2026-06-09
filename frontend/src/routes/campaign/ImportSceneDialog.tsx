@@ -6,6 +6,7 @@ import {
   importSceneApi,
 } from "../../api/campaign/importScene";
 import { FilePathPicker } from "../../components/FilePathPicker";
+import { Dialog, DialogClose } from "../../components/Dialog";
 
 type Phase = "pick" | "metadata" | "importing" | "done" | "error";
 
@@ -131,168 +132,158 @@ export function ImportSceneDialog({ campaignId, onClose, onImported }: Props) {
 
   if (phase === "importing" || phase === "done" || phase === "error") {
     const pct = progress ? Math.round((progress.current / progress.total) * 100) : 0;
+    const closable = phase === "done" || phase === "error";
     return (
-      <div className="import-overlay">
-        <div className="import-progress-card">
-          <h3>
-            {phase === "done"
-              ? "Import Complete"
-              : phase === "error"
-                ? "Import Failed"
-                : `Importing: ${title}`}
-          </h3>
-          <div className="import-progress-bar-track">
-            <div className="import-progress-bar-fill" style={{ width: `${pct}%` }} />
-          </div>
-          <p className="import-progress-detail">
-            {phase === "error" ? importErr : (progress?.detail ?? "Starting…")}
-          </p>
-          {progress && phase === "importing" && (
-            <p className="import-progress-count">
-              {progress.current} / {progress.total}
-            </p>
-          )}
-          {(phase === "done" || phase === "error") && (
-            <button type="button" className="primary" onClick={onClose}>
-              Close
-            </button>
-          )}
+      <Dialog
+        open
+        onClose={() => {
+          if (closable) onClose();
+        }}
+        title={
+          phase === "done"
+            ? "Import Complete"
+            : phase === "error"
+              ? "Import Failed"
+              : `Importing: ${title}`
+        }
+        panelClassName="import-progress-card"
+      >
+        <div className="import-progress-bar-track">
+          <div className="import-progress-bar-fill" style={{ width: `${pct}%` }} />
         </div>
-      </div>
+        <p className="import-progress-detail">
+          {phase === "error" ? importErr : (progress?.detail ?? "Starting…")}
+        </p>
+        {progress && phase === "importing" && (
+          <p className="import-progress-count">
+            {progress.current} / {progress.total}
+          </p>
+        )}
+        {closable && (
+          <button type="button" className="primary" onClick={onClose}>
+            Close
+          </button>
+        )}
+      </Dialog>
     );
   }
 
   if (phase === "metadata" && preview) {
     return (
-      <div className="import-overlay">
-        <div className="import-dialog">
-          <h3>Import Scene</h3>
-          <p className="import-post-count">{preview.post_count} posts detected</p>
-          <label>
-            <span>
-              Title <em>*</em>
-            </span>
-            <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
-          </label>
-          <label>
-            <span>Location</span>
-            <input
-              type="text"
-              value={locationRef}
-              onChange={(e) => setLocationRef(e.target.value)}
-              placeholder="e.g. blackspire-tower"
-            />
-          </label>
-          <label>
-            <span>In-game start</span>
-            <input
-              type="text"
-              value={inGameStart}
-              onChange={(e) => setInGameStart(e.target.value)}
-              placeholder="e.g. 1247-10-31T22:00:00"
-            />
-          </label>
-          <label>
-            <span>Mood</span>
-            <input
-              type="text"
-              value={mood}
-              onChange={(e) => setMood(e.target.value)}
-              placeholder="e.g. tense"
-            />
-          </label>
-          <label>
-            <span>Tags</span>
-            <input
-              type="text"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder="comma-separated"
-            />
-          </label>
-          <label>
-            <span>PC characters</span>
-            <input
-              type="text"
-              value={pcRefs}
-              onChange={(e) => setPcRefs(e.target.value)}
-              placeholder="comma-separated"
-            />
-          </label>
-          <label>
-            <span>NPC characters</span>
-            <input
-              type="text"
-              value={npcRefs}
-              onChange={(e) => setNpcRefs(e.target.value)}
-              placeholder="comma-separated"
-            />
-          </label>
-          <div className="import-form-actions">
-            <button
-              type="button"
-              onClick={() => {
-                setPhase("pick");
-                setPreview(null);
-                setTitle("");
-                setLocationRef("");
-                setInGameStart("");
-                setInGameEnd("");
-                setMood("");
-                setTags("");
-                setPcRefs("");
-                setNpcRefs("");
-              }}
-            >
-              Back
-            </button>
-            <button
-              type="button"
-              className="primary"
-              onClick={handleImport}
-              disabled={!title.trim()}
-            >
-              Import
-            </button>
-          </div>
+      <Dialog open onClose={onClose} title="Import Scene" panelClassName="import-dialog">
+        <p className="import-post-count">{preview.post_count} posts detected</p>
+        <label>
+          <span>
+            Title <em>*</em>
+          </span>
+          <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </label>
+        <label>
+          <span>Location</span>
+          <input
+            type="text"
+            value={locationRef}
+            onChange={(e) => setLocationRef(e.target.value)}
+            placeholder="e.g. blackspire-tower"
+          />
+        </label>
+        <label>
+          <span>In-game start</span>
+          <input
+            type="text"
+            value={inGameStart}
+            onChange={(e) => setInGameStart(e.target.value)}
+            placeholder="e.g. 1247-10-31T22:00:00"
+          />
+        </label>
+        <label>
+          <span>Mood</span>
+          <input
+            type="text"
+            value={mood}
+            onChange={(e) => setMood(e.target.value)}
+            placeholder="e.g. tense"
+          />
+        </label>
+        <label>
+          <span>Tags</span>
+          <input
+            type="text"
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+            placeholder="comma-separated"
+          />
+        </label>
+        <label>
+          <span>PC characters</span>
+          <input
+            type="text"
+            value={pcRefs}
+            onChange={(e) => setPcRefs(e.target.value)}
+            placeholder="comma-separated"
+          />
+        </label>
+        <label>
+          <span>NPC characters</span>
+          <input
+            type="text"
+            value={npcRefs}
+            onChange={(e) => setNpcRefs(e.target.value)}
+            placeholder="comma-separated"
+          />
+        </label>
+        <div className="import-form-actions">
+          <button
+            type="button"
+            onClick={() => {
+              setPhase("pick");
+              setPreview(null);
+              setTitle("");
+              setLocationRef("");
+              setInGameStart("");
+              setInGameEnd("");
+              setMood("");
+              setTags("");
+              setPcRefs("");
+              setNpcRefs("");
+            }}
+          >
+            Back
+          </button>
+          <button type="button" className="primary" onClick={handleImport} disabled={!title.trim()}>
+            Import
+          </button>
         </div>
-      </div>
+      </Dialog>
     );
   }
 
   return (
-    <div className="import-overlay">
-      <div className="import-dialog">
-        <div className="import-dialog-header">
-          <h3>Import Scene</h3>
-          <button type="button" onClick={onClose}>
-            &times;
-          </button>
-        </div>
-        <p>Select a grimoire-format scene file (.md) to import.</p>
-        <FilePathPicker
-          label="Scene file"
-          description="Path to a .md scene file"
-          required
-          value={filePath}
-          glob="*.md"
-          onChange={setFilePath}
-        />
-        {previewErr && <p className="import-error">{previewErr}</p>}
-        <div className="import-form-actions">
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="primary"
-            disabled={!filePath || loading}
-            onClick={() => handleFileSelected(filePath)}
-          >
-            {loading ? "Parsing…" : "Next"}
-          </button>
-        </div>
+    <Dialog open onClose={onClose} title="Import Scene" panelClassName="import-dialog">
+      <DialogClose />
+      <p>Select a grimoire-format scene file (.md) to import.</p>
+      <FilePathPicker
+        label="Scene file"
+        description="Path to a .md scene file"
+        required
+        value={filePath}
+        glob="*.md"
+        onChange={setFilePath}
+      />
+      {previewErr && <p className="import-error">{previewErr}</p>}
+      <div className="import-form-actions">
+        <button type="button" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="primary"
+          disabled={!filePath || loading}
+          onClick={() => handleFileSelected(filePath)}
+        >
+          {loading ? "Parsing…" : "Next"}
+        </button>
       </div>
-    </div>
+    </Dialog>
   );
 }
