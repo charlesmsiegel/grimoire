@@ -1,8 +1,15 @@
-export function ConfigSaveIndicator({
+/**
+ * Save/loading status chip for auto-saved forms — the single implementation
+ * behind both the campaign settings and app settings screens.
+ */
+
+export type SaveIndicatorStatus = "idle" | "loading" | "saving" | "saved" | "error";
+
+export function SaveIndicator({
   status,
   error,
 }: {
-  status: "idle" | "loading" | "saving" | "saved" | "error";
+  status: SaveIndicatorStatus;
   error: string | null;
 }) {
   if (status === "loading") return <small className="wizard-meta">Loading…</small>;

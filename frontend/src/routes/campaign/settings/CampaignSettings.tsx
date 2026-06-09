@@ -13,6 +13,7 @@ import { SummariesTab } from "./SummariesTab";
 import { StorageTab } from "./StorageTab";
 import { AdvancedTab } from "./AdvancedTab";
 import { ExpressionsTab } from "./ExpressionsTab";
+import { Tabs } from "../../../components/Tabs";
 
 type Tab =
   | "general"
@@ -80,20 +81,13 @@ export function CampaignSettings() {
         <h2 id="campaign-settings-heading">Campaign settings: {campaignId}</h2>
       </header>
 
-      <nav className="tab-bar" aria-label="Campaign settings tabs">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            className={tab === t.id ? "tab active" : "tab"}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
+      <Tabs
+        tabs={TABS.map((t) => ({ key: t.id, label: t.label }))}
+        active={tab}
+        onSelect={setTab}
+        ariaLabel="Campaign settings tabs"
+        className="tab-bar"
+      />
 
       {loading && <p className="wizard-meta">Loading…</p>}
       {error && (

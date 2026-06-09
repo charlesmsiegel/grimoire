@@ -1,4 +1,4 @@
-import { ConfigSaveIndicator } from "./ConfigSaveIndicator";
+import { SaveIndicator } from "../../components/SaveIndicator";
 import { useAppConfig } from "./shared";
 
 export function BackupTab() {
@@ -48,7 +48,7 @@ export function BackupTab() {
           disabled={!data}
         />
       </label>
-      <ConfigSaveIndicator status={status} error={error} />
+      <SaveIndicator status={status} error={error} />
     </div>
   );
 }
