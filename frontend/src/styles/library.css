@@ -192,9 +192,9 @@
 }
 
 .card-filter-tag.active {
-  background: var(--accent, var(--fg));
+  background: var(--accent);
   color: var(--bg-elev);
-  border-color: var(--accent, var(--fg));
+  border-color: var(--accent);
 }
 
 .card-filter-tag-clear {
@@ -929,7 +929,7 @@
 .world-hub-progress-bar > span {
   display: block;
   height: 100%;
-  background: var(--accent, #33aa77);
+  background: var(--accent);
 }
 .world-hub-checklist,
 .world-hub-suggestions {
@@ -976,7 +976,7 @@
 }
 .world-hub-add {
   font-size: 0.75rem;
-  color: var(--accent, #33aa77);
+  color: var(--accent);
 }
 
 /* ----- Dependents ----- */
@@ -1107,7 +1107,7 @@
   margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
-  color: var(--text-muted, var(--fg));
+  color: var(--fg-muted);
 }
 
 .time-digest-list {
@@ -1169,8 +1169,8 @@
 }
 
 .variants-diff-toggle[aria-pressed="true"] {
-  background: var(--accent-soft, var(--bg-elev));
-  border-color: var(--accent, var(--border-subtle));
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
 .variants-diff-section {

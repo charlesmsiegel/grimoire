@@ -22,7 +22,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  box-shadow: var(--shadow-lg, 0 4px 24px rgba(0, 0, 0, 0.25));
+  box-shadow: var(--shadow-lg);
 }
 
 .import-dialog-header {
@@ -52,7 +52,7 @@
 }
 
 .import-error {
-  color: var(--danger, #d9534f);
+  color: var(--danger);
   font-size: 0.85rem;
 }
 
@@ -67,7 +67,7 @@
 }
 
 .import-scene-btn:hover {
-  background: var(--bg-hover, var(--bg-elev));
+  background: var(--bg-elev-2);
   border-color: var(--border);
 }
 
@@ -83,7 +83,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  box-shadow: var(--shadow-lg, 0 4px 24px rgba(0, 0, 0, 0.25));
+  box-shadow: var(--shadow-lg);
 }
 
 .import-progress-bar-track {
@@ -96,7 +96,7 @@
 
 .import-progress-bar-fill {
   height: 100%;
-  background: var(--accent, #4a9eff);
+  background: var(--accent);
   border-radius: 4px;
   transition: width 0.3s ease;
 }

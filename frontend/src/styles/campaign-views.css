@@ -41,7 +41,7 @@
 }
 
 .campaign-header-chevron {
-  color: var(--fg-muted, #888);
+  color: var(--fg-muted);
   font-size: 0.85rem;
 }
 
@@ -594,8 +594,8 @@ button.primary:disabled {
   margin: 0;
   padding: var(--space-2) var(--space-4);
   font-size: 0.875rem;
-  color: var(--danger, #b3261e);
-  background: var(--danger-bg, rgba(179, 38, 30, 0.08));
+  color: var(--danger);
+  background: var(--danger-soft);
   border-top: 1px solid var(--border-subtle);
 }
 

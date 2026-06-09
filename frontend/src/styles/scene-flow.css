@@ -51,7 +51,7 @@
 }
 
 .suggestion-card.greeting {
-  border-color: var(--accent-soft, var(--border-subtle));
+  border-color: var(--accent-soft);
 }
 
 .suggestion-number {
@@ -62,7 +62,7 @@
   height: 1.5rem;
   border-radius: 50%;
   background: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: var(--accent-fg);
   font-weight: 700;
   font-size: 0.75rem;
   flex-shrink: 0;
@@ -78,7 +78,7 @@
   font-size: 0.7rem;
   padding: 0.125rem 0.5rem;
   border-radius: 1rem;
-  background: var(--accent-soft, #f5e6d3);
+  background: var(--accent-soft);
   color: var(--accent);
   white-space: nowrap;
 }
@@ -176,7 +176,7 @@
 
 .preview-actions .primary {
   background: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: var(--accent-fg);
   border-color: var(--accent);
   font-weight: 600;
 }

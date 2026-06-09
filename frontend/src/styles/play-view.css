@@ -69,10 +69,10 @@
   width: 1.5rem;
   height: 1.5rem;
   padding: 0;
-  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
-  border-radius: var(--radius-sm, 0.25rem);
-  background: var(--bg-elev, #fafafa);
-  color: var(--fg-muted, #888);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--fg-muted);
   font-size: 0.75rem;
   cursor: pointer;
   transition:
@@ -81,8 +81,8 @@
 }
 
 .hud-collapse-toggle:hover {
-  background: var(--surface-hover, rgba(0, 0, 0, 0.04));
-  color: var(--fg, currentColor);
+  background: var(--bg-sunken);
+  color: var(--fg);
 }
 
 .play-main {
@@ -269,7 +269,7 @@
 }
 
 .input-continue {
-  background: var(--bg-raised);
+  background: var(--bg-elev);
   color: var(--fg);
   border: 1px solid var(--border);
   padding: 0.25rem 0.75rem;
@@ -278,7 +278,7 @@
 }
 
 .input-continue:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--bg-elev-2);
 }
 
 .input-director-hint {
@@ -381,39 +381,39 @@
 .post-edit-form {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2, 0.5rem);
-  margin: var(--space-2, 0.5rem) 0;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
 }
 
 .post-edit-textarea {
   width: 100%;
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.9rem;
-  padding: var(--space-2, 0.5rem);
-  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.15));
-  border-radius: var(--radius-sm, 0.25rem);
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   resize: vertical;
 }
 
 .post-edit-actions {
   display: flex;
-  gap: var(--space-2, 0.5rem);
+  gap: var(--space-2);
 }
 
 .post-guided-form {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2, 0.5rem);
-  margin: var(--space-2, 0.5rem) 0;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
   align-items: center;
 }
 
 .post-guided-form input[type="text"] {
   flex: 1 1 12rem;
   font-size: 0.9rem;
-  padding: var(--space-1, 0.25rem) var(--space-2, 0.5rem);
-  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.15));
-  border-radius: var(--radius-sm, 0.25rem);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
 }
 
 .streaming-pulse {
@@ -426,7 +426,7 @@
 .post-pending .post-author-kind {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2, 0.5rem);
+  gap: var(--space-2);
 }
 
 .pending-dots {
