@@ -292,18 +292,21 @@ function CharacterSheet({
   onStatus,
   onStartCreation,
 }: SheetProps) {
-  const state = useResource<Record<string, unknown> | null>(
+  // The sheet value is wrapped so a 404 ("character has no sheet") stays
+  // distinguishable from "not loaded yet" — AsyncSection treats a null
+  // resource as still loading and would never render the create-sheet UI.
+  const state = useResource<{ value: Record<string, unknown> | null }>(
     useCallback(
       () =>
         viewsApi.getSheet(campaignId, "character", characterId).then(
           (sheet) => {
             onStatus(characterId, "present");
-            return sheet;
+            return { value: sheet };
           },
           (err: unknown) => {
             if (err instanceof ApiError && err.status === 404) {
               onStatus(characterId, "missing");
-              return null;
+              return { value: null };
             }
             throw err;
           },
@@ -323,7 +326,7 @@ function CharacterSheet({
   // Reset working copy when the underlying sheet changes (e.g. switching
   // characters). The `key={...}` on the parent makes this remount on
   // bulk-create completion as well.
-  const fetchedSheet = state.data;
+  const fetchedSheet = state.data?.value ?? null;
   useEffect(() => {
     if (fetchedSheet !== null) {
       setWorking(fetchedSheet as SheetValue);
@@ -345,7 +348,7 @@ function CharacterSheet({
 
   return (
     <AsyncSection state={state}>
-      {(sheet) => {
+      {({ value: sheet }) => {
         if (sheet === null) {
           return (
             <div className="muted">
