@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { ApiError } from "../../api/client";
+import { errorMessage } from "../../api/client";
 import {
   type ErrorAggregate,
   type HealthLatest,
@@ -22,12 +22,6 @@ import {
 import { useCampaignEvent, useCampaignId } from "../../state/useCampaignEvent";
 
 const POLL_MS = 15_000;
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return `${err.status}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
 
 function levelLabel(level: HealthLevel): string {
   switch (level) {

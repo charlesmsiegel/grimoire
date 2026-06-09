@@ -1,3 +1,5 @@
+import { slugify as slugifyShared } from "../../lib/slugify";
+
 /**
  * Wizard state shape. Each step contributes a slice of this draft. The final
  * step transforms it into a `CampaignCreateInput` for the backend.
@@ -88,11 +90,7 @@ export function emptyDraft(): WizardDraft {
   };
 }
 
+/** Campaign ids cap at 64 chars; spelling otherwise matches library ids. */
 export function slugify(input: string): string {
-  return input
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64);
+  return slugifyShared(input, { maxLength: 64 });
 }

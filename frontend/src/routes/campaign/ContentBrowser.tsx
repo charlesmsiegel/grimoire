@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { campaignApi, type ContentEntry } from "../../api/campaign";
-import { ApiError } from "../../api/client";
+import { errorMessage } from "../../api/client";
 import { mechanicsApi, type RegisteredModule } from "../../api/library";
 import { SheetRenderer } from "../../sheets/SheetRenderer";
 import type { SheetSchema } from "../../sheets/types";
@@ -23,12 +23,6 @@ interface ContentBrowserProps {
   module: RegisteredModule;
   /** Override list of kinds (defaults to `module.manifest.content_kinds`). */
   kinds?: string[];
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return `${err.status}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return String(err);
 }
 
 export function ContentBrowser({ campaignId, module, kinds }: ContentBrowserProps) {

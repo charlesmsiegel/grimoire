@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { ApiError } from "../../api/client";
+import { errorMessage } from "../../api/client";
 import {
   type PluginConfig,
   type PluginKind,
@@ -92,12 +92,6 @@ const KIND_COPY: Record<
     skipNote: "Skipping is fine — you can add an image backend later from Settings → Providers.",
   },
 };
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return `${err.status}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
 
 export function StartupWizard({ onClose, title = "Set up Grimoire" }: StartupWizardProps) {
   const navigate = useNavigate();

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { ApiError } from "../../api/client";
+import { errorMessage } from "../../api/client";
 import { pcProfileApi } from "../../api/campaign";
 import {
   type CampaignCreateInput,
@@ -43,12 +43,6 @@ interface LoadState<T> {
   data: T;
   loading: boolean;
   error: string | null;
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return `${err.status}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return String(err);
 }
 
 export function CampaignCreate() {

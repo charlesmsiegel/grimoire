@@ -16,7 +16,7 @@ import {
   type ProposedRoll,
   type RollResolution,
 } from "../../api/campaign";
-import { ApiError } from "../../api/client";
+import { errorMessage } from "../../api/client";
 import { useCampaignEvent } from "../../state/useCampaignEvent";
 
 type Decision = "accept" | "modify" | "decline";
@@ -33,12 +33,6 @@ function initialRow(p: ProposedRoll): RowState {
     pool: p.pool,
     difficulty: p.difficulty ?? null,
   };
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return `${err.status}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return String(err);
 }
 
 interface Props {

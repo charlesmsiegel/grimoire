@@ -13,7 +13,7 @@
 import { useEffect, useState } from "react";
 
 import { campaignApi } from "../../api/campaign";
-import { ApiError } from "../../api/client";
+import { errorMessage } from "../../api/client";
 import { mechanicsApi, type CreationStep } from "../../api/library";
 import { renderField } from "../../sheets/renderField";
 import { SheetRenderer } from "../../sheets/SheetRenderer";
@@ -43,12 +43,6 @@ interface WizardState {
   steps: CreationStep[];
   loading: boolean;
   error: string | null;
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return `${err.status}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return String(err);
 }
 
 export function CharacterCreation({
