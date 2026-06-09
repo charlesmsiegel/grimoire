@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { ApiError } from "../../api/library";
+import { api } from "../../api/client";
 
 interface CampaignSummary {
   id: string;
@@ -44,11 +45,11 @@ export function WorldDependentsView() {
       setLoading(true);
       setError(null);
       try {
-        const campaigns = await fetchJson<CampaignSummary[]>(`/api/campaigns`);
+        const campaigns = await api.get<CampaignSummary[]>(`/api/campaigns`);
         const compositions = await Promise.all(
           campaigns.map(async (c) => {
             try {
-              const comp = await fetchJson<CompositionPayload>(
+              const comp = await api.get<CompositionPayload>(
                 `/api/campaigns/${encodeURIComponent(c.id)}/composition`,
               );
               return { campaign: c, comp };
@@ -121,10 +122,4 @@ export function WorldDependentsView() {
       </table>
     </section>
   );
-}
-
-async function fetchJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
-  if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => ""));
-  return (await res.json()) as T;
 }

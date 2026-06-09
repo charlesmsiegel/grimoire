@@ -1,4 +1,11 @@
-import { ApiError } from "../client";
+/**
+ * Library API transport: a thin 30-second GET cache over the app-wide `api`
+ * client — one HTTP layer, one error shape (ApiError, parsed JSON detail).
+ * Any non-GET through this module invalidates the whole cache so list views
+ * refresh after mutations.
+ */
+
+import { ApiError, api } from "../client";
 
 export { ApiError };
 
@@ -38,7 +45,6 @@ export async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  init?: RequestInit,
   opts?: RequestOptions,
 ): Promise<T> {
   const useCache = method === "GET" && opts?.cache !== false;
@@ -47,23 +53,27 @@ export async function request<T>(
     const hit = cacheGet(url);
     if (hit !== undefined) return hit as T;
   }
-  const headers = new Headers(init?.headers);
-  if (body !== undefined) headers.set("Content-Type", "application/json");
-  const res = await fetch(url, {
-    ...init,
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, text);
+  let value: T;
+  switch (method) {
+    case "GET":
+      value = await api.get<T>(url);
+      break;
+    case "POST":
+      value = await api.post<T>(url, body);
+      break;
+    case "PUT":
+      value = await api.put<T>(url, body);
+      break;
+    case "PATCH":
+      value = await api.patch<T>(url, body);
+      break;
+    case "DELETE":
+      value = await api.delete<T>(url);
+      break;
+    default:
+      throw new Error(`unsupported method ${method}`);
   }
   if (method !== "GET") clearLibraryCache();
-  if (res.status === 204) return undefined as T;
-  const ct = res.headers.get("content-type") ?? "";
-  if (!ct.includes("application/json")) return undefined as T;
-  const parsed = (await res.json()) as T;
-  if (useCache) cacheSet(url, parsed);
-  return parsed;
+  if (useCache) cacheSet(url, value);
+  return value;
 }

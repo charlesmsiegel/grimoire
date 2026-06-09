@@ -16,6 +16,7 @@ import { useResource } from "../../api/useResource";
 import type { ImageJobEntry } from "../../state/storeContext";
 import { useStore } from "../../state/useStore";
 import { AsyncSection } from "../../components/AsyncSection";
+import { api } from "../../api/client";
 
 type ImagesTab = "gallery" | "queue" | "templates";
 
@@ -163,9 +164,8 @@ function ImageQueueRow({ campaignId, job }: { campaignId: string; job: ImageJobE
   async function cancel() {
     setCancelling(true);
     try {
-      await fetch(
+      await api.delete(
         `/api/campaigns/${encodeURIComponent(campaignId)}/images/jobs/${encodeURIComponent(job.job_id)}`,
-        { method: "DELETE" },
       );
     } catch {
       // Swallow; the backend emits `imagegen_job_failed` if cancel hit the
