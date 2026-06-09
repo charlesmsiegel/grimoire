@@ -742,6 +742,23 @@ class World(Protocol):
         campaign_id: CampaignId,
     ) -> ResolvedEntity: ...
 
+    async def list_resolved_for_campaign(
+        self,
+        campaign_id: CampaignId,
+        kind: EntityKind | str,
+    ) -> list[ResolvedEntity]: ...
+
+    async def upsert_override(
+        self,
+        campaign_id: CampaignId,
+        kind: EntityKind | str,
+        entity_id: str,
+        patch: dict,
+        *,
+        world_id: str,
+        source: str = "world:override",
+    ) -> None: ...
+
     async def list_greetings(self, world_id: str) -> list[Greeting]: ...
 
     async def fork_world(self, src_world_id: str, dst_world_id: str) -> None: ...

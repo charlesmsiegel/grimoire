@@ -444,6 +444,80 @@ class WorldService:
         """
         return await self.library.list_for_composition(campaign_id, kind)
 
+    async def list_resolved_for_campaign(
+        self,
+        campaign_id: CampaignId,
+        kind: EntityKind | str,
+    ) -> list[ResolvedEntity]:
+        """Composition-aware listing with the read cascade applied (#600).
+
+        Walks the same composition refs as :meth:`list_for_campaign`, resolves
+        each row through the cascade (emergent shadow → override → snapshot /
+        live), then appends campaign-local emergent entities of the kind —
+        mirroring ``CharactersService.list_for_campaign`` so the campaign
+        World tabs follow the same resolution rules as Cast.
+        """
+        normalized = _normalize_kind(kind)
+        dir_name = KIND_TO_DIR.get(normalized)
+        if dir_name is None:
+            raise WorldError(f"unsupported kind {normalized!r}")
+        out: list[ResolvedEntity] = []
+        seen: set[str] = set()
+        for ent in await self.library.list_for_composition(campaign_id, normalized):
+            try:
+                resolved = await self.library.resolve(
+                    f"worlds/{ent.world_id}/{dir_name}/{ent.asset_id}", campaign_id
+                )
+            except LibraryNotFoundError:
+                continue
+            out.append(resolved)
+            seen.add(ent.asset_id)
+        for row in await self.store.list_emergent(campaign_id, normalized):
+            asset_id = str(row.get("asset_id") or "")
+            # An emergent that shadows a composed library asset already
+            # surfaced through the cascade above; don't list it twice.
+            if not asset_id or asset_id in seen:
+                continue
+            try:
+                resolved = await self.library.resolve(
+                    f"emergent/{normalized}/{asset_id}", campaign_id
+                )
+            except LibraryNotFoundError:
+                continue
+            out.append(resolved)
+            seen.add(asset_id)
+        return out
+
+    async def upsert_override(
+        self,
+        campaign_id: CampaignId,
+        kind: EntityKind | str,
+        entity_id: str,
+        patch: dict,
+        *,
+        world_id: str,
+        source: str = "world:override",
+    ) -> None:
+        """Write a campaign-local override for a world-owned entity (#600).
+
+        Counterpart of ``CharactersService.upsert_override`` for the
+        non-character kinds; character overrides stay with the Characters
+        module (they also invalidate its view cache).
+        """
+        from grimoire.state_store.indexers import make_library_id
+
+        normalized = _normalize_kind(kind)
+        if normalized == "character":
+            raise WorldError("character overrides are owned by the Characters module")
+        if normalized not in _OWNED_KINDS:
+            raise WorldError(f"unsupported kind {normalized!r}")
+        await self.store.write_override(
+            campaign_id=campaign_id,
+            library_id=make_library_id(world_id, normalized, entity_id),
+            patch=patch,
+            source=source,
+        )
+
     # ------------------------------------------------------------------ #
     # Spatial queries
     # ------------------------------------------------------------------ #

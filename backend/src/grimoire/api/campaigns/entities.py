@@ -13,12 +13,18 @@ from grimoire.util import canonicalize_character_ref
 from .helpers import _list_kind
 from .schemas import (
     CharacterCreationSubmitPayload,
-    CharacterOverridePayload,
+    EntityOverridePayload,
     MechanicsSwitchPayload,
     PromotePayload,
 )
 
 router = APIRouter()
+
+# Plural URL segments for the world-owned kinds whose campaign-side overrides
+# route through ``WorldService`` (characters have their own route below).
+_WORLD_KIND_SEGMENTS: frozenset[str] = frozenset(
+    {"items", "locations", "lore", "factions", "greetings", "monsters"}
+)
 
 
 @router.get("/{campaign_id}/characters")
@@ -124,6 +130,20 @@ async def list_monsters(campaign_id: str, world: WorldDep) -> Any:
         raise map_lookup_errors(exc) from exc
 
 
+@router.get("/{campaign_id}/greetings")
+async def list_greetings(campaign_id: str, world: WorldDep) -> Any:
+    """Cascade-resolved greetings for the campaign (#600).
+
+    Replaces the frontend's per-world library fan-out: rows honour the
+    composition's per-ref ``include`` filters and carry real source chains,
+    so emergent greetings and overrides surface like every other kind.
+    """
+    try:
+        return await _list_kind(campaign_id, "greeting", world)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
 @router.post("/{campaign_id}/characters/{entity_id}/promote-to-library")
 async def promote_character(
     campaign_id: str,
@@ -149,7 +169,7 @@ async def promote_character(
 async def patch_character_override(
     campaign_id: str,
     entity_id: str,
-    payload: CharacterOverridePayload,
+    payload: EntityOverridePayload,
     characters: CharactersDep,
 ) -> Any:
     world_id = payload.world_id
@@ -182,6 +202,60 @@ async def patch_character_override(
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     return {"ok": True, "world_id": world_id, "ref": ref}
+
+
+@router.patch("/{campaign_id}/{kind}/{entity_id}/override")
+async def patch_entity_override(
+    campaign_id: str,
+    kind: str,
+    entity_id: str,
+    payload: EntityOverridePayload,
+    world: WorldDep,
+) -> Any:
+    """Campaign-local override for the non-character kinds (#600).
+
+    Mirrors ``patch_character_override``: resolve the owning world from the
+    campaign's composition unless the payload names it, then write through
+    the owning module (World).
+    """
+    if kind == "characters":
+        raise HTTPException(status_code=404, detail="use /characters/{id}/override")
+    if kind not in _WORLD_KIND_SEGMENTS:
+        raise HTTPException(status_code=404, detail=f"unknown entity kind {kind!r}")
+    world_id = payload.world_id
+    if not world_id:
+        try:
+            rows = await world.list_for_campaign(campaign_id, kind)
+        except Exception as exc:
+            raise map_lookup_errors(exc) from exc
+        for ent in rows:
+            if ent.asset_id == entity_id and ent.world_id:
+                world_id = ent.world_id
+                break
+    if not world_id:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"could not resolve owning world for {kind.removesuffix('s')} {entity_id!r} in "
+                f"campaign {campaign_id!r}; pass world_id explicitly for emergent-only entities"
+            ),
+        )
+    try:
+        await world.upsert_override(
+            campaign_id,
+            kind,
+            entity_id,
+            payload.override,
+            world_id=world_id,
+            source=payload.source,
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    return {
+        "ok": True,
+        "world_id": world_id,
+        "ref": f"library:worlds/{world_id}/{kind}/{entity_id}",
+    }
 
 
 @router.post("/{campaign_id}/{kind}/{entity_id}/promote-to-library")

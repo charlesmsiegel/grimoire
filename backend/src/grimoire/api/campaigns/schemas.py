@@ -169,7 +169,9 @@ class PromotePayload(BaseModel):
     confirm: bool = False
 
 
-class CharacterOverridePayload(BaseModel):
+class EntityOverridePayload(BaseModel):
+    """Campaign-local override patch for a library entity of any kind."""
+
     override: dict[str, Any]
     world_id: str | None = None
     source: str = "user"
