@@ -135,6 +135,10 @@ class FakeCharacters:
 class FakeScenes:
     def __init__(self) -> None:
         self.scenes: dict[str, list[Any]] = {}
+        self.confirmed_cast_changes: dict[str, list[Any]] = {}
 
     async def list_scenes(self, campaign_id: str) -> list[Any]:
         return self.scenes.get(campaign_id, [])
+
+    async def list_confirmed_cast_changes(self, scene_id: str) -> list[Any]:
+        return self.confirmed_cast_changes.get(scene_id, [])
