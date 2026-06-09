@@ -11,7 +11,9 @@ import pytest
 from grimoire.orchestrator.errors import (
     RetconBatchClosedError,
     RetconBatchNotFoundError,
+    RetconExtractionError,
     RetconInFlightError,
+    RetconStateError,
 )
 from grimoire.types.orchestrator import ReplayBatchStateView, RetconResult
 
@@ -116,6 +118,28 @@ def test_retcon_post_leave_as_is(wire, client) -> None:
     body = response.json()
     assert body["replay_batch_id"] is None
     assert wire.orchestrator.calls[0] == ("retcon_post", "p_1", "edit", "c1", False)
+
+
+def test_retcon_extraction_failure_is_502(wire, client) -> None:
+    # A failed re-extraction aborts the retcon before any state change (#583);
+    # the API surfaces it instead of returning a clean RetconResult.
+    wire.orchestrator.raise_on_retcon = RetconExtractionError("p_1")
+    response = client.post(
+        "/api/campaigns/c1/turns/t_1/retcon",
+        json={"post_id": "p_1", "new_text": "edit"},
+    )
+    assert response.status_code == 502
+    assert "unchanged" in response.json()["detail"]
+
+
+def test_retcon_state_swap_failure_is_500(wire, client) -> None:
+    wire.orchestrator.raise_on_retcon = RetconStateError("p_1")
+    response = client.post(
+        "/api/campaigns/c1/turns/t_1/retcon",
+        json={"post_id": "p_1", "new_text": "edit"},
+    )
+    assert response.status_code == 500
+    assert "unchanged" in response.json()["detail"]
 
 
 def test_retcon_post_in_flight_is_409(wire, client) -> None:

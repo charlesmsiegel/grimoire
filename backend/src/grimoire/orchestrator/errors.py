@@ -117,6 +117,41 @@ class RetconBatchClosedError(OrchestratorError):
         self.batch_id = batch_id
 
 
+class RetconExtractionError(OrchestratorError):
+    """Raised when re-extraction fails during a retcon.
+
+    Raised before any state is touched: the post text and the turn's deltas
+    are exactly as they were, so the caller can simply retry (#583).
+    """
+
+    http_status = 502
+
+    def __init__(self, post_id: str) -> None:
+        super().__init__(
+            f"retcon aborted: could not re-extract state changes for post {post_id!r}; "
+            "the post text and campaign state are unchanged"
+        )
+        self.post_id = post_id
+
+
+class RetconStateError(OrchestratorError):
+    """Raised when the atomic delta swap fails during a retcon.
+
+    The swap (reverse old turn deltas + apply re-extracted ones) is
+    all-or-nothing, so campaign state is exactly as it was before the
+    retcon; the post text edit has been rolled back as well (#583).
+    """
+
+    http_status = 500
+
+    def __init__(self, post_id: str) -> None:
+        super().__init__(
+            f"retcon aborted: could not replace the turn's state deltas for post "
+            f"{post_id!r}; campaign state was left unchanged"
+        )
+        self.post_id = post_id
+
+
 class CampaignIdExists(OrchestratorError):
     """Raised when a fork target campaign id already exists."""
 
@@ -154,7 +189,9 @@ __all__ = [
     "OrchestratorError",
     "RetconBatchClosedError",
     "RetconBatchNotFoundError",
+    "RetconExtractionError",
     "RetconInFlightError",
+    "RetconStateError",
     "SceneClosedError",
     "TurnAlreadyInProgressError",
     "TurnCancelledError",

@@ -9,7 +9,9 @@ from grimoire.event_bus import EventBus
 from grimoire.extractor.config import ExtractorConfig
 from grimoire.extractor.routing import route_deltas
 from grimoire.orchestrator.errors import (
+    RetconExtractionError,
     RetconInFlightError,
+    RetconStateError,
     UnknownCampaignError,
 )
 from grimoire.orchestrator.helpers import _pydantic_scene
@@ -116,6 +118,7 @@ class RetconCoordinator:
     async def _retcon_leave_as_is(self, post_id: PostId, new_text: str) -> RetconResult:
         scene_file, post = await self._scenes._find_post(post_id)
         original = post.body
+        warnings: list[str] = []
         downstream_targets: set[str] = set()
         if post.turn_id:
             try:
@@ -129,19 +132,19 @@ class RetconCoordinator:
                     if target:
                         downstream_targets.add(str(target))
             except Exception:
-                logger.debug("retcon: could not compute downstream targets", exc_info=True)
-
-        reversed_ids: list[str] = []
-        if post.turn_id:
-            try:
-                reversed_ids = await self._host._reverse_turn_deltas(
-                    scene_file.campaign_id, post.turn_id
+                logger.warning(
+                    "retcon: could not compute downstream targets for post %s (turn %s)",
+                    post_id,
+                    post.turn_id,
+                    exc_info=True,
                 )
-            except Exception as exc:
-                logger.warning("retcon: could not reverse deltas for %s: %s", post_id, exc)
-        await self._scenes.edit_post(post_id, new_text, source="retcon")
+                warnings.append(
+                    f"could not compute downstream targets for turn {post.turn_id}; "
+                    "downstream_flagged_turns may be incomplete"
+                )
 
-        new_delta_ids: list[str] = []
+        # Re-extract BEFORE touching any state: a failed extraction must leave
+        # the post text and the turn's deltas exactly as they were (#583).
         try:
             snapshot = StateSnapshot(
                 campaign_id=scene_file.campaign_id,
@@ -156,21 +159,55 @@ class RetconCoordinator:
                 player_pc_ref=post.author_pc_ref,
                 turn_id=post.turn_id,
             )
-            routing = route_deltas(list(result.deltas), config=self._extractor_config)
-            for delta in routing.auto_apply:
-                did = await self._store.apply_delta(
-                    delta=delta,
-                    source="retcon",
-                    turn_id=post.turn_id,
-                    campaign_id=scene_file.campaign_id,
+        except Exception as exc:
+            logger.warning("retcon: extractor failure on post %s: %s", post_id, exc)
+            raise RetconExtractionError(post_id) from exc
+        routing = route_deltas(list(result.deltas), config=self._extractor_config)
+
+        await self._scenes.edit_post(post_id, new_text, source="retcon")
+
+        # Swap the turn's deltas for the re-extracted ones as one atomic unit:
+        # either the old deltas are reversed and every replacement is applied,
+        # or the store rolls the whole swap back. On failure, restore the post
+        # text so the retcon as a whole is a no-op, then surface the error.
+        try:
+            swap = await self._store.swap_turn_deltas(
+                campaign_id=scene_file.campaign_id,
+                turn_id=post.turn_id or None,
+                deltas=list(routing.auto_apply),
+                source="retcon",
+            )
+        except Exception as exc:
+            logger.warning(
+                "retcon: delta swap failed for post %s (turn %s); state rolled back: %s",
+                post_id,
+                post.turn_id,
+                exc,
+            )
+            try:
+                await self._scenes.edit_post(post_id, original, source="retcon")
+            except Exception:
+                logger.exception(
+                    "retcon: could not restore original text of post %s after failed swap",
+                    post_id,
                 )
-                new_delta_ids.append(did)
-            for delta in routing.review:
+            raise RetconStateError(post_id) from exc
+        reversed_ids = [record.id for record in swap.rewound]
+        new_delta_ids = [record.id for record in swap.applied]
+
+        for delta in routing.review:
+            try:
                 await self._store.queue_for_review(
                     delta=delta, source="retcon", campaign_id=scene_file.campaign_id
                 )
-        except Exception as exc:
-            logger.warning("retcon: extractor failure on post %s: %s", post_id, exc)
+            except Exception as exc:
+                logger.warning(
+                    "retcon: queue_for_review failed (kind=%s post=%s): %s",
+                    delta.kind,
+                    post_id,
+                    exc,
+                )
+                warnings.append(f"a low-confidence delta (kind={delta.kind}) could not be queued")
 
         flagged: list[TurnId] = []
         if downstream_targets and post.turn_id:
@@ -189,7 +226,12 @@ class RetconCoordinator:
                         flagged.append(tid)
                         seen.add(tid)
             except Exception:
-                logger.debug("retcon: downstream flagging walk failed", exc_info=True)
+                logger.warning(
+                    "retcon: downstream flagging walk failed for post %s",
+                    post_id,
+                    exc_info=True,
+                )
+                warnings.append("downstream flagging walk failed; flagged turns may be incomplete")
 
         return RetconResult(
             post_id=post_id,
@@ -198,4 +240,5 @@ class RetconCoordinator:
             reversed_delta_ids=reversed_ids,
             new_delta_ids=new_delta_ids,
             downstream_flagged_turns=flagged,
+            warnings=warnings,
         )

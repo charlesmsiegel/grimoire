@@ -157,6 +157,9 @@ class RetconResult(BaseModel):
     reversed_delta_ids: list[str] = Field(default_factory=list)
     new_delta_ids: list[str] = Field(default_factory=list)
     downstream_flagged_turns: list[TurnId] = Field(default_factory=list)
+    # Non-fatal degradations (review-queue or downstream-flagging failures);
+    # fatal failures raise RetconExtractionError / RetconStateError instead.
+    warnings: list[str] = Field(default_factory=list)
     # Populated only on the replay path (per 2026-05-19-retcon-design):
     # ``replay_batch_id`` is non-None when the user opted to replay subsequent
     # posts; the rest fill in as the batch advances. The leave-as-is path
