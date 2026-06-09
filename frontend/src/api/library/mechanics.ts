@@ -1,29 +1,19 @@
+import { z } from "zod";
+
 import { ApiError, api } from "../client";
+import {
+  RegisteredMechanicsModuleSchema,
+  type RegisteredMechanicsModule,
+} from "../schemas/mechanics";
 import { request } from "./request";
 
 const API_BASE = "/api";
 
-export interface ModuleManifest {
-  id: string;
-  name: string;
-  version: string;
-  api_version: string;
-  author: string;
-  homepage: string;
-  description: string;
-  sheet_kinds: string[];
-  content_kinds: string[];
-  capabilities: string[];
-  ui: Record<string, unknown>;
-}
-
-export interface RegisteredModule {
-  manifest: ModuleManifest;
-  instance?: unknown;
-  theme_css?: string | null;
-  sheet_schemas?: Record<string, Record<string, unknown>>;
-  content_schemas?: Record<string, Record<string, unknown>>;
-}
+// Defined once as a Zod schema (used by the client's checkSchema drift check,
+// issue #599) and shared with `viewsApi.installedMechanics`, which reads the
+// same endpoint.
+export type { ModuleManifest } from "../schemas/mechanics";
+export type RegisteredModule = RegisteredMechanicsModule;
 
 export interface CreationStep {
   id: string;
@@ -60,7 +50,10 @@ export interface CreateModuleResponse {
 }
 
 export const mechanicsApi = {
-  listInstalled: () => request<RegisteredModule[]>("GET", `/mechanics/installed`),
+  listInstalled: () =>
+    request<RegisteredModule[]>("GET", `/mechanics/installed`, undefined, {
+      checkSchema: z.array(RegisteredMechanicsModuleSchema),
+    }),
   rescan: () => request<RescanReport | Record<string, unknown>>("POST", `/mechanics/rescan`),
   sheetSchema: (moduleId: string, kind: string) =>
     request<Record<string, unknown>>(

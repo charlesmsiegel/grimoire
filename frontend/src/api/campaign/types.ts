@@ -1,6 +1,21 @@
 import type { CreationStep } from "../library";
+import type { ApiAlternate, ApiPost, ApiScene, InGameTime } from "../schemas/scene";
 
 export type { CreationStep };
+
+// Scene/post/summary wire shapes are defined once as Zod schemas (used by the
+// client's checkSchema drift check, issue #599) and re-exported here.
+export type {
+  ApiAlternate,
+  ApiPost,
+  ApiScene,
+  InGameTime,
+  NarratorResponseMode,
+  PaginatedPostsResponse,
+  SceneDetail,
+} from "../schemas/scene";
+export type { CampaignSummary } from "../schemas/campaign";
+export type { PendingCastChange } from "../schemas/castChange";
 
 export interface PCEntry {
   character_ref: string;
@@ -10,36 +25,6 @@ export interface PCEntry {
   current_scene_id?: string | null;
   current_location_ref?: string | null;
   last_played_at?: string | null;
-}
-
-export interface ApiAlternate {
-  id: string;
-  post_id: string;
-  text: string;
-  delta_set_id: string;
-  author_kind: "pc" | "narrator" | "npc" | "system";
-  model?: string | null;
-  prompt_hash?: string | null;
-  steering_hint?: string | null;
-  tokens?: number | null;
-  pinned: boolean;
-  is_primary: boolean;
-  created_at?: string | null;
-}
-
-export interface ApiPost {
-  id: string;
-  scene_id: string;
-  order_in_scene: number;
-  author_kind: "pc" | "narrator" | "npc" | "system";
-  body: string;
-  is_player: boolean;
-  created_at: string;
-  turn_id: string;
-  author_pc_ref?: string | null;
-  author_npc_ref?: string | null;
-  alternates?: ApiAlternate[];
-  primary_alternate_id?: string | null;
 }
 
 export interface AlternateListResponse {
@@ -90,30 +75,6 @@ export interface ReplayBatchView {
   cancelled_at_post_id: string | null;
 }
 
-export type NarratorResponseMode = "all_at_once" | "per_character" | "per_character_multi_call";
-
-export interface ApiScene {
-  id: string;
-  campaign_id: string;
-  ordinal: number;
-  slug: string;
-  title: string;
-  location_ref: string | null;
-  in_game_start: { moment?: string | null } | null;
-  in_game_end: { moment?: string | null } | null;
-  present_character_refs: string[];
-  present_pc_refs: string[];
-  mood: string;
-  post_count: number;
-  closed: boolean;
-  last_advance_at_post: number | null;
-  running_summary: string;
-  summary: string;
-  threads_introduced?: { text: string }[];
-  threads_paid_off?: { text: string }[];
-  narrator_response_mode?: NarratorResponseMode | null;
-}
-
 export interface SceneAnalysisResult {
   summary: string;
   key_beats: string[];
@@ -129,17 +90,6 @@ export interface SceneAnalysisResult {
   }[];
 }
 
-export interface SceneDetail {
-  scene: ApiScene;
-  body: string;
-  posts: ApiPost[];
-}
-
-export interface PaginatedPostsResponse {
-  posts: ApiPost[];
-  has_more: boolean;
-}
-
 export interface SubmitTurnResult {
   accepted: boolean;
   turn_id?: string | null;
@@ -153,13 +103,6 @@ export interface AdvanceTurnResult {
   pending_posts: ApiPost[];
   turn_id?: string | null;
   note?: string;
-}
-
-export interface CampaignSummary {
-  id: string;
-  name: string;
-  description?: string | null;
-  mechanics_module?: string | null;
 }
 
 export interface OpenCommitment {
@@ -260,20 +203,6 @@ export interface SceneBreakSuggestedEvent {
 
 export type SceneBreakChoice = "continue" | "new_scene";
 
-export interface PendingCastChange {
-  id: string;
-  campaign_id: string;
-  scene_id: string;
-  character_ref: string;
-  change: "enter" | "leave";
-  is_pc: boolean;
-  evidence: string;
-  confidence: number;
-  turn_id: string | null;
-  status: string;
-  created_at: string;
-}
-
 export interface MissingSheet {
   kind: string;
   entity_id: string;
@@ -367,11 +296,6 @@ export interface LedgerEntry {
   status: "active" | "used" | "dismissed";
   created_at: string;
   used_in_scene_id: string | null;
-}
-
-export interface InGameTime {
-  moment: string;
-  calendar_id?: string | null;
 }
 
 export interface DurationLike {

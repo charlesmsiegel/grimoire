@@ -249,7 +249,13 @@ review smell. Grep before adding a `_parse_*` / `_slug*` / `_json*` / `_now*`.
 
 ### Frontend (TypeScript)
 
-- **Zod** for runtime validation of API responses
+- **Zod** for response-shape validation of list/grid-feeding endpoints: schemas live in
+  `api/schemas/` (the TS payload type is `z.infer`'d from the schema) and are passed via
+  the client's `checkSchema` option — dev-only `safeParse` + once-per-endpoint
+  `console.warn` on drift, raw payload returned either way, so drift never crashes a
+  play session. The strict `schema` option (`.parse`, throws, returns the transformed
+  output) is reserved for boundary parsers whose parsed form is consumed (e.g. sheet
+  schemas). Mutation responses and one-off reads use plain TS types (#599).
 - **Radix UI** primitives for accessible components (Dialog, DropdownMenu, Popover)
 - **React Router 7** for routing
 - **Strict TypeScript**: `strict: true`, `noUnusedLocals`, `noUnusedParameters`, `noUncheckedIndexedAccess`

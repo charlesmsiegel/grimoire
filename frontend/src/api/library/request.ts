@@ -5,6 +5,8 @@
  * refresh after mutations.
  */
 
+import type { ZodType } from "zod";
+
 import { ApiError, api } from "../client";
 
 export { ApiError };
@@ -39,6 +41,8 @@ export function clearLibraryCache(): void {
 
 export interface RequestOptions {
   cache?: boolean;
+  /** Observational response-shape check, forwarded to `api` (issue #599). */
+  checkSchema?: ZodType;
 }
 
 export async function request<T>(
@@ -56,7 +60,7 @@ export async function request<T>(
   let value: T;
   switch (method) {
     case "GET":
-      value = await api.get<T>(url);
+      value = await api.get<T>(url, { checkSchema: opts?.checkSchema });
       break;
     case "POST":
       value = await api.post<T>(url, body);

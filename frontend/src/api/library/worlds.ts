@@ -1,4 +1,13 @@
+import { z } from "zod";
+
+import { LibraryEntitySchema, type LibraryEntity } from "../schemas/libraryEntity";
+import { GreetingSchema, WorldMetaSchema, type Greeting, type WorldMeta } from "../schemas/world";
 import { request } from "./request";
+
+// Defined once as Zod schemas (used by the client's checkSchema drift check,
+// issue #599) and re-exported here so list payload types cannot drift.
+export type { Greeting, WorldMeta } from "../schemas/world";
+export type { LibraryEntity } from "../schemas/libraryEntity";
 
 export type EntityKind =
   | "character"
@@ -29,58 +38,10 @@ export const ENTITY_KIND_SINGULAR: Record<string, EntityKind> = {
   monsters: "monster",
 };
 
-export interface WorldMeta {
-  id: string;
-  name: string;
-  description: string;
-  tags: string[];
-  pc_role_tags: string[];
-  genre: string;
-  calendar: Record<string, unknown>;
-  calendar_ids: string[];
-  holiday_set_ids: string[];
-  display_calendar_id: string | null;
-  atmosphere: Record<string, unknown>;
-  defaults: Record<string, unknown>;
-  version: number;
-}
-
 export interface WorldSummary {
   counts: Record<string, number>;
   has_description: boolean;
   has_genre: boolean;
-}
-
-export interface LibraryEntity {
-  id: string;
-  world_id: string | null;
-  kind: EntityKind | string;
-  asset_id: string;
-  name: string;
-  path: string;
-  frontmatter: Record<string, unknown>;
-  body: string;
-  body_compressed: string | null;
-  tags: string[];
-  keywords: string[];
-  file_mtime: string | null;
-  content_hash: string;
-  indexed_at: string | null;
-  version: number;
-}
-
-export interface Greeting {
-  id: string;
-  world_id: string;
-  name: string;
-  starting_location: string | null;
-  starting_time: string | null;
-  present_characters: string[];
-  pov_character: string | null;
-  mood: string;
-  body: string;
-  tags: string[];
-  role_tags: string[];
 }
 
 export interface ReclassificationSuggestion {
@@ -164,7 +125,10 @@ export interface LibraryRescanReport {
 }
 
 export const libraryApi = {
-  listWorlds: () => request<WorldMeta[]>("GET", `/library/worlds`),
+  listWorlds: () =>
+    request<WorldMeta[]>("GET", `/library/worlds`, undefined, {
+      checkSchema: z.array(WorldMetaSchema),
+    }),
   rescanWorlds: () => request<LibraryRescanReport>("POST", `/library/worlds/rescan`),
   getWorld: (worldId: string) =>
     request<WorldMeta>("GET", `/library/worlds/${encodeURIComponent(worldId)}`),
@@ -187,6 +151,8 @@ export const libraryApi = {
     request<LibraryEntity[] | Greeting[]>(
       "GET",
       `/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}`,
+      undefined,
+      { checkSchema: z.array(z.union([LibraryEntitySchema, GreetingSchema])) },
     ),
   getEntity: (worldId: string, kindPlural: string, entityId: string) =>
     request<LibraryEntity | Greeting>(
@@ -255,9 +221,14 @@ export const libraryApi = {
     request<LibraryEntity[]>(
       "GET",
       `/library/variants/${kindPlural}/${encodeURIComponent(assetId)}`,
+      undefined,
+      { checkSchema: z.array(LibraryEntitySchema) },
     ),
 
-  listStyleGuides: () => request<LibraryEntity[]>("GET", `/library/style-guides`),
+  listStyleGuides: () =>
+    request<LibraryEntity[]>("GET", `/library/style-guides`, undefined, {
+      checkSchema: z.array(LibraryEntitySchema),
+    }),
   getStyleGuide: (id: string) =>
     request<LibraryEntity>("GET", `/library/style-guides/${encodeURIComponent(id)}`),
   getStyleGuideEdit: (id: string) =>
@@ -287,7 +258,10 @@ export const libraryApi = {
   deleteStyleGuide: (id: string) =>
     request<void>("DELETE", `/library/style-guides/${encodeURIComponent(id)}`),
 
-  listImagePresets: () => request<LibraryEntity[]>("GET", `/library/image-presets`),
+  listImagePresets: () =>
+    request<LibraryEntity[]>("GET", `/library/image-presets`, undefined, {
+      checkSchema: z.array(LibraryEntitySchema),
+    }),
   getImagePreset: (id: string) =>
     request<LibraryEntity>("GET", `/library/image-presets/${encodeURIComponent(id)}`),
   getImagePresetEdit: (id: string) =>
