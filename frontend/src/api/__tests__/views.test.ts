@@ -58,6 +58,26 @@ describe("viewsApi.getSheetSchema", () => {
     expect(schema.properties.attributes?.properties?.hidden).toEqual({});
   });
 
+  it("accepts a nullable object type array, normalizing it to 'object'", async () => {
+    // Draft 2020-12 allows `type: ["object", "null"]` and the backend
+    // metaschema check serves it; the boundary must not reject the sheet.
+    mockFetch({
+      type: ["object", "null"],
+      properties: { name: { widget: "text" } },
+    });
+
+    const schema = await viewsApi.getSheetSchema("vamp", "character");
+
+    expect(schema.type).toBe("object");
+    expect(schema.properties.name?.widget).toBe("text");
+  });
+
+  it("rejects a type declaration that does not admit objects", async () => {
+    mockFetch({ type: ["string", "null"], properties: {} });
+
+    await expect(viewsApi.getSheetSchema("vamp", "character")).rejects.toThrow();
+  });
+
   it("defaults missing properties to an empty record", async () => {
     mockFetch({ type: "object", title: "Empty" });
 

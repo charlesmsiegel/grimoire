@@ -28,7 +28,21 @@ const SchemaPropertySchema: z.ZodType = z.lazy(() =>
 );
 
 export const SheetSchemaSchema = z.looseObject({
-  type: z.literal("object").optional(),
+  // Draft 2020-12 `type` may be a simple-type string or an array of them
+  // (e.g. `["object", "null"]`), and the backend serves either. The renderer
+  // ignores `type`, so accept any object-admitting declaration and normalize
+  // it to the compile-time `type?: "object"`.
+  type: z
+    .union([
+      z.literal("object"),
+      z
+        .array(z.string())
+        .refine((types) => types.includes("object"), {
+          message: 'sheet schema "type" array must include "object"',
+        })
+        .transform(() => "object" as const),
+    ])
+    .optional(),
   title: z.string().optional(),
   properties: z.record(z.string(), SchemaPropertySchema).default({}),
   required: z.array(z.string()).optional(),
