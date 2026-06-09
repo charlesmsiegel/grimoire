@@ -238,7 +238,8 @@ review smell. Grep before adding a `_parse_*` / `_slug*` / `_json*` / `_now*`.
   parse is a bug, not a degradation.
 - **Write/mutation paths never catch-and-continue.** A failed multi-step write
   either compensates (file snapshot/restore, delta reversal — `write_library_file`
-  in `state_store/store.py` is the pattern) or raises. Applying half of a turn's
+  in `state_store/store.py` and `scene_files_transaction` in `scenes/storage.py`
+  are the pattern) or raises. Applying half of a turn's
   effects is worse than failing the turn (#583–#586). This applies to
   campaign/domain state; *best-effort diagnostic sinks* (audit trail, wire
   logging) stay non-fatal — they log their own failure and never fail the

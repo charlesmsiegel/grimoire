@@ -48,6 +48,7 @@ from grimoire.scenes.storage import (
     read_sidecar,
     read_sidecar_post_records,
     scene_basename,
+    scene_files_transaction,
     scene_paths,
     scenes_dir,
     slugify,
@@ -374,18 +375,27 @@ class SceneManager:
         self._records_hydrated.add(scene.id)
         return merged
 
-    def _write_sidecar(self, scene: Scene) -> None:
+    def _write_sidecar(
+        self,
+        scene: Scene,
+        records: dict[str, _PostRecord] | None = None,
+    ) -> None:
         """Persist ``scene`` and the in-memory post records together.
 
         Centralizing this keeps the sidecar's ``posts:`` block in sync — every
         mutation that writes the sidecar must include the live records.
+        Post mutations pass ``records`` explicitly (a staged copy) so the
+        in-memory cache can be committed only after both files are on disk
+        (#586).
         """
-        # Ensure the records are loaded from disk before overwriting, otherwise
-        # a sidecar-update-without-post-mutation (e.g., set_pov) would drop
-        # the persisted block on the floor.
-        self._hydrate_records(scene)
+        if records is None:
+            # Ensure the records are loaded from disk before overwriting,
+            # otherwise a sidecar-update-without-post-mutation (e.g., set_pov)
+            # would drop the persisted block on the floor.
+            self._hydrate_records(scene)
+            records = self._records_for(scene.id)
         _, yaml_path = self._scene_file_paths(scene)
-        write_sidecar(yaml_path, scene, post_records=self._records_for(scene.id))
+        write_sidecar(yaml_path, scene, post_records=records)
 
     # -- CRUD / read-only ------------------------------------------------
 
@@ -723,12 +733,7 @@ class SceneManager:
             else:
                 post = replace(post, scene_id=scene_id)
 
-            md_path, _ = self._scene_file_paths(scene)
-            append_post_to_body(
-                md_path,
-                post,
-                heading_pattern=self.config.files.post_heading_pattern,
-            )
+            md_path, yaml_path = self._scene_file_paths(scene)
 
             scene.post_count = post.order_in_scene
             if post.author_kind == AuthorKind.PC and post.author_pc_ref:
@@ -736,21 +741,31 @@ class SceneManager:
                     scene.present_pc_refs.append(post.author_pc_ref)
                 if post.author_pc_ref not in scene.present_character_refs:
                     scene.present_character_refs.append(post.author_pc_ref)
-                self._pc_current_scene[(scene.campaign_id, post.author_pc_ref)] = scene.id
             elif post.author_kind == AuthorKind.NPC and post.author_npc_ref:
                 if post.author_npc_ref not in scene.present_character_refs:
                     scene.present_character_refs.append(post.author_npc_ref)
 
-            # Update record cache before writing sidecar so the posts: block
-            # serializes the new entry.
-            self._hydrate_records(scene)
-            self._records_for(scene_id)[str(post.order_in_scene)] = _PostRecord(
+            # Stage the new record on a copy so the sidecar serializes it but
+            # the live cache only changes once both files are on disk (#586:
+            # files first, memory last).
+            records = dict(self._hydrate_records(scene))
+            records[str(post.order_in_scene)] = _PostRecord(
                 id=post.id,
                 turn_id=post.turn_id,
                 created_at=post.created_at,
                 is_player=post.is_player,
             )
-            self._write_sidecar(scene)
+            with scene_files_transaction(md_path, yaml_path):
+                append_post_to_body(
+                    md_path,
+                    post,
+                    heading_pattern=self.config.files.post_heading_pattern,
+                )
+                self._write_sidecar(scene, records=records)
+
+            self._post_records[scene_id] = records
+            if post.author_kind == AuthorKind.PC and post.author_pc_ref:
+                self._pc_current_scene[(scene.campaign_id, post.author_pc_ref)] = scene.id
             self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
 
             await self._emit(
@@ -1239,12 +1254,13 @@ class SceneManager:
                     updated.append(replace(existing, body=new_body))
                 else:
                     updated.append(existing)
-            md_path, _ = self._scene_file_paths(scene)
-            write_body(
-                md_path,
-                updated,
-                heading_pattern=self.config.files.post_heading_pattern,
-            )
+            md_path, yaml_path = self._scene_file_paths(scene)
+            with scene_files_transaction(md_path, yaml_path):
+                write_body(
+                    md_path,
+                    updated,
+                    heading_pattern=self.config.files.post_heading_pattern,
+                )
             self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
             await self._emit(
                 POST_EDITED,
@@ -1266,20 +1282,14 @@ class SceneManager:
                 if existing.order_in_scene > removed_order:
                     existing = replace(existing, order_in_scene=existing.order_in_scene - 1)
                 kept.append(existing)
-            md_path, _ = self._scene_file_paths(scene)
-            write_body(
-                md_path,
-                kept,
-                heading_pattern=self.config.files.post_heading_pattern,
-            )
+            md_path, yaml_path = self._scene_file_paths(scene)
             scene.post_count = len(kept)
             if scene.last_advance_at_post > scene.post_count:
                 scene.last_advance_at_post = scene.post_count
-            # Re-key record metadata for shifted posts.
-            self._hydrate_records(scene)
-            records = self._records_for(scene.id)
-            shifted = {}
-            for key, record in list(records.items()):
+            # Re-key record metadata for shifted posts on a staged copy; the
+            # live cache commits only after both files are on disk (#586).
+            shifted: dict[str, _PostRecord] = {}
+            for key, record in self._hydrate_records(scene).items():
                 order = int(key)
                 if order == removed_order:
                     continue
@@ -1287,8 +1297,14 @@ class SceneManager:
                     shifted[str(order - 1)] = record
                 else:
                     shifted[key] = record
+            with scene_files_transaction(md_path, yaml_path):
+                write_body(
+                    md_path,
+                    kept,
+                    heading_pattern=self.config.files.post_heading_pattern,
+                )
+                self._write_sidecar(scene, records=shifted)
             self._post_records[scene.id] = shifted
-            self._write_sidecar(scene)
             self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
             await self._emit(
                 POST_DELETED,
@@ -1312,12 +1328,7 @@ class SceneManager:
             cut = target.order_in_scene
             kept = [p for p in posts if p.order_in_scene < cut]
             removed = [p for p in posts if p.order_in_scene >= cut]
-            md_path, _ = self._scene_file_paths(scene)
-            write_body(
-                md_path,
-                kept,
-                heading_pattern=self.config.files.post_heading_pattern,
-            )
+            md_path, yaml_path = self._scene_file_paths(scene)
             scene.post_count = len(kept)
             # Roll the advance watermark back to the last surviving model
             # response. Merely clamping to post_count would leave PC inputs whose
@@ -1376,12 +1387,19 @@ class SceneManager:
                         scene.present_character_refs = [
                             ref for ref in scene.present_character_refs if ref not in drop
                         ]
-            self._hydrate_records(scene)
-            records = self._records_for(scene.id)
-            self._post_records[scene.id] = {
-                key: rec for key, rec in records.items() if int(key) < cut
+            # Drop removed records on a staged copy; the live cache commits
+            # only after both files are on disk (#586).
+            kept_records = {
+                key: rec for key, rec in self._hydrate_records(scene).items() if int(key) < cut
             }
-            self._write_sidecar(scene)
+            with scene_files_transaction(md_path, yaml_path):
+                write_body(
+                    md_path,
+                    kept,
+                    heading_pattern=self.config.files.post_heading_pattern,
+                )
+                self._write_sidecar(scene, records=kept_records)
+            self._post_records[scene.id] = kept_records
             self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
             for removed_post in removed:
                 await self._emit(

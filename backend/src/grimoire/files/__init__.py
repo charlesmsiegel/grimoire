@@ -4,6 +4,7 @@ Markdown + YAML frontmatter parsing, YAML-only loading, content hashing,
 and slug / scene filename generation. All file I/O is UTF-8.
 """
 
+from grimoire.files.atomic import atomic_write_text
 from grimoire.files.frontmatter import (
     FrontmatterError,
     ParsedDocument,
@@ -30,6 +31,7 @@ __all__ = [
     "FrontmatterError",
     "ParsedDocument",
     "YamlError",
+    "atomic_write_text",
     "content_hash",
     "dump_yaml",
     "load_yaml",

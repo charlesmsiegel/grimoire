@@ -12,20 +12,24 @@ reindex them. Helpers here are pure I/O — they don't update SQLite indexes.
 
 from __future__ import annotations
 
+import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
 import yaml
 
-from grimoire.files import load_yaml
+from grimoire.files import atomic_write_text, load_yaml
 from grimoire.files import slugify as _base_slugify
 
 # Canonical impl lives in :mod:`grimoire.files.hashing` and normalizes line
 # endings before hashing; re-exported here for the scenes module's callers.
 from grimoire.files.hashing import content_hash  # noqa: F401  (re-exported)
 from grimoire.scenes.types import Alternate, AuthorKind, Post, Scene
+
+logger = logging.getLogger(__name__)
 
 POST_HEADING_RE = re.compile(r"^##\s+Post\s+(\d+)\s+(?:—|--?)\s+(.+?)\s*$", re.MULTILINE)
 
@@ -347,12 +351,8 @@ def write_sidecar(path: Path, scene: Scene, *, post_records: dict | None = None)
     the scene) the per-post identity is persisted under a ``posts:`` block so
     ``id``/``turn_id``/``created_at``/``is_player`` survive process restart.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = _scene_to_yaml(scene, post_records=post_records)
-    path.write_text(
-        yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    atomic_write_text(path, yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 
 
 def read_sidecar(path: Path) -> Scene:
@@ -384,8 +384,7 @@ def write_body(
     *,
     heading_pattern: str = DEFAULT_POST_HEADING_PATTERN,
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_body(posts, heading_pattern), encoding="utf-8")
+    atomic_write_text(path, render_body(posts, heading_pattern))
 
 
 def append_post_to_body(
@@ -394,20 +393,49 @@ def append_post_to_body(
     *,
     heading_pattern: str = DEFAULT_POST_HEADING_PATTERN,
 ) -> None:
-    """Append a single post heading + body to the .md file without rewriting it."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Append a single post heading + body to the .md file.
+
+    Rewrites the file via write-then-rename rather than appending in place so
+    a failed write can't leave a torn body (#586); the produced bytes match
+    the historical append-mode output.
+    """
     heading_line = heading_pattern.format(
         order=post.order_in_scene,
         author=format_author_label(post),
     )
-    heading = f"{heading_line}\n\n"
-    body = post.body.rstrip() + "\n\n"
-    with path.open("a", encoding="utf-8") as fh:
-        if path.stat().st_size > 0:
-            # Ensure a blank line separator if file already has content.
-            fh.write("")
-        fh.write(heading)
-        fh.write(body)
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    atomic_write_text(path, f"{existing}{heading_line}\n\n{post.body.rstrip()}\n\n")
+
+
+@contextmanager
+def scene_files_transaction(md_path: Path, yaml_path: Path) -> Iterator[None]:
+    """Make a two-file scene mutation (``.md`` + sidecar) all-or-nothing.
+
+    One logical post mutation spans both files; this snapshots their bytes
+    (or absence) before yielding and, if the wrapped writes raise, restores
+    both so the pair is never left half-applied (#586). Callers must commit
+    in-memory caches only *after* the block succeeds — files first, memory
+    last.
+    """
+    snapshots = [
+        (path, path.read_bytes() if path.exists() else None) for path in (md_path, yaml_path)
+    ]
+    try:
+        yield
+    except BaseException:
+        for path, before in snapshots:
+            try:
+                if before is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_bytes(before)
+            except OSError:
+                logger.warning(
+                    "could not restore %s while rolling back a failed scene write",
+                    path,
+                    exc_info=True,
+                )
+        raise
 
 
 PostTuple = tuple[int, AuthorKind, str | None, str | None, str]

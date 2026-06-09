@@ -3,12 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from grimoire.scenes.storage import (
     next_ordinal,
     parse_body,
     read_sidecar,
     render_body,
     scene_basename,
+    scene_files_transaction,
     scene_paths,
     slugify,
     write_sidecar,
@@ -118,3 +121,37 @@ def test_render_body_trailing_newline() -> None:
     posts = [_make_post(1, AuthorKind.NARRATOR, "Just one post.")]
     body = render_body(posts)
     assert body.endswith("\n")
+
+
+def test_scene_files_transaction_restores_both_files_on_failure(tmp_path: Path) -> None:
+    md = tmp_path / "0001-scene.md"
+    yml = tmp_path / "0001-scene.yaml"
+    md.write_text("old md", encoding="utf-8")
+    yml.write_text("old yaml", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="boom"), scene_files_transaction(md, yml):
+        md.write_text("new md", encoding="utf-8")
+        yml.write_text("new yaml", encoding="utf-8")
+        raise RuntimeError("boom")
+    assert md.read_text(encoding="utf-8") == "old md"
+    assert yml.read_text(encoding="utf-8") == "old yaml"
+
+
+def test_scene_files_transaction_unlinks_files_created_inside(tmp_path: Path) -> None:
+    md = tmp_path / "0001-scene.md"
+    yml = tmp_path / "0001-scene.yaml"
+    with pytest.raises(RuntimeError), scene_files_transaction(md, yml):
+        md.write_text("new md", encoding="utf-8")
+        raise RuntimeError("boom")
+    assert not md.exists()
+    assert not yml.exists()
+
+
+def test_scene_files_transaction_keeps_changes_on_success(tmp_path: Path) -> None:
+    md = tmp_path / "0001-scene.md"
+    yml = tmp_path / "0001-scene.yaml"
+    md.write_text("old md", encoding="utf-8")
+    with scene_files_transaction(md, yml):
+        md.write_text("new md", encoding="utf-8")
+        yml.write_text("new yaml", encoding="utf-8")
+    assert md.read_text(encoding="utf-8") == "new md"
+    assert yml.read_text(encoding="utf-8") == "new yaml"
