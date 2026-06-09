@@ -28,6 +28,11 @@ const enc = encodeURIComponent;
 export const viewsApi = {
   listCharacters: (campaignId: string) =>
     api.get<ResolvedCharacter[]>(`/api/campaigns/${enc(campaignId)}/characters`),
+  /** Dramatis personae: PCs + emergent characters + library characters that
+   * have appeared in at least one scene. The full composition is
+   * `listCharacters`. */
+  listCast: (campaignId: string) =>
+    api.get<ResolvedCharacter[]>(`/api/campaigns/${enc(campaignId)}/cast`),
 
   listItems: (campaignId: string) =>
     api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/items`),
@@ -37,6 +42,8 @@ export const viewsApi = {
     api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/lore`),
   listFactions: (campaignId: string) =>
     api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/factions`),
+  listMonsters: (campaignId: string) =>
+    api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/monsters`),
 
   listScenes: (campaignId: string) =>
     api.get<SceneSummary[]>(`/api/campaigns/${enc(campaignId)}/scenes`),

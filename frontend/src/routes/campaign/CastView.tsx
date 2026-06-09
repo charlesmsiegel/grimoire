@@ -1,7 +1,9 @@
 /**
  * Cast view (spec 14 §Cast view).
  *
- * Grid of resolved characters with filters by source and role plus a detail
+ * The dramatis personae: PCs and emergent characters always, plus library
+ * characters once they have appeared in a scene. The full resolved
+ * composition lives in World → Characters. Each cast member gets a detail
  * panel showing resolved card, source chain, voice anchor with samples, and
  * mechanical sheet rendered through the widget library.
  */
@@ -25,7 +27,7 @@ type SourceFilter = "all" | "library" | "emergent" | "override";
 
 export function CastView() {
   const { campaignId = "" } = useParams();
-  const state = useApi(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
+  const state = useApi(useCallback(() => viewsApi.listCast(campaignId), [campaignId]));
   const composition = useApi(useCallback(() => viewsApi.getComposition(campaignId), [campaignId]));
   const pcState = useApi(useCallback(() => campaignApi.listPCs(campaignId), [campaignId]));
   const moduleId = composition.status === "ok" ? composition.data.mechanics : null;
@@ -72,7 +74,10 @@ export function CastView() {
       <header className="route-header">
         <h2 id="cast-heading">Cast</h2>
       </header>
-      <Loading state={state} emptyMessage="No characters resolved for this campaign yet.">
+      <Loading
+        state={state}
+        emptyMessage="No cast yet. PCs and emergent characters join automatically; library characters join once they appear in a scene."
+      >
         {(rows) => {
           const roles = collectRoles(rows);
           const filtered = applyFilters(rows, sourceFilter, roleFilter, tagFilter, searchFilter);

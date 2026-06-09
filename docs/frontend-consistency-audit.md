@@ -156,6 +156,18 @@ Make "a world's contents" one component family, parameterized by scope:
    truthful and emergent content is visible outside Cast.
 5. **URL-addressable tabs** in both scopes.
 
+> **Decision (2026-06-09):** Cast stays a separate view but becomes the true
+> dramatis personae — PCs and emergent characters always, plus library
+> characters once they appear in at least one scene's declared or present cast
+> (derived from scene sidecars; no new bookkeeping). The campaign World view
+> gains Characters and Monsters tabs showing the full resolved composition.
+> First slice implemented on this branch: `GET /api/campaigns/{id}/cast`
+> (`api/campaigns/entities.py`), Cast view reads it, and the campaign World
+> view gained Characters (default) and Monsters tabs with an "In cast"
+> cross-link into the Cast detail. Still open from this section:
+> cascade-truthful list endpoints (§3), the shared `EntityBrowser`, a campaign
+> greetings endpoint (§2), and override-editing parity (§4).
+
 ---
 
 ## Part II — Cross-cutting UI inconsistencies
@@ -387,7 +399,7 @@ shippable.
 
 **Phase 0 — Quick wins (no design decisions, hours each)**
 1. Add `viewsApi.listMonsters` + Monsters tab in campaign `WorldView` (backend is
-   ready). *(frontend only)*
+   ready). *(frontend only)* ✔ *Done — landed with the Cast decision (§5 note).*
 2. Sync campaign World tab selection to the URL (`?tab=` or subroutes, matching
    library's URL-per-kind).
 3. Export one `errorMessage` from `api/client.ts`; delete 9 copies. Unify `slugify`
@@ -423,9 +435,10 @@ shippable.
     agrees) generalize the override PATCH beyond characters.
 13. Frontend: extract `EntityBrowser` from `EntityListView` + `WorldView` with
     scope-driven affordances (edit/delete/convert in library; chain/override/promote in
-    campaign); add Characters and Monsters tabs to the campaign World view; wire the
-    existing generic promote endpoint; replace the raw-JSON override dialog with the
-    descriptor-driven `EntityForm` in patch mode.
+    campaign); wire the existing generic promote endpoint; replace the raw-JSON
+    override dialog with the descriptor-driven `EntityForm` in patch mode.
+    *(Characters + Monsters tabs and the appeared-only Cast endpoint already
+    landed — §5 decision note.)*
 
 **Phase 4 — CSS consolidation**
 14. Introduce `.card` / `.chip` / `.grid-cards` / `.empty` / one form-row primitive;

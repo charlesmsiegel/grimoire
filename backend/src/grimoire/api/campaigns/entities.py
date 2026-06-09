@@ -6,8 +6,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from grimoire.api.deps import CharactersDep, MechanicsDep, WorldDep
+from grimoire.api.deps import CharactersDep, MechanicsDep, ScenesDep, WorldDep
 from grimoire.api.util import map_lookup_errors, to_payload
+from grimoire.util import canonicalize_character_ref
 
 from .helpers import _list_kind
 from .schemas import (
@@ -26,6 +27,50 @@ async def list_characters(campaign_id: str, characters: CharactersDep) -> Any:
         return to_payload(await characters.list_for_campaign(campaign_id))
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
+
+
+@router.get("/{campaign_id}/cast")
+async def list_cast(campaign_id: str, characters: CharactersDep, scenes: ScenesDep) -> Any:
+    """Dramatis personae: the resolved characters that are part of play.
+
+    A character is in the cast when it is a PC, is emergent (campaign-local
+    characters only exist because play created them), or has appeared in at
+    least one scene's declared or present cast. Library characters no scene
+    has touched belong to the World → Characters view instead.
+    """
+    try:
+        rows = await characters.list_for_campaign(campaign_id)
+        pcs = await characters.list_pcs(campaign_id)
+        scene_rows = await scenes.list_scenes(campaign_id)
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+    in_play = _in_play_refs(pcs, scene_rows)
+    return to_payload([row for row in rows if _in_cast(row, in_play)])
+
+
+def _in_play_refs(pcs: Any, scene_rows: Any) -> set[str]:
+    """Canonical refs that count as "in play": every PC plus every ref any
+    scene declared or marked present. Spellings are normalized so membership
+    checks line up regardless of how the ref was stored (#464, #517).
+    """
+    refs: set[str] = set()
+    for entry in pcs:
+        # The service returns ``PCEntry`` models; the raw store (and test
+        # fakes) return dict rows.
+        ref = entry["character_ref"] if isinstance(entry, dict) else entry.character_ref
+        refs.add(canonicalize_character_ref(ref))
+    for scene in scene_rows:
+        declared = scene.declared_character_refs or []
+        for ref in [*scene.present_character_refs, *scene.present_pc_refs, *declared]:
+            refs.add(canonicalize_character_ref(ref))
+    return refs
+
+
+def _in_cast(row: Any, in_play: set[str]) -> bool:
+    char = row.character
+    if not char.world_id:
+        return True
+    return f"library:worlds/{char.world_id}/characters/{char.id}" in in_play
 
 
 @router.get("/{campaign_id}/items")
