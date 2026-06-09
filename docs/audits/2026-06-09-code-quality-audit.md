@@ -36,19 +36,26 @@ repo's own CLAUDE.md already names as a review smell.
 `try/except Exception` that only logs a warning. If extraction or re-application fails, the old deltas
 are gone, no new ones replace them, and the API call still returns success. Net effect: a retcon with a
 flaky LLM call silently rolls back world state without telling anyone.
-**Fix:** treat extraction failure as fatal for the retcon — restore the reversed deltas (or stage the
-reversal and commit only after re-extraction succeeds) and surface the error.
+**Fix:** treat extraction failure as fatal for the retcon — stage the reversal and commit only after
+re-extraction succeeds — and surface the error. *(Refined after PR review: the remedy must cover
+partials, not just all-or-nothing — `_reverse_turn_deltas` swallows per-delta reversal failures and
+the retcon call site passes no `failed_out`, and the retcon's apply loop can apply a subset of new
+deltas before the outer catch fires. The plan needs atomic unwind of partial new applications and
+must surface partially-failed reversals.)*
 
 ### 1.2 ✅ High — Pre-roll resumption has no atomicity and loses the pending pre-roll on failure
 `orchestrator/service.py:1976-1986` — `resolve_pre_roll` sets `state.pending_pre_roll = None` *before*
 the `try`, then awaits `_continue_turn_after_pre_roll` (a 184-line pipeline that streams, extracts, and
 applies deltas). If the pipeline raises midway: the pre-roll is unrecoverable (cleared), any
 already-applied deltas stay applied, and the lock is released (correctly — but into a half-applied
-turn). There is no compensation/rollback concept for a failed turn pipeline anywhere in the turn loop;
-the same gap exists at `service.py:1468-1519` where `inventory.apply_from_deltas` failure after
-`apply_routing` success just logs (`"inventory apply failed; continuing turn"`).
-**Fix:** make the post-extraction apply phase all-or-nothing (the delta log already supports reversal —
-use it as the compensation mechanism), and don't clear `pending_pre_roll` until the pipeline commits.
+turn). *(Corrected after PR review: batch-level compensation does exist — `delta_applier.py:201-254`
+LIFO-reverses every applied delta id when a later delta in the same auto-apply batch fails, then
+re-raises — so the gap is cross-stage, not total.)* The cross-stage gap is concrete at
+`service.py:1468-1519`: `inventory.apply_from_deltas` failure *after* the batch committed just logs
+(`"inventory apply failed; continuing turn"`).
+**Fix:** extend the existing batch unwind across stages rather than building a parallel mechanism —
+reverse the committed batch when a later stage fails, and don't clear `pending_pre_roll` until the
+pipeline commits.
 
 ### 1.3 ✅ High — Eight StateStore write methods can leave file and index/delta-log diverged
 `state_store/store.py:369-754` — `write_override`, `merge_override`, `delete_override`,
@@ -92,10 +99,13 @@ a counter/metric; write/mutation paths must not catch-and-continue.* The 47 `# p
 defensive` blocks (largely in time_engine) should each get either a test that triggers them or a
 narrower exception type.
 
-### 1.6 Medium — Concurrent read-merge-write on relationships
-`characters/service.py:847-920` — `update_relationship` fetches, merges in memory, upserts; two
-concurrent updates lose one delta (no version column, no per-ref lock). Low likelihood single-user,
-but the orchestrator's background jobs make it reachable.
+### 1.6 Latent (downgraded after PR review) — Concurrent read-merge-write on relationships
+`characters/service.py:835-920` — `update_relationship` fetches, merges in memory, upserts; two
+concurrent calls would lose one update (no version column, no per-ref lock). *(Corrected: the
+original "orchestrator's background jobs make it reachable" was unsupported — the method has **no
+production caller** (definition + tests only), so this is a latent hazard on unused public API,
+not a current correctness risk. Decide: delete the method, or fix the read-merge-write before
+wiring a caller.)*
 
 ---
 
@@ -138,12 +148,14 @@ multi-table writes).
 ### 2.4 Bundled export adapters bypass the read cascade *(re-scoped after PR review)*
 The service-side path is fine: `ExportService.preview()` → `export/snapshot.py:build_snapshot()`
 reads through injected service-backed Sources — the original text wrongly implicated
-`export/sources.py`. The actual bypass is `export/data.py:load_fs_snapshot()`, called by **three
+`export/sources.py`. The actual bypass is `export/data.py:load_fs_snapshot()`, called by **all five
 bundled adapters** (`export-markdown/plugin.py:177`, `export-html/plugin.py:116`,
-`export-single-markdown/plugin.py:67`): it constructs `data_root / "campaigns" / id / ...` paths and
+`export-single-markdown/plugin.py:67`, `export-transcript/plugin.py:68`,
+`export-json/plugin.py:157` — round one of corrections under-counted three because of a truncated
+grep): it constructs `data_root / "campaigns" / id / ...` paths and
 reads emergent/override frontmatter raw, so override cards are exported standalone — never
 cascade-merged onto their library base (library content is referenced by id only) — and a
-campaigns-layout change breaks those three adapters. Related: `export/service.py:155` hardcodes
+campaigns-layout change breaks every adapter. Related: `export/service.py:155` hardcodes
 adapter knowledge in the service (`bytes_per_word = 8 if adapter.id == "epub" else 6`) — sizing belongs
 on the adapter Protocol.
 
@@ -236,8 +248,10 @@ false positives (Protocol params, re-exports). What survives verification:
 - `orchestrator/service.py:134-151` — `_NullAutoDisable` is the permanent production default: a real
   implementation exists (`extractor/auto_disable.py:AutoDisableState`, fully unit-tested) but no
   production composition constructs it — bootstrap never passes `auto_disable=`. Decide: wire it or
-  remove the seam. Also `orchestrator/config.py:78` — `per_campaign_concurrency: int = 1` is defined
-  and **never read** by any code.
+  remove the seam. Also never-read config fields in `orchestrator/config.py` *(list extended after
+  PR review)*: `per_campaign_concurrency` (:78), `MultiPCConfig.advance_required` (:40),
+  `BackgroundWorkConfig.npc_tick_after_each_turn` (:46), `OrchestratorConfig.stream_response` (:80 —
+  the `stream_response=` at `service.py:346` is the unrelated AlternatesManager callback).
 - `world/calendars/holidays_seed.py` (849 lines) — ~25 holiday sets built eagerly at import; only
   reachable via two lookup functions. Cold data inline; fine to keep, better as lazy data files.
 
@@ -261,9 +275,11 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
 5. **Turn pipeline ×2** — `orchestrator/service.py:1404-1476` vs `1616-1642`
    (`_continue_turn_after_pre_roll` vs `_run_speaker_loop`): extract → resolve cast changes →
    apply-routing implemented twice. This is the duplication most likely to cause a real bug.
-6. ✅ **Inline `_Gateway` Protocol ×4** — `scenes/default_summarizers.py:27` (+ second copy at 176 via
-   the analyzer) and `scenes/analysis.py:42` + `analysis.py:53`, where `_AdaptiveGateway` is
-   *character-identical* to `_Gateway` ten lines above it. One shared `GatewayLike` protocol.
+6. **Inline `_Gateway` Protocol ×4** — `scenes/default_summarizers.py:27` (+ second copy at 176)
+   and `scenes/analysis.py:42` + `analysis.py:53`. *(Corrected after PR review: `_AdaptiveGateway`
+   is not identical — it additionally requires `resolve_route()` and `get_model_info()`.)*
+   Consolidate the shared `complete()` surface into one base protocol, with an extended adaptive
+   protocol inheriting it — don't collapse all four onto a minimal `GatewayLike`.
 7. ✅ **ID generation drift** — `util.new_id("prefix")` is the convention, but 13+ sites use raw
    `uuid.uuid4()`: worse, post/turn IDs are dashed in `scenes/manager.py:1653` (`str(uuid4())`) and
    dashless in `scenes/importer.py:169` (`uuid4().hex`) — two formats for the same field.
@@ -343,7 +359,7 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
 | P0 | 1.1 retcon delta restore; 1.2 pre-roll/turn-pipeline compensation | small / medium |
 | P0 | 1.5 error-handling policy on the five listed silent paths (watcher, list_pcs, archive, npc tick, imagegen config) — inventory rebuild already fixed (#553) | medium, mechanical |
 | 1 | 1.3 + 1.4 file/index write-ordering: shared snapshot-restore + two-file-commit helpers | small |
-| 2 | Convention convergence batch (one PR each, zero risk): §5.1-5.3 JSON helpers, §5.6 shared `_Gateway`, §5.7 `new_id`, §5.8 `yaml_io`, §2.5 `map_lookup_errors`, §4 dead-code deletions | small × 6 |
+| 2 | Convention convergence batch (one PR each, behavior-preserving *except as flagged*): §5.1-5.3 JSON helpers, §5.6 shared `_Gateway`, §5.8 `yaml_io`, §2.5 `map_lookup_errors`, §4 dead-code deletions. §5.7 `new_id` is **not** zero-risk — post/turn id formats are persisted and API-visible (#522's care notes apply); needs compat review + tests | small × 6 |
 | 3 | §2.1/2.2 OrchestratorHost Protocol + StateStore methods for fork/auxiliary SQL | medium |
 | 4 | §5.5 unify turn pipeline (then the OrchestratorService split falls out) | medium |
 | 5 | Frontend Zod ratchet + dialog component + PostItem split | medium |
@@ -374,9 +390,18 @@ characterization test first (pin current behavior, then fix).
 > corrected in place — `_SHEET_KIND_DEFAULT`, the drift fields, `retry_on_parse_failure`, and the
 > classifier fallback are live (struck from §4); the preview cache is bounded + tested (§2.5); the
 > store JSON helper does pass `default=str` (§5.2); the frontend `cancelled` flags do prevent
-> stale-state races (§7.4); and §2.4 was re-scoped from `sources.py` to the three bundled adapters
+> stale-state races (§7.4); and §2.4 was re-scoped from `sources.py` to the bundled adapters
 > that call `load_fs_snapshot`. Issues #591–#593 updated to match. Method lesson: dead-code and
 > divergence claims need a call-site grep *and* a test-suite grep before they're "verified".
+>
+> **Post-review corrections, round 2** (the re-review went 7-for-7): §2.4's adapter count restored
+> to **all five** — `export-json`/`export-transcript` had been dropped by a `| head`-truncated grep
+> in round 1; §1.2 now credits the existing `delta_applier.py:201-254` batch unwind (the gap is
+> cross-stage, not "no compensation anywhere"); §1.1's remedy extended to partial reversal/partial
+> apply; §1.6 downgraded to *latent* (`update_relationship` has no production caller); three more
+> never-read `orchestrator/config.py` fields added to §4; §5.6's "character-identical" claim fixed
+> (`_AdaptiveGateway` extends the contract); §9's "zero risk" label removed from the id-convergence
+> item. #583, #584, #588, #591, #593 updated to match.
 
 Checked 2026-06-09 against all 45 open issues plus targeted closed-issue searches. The repo has
 already run three audit passes (orchestrator simplification audit → #518–#523; code-quality /
