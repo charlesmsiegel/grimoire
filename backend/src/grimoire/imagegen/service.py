@@ -1249,6 +1249,7 @@ class ImageGenService:
                     {
                         "image_id": existing_image_id,
                         "campaign_id": job.campaign_id,
+                        "prompt": request.prompt,
                         "cached": True,
                         "cost_usd": 0.0,
                         "model": "",
@@ -1326,6 +1327,7 @@ class ImageGenService:
                 "campaign_id": job.campaign_id,
                 "scene_id": job.scene_id,
                 "post_id": job.post_id,
+                "prompt": request.prompt,
                 "cached": False,
                 "cost_usd": result.cost_usd,
                 "model": result.model,

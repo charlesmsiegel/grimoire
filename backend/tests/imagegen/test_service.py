@@ -198,9 +198,11 @@ async def test_generate_sync_random_seed_skips_cache(service) -> None:
 async def test_queue_generation_writes_files_and_index(service, tmp_path: Path) -> None:
     svc, bus = service
     events: list[str] = []
+    ready_payloads: list[dict] = []
     bus.subscribe("imagegen_job_queued", lambda ev: events.append(ev.type))
     bus.subscribe("imagegen_job_started", lambda ev: events.append(ev.type))
     bus.subscribe("image_ready", lambda ev: events.append(ev.type))
+    bus.subscribe("image_ready", lambda ev: ready_payloads.append(dict(ev.payload)))
 
     job_id = await svc.queue_generation(
         campaign_id="camp-1",
@@ -235,6 +237,9 @@ async def test_queue_generation_writes_files_and_index(service, tmp_path: Path) 
     assert "imagegen_job_queued" in events
     assert "imagegen_job_started" in events
     assert "image_ready" in events
+    # The event carries the generation prompt so clients can use it as the
+    # image's accessible name (frontend alt text).
+    assert [p.get("prompt") for p in ready_payloads] == ["scene shot"]
 
 
 async def test_queue_generation_cache_hit_skips_re_render(service) -> None:
@@ -247,8 +252,8 @@ async def test_queue_generation_cache_hit_skips_re_render(service) -> None:
     )
     await _wait_done(svc, "camp-1", job1)
 
-    cached_flags: list[bool] = []
-    bus.subscribe("image_ready", lambda ev: cached_flags.append(bool(ev.payload.get("cached"))))
+    ready_payloads: list[dict] = []
+    bus.subscribe("image_ready", lambda ev: ready_payloads.append(dict(ev.payload)))
 
     job2 = await svc.queue_generation(
         campaign_id="camp-1",
@@ -261,7 +266,10 @@ async def test_queue_generation_cache_hit_skips_re_render(service) -> None:
     images = await svc.list_images("camp-1")
     # Only one image row — the second job reused the cached image.
     assert len(images) == 1
-    assert any(cached_flags), "expected at least one image_ready with cached=True"
+    cached = [p for p in ready_payloads if p.get("cached")]
+    assert cached, "expected at least one image_ready with cached=True"
+    # The cached-hit event carries the prompt too (used as frontend alt text).
+    assert all(p.get("prompt") == "dup" for p in cached)
 
 
 async def test_cancel_queued_job_skips_generation(service) -> None:
