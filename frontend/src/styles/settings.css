@@ -1,0 +1,110 @@
+/* ======================================================}
+
+   Worlds tabs
+   ============================================================= */
+
+.tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: var(--space-4);
+}
+
+.tab-panel {
+  padding: var(--space-3) 0;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 56rem;
+}
+
+.settings-form fieldset {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  background: var(--bg-elev);
+}
+
+.settings-form legend {
+  font-family: var(--font-display);
+  font-weight: 600;
+  padding: 0 var(--space-2);
+  color: var(--fg-strong);
+}
+
+.routing-table {
+  border-collapse: collapse;
+  width: 100%;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.routing-table th,
+.routing-table td {
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+
+.routing-table tr:last-child td {
+  border-bottom: none;
+}
+
+.routing-table th {
+  background: var(--bg-sunken);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+}
+
+.routing-table select {
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.3rem 0.5rem;
+}
+
+.provider-section {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--bg-elev);
+}
+
+.provider-section h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.provider-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.provider-list li {
+  background: var(--bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+}
+
+.provider-list li.has-error {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}

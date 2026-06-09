@@ -1,0 +1,363 @@
+/* ======================================================}
+
+   Grimoire — Refined Grimoire design system
+   Local-first RPG companion. Warm parchment palette, modern
+   spacing, serif display + sans body, soft layered shadows.
+   ============================================================= */
+
+/* ----- Tokens (shared) ----- */
+
+:root {
+  --font-display:
+    "Iowan Old Style", "Palatino Linotype", "Source Serif Pro", "Cambria", Georgia, serif;
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  --transition-fast: 120ms cubic-bezier(0.2, 0, 0.2, 1);
+  --transition-base: 200ms cubic-bezier(0.2, 0, 0.2, 1);
+
+  --nav-width: 17rem;
+
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-worlds: "kern", "liga", "calt";
+}
+
+/* ----- Light (parchment) ----- */
+
+:root[data-theme="light"],
+:root:not([data-theme="dark"]) {
+  --bg: #f7f2e6;
+  --bg-elev: #fffcf3;
+  --bg-elev-2: #fffdf8;
+  --bg-sunken: #ede4cf;
+  --bg-tint: rgba(132, 44, 29, 0.04);
+  --fg: #1c1610;
+  --fg-strong: #0e0a05;
+  --fg-muted: #6b5b46;
+  --fg-subtle: #94856f;
+  --border: #dccfb3;
+  --border-strong: #c5b58f;
+  --border-subtle: #e7dcc5;
+  --accent: #862e1d;
+  --accent-hover: #a03722;
+  --accent-press: #6e2517;
+  --accent-soft: rgba(134, 46, 29, 0.1);
+  --accent-soft-hover: rgba(134, 46, 29, 0.16);
+  --accent-fg: #fbf6e9;
+  --gold: #a87a3d;
+  --warn: #a25500;
+  --warn-soft: rgba(162, 85, 0, 0.12);
+  --danger: #ab2f17;
+  --danger-soft: rgba(171, 47, 23, 0.12);
+  --ok: #436f23;
+  --ok-soft: rgba(67, 111, 35, 0.12);
+
+  --shadow-xs: 0 1px 2px rgba(50, 30, 10, 0.06);
+  --shadow-sm: 0 2px 5px rgba(50, 30, 10, 0.07), 0 1px 2px rgba(50, 30, 10, 0.05);
+  --shadow-md: 0 8px 22px rgba(50, 30, 10, 0.1), 0 2px 6px rgba(50, 30, 10, 0.05);
+  --shadow-lg: 0 22px 48px rgba(50, 30, 10, 0.14), 0 8px 16px rgba(50, 30, 10, 0.08);
+
+  --focus-ring: 0 0 0 3px rgba(134, 46, 29, 0.3);
+
+  color-scheme: light;
+}
+
+/* ----- Dark (deep grimoire) ----- */
+
+:root[data-theme="dark"] {
+  --bg: #14110a;
+  --bg-elev: #1d1810;
+  --bg-elev-2: #251f15;
+  --bg-sunken: #0e0b06;
+  --bg-tint: rgba(226, 178, 113, 0.04);
+  --fg: #ecdfc4;
+  --fg-strong: #faf2dc;
+  --fg-muted: #a4957b;
+  --fg-subtle: #786c58;
+  --border: #3a3022;
+  --border-strong: #564731;
+  --border-subtle: #2a2317;
+  --accent: #e2b271;
+  --accent-hover: #f0c587;
+  --accent-press: #c79a5e;
+  --accent-soft: rgba(226, 178, 113, 0.12);
+  --accent-soft-hover: rgba(226, 178, 113, 0.2);
+  --accent-fg: #1a1107;
+  --gold: #d49b6a;
+  --warn: #f0b14b;
+  --warn-soft: rgba(240, 177, 75, 0.14);
+  --danger: #ff7a5e;
+  --danger-soft: rgba(255, 122, 94, 0.14);
+  --ok: #8fc890;
+  --ok-soft: rgba(143, 200, 144, 0.14);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 10px 26px rgba(0, 0, 0, 0.45), 0 4px 10px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 24px 56px rgba(0, 0, 0, 0.55), 0 10px 20px rgba(0, 0, 0, 0.35);
+
+  --focus-ring: 0 0 0 3px rgba(226, 178, 113, 0.32);
+
+  color-scheme: dark;
+}
+
+/* ----- Font family override (§17 Appearance) ----- */
+
+:root[data-font="serif"] {
+  font-family: var(--font-display);
+}
+
+:root[data-font="dyslexia"] {
+  /* "OpenDyslexic" is the canonical free option; fall through to a wide,
+     plain sans for systems that don't have it installed. The browser ignores
+     unknown font names so this is safe even when the font isn't shipped. */
+  font-family:
+    "OpenDyslexic",
+    "Comic Sans MS",
+    "Trebuchet MS",
+    "Verdana",
+    -apple-system,
+    BlinkMacSystemFont,
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.01em;
+}
+
+/* ----- Density (§17 Appearance) ----- */
+
+:root[data-density="compact"] {
+  --space-1: 0.125rem;
+  --space-2: 0.25rem;
+  --space-3: 0.5rem;
+  --space-4: 0.75rem;
+  --space-5: 0.875rem;
+  --space-6: 1rem;
+  --space-8: 1.25rem;
+  --space-10: 1.5rem;
+  --space-12: 2rem;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* ----- Reset & base ----- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  background-image:
+    radial-gradient(circle at 20% 0%, var(--bg-tint), transparent 55%),
+    radial-gradient(circle at 90% 100%, var(--bg-tint), transparent 50%);
+  background-attachment: fixed;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--fg-strong);
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+h2 {
+  font-size: 1.4rem;
+}
+h3 {
+  font-size: 1.15rem;
+}
+h4 {
+  font-size: 1rem;
+}
+
+p {
+  margin: 0 0 var(--space-3);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+a:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: var(--space-4) 0;
+}
+
+::selection {
+  background: var(--accent-soft-hover);
+  color: var(--fg-strong);
+}
+
+/* Scrollbar polish */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+
+/* ----- Form controls ----- */
+
+button {
+  font: inherit;
+  font-weight: 500;
+  color: var(--fg);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.85rem;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-elev-2);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--accent);
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.65rem;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--fg-subtle);
+}
+
+input:hover:not(:focus):not(:disabled),
+textarea:hover:not(:focus):not(:disabled),
+select:hover:not(:focus):not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+textarea {
+  font-family: var(--font-sans);
+  line-height: 1.55;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: var(--space-3);
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  z-index: 100;
+  box-shadow: var(--shadow-md);
+  font-weight: 500;
+}
+
+.skip-link:focus {
+  top: var(--space-3);
+}
