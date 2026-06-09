@@ -3,6 +3,7 @@ import { type Dispatch, type MutableRefObject, useCallback } from "react";
 import type { ApiPost } from "../../api/campaign";
 import { campaignApi } from "../../api/campaign";
 import { setPcExpression } from "../../api/expressions";
+import { fileUrl } from "../../api/files";
 import { useCampaignEvent } from "../../state/useCampaignEvent";
 import type { WSMessage } from "../../ws/client";
 import type { PlayAction, PlayState } from "./playReducer";
@@ -158,7 +159,11 @@ export function usePlayStreamEvents(
           return;
         case "image_ready": {
           const id = typeof message.image_id === "string" ? message.image_id : null;
-          const url = typeof message.url === "string" ? message.url : null;
+          // The built-in service emits a data-root-relative `file_path`
+          // rather than a ready-made `url`; derive one from it (#582).
+          const explicitUrl = typeof message.url === "string" ? message.url : null;
+          const filePath = typeof message.file_path === "string" ? message.file_path : null;
+          const url = explicitUrl ?? (filePath ? fileUrl(filePath) : null);
           const post_id = typeof message.post_id === "string" ? message.post_id : undefined;
           const prompt = typeof message.prompt === "string" ? message.prompt : undefined;
           if (id && url) {

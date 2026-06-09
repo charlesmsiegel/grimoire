@@ -1243,20 +1243,34 @@ class ImageGenService:
             if existing_image_id and not existing_image_id.startswith("_inline_"):
                 if job.status == JobStatus.CANCELLED:
                     return cached
-                self._image_ids_by_job[job.id] = existing_image_id
-                await self._emit(
-                    events.IMAGE_READY,
-                    {
-                        "image_id": existing_image_id,
-                        "campaign_id": job.campaign_id,
-                        "prompt": request.prompt,
-                        "cached": True,
-                        "cost_usd": 0.0,
-                        "model": "",
-                        "backend": "",
-                    },
-                )
-                return cached
+                try:
+                    meta = await self.get_image(existing_image_id)
+                except KeyError:
+                    # The cached image row was deleted out from under the
+                    # cache entry; fall through to a fresh render (which
+                    # re-points the cache key at the new image).
+                    meta = None
+                if meta is not None:
+                    self._image_ids_by_job[job.id] = existing_image_id
+                    await self._emit(
+                        events.IMAGE_READY,
+                        {
+                            "image_id": existing_image_id,
+                            "campaign_id": job.campaign_id,
+                            # The *requesting* job's scene/post, not the
+                            # original render's — a cache hit attaches the
+                            # image to the post that asked for it.
+                            "scene_id": job.scene_id,
+                            "post_id": job.post_id,
+                            "file_path": meta.file_path,
+                            "prompt": request.prompt,
+                            "cached": True,
+                            "cost_usd": 0.0,
+                            "model": meta.model,
+                            "backend": meta.backend,
+                        },
+                    )
+                    return cached
 
         async def _on_progress(info: dict[str, Any]) -> None:
             await self._emit(
@@ -1311,7 +1325,7 @@ class ImageGenService:
         if job.status == JobStatus.CANCELLED:
             return result
         image_id = _new_image_id()
-        await self._persist_result(
+        rel_png = await self._persist_result(
             image_id=image_id,
             job=job,
             result=result,
@@ -1327,6 +1341,7 @@ class ImageGenService:
                 "campaign_id": job.campaign_id,
                 "scene_id": job.scene_id,
                 "post_id": job.post_id,
+                "file_path": rel_png,
                 "prompt": request.prompt,
                 "cached": False,
                 "cost_usd": result.cost_usd,
@@ -1342,7 +1357,9 @@ class ImageGenService:
         image_id: str,
         job: GenerationJob,
         result: GenerationResult,
-    ) -> None:
+    ) -> str:
+        """Write PNG + thumbnail + sidecar + index row; return the
+        data-root-relative PNG path (the ``images.file_path`` value)."""
         # Re-validate here even though queue/sync entry points already
         # check — `_persist_result` writes to disk, so we want a guard
         # right next to the write in case a future caller skips the
@@ -1420,6 +1437,7 @@ class ImageGenService:
                 json.dumps([]),
             ),
         )
+        return rel_png
 
     async def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
         if self.event_bus is None:

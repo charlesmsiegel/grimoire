@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
+import { fileUrl } from "../../api/files";
 import { ApiError, libraryApi } from "../../api/library";
 import { viewsApi } from "../../api/views";
 import type { ImageMetadata, ResolutionSource, ResolvedCharacter } from "../../api/types";
@@ -90,16 +91,9 @@ function Gallery({ campaignId }: { campaignId: string }) {
   );
 }
 
-// encodeURI doesn't encode "+", "?", "#"; a "+" in a filename breaks
-// the URL. Encode each path segment with encodeURIComponent then re-join
-// so "/" boundaries are preserved.
-function encodePath(p: string): string {
-  return p.split("/").map(encodeURIComponent).join("/");
-}
-
 function ImageTile({ image }: { image: ImageMetadata }) {
-  const url = `/api/files/${encodePath(image.file_path)}`;
-  const thumbUrl = image.thumbnail_path ? `/api/files/${encodePath(image.thumbnail_path)}` : url;
+  const url = fileUrl(image.file_path);
+  const thumbUrl = image.thumbnail_path ? fileUrl(image.thumbnail_path) : url;
   return (
     <li className="image-tile">
       <figure>

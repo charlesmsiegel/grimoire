@@ -240,6 +240,9 @@ async def test_queue_generation_writes_files_and_index(service, tmp_path: Path) 
     # The event carries the generation prompt so clients can use it as the
     # image's accessible name (frontend alt text).
     assert [p.get("prompt") for p in ready_payloads] == ["scene shot"]
+    # ... and the data-root-relative file path so clients can build a
+    # /api/files/ URL for it (#582).
+    assert [p.get("file_path") for p in ready_payloads] == [image.file_path]
 
 
 async def test_queue_generation_cache_hit_skips_re_render(service) -> None:
@@ -257,8 +260,8 @@ async def test_queue_generation_cache_hit_skips_re_render(service) -> None:
 
     job2 = await svc.queue_generation(
         campaign_id="camp-1",
-        scene_id=None,
-        post_id=None,
+        scene_id="scene-1",
+        post_id="post-9",
         request=_request(prompt="dup"),
     )
     await _wait_done(svc, "camp-1", job2)
@@ -270,6 +273,37 @@ async def test_queue_generation_cache_hit_skips_re_render(service) -> None:
     assert cached, "expected at least one image_ready with cached=True"
     # The cached-hit event carries the prompt too (used as frontend alt text).
     assert all(p.get("prompt") == "dup" for p in cached)
+    # ... plus the file path and the *requesting* job's scene/post, so the
+    # cached image attaches to the post that asked for it (#582).
+    assert all(p.get("file_path") == images[0].file_path for p in cached)
+    assert all(p.get("scene_id") == "scene-1" for p in cached)
+    assert all(p.get("post_id") == "post-9" for p in cached)
+
+
+async def test_queue_generation_cache_hit_with_deleted_image_re_renders(service) -> None:
+    """A cache entry whose images row was deleted falls back to a fresh render."""
+    svc, _ = service
+    job1 = await svc.queue_generation(
+        campaign_id="camp-1",
+        scene_id=None,
+        post_id=None,
+        request=_request(prompt="stale"),
+    )
+    await _wait_done(svc, "camp-1", job1)
+    (old_image,) = await svc.list_images("camp-1")
+    await svc.delete_image(old_image.id)
+
+    job2 = await svc.queue_generation(
+        campaign_id="camp-1",
+        scene_id=None,
+        post_id=None,
+        request=_request(prompt="stale"),
+    )
+    await _wait_done(svc, "camp-1", job2)
+
+    (new_image,) = await svc.list_images("camp-1")
+    assert new_image.id != old_image.id
+    assert (svc.data_root / new_image.file_path).exists()
 
 
 async def test_cancel_queued_job_skips_generation(service) -> None:
