@@ -135,17 +135,24 @@ multi-table writes).
   `grimoire.extractor.together` (a strategy module); `api/campaigns/settings.py:107` imports `Tier`
   from `llm_gateway.tiers` while the gateway's `__init__` deliberately exports only `Route`.
 
-### 2.4 Export bypasses the read cascade
-`export/sources.py`, `export/data.py:99-206` — the export snapshot builder constructs
-`data_root / "campaigns" / id / ...` paths and parses YAML by hand instead of reading through
-StateStore/the cascade. Campaign-local overrides applied by the cascade may not be reflected in
-exports, and a layout change breaks all five adapters. Related: `export/service.py:155` hardcodes
+### 2.4 Bundled export adapters bypass the read cascade *(re-scoped after PR review)*
+The service-side path is fine: `ExportService.preview()` → `export/snapshot.py:build_snapshot()`
+reads through injected service-backed Sources — the original text wrongly implicated
+`export/sources.py`. The actual bypass is `export/data.py:load_fs_snapshot()`, called by **three
+bundled adapters** (`export-markdown/plugin.py:177`, `export-html/plugin.py:116`,
+`export-single-markdown/plugin.py:67`): it constructs `data_root / "campaigns" / id / ...` paths and
+reads emergent/override frontmatter raw, so override cards are exported standalone — never
+cascade-merged onto their library base (library content is referenced by id only) — and a
+campaigns-layout change breaks those three adapters. Related: `export/service.py:155` hardcodes
 adapter knowledge in the service (`bytes_per_word = 8 if adapter.id == "epub" else 6`) — sizing belongs
 on the adapter Protocol.
 
 ### 2.5 ✅ State and hand-rolled wiring in the API layer
-- `api/imports.py:62` — `_PREVIEW_CACHE` module-level mutable dict with hand-rolled GC; domain state
-  living in a router module (untestable, unbounded between GCs). Move into a small service object.
+- `api/imports.py:62` — `_PREVIEW_CACHE` module-level mutable dict. *(Corrected after PR review:
+  it is hard-capped at `MAX_PREVIEW_ENTRIES = 256` with expiry sweep + eviction, and the bound is
+  tested — the original "unbounded/untestable" claim was wrong.)* The remaining point is placement
+  only: domain state living in a router module; fold into a container-owned service object when
+  next touched.
 - `api/hud.py:32-52` — `_get_hud`/`_get_hud_config` re-implement the present-or-503 dependency pattern
   with `getattr(container, "extras", {})` chains returning `Any`, instead of the typed `api.deps`
   providers the repo convention mandates.
@@ -211,19 +218,26 @@ false positives (Protocol params, re-exports). What survives verification:
 
 - ✅ `orchestrator/auxiliary.py:189` — `_ = AuxiliaryAlreadyCommittedError` *after* a `return`:
   unreachable linter-appeasement. Delete (and the import if then unused).
-- `mechanics/service.py:74` — `_SHEET_KIND_DEFAULT` constant, zero references.
-- `extractor/config.py:49` — `retry_on_parse_failure` is never set to anything but its default by any
-  caller; the extractor's `_noop_list/_noop_llm/_noop_heuristic` strategy-disable paths are exercised
-  only by tests. Either test the off-paths for real or hardcode.
-- `watcher/classifier.py:218,236,252` — `DIR_TO_KIND.get(d) or d` fallback is unreachable given the
-  guards above each call.
+- ~~`mechanics/service.py:74` — `_SHEET_KIND_DEFAULT` constant, zero references.~~ *(Corrected after
+  PR review: used at `mechanics/service.py:867` as the fallback sheet kind — live, keep.)*
+- ~~`extractor/config.py:49` — `retry_on_parse_failure` never varied~~ *(Corrected after PR review:
+  it drives a real retry loop at `llm_strategy.py:504` and both settings are exercised by
+  `tests/extractor/test_llm_strategy.py` — supported, tested config; production just never varies
+  the default. Keep.)*
+- ~~`watcher/classifier.py:218,236,252` — `DIR_TO_KIND.get(d) or d` fallback unreachable~~
+  *(Corrected on re-verification: there is no guard on `dir_name`, the identity fallback is
+  reachable for unknown directory names and deliberate — see the comment at `classifier.py:88`.)*
 - `characters/service.py:766` — `pending_pc_inputs_since_last_advance()` has no production caller
   (test-only public API).
-- Drift feature half-wired: `character_state.drift_score` / `tier_pin` are written
-  (`characters/service.py:504-560` via event subscriber) but nothing reads them to make a decision —
-  speculative until the consumer exists.
-- `orchestrator/service.py:134-151` — `_NullAutoDisable` permanent stub; `config.py:38`
-  `per_campaign_concurrency: int = 1` never varied.
+- ~~Drift feature half-wired: nothing reads `drift_score` / `tier_pin`~~ *(Corrected after PR
+  review: both are consumed — `tier_pin` is applied during tier computation
+  (`characters/service.py:483-489`) and `drift_score` gates corrective context
+  (`service.py:554` → `context/cast.py:243`). Live feature, keep.)*
+- `orchestrator/service.py:134-151` — `_NullAutoDisable` is the permanent production default: a real
+  implementation exists (`extractor/auto_disable.py:AutoDisableState`, fully unit-tested) but no
+  production composition constructs it — bootstrap never passes `auto_disable=`. Decide: wire it or
+  remove the seam. Also `orchestrator/config.py:78` — `per_campaign_concurrency: int = 1` is defined
+  and **never read** by any code.
 - `world/calendars/holidays_seed.py` (849 lines) — ~25 holiday sets built eagerly at import; only
   reachable via two lookup functions. Cold data inline; fine to keep, better as lazy data files.
 
@@ -236,9 +250,10 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
 1. ✅ **JSON-from-LLM extraction ×3** — `extractor/llm_strategy.py:68` `_extract_json_payload` (3-stage
    fence/whole/bare-brace parser) and `continuity/llm_judge.py` `_extract_json` duplicate
    `grimoire.util.extract_json_object` (which `scenes/default_summarizers.py` correctly uses).
-2. ✅ **JSON (de)serialization ×3** — `state_store/store.py:86-99` `_json_dumps`/`_json_loads` and
-   `state_store/indexers.py:31` `_json_or_none` vs `util.safe_json_dumps/loads` (the store's variant
-   silently drops `default=str` — a behavioral divergence, not just cosmetic).
+2. **JSON (de)serialization ×3** — `state_store/store.py:86-99` `_json_dumps`/`_json_loads` and
+   `state_store/indexers.py:31` `_json_or_none` vs `util.safe_json_dumps/loads`. *(Corrected after
+   PR review: the store variant does pass `default=str`; the only real divergence is that it passes
+   already-serialized strings through unchanged — preserve that passthrough when consolidating.)*
 3. ✅ **`_maybe_json` byte-identical ×2** — `library/service.py:928` and `library/composition.py:426`.
 4. **Gateway retry/fallback state machine ×2** — `_invoke_complete` (gateway.py:744) vs `_stream_inner`
    (gateway.py:969); the analyzer independently flagged twin blocks at 462/479 and 1458/1501. A retry
@@ -296,9 +311,12 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
    (`usePostEditor`, `useAuxAction`) / `useReducer`.
 3. **No shared dialog.** ~15 files hand-roll the same `modal-backdrop / modal / modal-actions`
    structure and open/close state, despite Radix Dialog being a project dependency.
-4. **Uncancelled async effects.** `PostItem.tsx:578-617` (CostLabel IntersectionObserver fetch) and
-   `SideHud.tsx:236-273` use a local `cancelled` flag but never abort the request — stale responses
-   race on fast navigation. Thread `AbortSignal` through the API client.
+4. **Un-aborted async effects.** `PostItem.tsx:578-617` (CostLabel IntersectionObserver fetch) and
+   `SideHud.tsx:236-273` hand-roll a `cancelled` flag. *(Corrected after PR review: the flag does
+   guard every state update, so there is no stale-state race — the original framing was wrong.)*
+   The remaining cost is efficiency/consistency: obsolete requests still complete, and the same
+   boilerplate is re-implemented per effect — thread `AbortSignal` through the API client as part
+   of the #549 consolidation.
 
 ---
 
@@ -351,6 +369,14 @@ characterization test first (pin current behavior, then fix).
 > `self._orch`). **#589's body is the canonical, complete inventory**, including the explicit
 > out-of-scope tier (same-package collaborator privates → #521). Method lesson for the next audit:
 > sweep this category with greps; reading alone under-reports it.
+>
+> **Post-review corrections** (automated review on this PR + re-verification): eight claims were
+> corrected in place — `_SHEET_KIND_DEFAULT`, the drift fields, `retry_on_parse_failure`, and the
+> classifier fallback are live (struck from §4); the preview cache is bounded + tested (§2.5); the
+> store JSON helper does pass `default=str` (§5.2); the frontend `cancelled` flags do prevent
+> stale-state races (§7.4); and §2.4 was re-scoped from `sources.py` to the three bundled adapters
+> that call `load_fs_snapshot`. Issues #591–#593 updated to match. Method lesson: dead-code and
+> divergence claims need a call-site grep *and* a test-suite grep before they're "verified".
 
 Checked 2026-06-09 against all 45 open issues plus targeted closed-issue searches. The repo has
 already run three audit passes (orchestrator simplification audit → #518–#523; code-quality /
