@@ -210,7 +210,6 @@
   font-weight: 400;
 }
 
-.why-character-empty,
 .why-character-loading {
   color: var(--fg-muted);
   font-style: italic;

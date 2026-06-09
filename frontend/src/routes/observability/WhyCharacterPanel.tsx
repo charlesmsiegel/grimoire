@@ -182,7 +182,7 @@ export function WhyCharacterPanel({ campaignId }: Props) {
           {turns === null && <p className="why-character-loading">Loading turns…</p>}
           {turnsError && <p className="why-character-error">{turnsError}</p>}
           {turns !== null && turns.length === 0 && !turnsError && (
-            <p className="why-character-empty">No audits yet for this campaign.</p>
+            <p className="empty-state">No audits yet for this campaign.</p>
           )}
           {turns !== null && turns.length > 0 && (
             <ul>
@@ -210,13 +210,13 @@ export function WhyCharacterPanel({ campaignId }: Props) {
         </aside>
 
         <main className="why-character-cards" aria-label="Character cards">
-          {!selectedTurnId && <p className="why-character-empty">Pick a turn to inspect.</p>}
+          {!selectedTurnId && <p className="empty-state">Pick a turn to inspect.</p>}
           {selectedTurnId && !prompt && !promptError && (
             <p className="why-character-loading">Loading audit…</p>
           )}
-          {promptError && <p className="why-character-empty">No audit available for that turn.</p>}
+          {promptError && <p className="empty-state">No audit available for that turn.</p>}
           {prompt && cards.length === 0 && (
-            <p className="why-character-empty">This turn's context had no character sources.</p>
+            <p className="empty-state">This turn's context had no character sources.</p>
           )}
           {cards.map((card) => (
             <article
@@ -234,7 +234,7 @@ export function WhyCharacterPanel({ campaignId }: Props) {
               </header>
               <ul className="why-character-reasons">
                 {card.reasons.length === 0 ? (
-                  <li className="why-character-empty">(no declared reason)</li>
+                  <li className="empty-state">(no declared reason)</li>
                 ) : (
                   card.reasons.map((r) => (
                     <li key={r} className={`chip why-character-reason why-character-reason-${r}`}>

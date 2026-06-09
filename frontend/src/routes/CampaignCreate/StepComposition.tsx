@@ -70,7 +70,7 @@ export function StepComposition({ draft, update, worlds, loading, error }: Props
       {error && <p className="wizard-error">{error}</p>}
 
       {refs.length === 0 ? (
-        <p className="wizard-empty">No worlds yet — pick one below.</p>
+        <p className="empty-state">No worlds yet — pick one below.</p>
       ) : (
         <ol className="wizard-ref-list" aria-label="Selected worlds">
           {refs.map((ref, i) => (

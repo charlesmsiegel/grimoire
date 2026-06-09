@@ -117,21 +117,21 @@ export function WhatChangedPanel({ turnId }: Props) {
 
 function Body({ state, filtered }: { state: State; filtered: TurnDeltaDiff | null }) {
   if (state.status === "idle") {
-    return <p className="side-empty">Waiting for the first turn of the scene.</p>;
+    return <p className="empty-state side-empty">Waiting for the first turn of the scene.</p>;
   }
   if (state.status === "loading") {
     return (
-      <p className="side-empty" aria-busy="true">
+      <p className="empty-state side-empty" aria-busy="true">
         Loading deltas…
       </p>
     );
   }
   if (state.status === "missing") {
-    return <p className="side-empty">No audit record yet for this turn.</p>;
+    return <p className="empty-state side-empty">No audit record yet for this turn.</p>;
   }
   if (state.status === "error") {
     return (
-      <p className="side-empty" role="alert">
+      <p className="empty-state side-empty" role="alert">
         Couldn’t load deltas: {state.error}
       </p>
     );
@@ -139,7 +139,7 @@ function Body({ state, filtered }: { state: State; filtered: TurnDeltaDiff | nul
   if (!filtered) return null;
   const total = filtered.applied.length + filtered.queued.length;
   if (total === 0) {
-    return <p className="side-empty">No deltas matched the current filters.</p>;
+    return <p className="empty-state side-empty">No deltas matched the current filters.</p>;
   }
   return (
     <>

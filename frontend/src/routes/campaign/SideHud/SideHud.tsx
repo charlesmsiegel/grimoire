@@ -432,7 +432,7 @@ export function SideHud({
   if (hud.loading && hud.widgets.length === 0) {
     return (
       <aside className="side-hud side-hud-loading" aria-busy="true" aria-label="Scene HUD">
-        <p className="side-hud-empty">Loading HUD…</p>
+        <p className="empty-state">Loading HUD…</p>
       </aside>
     );
   }

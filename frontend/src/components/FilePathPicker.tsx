@@ -158,7 +158,9 @@ export function FilePathPicker({
                     </button>
                   </li>
                 ))}
-                {entries.length === 0 && !parent && <li className="fb-empty">No matching files</li>}
+                {entries.length === 0 && !parent && (
+                  <li className="empty-state fb-empty">No matching files</li>
+                )}
               </ul>
             )}
           </div>

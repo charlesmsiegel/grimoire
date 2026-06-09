@@ -42,7 +42,7 @@ export function CostBreakdown({ turnId }: Props) {
     return <p className="cost-breakdown-loading">Loading cost breakdown…</p>;
   }
   if (rows.length === 0) {
-    return <p className="cost-breakdown-empty">No recorded cost for this turn.</p>;
+    return <p className="empty-state">No recorded cost for this turn.</p>;
   }
 
   const totalUsd = rows.reduce((acc, r) => acc + r.total_usd, 0);

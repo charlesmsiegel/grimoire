@@ -237,18 +237,6 @@
   color: orange;
 }
 
-.hud-widget-error,
-.hud-widget-empty {
-  margin: 0;
-  font-size: 0.85rem;
-  color: var(--fg-muted);
-  font-style: italic;
-}
-
-.hud-widget-error {
-  color: var(--danger);
-}
-
 .hud-row-value {
   font-size: 0.9rem;
 }

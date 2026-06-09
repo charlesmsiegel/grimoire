@@ -22,7 +22,7 @@ export function RowWidget({ snapshot, onRefresh }: Props) {
       scalar !== null ? (
         <span className="hud-row-value">{scalar}</span>
       ) : (
-        <span className="hud-row-value hud-row-empty">—</span>
+        <span className="hud-row-value empty-state">—</span>
       );
   } else if (snapshot.status === "hidden") {
     return null;

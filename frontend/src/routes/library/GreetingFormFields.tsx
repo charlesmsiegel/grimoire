@@ -111,7 +111,7 @@ export function GreetingFormFields({ worldId, value, onChange, hideName = false 
           </p>
         )}
         {characters.length === 0 && !loadErr && (
-          <p className="library-empty">
+          <p className="empty-state">
             <em>This world has no characters yet. Create some under the Characters tab.</em>
           </p>
         )}

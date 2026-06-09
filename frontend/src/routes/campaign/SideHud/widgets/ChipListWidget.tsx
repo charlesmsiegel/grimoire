@@ -83,7 +83,7 @@ function renderBody(
   if (isPresentCast && campaignId) {
     const chips = parsePresentCast(snapshot.data);
     if (chips.length === 0) {
-      return <p className="hud-chip-list-empty">No present characters.</p>;
+      return <p className="empty-state">No present characters.</p>;
     }
     return (
       <ul className="hud-chip-list hud-present-cast-list">
@@ -97,7 +97,7 @@ function renderBody(
   }
   const generic = extractGenericChips(snapshot.data);
   if (generic.length === 0) {
-    return <p className="hud-chip-list-empty">Nothing yet.</p>;
+    return <p className="empty-state">Nothing yet.</p>;
   }
   return (
     <ul className="hud-chip-list hud-generic-chip-list">

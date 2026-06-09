@@ -109,7 +109,7 @@ export function SceneLedgerDialog({ campaignId, open, onClose }: Props) {
               ))}
             </section>
           )}
-          {items.length === 0 && <p className="ledger-empty">No scene ideas yet.</p>}
+          {items.length === 0 && <p className="empty-state ledger-empty">No scene ideas yet.</p>}
         </div>
       )}
     </Dialog>

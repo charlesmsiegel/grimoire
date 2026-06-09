@@ -26,7 +26,7 @@ interface Props {
 export function TokenBars({ summary, sources, loading }: Props) {
   if (!summary) {
     return (
-      <p className="inspector-empty">
+      <p className="empty-state inspector-empty">
         {loading ? "Computing preview…" : "Type to preview the next prompt."}
       </p>
     );

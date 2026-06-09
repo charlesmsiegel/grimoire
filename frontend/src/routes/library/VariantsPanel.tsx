@@ -97,7 +97,7 @@ function VariantPairDiff({ a, b }: { a: LibraryEntity; b: LibraryEntity }) {
         </span>
       </header>
       {diff.rows.length === 0 ? (
-        <p className="variant-diff-empty">Frontmatter is identical.</p>
+        <p className="empty-state">Frontmatter is identical.</p>
       ) : (
         <ul className="variant-diff-rows">
           {diff.rows.map((row) => (

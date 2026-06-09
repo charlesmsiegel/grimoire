@@ -136,12 +136,6 @@
   border-radius: var(--radius-sm);
 }
 
-.wizard-empty {
-  margin: 0;
-  color: var(--fg-muted);
-  font-style: italic;
-}
-
 .wizard-nav {
   display: flex;
   justify-content: space-between;

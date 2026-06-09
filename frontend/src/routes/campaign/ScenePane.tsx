@@ -170,7 +170,7 @@ export const ScenePane = memo(function ScenePane({
     <section ref={paneRef} className="scene-pane" aria-label="Scene posts" aria-live="polite">
       {hasMorePosts && <div ref={topSentinelRef} className="load-more-sentinel" />}
       {posts.length === 0 && !streaming && !awaitingResponse && (
-        <p className="scene-empty">No posts yet. Begin with a post below.</p>
+        <p className="empty-state scene-empty">No posts yet. Begin with a post below.</p>
       )}
       {posts.map((post) => (
         <PostItem

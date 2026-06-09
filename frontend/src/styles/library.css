@@ -355,13 +355,6 @@
   color: var(--fg-muted);
 }
 
-.bullet-editor-empty {
-  margin: 0;
-  font-size: 0.8rem;
-  color: var(--fg-subtle);
-  font-style: italic;
-}
-
 .bullet-editor-row {
   display: flex;
   align-items: center;
@@ -1163,13 +1156,6 @@
 
 .variant-diff-body-meta {
   font-variant-numeric: tabular-nums;
-}
-
-.variant-diff-empty {
-  margin: 0;
-  font-size: 0.85rem;
-  color: var(--fg-muted);
-  font-style: italic;
 }
 
 .variant-diff-rows {

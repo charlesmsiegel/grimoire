@@ -408,7 +408,7 @@ function BulletEditor({
   return (
     <fieldset className="bullet-editor">
       <legend>{label}</legend>
-      {items.length === 0 && <p className="bullet-editor-empty">No bullets yet.</p>}
+      {items.length === 0 && <p className="empty-state">No bullets yet.</p>}
       {items.map((value, idx) => (
         <div key={idx} className="bullet-editor-row">
           <span className="bullet-editor-marker" aria-hidden>

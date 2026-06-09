@@ -79,7 +79,7 @@ function renderBody(snapshot: WidgetSnapshot): React.ReactNode {
   const items = extractItems(snapshot.data);
   if (items !== null) {
     if (items.length === 0) {
-      return <p className="hud-block-empty">Nothing yet.</p>;
+      return <p className="empty-state">Nothing yet.</p>;
     }
     return (
       <ul className="hud-block-list">
@@ -91,5 +91,5 @@ function renderBody(snapshot: WidgetSnapshot): React.ReactNode {
   }
   const scalar = primaryScalar(snapshot.data);
   if (scalar !== null) return <p className="hud-block-text">{scalar}</p>;
-  return <p className="hud-block-empty">No data.</p>;
+  return <p className="empty-state">No data.</p>;
 }
