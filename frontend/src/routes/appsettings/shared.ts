@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ApiError, api } from "../../api/client";
+import { api, errorMessage } from "../../api/client";
+
+export { errorMessage };
 
 export interface AppConfig {
   library_path: string;
   backup: { schedule: string; retention_days: number; location: string };
-}
-
-export function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return `${err.status}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return String(err);
 }
 
 export function useAppConfig(): {

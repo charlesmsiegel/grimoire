@@ -16,6 +16,13 @@ export class ApiError extends Error {
   }
 }
 
+/** Human-readable message for any thrown value; ApiErrors include the status. */
+export function errorMessage(err: unknown): string {
+  if (err instanceof ApiError) return `${err.status}: ${err.message}`;
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
 import type { ZodType } from "zod";
 
 interface RequestOptions {

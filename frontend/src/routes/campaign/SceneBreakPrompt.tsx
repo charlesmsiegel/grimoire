@@ -17,14 +17,8 @@ import {
   type SceneBreakChoice,
   type SceneBreakSuggestedEvent,
 } from "../../api/campaign";
-import { ApiError } from "../../api/client";
+import { ApiError, errorMessage } from "../../api/client";
 import { useCampaignEvent } from "../../state/useCampaignEvent";
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return `${err.status}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
 
 function describeReason(reason: string): string {
   switch (reason) {

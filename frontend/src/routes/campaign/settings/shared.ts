@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ApiError, api } from "../../../api/client";
+import { api, errorMessage } from "../../../api/client";
+
+export { errorMessage };
 
 export interface CampaignRecord {
   id: string;
@@ -11,12 +13,6 @@ export interface CampaignRecord {
   image_preset_id?: string | null;
   inline_style_guide?: string | null;
   content_boundaries?: string | null;
-}
-
-export function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return `${err.status}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return String(err);
 }
 
 export type SaveStatus = "idle" | "saving" | "saved" | "error";
