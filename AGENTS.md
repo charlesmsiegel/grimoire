@@ -239,7 +239,10 @@ review smell. Grep before adding a `_parse_*` / `_slug*` / `_json*` / `_now*`.
 - **Write/mutation paths never catch-and-continue.** A failed multi-step write
   either compensates (file snapshot/restore, delta reversal — `write_library_file`
   in `state_store/store.py` is the pattern) or raises. Applying half of a turn's
-  effects is worse than failing the turn (#583–#586).
+  effects is worse than failing the turn (#583–#586). This applies to
+  campaign/domain state; *best-effort diagnostic sinks* (audit trail, wire
+  logging) stay non-fatal — they log their own failure and never fail the
+  operation they observe.
 - Catch the narrowest exception the failure actually produces; reserve broad
   `except Exception` for top-level loop/job guards that log *and* surface.
 
@@ -351,7 +354,7 @@ overlay (override YAML / emergent frontmatter), with a derived
 - **Don't call another module's `_private` members.** If a neighbor needs `_find_post`-style access, promote the method to the owner's public API first. New `self._host._x` or `getattr(service, "_attr", …)` reach-ins are review blockers (#589 tracks retiring the existing ones).
 - **Don't forget to update both file and index.** When changing content programmatically, write the file and let the watcher handle the index — or explicitly trigger an index update if the watcher isn't running (e.g., in tests).
 - **Don't hand-roll what a shared helper already does.** datetime/JSON/id/slug strings, YAML + frontmatter I/O, and HTTP not-found translation all have canonical helpers (Code Conventions → *Shared helpers*). Reuse keeps behaviour consistent and fixes land in one place.
-- **Don't re-flag sanctioned patterns when auditing or reviewing.** Table-gateway classes (one domain's SQL behind one small class), single-implementation Protocols (the documented boundary mechanism), and mutable Pydantic field defaults (Pydantic deep-copies them per instance) are deliberate choices or known false positives — see `docs/audits/2026-06-09-code-quality-audit.md` §6 before filing smell reports.
+- **Don't re-flag sanctioned patterns when auditing or reviewing.** Table-gateway classes (one domain's SQL behind one small class), single-implementation Protocols *at documented module boundaries* (the boundary mechanism — new speculative intra-module Protocols are still fair game), and mutable Pydantic field defaults (Pydantic deep-copies them per instance) are deliberate choices or known false positives — see `docs/audits/2026-06-09-code-quality-audit.md` §6 before filing smell reports.
 
 ## Keep Documentation Up to Date
 
