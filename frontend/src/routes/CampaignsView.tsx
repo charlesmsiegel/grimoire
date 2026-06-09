@@ -245,8 +245,8 @@ export function CampaignsView() {
           title={`Delete campaign "${del.target.name}"?`}
           body={
             <p>
-              This removes the campaign directory — scenes, overrides, emergent content, sheets,
-              and images — from disk. Cannot be undone.
+              This removes the campaign directory — scenes, overrides, emergent content, sheets, and
+              images — from disk. Cannot be undone.
             </p>
           }
           typedConfirmation={{

@@ -22,6 +22,7 @@ import {
   previewSillyTavernImport,
   requiredOverridesFor,
 } from "../../api/imports";
+import { Dialog } from "../../components/Dialog";
 
 interface Props {
   worldId: string;
@@ -159,9 +160,13 @@ export function ImportDialog({ worldId, onClose }: Props) {
   }
 
   return (
-    <div className="import-dialog" role="dialog" aria-label="Import character card">
+    <Dialog
+      open
+      onClose={() => onClose(mode === "done")}
+      title="Import character card"
+      panelClassName="import-dialog"
+    >
       <header className="import-dialog-header">
-        <h3>Import character card</h3>
         <button type="button" onClick={() => onClose(mode === "done")}>
           {mode === "done" ? "Close" : "Cancel"}
         </button>
@@ -372,6 +377,6 @@ export function ImportDialog({ worldId, onClose }: Props) {
           {errorMsg}
         </p>
       )}
-    </div>
+    </Dialog>
   );
 }

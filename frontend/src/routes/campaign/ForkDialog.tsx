@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 
 import { campaignApi, type ForkCampaignResult } from "../../api/campaign";
 import { ApiError } from "../../api/client";
+import { Dialog } from "../../components/Dialog";
 
 interface ForkDialogProps {
   open: boolean;
@@ -91,14 +92,8 @@ export function ForkDialog({
   }
 
   return (
-    <div
-      className="modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="fork-dialog-title"
-    >
-      <form className="modal fork-dialog" onSubmit={handleSubmit}>
-        <h2 id="fork-dialog-title">Fork campaign</h2>
+    <Dialog open={open} onClose={onClose} title="Fork campaign" panelClassName="fork-dialog">
+      <form onSubmit={handleSubmit}>
         <p className="muted">
           Source: <strong>{sourceCampaignName}</strong> ({sourceCampaignId})
         </p>
@@ -184,6 +179,6 @@ export function ForkDialog({
           </button>
         </div>
       </form>
-    </div>
+    </Dialog>
   );
 }

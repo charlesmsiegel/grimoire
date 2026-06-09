@@ -3308,6 +3308,37 @@ pre {
   }
 }
 
+/* Corner close button rendered by components/Dialog's <DialogClose />. */
+.modal {
+  position: relative;
+}
+
+.modal-close {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: var(--space-1);
+  cursor: pointer;
+}
+
+.modal-close:hover {
+  color: var(--fg);
+}
+
+/* Wide variants of the shared dialog panel. */
+.modal.diff-modal,
+.modal.ledger-dialog,
+.modal.library-convert-modal {
+  max-width: 56rem;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
 .modal-actions {
   display: flex;
   gap: var(--space-2);

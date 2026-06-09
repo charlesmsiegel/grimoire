@@ -205,7 +205,12 @@ function ExtrasRow({ entryKey, extra, worldId, kind, entityId, campaignId, onCha
           </button>
         ) : null}
         {/* eslint-disable-next-line local/no-bespoke-delete -- extras table row action, not a card */}
-        <button type="button" onClick={() => del.request(entryKey)} disabled={saving} aria-label="Delete">
+        <button
+          type="button"
+          onClick={() => del.request(entryKey)}
+          disabled={saving}
+          aria-label="Delete"
+        >
           ×
         </button>
       </span>

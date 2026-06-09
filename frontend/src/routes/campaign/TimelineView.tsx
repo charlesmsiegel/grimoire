@@ -140,7 +140,9 @@ export function TimelineView() {
                     onAnalyze={() =>
                       campaignApi.analyzeScene(campaignId, scene.id).then(() => state.reload())
                     }
-                    onDelete={() => del.request({ sceneId: scene.id, title: scene.title || scene.slug })}
+                    onDelete={() =>
+                      del.request({ sceneId: scene.id, title: scene.title || scene.slug })
+                    }
                   />
                 ))}
                 {visible.length === 0 && (

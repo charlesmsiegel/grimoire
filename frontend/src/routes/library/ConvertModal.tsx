@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Dialog, DialogClose } from "../../components/Dialog";
 
 import {
   ApiError,
@@ -91,13 +92,13 @@ export function ConvertModal({
   }
 
   return (
-    <div role="dialog" aria-label={`Convert ${sourceId}`} className="library-convert-modal">
-      <header>
-        <h3>Convert {sourceId}</h3>
-        <button type="button" onClick={onClose} aria-label="Close">
-          ×
-        </button>
-      </header>
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Convert ${sourceId}`}
+      panelClassName="library-convert-modal"
+    >
+      <DialogClose />
 
       <label>
         <span>Target kind</span>
@@ -176,6 +177,6 @@ export function ConvertModal({
           </footer>
         </>
       )}
-    </div>
+    </Dialog>
   );
 }
