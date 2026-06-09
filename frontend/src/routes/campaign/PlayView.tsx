@@ -17,6 +17,7 @@ import { ScenePane } from "./ScenePane";
 import { SideHud } from "./SideHud/SideHud";
 import { TimeAdvanceDigest } from "./TimeAdvanceDigest";
 import { usePlayState } from "./usePlayState";
+import { PromptDialog } from "../../components/PromptDialog";
 
 interface Props {
   campaignId: string;
@@ -107,22 +108,33 @@ export function PlayView({ campaignId }: Props) {
     }
   }, []);
 
-  const handleSkipTime = useCallback(() => {
-    const raw = window.prompt("Skip how many minutes?", "60");
-    if (!raw) return;
-    const minutes = Number.parseInt(raw, 10);
-    if (!Number.isFinite(minutes) || minutes <= 0) return;
-    void runAction(async () => {
-      const result = await campaignApi.timeAdvance(campaignId, { duration: { minutes } });
-      setTimeDigest(result);
-    });
-  }, [campaignId, runAction]);
+  const [activePrompt, setActivePrompt] = useState<"skip-time" | "record-fact" | null>(null);
+  const handleSkipTime = useCallback(() => setActivePrompt("skip-time"), []);
+  const handleManualFact = useCallback(() => setActivePrompt("record-fact"), []);
 
-  const handleManualFact = useCallback(() => {
-    const statement = window.prompt("Record a fact (free text):");
-    if (!statement) return;
-    void runAction(() => campaignApi.createFact(campaignId, { predicate: "user_note", statement }));
-  }, [campaignId, runAction]);
+  const submitSkipTime = useCallback(
+    (raw: string) => {
+      setActivePrompt(null);
+      const minutes = Number.parseInt(raw, 10);
+      if (!Number.isFinite(minutes) || minutes <= 0) return;
+      void runAction(async () => {
+        const result = await campaignApi.timeAdvance(campaignId, { duration: { minutes } });
+        setTimeDigest(result);
+      });
+    },
+    [campaignId, runAction],
+  );
+
+  const submitManualFact = useCallback(
+    (statement: string) => {
+      setActivePrompt(null);
+      if (!statement.trim()) return;
+      void runAction(() =>
+        campaignApi.createFact(campaignId, { predicate: "user_note", statement }),
+      );
+    },
+    [campaignId, runAction],
+  );
 
   // "What changed?" reads the most recent narrator turn — the one whose
   // audit record carries the deltas that just landed. Player posts share
@@ -164,6 +176,29 @@ export function PlayView({ campaignId }: Props) {
       <DriftBanner warnings={driftWarnings} onSuppress={play.suppressDrift} />
 
       <TimeAdvanceDigest result={timeDigest} onDismiss={() => setTimeDigest(null)} />
+
+      {activePrompt === "skip-time" && (
+        <PromptDialog
+          open
+          title="Skip time"
+          label="Skip how many minutes?"
+          initialValue="60"
+          inputType="number"
+          confirmLabel="Skip"
+          onSubmit={submitSkipTime}
+          onCancel={() => setActivePrompt(null)}
+        />
+      )}
+      {activePrompt === "record-fact" && (
+        <PromptDialog
+          open
+          title="Record a fact"
+          label="Record a fact (free text):"
+          confirmLabel="Record"
+          onSubmit={submitManualFact}
+          onCancel={() => setActivePrompt(null)}
+        />
+      )}
 
       <PreRollConfirmation campaignId={campaignId} />
       <SceneBreakPrompt campaignId={campaignId} />

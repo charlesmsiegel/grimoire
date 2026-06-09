@@ -23,6 +23,28 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
       "local/no-bespoke-delete": "error",
+      // Native popups bypass the app's themed, accessible dialogs. Use
+      // components/ConfirmDestructiveDialog or components/PromptDialog.
+      "no-restricted-globals": [
+        "error",
+        { name: "confirm", message: "Use ConfirmDestructiveDialog instead." },
+        { name: "prompt", message: "Use PromptDialog instead." },
+        { name: "alert", message: "Render the message inline (role=alert) or in a Dialog." },
+      ],
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "window",
+          property: "confirm",
+          message: "Use ConfirmDestructiveDialog instead.",
+        },
+        { object: "window", property: "prompt", message: "Use PromptDialog instead." },
+        {
+          object: "window",
+          property: "alert",
+          message: "Render the message inline (role=alert) or in a Dialog.",
+        },
+      ],
     },
   },
 );
