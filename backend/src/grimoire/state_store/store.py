@@ -1919,6 +1919,72 @@ class StateStore:
                     applied.append(await get_delta(conn, rec.id))
         return SwapResult(rewound=rewound, applied=applied)
 
+    async def swap_turn_deltas(
+        self,
+        *,
+        campaign_id: str,
+        turn_id: str | None,
+        deltas: list[Any],
+        source: str,
+    ) -> SwapResult:
+        """Atomically replace a turn's applied deltas with ``deltas``.
+
+        LIFO-reverses every non-reversed delta recorded for ``turn_id`` —
+        skipping queued-but-unapplied review rows, which were never applied
+        to their target — then applies the replacements, all in one
+        transaction. Any reversal or apply failure rolls the whole swap back
+        (file targets touched by a reversal are snapshot/restored), so the
+        campaign is left exactly as it was before the call (#583).
+
+        ``turn_id=None`` means the post being retconned has no turn: nothing
+        is reversed and the replacements are applied atomically.
+        """
+        rewound: list[DeltaRecord] = []
+        applied: list[DeltaRecord] = []
+        file_snapshots: list[tuple[Path, bytes | None]] = []
+        try:
+            async with self._txn() as conn:
+                rows: list[aiosqlite.Row] = []
+                if turn_id is not None:
+                    cur = await conn.execute(
+                        """
+                        SELECT * FROM deltas
+                        WHERE campaign_id = ? AND turn_id = ? AND reversed_at IS NULL
+                          AND id NOT IN (
+                            SELECT delta_id FROM review_queue WHERE status = 'pending'
+                          )
+                        ORDER BY applied_at DESC, rowid DESC
+                        """,
+                        (campaign_id, turn_id),
+                    )
+                    rows = list(await cur.fetchall())
+                    await cur.close()
+                for row in rows:
+                    rec = DeltaRecord.from_row(row)
+                    if rec.target_scope in ("library", "campaign-file") and rec.target_path:
+                        target = Path(rec.target_path)
+                        file_snapshots.append(
+                            (target, target.read_bytes() if target.exists() else None)
+                        )
+                    await self._reverse_delta_on_conn(conn, rec.id)
+                    rewound.append(await get_delta(conn, rec.id))
+                for d in deltas:
+                    delta_id = await self._apply_delta_on_conn(
+                        conn,
+                        delta=d,
+                        source=source,
+                        turn_id=turn_id,
+                        campaign_id=campaign_id,
+                    )
+                    applied.append(await get_delta(conn, delta_id))
+        except BaseException:
+            # The SQL transaction rolled back; put reversed file targets back
+            # so files and indexes don't drift (write_library_file's pattern).
+            for target, before_bytes in reversed(file_snapshots):
+                _restore_file(target, before_bytes)
+            raise
+        return SwapResult(rewound=rewound, applied=applied)
+
     async def set_current_alternate_delta_set(
         self,
         *,

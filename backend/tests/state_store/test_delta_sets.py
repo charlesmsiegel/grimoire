@@ -166,6 +166,180 @@ async def test_swap_atomic_rollback_on_apply_failure(store: StateStore) -> None:
     assert state["emotional_state"] == "calm"
 
 
+# ---------------------------------------------------------------------------
+# swap_turn_deltas (#583): atomic reverse-and-replace of a turn's deltas
+# ---------------------------------------------------------------------------
+
+
+async def _mood(store: StateStore) -> str | None:
+    state = await store.resolve_character_state(
+        character_ref="lib:winifred", campaign_id=CAMPAIGN_ID
+    )
+    return state["emotional_state"] if state else None
+
+
+async def test_swap_turn_deltas_replaces_turn(store: StateStore) -> None:
+    await _seed(store)
+    await store.apply_delta(
+        delta=_char_delta("calm"), source="extractor", turn_id="t_1", campaign_id=CAMPAIGN_ID
+    )
+    await store.apply_delta(
+        delta=_char_delta("tense"), source="extractor", turn_id="t_1", campaign_id=CAMPAIGN_ID
+    )
+
+    result = await store.swap_turn_deltas(
+        campaign_id=CAMPAIGN_ID,
+        turn_id="t_1",
+        deltas=[_char_delta("fierce")],
+        source="retcon",
+    )
+
+    assert [r.after["emotional_state"] for r in result.rewound] == ["tense", "calm"]  # LIFO
+    assert all(r.reversed_at is not None for r in result.rewound)
+    assert len(result.applied) == 1
+    assert result.applied[0].turn_id == "t_1"
+    assert result.applied[0].source == "retcon"
+    assert await _mood(store) == "fierce"
+
+
+async def test_swap_turn_deltas_rolls_back_on_apply_failure(store: StateStore) -> None:
+    await _seed(store)
+    await store.apply_delta(
+        delta=_char_delta("calm"), source="extractor", turn_id="t_1", campaign_id=CAMPAIGN_ID
+    )
+
+    good = _char_delta("fierce")
+    bad = {
+        "kind": "other",
+        "target_scope": "campaign-sqlite",
+        "target_table": "not_a_real_table",
+        "target_id": "x",
+        "after": {"id": "x"},
+    }
+    with pytest.raises(StateStoreError):
+        await store.swap_turn_deltas(
+            campaign_id=CAMPAIGN_ID,
+            turn_id="t_1",
+            deltas=[good, bad],
+            source="retcon",
+        )
+
+    # The whole swap rolled back: the original delta is still active, the
+    # partially-applied replacement is gone, and live state is untouched.
+    log = await store.get_delta_log(campaign_id=CAMPAIGN_ID, include_reversed=True)
+    assert [(r.source, r.reversed_at is None) for r in log] == [("extractor", True)]
+    assert await _mood(store) == "calm"
+
+
+async def test_swap_turn_deltas_rolls_back_on_reversal_failure(store: StateStore) -> None:
+    await _seed(store)
+    # First delta of the turn is irreversible (campaign-local scope); the
+    # second reverses fine. The LIFO walk reverses the second, then fails on
+    # the first — the second's reversal must be rolled back too.
+    await store.apply_delta(
+        delta={
+            "kind": "other",
+            "target_scope": "campaign-local",
+            "target_id": "note-1",
+            "after": {"text": "scribble"},
+        },
+        source="extractor",
+        turn_id="t_1",
+        campaign_id=CAMPAIGN_ID,
+    )
+    await store.apply_delta(
+        delta=_char_delta("tense"), source="extractor", turn_id="t_1", campaign_id=CAMPAIGN_ID
+    )
+
+    with pytest.raises(StateStoreError):
+        await store.swap_turn_deltas(
+            campaign_id=CAMPAIGN_ID,
+            turn_id="t_1",
+            deltas=[_char_delta("fierce")],
+            source="retcon",
+        )
+
+    log = await store.get_delta_log(campaign_id=CAMPAIGN_ID, include_reversed=True)
+    assert len(log) == 2
+    assert all(r.reversed_at is None for r in log)
+    assert await _mood(store) == "tense"
+
+
+async def test_swap_turn_deltas_restores_reversed_file_targets(store: StateStore) -> None:
+    await _seed(store)
+    write = await store.write_library_file(
+        library_id="worlds/w1/characters/winifred",
+        frontmatter={"name": "winifred"},
+        body="edited during the turn",
+        source="extractor",
+        campaign_id=CAMPAIGN_ID,
+        turn_id="t_1",
+    )
+    on_disk_before = write.path.read_bytes()
+
+    bad = {
+        "kind": "other",
+        "target_scope": "campaign-sqlite",
+        "target_table": "not_a_real_table",
+        "target_id": "x",
+        "after": {"id": "x"},
+    }
+    with pytest.raises(StateStoreError):
+        await store.swap_turn_deltas(
+            campaign_id=CAMPAIGN_ID,
+            turn_id="t_1",
+            deltas=[bad],
+            source="retcon",
+        )
+
+    # Reversing the file delta rewrote the file inside the failed transaction;
+    # the snapshot/restore must put the post-turn bytes back.
+    assert write.path.read_bytes() == on_disk_before
+    log = await store.get_delta_log(campaign_id=CAMPAIGN_ID, include_reversed=True)
+    assert all(r.reversed_at is None for r in log)
+
+
+async def test_swap_turn_deltas_skips_pending_review_rows(store: StateStore) -> None:
+    await _seed(store)
+    await store.apply_delta(
+        delta=_char_delta("calm"), source="extractor", turn_id="t_1", campaign_id=CAMPAIGN_ID
+    )
+    review_delta = _char_delta("suspicious")
+    review_delta["turn_id"] = "t_1"
+    review_id = await store.queue_for_review(
+        delta=review_delta, source="extractor", campaign_id=CAMPAIGN_ID
+    )
+
+    result = await store.swap_turn_deltas(
+        campaign_id=CAMPAIGN_ID,
+        turn_id="t_1",
+        deltas=[_char_delta("fierce")],
+        source="retcon",
+    )
+
+    # Only the applied delta was reversed; the queued-but-unapplied review row
+    # is still pending and unreversed (it was never applied to its target).
+    assert len(result.rewound) == 1
+    assert result.rewound[0].after["emotional_state"] == "calm"
+    pending = await store.pending_review_delta_ids(CAMPAIGN_ID)
+    assert len(pending) == 1
+    assert review_id is not None
+
+
+async def test_swap_turn_deltas_with_no_turn_applies_atomically(store: StateStore) -> None:
+    await _seed(store)
+    result = await store.swap_turn_deltas(
+        campaign_id=CAMPAIGN_ID,
+        turn_id=None,
+        deltas=[_char_delta("fierce")],
+        source="retcon",
+    )
+    assert result.rewound == []
+    assert len(result.applied) == 1
+    assert result.applied[0].turn_id is None
+    assert await _mood(store) == "fierce"
+
+
 async def test_current_delta_set_for_post(store: StateStore) -> None:
     await _seed(store)
     await store.apply_delta_set(

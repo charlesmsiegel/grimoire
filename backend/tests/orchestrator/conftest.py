@@ -150,6 +150,40 @@ class FakeStateStore:
     async def reverse_delta(self, delta_id: str) -> None:
         self.reversed_ids.append(delta_id)
 
+    async def swap_turn_deltas(
+        self,
+        *,
+        campaign_id: str | None = None,
+        turn_id: str | None = None,
+        deltas: list[Any] | None = None,
+        source: str = "",
+    ) -> Any:
+        """Mirror StateStore.swap_turn_deltas: all-or-nothing reverse+apply."""
+        reversed_before = list(self.reversed_ids)
+        applied_before = list(self.applied)
+        rewound: list[_DeltaRow] = []
+        applied: list[_DeltaRow] = []
+        try:
+            if turn_id is not None:
+                log = await self.get_delta_log(
+                    campaign_id=campaign_id, turn_id=turn_id, include_reversed=False
+                )
+                for row in reversed(log):
+                    if row.id in self.pending_delta_ids:
+                        continue
+                    await self.reverse_delta(row.id)
+                    rewound.append(row)
+            for d in deltas or []:
+                await self.apply_delta(
+                    delta=d, source=source, turn_id=turn_id, campaign_id=campaign_id
+                )
+                applied.append(_DeltaRow(self.applied[-1]))
+        except Exception:
+            self.reversed_ids = reversed_before
+            self.applied = applied_before
+            raise
+        return _SwapOutcome(rewound=rewound, applied=applied)
+
     async def pending_review_delta_ids(self, campaign_id: str) -> set[str]:
         return set(self.pending_delta_ids)
 
@@ -178,6 +212,14 @@ class _DeltaRow:
         self.campaign_id = entry["campaign_id"]
         self.delta = entry["delta"]
         self.target_id = getattr(entry["delta"], "target_id", None)
+
+
+@dataclass
+class _SwapOutcome:
+    """Duck-type of ``grimoire.state_store.store.SwapResult``."""
+
+    rewound: list[_DeltaRow]
+    applied: list[_DeltaRow]
 
 
 @dataclass
@@ -301,6 +343,8 @@ class FakeExtractor:
         player_pc_ref: str | None = None,
         turn_id: str | None = None,
     ) -> ExtractionResult:
+        if self.raise_on_extract is not None:
+            raise self.raise_on_extract
         return ExtractionResult(deltas=list(self.deltas))
 
 
