@@ -344,6 +344,13 @@ characterization test first (pin current behavior, then fix).
 > hygiene; cleanup: #593 dead code, #594 continuity perf; frontend: #595 Zod, #596 dialog,
 > #597 InputArea; gates: #598), with detail comments added to #518, #521, #522, #538, #545, #550,
 > #551, #561, #564. The table is kept as the as-audited snapshot.
+>
+> A follow-up *mechanical* sweep (`_host\._`, `self\._\w+\._\w+`, `getattr(obj, "_…")`,
+> cross-package `_private` imports) found §2.1/§2.3 sites this report's reading-based pass missed —
+> most notably the `RetconReplaySession` friend-class (`retcon_replay.py`, ~11 reach-ins via
+> `self._orch`). **#589's body is the canonical, complete inventory**, including the explicit
+> out-of-scope tier (same-package collaborator privates → #521). Method lesson for the next audit:
+> sweep this category with greps; reading alone under-reports it.
 
 Checked 2026-06-09 against all 45 open issues plus targeted closed-issue searches. The repo has
 already run three audit passes (orchestrator simplification audit → #518–#523; code-quality /
