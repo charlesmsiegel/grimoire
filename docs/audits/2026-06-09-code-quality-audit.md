@@ -148,9 +148,12 @@ multi-table writes).
   `_cache._active_pc` / `_cache._view_cache`.
 - `scenes/importer.py:112-147` — mutates `scene_manager._active_scene` / `_pc_current_scene` and calls
   `write_sidecar()` directly, bypassing the manager's locking and events.
-- `orchestrator/service.py:1183,1520,1569` — imports `strip_tracker_block` from
-  `grimoire.extractor.together` (a strategy module); `api/campaigns/settings.py:107` imports `Tier`
-  from `llm_gateway.tiers` while the gateway's `__init__` deliberately exports only `Route`.
+- *(Reclassified after PR review — facade gap, not a private reach: both names are in their
+  submodules' `__all__`.)* `orchestrator/service.py:1183,1520,1569` imports `strip_tracker_block`
+  from `grimoire.extractor.together` and `api/campaigns/settings.py:107` imports `Tier` from
+  `llm_gateway.tiers`, while each package root curates a narrower surface (the gateway's `__init__`
+  exports only `Route`). Re-export from the package roots for consistency if desired — these are
+  ordinary public imports, not encapsulation violations.
 
 ### 2.4 Bundled export adapters bypass the read cascade *(re-scoped after PR review)*
 The service-side path is fine: `ExportService.preview()` → `export/snapshot.py:build_snapshot()`
@@ -315,7 +318,8 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
 - The analyzer's "thin wrapper" flags (SceneLedger, CostTrackerService, ErrorStore, CastChangeStore,
   ExtrasMirror, InventoryPersistence) are **false positives** — they're table gateways that own SQL for
   one domain; that's the right pattern here.
-- Real (small) instances: `_NullAutoDisable` (§4), never-varied config knobs (§4),
+- Real (small) instances: the unwired `AutoDisableState` tracker (§4 — `_NullAutoDisable` itself is
+  *live policy*, not removable cleanup; see §4), never-read config knobs (§4),
   `WatchedFile` carrying 11 optional fields of which each kind uses ~5 (`watcher/classifier.py:45-85`)
   — consider per-kind dataclasses; `characters/service.py:1029-1044` pass-through `_ingest`/
   `_finalize_import` middle-men into `sheet_manager` privates.
@@ -351,13 +355,21 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
 1. **Ban the bypasses mechanically** (ruff `lint.flake8-tidy-imports.banned-api`):
    `yaml.safe_load`/`yaml.safe_dump` (→ `grimoire.files.yaml_io`, with a per-file exemption for
    `files/yaml_io.py` itself — the canonical helper necessarily calls both), `uuid.uuid4`
-   (→ `util.new_id`) outside `util.py`, and add `BLE001` (blind `except`) — start with per-file
-   ignores for the existing 556 sites and shrink.
-2. **Complexity gate for new code:** enable mccabe (`C901`, max ~15). The existing offenders get
-   per-file ignores; new code holds the line.
+   (→ `util.new_id`) outside `util.py` — **both bans scoped to `src/`** (tests legitimately
+   hand-roll YAML fixtures; exempt `tests/` or apply via per-path config). Add `BLE001` (blind
+   `except`) with **inline `# noqa: BLE001` on existing sites or a diff-aware baseline — not
+   per-file ignores**, which would exempt every *new* broad catch in exactly the god-service files
+   where most work happens.
+2. **Complexity gate for new code:** enable mccabe (`C901`, max ~15). Existing offenders get
+   per-function `# noqa: C901` with a reason (as #538 plans) — not per-file ignores, which would
+   stop checking new functions added to those same files.
 3. **Greppable boundary checks in CI** (the module-boundary reviewer exists for diffs; add repo-wide):
    `\.db\.(fetch|execute|acquire)` outside `state_store/`/`storage/`/table-gateway modules;
-   `_(host|orch)\._` outside a documented host interface; and the inline-404 check **must be
+   a private-reach check **covering more than host objects** — `_(host|orch)\._` alone misses the
+   §2.3 patterns (`self._context._characters`, `self._drift._post_fetcher`,
+   `scene_manager._active_scene`), so pair it with `getattr\(\w+, "_` and, better, a small AST
+   checker flagging `obj._x` where `obj` isn't `self`/`cls`, with same-module allowlists (#589's
+   Protocol typing stays the primary enforcement); and the inline-404 check **must be
    multiline-aware or AST-based** — a single-line grep for `HTTPException\(status_code=404` misses
    the split form (`raise HTTPException(` ↵ `status_code=404`) used at e.g.
    `api/campaigns/scenes.py:392`, `entities.py:111`, `turns.py:136` (use `rg -U` or a small AST
@@ -428,6 +440,14 @@ test first (pin current behavior, then fix).
 > "behavior-preserving" concluding sentence aligned with the id-convergence flag; §1.1 keeps its
 > P0 rank with the conditional-trigger qualifier made explicit (work-ordering tier, not a release
 > gate). #585, #593, #598 updated to match.
+>
+> **Post-review corrections, round 4:** `strip_tracker_block`/`Tier` reclassified from private
+> reach-ins to a facade note (both are in their submodules' `__all__` — #589 trimmed accordingly);
+> §6 no longer lists the live `_NullAutoDisable` policy as over-engineering (only the unwired
+> tracker); §8's gates hardened again — bans scoped to `src/` (tests hand-roll YAML fixtures
+> legitimately), inline `# noqa`/diff-aware baselines instead of per-file ignores (which would
+> exempt new code in the god-service files), and the private-reach check generalized beyond
+> `_(host|orch)\._` to the other §2.3 patterns.
 
 Checked 2026-06-09 against all 45 open issues plus targeted closed-issue searches. The repo has
 already run three audit passes (orchestrator simplification audit → #518–#523; code-quality /
