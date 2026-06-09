@@ -9,8 +9,8 @@
  * frontmatter records one; lore is grouped by keyword.
  */
 
-import { useCallback, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useCallback, useMemo } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { viewsApi } from "../../api/views";
 import type { Composition, Greeting, ResolvedCharacter, ResolvedEntity } from "../../api/types";
@@ -42,13 +42,24 @@ const TABS: { key: WorldTab; label: string }[] = [
 
 export function WorldView() {
   const { campaignId = "" } = useParams();
-  const [tab, setTab] = useState<WorldTab>("characters");
+  // Tab selection lives in the URL (?tab=…) so world tabs are deep-linkable
+  // and survive refresh, matching the library's URL-per-kind routes.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get("tab");
+  const tab: WorldTab = TABS.some((t) => t.key === rawTab) ? (rawTab as WorldTab) : "characters";
+  const selectTab = (key: WorldTab) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("tab", key);
+      return next;
+    });
+  };
 
   return (
     <section className="route campaign-world" aria-labelledby="world-heading">
       <header className="route-header">
         <h2 id="world-heading">World</h2>
-        <Tabs tabs={TABS} active={tab} onSelect={setTab} ariaLabel="World tabs" />
+        <Tabs tabs={TABS} active={tab} onSelect={selectTab} ariaLabel="World tabs" />
       </header>
       {tab === "characters" && <CharactersTab campaignId={campaignId} />}
       {tab === "monsters" && <EntityTab campaignId={campaignId} kind="monsters" />}
@@ -326,34 +337,67 @@ function GreetingsTab({ campaignId }: { campaignId: string }) {
     useCallback(() => viewsApi.getComposition(campaignId), [campaignId]),
   );
 
-  if (composition.status !== "ok") {
-    return (
-      <Loading state={composition}>{() => <p className="muted">Loading composition…</p>}</Loading>
-    );
-  }
+  return (
+    <Loading state={composition}>
+      {(comp) => {
+        // Honor each ref's include filter: an empty list means "all kinds".
+        const worldIds = comp.worlds
+          .filter((ref) => ref.include.length === 0 || ref.include.includes("greetings"))
+          .map((ref) => ref.world_id);
+        return <GreetingsAcrossWorlds worldIds={worldIds} />;
+      }}
+    </Loading>
+  );
+}
 
-  return <GreetingsAcrossWorlds worldIds={composition.data.worlds.map((s) => s.world_id)} />;
+interface GreetingsFanout {
+  greetings: Greeting[];
+  /** World ids whose greeting fetch failed; surfaced, not swallowed. */
+  failures: string[];
 }
 
 function GreetingsAcrossWorlds({ worldIds }: { worldIds: string[] }) {
   const idsKey = useMemo(() => worldIds.join("|"), [worldIds]);
-  const state = useApi<Greeting[]>(
+  const state = useApi<GreetingsFanout>(
     useCallback(
-      () =>
-        Promise.all(worldIds.map((id) => viewsApi.listGreetingsForWorld(id).catch(() => []))).then(
-          (lists) => lists.flat(),
-        ),
+      async () => {
+        const settled = await Promise.allSettled(
+          worldIds.map((id) => viewsApi.listGreetingsForWorld(id)),
+        );
+        const greetings: Greeting[] = [];
+        const failures: string[] = [];
+        settled.forEach((res, i) => {
+          if (res.status === "fulfilled") greetings.push(...res.value);
+          else failures.push(worldIds[i] ?? "?");
+        });
+        return { greetings, failures };
+      },
       // worldIds identity is unstable; collapse to a string key.
       // eslint-disable-next-line react-hooks/exhaustive-deps
       [idsKey],
     ),
   );
   if (worldIds.length === 0) {
-    return <p className="muted">No world refs in the composition.</p>;
+    return <p className="muted">No world refs in the composition include greetings.</p>;
   }
   return (
-    <Loading state={state} emptyMessage="No greetings declared in the composed worlds.">
-      {(rows) => <FilteredGreetings rows={rows} />}
+    <Loading state={state}>
+      {({ greetings, failures }) => (
+        <>
+          {failures.length > 0 && (
+            <p className="error" role="alert">
+              Failed to load greetings from: {failures.join(", ")}
+            </p>
+          )}
+          {greetings.length === 0 ? (
+            failures.length === 0 && (
+              <p className="muted">No greetings declared in the composed worlds.</p>
+            )
+          ) : (
+            <FilteredGreetings rows={greetings} />
+          )}
+        </>
+      )}
     </Loading>
   );
 }
