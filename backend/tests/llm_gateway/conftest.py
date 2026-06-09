@@ -32,6 +32,7 @@ class FakeLLMProvider:
         default_factory=lambda: TokenUsage(input_tokens=10, output_tokens=5)
     )
     response_cost: float | None = 0.0001
+    stream_cost: float | None = None
     stream_chunks: list[str] = field(default_factory=lambda: ["he", "ll", "o"])
     raise_sequence: list[BaseException] = field(default_factory=list)
     models: list[ModelInfo] = field(default_factory=list)
@@ -69,7 +70,9 @@ class FakeLLMProvider:
 
                 await asyncio.sleep(self.stream_delays[i])
             yield CompletionChunk(delta=part, is_final=False)
-        yield CompletionChunk(delta="", is_final=True, usage=self.response_usage)
+        yield CompletionChunk(
+            delta="", is_final=True, usage=self.response_usage, cost_estimate_usd=self.stream_cost
+        )
 
     async def list_models(self) -> list[ModelInfo]:
         return list(self.models)

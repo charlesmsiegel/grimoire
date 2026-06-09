@@ -98,6 +98,11 @@ class CompletionChunk(BaseModel):
     delta: str
     is_final: bool = False
     usage: TokenUsage | None = None
+    # Actual charge for the whole call (USD) as reported by the provider
+    # (e.g. OpenRouter usage accounting), set on the final chunk when known.
+    # None means "not reported" — the gateway then estimates from catalog
+    # pricing, mirroring how `CompletionResponse.cost_estimate_usd` works.
+    cost_estimate_usd: float | None = None
 
 
 class RetryPolicy(BaseModel):

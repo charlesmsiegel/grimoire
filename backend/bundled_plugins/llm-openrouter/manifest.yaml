@@ -70,19 +70,31 @@ config_schema:
         request (keys such as `sort`, `allow_fallbacks`, `order`, `only`,
         `max_price`). Controls which upstream provider serves a model and can
         cap per-token price. Omit to use Grimoire's cost-safe default
-        (`sort: price`, `allow_fallbacks: false`); set to `{}` to opt out.
+        (`sort: price`, `allow_fallbacks: false`); set to `{}` to opt out of
+        routing entirely, including the builtin per-model price guards.
       additionalProperties: true
     provider_overrides:
       type: object
       title: Per-model provider routing
       description: |
         Map of model slug -> provider routing object, merged over the default
-        for that model. Use `max_price` (USD per million prompt/completion
+        for that model (nested objects such as `max_price` merge
+        field-by-field). Use `max_price` (USD per million prompt/completion
         tokens) to cap a specific model's price. Supplying this replaces the
         builtin price guards (e.g. the DeepSeek V4 Pro ceiling).
       additionalProperties:
         type: object
         additionalProperties: true
+    usage_accounting:
+      type: boolean
+      title: Usage accounting
+      description: |
+        Ask OpenRouter to return the actual charged cost on every response
+        (`usage: {include: true}`) so logs and cost records reflect the real
+        charge rather than catalog estimates. Disable — together with
+        `provider: {}` — when `base_url` points at a strict OpenAI-compatible
+        gateway that rejects OpenRouter-only request fields.
+      default: true
   required: [api_key]
   additionalProperties: false
 
