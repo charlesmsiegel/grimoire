@@ -39,6 +39,25 @@ describe("viewsApi.getSheetSchema", () => {
     expect(schema.required).toEqual(["willpower"]);
   });
 
+  it("accepts Draft 2020-12 boolean subschemas, coercing them to empty objects", async () => {
+    // The backend metaschema check (Draft202012Validator) accepts `true`/`false`
+    // anywhere a subschema is expected, so the boundary parser must too.
+    mockFetch({
+      type: "object",
+      properties: {
+        metadata: true,
+        powers: { widget: "power-list", items: false },
+        attributes: { widget: "nested-section", properties: { hidden: true } },
+      },
+    });
+
+    const schema = await viewsApi.getSheetSchema("vamp", "character");
+
+    expect(schema.properties.metadata).toEqual({});
+    expect(schema.properties.powers?.items).toEqual({});
+    expect(schema.properties.attributes?.properties?.hidden).toEqual({});
+  });
+
   it("defaults missing properties to an empty record", async () => {
     mockFetch({ type: "object", title: "Empty" });
 

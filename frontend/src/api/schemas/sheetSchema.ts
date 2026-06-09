@@ -10,12 +10,21 @@ import { z } from "zod";
  * so each property object passes unknown keys through and only the recursive
  * structure (`properties`, `items`) is validated. Parsing here replaces the
  * former `as unknown as SheetSchema` cast at the use sites (issue #545).
+ *
+ * Draft 2020-12 boolean subschemas (`true`/`false`) are accepted by the
+ * backend's metaschema check (`mechanics/loader.py::_read_schema_file`), so
+ * they must parse here too. They carry no widget annotations, so they coerce
+ * to `{}` — the renderer shows its generic fallback, exactly as it did before
+ * this boundary existed.
  */
 const SchemaPropertySchema: z.ZodType = z.lazy(() =>
-  z.looseObject({
-    properties: z.record(z.string(), SchemaPropertySchema).optional(),
-    items: SchemaPropertySchema.optional(),
-  }),
+  z.union([
+    z.boolean().transform(() => ({})),
+    z.looseObject({
+      properties: z.record(z.string(), SchemaPropertySchema).optional(),
+      items: SchemaPropertySchema.optional(),
+    }),
+  ]),
 );
 
 export const SheetSchemaSchema = z.looseObject({
