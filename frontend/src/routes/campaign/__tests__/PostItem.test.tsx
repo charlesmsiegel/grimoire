@@ -490,4 +490,16 @@ describe("PostItem generated images", () => {
     expect(img.getAttribute("alt")).toBe("Generated scene image");
     expect(img.getAttribute("alt")).not.toBe("");
   });
+
+  it("treats a whitespace-only prompt as absent and uses the fallback alt", () => {
+    render(
+      <PostItem
+        post={makePost()}
+        pcs={PCS}
+        images={[{ id: "img1", url: "/api/files/x.png", post_id: "p1", prompt: "   " }]}
+        campaignId="c1"
+      />,
+    );
+    expect(screen.getByRole("img").getAttribute("alt")).toBe("Generated scene image");
+  });
 });

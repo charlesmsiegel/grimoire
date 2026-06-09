@@ -86,6 +86,11 @@ describe("ScenePane generated images", () => {
     expect(img.getAttribute("alt")).toBe("Generated scene image");
     expect(img.getAttribute("alt")).not.toBe("");
   });
+
+  it("treats a whitespace-only prompt as absent and uses the fallback alt", () => {
+    renderPane({ images: { img1: { id: "img1", url: "/api/files/x.png", prompt: "   " } } });
+    expect(screen.getByRole("img").getAttribute("alt")).toBe("Generated scene image");
+  });
 });
 
 describe("ScenePane delete wiring", () => {
