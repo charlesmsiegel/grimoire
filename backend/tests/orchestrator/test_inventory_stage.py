@@ -1,0 +1,254 @@
+"""The shared post-extraction state stage runs in both pipeline copies (#603).
+
+The speaker loop (``per_character_multi_call``) used to skip the inventory
+stage entirely: ``INVENTORY_CHANGE`` deltas extracted in a speaker round were
+silently discarded while the single-response path applied them. These tests
+pin the orchestrator → InventoryService handoff in both pipelines, the parity
+between them, the flagged-not-silent failure semantics (#584), and a holdings
+write end-to-end against the real InventoryService + StateStore.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from grimoire import events
+from grimoire.event_bus import Event, EventBus
+from grimoire.orchestrator.config import OrchestratorConfig, SpeakerLoopConfig
+from grimoire.orchestrator.service import OrchestratorService
+from grimoire.scenes.manager import SceneManager, SceneManagerConfig
+from grimoire.scenes.types import AuthorKind, SceneInit
+from grimoire.types.common import Scope
+from grimoire.types.state import DeltaKind, StateDelta
+
+from .conftest import (
+    FakeContextBuilder,
+    FakeDB,
+    FakeExtractor,
+    FakeGateway,
+    FakeInventory,
+    FakeStateStore,
+    WSCollector,
+    fixed_clock,
+)
+
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+
+MULTI_CALL_CONFIG = json.dumps({"narrator": {"response_mode": "per_character_multi_call"}})
+
+
+def _inventory_delta() -> StateDelta:
+    return StateDelta(
+        kind=DeltaKind.INVENTORY_CHANGE,
+        target_scope=Scope.CAMPAIGN_SQLITE,
+        target_id="ring",
+        after={"action": "acquire", "item": "ring", "holder": "alice", "quantity": 1},
+        confidence=0.95,
+    )
+
+
+def _make_orchestrator(
+    *,
+    tmp_path: Path,
+    inventory: FakeInventory,
+    deltas: list[StateDelta],
+    campaign_config: str | None = None,
+) -> tuple[OrchestratorService, SceneManager, WSCollector]:
+    bus = EventBus()
+    sm = SceneManager(tmp_path, config=SceneManagerConfig(running_summary_every_n_posts=0))
+    db = FakeDB(campaigns={"camp1"}, pcs={"camp1": {"pc1"}})
+    if campaign_config:
+        db.campaign_configs["camp1"] = campaign_config
+    ws = WSCollector()
+    orch = OrchestratorService(
+        event_bus=bus,
+        scene_manager=sm,
+        llm_gateway=FakeGateway(chunks=["Alice pockets the ring."]),
+        context_builder=FakeContextBuilder(),
+        extractor=FakeExtractor(deltas=deltas),
+        state_store=FakeStateStore(db=db),
+        inventory=inventory,
+        ws_push=ws,
+        config=OrchestratorConfig(speaker_loop=SpeakerLoopConfig(timeout_seconds=0.05)),
+        clock=fixed_clock(),
+    )
+    return orch, sm, ws
+
+
+async def _start_scene(sm: SceneManager):
+    return await sm.start_scene(
+        SceneInit(
+            campaign_id="camp1",
+            present_character_refs=["worlds/w/characters/alice"],
+            present_pc_refs=["pc1"],
+        )
+    )
+
+
+def _subscribe_fragments(orch: OrchestratorService) -> list[Event]:
+    captured: list[Event] = []
+    orch.event_bus().subscribe(events.TURN_AUDIT_FRAGMENT, captured.append)
+    return captured
+
+
+async def test_speaker_round_inventory_deltas_reach_inventory(tmp_path: Path) -> None:
+    """Regression (#603): an INVENTORY_CHANGE delta extracted in a speaker
+    round must be handed to the InventoryService, not silently discarded."""
+    inventory = FakeInventory()
+    orch, sm, _ws = _make_orchestrator(
+        tmp_path=tmp_path,
+        inventory=inventory,
+        deltas=[_inventory_delta()],
+        campaign_config=MULTI_CALL_CONFIG,
+    )
+    await _start_scene(sm)
+
+    result = await orch.submit_post("camp1", "pc1", "I hand Alice the ring")
+
+    assert len(inventory.calls) >= 1
+    call = inventory.calls[0]
+    assert call["campaign_id"] == "camp1"
+    assert call["turn_id"] == result.turn_id
+    assert [d.kind for d in call["deltas"]] == [DeltaKind.INVENTORY_CHANGE]
+
+
+async def test_inventory_handoff_parity_between_pipelines(tmp_path: Path) -> None:
+    """The speaker loop hands the InventoryService the same payload the
+    single-response path does (#603 acceptance criterion)."""
+    inv_single = FakeInventory()
+    orch_single, sm_single, _ = _make_orchestrator(
+        tmp_path=tmp_path / "single",
+        inventory=inv_single,
+        deltas=[_inventory_delta()],
+    )
+    await _start_scene(sm_single)
+    result_single = await orch_single.submit_post("camp1", "pc1", "I hand Alice the ring")
+
+    inv_multi = FakeInventory()
+    orch_multi, sm_multi, _ = _make_orchestrator(
+        tmp_path=tmp_path / "multi",
+        inventory=inv_multi,
+        deltas=[_inventory_delta()],
+        campaign_config=MULTI_CALL_CONFIG,
+    )
+    await _start_scene(sm_multi)
+    result_multi = await orch_multi.submit_post("camp1", "pc1", "I hand Alice the ring")
+
+    assert len(inv_single.calls) == 1
+    assert len(inv_multi.calls) == 1
+    single, multi = inv_single.calls[0], inv_multi.calls[0]
+    assert single["campaign_id"] == multi["campaign_id"] == "camp1"
+    assert single["turn_id"] == result_single.turn_id
+    assert multi["turn_id"] == result_multi.turn_id
+    assert [(d.kind, d.after) for d in single["deltas"]] == [
+        (d.kind, d.after) for d in multi["deltas"]
+    ]
+
+
+async def test_speaker_round_inventory_failure_flagged_not_silent(tmp_path: Path) -> None:
+    """A failed inventory stage in a speaker round is flagged on the turn
+    audit (#584 semantics) and the round still completes."""
+    inventory = FakeInventory(raise_on_apply=RuntimeError("inventory boom"))
+    orch, sm, ws = _make_orchestrator(
+        tmp_path=tmp_path,
+        inventory=inventory,
+        deltas=[_inventory_delta()],
+        campaign_config=MULTI_CALL_CONFIG,
+    )
+    scene = await _start_scene(sm)
+    fragments = _subscribe_fragments(orch)
+
+    await orch.submit_post("camp1", "pc1", "I hand Alice the ring")
+
+    warnings = [w for e in fragments for w in e.payload.get("warnings", [])]
+    assert any(w["module"] == "inventory" for w in warnings)
+
+    posts = await sm.recent_posts(scene.id, n=20)
+    assert any(p.author_kind == AuthorKind.NPC for p in posts)
+    assert "turn_complete" in [m["type"] for _, m in ws.messages]
+
+
+async def test_single_response_inventory_failure_flagged_not_silent(tmp_path: Path) -> None:
+    """The single-response path flags the same failure the same way."""
+    inventory = FakeInventory(raise_on_apply=RuntimeError("inventory boom"))
+    orch, sm, ws = _make_orchestrator(
+        tmp_path=tmp_path,
+        inventory=inventory,
+        deltas=[_inventory_delta()],
+    )
+    scene = await _start_scene(sm)
+    fragments = _subscribe_fragments(orch)
+
+    await orch.submit_post("camp1", "pc1", "I hand Alice the ring")
+
+    warnings = [w for e in fragments for w in e.payload.get("warnings", [])]
+    assert any(w["module"] == "inventory" for w in warnings)
+
+    posts = await sm.recent_posts(scene.id, n=20)
+    assert any(p.author_kind == AuthorKind.NARRATOR for p in posts)
+    assert "turn_complete" in [m["type"] for _, m in ws.messages]
+
+
+async def test_speaker_round_updates_holdings_with_real_inventory(tmp_path: Path) -> None:
+    """End-to-end over the real StateStore + InventoryService: a speaker-round
+    INVENTORY_CHANGE delta lands in ``inventory_holdings`` exactly as a
+    single-response turn's would (#603 acceptance criterion)."""
+    from grimoire.inventory.service import InventoryService
+    from grimoire.state_store import StateStore
+    from grimoire.storage import Database
+    from grimoire.testing.db_template import stamp_migrated_db
+
+    bus = EventBus()
+    db = Database(stamp_migrated_db(tmp_path / "campaigns.sqlite"), pool_size=2)
+    await db.connect()
+    try:
+        store = StateStore(db, tmp_path / "data")
+        await store.upsert_campaign(campaign_id="camp1", name="C")
+        await store.set_campaign_config(
+            "camp1",
+            {
+                "narrator": {"response_mode": "per_character_multi_call"},
+                "inventory": {"enabled": True},
+            },
+        )
+        await store.add_pc(campaign_id="camp1", character_ref="pc1", display_name="PC One")
+        await store.write_emergent(
+            campaign_id="camp1",
+            kind="character",
+            entity_id="alice",
+            frontmatter={"id": "alice", "name": "Alice"},
+            body="",
+            source="test",
+        )
+
+        sm = SceneManager(
+            tmp_path / "scenes", config=SceneManagerConfig(running_summary_every_n_posts=0)
+        )
+        orch = OrchestratorService(
+            event_bus=bus,
+            scene_manager=sm,
+            llm_gateway=FakeGateway(chunks=["Alice pockets the ring."]),
+            context_builder=FakeContextBuilder(),
+            extractor=FakeExtractor(deltas=[_inventory_delta()]),
+            state_store=store,
+            inventory=InventoryService(store=store, event_bus=bus),
+            config=OrchestratorConfig(speaker_loop=SpeakerLoopConfig(timeout_seconds=0.05)),
+        )
+        await sm.start_scene(
+            SceneInit(
+                campaign_id="camp1",
+                present_character_refs=["alice"],
+                present_pc_refs=["pc1"],
+            )
+        )
+
+        await orch.submit_post("camp1", "pc1", "I hand Alice the ring")
+
+        rows = await store.list_inventory_holdings("camp1", item_ref="ring")
+        assert len(rows) == 1
+        assert rows[0]["holder_id"] == "alice"
+    finally:
+        await db.close()

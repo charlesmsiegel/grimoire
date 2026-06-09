@@ -1414,23 +1414,13 @@ class OrchestratorService:
         # unknown-name candidate it appends is part of the extraction for every
         # downstream consumer (DELTAS_EXTRACTED, apply_routing), and pending
         # cast changes are queued for review.
-        if extraction is not None and self._characters is not None:
-            pending_ids = await resolve_cast_changes(
-                extraction=extraction,
-                scene=scene_obj,
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                characters=self._characters,
-                scenes=self._scenes,
-            )
-            if pending_ids:
-                pending = await self._scenes.list_pending_cast_changes(scene_id)
-                await self._emit_fragment(
-                    turn_id,
-                    campaign_id,
-                    pending_cast_changes=[p.model_dump(mode="json") for p in pending],
-                )
-                await self._push_pending_cast_changes(campaign_id, scene_id)
+        await self._resolve_extraction_cast_changes(
+            extraction=extraction,
+            scene_obj=scene_obj,
+            campaign_id=campaign_id,
+            scene_id=scene_id,
+            turn_id=turn_id,
+        )
 
         await self._emit_turn_event(
             events.DELTAS_EXTRACTED,
@@ -1466,56 +1456,12 @@ class OrchestratorService:
                 time_advance_durations.append(d.model_dump(mode="json"))
 
         active.stage = "applying"
-        applied_ids: list[str] = []
-        queued_ids: list[str] = []
-        if extraction is not None:
-            applied_ids, queued_ids = await self._delta.apply_routing(
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                extraction=extraction,
-            )
-        if applied_ids or queued_ids:
-            await self._emit_fragment(
-                turn_id,
-                campaign_id,
-                applied_deltas=[{"id": did} for did in applied_ids],
-                queued_for_review=[{"id": qid} for qid in queued_ids],
-            )
-
-        if self._inventory is not None and extraction is not None:
-            # The inventory service is injected at startup (Protocol-style);
-            # the orchestrator hands it raw deltas and never imports the
-            # inventory package (no orchestrator -> inventory module edge).
-            try:
-                await self._inventory.apply_from_deltas(
-                    campaign_id=campaign_id,
-                    turn_id=turn_id,
-                    deltas=list(extraction.deltas),
-                )
-            except Exception:
-                logger.exception("inventory apply failed; continuing turn")
-
-        if (
-            extraction is not None
-            and self._transient_state is not None
-            and getattr(extraction, "transient_updates", None)
-        ):
-            from grimoire.transient_state.routing import route_transient_updates
-
-            ts_summary = await route_transient_updates(
-                campaign_id=campaign_id,
-                proposals=list(extraction.transient_updates),
-                transient_state=self._transient_state,
-                source_post_id=turn_id,
-                continuity=self._continuity,
-            )
-            if ts_summary.writes or ts_summary.conflicts:
-                await self._emit_fragment(
-                    turn_id,
-                    campaign_id,
-                    transient_state_writes=ts_summary.writes,
-                    transient_state_conflicts=ts_summary.conflicts,
-                )
+        await self._apply_extraction_state(
+            campaign_id=campaign_id,
+            scene_id=scene_id,
+            turn_id=turn_id,
+            extraction=extraction,
+        )
 
         from grimoire.extractor.together import strip_tracker_block
         from grimoire.orchestrator.post_splitting import create_response_posts
@@ -1548,6 +1494,125 @@ class OrchestratorService:
             time_advances=time_advance_durations,
             pending_cast_changes=[p.model_dump(mode="json") for p in pending_cast],
         )
+
+    async def _resolve_extraction_cast_changes(
+        self,
+        *,
+        extraction: ExtractionResult | None,
+        scene_obj: Any,
+        campaign_id: CampaignId,
+        scene_id: SceneId,
+        turn_id: TurnId,
+    ) -> None:
+        """Resolve extractor cast-change proposals and surface queued ones (#464).
+
+        Shared post-extraction stage: both the single-response pipeline and
+        the speaker loop run this between extraction and
+        :meth:`_apply_extraction_state`, so the two paths can't drift (#603).
+        No-op when extraction failed or the Characters module isn't wired.
+        """
+        if extraction is None or self._characters is None:
+            return
+        pending_ids = await resolve_cast_changes(
+            extraction=extraction,
+            scene=scene_obj,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            characters=self._characters,
+            scenes=self._scenes,
+        )
+        if pending_ids:
+            pending = await self._scenes.list_pending_cast_changes(scene_id)
+            await self._emit_fragment(
+                turn_id,
+                campaign_id,
+                pending_cast_changes=[p.model_dump(mode="json") for p in pending],
+            )
+            await self._push_pending_cast_changes(campaign_id, scene_id)
+
+    async def _apply_extraction_state(
+        self,
+        *,
+        campaign_id: CampaignId,
+        scene_id: SceneId,
+        turn_id: TurnId,
+        extraction: ExtractionResult | None,
+    ) -> tuple[list[str], list[str]]:
+        """Apply an extraction's state effects: routing, inventory, transient.
+
+        This is the single post-extraction stage list shared by the
+        single-response pipeline and the speaker loop (#603) — add any new
+        state-affecting stage here, never to just one caller, so the two
+        pipeline copies stay structurally identical until #518 folds them
+        into a TurnCoordinator. Returns ``(applied_ids, queued_ids)`` from
+        delta routing; no-ops when extraction failed.
+        """
+        if extraction is None:
+            return [], []
+
+        applied_ids, queued_ids = await self._delta.apply_routing(
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            extraction=extraction,
+        )
+        if applied_ids or queued_ids:
+            await self._emit_fragment(
+                turn_id,
+                campaign_id,
+                applied_deltas=[{"id": did} for did in applied_ids],
+                queued_for_review=[{"id": qid} for qid in queued_ids],
+            )
+
+        if self._inventory is not None:
+            # The inventory service is injected at startup (Protocol-style);
+            # the orchestrator hands it raw deltas and never imports the
+            # inventory package (no orchestrator -> inventory module edge).
+            try:
+                await self._inventory.apply_from_deltas(
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    deltas=list(extraction.deltas),
+                )
+            except Exception as exc:
+                # Cross-stage compensation is #584's scope; until it lands a
+                # failed inventory stage is flagged on the turn audit — the
+                # routed delta batch is already committed, so continuing
+                # silently would hide a holdings/narrative divergence (#603).
+                logger.exception(
+                    "inventory apply failed for turn %s; flagged on turn audit", turn_id
+                )
+                await self._emit_fragment(
+                    turn_id,
+                    campaign_id,
+                    warnings=[
+                        {
+                            "timestamp": self._clock().isoformat(),
+                            "module": "inventory",
+                            "message": f"inventory apply failed: {exc}",
+                            "payload": {"scene_id": scene_id, "stage": "inventory_apply"},
+                        }
+                    ],
+                )
+
+        if self._transient_state is not None and getattr(extraction, "transient_updates", None):
+            from grimoire.transient_state.routing import route_transient_updates
+
+            ts_summary = await route_transient_updates(
+                campaign_id=campaign_id,
+                proposals=list(extraction.transient_updates),
+                transient_state=self._transient_state,
+                source_post_id=turn_id,
+                continuity=self._continuity,
+            )
+            if ts_summary.writes or ts_summary.conflicts:
+                await self._emit_fragment(
+                    turn_id,
+                    campaign_id,
+                    transient_state_writes=ts_summary.writes,
+                    transient_state_conflicts=ts_summary.conflicts,
+                )
+
+        return applied_ids, queued_ids
 
     async def _run_speaker_loop(
         self,
@@ -1620,26 +1685,25 @@ class OrchestratorService:
                 turn_id=turn_id,
                 mode=extract_mode,
             )
-            if extraction is not None:
-                # §464: resolve before apply_routing (same invariant as the
-                # single-response path) so unknown-name candidates are routed.
-                if self._characters is not None:
-                    await resolve_cast_changes(
-                        extraction=extraction,
-                        scene=scene_obj,
-                        campaign_id=campaign_id,
-                        turn_id=turn_id,
-                        characters=self._characters,
-                        scenes=self._scenes,
-                    )
-                    # Surface prompts queued this round without waiting for the
-                    # loop's final turn_complete.
-                    await self._push_pending_cast_changes(campaign_id, scene_id)
-                await self._delta.apply_routing(
-                    campaign_id=campaign_id,
-                    turn_id=turn_id,
-                    extraction=extraction,
-                )
+            # §464: resolve before applying (same invariant as the
+            # single-response path) so unknown-name candidates are routed and
+            # prompts queued this round surface without waiting for the loop's
+            # final turn_complete; then run the shared state-application
+            # stages (routing, inventory, transient) so a speaker round
+            # applies the same state effects as a single-response turn (#603).
+            await self._resolve_extraction_cast_changes(
+                extraction=extraction,
+                scene_obj=scene_obj,
+                campaign_id=campaign_id,
+                scene_id=scene_id,
+                turn_id=turn_id,
+            )
+            await self._apply_extraction_state(
+                campaign_id=campaign_id,
+                scene_id=scene_id,
+                turn_id=turn_id,
+                extraction=extraction,
+            )
 
             # Create NPC post
             cleaned = strip_tracker_block(response_text)

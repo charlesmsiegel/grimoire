@@ -304,6 +304,22 @@ class FakeExtractor:
         return ExtractionResult(deltas=list(self.deltas))
 
 
+@dataclass
+class FakeInventory:
+    """Records every ``apply_from_deltas`` handoff from the orchestrator."""
+
+    calls: list[dict] = field(default_factory=list)
+    raise_on_apply: BaseException | None = None
+
+    async def apply_from_deltas(
+        self, *, campaign_id: str, turn_id: str | None, deltas: list[Any]
+    ) -> dict | None:
+        self.calls.append({"campaign_id": campaign_id, "turn_id": turn_id, "deltas": list(deltas)})
+        if self.raise_on_apply is not None:
+            raise self.raise_on_apply
+        return {"touched": 0, "flags": 0}
+
+
 class WSCollector:
     """Captures every ws_push call so tests can assert event order."""
 
