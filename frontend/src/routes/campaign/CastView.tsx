@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api/client";
-import { campaignApi, canonicalizeCharacterRef } from "../../api/campaign";
+import { campaignApi, canonicalizeCharacterRef, characterRefFor } from "../../api/campaign";
 import { viewsApi } from "../../api/views";
 import type { ResolvedCharacter, WorldMeta } from "../../api/types";
 import { useResource } from "../../api/useResource";
@@ -46,11 +46,7 @@ export function CastView() {
   // which spelling was stored (#517).
   const pcRefs = new Set(pcState.data?.map((p) => canonicalizeCharacterRef(p.character_ref)) ?? []);
   const refForRow = (r: ResolvedCharacter): string =>
-    canonicalizeCharacterRef(
-      r.character.world_id !== null
-        ? `library:worlds/${r.character.world_id}/characters/${r.character.id}`
-        : `campaign:emergent/character/${r.character.id}`,
-    );
+    canonicalizeCharacterRef(characterRefFor(r.character));
   const removePc = useDestructiveConfirm<{ ref: string; name: string }>(async ({ ref }) => {
     await campaignApi.removePc(campaignId, ref);
     state.reload();

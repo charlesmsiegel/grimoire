@@ -56,13 +56,13 @@ export function WorldsListView() {
   const [deleting, setDeleting] = useState<{
     worldId: string;
     worldName: string;
-    dependents: CampaignRef[] | undefined;
+    dependents: CampaignRef[] | "loading";
     busy: boolean;
     err: string | null;
   } | null>(null);
 
   async function openDelete(worldId: string, worldName: string) {
-    setDeleting({ worldId, worldName, dependents: undefined, busy: false, err: null });
+    setDeleting({ worldId, worldName, dependents: "loading", busy: false, err: null });
     try {
       const deps = await fetchWorldDependents(worldId);
       setDeleting((d) => (d && d.worldId === worldId ? { ...d, dependents: deps } : d));

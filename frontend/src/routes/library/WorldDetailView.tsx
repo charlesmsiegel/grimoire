@@ -33,7 +33,7 @@ export function WorldDetailView() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<{
-    dependents: CampaignRef[] | undefined;
+    dependents: CampaignRef[] | "loading";
     busy: boolean;
     err: string | null;
   } | null>(null);
@@ -42,7 +42,7 @@ export function WorldDetailView() {
   );
 
   async function openDelete() {
-    setDeleting({ dependents: undefined, busy: false, err: null });
+    setDeleting({ dependents: "loading", busy: false, err: null });
     try {
       const deps = await fetchWorldDependents(worldId);
       setDeleting((d) => (d ? { ...d, dependents: deps } : d));

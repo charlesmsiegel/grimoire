@@ -313,7 +313,7 @@ function EntityEditorBody({
               This permanently removes <code>{entity.path}</code>. Cannot be undone.
             </p>
           }
-          dependents={dependents.data ?? undefined}
+          dependents={dependents.data ?? (dependents.loading ? "loading" : [])}
           busy={deleting.busy}
           error={deleting.err}
           onConfirm={() => void confirmDelete()}
@@ -577,7 +577,7 @@ function GreetingEditorBody({
               This permanently removes greeting <code>{greeting.id}</code>. Cannot be undone.
             </p>
           }
-          dependents={dependents.data ?? undefined}
+          dependents={dependents.data ?? (dependents.loading ? "loading" : [])}
           busy={deleting.busy}
           error={deleting.err}
           onConfirm={() => void confirmDelete()}
