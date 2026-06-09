@@ -8,6 +8,8 @@ import { CardIconBar } from "../../components/CardIconBar";
 import { deleteAction } from "../../components/cardActions";
 import { Markdown } from "../../components/Markdown";
 import { AsyncBoundary } from "./AsyncBoundary";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
+import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
 
 const SECTION_LABELS = {
   pacing: "Pacing",
@@ -46,11 +48,10 @@ function StyleGuideList() {
     useCallback(() => libraryApi.listStyleGuides(), []),
   );
 
-  async function handleDelete(id: string, name: string) {
-    if (!window.confirm(`Delete style guide "${name}"? This cannot be undone.`)) return;
+  const del = useDestructiveConfirm<{ id: string; name: string }>(async ({ id }) => {
     await libraryApi.deleteStyleGuide(id);
     reload();
-  }
+  });
 
   return (
     <section className="library-section">
@@ -58,6 +59,17 @@ function StyleGuideList() {
         <h3>Style guides</h3>
         <button onClick={() => navigate("/library/style-guides/new")}>+ New style guide</button>
       </header>
+      {del.target && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete style guide "${del.target.name}"?`}
+          body={<p>This cannot be undone.</p>}
+          busy={del.busy}
+          error={del.error}
+          onConfirm={del.confirm}
+          onCancel={del.cancel}
+        />
+      )}
       <AsyncBoundary
         loading={loading}
         error={error}
@@ -81,7 +93,7 @@ function StyleGuideList() {
               <CardIconBar
                 actions={[
                   deleteAction({
-                    onClick: () => void handleDelete(g.asset_id, g.name || g.asset_id),
+                    onClick: () => del.request({ id: g.asset_id, name: g.name || g.asset_id }),
                     label: `Delete style guide ${g.name || g.asset_id}`,
                   }),
                 ]}

@@ -18,7 +18,7 @@ import { CONVERT_ICON, deleteAction } from "../../components/cardActions";
 import { useCardFilters } from "../../hooks/useCardFilters";
 import { TokenBadge } from "../../components/TokenBadge";
 import { AsyncBoundary } from "./AsyncBoundary";
-import { ConfirmDestructiveDialog } from "./ConfirmDestructiveDialog";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
 import { ConvertModal } from "./ConvertModal";
 import { EntityForm } from "./EntityForm";
 import { getDescriptor, primaryLabelKey } from "./entitySchemas";
