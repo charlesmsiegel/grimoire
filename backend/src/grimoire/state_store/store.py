@@ -11,7 +11,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Iterable, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -112,6 +112,24 @@ def _restore_file(target: Path, before_bytes: bytes | None) -> None:
             target.unlink()
     else:
         target.write_bytes(before_bytes)
+
+
+@contextlib.contextmanager
+def _snapshot_file_before(target: Path) -> Iterator[None]:
+    """Restore ``target``'s prior bytes (or absence) when the wrapped block fails.
+
+    Every file mutation and its index/delta-log transaction must run inside
+    this block: a SQL rollback (or cancellation) would otherwise leave the
+    file changed with no delta-log record of it, and that divergence does not
+    self-heal — the watcher re-indexes content, not delta history. See BUGS.md
+    ("apply_delta path leaves orphan files when SQL rolls back").
+    """
+    before_bytes = target.read_bytes() if target.exists() else None
+    try:
+        yield
+    except BaseException:
+        _restore_file(target, before_bytes)
+        raise
 
 
 @dataclass(frozen=True)
@@ -238,12 +256,7 @@ class StateStore:
         target.parent.mkdir(parents=True, exist_ok=True)
 
         before_payload: dict | None
-        # Snapshot the prior on-disk bytes (or absence) so we can restore on
-        # SQL rollback — otherwise the file would be left mutated while the
-        # index reflects the old state. See BUGS.md ("apply_delta path leaves
-        # orphan files when SQL rolls back").
         if target.exists():
-            before_bytes: bytes | None = target.read_bytes()
             if ref.kind in {"world", "image_preset"}:
                 before_data = load_yaml(target) or {}
                 before_payload = {"frontmatter": before_data, "body": ""}
@@ -251,17 +264,16 @@ class StateStore:
                 doc = read_markdown(target)
                 before_payload = {"frontmatter": doc.frontmatter, "body": doc.body}
         else:
-            before_bytes = None
             before_payload = None
 
-        # Write the file.
-        if ref.kind in {"world", "image_preset"}:
-            write_yaml(target, frontmatter)
-            body = ""
-        else:
-            write_markdown(target, ParsedDocument(frontmatter=frontmatter, body=body))
+        with _snapshot_file_before(target):
+            # Write the file.
+            if ref.kind in {"world", "image_preset"}:
+                write_yaml(target, frontmatter)
+                body = ""
+            else:
+                write_markdown(target, ParsedDocument(frontmatter=frontmatter, body=body))
 
-        try:
             async with self._txn() as conn:
                 version = await upsert_library_index(
                     conn,
@@ -284,9 +296,6 @@ class StateStore:
                     before=before_payload,
                     after={"frontmatter": frontmatter, "body": body, "version": version},
                 )
-        except BaseException:
-            _restore_file(target, before_bytes)
-            raise
 
         if self._bus is not None:
             await self._bus.emit(
@@ -320,9 +329,6 @@ class StateStore:
         if not target.exists():
             raise NotFoundError(f"library file does not exist: {library_id}")
 
-        # Snapshot the file bytes before unlinking so an SQL rollback can
-        # put the file back (see write_library_file's matching comment).
-        before_bytes = target.read_bytes()
         if ref.kind in {"world", "image_preset"}:
             before_data = load_yaml(target) or {}
             before_payload = {"frontmatter": before_data, "body": ""}
@@ -330,9 +336,8 @@ class StateStore:
             doc = read_markdown(target)
             before_payload = {"frontmatter": doc.frontmatter, "body": doc.body}
 
-        target.unlink()
-
-        try:
+        with _snapshot_file_before(target):
+            target.unlink()
             async with self._txn() as conn:
                 await delete_library_index_row(conn, library_id)
                 delta_id = await insert_delta(
@@ -348,9 +353,6 @@ class StateStore:
                     before=before_payload,
                     after=None,
                 )
-        except BaseException:
-            _restore_file(target, before_bytes)
-            raise
 
         if self._bus is not None:
             await self._bus.emit(
@@ -383,35 +385,35 @@ class StateStore:
         if target.exists():
             before_payload = load_yaml(target) or {}
 
-        write_yaml(target, patch)
-
         composite_id = f"campaigns/{campaign_id}/overrides/{library_id}"
-        async with self._txn() as conn:
-            await upsert_campaign_content_index(
-                conn,
-                data_root=self.data_root,
-                campaign_id=campaign_id,
-                composite_id=composite_id,
-                kind="override",
-                entity_subkind=ref.kind,
-                asset_id=ref.asset_id,
-                path=target,
-                frontmatter=patch,
-                body=None,
-            )
-            await insert_delta(
-                conn,
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                source=source,
-                kind="override_write",
-                target_scope="campaign-file",
-                target_table=None,
-                target_path=str(target),
-                target_id=composite_id,
-                before=before_payload,
-                after=patch,
-            )
+        with _snapshot_file_before(target):
+            write_yaml(target, patch)
+            async with self._txn() as conn:
+                await upsert_campaign_content_index(
+                    conn,
+                    data_root=self.data_root,
+                    campaign_id=campaign_id,
+                    composite_id=composite_id,
+                    kind="override",
+                    entity_subkind=ref.kind,
+                    asset_id=ref.asset_id,
+                    path=target,
+                    frontmatter=patch,
+                    body=None,
+                )
+                await insert_delta(
+                    conn,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    source=source,
+                    kind="override_write",
+                    target_scope="campaign-file",
+                    target_table=None,
+                    target_path=str(target),
+                    target_id=composite_id,
+                    before=before_payload,
+                    after=patch,
+                )
         return target
 
     async def merge_override(
@@ -463,26 +465,27 @@ class StateStore:
         if not target.exists():
             return False
         before_payload = load_yaml(target) or {}
-        target.unlink()
 
         composite_id = f"campaigns/{campaign_id}/overrides/{library_id}"
-        async with self._txn() as conn:
-            from grimoire.state_store.indexers import delete_campaign_content_row
+        with _snapshot_file_before(target):
+            target.unlink()
+            async with self._txn() as conn:
+                from grimoire.state_store.indexers import delete_campaign_content_row
 
-            await delete_campaign_content_row(conn, composite_id)
-            await insert_delta(
-                conn,
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                source=source,
-                kind="override_delete",
-                target_scope="campaign-file",
-                target_table=None,
-                target_path=str(target),
-                target_id=composite_id,
-                before=before_payload,
-                after=None,
-            )
+                await delete_campaign_content_row(conn, composite_id)
+                await insert_delta(
+                    conn,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    source=source,
+                    kind="override_delete",
+                    target_scope="campaign-file",
+                    target_table=None,
+                    target_path=str(target),
+                    target_id=composite_id,
+                    before=before_payload,
+                    after=None,
+                )
         return True
 
     async def delete_emergent(
@@ -506,26 +509,27 @@ class StateStore:
             return False
         doc = read_markdown(target)
         before_payload = {"frontmatter": doc.frontmatter, "body": doc.body}
-        target.unlink()
 
         composite_id = f"campaigns/{campaign_id}/emergent/{kind}/{entity_id}"
-        async with self._txn() as conn:
-            from grimoire.state_store.indexers import delete_campaign_content_row
+        with _snapshot_file_before(target):
+            target.unlink()
+            async with self._txn() as conn:
+                from grimoire.state_store.indexers import delete_campaign_content_row
 
-            await delete_campaign_content_row(conn, composite_id)
-            await insert_delta(
-                conn,
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                source=source,
-                kind="emergent_delete",
-                target_scope="campaign-file",
-                target_table=None,
-                target_path=str(target),
-                target_id=composite_id,
-                before=before_payload,
-                after=None,
-            )
+                await delete_campaign_content_row(conn, composite_id)
+                await insert_delta(
+                    conn,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    source=source,
+                    kind="emergent_delete",
+                    target_scope="campaign-file",
+                    target_table=None,
+                    target_path=str(target),
+                    target_id=composite_id,
+                    before=before_payload,
+                    after=None,
+                )
         return True
 
     async def write_emergent(
@@ -545,35 +549,35 @@ class StateStore:
             doc = read_markdown(target)
             before_payload = {"frontmatter": doc.frontmatter, "body": doc.body}
 
-        write_markdown(target, ParsedDocument(frontmatter=frontmatter, body=body))
-
         composite_id = f"campaigns/{campaign_id}/emergent/{kind}/{entity_id}"
-        async with self._txn() as conn:
-            await upsert_campaign_content_index(
-                conn,
-                data_root=self.data_root,
-                campaign_id=campaign_id,
-                composite_id=composite_id,
-                kind="emergent",
-                entity_subkind=kind,
-                asset_id=entity_id,
-                path=target,
-                frontmatter=frontmatter,
-                body=body,
-            )
-            await insert_delta(
-                conn,
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                source=source,
-                kind="emergent_create" if before_payload is None else "emergent_update",
-                target_scope="campaign-file",
-                target_table=None,
-                target_path=str(target),
-                target_id=composite_id,
-                before=before_payload,
-                after={"frontmatter": frontmatter, "body": body},
-            )
+        with _snapshot_file_before(target):
+            write_markdown(target, ParsedDocument(frontmatter=frontmatter, body=body))
+            async with self._txn() as conn:
+                await upsert_campaign_content_index(
+                    conn,
+                    data_root=self.data_root,
+                    campaign_id=campaign_id,
+                    composite_id=composite_id,
+                    kind="emergent",
+                    entity_subkind=kind,
+                    asset_id=entity_id,
+                    path=target,
+                    frontmatter=frontmatter,
+                    body=body,
+                )
+                await insert_delta(
+                    conn,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    source=source,
+                    kind="emergent_create" if before_payload is None else "emergent_update",
+                    target_scope="campaign-file",
+                    target_table=None,
+                    target_path=str(target),
+                    target_id=composite_id,
+                    before=before_payload,
+                    after={"frontmatter": frontmatter, "body": body},
+                )
         return target
 
     async def write_sheet(
@@ -592,35 +596,35 @@ class StateStore:
         if target.exists():
             before_payload = load_yaml(target) or {}
 
-        write_yaml(target, sheet)
-
         composite_id = f"campaigns/{campaign_id}/sheets/{kind}/{entity_id}.{mechanics_id}"
-        async with self._txn() as conn:
-            await upsert_campaign_content_index(
-                conn,
-                data_root=self.data_root,
-                campaign_id=campaign_id,
-                composite_id=composite_id,
-                kind="sheet",
-                entity_subkind=kind,
-                asset_id=entity_id,
-                path=target,
-                frontmatter=sheet,
-                body=None,
-            )
-            await insert_delta(
-                conn,
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                source=source,
-                kind="sheet_update",
-                target_scope="campaign-file",
-                target_table=None,
-                target_path=str(target),
-                target_id=composite_id,
-                before=before_payload,
-                after=sheet,
-            )
+        with _snapshot_file_before(target):
+            write_yaml(target, sheet)
+            async with self._txn() as conn:
+                await upsert_campaign_content_index(
+                    conn,
+                    data_root=self.data_root,
+                    campaign_id=campaign_id,
+                    composite_id=composite_id,
+                    kind="sheet",
+                    entity_subkind=kind,
+                    asset_id=entity_id,
+                    path=target,
+                    frontmatter=sheet,
+                    body=None,
+                )
+                await insert_delta(
+                    conn,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    source=source,
+                    kind="sheet_update",
+                    target_scope="campaign-file",
+                    target_table=None,
+                    target_path=str(target),
+                    target_id=composite_id,
+                    before=before_payload,
+                    after=sheet,
+                )
         return target
 
     async def write_content(
@@ -640,35 +644,35 @@ class StateStore:
         if target.exists():
             before_payload = load_yaml(target) or {}
 
-        write_yaml(target, payload)
-
         composite_id = f"campaigns/{campaign_id}/content/{kind}/{content_id}.{mechanics_id}"
-        async with self._txn() as conn:
-            await upsert_campaign_content_index(
-                conn,
-                data_root=self.data_root,
-                campaign_id=campaign_id,
-                composite_id=composite_id,
-                kind="content",
-                entity_subkind=kind,
-                asset_id=content_id,
-                path=target,
-                frontmatter=payload,
-                body=None,
-            )
-            await insert_delta(
-                conn,
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                source=source,
-                kind="content_update",
-                target_scope="campaign-file",
-                target_table=None,
-                target_path=str(target),
-                target_id=composite_id,
-                before=before_payload,
-                after=payload,
-            )
+        with _snapshot_file_before(target):
+            write_yaml(target, payload)
+            async with self._txn() as conn:
+                await upsert_campaign_content_index(
+                    conn,
+                    data_root=self.data_root,
+                    campaign_id=campaign_id,
+                    composite_id=composite_id,
+                    kind="content",
+                    entity_subkind=kind,
+                    asset_id=content_id,
+                    path=target,
+                    frontmatter=payload,
+                    body=None,
+                )
+                await insert_delta(
+                    conn,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    source=source,
+                    kind="content_update",
+                    target_scope="campaign-file",
+                    target_table=None,
+                    target_path=str(target),
+                    target_id=composite_id,
+                    before=before_payload,
+                    after=payload,
+                )
         return target
 
     async def get_content(
@@ -722,35 +726,35 @@ class StateStore:
         if target.exists():
             before_payload = load_yaml(target) or {}
 
-        write_yaml(target, metadata)
-
         composite_id = f"campaigns/{campaign_id}/images/{image_id}"
-        async with self._txn() as conn:
-            await upsert_campaign_content_index(
-                conn,
-                data_root=self.data_root,
-                campaign_id=campaign_id,
-                composite_id=composite_id,
-                kind="image",
-                entity_subkind=None,
-                asset_id=image_id,
-                path=target,
-                frontmatter=metadata,
-                body=None,
-            )
-            await insert_delta(
-                conn,
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                source=source,
-                kind="image_metadata_write",
-                target_scope="campaign-file",
-                target_table=None,
-                target_path=str(target),
-                target_id=composite_id,
-                before=before_payload,
-                after=metadata,
-            )
+        with _snapshot_file_before(target):
+            write_yaml(target, metadata)
+            async with self._txn() as conn:
+                await upsert_campaign_content_index(
+                    conn,
+                    data_root=self.data_root,
+                    campaign_id=campaign_id,
+                    composite_id=composite_id,
+                    kind="image",
+                    entity_subkind=None,
+                    asset_id=image_id,
+                    path=target,
+                    frontmatter=metadata,
+                    body=None,
+                )
+                await insert_delta(
+                    conn,
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    source=source,
+                    kind="image_metadata_write",
+                    target_scope="campaign-file",
+                    target_table=None,
+                    target_path=str(target),
+                    target_id=composite_id,
+                    before=before_payload,
+                    after=metadata,
+                )
         return target
 
     # ------------------------------------------------------------------
