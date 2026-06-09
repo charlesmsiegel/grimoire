@@ -18,6 +18,8 @@ import type { ResolvedCharacter, WorldMeta } from "../../api/types";
 import { useResource } from "../../api/useResource";
 import { CardIconBar } from "../../components/CardIconBar";
 import { deleteAction } from "../../components/cardActions";
+import { CardFilters } from "../../components/CardFilters";
+import { useCardFilters } from "../../hooks/useCardFilters";
 import { Markdown } from "../../components/Markdown";
 import { SheetRenderer } from "../../sheets";
 import type { SheetValue } from "../../sheets/types";
@@ -55,10 +57,6 @@ export function CastView() {
     pcState.reload();
   });
 
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
-  const [roleFilter, setRoleFilter] = useState<string>("all");
-  const [tagFilter, setTagFilter] = useState("");
-  const [searchFilter, setSearchFilter] = useState("");
   const [searchParams] = useSearchParams();
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get("character"));
   const [initialRef] = useState(() => searchParams.get("ref"));
@@ -85,157 +83,167 @@ export function CastView() {
         state={state}
         emptyMessage="No cast yet. PCs and emergent characters join automatically; library characters join once they appear in a scene."
       >
-        {(rows) => {
-          const roles = collectRoles(rows);
-          const filtered = applyFilters(rows, sourceFilter, roleFilter, tagFilter, searchFilter);
-          const byId = filtered.find((r) => r.character.id === selectedId);
-          const byRef =
-            !byId && initialRef
-              ? filtered.find((r) => {
-                  const ref =
-                    r.character.world_id !== null
-                      ? `library:worlds/${r.character.world_id}/characters/${r.character.id}`
-                      : `campaign:emergent/character/${r.character.id}`;
-                  return ref === initialRef;
-                })
-              : undefined;
-          const selected = byId ?? byRef ?? filtered[0] ?? null;
-          return (
-            <div className="cast-layout">
-              <aside className="cast-list" aria-label="Character list">
-                <Filters
-                  source={sourceFilter}
-                  onSource={setSourceFilter}
-                  role={roleFilter}
-                  roles={roles}
-                  onRole={setRoleFilter}
-                  tag={tagFilter}
-                  onTag={setTagFilter}
-                  search={searchFilter}
-                  onSearch={setSearchFilter}
-                />
-                <ul className="entity-list">
-                  {filtered.map((c) => (
-                    <li key={c.character.id} className="cast-entity">
-                      <button
-                        type="button"
-                        className={
-                          selected?.character.id === c.character.id
-                            ? "entity-card active"
-                            : "entity-card"
-                        }
-                        onClick={() => setSelectedId(c.character.id)}
-                      >
-                        <div className="entity-card-head">
-                          <span className="entity-name">{c.character.name}</span>
-                          <ChainBadge chain={c.source_chain} overrides={c.overrides_applied} />
-                        </div>
-                        <small className="entity-meta">
-                          {c.character.role} · {c.character.tags.slice(0, 3).join(", ")}
-                        </small>
-                      </button>
-                      <CardIconBar
-                        actions={
-                          pcRefs.has(refForRow(c))
-                            ? [
-                                deleteAction({
-                                  onClick: () =>
-                                    removePc.request({
-                                      ref: refForRow(c),
-                                      name: c.character.name,
-                                    }),
-                                  label: `Remove ${c.character.name} as PC`,
-                                }),
-                              ]
-                            : []
-                        }
-                      />
-                    </li>
-                  ))}
-                  {filtered.length === 0 && (
-                    <li className="muted">No characters match the current filters.</li>
-                  )}
-                </ul>
-              </aside>
-              <article className="cast-detail" aria-live="polite">
-                {selected ? (
-                  <CharacterDetail
-                    campaignId={campaignId}
-                    moduleId={moduleId}
-                    character={selected}
-                    onReload={() => state.reload()}
-                  />
-                ) : (
-                  <p className="muted">Select a character to see details.</p>
-                )}
-              </article>
-            </div>
-          );
-        }}
+        {(rows) => (
+          <CastBody
+            rows={rows}
+            campaignId={campaignId}
+            moduleId={moduleId}
+            selectedId={selectedId}
+            setSelectedId={setSelectedId}
+            initialRef={initialRef}
+            pcRefs={pcRefs}
+            refForRow={refForRow}
+            onRemovePc={removePc.request}
+            onReload={() => state.reload()}
+          />
+        )}
       </AsyncSection>
     </section>
   );
 }
 
-interface FiltersProps {
-  source: SourceFilter;
-  onSource: (s: SourceFilter) => void;
-  role: string;
-  roles: string[];
-  onRole: (r: string) => void;
-  tag: string;
-  onTag: (t: string) => void;
-  search: string;
-  onSearch: (q: string) => void;
+interface CastBodyProps {
+  rows: ResolvedCharacter[];
+  campaignId: string;
+  moduleId: string | null;
+  selectedId: string | null;
+  setSelectedId: (id: string) => void;
+  initialRef: string | null;
+  pcRefs: Set<string>;
+  refForRow: (r: ResolvedCharacter) => string;
+  onRemovePc: (target: { ref: string; name: string }) => void;
+  onReload: () => void;
 }
 
-function Filters({
-  source,
-  onSource,
-  role,
-  roles,
-  onRole,
-  tag,
-  onTag,
-  search,
-  onSearch,
-}: FiltersProps) {
+function CastBody({
+  rows,
+  campaignId,
+  moduleId,
+  selectedId,
+  setSelectedId,
+  initialRef,
+  pcRefs,
+  refForRow,
+  onRemovePc,
+  onReload,
+}: CastBodyProps) {
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const [roleFilter, setRoleFilter] = useState<string>("all");
+  const roles = collectRoles(rows);
+  // Search + tag filtering goes through the app-standard CardFilters; the
+  // cast-specific source/role facets apply on top.
+  const {
+    filtered: textFiltered,
+    search,
+    setSearch,
+    selectedTags,
+    toggleTag,
+    clearTags,
+    availableTags,
+  } = useCardFilters(rows, {
+    text: (r) => [r.character.name, r.character.id, r.character.description, r.character.body],
+    tags: (r) => r.character.tags,
+  });
+  const filtered = textFiltered.filter((r) => matchesFacets(r, sourceFilter, roleFilter));
+  const byId = filtered.find((r) => r.character.id === selectedId);
+  const byRef = !byId && initialRef ? filtered.find((r) => refForRow(r) === initialRef) : undefined;
+  const selected = byId ?? byRef ?? filtered[0] ?? null;
   return (
-    <div className="cast-filters">
-      <label className="field">
-        <span>Search</span>
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => onSearch(e.target.value)}
-          placeholder="Name, id, description…"
-          aria-label="Search characters"
+    <div className="cast-layout">
+      <aside className="cast-list" aria-label="Character list">
+        <CardFilters
+          search={search}
+          onSearch={setSearch}
+          availableTags={availableTags}
+          selectedTags={selectedTags}
+          onToggleTag={toggleTag}
+          onClearTags={clearTags}
+          searchPlaceholder="Search cast by name, id, or text…"
+          searchLabel="Search cast"
+          resultSummary={
+            filtered.length === rows.length
+              ? `${rows.length} in cast`
+              : `${filtered.length} of ${rows.length}`
+          }
         />
-      </label>
-      <label className="field">
-        <span>Source</span>
-        <select value={source} onChange={(e) => onSource(e.target.value as SourceFilter)}>
-          <option value="all">All</option>
-          <option value="library">Library</option>
-          <option value="emergent">Emergent</option>
-          <option value="override">Has override</option>
-        </select>
-      </label>
-      <label className="field">
-        <span>Role</span>
-        <select value={role} onChange={(e) => onRole(e.target.value)}>
-          <option value="all">All</option>
-          {roles.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
+        <div className="cast-filters">
+          <label className="field">
+            <span>Source</span>
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value as SourceFilter)}
+            >
+              <option value="all">All</option>
+              <option value="library">Library</option>
+              <option value="emergent">Emergent</option>
+              <option value="override">Has override</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Role</span>
+            <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
+              <option value="all">All</option>
+              {roles.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <ul className="entity-list">
+          {filtered.map((c) => (
+            <li key={c.character.id} className="cast-entity">
+              <button
+                type="button"
+                className={
+                  selected?.character.id === c.character.id ? "entity-card active" : "entity-card"
+                }
+                onClick={() => setSelectedId(c.character.id)}
+              >
+                <div className="entity-card-head">
+                  <span className="entity-name">{c.character.name}</span>
+                  <ChainBadge chain={c.source_chain} overrides={c.overrides_applied} />
+                </div>
+                <small className="entity-meta">
+                  {c.character.role} · {c.character.tags.slice(0, 3).join(", ")}
+                </small>
+              </button>
+              <CardIconBar
+                actions={
+                  pcRefs.has(refForRow(c))
+                    ? [
+                        deleteAction({
+                          onClick: () =>
+                            onRemovePc({
+                              ref: refForRow(c),
+                              name: c.character.name,
+                            }),
+                          label: `Remove ${c.character.name} as PC`,
+                        }),
+                      ]
+                    : []
+                }
+              />
+            </li>
           ))}
-        </select>
-      </label>
-      <label className="field">
-        <span>Tag contains</span>
-        <input type="text" value={tag} onChange={(e) => onTag(e.target.value)} />
-      </label>
+          {filtered.length === 0 && (
+            <li className="muted">No characters match the current filters.</li>
+          )}
+        </ul>
+      </aside>
+      <article className="cast-detail" aria-live="polite">
+        {selected ? (
+          <CharacterDetail
+            campaignId={campaignId}
+            moduleId={moduleId}
+            character={selected}
+            onReload={onReload}
+          />
+        ) : (
+          <p className="muted">Select a character to see details.</p>
+        )}
+      </article>
     </div>
   );
 }
@@ -635,38 +643,14 @@ function collectRoles(rows: ResolvedCharacter[]): string[] {
   return [...set].sort();
 }
 
-function applyFilters(
-  rows: ResolvedCharacter[],
-  source: SourceFilter,
-  role: string,
-  tag: string,
-  search: string,
-): ResolvedCharacter[] {
-  const tagLower = tag.trim().toLowerCase();
-  const searchLower = search.trim().toLowerCase();
-  return rows.filter((r) => {
-    if (role !== "all" && r.character.role !== role) return false;
-    if (tagLower && !r.character.tags.some((t) => t.toLowerCase().includes(tagLower))) {
-      return false;
-    }
-    if (searchLower) {
-      const c = r.character;
-      const haystack = [c.name, c.id, c.description, c.body]
-        .filter((s): s is string => typeof s === "string" && s.length > 0)
-        .join(" ")
-        .toLowerCase();
-      if (!haystack.includes(searchLower)) return false;
-    }
-    if (source === "all") return true;
-    const top = r.source_chain[0];
-    const isLibrary = top
-      ? top.layer === "library_live" || top.layer === "library_snapshot"
-      : false;
-    const isEmergent = !top || top.layer === "emergent";
-    const hasOverride = r.overrides_applied.length > 0 || (top?.override_applied ?? false);
-    if (source === "library") return isLibrary;
-    if (source === "emergent") return isEmergent;
-    if (source === "override") return hasOverride;
-    return true;
-  });
+function matchesFacets(r: ResolvedCharacter, source: SourceFilter, role: string): boolean {
+  if (role !== "all" && r.character.role !== role) return false;
+  if (source === "all") return true;
+  const top = r.source_chain[0];
+  const isLibrary = top ? top.layer === "library_live" || top.layer === "library_snapshot" : false;
+  const isEmergent = !top || top.layer === "emergent";
+  const hasOverride = r.overrides_applied.length > 0 || (top?.override_applied ?? false);
+  if (source === "library") return isLibrary;
+  if (source === "emergent") return isEmergent;
+  return hasOverride;
 }
