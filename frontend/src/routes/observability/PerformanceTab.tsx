@@ -113,7 +113,7 @@ export function PerformanceTab() {
       </header>
 
       {pairs.length === 0 ? (
-        <p className="observability-empty">No metrics recorded yet.</p>
+        <p className="empty-state">No metrics recorded yet.</p>
       ) : (
         <ul className="observability-pair-list">
           {pairs.map((p) => {

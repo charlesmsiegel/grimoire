@@ -102,11 +102,6 @@
   box-shadow: var(--shadow-xs);
 }
 
-.scene-header-empty {
-  color: var(--fg-muted);
-  font-style: italic;
-}
-
 .scene-header-row {
   display: flex;
   align-items: baseline;
@@ -204,8 +199,6 @@
 }
 
 .scene-empty {
-  color: var(--fg-muted);
-  font-style: italic;
   text-align: center;
   padding: var(--space-6);
 }
@@ -534,10 +527,7 @@
 }
 
 .side-empty {
-  margin: 0;
   font-size: 0.85rem;
-  color: var(--fg-muted);
-  font-style: italic;
 }
 
 .side-list {

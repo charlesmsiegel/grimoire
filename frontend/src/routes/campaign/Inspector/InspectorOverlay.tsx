@@ -115,7 +115,7 @@ export function InspectorOverlay({
           <div className="inspector-overlay-raw">
             {rawErr && <p className="inspector-error">{rawErr}</p>}
             {!detail ? (
-              <p className="inspector-empty">Loading messages…</p>
+              <p className="empty-state inspector-empty">Loading messages…</p>
             ) : (
               <ol className="inspector-raw-messages">
                 {detail.messages.map((m, i) => (
@@ -153,7 +153,7 @@ export function InspectorOverlay({
                   </button>
                 </li>
               ))}
-              {sorted.length === 0 && <li className="inspector-empty">No sources.</li>}
+              {sorted.length === 0 && <li className="empty-state inspector-empty">No sources.</li>}
             </ul>
             <div className="inspector-overlay-detail">
               {selected ? (
@@ -173,7 +173,7 @@ export function InspectorOverlay({
                   )}
                 </>
               ) : (
-                <p className="inspector-empty">Select a source.</p>
+                <p className="empty-state inspector-empty">Select a source.</p>
               )}
             </div>
           </div>

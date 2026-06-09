@@ -81,7 +81,7 @@ export function ExtrasTable({ worldId, kind, entityId, campaignId }: Props) {
         </button>
       </header>
       {entries.length === 0 && !adding ? (
-        <p className="extras-empty">
+        <p className="empty-state">
           No extras yet. Add a free-form detail like favorite_drink, scars, dialect_notes…
         </p>
       ) : null}

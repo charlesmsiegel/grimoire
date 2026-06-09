@@ -97,7 +97,7 @@ export function CompositeWidget({ snapshot, onRefresh }: Props) {
         </ul>
       )}
       {count === null && items.length === 0 && !label && (
-        <p className="hud-composite-empty">Nothing to show.</p>
+        <p className="empty-state">Nothing to show.</p>
       )}
     </section>
   );

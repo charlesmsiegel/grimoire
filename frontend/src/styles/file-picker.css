@@ -123,7 +123,6 @@
 .fb-empty {
   padding: var(--space-4);
   text-align: center;
-  color: var(--fg-muted);
   font-size: 0.875rem;
 }
 

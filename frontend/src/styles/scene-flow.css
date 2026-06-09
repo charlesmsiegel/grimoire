@@ -277,10 +277,13 @@
   padding: 0.25rem 0.5rem;
 }
 
-.ledger-loading,
-.ledger-empty {
+.ledger-loading {
   color: var(--fg-muted);
   font-style: italic;
+}
+
+.ledger-loading,
+.ledger-empty {
   text-align: center;
   padding: var(--space-4);
 }

@@ -21,8 +21,10 @@ function formatTime(scene: ApiScene): string | null {
 export function SceneHeader({ scene }: Props) {
   if (!scene) {
     return (
-      <header className="scene-header scene-header-empty">
-        <p>No active scene. Submit a post or open one from the Timeline view.</p>
+      <header className="scene-header">
+        <p className="empty-state">
+          No active scene. Submit a post or open one from the Timeline view.
+        </p>
       </header>
     );
   }

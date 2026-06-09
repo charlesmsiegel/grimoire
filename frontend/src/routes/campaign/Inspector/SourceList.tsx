@@ -37,7 +37,9 @@ export function SourceList({ campaignId, sources, onChanged }: Props) {
           onChanged={onChanged}
         />
       ))}
-      {sorted.length === 0 && <li className="inspector-empty">No sources in this preview.</li>}
+      {sorted.length === 0 && (
+        <li className="empty-state inspector-empty">No sources in this preview.</li>
+      )}
     </ul>
   );
 }
@@ -75,7 +77,7 @@ function SourceRow({
           </p>
           <ul className="inspector-reason-list">
             {source.inclusion_reasons.length === 0 ? (
-              <li className="inspector-empty">No declared reason.</li>
+              <li className="empty-state inspector-empty">No declared reason.</li>
             ) : (
               source.inclusion_reasons.map((r) => (
                 <li key={r} className={`inspector-reason inspector-reason-${r}`}>
@@ -87,7 +89,7 @@ function SourceRow({
           {source.text ? (
             <pre className="inspector-source-text">{source.text}</pre>
           ) : (
-            <p className="inspector-empty">No text captured for this source.</p>
+            <p className="empty-state inspector-empty">No text captured for this source.</p>
           )}
           {isPinnable(source.kind) && (
             <PinControls campaignId={campaignId} source={source} onChanged={onChanged} />
