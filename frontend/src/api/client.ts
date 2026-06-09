@@ -102,9 +102,24 @@ async function requestText(
   return res.text();
 }
 
+async function requestWithTextBody<T>(method: string, path: string, text: string): Promise<T> {
+  const res = await fetch(buildUrl(path), {
+    method,
+    headers: { "Content-Type": "text/plain" },
+    body: text,
+  });
+  if (!res.ok) {
+    const detail = await parseBody(res).catch(() => null);
+    throw new ApiError(res.status, detail);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await parseBody(res)) as T;
+}
+
 export const api = {
   get: <T>(path: string, opts?: RequestOptions) => request<T>("GET", path, undefined, opts),
   getText: (path: string, opts?: RequestOptions) => requestText("GET", path, opts),
+  putText: <T>(path: string, text: string) => requestWithTextBody<T>("PUT", path, text),
   post: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
     request<T>("POST", path, body, opts),
   put: <T>(path: string, body?: unknown, opts?: RequestOptions) =>

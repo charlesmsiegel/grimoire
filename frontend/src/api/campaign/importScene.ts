@@ -75,6 +75,8 @@ export const importSceneApi = {
     body: ImportRequest,
     onProgress: (p: ImportProgress) => void,
   ): Promise<string> => {
+    // Raw fetch on purpose: this endpoint streams SSE progress frames — the
+    // shared api client is request/response JSON only.
     const res = await fetch(`/api/campaigns/${enc(campaignId)}/scenes/import`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
