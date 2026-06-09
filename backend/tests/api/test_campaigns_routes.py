@@ -978,3 +978,26 @@ def test_cast_with_no_scenes_keeps_pcs_and_emergent_only(client, container) -> N
     resp = client.get("/api/campaigns/c1/cast")
     assert resp.status_code == 200
     assert [row["character"]["id"] for row in resp.json()] == ["alice", "ghost"]
+
+
+def test_cast_keeps_characters_that_entered_then_left(client, container) -> None:
+    """remove_present_character strips the sidecar membership fields, so a
+    departed character's only surviving evidence is the confirmed cast-change
+    log — appearance is historical (#581 review)."""
+    from tests.api.conftest import _FakeAttr
+    from tests.mocks import FakeScenes
+
+    chars = FakeCharacters()
+    chars.resolved["c1"] = [
+        _resolved_character("bram", "w1"),  # entered scene s1, later left
+        _resolved_character("celia", "w1"),  # never appeared
+    ]
+    scenes = FakeScenes()
+    scenes.scenes["c1"] = [_scene("s1")]  # membership fields already cleared
+    scenes.confirmed_cast_changes["s1"] = [_FakeAttr(character_ref="w1/bram")]
+    container.characters = chars
+    container.scenes = scenes
+
+    resp = client.get("/api/campaigns/c1/cast")
+    assert resp.status_code == 200
+    assert [row["character"]["id"] for row in resp.json()] == ["bram"]

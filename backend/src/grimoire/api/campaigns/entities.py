@@ -45,6 +45,17 @@ async def list_cast(campaign_id: str, characters: CharactersDep, scenes: ScenesD
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
     in_play = _in_play_refs(pcs, scene_rows)
+    # A character that entered and later left is gone from the sidecar's
+    # membership fields (remove_present_character strips declared refs too),
+    # but appearance is historical — the confirmed cast-change log is the
+    # durable record, so union it in.
+    for scene in scene_rows:
+        try:
+            confirmed = await scenes.list_confirmed_cast_changes(scene.id)
+        except Exception as exc:
+            raise map_lookup_errors(exc) from exc
+        for change in confirmed:
+            in_play.add(canonicalize_character_ref(change.character_ref))
     return to_payload([row for row in rows if _in_cast(row, in_play)])
 
 
