@@ -7,6 +7,7 @@ promotion, and search.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -1108,119 +1109,98 @@ async def test_capabilities_empty_when_null_mechanics(
 
 
 # ---------------------------------------------------------------------------
-# Relationships
+# Relationships (read paths; rows are written by the extractor delta path)
 # ---------------------------------------------------------------------------
 
 
-async def test_relationship_increment(characters: CharactersService, store: StateStore) -> None:
+async def _seed_relationship(
+    store: StateStore,
+    *,
+    campaign_id: str,
+    from_ref: str,
+    to_ref: str,
+    types: list[str] | str | None = None,
+    state: dict | str | None = None,
+    history: list[dict] | str | None = None,
+    row_id: str = "rel-1",
+) -> None:
+    """Insert a relationship row as production does (RELATIONSHIP_UPDATE deltas
+    upsert rows through the state store; CharactersService only reads them).
+    Pass a raw string for ``types``/``state``/``history`` to seed malformed JSON.
+    """
+
+    def _column(value: list | dict | str | None, default: list | dict) -> str:
+        if isinstance(value, str):
+            return value
+        return json.dumps(value if value is not None else default)
+
+    await store.db.execute(
+        """
+        INSERT INTO relationships (
+          id, campaign_id, from_character_ref, to_character_ref,
+          types, state, updated_at_turn, history
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            row_id,
+            campaign_id,
+            from_ref,
+            to_ref,
+            _column(types, []),
+            _column(state, {}),
+            "turn-001",
+            _column(history, []),
+        ),
+    )
+
+
+async def test_get_relationships_matches_either_direction(
+    characters: CharactersService, store: StateStore
+) -> None:
     await _bind_campaign(store, "camp-1", "wod-london")
-    rel1 = await characters.update_relationship(
-        "library:worlds/wod-london/characters/vivienne",
-        "library:worlds/wod-london/characters/winifred",
-        "camp-1",
-        delta={"affection": 3, "trust": 2},
+    await _seed_relationship(
+        store,
+        campaign_id="camp-1",
+        from_ref="library:worlds/wod-london/characters/vivienne",
+        to_ref="library:worlds/wod-london/characters/winifred",
         types=["sibling"],
+        state={"affection": 2, "trust": 2},
     )
-    assert rel1["state"]["affection"] == 3
-    assert rel1["types"] == ["sibling"]
 
-    rel2 = await characters.update_relationship(
+    for ref in (
         "library:worlds/wod-london/characters/vivienne",
         "library:worlds/wod-london/characters/winifred",
-        "camp-1",
-        delta={"affection": -1},
+    ):
+        listed = await characters.get_relationships(ref, "camp-1")
+        assert len(listed) == 1
+        assert listed[0]["types"] == ["sibling"]
+        assert listed[0]["state"]["affection"] == 2
+        assert listed[0]["state"]["trust"] == 2
+
+    # Rows are campaign-scoped.
+    assert (
+        await characters.get_relationships(
+            "library:worlds/wod-london/characters/vivienne", "camp-2"
+        )
+        == []
     )
-    assert rel2["state"]["affection"] == 2
-    assert rel2["state"]["trust"] == 2
-
-    listed = await characters.get_relationships(
-        "library:worlds/wod-london/characters/vivienne", "camp-1"
-    )
-    assert len(listed) == 1
-    assert listed[0]["state"]["affection"] == 2
 
 
-async def test_relationship_history_appends_event_when_summary_supplied(
+async def test_get_relationship_history_preserves_stored_order(
     characters: CharactersService, store: StateStore
 ) -> None:
     await _bind_campaign(store, "camp-1", "wod-london")
-    rel = await characters.update_relationship(
-        "library:worlds/wod-london/characters/vivienne",
-        "library:worlds/wod-london/characters/winifred",
-        "camp-1",
-        delta={"affection": 2},
-        in_post="post-001",
-        summary="winifred apologized for the library incident.",
-    )
-    history = rel["history"]
-    assert len(history) == 1
-    assert history[0]["in_post"] == "post-001"
-    assert history[0]["summary"] == "winifred apologized for the library incident."
-    assert history[0]["delta"] == {"affection": 2}
-    assert history[0]["at"]  # ISO timestamp
-
-    # The standalone read path returns the same event.
-    fetched = await characters.get_relationship_history(
-        "library:worlds/wod-london/characters/vivienne",
-        "library:worlds/wod-london/characters/winifred",
-        "camp-1",
-    )
-    assert len(fetched) == 1
-    assert fetched[0]["summary"] == "winifred apologized for the library incident."
-
-
-async def test_relationship_history_omits_event_without_summary(
-    characters: CharactersService, store: StateStore
-) -> None:
-    await _bind_campaign(store, "camp-1", "wod-london")
-    # No summary supplied -> no event appended (avoid spamming empty events).
-    rel = await characters.update_relationship(
-        "library:worlds/wod-london/characters/vivienne",
-        "library:worlds/wod-london/characters/winifred",
-        "camp-1",
-        delta={"affection": 1},
-    )
-    assert rel["history"] == []
-
-    # Empty-string summary also doesn't count.
-    rel2 = await characters.update_relationship(
-        "library:worlds/wod-london/characters/vivienne",
-        "library:worlds/wod-london/characters/winifred",
-        "camp-1",
-        delta={"trust": 1},
-        in_post="post-002",
-        summary="",
-    )
-    assert rel2["history"] == []
-
-
-async def test_relationship_history_preserves_chronological_order(
-    characters: CharactersService, store: StateStore
-) -> None:
-    await _bind_campaign(store, "camp-1", "wod-london")
-    await characters.update_relationship(
-        "library:worlds/wod-london/characters/vivienne",
-        "library:worlds/wod-london/characters/winifred",
-        "camp-1",
-        delta={"affection": 1},
-        in_post="post-001",
-        summary="first event",
-    )
-    await characters.update_relationship(
-        "library:worlds/wod-london/characters/vivienne",
-        "library:worlds/wod-london/characters/winifred",
-        "camp-1",
-        delta={"trust": 1},
-        in_post="post-002",
-        summary="second event",
-    )
-    await characters.update_relationship(
-        "library:worlds/wod-london/characters/vivienne",
-        "library:worlds/wod-london/characters/winifred",
-        "camp-1",
-        delta={"affection": -1},
-        in_post="post-003",
-        summary="third event",
+    await _seed_relationship(
+        store,
+        campaign_id="camp-1",
+        from_ref="library:worlds/wod-london/characters/vivienne",
+        to_ref="library:worlds/wod-london/characters/winifred",
+        history=[
+            {"in_post": "post-001", "summary": "first event", "delta": {"affection": 1}},
+            {"in_post": "post-002", "summary": "second event", "delta": {"trust": 1}},
+            {"in_post": "post-003", "summary": "third event", "delta": {"affection": -1}},
+        ],
     )
 
     history = await characters.get_relationship_history(
@@ -1234,6 +1214,48 @@ async def test_relationship_history_preserves_chronological_order(
         "third event",
     ]
     assert [e["in_post"] for e in history] == ["post-001", "post-002", "post-003"]
+
+
+async def test_get_relationship_history_empty_when_no_row(
+    characters: CharactersService, store: StateStore
+) -> None:
+    await _bind_campaign(store, "camp-1", "wod-london")
+    history = await characters.get_relationship_history(
+        "library:worlds/wod-london/characters/vivienne",
+        "library:worlds/wod-london/characters/winifred",
+        "camp-1",
+    )
+    assert history == []
+
+
+async def test_relationship_row_with_malformed_json_degrades_to_defaults(
+    characters: CharactersService, store: StateStore
+) -> None:
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await _seed_relationship(
+        store,
+        campaign_id="camp-1",
+        from_ref="library:worlds/wod-london/characters/vivienne",
+        to_ref="library:worlds/wod-london/characters/winifred",
+        types="{not json",
+        state="{not json",
+        history="{not json",
+    )
+
+    listed = await characters.get_relationships(
+        "library:worlds/wod-london/characters/vivienne", "camp-1"
+    )
+    assert len(listed) == 1
+    assert listed[0]["types"] == []
+    assert listed[0]["state"]["affection"] == 0  # RelationshipState defaults
+    assert listed[0]["history"] == []
+
+    history = await characters.get_relationship_history(
+        "library:worlds/wod-london/characters/vivienne",
+        "library:worlds/wod-london/characters/winifred",
+        "camp-1",
+    )
+    assert history == []
 
 
 # ---------------------------------------------------------------------------
