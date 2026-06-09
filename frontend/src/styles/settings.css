@@ -108,3 +108,16 @@
   border-color: var(--danger);
   background: var(--danger-soft);
 }
+
+.routing-advanced {
+  margin-top: var(--space-4);
+  padding: var(--space-3);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.routing-advanced summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: var(--space-1) 0;
+}

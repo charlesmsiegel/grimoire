@@ -1,3 +1,123 @@
+/* ----- Inspector panel ----- */
+
+.inspector-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.inspector-error {
+  color: var(--danger, #c33);
+  font-size: 0.85rem;
+}
+
+.inspector-empty {
+  color: var(--fg-muted, #888);
+  font-size: 0.85rem;
+}
+
+.inspector-tabs {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.inspector-tabs button {
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+  border-radius: var(--radius-sm, 0.25rem);
+  background: var(--bg-elev, #fafafa);
+  color: var(--fg-muted, #888);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.inspector-tabs button:hover {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.04));
+}
+
+.inspector-tabs button.is-active {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.06));
+  border-color: var(--border-strong, rgba(0, 0, 0, 0.2));
+  color: var(--fg, currentColor);
+  font-weight: 600;
+}
+
+.inspector-tab-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.inspector-token-bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+}
+
+.inspector-token-row {
+  display: grid;
+  grid-template-columns: 5rem 1fr auto;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.8rem;
+}
+
+.inspector-token-label {
+  color: var(--fg-muted, #888);
+  white-space: nowrap;
+}
+
+.inspector-token-bar {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--border-subtle, rgba(0, 0, 0, 0.08));
+  overflow: hidden;
+}
+
+.inspector-token-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent, #4a9eff);
+  transition: width 0.2s ease;
+}
+
+.inspector-token-row.is-over .inspector-token-fill {
+  background: var(--danger, #c33);
+}
+
+.inspector-token-counts {
+  color: var(--fg-muted, #888);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.inspector-refresh {
+  align-self: flex-start;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+  border-radius: var(--radius-sm, 0.25rem);
+  background: var(--bg-elev, #fafafa);
+  color: var(--fg, currentColor);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.inspector-refresh:hover {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.04));
+  border-color: var(--border-strong, rgba(0, 0, 0, 0.2));
+}
+
 /* Inspector: total token bar */
 .inspector-token-total {
   display: flex;
