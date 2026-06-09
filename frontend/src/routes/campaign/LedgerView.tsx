@@ -77,7 +77,7 @@ function CommitmentSection({
       ) : (
         <ul className="entity-list">
           {items.map((c) => (
-            <li key={c.id} className="entity-card">
+            <li key={c.id} className="card entity-card">
               <div className="entity-card-head">
                 <span className="entity-name">{c.text}</span>
                 <small className="entity-meta">{c.status}</small>
@@ -134,7 +134,7 @@ function ContradictionsSection({ reports }: { reports: ContradictionReport[] }) 
 function ContradictionItem({ report }: { report: ContradictionReport }) {
   const [open, setOpen] = useState(false);
   return (
-    <li className="entity-card">
+    <li className="card entity-card">
       <button
         type="button"
         className="ledger-disclosure"

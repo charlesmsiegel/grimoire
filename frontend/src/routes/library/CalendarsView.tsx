@@ -127,7 +127,7 @@ function CalendarsList() {
         onRetry={reload}
       >
         <h4>Built-in</h4>
-        <ul className="library-card-grid">
+        <ul className="grid-cards">
           {builtins.map((c) => (
             <li key={c.id} className="library-card">
               <Link to={`/library/calendars/${encodeURIComponent(c.id)}`}>
@@ -144,7 +144,7 @@ function CalendarsList() {
         {customs.length > 0 && (
           <>
             <h4>Custom</h4>
-            <ul className="library-card-grid">
+            <ul className="grid-cards">
               {customs.map((c) => (
                 <li key={c.id} className="library-card">
                   <Link to={`/library/calendars/${encodeURIComponent(c.id)}`}>

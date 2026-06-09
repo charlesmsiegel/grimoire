@@ -75,7 +75,7 @@ function MechanicsList() {
         emptyMessage="No mechanics modules installed."
         onRetry={reload}
       >
-        <ul className="library-card-grid">
+        <ul className="grid-cards">
           {data?.map((m) => (
             <li key={m.manifest.id} className="library-card">
               <Link to={`/library/mechanics/${encodeURIComponent(m.manifest.id)}`}>

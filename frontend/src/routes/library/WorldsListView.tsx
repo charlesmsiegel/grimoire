@@ -253,7 +253,7 @@ function WorldsListBody({ worlds, onDelete }: WorldsListBodyProps) {
       {filtered.length === 0 ? (
         <p className="library-status">No worlds match the current filters.</p>
       ) : (
-        <ul className="library-card-grid">
+        <ul className="grid-cards">
           {filtered.map((s) => (
             <li key={s.id} className="library-card">
               <Link to={`/library/worlds/${encodeURIComponent(s.id)}`}>

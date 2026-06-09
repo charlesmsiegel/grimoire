@@ -116,7 +116,7 @@ export function GreetingFormFields({ worldId, value, onChange, hideName = false 
           </p>
         )}
         {characters.length > 0 && (
-          <ul className="greeting-character-list">
+          <ul className="grid-cards greeting-character-list">
             {characters.map((c) => (
               <li key={c.assetId}>
                 <label>

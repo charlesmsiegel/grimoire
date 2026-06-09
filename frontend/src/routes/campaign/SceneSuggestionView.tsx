@@ -63,19 +63,19 @@ export function SceneSuggestionView({ campaignId, suggestions, dispatch }: Props
         {suggestions.ledger_picks.map((item, i) => (
           <button
             key={item.ledger_id}
-            className={`suggestion-card${item.greeting_id ? " greeting" : ""}`}
+            className={`card suggestion-card${item.greeting_id ? " greeting" : ""}`}
             onClick={() => pickLedgerItem(item)}
           >
             <span className="suggestion-number">{i + 1}</span>
             <span className="suggestion-text">{item.summary}</span>
-            {item.greeting_id && <span className="greeting-badge">Greeting</span>}
+            {item.greeting_id && <span className="chip greeting-badge">Greeting</span>}
           </button>
         ))}
 
         {suggestions.generated.map((g, i) => (
           <button
             key={`gen-${i}`}
-            className="suggestion-card generated"
+            className="card suggestion-card generated"
             onClick={() => pickGenerated(g)}
           >
             <span className="suggestion-number">{suggestions.ledger_picks.length + i + 1}</span>

@@ -20,7 +20,7 @@ export function NarratorTab({ campaignId }: { campaignId: string }) {
         this default from the scene side panel.
       </p>
       {!ready && <p className="wizard-meta">Loading saved settings…</p>}
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Default response mode</span>
         <select
           value={value.response_mode}

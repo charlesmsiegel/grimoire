@@ -134,7 +134,7 @@ export function ProviderCard({
   };
 
   return (
-    <section className="provider-card provider-card-primary">
+    <section className="card provider-card provider-card-primary">
       <header className="provider-card-head">
         <div className="provider-card-title">
           <span className="provider-card-icon" aria-hidden="true">

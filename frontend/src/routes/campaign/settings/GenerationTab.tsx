@@ -28,7 +28,7 @@ export function GenerationTab({ campaignId }: { campaignId: string }) {
         <code>max_tokens</code> if long narrator responses are being cut off.
       </p>
       {!ready && <p className="wizard-meta">Loading saved settings…</p>}
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Max output tokens</span>
         <input
           type="number"
@@ -43,7 +43,7 @@ export function GenerationTab({ campaignId }: { campaignId: string }) {
           disabled={!ready}
         />
       </label>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Temperature</span>
         <input
           type="number"

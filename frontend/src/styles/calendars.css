@@ -46,11 +46,8 @@
 }
 
 .calendar-checkbox-grid {
-  list-style: none;
+  --grid-min: 14rem;
   margin: var(--space-1) 0 var(--space-3);
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
   gap: var(--space-1);
 }
 

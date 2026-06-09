@@ -165,11 +165,11 @@ function FilteredCharacters({ rows, campaignId, castRefs }: FilteredCharactersPr
       {filtered.length === 0 ? (
         <p className="muted">No characters match the current filters.</p>
       ) : (
-        <ul className="entity-grid">
+        <ul className="grid-cards entity-grid">
           {filtered.map((r) => {
             const c = r.character;
             return (
-              <li key={`${c.world_id ?? "campaign"}:${c.id}`} className="entity-card-static">
+              <li key={`${c.world_id ?? "campaign"}:${c.id}`} className="card entity-card-static">
                 <header>
                   <h4>{c.name || c.id}</h4>
                   <ChainBadge chain={r.source_chain} overrides={r.overrides_applied} />
@@ -236,7 +236,7 @@ function FilteredEntityGrid({ rows, kind, renderExtras }: FilteredEntityGridProp
       {filtered.length === 0 ? (
         <p className="muted">No {kind} match the current filters.</p>
       ) : (
-        <ul className="entity-grid">
+        <ul className="grid-cards entity-grid">
           {filtered.map((row) => (
             <EntityCard key={`${row.world_id ?? "campaign"}:${row.asset_id}`} row={row}>
               {renderExtras?.(row)}
@@ -323,7 +323,7 @@ function FilteredLore({ rows }: { rows: ResolvedEntity[] }) {
           {[...grouped.entries()].map(([kw, entries]) => (
             <section key={kw} className="lore-group">
               <h3>{kw}</h3>
-              <ul className="entity-grid">
+              <ul className="grid-cards entity-grid">
                 {entries.map((row) => (
                   <EntityCard key={`${row.world_id ?? "campaign"}:${row.asset_id}`} row={row} />
                 ))}
@@ -433,9 +433,9 @@ function FilteredGreetings({ rows }: { rows: Greeting[] }) {
       {filtered.length === 0 ? (
         <p className="muted">No greetings match the current filters.</p>
       ) : (
-        <ul className="entity-grid">
+        <ul className="grid-cards entity-grid">
           {filtered.map((g) => (
-            <li key={`${g.world_id}:${g.id}`} className="entity-card-static">
+            <li key={`${g.world_id}:${g.id}`} className="card entity-card-static">
               <header>
                 <h4>{g.name}</h4>
                 <span className="muted">{g.world_id}</span>
@@ -460,7 +460,7 @@ function FilteredGreetings({ rows }: { rows: Greeting[] }) {
 
 function EntityCard({ row, children }: { row: ResolvedEntity; children?: React.ReactNode }) {
   return (
-    <li className="entity-card-static">
+    <li className="card entity-card-static">
       <header>
         <h4>{row.name || row.asset_id}</h4>
         <ChainBadge chain={row.source_chain} overrides={row.overrides_applied} />

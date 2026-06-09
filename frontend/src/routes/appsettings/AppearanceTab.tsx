@@ -14,7 +14,7 @@ export function AppearanceTab() {
           </label>
         ))}
       </fieldset>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Font family</span>
         <select
           value={fontFamily}
@@ -25,7 +25,7 @@ export function AppearanceTab() {
           <option value="dyslexia">Dyslexia-friendly</option>
         </select>
       </label>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Density</span>
         <select
           value={density}

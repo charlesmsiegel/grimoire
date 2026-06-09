@@ -7,7 +7,7 @@ export function BackupTab() {
 
   return (
     <div className="settings-form">
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Default schedule</span>
         <select
           value={backup.schedule}
@@ -20,7 +20,7 @@ export function BackupTab() {
           <option value="weekly">Weekly</option>
         </select>
       </label>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Retention (days)</span>
         <input
           type="number"
@@ -39,7 +39,7 @@ export function BackupTab() {
           disabled={!data}
         />
       </label>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Destination</span>
         <input
           type="text"

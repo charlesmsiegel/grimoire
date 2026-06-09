@@ -180,9 +180,6 @@ button.primary:disabled {
 }
 
 .field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
   font-size: 0.875rem;
 }
 
@@ -246,9 +243,6 @@ button.primary:disabled {
   flex-direction: column;
   width: 100%;
   text-align: left;
-  background: var(--bg-elev);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
   padding: var(--space-3);
   cursor: pointer;
   transition:
@@ -342,18 +336,10 @@ button.primary:disabled {
 /* ----- World view ----- */
 
 .entity-grid {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
-  gap: var(--space-3);
+  --grid-min: 17rem;
 }
 
 .entity-card-static {
-  background: var(--bg-elev);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
   padding: var(--space-4);
   box-shadow: var(--shadow-xs);
 }
@@ -471,9 +457,6 @@ button.primary:disabled {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  background: var(--bg-elev);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
   cursor: pointer;
   box-shadow: var(--shadow-xs);
@@ -534,13 +517,8 @@ button.primary:disabled {
 }
 
 .cast-chip {
-  background: var(--bg-sunken);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
   padding: 0.05rem 0.55rem;
   font-size: 0.7rem;
-  color: var(--fg-muted);
-  font-weight: 500;
 }
 
 .cast-chip.pc {
@@ -625,13 +603,8 @@ button.primary:disabled {
 }
 
 .tag {
-  background: var(--bg-sunken);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
   padding: 0.05rem 0.55rem;
   font-size: 0.7rem;
-  color: var(--fg-muted);
-  font-weight: 500;
 }
 
 .thread-summary {
@@ -819,12 +792,7 @@ button.primary:disabled {
 }
 
 .image-grid {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
-  gap: var(--space-3);
+  --grid-min: 13rem;
 }
 
 .image-tile {

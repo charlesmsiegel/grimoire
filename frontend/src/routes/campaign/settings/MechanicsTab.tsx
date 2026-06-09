@@ -101,7 +101,7 @@ export function MechanicsTab({
         Active mechanics module. Switching modules preserves existing sheets under their old module
         id and opens a wizard to create new sheets where needed.
       </p>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Module</span>
         <select value={selected ?? ""} onChange={(e) => setSelected(e.target.value || null)}>
           <option value="">No mechanics (narrative only)</option>
@@ -124,7 +124,7 @@ export function MechanicsTab({
         Pre-roll confirmation: when to interrupt a turn and ask the player to accept, modify, or
         decline the proposed dice rolls before resolving them.
       </p>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Confirm before executing</span>
         <select
           value={confirmPolicy}

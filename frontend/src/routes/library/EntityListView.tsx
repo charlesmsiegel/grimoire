@@ -287,7 +287,7 @@ function EntityListBody({
       {filtered.length === 0 ? (
         <p className="library-status">No {kindPlural} match the current filters.</p>
       ) : (
-        <ul className="library-card-grid">
+        <ul className="grid-cards">
           {filtered.map((e) => {
             const id = "asset_id" in e ? e.asset_id : e.id;
             const name = e.name || id;

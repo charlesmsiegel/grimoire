@@ -152,10 +152,8 @@
   gap: var(--space-3);
 }
 .why-character-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-color: var(--border);
   padding: var(--space-3);
-  background: var(--bg-elev);
 }
 .why-character-card header {
   display: grid;
@@ -205,10 +203,11 @@
 }
 .why-character-reason {
   background: var(--accent-soft);
+  border-color: transparent;
   color: var(--fg);
   padding: 0.15rem var(--space-2);
-  border-radius: var(--radius-pill);
   font-size: 0.8em;
+  font-weight: 400;
 }
 
 .why-character-empty,

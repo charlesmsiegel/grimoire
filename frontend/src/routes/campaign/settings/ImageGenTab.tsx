@@ -34,7 +34,7 @@ export function ImageGenTab({ campaignId }: { campaignId: string }) {
   return (
     <div className="settings-form">
       {!ready && <p className="wizard-meta">Loading saved settings…</p>}
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Backend</span>
         <select
           value={value.backend ?? ""}
@@ -49,7 +49,7 @@ export function ImageGenTab({ campaignId }: { campaignId: string }) {
           ))}
         </select>
       </label>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Active preset</span>
         <input
           type="text"
@@ -59,7 +59,7 @@ export function ImageGenTab({ campaignId }: { campaignId: string }) {
           disabled={!ready}
         />
       </label>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Sampler defaults</span>
         <input
           type="text"

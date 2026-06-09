@@ -91,11 +91,7 @@
   line-height: 1.55;
 }
 
-.wizard-field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
+/* .wizard-field is the bare .form-field primitive plus the rules below. */
 
 .wizard-field > span:first-child {
   font-size: 0.8rem;
@@ -275,15 +271,11 @@
 }
 
 .wizard-cast-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
   padding: 0.15rem 0.6rem;
   background: var(--accent-soft);
+  border-color: transparent;
   color: var(--accent);
-  border-radius: var(--radius-pill);
   font-size: 0.85rem;
-  font-weight: 500;
 }
 
 .wizard-cast-chip button {

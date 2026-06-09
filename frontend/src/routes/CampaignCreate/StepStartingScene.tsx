@@ -93,7 +93,7 @@ export function StepStartingScene({
       {loading && <p className="wizard-meta">Loading greetings…</p>}
       {error && <p className="wizard-error">{error}</p>}
 
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Greeting</span>
         <select
           value={draft.greetingId ?? ""}
@@ -120,7 +120,7 @@ export function StepStartingScene({
         )}
       </label>
 
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Starting location</span>
         <input
           type="text"
@@ -130,7 +130,7 @@ export function StepStartingScene({
         />
       </label>
 
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>In-game time</span>
         <input
           type="text"
@@ -223,12 +223,12 @@ function CastInput({ value, onChange, candidates }: CastInputProps) {
   };
 
   return (
-    <div className="wizard-field">
+    <div className="form-field wizard-field">
       <span>Present cast</span>
       <div className="wizard-cast-input">
         <div className="wizard-cast-chips" onClick={() => inputRef.current?.focus()}>
           {value.map((id) => (
-            <span key={id} className="wizard-cast-chip">
+            <span key={id} className="chip wizard-cast-chip">
               <span>{labelFor(id)}</span>
               <button
                 type="button"

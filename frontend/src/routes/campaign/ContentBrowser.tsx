@@ -136,7 +136,7 @@ function ContentKindPanel({ campaignId, module, kind }: PanelProps) {
               <li key={e.id}>
                 <button
                   type="button"
-                  className={selectedId === e.id ? "entity-card active" : "entity-card"}
+                  className={selectedId === e.id ? "card entity-card active" : "card entity-card"}
                   onClick={() => setSelectedId(e.id)}
                 >
                   <div className="entity-card-head">

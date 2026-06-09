@@ -48,7 +48,7 @@ export function AuxInflightBadge({ campaignId }: Props) {
     <div className="aux-inflight-badge">
       <button
         type="button"
-        className="aux-inflight-badge-pill"
+        className="chip aux-inflight-badge-pill"
         aria-label={`${results.length} auxiliary task${results.length === 1 ? "" : "s"} awaiting review`}
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}

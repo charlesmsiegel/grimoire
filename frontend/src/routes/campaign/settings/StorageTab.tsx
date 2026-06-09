@@ -16,7 +16,7 @@ export function StorageTab({ campaignId }: { campaignId: string }) {
   return (
     <div className="settings-form">
       {!ready && <p className="wizard-meta">Loading saved settings…</p>}
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Backup schedule</span>
         <select
           value={value.schedule}
@@ -29,7 +29,7 @@ export function StorageTab({ campaignId }: { campaignId: string }) {
           <option value="weekly">Weekly</option>
         </select>
       </label>
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Retention (days)</span>
         <input
           type="number"

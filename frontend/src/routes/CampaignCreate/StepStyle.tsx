@@ -54,7 +54,7 @@ export function StepStyle({ draft, update, styleGuides, imagePresets, loading, e
       </fieldset>
 
       {draft.styleGuideMode === "library" && (
-        <label className="wizard-field">
+        <label className="form-field wizard-field">
           <span>Library style guide</span>
           <select
             value={draft.styleGuideId ?? ""}
@@ -71,7 +71,7 @@ export function StepStyle({ draft, update, styleGuides, imagePresets, loading, e
       )}
 
       {draft.styleGuideMode === "inline" && (
-        <label className="wizard-field">
+        <label className="form-field wizard-field">
           <span>Inline style guide</span>
           <textarea
             rows={5}
@@ -82,7 +82,7 @@ export function StepStyle({ draft, update, styleGuides, imagePresets, loading, e
         </label>
       )}
 
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Image preset</span>
         <select
           value={draft.imagePresetId ?? ""}
@@ -97,7 +97,7 @@ export function StepStyle({ draft, update, styleGuides, imagePresets, loading, e
         </select>
       </label>
 
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Content boundaries</span>
         <textarea
           rows={4}

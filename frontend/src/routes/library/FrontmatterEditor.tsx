@@ -91,7 +91,7 @@ function FrontmatterField({
 }) {
   const kind = fieldKind(value);
   return (
-    <div className="frontmatter-field" data-kind={kind}>
+    <div className="form-field frontmatter-field" data-kind={kind}>
       <label className="frontmatter-label">
         <span>{name}</span>
         {!readOnly && (

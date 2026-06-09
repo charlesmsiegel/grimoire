@@ -20,7 +20,7 @@ export function StepIdentity({ draft, update, idEdited, setIdEdited }: Props) {
       <h3>Step 1 — Identity</h3>
       <p className="wizard-step-help">Name your campaign. The id derives from the name.</p>
 
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Name</span>
         <input
           type="text"
@@ -36,7 +36,7 @@ export function StepIdentity({ draft, update, idEdited, setIdEdited }: Props) {
         />
       </label>
 
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Id</span>
         <input
           type="text"
@@ -51,7 +51,7 @@ export function StepIdentity({ draft, update, idEdited, setIdEdited }: Props) {
         <small id="wizard-id-help">Lowercase, hyphen-separated. Used in URLs and file paths.</small>
       </label>
 
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Description</span>
         <textarea
           value={draft.description}
@@ -61,7 +61,7 @@ export function StepIdentity({ draft, update, idEdited, setIdEdited }: Props) {
         />
       </label>
 
-      <label className="wizard-field">
+      <label className="form-field wizard-field">
         <span>Tags</span>
         <input
           type="text"

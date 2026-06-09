@@ -28,7 +28,7 @@ export function renderField({
   const hideLabel = property.widget === "boolean" || property.widget === "nested-section";
 
   return (
-    <div className="sheet-field" data-widget={property.widget ?? "fallback"} key={name}>
+    <div className="form-field sheet-field" data-widget={property.widget ?? "fallback"} key={name}>
       {!hideLabel && (
         <label className="sheet-field-label" htmlFor={`sheet-${name}`}>
           {label}
