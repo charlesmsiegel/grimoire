@@ -78,8 +78,9 @@ where the caller cannot distinguish *empty* from *broken*:
 - `watcher/watcher.py:460-464, 513-514, 707-716` — parse failures, scene-manager reindex failures, and
   *all* processing errors are logged and dropped; the index silently drifts from disk with no surfaced
   signal (no quarantine entry, no error event, no failure counter).
-- `state_store/store.py:1003-1029` — inventory rebuild skips unparseable holder files silently, then
-  truncates + repopulates `inventory_holdings`; a corrupt file means a holder's inventory vanishes.
+- ~~`state_store/store.py:1003-1029` — inventory rebuild skips unparseable holder files silently~~
+  *(correction: already fixed via #553 — the rebuild now logs a WARNING per unparseable file and
+  counts skips; it is the model the other five sites should follow)*
 - `context/archive.py:185-226, 265-268, 300-302` — lore triggers, vector search, keyword search all
   return `[]` on any exception (first attempt isn't even logged); context assembly silently degrades.
 - `time_engine/service.py:1017-1021` — a failing NPC-tick callable falls back to an *empty* tick with
@@ -322,7 +323,7 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
 | Priority | Work | Size |
 |---|---|---|
 | P0 | 1.1 retcon delta restore; 1.2 pre-roll/turn-pipeline compensation | small / medium |
-| P0 | 1.5 error-handling policy on the six listed silent paths (watcher, list_pcs, inventory rebuild, archive, npc tick, imagegen config) | medium, mechanical |
+| P0 | 1.5 error-handling policy on the five listed silent paths (watcher, list_pcs, archive, npc tick, imagegen config) — inventory rebuild already fixed (#553) | medium, mechanical |
 | 1 | 1.3 + 1.4 file/index write-ordering: shared snapshot-restore + two-file-commit helpers | small |
 | 2 | Convention convergence batch (one PR each, zero risk): §5.1-5.3 JSON helpers, §5.6 shared `_Gateway`, §5.7 `new_id`, §5.8 `yaml_io`, §2.5 `map_lookup_errors`, §4 dead-code deletions | small × 6 |
 | 3 | §2.1/2.2 OrchestratorHost Protocol + StateStore methods for fork/auxiliary SQL | medium |
@@ -332,3 +333,35 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
 
 Everything in priority 2 is behavior-preserving and safe to batch; the P0 items need a
 characterization test first (pin current behavior, then fix).
+
+---
+
+## 10. Cross-reference against the GitHub issue backlog
+
+Checked 2026-06-09 against all 45 open issues plus targeted closed-issue searches. The repo has
+already run three audit passes (orchestrator simplification audit → #518–#523; code-quality /
+coding-standards sweep → #535–#556; python-simplifier + API-surface audits → #530–#533, #561–#565),
+so much of this report's *architecture and convention* material is already tracked. The
+*correctness* section largely is not.
+
+| This report | Backlog status |
+|---|---|
+| §1.1 retcon silent delta destruction | **not tracked** (closed #101/#113 covered apply-rollback and downstream flagging, not re-extraction failure) |
+| §1.2 pre-roll cleared before `try`; inventory failure mid-turn | **not tracked** (closed #98/#101 handled player-post rollback, a different pipeline stage) |
+| §1.3 StateStore 8 write methods without snapshot/restore | **not tracked** (#521 splits the class; says nothing about write-ordering) |
+| §1.4 scene `.md`/sidecar/memory desync | **not tracked** |
+| §1.5 silent failures | inventory rebuild **fixed** (#553, closed); generic sweep #552 (S110/S112/BLE001) exists; the 5 named sites **not individually tracked** |
+| §1.6 relationship read-merge-write race | **not tracked** |
+| §2 encapsulation | partial: campaign-exists SQL ×6 → #523 §2; `host: Any` typing → #520; inline 404s → #523 §1 (counts ~130); SceneManager setters → #521. `_find_post`, importer `_active_scene`, export cascade bypass, `bytes_per_word`, `_PREVIEW_CACHE`, hud deps **not tracked** |
+| §3 god classes / complexity | **tracked**: #518 (TurnCoordinator, full dependency map), #521 (StateStore-first decomposition), #538 (C901, 93 fns), #565 (deep nesting incl. `run_backup`) |
+| §4 dead code | family-level only (#523 §6 `emit_typed`, #554 ERA001, #530–#533 orphan routes); the 8 named items **not tracked** |
+| §5 duplication / drift | **mostly tracked**: #522 (slugify ×8, `new_id` ×16, JSON extractors, `now_iso`), #561 (`_maybe_json`, intra-file clones), #523 (YAML I/O, 404s, dispatch tables). Turn-pipeline ×2 and continuity fetch-all ×3 **not tracked** |
+| §6 over-engineering | #520 is sharper: all 17 service Protocols have zero importers |
+| §7 frontend | partial: #540 PostItem, #542/#549 fetch hooks, #543, #545 (1 of 5 casts), #548, #556. Zod 2/56 endpoints, ~15 hand-rolled modals, InputArea, 4 remaining casts **not tracked** |
+| §8 ratchets | mostly tracked (#550/#538/#535/#552/#536/#537/#539); the repo-grep checks (`store.db`, `_host._`, inline 404) and required-Zod-param **not tracked** |
+
+Backlog items this report missed: ASYNC240 blocking I/O in async (#555), vector→BLOB triplication
+and the `_parse_character_ref` canonicalization divergence (#522 §4–5), tiered-confidence routing ×3
+and `emit_typed` (#523), data clumps / `kind` vs `entity_kind` (#564), boolean-blindness (#563), the
+existing `useResource`/`useApi` hooks (#549), and the API-surface (#530–#533) and test-strategy
+(#524–#529) families, which were out of scope here.
