@@ -761,9 +761,9 @@ class World(Protocol):
         entity_id: str,
         patch: dict,
         *,
-        world_id: str,
+        world_id: str | None = None,
         source: str = "world:override",
-    ) -> None: ...
+    ) -> str: ...
 
     async def list_greetings(self, world_id: str) -> list[Greeting]: ...
 

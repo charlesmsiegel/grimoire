@@ -488,6 +488,33 @@ async def test_upsert_override_rejects_emergent_shadowed_entity(
         )
 
 
+async def test_upsert_override_resolves_world_from_composition(
+    world: WorldService, store: StateStore
+) -> None:
+    """Without an explicit world_id, the owning world comes from the composition."""
+    await _seed_world(world, "wod-london")
+    await _seed_faction(world, "wod-london", "camarilla", name="Camarilla")
+    await _bind_campaign(store, "camp1", [("wod-london", [])])
+
+    resolved_world = await world.upsert_override(
+        "camp1", "faction", "camarilla", {"name": "Camarilla (Fractured)"}
+    )
+    assert resolved_world == "wod-london"
+
+    resolved = await world.resolve("worlds/wod-london/factions/camarilla", "camp1")
+    assert resolved.name == "Camarilla (Fractured)"
+
+
+async def test_upsert_override_unresolvable_world_raises(
+    world: WorldService, store: StateStore
+) -> None:
+    await _seed_world(world, "wod-london")
+    await _bind_campaign(store, "camp1", [("wod-london", [])])
+
+    with pytest.raises(WorldNotFoundError):
+        await world.upsert_override("camp1", "item", "ghost", {"name": "X"})
+
+
 async def test_upsert_override_rejects_missing_target(
     world: WorldService, store: StateStore
 ) -> None:
