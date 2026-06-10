@@ -580,3 +580,91 @@ def test_expressions_does_not_clobber_other_settings(settings_client) -> None:
 def test_expressions_unknown_campaign_404(settings_client) -> None:
     resp = settings_client.get("/api/campaigns/missing/expressions")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Character variant selections (campaign.yaml `variants:` map)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def variants_client(
+    settings_client: TestClient,
+    container: ServiceContainer,
+    state_store: StateStore,
+) -> TestClient:
+    """Settings client plus a real LibraryService, a seeded character with a
+    variant, and a campaign.yaml for camp-1 (selection SSOT)."""
+    from grimoire.files import write_yaml
+    from grimoire.library.service import LibraryService
+
+    library = LibraryService(state_store)
+    container.library = library
+
+    await state_store.write_library_file(
+        library_id="worlds/wod-london/world",
+        frontmatter={"id": "wod-london", "name": "WoD London", "version": 1},
+        body="",
+        source="user",
+    )
+    await state_store.write_library_file(
+        library_id="worlds/wod-london/characters/alistair",
+        frontmatter={"id": "alistair", "name": "Alistair"},
+        body="An elder.",
+        source="user",
+    )
+    await library.upsert_character_variant(
+        "wod-london", "alistair", "young", label="Young Alistair", frontmatter={"age": 25}
+    )
+    campaign_dir = state_store.data_root / "campaigns" / "camp-1"
+    campaign_dir.mkdir(parents=True, exist_ok=True)
+    write_yaml(campaign_dir / "campaign.yaml", {"id": "camp-1", "name": "Camp One"})
+    return settings_client
+
+
+def test_variants_selection_round_trip(variants_client) -> None:
+    resp = variants_client.get("/api/campaigns/camp-1/variants")
+    assert resp.status_code == 200
+    assert resp.json() == {"variants": {}}
+
+    resp = variants_client.put(
+        "/api/campaigns/camp-1/variants",
+        json={"variants": {"worlds/wod-london/characters/alistair": "young"}},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"variants": {"worlds/wod-london/characters/alistair": "young"}}
+
+    resp = variants_client.get("/api/campaigns/camp-1/variants")
+    assert resp.json() == {"variants": {"worlds/wod-london/characters/alistair": "young"}}
+
+    # Empty map clears the selection.
+    resp = variants_client.put("/api/campaigns/camp-1/variants", json={"variants": {}})
+    assert resp.status_code == 200
+    resp = variants_client.get("/api/campaigns/camp-1/variants")
+    assert resp.json() == {"variants": {}}
+
+
+def test_variants_selection_rejects_unknown_variant(variants_client) -> None:
+    resp = variants_client.put(
+        "/api/campaigns/camp-1/variants",
+        json={"variants": {"worlds/wod-london/characters/alistair": "ghost"}},
+    )
+    assert resp.status_code == 422
+
+
+def test_variants_selection_rejects_non_character_key(variants_client) -> None:
+    resp = variants_client.put(
+        "/api/campaigns/camp-1/variants",
+        json={"variants": {"worlds/wod-london/items/dagger": "young"}},
+    )
+    assert resp.status_code == 422
+    resp = variants_client.put(
+        "/api/campaigns/camp-1/variants",
+        json={"variants": {"not a ref": "young"}},
+    )
+    assert resp.status_code == 422
+
+
+def test_variants_selection_unknown_campaign_404(variants_client) -> None:
+    resp = variants_client.get("/api/campaigns/missing/variants")
+    assert resp.status_code == 404

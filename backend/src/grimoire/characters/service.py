@@ -17,6 +17,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from grimoire import events
 from grimoire.event_bus import Event, EventBus
 from grimoire.library import LibraryService
 from grimoire.mechanics.service import MechanicsService
@@ -160,10 +161,19 @@ class CharactersService:
         )
         if event_bus is not None:
             event_bus.subscribe("library_entity_changed", self._on_entity_changed)
+            # External edits arrive via the watcher with the kind under
+            # `entity_kind` rather than `kind` — without this subscription a
+            # hand-edited character card or variant overlay would keep serving
+            # stale cached views until some unrelated in-app write flushed them.
+            event_bus.subscribe(events.LIBRARY_FILE_CHANGED, self._on_library_file_changed)
 
     def _on_entity_changed(self, event: Event) -> None:
         kind = event.payload.get("kind")
-        if kind == "character":
+        if kind in {"character", "character_variant"}:
+            self._cache.view_invalidate()
+
+    def _on_library_file_changed(self, event: Event) -> None:
+        if event.payload.get("entity_kind") in {"character", "character_variant"}:
             self._cache.view_invalidate()
 
     @property
@@ -349,21 +359,6 @@ class CharactersService:
                 name=ch.name,
             )
         return None
-
-    # ------------------------------------------------------------------ #
-    # Cross-world variants
-    # ------------------------------------------------------------------ #
-
-    async def cross_world_lookup(
-        self, character_id: str, exclude_world: str | None = None
-    ) -> list[Character]:
-        lookup_id = character_id
-        if not self._config.cross_world_lookup.case_sensitive:
-            lookup_id = slugify_id(character_id, fallback=character_id.lower())
-        rows = await self.library.variants_of(lookup_id, "character")
-        if exclude_world:
-            rows = [r for r in rows if r.world_id != exclude_world]
-        return [character_from_entity(r) for r in rows]
 
     # ------------------------------------------------------------------ #
     # Compressed views (delegated to sheet_manager)

@@ -43,9 +43,9 @@ export function canonicalizeCharacterRef(ref: string): string {
 }
 
 /**
- * Canonical ref for a resolved character row. Cross-world variants share
- * asset ids, so identity checks (cast membership, PC flags, deep links) must
- * key on the full ref, never the bare id.
+ * Canonical ref for a resolved character row. The same asset id can exist
+ * in more than one composed world, so identity checks (cast membership,
+ * PC flags, deep links) must key on the full ref, never the bare id.
  */
 export function characterRefFor(character: { world_id: string | null; id: string }): string {
   return character.world_id !== null

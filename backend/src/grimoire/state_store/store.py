@@ -56,6 +56,8 @@ from grimoire.state_store.paths import (
     KIND_TO_DIR,
     campaign_id_for_path,
     campaigns_root,
+    character_variant_path,
+    character_variants_dir,
     content_path,
     emergent_path,
     image_metadata_path,
@@ -63,6 +65,7 @@ from grimoire.state_store.paths import (
     override_path,
     parse_library_id,
     sheet_path,
+    validate_path_component,
 )
 from grimoire.state_store.search import (
     SearchHit,
@@ -130,6 +133,38 @@ def _snapshot_file_before(target: Path) -> Iterator[None]:
     except BaseException:
         _restore_file(target, before_bytes)
         raise
+
+
+# Variant-file frontmatter keys that describe the variant itself and must not
+# leak into the resolved character: ``label`` is the variant's display name,
+# ``id`` would clobber the character's identity.
+_VARIANT_RESERVED_KEYS: frozenset[str] = frozenset({"id", "label"})
+
+
+def _merge_overlay(base_frontmatter: dict, patch: dict) -> dict:
+    """Shallow-merge ``patch`` onto entity frontmatter with extras tombstones.
+
+    Top-level keys replace wholesale, except ``extras`` which merges
+    key-by-key; a ``None`` value in ``patch['extras']`` deletes the cascaded
+    key. Shared by campaign overrides and character variant overlays so both
+    layers behave identically.
+    """
+    merged = dict(base_frontmatter)
+    base_extras = dict(merged.get("extras") or {})
+    patch_extras = patch.get("extras")
+    merged.update(patch)
+    if base_extras or isinstance(patch_extras, dict):
+        merged_extras = dict(base_extras)
+        for key, value in (patch_extras or {}).items():
+            if value is None:
+                merged_extras.pop(key, None)
+            else:
+                merged_extras[key] = value
+        if merged_extras:
+            merged["extras"] = merged_extras
+        else:
+            merged.pop("extras", None)
+    return merged
 
 
 @dataclass(frozen=True)
@@ -331,7 +366,9 @@ class StateStore:
         """Delete a library entity file and remove its index row.
 
         Returns the delta id. The deleted content is captured in ``before`` so
-        the deletion is reversible.
+        the deletion is reversible. Deleting a character cascades to its
+        variant overlay files (each captured in its own reversible delta) so a
+        later character with the same id doesn't resurrect stale variants.
         """
         ref = parse_library_id(library_id)
         target = library_path(self.data_root, library_id)
@@ -345,8 +382,31 @@ class StateStore:
             doc = read_markdown(target)
             before_payload = {"frontmatter": doc.frontmatter, "body": doc.body}
 
-        with _snapshot_file_before(target):
+        # Cascade: a character's variant overlays die with the base. Each
+        # file gets its own snapshot context so a failed transaction restores
+        # all of them, base included.
+        variant_snapshots: list[tuple[Path, dict, str]] = []
+        if ref.kind == "character" and ref.world_id is not None:
+            variants_dir = character_variants_dir(self.data_root, ref.world_id, ref.asset_id)
+            if variants_dir.is_dir():
+                for vpath in sorted(variants_dir.glob("*.md")):
+                    vdoc = read_markdown(vpath)
+                    variant_snapshots.append(
+                        (
+                            vpath,
+                            {"frontmatter": vdoc.frontmatter, "body": vdoc.body},
+                            f"{library_id}/variants/{vpath.stem}",
+                        )
+                    )
+
+        with contextlib.ExitStack() as snapshots:
+            snapshots.enter_context(_snapshot_file_before(target))
+            for vpath, _vpayload, _vid in variant_snapshots:
+                snapshots.enter_context(_snapshot_file_before(vpath))
             target.unlink()
+            for vpath, _vpayload, _vid in variant_snapshots:
+                vpath.unlink()
+
             async with self._txn() as conn:
                 await delete_library_index_row(conn, library_id)
                 delta_id = await insert_delta(
@@ -362,6 +422,29 @@ class StateStore:
                     before=before_payload,
                     after=None,
                 )
+                for vpath, vpayload, vid in variant_snapshots:
+                    await insert_delta(
+                        conn,
+                        campaign_id=campaign_id,
+                        turn_id=None,
+                        source=source,
+                        kind="library_file_delete",
+                        target_scope="library",
+                        target_table=None,
+                        target_path=str(vpath),
+                        target_id=vid,
+                        before=vpayload,
+                        after=None,
+                    )
+
+        if variant_snapshots:
+            # Tidy the now-empty variants/ dir (and the character dir when the
+            # overlay dir was its only content, i.e. flat-form characters).
+            variants_dir = variant_snapshots[0][0].parent
+            with contextlib.suppress(OSError):
+                variants_dir.rmdir()
+            with contextlib.suppress(OSError):
+                variants_dir.parent.rmdir()
 
         if self._bus is not None:
             await self._bus.emit(
@@ -789,12 +872,166 @@ class StateStore:
             )
         return [_library_row_to_dict(row) for row in rows]
 
-    async def variants_of(self, asset_id: str, kind: str) -> list[dict]:
-        rows = await self.db.fetchall(
-            "SELECT * FROM library_index WHERE asset_id = ? AND kind = ? ORDER BY world_id",
-            (asset_id, kind),
-        )
-        return [_library_row_to_dict(row) for row in rows]
+    # ------------------------------------------------------------------
+    # Character variants (in-world diff overlays; files only, not indexed)
+    # ------------------------------------------------------------------
+
+    def _variant_dict(self, world_id: str, base_id: str, path: Path) -> dict:
+        doc = read_markdown(path)
+        variant_id = path.stem
+        frontmatter = dict(doc.frontmatter or {})
+        return {
+            "id": variant_id,
+            "world_id": world_id,
+            "character_id": base_id,
+            "label": str(frontmatter.get("label") or variant_id),
+            "frontmatter": frontmatter,
+            "body": doc.body or "",
+            "path": str(path),
+        }
+
+    async def list_character_variants(self, world_id: str, base_id: str) -> list[dict]:
+        """All variant overlays of a character, sorted by variant id.
+
+        Variants are leaf files of the base character — they are read straight
+        from disk and never enter ``library_index``. An unparseable file is
+        returned as an error-marker entry (empty diff + ``error`` message)
+        rather than dropped, so callers can tell "no variants" from "broken
+        variant file" and the UI can surface the failure.
+        """
+        directory = character_variants_dir(self.data_root, world_id, base_id)
+        if not directory.is_dir():
+            return []
+        out: list[dict] = []
+        for path in sorted(directory.glob("*.md")):
+            try:
+                out.append(self._variant_dict(world_id, base_id, path))
+            except Exception as exc:
+                logger.warning("unparseable character variant %s: %s", path, exc)
+                out.append(
+                    {
+                        "id": path.stem,
+                        "world_id": world_id,
+                        "character_id": base_id,
+                        "label": path.stem,
+                        "frontmatter": {},
+                        "body": "",
+                        "path": str(path),
+                        "error": str(exc),
+                    }
+                )
+        return out
+
+    async def get_character_variant(
+        self, world_id: str, base_id: str, variant_id: str
+    ) -> dict | None:
+        target = character_variant_path(self.data_root, world_id, base_id, variant_id)
+        if not target.exists():
+            return None
+        return self._variant_dict(world_id, base_id, target)
+
+    async def write_character_variant(
+        self,
+        *,
+        world_id: str,
+        base_id: str,
+        variant_id: str,
+        frontmatter: dict,
+        body: str,
+        source: str,
+    ) -> dict:
+        """Write a variant overlay file and record a reversible delta.
+
+        Mirrors :meth:`write_library_file`'s compensation: the prior bytes are
+        restored if the delta insert fails so disk and delta log stay coherent.
+        """
+        target = character_variant_path(self.data_root, world_id, base_id, variant_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        composite_id = f"worlds/{world_id}/characters/{base_id}/variants/{variant_id}"
+
+        if target.exists():
+            doc = read_markdown(target)
+            before_payload: dict | None = {"frontmatter": doc.frontmatter, "body": doc.body}
+        else:
+            before_payload = None
+
+        with _snapshot_file_before(target):
+            write_markdown(target, ParsedDocument(frontmatter=frontmatter, body=body))
+
+            async with self._txn() as conn:
+                await insert_delta(
+                    conn,
+                    campaign_id=None,
+                    turn_id=None,
+                    source=source,
+                    kind="library_file_write",
+                    target_scope="library",
+                    target_table=None,
+                    target_path=str(target),
+                    target_id=composite_id,
+                    before=before_payload,
+                    after={"frontmatter": frontmatter, "body": body},
+                )
+
+        if self._bus is not None:
+            await self._bus.emit(
+                Event(
+                    type="library_entity_changed",
+                    payload={
+                        "library_id": composite_id,
+                        "kind": "character_variant",
+                        "variant_of": make_library_id(world_id, "character", base_id),
+                    },
+                )
+            )
+        return self._variant_dict(world_id, base_id, target)
+
+    async def delete_character_variant(
+        self,
+        *,
+        world_id: str,
+        base_id: str,
+        variant_id: str,
+        source: str,
+    ) -> str:
+        target = character_variant_path(self.data_root, world_id, base_id, variant_id)
+        if not target.exists():
+            raise NotFoundError(
+                f"character variant does not exist: {base_id}/{variant_id} in {world_id}"
+            )
+        composite_id = f"worlds/{world_id}/characters/{base_id}/variants/{variant_id}"
+        doc = read_markdown(target)
+        before_payload = {"frontmatter": doc.frontmatter, "body": doc.body}
+
+        with _snapshot_file_before(target):
+            target.unlink()
+            async with self._txn() as conn:
+                delta_id = await insert_delta(
+                    conn,
+                    campaign_id=None,
+                    turn_id=None,
+                    source=source,
+                    kind="library_file_delete",
+                    target_scope="library",
+                    target_table=None,
+                    target_path=str(target),
+                    target_id=composite_id,
+                    before=before_payload,
+                    after=None,
+                )
+
+        if self._bus is not None:
+            await self._bus.emit(
+                Event(
+                    type="library_entity_changed",
+                    payload={
+                        "library_id": composite_id,
+                        "kind": "character_variant",
+                        "variant_of": make_library_id(world_id, "character", base_id),
+                    },
+                )
+            )
+        return delta_id
 
     async def get_override(self, campaign_id: str, library_id: str) -> dict | None:
         ref = parse_library_id(library_id)
@@ -1188,10 +1425,12 @@ class StateStore:
         asset_id: str,
         world_id: str | None = None,
     ) -> dict | None:
-        """Cascade: campaign override → snapshot (pinned) / live index → None.
+        """Cascade: base (snapshot/live) → variant overlay → campaign override.
 
         ``world_id=None`` means try campaign emergent first (the entity is
-        campaign-local). Pinned vs live is determined per world ref.
+        campaign-local). Pinned vs live is determined per world ref. For
+        characters, the campaign's selected variant diff (``variants:`` in
+        ``campaign.yaml``) is applied on the base before any override.
         """
         if world_id is None:
             emergent = await self.get_emergent(campaign_id, kind, asset_id)
@@ -1205,43 +1444,180 @@ class StateStore:
 
         library_id = make_library_id(world_id, kind, asset_id)
 
-        override = await self.get_override(campaign_id, library_id)
-        if override is not None:
-            base = await self._resolve_world_base(
-                campaign_id=campaign_id,
-                world_id=world_id,
-                library_id=library_id,
-            )
-            merged = dict(base or {})
-            merged_fm = dict(merged.get("frontmatter") or {})
-            # Narrative extras (frontmatter['extras']) need a key-by-key
-            # merge so an override on one key doesn't drop unrelated
-            # library keys. None entries in the override are "override-
-            # null" tombstones that delete the cascaded library value.
-            base_extras = dict(merged_fm.get("extras") or {})
-            override_extras = override.get("extras")
-            merged_fm.update(override)
-            if base_extras or isinstance(override_extras, dict):
-                merged_extras = dict(base_extras)
-                for key, value in (override_extras or {}).items():
-                    if value is None:
-                        merged_extras.pop(key, None)
-                    else:
-                        merged_extras[key] = value
-                if merged_extras:
-                    merged_fm["extras"] = merged_extras
-                else:
-                    merged_fm.pop("extras", None)
-            merged["frontmatter"] = merged_fm
-            merged["source"] = "campaign-override"
-            merged["override"] = override
-            return merged
-
-        return await self._resolve_world_base(
+        base = await self._resolve_world_base(
             campaign_id=campaign_id,
             world_id=world_id,
             library_id=library_id,
         )
+        if base is not None and kind == "character":
+            base = await self._apply_variant_overlay(
+                campaign_id=campaign_id,
+                world_id=world_id,
+                asset_id=asset_id,
+                library_id=library_id,
+                base=base,
+            )
+
+        override = await self.get_override(campaign_id, library_id)
+        if override is not None:
+            merged = dict(base or {})
+            merged["frontmatter"] = _merge_overlay(dict(merged.get("frontmatter") or {}), override)
+            merged["source"] = "campaign-override"
+            merged["override"] = override
+            return merged
+
+        return base
+
+    def _campaign_yaml_path(self, campaign_id: str) -> Path:
+        validate_path_component(campaign_id, name="campaign_id")
+        return campaigns_root(self.data_root) / campaign_id / "campaign.yaml"
+
+    async def get_campaign_variant_selections(self, campaign_id: str) -> dict[str, str]:
+        """The campaign's variant selection map from ``campaign.yaml``.
+
+        Keys are character library ids (``worlds/<world>/characters/<id>``),
+        values are variant ids. Missing file or block → empty map.
+        """
+        yaml_path = self._campaign_yaml_path(campaign_id)
+        if not yaml_path.is_file():
+            return {}
+        try:
+            raw = load_yaml(yaml_path) or {}
+        except Exception as exc:
+            logger.warning("failed to read %s for variant selections: %s", yaml_path, exc)
+            return {}
+        block = raw.get("variants") if isinstance(raw, dict) else None
+        if not isinstance(block, dict):
+            return {}
+        return {str(k): str(v) for k, v in block.items() if v}
+
+    async def set_campaign_variant_selections(
+        self, campaign_id: str, selections: dict[str, str]
+    ) -> dict[str, str]:
+        """Replace the ``variants:`` map in ``campaign.yaml`` (file is SSOT).
+
+        An empty map removes the block. A missing ``campaign.yaml`` is created
+        (mirroring how the LLM gateway persists tier routes) so campaigns
+        whose file hasn't materialized yet can still pin variants. Emits a
+        ``library_entity_changed`` event (kind ``character_variant``) when the
+        selection actually changes so cached character views re-render with
+        the newly selected portrayal.
+        """
+        yaml_path = self._campaign_yaml_path(campaign_id)
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        raw = (load_yaml(yaml_path) or {}) if yaml_path.is_file() else {"id": campaign_id}
+        if not isinstance(raw, dict):
+            raise StateStoreError(f"{yaml_path}: top-level YAML must be a mapping")
+        previous_block = raw.get("variants")
+        previous = (
+            {str(k): str(v) for k, v in previous_block.items() if v}
+            if isinstance(previous_block, dict)
+            else {}
+        )
+        cleaned = {str(k): str(v) for k, v in selections.items() if v}
+        if cleaned:
+            raw["variants"] = cleaned
+        else:
+            raw.pop("variants", None)
+        write_yaml(yaml_path, raw)
+
+        changed = sorted(
+            k for k in previous.keys() | cleaned.keys() if previous.get(k) != cleaned.get(k)
+        )
+        if changed and self._bus is not None:
+            await self._bus.emit(
+                Event(
+                    type="library_entity_changed",
+                    payload={
+                        "kind": "character_variant",
+                        "campaign_id": campaign_id,
+                        "library_ids": changed,
+                    },
+                )
+            )
+        return cleaned
+
+    def _selected_variant_id(
+        self, campaign_id: str, library_id: str
+    ) -> tuple[str | None, str | None]:
+        """Read the campaign's variant selection for one character.
+
+        ``campaign.yaml`` is the source of truth::
+
+            variants:
+              worlds/<world>/characters/<id>: <variant-id>
+
+        Returns ``(variant_id, error)``. ``error`` is set when the file exists
+        but can't be read — the caller can't know whether a selection was
+        present, so it must surface the breakage rather than treat it as
+        "no selection".
+        """
+        yaml_path = self._campaign_yaml_path(campaign_id)
+        if not yaml_path.is_file():
+            return None, None
+        try:
+            raw = load_yaml(yaml_path) or {}
+        except Exception as exc:
+            logger.warning("failed to read %s for variant selection: %s", yaml_path, exc)
+            return None, f"unreadable campaign.yaml: {exc}"
+        block = raw.get("variants") if isinstance(raw, dict) else None
+        if not isinstance(block, dict):
+            return None, None
+        value = block.get(library_id)
+        return (str(value) if value else None), None
+
+    async def _apply_variant_overlay(
+        self,
+        *,
+        campaign_id: str,
+        world_id: str,
+        asset_id: str,
+        library_id: str,
+        base: dict,
+    ) -> dict:
+        """Apply the campaign's selected variant diff on top of a character base.
+
+        Degraded reads (unreadable campaign.yaml, dangling selection,
+        unparseable overlay) log a warning and fall back to the base so a bad
+        overlay never hides the character — but they mark the result with
+        ``variant_error`` so resolution surfaces "broken" distinctly from
+        "no selection" (it shows up in ``ResolvedEntity.overrides_applied``).
+        """
+        variant_id, selection_error = self._selected_variant_id(campaign_id, library_id)
+        if selection_error is not None:
+            return {**base, "variant_error": selection_error}
+        if not variant_id:
+            return base
+        try:
+            variant = await self.get_character_variant(world_id, asset_id, variant_id)
+        except Exception as exc:
+            logger.warning(
+                "campaign %s: failed to read variant %r of %s: %s",
+                campaign_id,
+                variant_id,
+                library_id,
+                exc,
+            )
+            return {**base, "variant_error": f"unreadable variant {variant_id!r}: {exc}"}
+        if variant is None:
+            logger.warning(
+                "campaign %s selects missing variant %r of %s",
+                campaign_id,
+                variant_id,
+                library_id,
+            )
+            return {**base, "variant_error": f"missing variant {variant_id!r}"}
+        overlay = {
+            k: v
+            for k, v in (variant.get("frontmatter") or {}).items()
+            if k not in _VARIANT_RESERVED_KEYS
+        }
+        merged = dict(base)
+        merged["frontmatter"] = _merge_overlay(dict(merged.get("frontmatter") or {}), overlay)
+        if (variant.get("body") or "").strip():
+            merged["body"] = variant["body"]
+        merged["variant"] = variant_id
+        return merged
 
     async def _resolve_world_base(
         self,

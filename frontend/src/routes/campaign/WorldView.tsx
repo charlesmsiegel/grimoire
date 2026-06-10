@@ -117,8 +117,8 @@ function EntityTab({
 function CharactersTab({ campaignId }: { campaignId: string }) {
   const state = useResource(useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]));
   const cast = useResource(useCallback(() => viewsApi.listCast(campaignId), [campaignId]));
-  // Key membership by canonical ref, not bare id — cross-world variants
-  // share asset ids (#517).
+  // Key membership by canonical ref, not bare id — the same asset id can
+  // exist in more than one world (#517).
   const castRefs = new Set(cast.data?.map((r) => characterRefFor(r.character)) ?? []);
   return (
     <AsyncSection state={state} emptyMessage="No characters resolved for this campaign yet.">

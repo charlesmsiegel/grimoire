@@ -148,3 +148,48 @@ def test_unknown_filename_returns_none(tmp_path: Path) -> None:
     odd.parent.mkdir(parents=True)
     odd.touch()
     assert classify_path(root, odd) is None
+
+
+def test_character_variant_path(tmp_path: Path) -> None:
+    """Variant overlays classify for change events but stay out of the index
+    (library_id is None so the watcher never upserts library_index)."""
+    root = _root(tmp_path)
+    target = (
+        root
+        / "library"
+        / "worlds"
+        / "wod-london"
+        / "characters"
+        / "winifred"
+        / "variants"
+        / "young.md"
+    )
+    target.parent.mkdir(parents=True)
+    target.touch()
+    w = classify_path(root, target)
+    assert w is not None
+    assert w.scope == "library"
+    assert w.kind == "library_character_variant"
+    assert w.library_id is None
+    assert w.entity_kind == "character_variant"
+    assert w.asset_id == "young"
+    assert w.variant_of == "winifred"
+    assert w.world_id == "wod-london"
+    assert w.event_type == "library_file_changed"
+
+
+def test_character_variant_non_md_ignored(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    target = (
+        root
+        / "library"
+        / "worlds"
+        / "wod-london"
+        / "characters"
+        / "winifred"
+        / "variants"
+        / "notes.txt"
+    )
+    target.parent.mkdir(parents=True)
+    target.touch()
+    assert classify_path(root, target) is None

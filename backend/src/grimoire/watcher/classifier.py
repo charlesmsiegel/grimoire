@@ -17,6 +17,7 @@ from grimoire.state_store.paths import DIR_TO_KIND
 # Map a watched-file ``kind`` to the bus event type the watcher emits.
 EVENT_TYPE_BY_KIND: dict[str, str] = {
     "library_entity": events.LIBRARY_FILE_CHANGED,
+    "library_character_variant": events.LIBRARY_FILE_CHANGED,
     "library_world": events.LIBRARY_FILE_CHANGED,
     "library_style_guide": events.LIBRARY_FILE_CHANGED,
     "library_image_preset": events.LIBRARY_FILE_CHANGED,
@@ -57,6 +58,7 @@ class WatchedFile:
     mechanics_id: str | None = None
     scene_basename: str | None = None
     image_id: str | None = None
+    variant_of: str | None = None  # base character asset id (character variants)
 
     @property
     def event_type(self) -> str:
@@ -169,6 +171,27 @@ def _classify_library(abs_path: Path, rel: Path) -> WatchedFile | None:
                 entity_kind="character",
                 asset_id=asset_id,
                 library_id=f"worlds/{world_id}/characters/{asset_id}",
+            )
+        # In-world character variant overlay:
+        # worlds/<w>/characters/<base>/variants/<variant-id>.md. Variants are
+        # leaf files of the base character and never enter library_index —
+        # library_id stays None so the watcher only emits a change event
+        # (cache invalidation, UI refresh) without touching the index.
+        if (
+            len(parts) == 6
+            and parts[2] == "characters"
+            and parts[4] == "variants"
+            and parts[5].endswith(".md")
+        ):
+            world_id = parts[1]
+            return WatchedFile(
+                scope="library",
+                kind="library_character_variant",
+                path=abs_path,
+                world_id=world_id,
+                entity_kind="character_variant",
+                asset_id=parts[5][:-3],
+                variant_of=parts[3],
             )
         return None
 

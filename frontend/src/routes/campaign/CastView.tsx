@@ -11,8 +11,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { ApiError } from "../../api/client";
+import { ApiError, errorMessage } from "../../api/client";
 import { campaignApi, canonicalizeCharacterRef, characterRefFor } from "../../api/campaign";
+import { libraryApi } from "../../api/library";
 import { viewsApi } from "../../api/views";
 import type { ResolvedCharacter, WorldMeta } from "../../api/types";
 import { useResource } from "../../api/useResource";
@@ -54,8 +55,9 @@ export function CastView() {
   });
 
   const [searchParams] = useSearchParams();
-  // Selection is keyed by canonical ref — cross-world variants share bare
-  // asset ids. ?character= remains as a legacy id hint; ?ref= is canonical.
+  // Selection is keyed by canonical ref — the same asset id can exist in
+  // more than one world. ?character= remains as a legacy id hint; ?ref= is
+  // canonical.
   const [selectedRef, setSelectedRef] = useState<string | null>(null);
   const [initialId] = useState(() => searchParams.get("character"));
   const [initialRef] = useState(() => searchParams.get("ref"));
@@ -299,6 +301,15 @@ function CharacterDetail({ campaignId, moduleId, character: row, onReload }: Cha
       </p>
 
       {character.description && <p>{character.description}</p>}
+
+      {character.world_id && (
+        <VariantPicker
+          campaignId={campaignId}
+          worldId={character.world_id}
+          characterId={character.id}
+          onReload={onReload}
+        />
+      )}
       {character.body && (
         <details>
           <summary>Card body</summary>
@@ -422,6 +433,113 @@ function CharacterDetail({ campaignId, moduleId, character: row, onReload }: Cha
         />
       )}
     </div>
+  );
+}
+
+interface VariantPickerProps {
+  campaignId: string;
+  worldId: string;
+  characterId: string;
+  onReload: () => void;
+}
+
+/**
+ * Per-campaign character-variant selection (campaign.yaml `variants:` map).
+ * Renders nothing when the library defines no variants for this character.
+ */
+function VariantPicker({ campaignId, worldId, characterId, onReload }: VariantPickerProps) {
+  const variantsState = useResource(
+    useCallback(
+      () => libraryApi.listCharacterVariants(worldId, characterId),
+      [worldId, characterId],
+    ),
+  );
+  const selectionState = useResource(
+    useCallback(() => viewsApi.getVariantSelections(campaignId), [campaignId]),
+  );
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const libraryId = `worlds/${worldId}/characters/${characterId}`;
+  const variants = variantsState.data ?? [];
+  const selections = selectionState.data?.variants ?? {};
+  const current = selections[libraryId] ?? "";
+  // PUT replaces the whole selection map, so writing before the current map
+  // has loaded would wipe every other character's selection.
+  const selectionsLoaded = selectionState.data != null;
+
+  // No variants in the library → no picker (the base card is always valid).
+  // A failed load is rendered, not hidden — otherwise broken library data is
+  // indistinguishable from "this character has no variants".
+  if (variantsState.error) {
+    return (
+      <section className="variant-picker">
+        <h4>Variant</h4>
+        <p className="library-error" role="alert">
+          Couldn’t load this character’s variants: {errorMessage(variantsState.error)}{" "}
+          <button type="button" onClick={variantsState.reload}>
+            Retry
+          </button>
+        </p>
+      </section>
+    );
+  }
+  if (variants.length === 0) return null;
+
+  async function select(variantId: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const next = { ...selections };
+      if (variantId) {
+        next[libraryId] = variantId;
+      } else {
+        delete next[libraryId];
+      }
+      await viewsApi.setVariantSelections(campaignId, next);
+      selectionState.reload();
+      onReload();
+    } catch (selectErr) {
+      setErr(errorMessage(selectErr));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="variant-picker">
+      <h4>Variant</h4>
+      <select
+        aria-label="Character variant"
+        value={current}
+        disabled={busy || variantsState.loading || !selectionsLoaded}
+        onChange={(e) => void select(e.target.value)}
+      >
+        <option value="">Base</option>
+        {variants.map((v) => (
+          <option key={v.id} value={v.id} disabled={Boolean(v.error)}>
+            {v.error ? `${v.label} (unparseable)` : v.label}
+          </option>
+        ))}
+      </select>
+      <p className="muted variant-picker-hint">
+        This campaign plays the {current ? "selected variant" : "base portrayal"}; overrides still
+        apply on top.
+      </p>
+      {selectionState.error && (
+        <p className="library-error" role="alert">
+          Couldn’t load the campaign’s variant selections — switching is disabled.{" "}
+          <button type="button" onClick={selectionState.reload}>
+            Retry
+          </button>
+        </p>
+      )}
+      {err && (
+        <p className="library-error" role="alert">
+          {err}
+        </p>
+      )}
+    </section>
   );
 }
 

@@ -93,3 +93,18 @@ def test_emergent_and_sheet_paths(tmp_path: Path) -> None:
 
     s = sheet_path(tmp_path, "c1", "character", "winifred", "wod")
     assert s == tmp_path / "campaigns/c1/sheets/characters/winifred.wod.yaml"
+
+
+def test_character_variant_paths(tmp_path):
+    from grimoire.state_store.paths import character_variant_path, character_variants_dir
+
+    directory = character_variants_dir(tmp_path, "wod-london", "alistair")
+    assert directory == (
+        tmp_path / "library" / "worlds" / "wod-london" / "characters" / "alistair" / "variants"
+    )
+    target = character_variant_path(tmp_path, "wod-london", "alistair", "young")
+    assert target == directory / "young.md"
+    with pytest.raises(InvalidRefError):
+        character_variant_path(tmp_path, "wod-london", "alistair", "../escape")
+    with pytest.raises(InvalidRefError):
+        character_variant_path(tmp_path, "wod-london", "../up", "young")

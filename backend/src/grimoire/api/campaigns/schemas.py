@@ -238,6 +238,16 @@ class IntegratedDeltasPayload(BaseModel):
     enabled: bool = False
 
 
+class VariantSelectionsPayload(BaseModel):
+    """Replace the campaign's character-variant selection map.
+
+    Keys are character library ids (``worlds/<world>/characters/<id>``),
+    values are variant ids. An empty map clears every selection.
+    """
+
+    variants: dict[str, str] = Field(default_factory=dict)
+
+
 class GenerationSettingsPayload(BaseModel):
     max_tokens: int | None = Field(default=None, ge=1, le=200_000)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)

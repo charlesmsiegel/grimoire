@@ -21,7 +21,6 @@ import { FrontmatterEditor } from "./FrontmatterEditor";
 import { ensureFrontmatter, type Frontmatter } from "./frontmatter";
 import { greetingFormToPayload, type GreetingFormValue } from "./greeting-form";
 import { GreetingFormFields } from "./GreetingFormFields";
-import { VariantsBreadcrumb } from "./VariantsBreadcrumb";
 import { VariantsPanel } from "./VariantsPanel";
 
 const ENTITY_HIDDEN_KEYS = ["extras"];
@@ -87,8 +86,12 @@ interface EditorBodyProps {
 
 const SUB_TABS = (isCharacter: boolean, basePath: string) => [
   { to: basePath, label: "Editor", end: true },
-  ...(isCharacter ? [{ to: `${basePath}/capabilities`, label: "Capabilities", end: false }] : []),
-  { to: `${basePath}/variants`, label: "Variants", end: false },
+  ...(isCharacter
+    ? [
+        { to: `${basePath}/capabilities`, label: "Capabilities", end: false },
+        { to: `${basePath}/variants`, label: "Variants", end: false },
+      ]
+    : []),
   { to: `${basePath}/preview`, label: "Preview", end: false },
 ];
 
@@ -186,11 +189,6 @@ function EntityEditorBody({
             <code>{entity.path}</code> · v{entity.version} ·{" "}
             <TokenBadge text={`${JSON.stringify(frontmatter)}\n${body}`} />
           </small>
-          <VariantsBreadcrumb
-            kindPlural={kindPlural}
-            assetId={entity.asset_id}
-            currentWorldId={worldId}
-          />
         </div>
         <div className="entity-editor-actions">
           <button onClick={handleSaveClick} disabled={!dirty || saving}>
@@ -257,10 +255,12 @@ function EntityEditorBody({
         {isCharacter && (
           <Route path="capabilities" element={<CapabilitiesPanel entity={entity} />} />
         )}
-        <Route
-          path="variants"
-          element={<VariantsPanel kindPlural={kindPlural} assetId={entity.asset_id} />}
-        />
+        {isCharacter && (
+          <Route
+            path="variants"
+            element={<VariantsPanel worldId={worldId} characterId={entity.asset_id} />}
+          />
+        )}
         <Route
           path="preview"
           element={

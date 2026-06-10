@@ -14,7 +14,7 @@ vi.mock("../../../api/library", async () => {
       getEntity: vi.fn(),
       listEntities: vi.fn().mockResolvedValue([]),
       dependents: vi.fn().mockResolvedValue([]),
-      variants: vi.fn().mockResolvedValue([]),
+      listCharacterVariants: vi.fn().mockResolvedValue([]),
     },
   };
 });

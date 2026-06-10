@@ -95,9 +95,9 @@ export function WorldDetailView() {
     setForking(true);
     setForkErr(null);
     try {
-      // Fork copies the directory and preserves every entity's asset_id, so
-      // the forked world's characters / items / locations / etc. appear as
-      // cross-world variants of the source (see VariantsBreadcrumb).
+      // Fork copies the directory wholesale (entities keep their asset_ids,
+      // characters keep their variants/ overlays); the copies are fully
+      // independent of the source afterwards.
       await libraryApi.forkWorld(worldId, targetId);
       setForkOpen(false);
       navigate(`/library/worlds/${encodeURIComponent(targetId)}`);
@@ -181,7 +181,7 @@ export function WorldDetailView() {
           open
           title={`Fork "${data?.name || worldId}"`}
           label="New world id"
-          hint="Lowercase letters, digits, ._- — the fork keeps every entity's asset id, so entities appear as cross-world variants."
+          hint="Lowercase letters, digits, ._- — the fork copies every entity (including character variants) into an independent world."
           confirmLabel="Fork"
           busy={forking}
           error={forkErr}

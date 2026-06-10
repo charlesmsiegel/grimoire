@@ -6,6 +6,7 @@ export {
   type WorldMeta,
   type WorldSummary,
   type LibraryEntity,
+  type CharacterVariant,
   type Greeting,
   type ReclassificationSuggestion,
   type ReclassificationPreview,

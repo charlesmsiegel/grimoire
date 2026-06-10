@@ -55,13 +55,13 @@ Per-domain wrappers under `api/`:
 
 ### Entity editor
 
-`EntityEditorView` (`routes/library/EntityEditorView.tsx`) is the per-asset editor. Sub-tabs: `Editor` (frontmatter form + markdown body textarea), `Capabilities` (characters only — explains that mechanical sheets live per-campaign), `Variants` (cross-world same-asset-id list), `Preview` (rendered markdown). For characters, `CharacterExtras` adds dedicated voice / image-prompt fields. Greetings get a bespoke `GreetingFormFields` editor instead of the generic frontmatter/body split.
+`EntityEditorView` (`routes/library/EntityEditorView.tsx`) is the per-asset editor. Sub-tabs: `Editor` (frontmatter form + markdown body textarea), `Capabilities` (characters only — explains that mechanical sheets live per-campaign), `Variants` (characters only — in-world variant overlays: list/create/edit/delete), `Preview` (rendered markdown). For characters, `CharacterExtras` adds dedicated voice / image-prompt fields. Greetings get a bespoke `GreetingFormFields` editor instead of the generic frontmatter/body split.
 
 When the entity has dependent campaigns, save raises a confirmation dialog explaining "edits will be visible to campaigns when they upgrade their ref; pinned campaigns continue seeing the previous version" before persisting.
 
-### Cross-world variants
+### Character variants
 
-`VariantsPanel` (`routes/library/VariantsPanel.tsx`) lists entities across worlds sharing the same `asset_id` with a short snippet — informational only, no diff or merge.
+`VariantsPanel` (`routes/library/VariantsPanel.tsx`) lists a character's in-world variant overlays with their overridden keys, creates one from a label (slugified id), and edits the diff (JSON object), label, and replacement body inline. Per-campaign selection lives in the Cast view's `VariantPicker` (`routes/campaign/CastView.tsx`), backed by `GET/PUT /api/campaigns/<id>/variants`.
 
 ## Campaign play view
 

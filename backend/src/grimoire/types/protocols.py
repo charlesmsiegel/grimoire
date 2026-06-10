@@ -46,6 +46,7 @@ from .common import (
 )
 from .composition import (
     CampaignRef,
+    CharacterVariant,
     Composition,
     Greeting,
     LibraryEntity,
@@ -490,7 +491,15 @@ class StateStore(Protocol):
 
     async def query_library(self, predicate: dict) -> list[LibraryEntity]: ...
 
-    async def variants_of(self, asset_id: str, kind: str) -> list[LibraryEntity]: ...
+    # Character variants (in-world diff overlays; files only, never indexed)
+    async def list_character_variants(self, world_id: str, base_id: str) -> list[dict]: ...
+    async def get_character_variant(
+        self, world_id: str, base_id: str, variant_id: str
+    ) -> dict | None: ...
+    async def get_campaign_variant_selections(self, campaign_id: str) -> dict[str, str]: ...
+    async def set_campaign_variant_selections(
+        self, campaign_id: str, selections: dict[str, str]
+    ) -> dict[str, str]: ...
 
     # Campaign content reads
     async def get_scene_file(self, scene_id: SceneId) -> SceneFile: ...
@@ -684,7 +693,26 @@ class Library(Protocol):
     async def list_greetings(self, world_id: str) -> list[Greeting]: ...
     async def get_greeting(self, world_id: str, id: str) -> Greeting: ...
 
-    async def variants_of(self, asset_id: str, kind: str) -> list[LibraryEntity]: ...
+    # Character variants (in-world diff overlays on a base character)
+    async def list_character_variants(
+        self, world_id: str, character_id: str
+    ) -> list[CharacterVariant]: ...
+    async def get_character_variant(
+        self, world_id: str, character_id: str, variant_id: str
+    ) -> CharacterVariant: ...
+    async def upsert_character_variant(
+        self,
+        world_id: str,
+        character_id: str,
+        variant_id: str,
+        *,
+        label: str | None = None,
+        frontmatter: dict | None = None,
+        body: str = "",
+    ) -> CharacterVariant: ...
+    async def delete_character_variant(
+        self, world_id: str, character_id: str, variant_id: str
+    ) -> None: ...
 
     async def create_world(self, id: str, meta: dict) -> WorldMeta: ...
     async def create_entity(
@@ -807,12 +835,6 @@ class Characters(Protocol):
         campaign_id: CampaignId,
         filter: CharacterFilter | None = None,
     ) -> list[ResolvedCharacter]: ...
-
-    async def cross_world_lookup(
-        self,
-        character_id: str,
-        exclude_world: str | None = None,
-    ) -> list[Character]: ...
 
     async def get_full_card(
         self, ref: CharacterRef, campaign_id: CampaignId, *, seed: int | None = None

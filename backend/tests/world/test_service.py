@@ -1,8 +1,8 @@
 """Tests for WorldService.
 
-Covers CRUD-by-kind, composition-aware listing, spatial queries, cross-world
-variants, lore keyword triggers, calendar/season/holiday queries, procedural
-weather (determinism + override), faction state, and fork.
+Covers CRUD-by-kind, composition-aware listing, spatial queries, lore keyword
+triggers, calendar/season/holiday queries, procedural weather (determinism +
+override), faction state, and fork.
 """
 
 from __future__ import annotations
@@ -290,7 +290,7 @@ async def test_locations_within_depth(world: WorldService) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Composition + cross-world
+# Composition
 # ---------------------------------------------------------------------------
 
 
@@ -535,21 +535,6 @@ async def test_upsert_override_rejects_characters_and_unknown_kinds(
         await world.upsert_override("camp1", "character", "alistair", {}, world_id="wod-london")
     with pytest.raises(WorldError):
         await world.upsert_override("camp1", "widget", "x", {}, world_id="wod-london")
-
-
-async def test_cross_world_lookup_by_asset_id(world: WorldService) -> None:
-    await _seed_world(world, "wod-london")
-    await _seed_world(world, "faerun")
-    await _seed_location(world, "wod-london", "orchard")
-    await _seed_location(world, "faerun", "orchard")
-
-    found = await world.cross_world_lookup("orchard", EntityKind.LOCATION)
-    assert {ent.world_id for ent in found} == {"wod-london", "faerun"}
-
-    excluded = await world.cross_world_lookup(
-        "orchard", EntityKind.LOCATION, exclude_world="wod-london"
-    )
-    assert {ent.world_id for ent in excluded} == {"faerun"}
 
 
 # ---------------------------------------------------------------------------

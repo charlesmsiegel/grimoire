@@ -44,6 +44,23 @@ export interface WorldSummary {
   has_genre: boolean;
 }
 
+/** An in-world variant of a character: a diff overlay on the base card.
+ * `frontmatter` holds only the fields that differ from the base (plus the
+ * reserved `label`); a non-empty `body` replaces the base prose when a
+ * campaign selects the variant. */
+export interface CharacterVariant {
+  id: string;
+  world_id: string;
+  character_id: string;
+  label: string;
+  frontmatter: Record<string, unknown>;
+  body: string;
+  path: string;
+  /** Set when the overlay file exists but can't be parsed; the entry is a
+   * marker (empty diff) so broken files stay visible instead of vanishing. */
+  error?: string | null;
+}
+
 export interface ReclassificationSuggestion {
   kind: EntityKind | "lore";
   confidence: number;
@@ -219,12 +236,28 @@ export const libraryApi = {
       `/library/worlds/${encodeURIComponent(worldId)}/reclassifications/${encodeURIComponent(ts)}/undo`,
     ),
 
-  variants: (kindPlural: string, assetId: string) =>
-    request<LibraryEntity[]>(
+  // In-world character variants: diff overlays on a base character that a
+  // campaign can select (campaign.yaml `variants:` map).
+  listCharacterVariants: (worldId: string, characterId: string) =>
+    request<CharacterVariant[]>(
       "GET",
-      `/library/variants/${kindPlural}/${encodeURIComponent(assetId)}`,
-      undefined,
-      { checkSchema: z.array(LibraryEntitySchema) },
+      `/library/worlds/${encodeURIComponent(worldId)}/characters/${encodeURIComponent(characterId)}/variants`,
+    ),
+  putCharacterVariant: (
+    worldId: string,
+    characterId: string,
+    variantId: string,
+    payload: { label?: string | null; frontmatter?: Record<string, unknown>; body?: string },
+  ) =>
+    request<CharacterVariant>(
+      "PUT",
+      `/library/worlds/${encodeURIComponent(worldId)}/characters/${encodeURIComponent(characterId)}/variants/${encodeURIComponent(variantId)}`,
+      payload,
+    ),
+  deleteCharacterVariant: (worldId: string, characterId: string, variantId: string) =>
+    request<void>(
+      "DELETE",
+      `/library/worlds/${encodeURIComponent(worldId)}/characters/${encodeURIComponent(characterId)}/variants/${encodeURIComponent(variantId)}`,
     ),
 
   listStyleGuides: () =>

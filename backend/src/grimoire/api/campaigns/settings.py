@@ -7,7 +7,10 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from grimoire.api.deps import LLMGatewayDep, StateStoreDep
+from grimoire.api.deps import LibraryDep, LLMGatewayDep, StateStoreDep
+from grimoire.library.errors import LibraryNotFoundError
+from grimoire.state_store.errors import InvalidRefError
+from grimoire.state_store.paths import parse_library_id
 
 from .helpers import (
     _load_campaign_config,
@@ -26,9 +29,44 @@ from .schemas import (
     StorageSettingsPayload,
     SummariesSettingsPayload,
     TierSettingsPayload,
+    VariantSelectionsPayload,
 )
 
 router = APIRouter()
+
+
+@router.get("/{campaign_id}/variants")
+async def get_campaign_variants(campaign_id: str, state_store: StateStoreDep) -> Any:
+    """The campaign's character-variant selection map (from campaign.yaml)."""
+    await _require_campaign_row(state_store, campaign_id)
+    return {"variants": await state_store.get_campaign_variant_selections(campaign_id)}
+
+
+@router.put("/{campaign_id}/variants")
+async def set_campaign_variants(
+    campaign_id: str,
+    payload: VariantSelectionsPayload,
+    state_store: StateStoreDep,
+    library: LibraryDep,
+) -> Any:
+    """Replace the selection map. Every entry must name an existing variant."""
+    await _require_campaign_row(state_store, campaign_id)
+    for library_id, variant_id in payload.variants.items():
+        try:
+            ref = parse_library_id(library_id)
+        except InvalidRefError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if ref.kind != "character" or ref.world_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"variant selections must key on characters, got {library_id!r}",
+            )
+        try:
+            await library.get_character_variant(ref.world_id, ref.asset_id, variant_id)
+        except LibraryNotFoundError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    cleaned = await state_store.set_campaign_variant_selections(campaign_id, payload.variants)
+    return {"variants": cleaned}
 
 
 @router.get("/{campaign_id}/routing")

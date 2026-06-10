@@ -126,6 +126,16 @@ export const viewsApi = {
       payload,
     ),
 
+  // Character-variant selection map (campaign.yaml `variants:`); keys are
+  // character library ids (`worlds/<world>/characters/<id>`), values are
+  // variant ids.
+  getVariantSelections: (campaignId: string) =>
+    api.get<{ variants: Record<string, string> }>(`/api/campaigns/${enc(campaignId)}/variants`),
+  setVariantSelections: (campaignId: string, variants: Record<string, string>) =>
+    api.put<{ variants: Record<string, string> }>(`/api/campaigns/${enc(campaignId)}/variants`, {
+      variants,
+    }),
+
   promoteCharacterToLibrary: (
     campaignId: string,
     entityId: string,

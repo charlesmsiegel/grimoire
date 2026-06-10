@@ -1058,18 +1058,63 @@ async def characters_create_many(chars: CharactersService) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cross-world variants
+# Variants (in-world diff overlays selected per campaign)
 # ---------------------------------------------------------------------------
 
 
-async def test_cross_world_lookup(characters: CharactersService, store: StateStore) -> None:
-    await _seed_world(store, "wod-london")
-    await _seed_world(store, "wod-nyc")
-    await characters.create("wod-london", _character_data("alistair"))
-    await characters.create("wod-nyc", _character_data("alistair"))
+async def test_resolve_applies_selected_variant(
+    characters: CharactersService,
+    library: LibraryService,
+    store: StateStore,
+) -> None:
+    """A campaign.yaml `variants:` selection overlays the base character."""
+    from grimoire.files import write_yaml
 
-    variants = await characters.cross_world_lookup("alistair", exclude_world="wod-london")
-    assert [v.world_id for v in variants] == ["wod-nyc"]
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data("alistair"))
+    await library.upsert_character_variant(
+        "wod-london",
+        "alistair",
+        "young",
+        label="Young Alistair",
+        frontmatter={"name": "Young Alistair", "age": "25"},
+        body="A brash newcomer to the city.",
+    )
+    campaign_dir = store.data_root / "campaigns" / "camp-1"
+    campaign_dir.mkdir(parents=True, exist_ok=True)
+    write_yaml(
+        campaign_dir / "campaign.yaml",
+        {"id": "camp-1", "variants": {"worlds/wod-london/characters/alistair": "young"}},
+    )
+
+    ref = "library:worlds/wod-london/characters/alistair"
+    resolved = await characters.resolve(ref, "camp-1")
+    assert resolved.character.name == "Young Alistair"
+    assert resolved.character.age == "25"
+    assert "A brash newcomer" in resolved.character.body
+    # The variant changes only what its diff names — identity and untouched
+    # fields cascade from the base.
+    assert resolved.character.id == "alistair"
+    assert "vampire" in resolved.character.tags
+
+
+async def test_resolve_without_selection_uses_base(
+    characters: CharactersService,
+    library: LibraryService,
+    store: StateStore,
+) -> None:
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await characters.create("wod-london", _character_data("alistair"))
+    await library.upsert_character_variant(
+        "wod-london", "alistair", "young", frontmatter={"age": "25"}
+    )
+
+    ref = "library:worlds/wod-london/characters/alistair"
+    resolved = await characters.resolve(ref, "camp-1")
+    assert resolved.character.age is None
+    assert resolved.character.name == "Alistair"
 
 
 def test_characters_config_defaults_match_spec() -> None:
@@ -1083,48 +1128,9 @@ def test_characters_config_defaults_match_spec() -> None:
     assert config.voice_anchor.max_samples == 5
     assert config.capsules.auto_generate is True
     assert config.promotion.require_confirmation is True
-    assert config.cross_world_lookup.case_sensitive is False
     assert config.multi_pc.auto_advance_with_single_pc is True
     assert config.multi_pc.require_advance_with_multiple_pcs is True
     assert config.cache.max_size == 256
-
-
-async def test_cross_world_lookup_is_case_insensitive_by_default(
-    library: LibraryService,
-    mechanics: MechanicsService,
-    store: StateStore,
-) -> None:
-    """Spec characters-remaining §7: case_sensitive=False slug-normalizes the id."""
-    chars = CharactersService(library, mechanics)
-    await _seed_world(store, "wod-london")
-    await _seed_world(store, "wod-nyc")
-    await chars.create("wod-london", _character_data("alistair-hyde-smythe"))
-    await chars.create("wod-nyc", _character_data("alistair-hyde-smythe"))
-
-    # Mixed-case query slug-normalizes to "alistair-hyde-smythe".
-    variants = await chars.cross_world_lookup("Alistair Hyde Smythe")
-    assert {v.world_id for v in variants} == {"wod-london", "wod-nyc"}
-
-
-async def test_cross_world_lookup_respects_case_sensitive_flag(
-    library: LibraryService,
-    mechanics: MechanicsService,
-    store: StateStore,
-) -> None:
-    """When case_sensitive=True the raw id is passed through verbatim."""
-    from grimoire.characters.config import CrossWorldLookupConfig
-
-    chars = CharactersService(
-        library,
-        mechanics,
-        config=CharactersConfig(cross_world_lookup=CrossWorldLookupConfig(case_sensitive=True)),
-    )
-    await _seed_world(store, "wod-london")
-    await chars.create("wod-london", _character_data("alistair-hyde-smythe"))
-
-    # Different case → no match (no slugification applied).
-    variants = await chars.cross_world_lookup("Alistair Hyde Smythe")
-    assert variants == []
 
 
 # ---------------------------------------------------------------------------
@@ -2207,3 +2213,42 @@ async def test_event_bus_ignores_non_character_kinds(
     await bus.emit(Event(type="library_entity_changed", payload={"kind": "location"}))
     await chars.get_full_card(ref, "camp-1")
     assert counts["full"] == 1
+
+
+async def test_event_bus_invalidates_cache_on_variant_changes(
+    library: LibraryService,
+    mechanics: MechanicsService,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Variant writes / selection changes (kind=character_variant) and
+    watcher-originated external edits (library_file_changed) both flush
+    cached views, so prompt assembly never serves a stale portrayal."""
+    from grimoire.event_bus import Event, EventBus
+
+    bus = EventBus()
+    chars = CharactersService(library, mechanics, event_bus=bus)
+
+    await _seed_world(store, "wod-london")
+    await _bind_campaign(store, "camp-1", "wod-london")
+    await chars.create("wod-london", _character_data())
+    ref = "library:worlds/wod-london/characters/alistair"
+
+    counts = _patch_render_counters(monkeypatch)
+    await chars.get_full_card(ref, "camp-1")
+    assert counts["full"] == 1
+
+    # In-app variant write or campaign selection change.
+    await bus.emit(Event(type="library_entity_changed", payload={"kind": "character_variant"}))
+    await chars.get_full_card(ref, "camp-1")
+    assert counts["full"] == 2
+
+    # External edit picked up by the watcher (kind lives under entity_kind).
+    await bus.emit(Event(type="library_file_changed", payload={"entity_kind": "character_variant"}))
+    await chars.get_full_card(ref, "camp-1")
+    assert counts["full"] == 3
+
+    # Watcher events for unrelated kinds don't flush.
+    await bus.emit(Event(type="library_file_changed", payload={"entity_kind": "location"}))
+    await chars.get_full_card(ref, "camp-1")
+    assert counts["full"] == 3
