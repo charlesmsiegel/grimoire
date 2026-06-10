@@ -306,6 +306,36 @@ async def test_queue_generation_cache_hit_with_deleted_image_re_renders(service)
     assert (svc.data_root / new_image.file_path).exists()
 
 
+async def test_queue_generation_cache_hit_with_missing_asset_re_renders(service) -> None:
+    """A cache hit whose PNG vanished on disk (row intact) re-renders too."""
+    svc, bus = service
+    job1 = await svc.queue_generation(
+        campaign_id="camp-1",
+        scene_id=None,
+        post_id=None,
+        request=_request(prompt="gone"),
+    )
+    await _wait_done(svc, "camp-1", job1)
+    (old_image,) = await svc.list_images("camp-1")
+    (svc.data_root / old_image.file_path).unlink()
+
+    ready_payloads: list[dict] = []
+    bus.subscribe("image_ready", lambda ev: ready_payloads.append(dict(ev.payload)))
+
+    job2 = await svc.queue_generation(
+        campaign_id="camp-1",
+        scene_id=None,
+        post_id=None,
+        request=_request(prompt="gone"),
+    )
+    await _wait_done(svc, "camp-1", job2)
+
+    # Fresh render, not a cached emission pointing at the deleted PNG.
+    assert [p.get("cached") for p in ready_payloads] == [False]
+    new_image = next(img for img in await svc.list_images("camp-1") if img.id != old_image.id)
+    assert (svc.data_root / new_image.file_path).exists()
+
+
 async def test_cancel_queued_job_skips_generation(service) -> None:
     svc, _ = service
     # Saturate the worker with a long-running request first.
