@@ -68,7 +68,7 @@ from grimoire.util import canonicalize_character_ref, now_iso, parse_iso_datetim
 from .atmosphere import generate_atmosphere
 from .calendar import holiday_at, parse_calendar, season_for
 from .config import WorldConfig
-from .errors import CompositionError, WorldError, WorldNotFoundError
+from .errors import CompositionError, OverrideTargetError, WorldError, WorldNotFoundError
 from .location_generator import generate_location_frontmatter
 from .weather import generate_weather
 
@@ -469,6 +469,14 @@ class WorldService:
                     f"worlds/{ent.world_id}/{dir_name}/{ent.asset_id}", campaign_id
                 )
             except LibraryNotFoundError:
+                logger.warning(
+                    "composed entity worlds/%s/%s/%s is indexed but did not resolve "
+                    "for campaign %s; omitting from the list",
+                    ent.world_id,
+                    dir_name,
+                    ent.asset_id,
+                    campaign_id,
+                )
                 continue
             out.append(resolved)
             seen.add(ent.asset_id)
@@ -483,6 +491,13 @@ class WorldService:
                     f"emergent/{normalized}/{asset_id}", campaign_id
                 )
             except LibraryNotFoundError:
+                logger.warning(
+                    "emergent %s/%s is indexed but unreadable for campaign %s; "
+                    "omitting from the list",
+                    normalized,
+                    asset_id,
+                    campaign_id,
+                )
                 continue
             out.append(resolved)
             seen.add(asset_id)
@@ -498,22 +513,31 @@ class WorldService:
         world_id: str,
         source: str = "world:override",
     ) -> None:
-        """Write a campaign-local override for a world-owned entity (#600).
+        """Shallow-merge a campaign-local override for a world-owned entity (#600).
 
         Counterpart of ``CharactersService.upsert_override`` for the
         non-character kinds; character overrides stay with the Characters
-        module (they also invalidate its view cache).
+        module (they also invalidate its view cache). Merge semantics:
+        ``patch`` keys land on top of any existing override so updating one
+        field doesn't drop the rest. Entities shadowed by campaign-local
+        emergent content are rejected — the cascade resolves emergent first,
+        so the override could never become visible.
         """
-        from grimoire.state_store.indexers import make_library_id
-
         normalized = _normalize_kind(kind)
         if normalized == "character":
             raise WorldError("character overrides are owned by the Characters module")
         if normalized not in _OWNED_KINDS:
             raise WorldError(f"unsupported kind {normalized!r}")
-        await self.store.write_override(
+        if await self.store.get_emergent(campaign_id, normalized, entity_id) is not None:
+            raise OverrideTargetError(
+                f"{normalized} {entity_id!r} is campaign-local emergent content in "
+                f"campaign {campaign_id!r}; edit the emergent entity instead of overriding"
+            )
+        await self.store.merge_override(
             campaign_id=campaign_id,
-            library_id=make_library_id(world_id, normalized, entity_id),
+            world_id=world_id,
+            kind=normalized,
+            asset_id=entity_id,
             patch=patch,
             source=source,
         )

@@ -742,6 +742,12 @@ class World(Protocol):
         campaign_id: CampaignId,
     ) -> ResolvedEntity: ...
 
+    async def list_for_campaign(
+        self,
+        campaign_id: CampaignId,
+        kind: EntityKind | str,
+    ) -> list[LibraryEntity]: ...
+
     async def list_resolved_for_campaign(
         self,
         campaign_id: CampaignId,
