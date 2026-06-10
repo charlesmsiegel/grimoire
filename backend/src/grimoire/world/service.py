@@ -516,19 +516,21 @@ class WorldService:
         entity_id: str,
         patch: dict,
         *,
-        world_id: str,
+        world_id: str | None = None,
         source: str = "world:override",
-    ) -> None:
+    ) -> str:
         """Shallow-merge a campaign-local override for a world-owned entity (#600).
 
         Counterpart of ``CharactersService.upsert_override`` for the
         non-character kinds; character overrides stay with the Characters
         module (they also invalidate its view cache). Merge semantics:
         ``patch`` keys land on top of any existing override so updating one
-        field doesn't drop the rest. Entities shadowed by campaign-local
-        emergent content are rejected — the cascade resolves emergent first,
-        so the override could never become visible — and the target library
-        entity must exist, so a typo'd id can't leave an orphan override file.
+        field doesn't drop the rest. When ``world_id`` is omitted the owning
+        world is resolved from the campaign's composition. Entities shadowed
+        by campaign-local emergent content are rejected — the cascade resolves
+        emergent first, so the override could never become visible — and the
+        target library entity must exist, so a typo'd id can't leave an orphan
+        override file. Returns the world id the override was written against.
         """
         normalized = _normalize_kind(kind)
         if normalized == "character":
@@ -539,6 +541,17 @@ class WorldService:
             raise OverrideTargetError(
                 f"{normalized} {entity_id!r} is campaign-local emergent content in "
                 f"campaign {campaign_id!r}; edit the emergent entity instead of overriding"
+            )
+        if not world_id:
+            for ent in await self.library.list_for_composition(campaign_id, normalized):
+                if ent.asset_id == entity_id and ent.world_id:
+                    world_id = ent.world_id
+                    break
+        if not world_id:
+            raise WorldNotFoundError(
+                f"could not resolve owning world for {normalized} {entity_id!r} in "
+                f"campaign {campaign_id!r}; pass world_id explicitly when the entity "
+                "is not composed into this campaign"
             )
         try:
             await self.library.get_entity(world_id, normalized, entity_id)
@@ -554,6 +567,7 @@ class WorldService:
             patch=patch,
             source=source,
         )
+        return world_id
 
     # ------------------------------------------------------------------ #
     # Spatial queries
