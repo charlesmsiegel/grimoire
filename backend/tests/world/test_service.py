@@ -384,6 +384,9 @@ async def test_list_resolved_for_campaign_emergent_shadows_library(
     assert [r.asset_id for r in rows] == ["elysium"]
     assert rows[0].name == "Elysium (Rebuilt)"
     assert rows[0].source_chain[0].layer == ResolutionLayer.EMERGENT
+    # The row keeps campaign-local identity rather than being labelled as
+    # the composed world's content.
+    assert rows[0].world_id is None
 
 
 async def test_list_resolved_for_campaign_respects_include_filter(
@@ -482,6 +485,19 @@ async def test_upsert_override_rejects_emergent_shadowed_entity(
     with pytest.raises(OverrideTargetError):
         await world.upsert_override(
             "camp1", "item", "bone-knife", {"name": "X"}, world_id="wod-london"
+        )
+
+
+async def test_upsert_override_rejects_missing_target(
+    world: WorldService, store: StateStore
+) -> None:
+    """A typo'd id must not leave an orphan override file on disk."""
+    await _seed_world(world, "wod-london")
+    await _bind_campaign(store, "camp1", [("wod-london", [])])
+
+    with pytest.raises(WorldNotFoundError):
+        await world.upsert_override(
+            "camp1", "item", "no-such-item", {"name": "X"}, world_id="wod-london"
         )
 
 

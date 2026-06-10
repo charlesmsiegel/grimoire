@@ -794,15 +794,33 @@ def test_patch_entity_override_409_for_emergent_entity(client, container) -> Non
 
 
 def test_patch_entity_override_accepts_explicit_world(client, container) -> None:
+    """An explicit world_id reaches library entities outside the composition —
+    but only ones that actually exist (no orphan override for a typo'd id)."""
     from functools import partial
 
-    client.portal.call(partial(container.state_store.upsert_campaign, campaign_id="c1", name="C1"))
+    store = container.state_store
+    client.portal.call(partial(store.upsert_campaign, campaign_id="c1", name="C1"))
+    client.portal.call(
+        partial(
+            store.write_library_file,
+            library_id="worlds/w9/factions/camarilla",
+            frontmatter={"id": "camarilla", "name": "Camarilla"},
+            body="",
+            source="test",
+        )
+    )
     response = client.patch(
         "/api/campaigns/c1/factions/camarilla/override",
         json={"override": {"name": "X"}, "world_id": "w9"},
     )
     assert response.status_code == 200
     assert response.json()["ref"] == "library:worlds/w9/factions/camarilla"
+
+    missing = client.patch(
+        "/api/campaigns/c1/factions/ghost/override",
+        json={"override": {"name": "X"}, "world_id": "w9"},
+    )
+    assert missing.status_code == 404
 
 
 def test_patch_entity_override_404_when_world_unresolvable(client, container) -> None:

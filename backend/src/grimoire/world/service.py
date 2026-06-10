@@ -461,9 +461,17 @@ class WorldService:
         dir_name = KIND_TO_DIR.get(normalized)
         if dir_name is None:
             raise WorldError(f"unsupported kind {normalized!r}")
+        emergent_rows = await self.store.list_emergent(campaign_id, normalized)
+        emergent_ids = {str(r.get("asset_id") or "") for r in emergent_rows} - {""}
         out: list[ResolvedEntity] = []
         seen: set[str] = set()
         for ent in await self.library.list_for_composition(campaign_id, normalized):
+            # A campaign-local emergent with the same asset id wins the
+            # cascade; it is listed below through its emergent ref so the row
+            # keeps campaign-local identity (world_id=None) instead of being
+            # mislabelled as the composed world's content.
+            if ent.asset_id in emergent_ids:
+                continue
             try:
                 resolved = await self.library.resolve(
                     f"worlds/{ent.world_id}/{dir_name}/{ent.asset_id}", campaign_id
@@ -480,10 +488,8 @@ class WorldService:
                 continue
             out.append(resolved)
             seen.add(ent.asset_id)
-        for row in await self.store.list_emergent(campaign_id, normalized):
+        for row in emergent_rows:
             asset_id = str(row.get("asset_id") or "")
-            # An emergent that shadows a composed library asset already
-            # surfaced through the cascade above; don't list it twice.
             if not asset_id or asset_id in seen:
                 continue
             try:
@@ -521,7 +527,8 @@ class WorldService:
         ``patch`` keys land on top of any existing override so updating one
         field doesn't drop the rest. Entities shadowed by campaign-local
         emergent content are rejected — the cascade resolves emergent first,
-        so the override could never become visible.
+        so the override could never become visible — and the target library
+        entity must exist, so a typo'd id can't leave an orphan override file.
         """
         normalized = _normalize_kind(kind)
         if normalized == "character":
@@ -533,6 +540,12 @@ class WorldService:
                 f"{normalized} {entity_id!r} is campaign-local emergent content in "
                 f"campaign {campaign_id!r}; edit the emergent entity instead of overriding"
             )
+        try:
+            await self.library.get_entity(world_id, normalized, entity_id)
+        except LibraryNotFoundError as exc:
+            raise WorldNotFoundError(
+                f"cannot override {normalized} {entity_id!r}: no such entity in world {world_id!r}"
+            ) from exc
         await self.store.merge_override(
             campaign_id=campaign_id,
             world_id=world_id,
