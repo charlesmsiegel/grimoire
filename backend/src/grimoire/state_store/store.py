@@ -1957,8 +1957,9 @@ class StateStore:
         applied: list[DeltaRecord] = []
         queued_review_ids: list[str] = []
         rejected_review_ids: list[str] = []
-        file_snapshots: list[tuple[Path, bytes | None]] = []
-        try:
+        # File targets are snapshot as the reversal walk reaches them; the
+        # stack restores them (LIFO) after a failed transaction rolls back.
+        with contextlib.ExitStack() as file_snapshots:
             async with self._txn() as conn:
                 rows: list[aiosqlite.Row] = []
                 if turn_id is not None:
@@ -2003,10 +2004,7 @@ class StateStore:
                 for row in rows:
                     rec = DeltaRecord.from_row(row)
                     if rec.target_scope in ("library", "campaign-file") and rec.target_path:
-                        target = Path(rec.target_path)
-                        file_snapshots.append(
-                            (target, target.read_bytes() if target.exists() else None)
-                        )
+                        file_snapshots.enter_context(_snapshot_file_before(Path(rec.target_path)))
                     await self._reverse_delta_on_conn(conn, rec.id)
                     rewound.append(await get_delta(conn, rec.id))
                 for d in deltas:
@@ -2024,12 +2022,6 @@ class StateStore:
                             conn, delta=d, source=source, campaign_id=campaign_id
                         )
                     )
-        except BaseException:
-            # The SQL transaction rolled back; put reversed file targets back
-            # so files and indexes don't drift (write_library_file's pattern).
-            for target, before_bytes in reversed(file_snapshots):
-                _restore_file(target, before_bytes)
-            raise
         return SwapResult(
             rewound=rewound,
             applied=applied,
