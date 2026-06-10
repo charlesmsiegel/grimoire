@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -16,11 +17,14 @@ from .models import (
     FlagReason,
     HolderKind,
     InventoryAction,
+    InventoryEntry,
     InventoryOperation,
 )
 from .persistence import InventoryPersistence
 from .resolver import ItemResolver
 from .state_machine import Holdings, ResolvedOp, apply_op
+
+logger = logging.getLogger(__name__)
 
 
 def deltas_to_operations(deltas: list[StateDelta]) -> list[InventoryOperation]:
@@ -91,7 +95,13 @@ class InventoryService:
 
         resolver = ItemResolver(self._store, config)
         holdings: Holdings = {}
-        touched: set[tuple[HolderKind, str]] = set()
+        # Pre-image of every loaded holder (deep copies — apply_op mutates
+        # entries in place), used to restore already-persisted holders when a
+        # later holder's write fails: the persist loop commits all holders or
+        # none (#584). Dict-as-ordered-set so persistence (and its unwind)
+        # walks holders in first-touch order deterministically.
+        pristine: dict[tuple[HolderKind, str], list[InventoryEntry]] = {}
+        touched: dict[tuple[HolderKind, str], None] = {}
         flags: list[FlaggedOp] = []
 
         for op in operations:
@@ -104,9 +114,9 @@ class InventoryService:
             )
             to_kind, to_id = self._holder(op.to) if op.to else (None, None)
 
-            await self._ensure_loaded(campaign_id, holdings, holder_kind, holder_id)
+            await self._ensure_loaded(campaign_id, holdings, pristine, holder_kind, holder_id)
             if to_id is not None and to_kind is not None:
-                await self._ensure_loaded(campaign_id, holdings, to_kind, to_id)
+                await self._ensure_loaded(campaign_id, holdings, pristine, to_kind, to_id)
 
             resolved = ResolvedOp(
                 action=op.action,
@@ -123,28 +133,41 @@ class InventoryService:
                 acquired_in_post=turn_id,
             )
             step = apply_op(holdings, resolved)
-            touched.add((holder_kind, holder_id))
+            touched[(holder_kind, holder_id)] = None
             if to_id is not None and to_kind is not None:
-                touched.add((to_kind, to_id))
+                touched[(to_kind, to_id)] = None
 
             if step.flag is not None:
                 flags.append(FlaggedOp(op=op, reason=step.flag))
             elif op.confidence < config.flag_threshold:
                 flags.append(FlaggedOp(op=op, reason=FlagReason.LOW_CONFIDENCE))
 
-        # Persist every touched holder (file SSOT + derived rows).
-        for hk, hid in touched:
-            entries = list(holdings.get((hk, hid), {}).values())
-            await self._persist.write_holder_inventory(
-                campaign_id=campaign_id,
-                holder_kind=hk,
-                holder_id=hid,
-                entries=entries,
-                source="inventory",
-                turn_id=turn_id,
+        # Persist every touched holder (file SSOT + derived rows). A failure
+        # mid-loop restores every holder reached so far — including the one
+        # whose write failed partway (file written, derived rows not) — before
+        # re-raising: the batch commits all holders or none (#584).
+        # BaseException so a task cancellation mid-persist restores too.
+        written: list[tuple[HolderKind, str]] = []
+        try:
+            for hk, hid in touched:
+                written.append((hk, hid))
+                entries = list(holdings.get((hk, hid), {}).values())
+                await self._persist.write_holder_inventory(
+                    campaign_id=campaign_id,
+                    holder_kind=hk,
+                    holder_id=hid,
+                    entries=entries,
+                    source="inventory",
+                    turn_id=turn_id,
+                )
+            await self._record_flags(campaign_id, turn_id, flags)
+        except BaseException:
+            await self._rewrite_holders(
+                campaign_id,
+                turn_id,
+                [(hk, hid, pristine.get((hk, hid), [])) for hk, hid in reversed(written)],
             )
-
-        await self._record_flags(campaign_id, turn_id, flags)
+            raise
 
         await self._bus.emit(
             Event(
@@ -163,28 +186,115 @@ class InventoryService:
                     payload={"campaign_id": campaign_id, "turn_id": turn_id, "count": len(flags)},
                 )
             )
-        return {"touched": len(touched), "flags": len(flags)}
+        return {
+            "touched": len(touched),
+            "flags": len(flags),
+            # Pre-images of every holder this apply committed, handed back via
+            # restore_holders when a turn stage *after* the apply fails (#584).
+            "rollback": [(hk, hid, pristine.get((hk, hid), [])) for hk, hid in touched],
+        }
+
+    async def restore_holders(
+        self,
+        *,
+        campaign_id: str,
+        turn_id: str | None,
+        rollback: list[tuple[HolderKind, str, list[InventoryEntry]]],
+    ) -> None:
+        """Rewrite holders to the pre-images a successful :meth:`apply` returned.
+
+        Called by the orchestrator's cross-stage unwind when a turn stage
+        *after* the inventory apply fails (#584), so committed holder writes
+        unwind with the rest of the turn. Restores newest-first and emits
+        ``INVENTORY_CHANGED`` so consumers (HUD) refresh.
+        """
+        if not rollback:
+            return
+        await self._rewrite_holders(campaign_id, turn_id, list(reversed(rollback)))
+        await self._bus.emit(
+            Event(
+                type=inv_events.INVENTORY_CHANGED,
+                payload={
+                    "campaign_id": campaign_id,
+                    "turn_id": turn_id,
+                    "holders": [{"kind": k.value, "id": i} for (k, i, _) in rollback],
+                },
+            )
+        )
+
+    async def _rewrite_holders(
+        self,
+        campaign_id: str,
+        turn_id: str | None,
+        holders: list[tuple[HolderKind, str, list[InventoryEntry]]],
+    ) -> None:
+        """Best-effort restore of holder pre-images; failures are logged so a
+        partial rollback is visible, and the remaining holders still restore."""
+        for hk, hid, entries in holders:
+            try:
+                await self._persist.write_holder_inventory(
+                    campaign_id=campaign_id,
+                    holder_kind=hk,
+                    holder_id=hid,
+                    entries=entries,
+                    source="inventory_rollback",
+                    turn_id=turn_id,
+                )
+            except Exception:
+                logger.warning(
+                    "inventory rollback failed for holder %s/%s (campaign %s)",
+                    getattr(hk, "value", hk),
+                    hid,
+                    campaign_id,
+                    exc_info=True,
+                )
 
     async def _ensure_loaded(
-        self, campaign_id: str, holdings: Holdings, kind: HolderKind, hid: str
+        self,
+        campaign_id: str,
+        holdings: Holdings,
+        pristine: dict[tuple[HolderKind, str], list[InventoryEntry]],
+        kind: HolderKind,
+        hid: str,
     ) -> None:
         if (kind, hid) in holdings:
             return
         entries = await self._persist.read_holder_inventory(campaign_id, kind, hid)
         holdings[(kind, hid)] = {e.item_ref: e for e in entries}
+        # apply_op mutates entries in place, so keep untouched copies for the
+        # persist-failure rollback.
+        pristine[(kind, hid)] = [e.model_copy(deep=True) for e in entries]
 
     async def _record_flags(
         self, campaign_id: str, turn_id: str | None, flags: list[FlaggedOp]
     ) -> None:
+        """Insert review flags all-or-nothing: a failure mid-way deletes the
+        flags already inserted before re-raising, so a rolled-back apply never
+        leaves review flags behind (#584)."""
         now = self._clock().isoformat()
-        for f in flags:
-            await self._store.record_inventory_flag(
-                campaign_id=campaign_id,
-                turn_id=turn_id,
-                op_json=f.op.model_dump_json(),
-                flag_reason=f.reason.value,
-                created_at=now,
-            )
+        recorded: list[str] = []
+        try:
+            for f in flags:
+                fid = await self._store.record_inventory_flag(
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    op_json=f.op.model_dump_json(),
+                    flag_reason=f.reason.value,
+                    created_at=now,
+                )
+                recorded.append(fid)
+        except BaseException:
+            for fid in reversed(recorded):
+                try:
+                    await self._store.delete_inventory_flag(campaign_id, fid)
+                except Exception:
+                    logger.warning(
+                        "inventory flag rollback failed for %s (campaign %s)",
+                        fid,
+                        campaign_id,
+                        exc_info=True,
+                    )
+            raise
 
     @staticmethod
     def _holder(ref: str | None) -> tuple[HolderKind | None, str | None]:

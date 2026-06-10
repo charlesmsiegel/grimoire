@@ -4,8 +4,8 @@ The speaker loop (``per_character_multi_call``) used to skip the inventory
 stage entirely: ``INVENTORY_CHANGE`` deltas extracted in a speaker round were
 silently discarded while the single-response path applied them. These tests
 pin the orchestrator → InventoryService handoff in both pipelines, the parity
-between them, the flagged-not-silent failure semantics (#584), and a holdings
-write end-to-end against the real InventoryService + StateStore.
+between them, the fail-with-compensation failure semantics (#584), and a
+holdings write end-to-end against the real InventoryService + StateStore.
 """
 
 from __future__ import annotations
@@ -18,9 +18,10 @@ import pytest
 from grimoire import events
 from grimoire.event_bus import Event, EventBus
 from grimoire.orchestrator.config import OrchestratorConfig, SpeakerLoopConfig
+from grimoire.orchestrator.errors import OrchestratorError
 from grimoire.orchestrator.service import OrchestratorService
 from grimoire.scenes.manager import SceneManager, SceneManagerConfig
-from grimoire.scenes.types import AuthorKind, SceneInit
+from grimoire.scenes.types import SceneInit
 from grimoire.types.common import Scope
 from grimoire.types.state import DeltaKind, StateDelta
 
@@ -149,9 +150,12 @@ async def test_inventory_handoff_parity_between_pipelines(tmp_path: Path) -> Non
     ]
 
 
-async def test_speaker_round_inventory_failure_flagged_not_silent(tmp_path: Path) -> None:
-    """A failed inventory stage in a speaker round is flagged on the turn
-    audit (#584 semantics) and the round still completes."""
+async def test_speaker_round_inventory_failure_fails_turn_with_compensation(
+    tmp_path: Path,
+) -> None:
+    """A failed inventory stage fails the turn (#584): the round's committed
+    state is unwound, no completion is published, and the player post rolls
+    back — never narrative state without its inventory effects."""
     inventory = FakeInventory(raise_on_apply=RuntimeError("inventory boom"))
     orch, sm, ws = _make_orchestrator(
         tmp_path=tmp_path,
@@ -160,20 +164,21 @@ async def test_speaker_round_inventory_failure_flagged_not_silent(tmp_path: Path
         campaign_config=MULTI_CALL_CONFIG,
     )
     scene = await _start_scene(sm)
-    fragments = _subscribe_fragments(orch)
 
-    await orch.submit_post("camp1", "pc1", "I hand Alice the ring")
+    with pytest.raises(OrchestratorError):
+        await orch.submit_post("camp1", "pc1", "I hand Alice the ring")
 
-    warnings = [w for e in fragments for w in e.payload.get("warnings", [])]
-    assert any(w["module"] == "inventory" for w in warnings)
+    assert len(inventory.calls) == 1
+    types = [m["type"] for _, m in ws.messages]
+    assert "turn_failed" in types
+    assert "turn_complete" not in types
+    assert await sm.get_posts(scene.id) == []
 
-    posts = await sm.recent_posts(scene.id, n=20)
-    assert any(p.author_kind == AuthorKind.NPC for p in posts)
-    assert "turn_complete" in [m["type"] for _, m in ws.messages]
 
-
-async def test_single_response_inventory_failure_flagged_not_silent(tmp_path: Path) -> None:
-    """The single-response path flags the same failure the same way."""
+async def test_single_response_inventory_failure_fails_turn_with_compensation(
+    tmp_path: Path,
+) -> None:
+    """The single-response path fails the same failure the same way (#584)."""
     inventory = FakeInventory(raise_on_apply=RuntimeError("inventory boom"))
     orch, sm, ws = _make_orchestrator(
         tmp_path=tmp_path,
@@ -181,16 +186,15 @@ async def test_single_response_inventory_failure_flagged_not_silent(tmp_path: Pa
         deltas=[_inventory_delta()],
     )
     scene = await _start_scene(sm)
-    fragments = _subscribe_fragments(orch)
 
-    await orch.submit_post("camp1", "pc1", "I hand Alice the ring")
+    with pytest.raises(OrchestratorError):
+        await orch.submit_post("camp1", "pc1", "I hand Alice the ring")
 
-    warnings = [w for e in fragments for w in e.payload.get("warnings", [])]
-    assert any(w["module"] == "inventory" for w in warnings)
-
-    posts = await sm.recent_posts(scene.id, n=20)
-    assert any(p.author_kind == AuthorKind.NARRATOR for p in posts)
-    assert "turn_complete" in [m["type"] for _, m in ws.messages]
+    assert len(inventory.calls) == 1
+    types = [m["type"] for _, m in ws.messages]
+    assert "turn_failed" in types
+    assert "turn_complete" not in types
+    assert await sm.get_posts(scene.id) == []
 
 
 async def test_multi_round_applied_deltas_accumulate_in_audit_fragment(tmp_path: Path) -> None:
@@ -232,44 +236,6 @@ async def test_multi_round_applied_deltas_accumulate_in_audit_fragment(tmp_path:
     applied_fragments = [e for e in fragments if "applied_deltas" in e.payload]
     assert len(applied_fragments) == 1
     assert len(applied_fragments[0].payload["applied_deltas"]) == 2
-
-
-async def test_multi_round_inventory_warnings_accumulate_in_audit_fragment(
-    tmp_path: Path,
-) -> None:
-    """Inventory failures in multiple rounds merge into one warnings fragment;
-    per-round emission would keep only the final round's warning in the audit."""
-    import asyncio
-
-    inventory = FakeInventory(raise_on_apply=RuntimeError("inventory boom"))
-    orch, sm, ws = _make_orchestrator(
-        tmp_path=tmp_path,
-        inventory=inventory,
-        deltas=[_inventory_delta()],
-        campaign_config=MULTI_CALL_CONFIG,
-        speaker_timeout=2.0,
-    )
-    await _start_scene(sm, npc_refs=["worlds/w/characters/alice", "worlds/w/characters/bob"])
-    fragments = _subscribe_fragments(orch)
-
-    submit_task = asyncio.create_task(orch.submit_post("camp1", "pc1", "Hello everyone"))
-    for _ in range(100):
-        await asyncio.sleep(0.05)
-        if [m["type"] for _, m in ws.messages].count("speaker_round_waiting") >= 1:
-            break
-    await orch.next_speaker("camp1")
-    for _ in range(100):
-        await asyncio.sleep(0.05)
-        if [m["type"] for _, m in ws.messages].count("speaker_round_waiting") >= 2:
-            break
-    await asyncio.wait_for(submit_task, timeout=10.0)
-
-    assert len(inventory.calls) == 2
-    warning_fragments = [e for e in fragments if "warnings" in e.payload]
-    assert len(warning_fragments) == 1
-    warnings = warning_fragments[0].payload["warnings"]
-    assert len(warnings) == 2
-    assert all(w["module"] == "inventory" for w in warnings)
 
 
 async def test_speaker_round_updates_holdings_with_real_inventory(tmp_path: Path) -> None:

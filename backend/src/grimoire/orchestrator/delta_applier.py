@@ -237,7 +237,9 @@ class DeltaApplier:
                     delta_set_id=delta_set_id,
                 )
                 applied_ids.append(did)
-        except Exception:
+        except BaseException:
+            # BaseException so a task cancellation mid-batch (idle-timeout
+            # watchdog) unwinds the partial batch too, not just plain errors.
             for did in reversed(applied_ids):
                 try:
                     await self._store.reverse_delta(did)

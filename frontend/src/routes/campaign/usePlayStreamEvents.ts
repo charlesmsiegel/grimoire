@@ -51,6 +51,18 @@ export function usePlayStreamEvents(
           // Surface it so the turn doesn't silently vanish (the #1 "I sent a
           // message and got nothing" confusion).
           const reason = typeof message.reason === "string" ? message.reason : "";
+          // A failed pre-roll resume re-parks the turn instead of rolling the
+          // post back: the message is still saved and the roll-confirmation
+          // dialog stays open for a retry, so don't claim otherwise.
+          if (message.pre_roll_resumable === true) {
+            dispatch({
+              type: "turn-failed",
+              message: reason
+                ? `The narrator couldn't respond (${reason}). Your message is saved and the roll confirmation is still open — submit it again to retry.`
+                : "The narrator couldn't respond. Your message is saved and the roll confirmation is still open — submit it again to retry.",
+            });
+            return;
+          }
           dispatch({
             type: "turn-failed",
             message: reason
