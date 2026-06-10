@@ -227,8 +227,14 @@ export function playReducer(state: PlayState, action: PlayAction): PlayState {
       };
     case "set-advance":
       return { ...state, advanceEnabled: action.enabled, advanceReason: action.reason };
-    case "image-ready":
-      return { ...state, images: { ...state.images, [action.image.id]: action.image } };
+    case "image-ready": {
+      // Key by image + attachment, not bare image id: a cache hit re-emits
+      // an existing image id with the *requesting* post's post_id, and must
+      // not move the image away from the post that first received it — the
+      // same image can legitimately illustrate several posts.
+      const key = `${action.image.id}:${action.image.post_id ?? ""}`;
+      return { ...state, images: { ...state.images, [key]: action.image } };
+    }
     case "drift": {
       const prev = state.driftWarnings[action.ref];
       return {
