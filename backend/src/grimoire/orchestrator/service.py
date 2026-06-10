@@ -131,6 +131,28 @@ class _PendingPreRoll:
     auto_resolved: list[MechanicsResult] = field(default_factory=list)
 
 
+@dataclass
+class _ExtractionApplyResult:
+    """Output of the shared post-extraction state stage (#603).
+
+    Returned per call so the speaker loop can merge round results and emit
+    one audit fragment per turn — the TurnAuditor's fragment merge is
+    last-write-wins per key, so per-round emission would persist only the
+    final round.
+    """
+
+    applied_ids: list[str] = field(default_factory=list)
+    queued_ids: list[str] = field(default_factory=list)
+    transient_writes: list[dict] = field(default_factory=list)
+    transient_conflicts: list[dict] = field(default_factory=list)
+
+    def merge(self, other: _ExtractionApplyResult) -> None:
+        self.applied_ids.extend(other.applied_ids)
+        self.queued_ids.extend(other.queued_ids)
+        self.transient_writes.extend(other.transient_writes)
+        self.transient_conflicts.extend(other.transient_conflicts)
+
+
 class _NullAutoDisable:
     """Permissive `select_mode` collaborator used until AutoDisableState lands.
 
@@ -1456,12 +1478,13 @@ class OrchestratorService:
                 time_advance_durations.append(d.model_dump(mode="json"))
 
         active.stage = "applying"
-        await self._apply_extraction_state(
+        applied_state = await self._apply_extraction_state(
             campaign_id=campaign_id,
             scene_id=scene_id,
             turn_id=turn_id,
             extraction=extraction,
         )
+        await self._emit_extraction_state_fragment(turn_id, campaign_id, applied_state)
 
         from grimoire.extractor.together import strip_tracker_block
         from grimoire.orchestrator.post_splitting import create_response_posts
@@ -1537,31 +1560,31 @@ class OrchestratorService:
         scene_id: SceneId,
         turn_id: TurnId,
         extraction: ExtractionResult | None,
-    ) -> tuple[list[str], list[str]]:
+    ) -> _ExtractionApplyResult:
         """Apply an extraction's state effects: routing, inventory, transient.
 
         This is the single post-extraction stage list shared by the
         single-response pipeline and the speaker loop (#603) — add any new
         state-affecting stage here, never to just one caller, so the two
         pipeline copies stay structurally identical until #518 folds them
-        into a TurnCoordinator. Returns ``(applied_ids, queued_ids)`` from
-        delta routing; no-ops when extraction failed.
+        into a TurnCoordinator. No-ops when extraction failed.
+
+        Audit fragments for the applied state are NOT emitted here: callers
+        emit once per turn via :meth:`_emit_extraction_state_fragment` (the
+        speaker loop merges round results first, since the TurnAuditor keeps
+        only the last value per fragment key).
         """
+        result = _ExtractionApplyResult()
         if extraction is None:
-            return [], []
+            return result
 
         applied_ids, queued_ids = await self._delta.apply_routing(
             campaign_id=campaign_id,
             turn_id=turn_id,
             extraction=extraction,
         )
-        if applied_ids or queued_ids:
-            await self._emit_fragment(
-                turn_id,
-                campaign_id,
-                applied_deltas=[{"id": did} for did in applied_ids],
-                queued_for_review=[{"id": qid} for qid in queued_ids],
-            )
+        result.applied_ids = list(applied_ids)
+        result.queued_ids = list(queued_ids)
 
         if self._inventory is not None:
             # The inventory service is injected at startup (Protocol-style);
@@ -1604,15 +1627,37 @@ class OrchestratorService:
                 source_post_id=turn_id,
                 continuity=self._continuity,
             )
-            if ts_summary.writes or ts_summary.conflicts:
-                await self._emit_fragment(
-                    turn_id,
-                    campaign_id,
-                    transient_state_writes=ts_summary.writes,
-                    transient_state_conflicts=ts_summary.conflicts,
-                )
+            result.transient_writes = list(ts_summary.writes)
+            result.transient_conflicts = list(ts_summary.conflicts)
 
-        return applied_ids, queued_ids
+        return result
+
+    async def _emit_extraction_state_fragment(
+        self,
+        turn_id: TurnId,
+        campaign_id: CampaignId,
+        result: _ExtractionApplyResult,
+    ) -> None:
+        """Emit the turn-audit fragment for applied extraction state (#603).
+
+        Called once per turn — the TurnAuditor merges fragments
+        last-write-wins per key, so the speaker loop merges all round
+        results into one ``_ExtractionApplyResult`` before emitting.
+        """
+        if result.applied_ids or result.queued_ids:
+            await self._emit_fragment(
+                turn_id,
+                campaign_id,
+                applied_deltas=[{"id": did} for did in result.applied_ids],
+                queued_for_review=[{"id": qid} for qid in result.queued_ids],
+            )
+        if result.transient_writes or result.transient_conflicts:
+            await self._emit_fragment(
+                turn_id,
+                campaign_id,
+                transient_state_writes=result.transient_writes,
+                transient_state_conflicts=result.transient_conflicts,
+            )
 
     async def _run_speaker_loop(
         self,
@@ -1642,6 +1687,10 @@ class OrchestratorService:
 
         state = self._state_for(campaign_id)
         recent_speakers: list[str] = []
+        # Merged across rounds; emitted as one audit fragment after the loop
+        # so earlier rounds aren't clobbered by the auditor's last-write-wins
+        # fragment merge.
+        applied_state = _ExtractionApplyResult()
 
         while True:
             self._check_cancelled(active)
@@ -1698,11 +1747,13 @@ class OrchestratorService:
                 scene_id=scene_id,
                 turn_id=turn_id,
             )
-            await self._apply_extraction_state(
-                campaign_id=campaign_id,
-                scene_id=scene_id,
-                turn_id=turn_id,
-                extraction=extraction,
+            applied_state.merge(
+                await self._apply_extraction_state(
+                    campaign_id=campaign_id,
+                    scene_id=scene_id,
+                    turn_id=turn_id,
+                    extraction=extraction,
+                )
             )
 
             # Create NPC post
@@ -1747,6 +1798,8 @@ class OrchestratorService:
             present_npcs = [r for r in scene_obj.present_character_refs if r not in pc_refs]
             if not present_npcs:
                 break
+
+        await self._emit_extraction_state_fragment(turn_id, campaign_id, applied_state)
 
     def _check_cancelled(self, active: _ActiveTurn) -> None:
         if active.cancel_event.is_set():

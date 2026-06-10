@@ -56,6 +56,7 @@ def _make_orchestrator(
     inventory: FakeInventory,
     deltas: list[StateDelta],
     campaign_config: str | None = None,
+    speaker_timeout: float = 0.05,
 ) -> tuple[OrchestratorService, SceneManager, WSCollector]:
     bus = EventBus()
     sm = SceneManager(tmp_path, config=SceneManagerConfig(running_summary_every_n_posts=0))
@@ -72,17 +73,17 @@ def _make_orchestrator(
         state_store=FakeStateStore(db=db),
         inventory=inventory,
         ws_push=ws,
-        config=OrchestratorConfig(speaker_loop=SpeakerLoopConfig(timeout_seconds=0.05)),
+        config=OrchestratorConfig(speaker_loop=SpeakerLoopConfig(timeout_seconds=speaker_timeout)),
         clock=fixed_clock(),
     )
     return orch, sm, ws
 
 
-async def _start_scene(sm: SceneManager):
+async def _start_scene(sm: SceneManager, npc_refs: list[str] | None = None):
     return await sm.start_scene(
         SceneInit(
             campaign_id="camp1",
-            present_character_refs=["worlds/w/characters/alice"],
+            present_character_refs=npc_refs or ["worlds/w/characters/alice"],
             present_pc_refs=["pc1"],
         )
     )
@@ -190,6 +191,47 @@ async def test_single_response_inventory_failure_flagged_not_silent(tmp_path: Pa
     posts = await sm.recent_posts(scene.id, n=20)
     assert any(p.author_kind == AuthorKind.NARRATOR for p in posts)
     assert "turn_complete" in [m["type"] for _, m in ws.messages]
+
+
+async def test_multi_round_applied_deltas_accumulate_in_audit_fragment(tmp_path: Path) -> None:
+    """Round results merge into one audit fragment: the TurnAuditor keeps the
+    last value per fragment key, so per-round emission would persist only the
+    final round's ``applied_deltas``. Two rounds x one auto-applied delta must
+    surface both delta ids."""
+    import asyncio
+
+    fact_delta = StateDelta(
+        kind=DeltaKind.FACT_ADD,
+        target_scope=Scope.CAMPAIGN_SQLITE,
+        target_id="fact-ring",
+        after={"text": "Alice has the ring"},
+        confidence=0.95,
+    )
+    orch, sm, ws = _make_orchestrator(
+        tmp_path=tmp_path,
+        inventory=FakeInventory(),
+        deltas=[fact_delta],
+        campaign_config=MULTI_CALL_CONFIG,
+        speaker_timeout=2.0,
+    )
+    await _start_scene(sm, npc_refs=["worlds/w/characters/alice", "worlds/w/characters/bob"])
+    fragments = _subscribe_fragments(orch)
+
+    submit_task = asyncio.create_task(orch.submit_post("camp1", "pc1", "Hello everyone"))
+    for _ in range(100):
+        await asyncio.sleep(0.05)
+        if [m["type"] for _, m in ws.messages].count("speaker_round_waiting") >= 1:
+            break
+    await orch.next_speaker("camp1")
+    for _ in range(100):
+        await asyncio.sleep(0.05)
+        if [m["type"] for _, m in ws.messages].count("speaker_round_waiting") >= 2:
+            break
+    await asyncio.wait_for(submit_task, timeout=10.0)
+
+    applied_fragments = [e for e in fragments if "applied_deltas" in e.payload]
+    assert len(applied_fragments) == 1
+    assert len(applied_fragments[0].payload["applied_deltas"]) == 2
 
 
 async def test_speaker_round_updates_holdings_with_real_inventory(tmp_path: Path) -> None:
