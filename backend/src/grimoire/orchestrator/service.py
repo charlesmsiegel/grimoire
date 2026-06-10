@@ -129,6 +129,10 @@ class _PendingPreRoll:
     # Proposals that were auto-resolved (high_stakes filtering) and don't
     # need user confirmation but should be threaded into the final results.
     auto_resolved: list[MechanicsResult] = field(default_factory=list)
+    # Claimed (synchronously) by resolve_pre_roll before its first await so a
+    # concurrent resolve call for the same turn can't double-roll or run the
+    # continuation twice; released only when the turn re-parks after a failure.
+    resolving: bool = False
 
 
 @dataclass
@@ -147,6 +151,9 @@ class _ExtractionApplyResult:
     transient_conflicts: list[dict] = field(default_factory=list)
     # WarningRecord-shaped dicts (stage failures flagged on the turn audit).
     warnings: list[dict] = field(default_factory=list)
+    # Per-holder inventory pre-images from a committed apply, handed back to
+    # InventoryService.restore_holders when a later turn stage fails (#584).
+    inventory_rollback: list = field(default_factory=list)
 
     def merge(self, other: _ExtractionApplyResult) -> None:
         self.applied_ids.extend(other.applied_ids)
@@ -154,6 +161,7 @@ class _ExtractionApplyResult:
         self.transient_writes.extend(other.transient_writes)
         self.transient_conflicts.extend(other.transient_conflicts)
         self.warnings.extend(other.warnings)
+        self.inventory_rollback.extend(other.inventory_rollback)
 
 
 class _NullAutoDisable:
@@ -1487,31 +1495,55 @@ class OrchestratorService:
             turn_id=turn_id,
             extraction=extraction,
         )
-        await self._emit_extraction_state_fragment(turn_id, campaign_id, applied_state)
 
-        from grimoire.extractor.together import strip_tracker_block
-        from grimoire.orchestrator.post_splitting import create_response_posts
-        from grimoire.scenes.narrator_mode import effective_response_mode
+        # applied_state is committed (the apply stage compensates itself); any
+        # failure from here until completion publishes must unwind it — and
+        # the response posts appended below — before propagating, or the turn
+        # fails half-applied (#584). BaseException so the idle-timeout
+        # cancellation also unwinds.
+        appended_post_ids: list[str] = []
+        try:
+            await self._emit_extraction_state_fragment(turn_id, campaign_id, applied_state)
 
-        cleaned_text = strip_tracker_block(response_text)
-        campaign_row: dict | None = None
-        with contextlib.suppress(Exception):
-            campaign_row = await self._store.get_campaign_row(campaign_id)
-        narrator_mode = effective_response_mode(
-            scene_override=scene_obj.narrator_response_mode,
-            campaign_row=campaign_row,
-        )
-        response_posts = create_response_posts(
-            response_text=cleaned_text,
-            narrator_mode=narrator_mode,
-            turn_id=turn_id,
-            clock=self._clock,
-        )
-        for rp in response_posts:
-            await self._scenes.append_post(scene_id, rp)
-        await self._emit_fragment(turn_id, campaign_id, scene_appended=True)
+            from grimoire.extractor.together import strip_tracker_block
+            from grimoire.orchestrator.post_splitting import create_response_posts
+            from grimoire.scenes.narrator_mode import effective_response_mode
 
-        pending_cast = await self._scenes.list_pending_cast_changes(scene_id)
+            cleaned_text = strip_tracker_block(response_text)
+            campaign_row: dict | None = None
+            with contextlib.suppress(Exception):
+                campaign_row = await self._store.get_campaign_row(campaign_id)
+            narrator_mode = effective_response_mode(
+                scene_override=scene_obj.narrator_response_mode,
+                campaign_row=campaign_row,
+            )
+            response_posts = create_response_posts(
+                response_text=cleaned_text,
+                narrator_mode=narrator_mode,
+                turn_id=turn_id,
+                clock=self._clock,
+            )
+            for rp in response_posts:
+                await self._scenes.append_post(scene_id, rp)
+                appended_post_ids.append(rp.id)
+            await self._emit_fragment(turn_id, campaign_id, scene_appended=True)
+
+            pending_cast = await self._scenes.list_pending_cast_changes(scene_id)
+        except BaseException:
+            await self._unwind_after_apply(
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                applied_ids=applied_state.applied_ids,
+                appended_post_ids=appended_post_ids,
+                queued_review_ids=applied_state.queued_ids,
+                inventory_rollback=applied_state.inventory_rollback,
+            )
+            raise
+
+        # Publishing completion is the commit boundary: turn_complete
+        # subscribers (Time Engine, Continuity, Characters) react with
+        # independent writes the unwind above can't compensate, so it must
+        # never run once this event is out.
         await self._emit_turn_event(
             events.TURN_COMPLETE,
             turn_id,
@@ -1589,45 +1621,48 @@ class OrchestratorService:
         result.applied_ids = list(applied_ids)
         result.queued_ids = list(queued_ids)
 
-        if self._inventory is not None:
-            # The inventory service is injected at startup (Protocol-style);
-            # the orchestrator hands it raw deltas and never imports the
-            # inventory package (no orchestrator -> inventory module edge).
-            try:
-                await self._inventory.apply_from_deltas(
+        # apply_routing compensates its own batch mid-flight; once it returns,
+        # the batch is committed — a failure in the stages below unwinds it
+        # (and their own committed writes) before propagating, so the turn
+        # never ends half-applied (#584). BaseException so the idle-timeout
+        # cancellation also unwinds.
+        try:
+            if self._inventory is not None:
+                # The inventory service is injected at startup (Protocol-style);
+                # the orchestrator hands it raw deltas and never imports the
+                # inventory package (no orchestrator -> inventory module edge).
+                # It restores its own partially-written holders before raising;
+                # on success the result carries the holder pre-images so a
+                # *later* stage failure can hand them back to restore_holders.
+                inventory_result = await self._inventory.apply_from_deltas(
                     campaign_id=campaign_id,
                     turn_id=turn_id,
                     deltas=list(extraction.deltas),
                 )
-            except Exception as exc:
-                # Cross-stage compensation is #584's scope; until it lands a
-                # failed inventory stage is flagged on the turn audit — the
-                # routed delta batch is already committed, so continuing
-                # silently would hide a holdings/narrative divergence (#603).
-                logger.exception(
-                    "inventory apply failed for turn %s; flagged on turn audit", turn_id
-                )
-                result.warnings.append(
-                    {
-                        "timestamp": self._clock().isoformat(),
-                        "module": "inventory",
-                        "message": f"inventory apply failed: {exc}",
-                        "payload": {"scene_id": scene_id, "stage": "inventory_apply"},
-                    }
-                )
+                result.inventory_rollback = list((inventory_result or {}).get("rollback") or [])
 
-        if self._transient_state is not None and getattr(extraction, "transient_updates", None):
-            from grimoire.transient_state.routing import route_transient_updates
+            if self._transient_state is not None and getattr(extraction, "transient_updates", None):
+                from grimoire.transient_state.routing import route_transient_updates
 
-            ts_summary = await route_transient_updates(
+                ts_summary = await route_transient_updates(
+                    campaign_id=campaign_id,
+                    proposals=list(extraction.transient_updates),
+                    transient_state=self._transient_state,
+                    source_post_id=turn_id,
+                    continuity=self._continuity,
+                )
+                result.transient_writes = list(ts_summary.writes)
+                result.transient_conflicts = list(ts_summary.conflicts)
+        except BaseException:
+            await self._unwind_after_apply(
                 campaign_id=campaign_id,
-                proposals=list(extraction.transient_updates),
-                transient_state=self._transient_state,
-                source_post_id=turn_id,
-                continuity=self._continuity,
+                turn_id=turn_id,
+                applied_ids=result.applied_ids,
+                appended_post_ids=[],
+                queued_review_ids=result.queued_ids,
+                inventory_rollback=result.inventory_rollback,
             )
-            result.transient_writes = list(ts_summary.writes)
-            result.transient_conflicts = list(ts_summary.conflicts)
+            raise
 
         return result
 
@@ -1748,13 +1783,11 @@ class OrchestratorService:
                 scene_id=scene_id,
                 turn_id=turn_id,
             )
-            applied_state.merge(
-                await self._apply_extraction_state(
-                    campaign_id=campaign_id,
-                    scene_id=scene_id,
-                    turn_id=turn_id,
-                    extraction=extraction,
-                )
+            round_state = await self._apply_extraction_state(
+                campaign_id=campaign_id,
+                scene_id=scene_id,
+                turn_id=turn_id,
+                extraction=extraction,
             )
 
             # Create NPC post
@@ -1766,7 +1799,25 @@ class OrchestratorService:
                 turn_id=turn_id,
                 author_npc_ref=speaker_ref,
             )
-            await self._scenes.append_post(scene_id, post)
+            try:
+                await self._scenes.append_post(scene_id, post)
+            except BaseException:
+                # The round's state committed but its post can't land — unwind
+                # the round before propagating so the failed loop never leaves
+                # deltas without the prose they came from (#584). Earlier
+                # rounds stay: their posts are already part of the scene.
+                await self._unwind_after_apply(
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    applied_ids=round_state.applied_ids,
+                    appended_post_ids=[],
+                    queued_review_ids=round_state.queued_ids,
+                    inventory_rollback=round_state.inventory_rollback,
+                )
+                raise
+            # Merge only after the round's post landed, so the end-of-loop
+            # audit fragment reflects committed rounds.
+            applied_state.merge(round_state)
             await self._emit_fragment(turn_id, campaign_id, scene_appended=True)
 
             # Signal frontend: ready for next
@@ -1814,6 +1865,82 @@ class OrchestratorService:
         except Exception:
             logger.debug("rollback delete_post for %s failed", active.player_post_id, exc_info=True)
         active.player_post_id = None
+
+    async def _unwind_after_apply(
+        self,
+        *,
+        campaign_id: CampaignId,
+        turn_id: TurnId,
+        applied_ids: list[str],
+        appended_post_ids: list[str],
+        queued_review_ids: list[str] | None = None,
+        inventory_rollback: Any | None = None,
+    ) -> None:
+        """Compensate a turn that failed after its delta batch committed (#584).
+
+        LIFO across stages: response posts appended after the batch are deleted
+        first, then committed inventory holders restore to their pre-images,
+        then the batch unwinds through the same ``reverse_delta`` walk the
+        DeltaApplier uses mid-batch; review items the routing queued are
+        rejected so the queue doesn't surface a turn that no longer exists (a
+        retry re-queues fresh ones). Each step is best-effort — a failed
+        reversal is logged and the rest still unwind — and the outcome lands in
+        the turn's audit fragment so a partial unwind is visible, not silent.
+        """
+        deleted_post_ids: list[str] = []
+        for pid in reversed(appended_post_ids):
+            try:
+                await self._scenes.delete_post(pid, source="rollback")
+                deleted_post_ids.append(pid)
+            except Exception:
+                logger.warning(
+                    "rollback of response post %s failed during turn unwind",
+                    pid,
+                    exc_info=True,
+                )
+        if inventory_rollback and self._inventory is not None:
+            try:
+                await self._inventory.restore_holders(
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    rollback=inventory_rollback,
+                )
+            except Exception:
+                logger.warning(
+                    "inventory restore failed during turn unwind (turn %s)",
+                    turn_id,
+                    exc_info=True,
+                )
+        reversed_ids: list[str] = []
+        for did in reversed(applied_ids):
+            try:
+                await self._store.reverse_delta(did)
+                reversed_ids.append(did)
+            except Exception:
+                logger.warning(
+                    "rollback of delta %s failed during turn unwind",
+                    did,
+                    exc_info=True,
+                )
+        rejected_review_ids: list[str] = []
+        for rid in reversed(queued_review_ids or []):
+            try:
+                await self._store.reject_review_item(rid, notes="turn unwound after failure")
+                rejected_review_ids.append(rid)
+            except Exception:
+                logger.warning(
+                    "rejection of review item %s failed during turn unwind",
+                    rid,
+                    exc_info=True,
+                )
+        if reversed_ids or deleted_post_ids or rejected_review_ids:
+            await self._emit_fragment(
+                turn_id,
+                campaign_id,
+                compensated_deltas=[{"id": did} for did in reversed_ids],
+                compensated_posts=[{"id": pid} for pid in deleted_post_ids],
+                compensated_review_items=[{"id": rid} for rid in rejected_review_ids],
+            )
 
     async def _run_with_idle_timeout(
         self,
@@ -2058,6 +2185,11 @@ class OrchestratorService:
         For each proposal: ``accepted=False`` drops it; ``modifications`` is
         a dict whose keys (``pool``, ``difficulty``, ``modifiers``, ...)
         override the corresponding fields on the proposal.
+
+        If the resumed pipeline fails, the turn re-parks on ``pre_roll_pending``
+        with its committed state unwound, and this method may be called again
+        with the same (or different) resolutions; accepted proposals are then
+        re-rolled.
         """
         state = self._state_for(campaign_id)
         pending = state.pending_pre_roll
@@ -2070,38 +2202,117 @@ class OrchestratorService:
         if active is None or active.turn_id != turn_id:
             raise OrchestratorError(f"active turn {turn_id!r} not in pre_roll_pending stage")
 
-        # Index resolutions by label; missing labels are treated as accepted
-        # with no modifications so the caller can omit them.
-        by_label: dict[str, ProposalResolution] = {r.label: r for r in resolutions}
-        final_proposals: list[ProposedRoll] = []
-        for proposal in pending.proposals:
-            resolution = by_label.get(proposal.label)
-            if resolution is None:
-                final_proposals.append(proposal)
-                continue
-            if not resolution.accepted:
-                continue
-            if resolution.modifications:
-                merged = proposal.model_copy(update=_clean_modifications(resolution.modifications))
-                final_proposals.append(merged)
-            else:
-                final_proposals.append(proposal)
+        if pending.resolving:
+            raise OrchestratorError(f"pre_roll for turn {turn_id!r} is already being resolved")
+        # Claim before the first await: pending_pre_roll stays populated through
+        # the continuation (for resumability), so without the claim a concurrent
+        # resolve call would pass the checks above and run the pipeline twice.
+        pending.resolving = True
 
-        resolved = await self._resolve_proposals(campaign_id, final_proposals)
-        # Combine with any inline (non-high-stakes) results from the pause.
-        all_results = list(pending.auto_resolved) + resolved
+        try:
+            # Index resolutions by label; missing labels are treated as accepted
+            # with no modifications so the caller can omit them.
+            by_label: dict[str, ProposalResolution] = {r.label: r for r in resolutions}
+            final_proposals: list[ProposedRoll] = []
+            for proposal in pending.proposals:
+                resolution = by_label.get(proposal.label)
+                if resolution is None:
+                    final_proposals.append(proposal)
+                    continue
+                if not resolution.accepted:
+                    continue
+                if resolution.modifications:
+                    merged = proposal.model_copy(
+                        update=_clean_modifications(resolution.modifications)
+                    )
+                    final_proposals.append(merged)
+                else:
+                    final_proposals.append(proposal)
 
-        # Clear pending so a second call doesn't double-process.
-        state.pending_pre_roll = None
+            resolved = await self._resolve_proposals(campaign_id, final_proposals)
+            # Combine with any inline (non-high-stakes) results from the pause.
+            all_results = list(pending.auto_resolved) + resolved
+        except BaseException:
+            # Nothing ran yet — release the claim so the turn stays resolvable.
+            pending.resolving = False
+            raise
+
+        # The pending pre-roll is cleared only once the continuation commits
+        # (or the turn is cancelled) — clearing it up front made any pipeline
+        # failure unrecoverable: pre-roll gone, batch half-applied, lock
+        # released (#584). On failure the continuation has already unwound
+        # whatever it committed, so the turn re-parks on ``pre_roll_pending``
+        # — lock held, player post and proposals intact — and the player can
+        # simply re-submit their resolutions.
         try:
             await self._continue_turn_after_pre_roll(
                 active=active,
                 resolved_results=all_results,
             )
-            state.last_turn_id = turn_id
-        finally:
-            state.active = None
-            state.lock.release()
+        except TurnCancelledError:
+            # Mirror _run_turn's cancel handling: drop the paused turn cleanly.
+            # Emit + roll the player post back while the lock is still held so
+            # a queued submission can't build context against the doomed post;
+            # the finally guarantees the lock is released exactly once.
+            state.pending_pre_roll = None
+            try:
+                await self._emit_turn_event(
+                    events.TURN_CANCELLED,
+                    turn_id,
+                    campaign_id,
+                    active.scene_id,
+                )
+                await self._rollback_player_post(active)
+            finally:
+                state.active = None
+                state.lock.release()
+            return SubmitResult(
+                accepted=True,
+                turn_id=turn_id,
+                auto_responding=False,
+                reason="turn cancelled",
+            )
+        except _StreamFailure as exc:
+            pending.resolving = False
+            active.stage = "pre_roll_pending"
+            await self._emit_turn_event(
+                events.TURN_FAILED,
+                turn_id,
+                campaign_id,
+                active.scene_id,
+                reason="llm_gateway",
+                partial_response=exc.partial_text,
+                pre_roll_resumable=True,
+            )
+            raise OrchestratorError(
+                f"llm gateway failed for turn {turn_id}: {exc.cause}"
+            ) from exc.cause
+        except Exception as exc:
+            pending.resolving = False
+            active.stage = "pre_roll_pending"
+            await self._emit_turn_event(
+                events.TURN_FAILED,
+                turn_id,
+                campaign_id,
+                active.scene_id,
+                reason="orchestrator",
+                partial_response="",
+                pre_roll_resumable=True,
+            )
+            if isinstance(exc, OrchestratorError):
+                raise
+            raise OrchestratorError(f"turn {turn_id} failed: {exc}") from exc
+        except BaseException:
+            # Task cancellation (client disconnect, shutdown): re-park silently
+            # so the turn stays resumable; the continuation already unwound.
+            pending.resolving = False
+            active.stage = "pre_roll_pending"
+            raise
+
+        state.pending_pre_roll = None
+        state.last_turn_id = turn_id
+        state.active = None
+        state.lock.release()
         return SubmitResult(
             accepted=True,
             turn_id=turn_id,

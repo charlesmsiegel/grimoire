@@ -1368,6 +1368,14 @@ class StateStore:
             (campaign_id, flag_id),
         )
 
+    async def delete_inventory_flag(self, campaign_id: str, flag_id: str) -> None:
+        """Remove a flag outright — used when the apply that recorded it rolls
+        back (#584), so no review row survives for an unapplied change."""
+        await self.db.execute(
+            "DELETE FROM inventory_flags WHERE campaign_id=? AND id=?",
+            (campaign_id, flag_id),
+        )
+
     async def find_item_by_name(self, campaign_id: str, name: str) -> dict | None:
         """Resolve an item name to a campaign-visible item via the content index."""
         import json
