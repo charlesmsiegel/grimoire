@@ -1251,6 +1251,14 @@ class ImageGenService:
                     # re-points the cache key at the new image).
                     meta = None
                 if meta is not None:
+                    asset = Path(meta.file_path)
+                    if not asset.is_absolute():
+                        asset = self.data_root / asset
+                    if not asset.is_file():
+                        # The PNG was removed on disk while its row survived;
+                        # re-render rather than emit a file_path that 404s.
+                        meta = None
+                if meta is not None:
                     self._image_ids_by_job[job.id] = existing_image_id
                     await self._emit(
                         events.IMAGE_READY,
