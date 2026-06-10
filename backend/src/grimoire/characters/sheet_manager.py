@@ -179,17 +179,18 @@ class CharacterSheetManager:
         *,
         source: str = "characters:override",
     ) -> None:
-        from grimoire.state_store.indexers import make_library_id
-
         view = _parse_character_ref(character_ref)
         if view.is_emergent or view.world_id is None:
             from .errors import CharactersError
 
             raise CharactersError(f"cannot derive library_id from emergent ref {character_ref!r}")
-        library_id = make_library_id(view.world_id, "character", view.asset_id)
-        await self._store.write_override(
+        # Patch semantics: top-level keys shallow-merge into the existing
+        # override, so editing one key never drops earlier overrides on others.
+        await self._store.merge_override(
             campaign_id=campaign_id,
-            library_id=library_id,
+            world_id=view.world_id,
+            kind="character",
+            asset_id=view.asset_id,
             patch=patch,
             source=source,
         )

@@ -538,6 +538,78 @@ async def test_upsert_override_rejects_characters_and_unknown_kinds(
 
 
 # ---------------------------------------------------------------------------
+# Version pinning (track_latest=false) and the cascade list
+# ---------------------------------------------------------------------------
+
+
+async def test_list_resolved_for_campaign_pinned_ref_enumerates_snapshot(
+    world: WorldService, store: StateStore
+) -> None:
+    """Pinned (track_latest=false) refs list their bind-time snapshot.
+
+    Entities added to the live world after binding must not leak in, and
+    snapshotted entities deleted from the live world must survive — matching
+    the per-entity resolve path, which prefers snapshots for pinned refs.
+    """
+    await _seed_world(world, "wod-london")
+    await _seed_location(world, "wod-london", "old-square")
+    await _seed_location(world, "wod-london", "doomed-alley")
+    await store.upsert_campaign(campaign_id="camp-pinned", name="camp-pinned")
+    await store.upsert_world_ref(
+        campaign_id="camp-pinned",
+        world_id="wod-london",
+        priority=1,
+        include=None,
+        track_latest=False,  # pinned; snapshot_on_bind defaults to True
+    )
+
+    await _seed_location(world, "wod-london", "post-bind-plaza")
+    await world.delete_entity("wod-london", "location", "doomed-alley")
+
+    rows = {
+        r.asset_id: r
+        for r in await world.list_resolved_for_campaign("camp-pinned", EntityKind.LOCATION)
+    }
+    assert set(rows) == {"old-square", "doomed-alley"}
+    assert rows["doomed-alley"].source_chain[0].layer == ResolutionLayer.LIBRARY_SNAPSHOT
+
+    # A live (track_latest) campaign over the same world sees the live index.
+    await _bind_campaign(store, "camp-live", [("wod-london", [])])
+    live = {
+        r.asset_id for r in await world.list_resolved_for_campaign("camp-live", EntityKind.LOCATION)
+    }
+    assert live == {"old-square", "post-bind-plaza"}
+
+
+async def test_upsert_override_accepts_snapshot_only_target(
+    world: WorldService, store: StateStore
+) -> None:
+    """Pinned campaigns can override entities that only survive in their snapshot."""
+    await _seed_world(world, "wod-london")
+    await _seed_location(world, "wod-london", "doomed-alley", name="Doomed Alley")
+    await store.upsert_campaign(campaign_id="camp-pinned", name="camp-pinned")
+    await store.upsert_world_ref(
+        campaign_id="camp-pinned",
+        world_id="wod-london",
+        priority=1,
+        include=None,
+        track_latest=False,
+    )
+    await world.delete_entity("wod-london", "location", "doomed-alley")
+
+    await world.upsert_override(
+        "camp-pinned", "location", "doomed-alley", {"name": "The Alley, Remembered"}
+    )
+
+    rows = {
+        r.asset_id: r
+        for r in await world.list_resolved_for_campaign("camp-pinned", EntityKind.LOCATION)
+    }
+    assert rows["doomed-alley"].name == "The Alley, Remembered"
+    assert rows["doomed-alley"].overrides_applied
+
+
+# ---------------------------------------------------------------------------
 # Lore keyword triggers
 # ---------------------------------------------------------------------------
 
