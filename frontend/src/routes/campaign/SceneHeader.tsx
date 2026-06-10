@@ -5,7 +5,7 @@ interface Props {
 }
 
 function formatTime(scene: ApiScene): string | null {
-  const moment = scene.in_game_start?.moment;
+  const moment = scene.in_game_start;
   if (!moment) return null;
   const dt = new Date(moment);
   if (Number.isNaN(dt.getTime())) return moment;
