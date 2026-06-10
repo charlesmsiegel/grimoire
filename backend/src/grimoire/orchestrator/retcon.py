@@ -18,7 +18,7 @@ from grimoire.orchestrator.helpers import _pydantic_scene
 from grimoire.orchestrator.retcon_replay import RetconReplaySession
 from grimoire.scenes.manager import SceneManager
 from grimoire.types.common import CampaignId, PostId, TurnId
-from grimoire.types.extraction import ExtractionResult
+from grimoire.types.extraction import PARSE_FAILURE_FLAG_CODES, ExtractionResult
 from grimoire.types.orchestrator import (
     ReplayBatchStateView,
     RetconResult,
@@ -162,20 +162,41 @@ class RetconCoordinator:
         except Exception as exc:
             logger.warning("retcon: extractor failure on post %s: %s", post_id, exc)
             raise RetconExtractionError(post_id) from exc
+        # The extractor reports LLM call/parse failures as flags rather than
+        # raising; treating such a result as "no deltas" would silently wipe
+        # the turn's effects — the exact failure mode #583 closes.
+        failure_flag = next(
+            (
+                flag
+                for flag in getattr(result, "flags", []) or []
+                if getattr(flag, "code", None) in PARSE_FAILURE_FLAG_CODES
+            ),
+            None,
+        )
+        if failure_flag is not None:
+            logger.warning(
+                "retcon: extraction reported %s on post %s; aborting before any state change",
+                failure_flag.code,
+                post_id,
+            )
+            raise RetconExtractionError(post_id, reason=failure_flag.code)
         routing = route_deltas(list(result.deltas), config=self._extractor_config)
 
         await self._scenes.edit_post(post_id, new_text, source="retcon")
 
-        # Swap the turn's deltas for the re-extracted ones as one atomic unit:
-        # either the old deltas are reversed and every replacement is applied,
-        # or the store rolls the whole swap back. On failure, restore the post
-        # text so the retcon as a whole is a no-op, then surface the error.
+        # Swap the turn's recorded effects for the re-extracted ones as one
+        # atomic unit: stale pending review rows are rejected, the old deltas
+        # reversed, every replacement applied, and the new low-confidence
+        # proposals queued — or the store rolls the whole swap back. On
+        # failure, restore the post text so the retcon as a whole is a no-op,
+        # and report honestly if even that restore fails.
         try:
             swap = await self._store.swap_turn_deltas(
                 campaign_id=scene_file.campaign_id,
                 turn_id=post.turn_id or None,
                 deltas=list(routing.auto_apply),
                 source="retcon",
+                review_deltas=list(routing.review),
             )
         except Exception as exc:
             logger.warning(
@@ -184,30 +205,18 @@ class RetconCoordinator:
                 post.turn_id,
                 exc,
             )
+            post_restored = True
             try:
                 await self._scenes.edit_post(post_id, original, source="retcon")
             except Exception:
+                post_restored = False
                 logger.exception(
                     "retcon: could not restore original text of post %s after failed swap",
                     post_id,
                 )
-            raise RetconStateError(post_id) from exc
+            raise RetconStateError(post_id, post_restored=post_restored) from exc
         reversed_ids = [record.id for record in swap.rewound]
         new_delta_ids = [record.id for record in swap.applied]
-
-        for delta in routing.review:
-            try:
-                await self._store.queue_for_review(
-                    delta=delta, source="retcon", campaign_id=scene_file.campaign_id
-                )
-            except Exception as exc:
-                logger.warning(
-                    "retcon: queue_for_review failed (kind=%s post=%s): %s",
-                    delta.kind,
-                    post_id,
-                    exc,
-                )
-                warnings.append(f"a low-confidence delta (kind={delta.kind}) could not be queued")
 
         flagged: list[TurnId] = []
         if downstream_targets and post.turn_id:

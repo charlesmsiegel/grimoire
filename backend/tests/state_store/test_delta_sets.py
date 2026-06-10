@@ -299,7 +299,7 @@ async def test_swap_turn_deltas_restores_reversed_file_targets(store: StateStore
     assert all(r.reversed_at is None for r in log)
 
 
-async def test_swap_turn_deltas_skips_pending_review_rows(store: StateStore) -> None:
+async def test_swap_turn_deltas_rejects_stale_pending_review_rows(store: StateStore) -> None:
     await _seed(store)
     await store.apply_delta(
         delta=_char_delta("calm"), source="extractor", turn_id="t_1", campaign_id=CAMPAIGN_ID
@@ -317,13 +317,65 @@ async def test_swap_turn_deltas_skips_pending_review_rows(store: StateStore) -> 
         source="retcon",
     )
 
-    # Only the applied delta was reversed; the queued-but-unapplied review row
-    # is still pending and unreversed (it was never applied to its target).
+    # Only the applied delta was reversed (the queued row was never applied to
+    # its target, so there is nothing to reverse) ...
     assert len(result.rewound) == 1
     assert result.rewound[0].after["emotional_state"] == "calm"
+    # ... and the stale pending proposal — extracted from the retconned-away
+    # text — was rejected rather than left approvable.
+    assert result.rejected_review_ids == [review_id]
+    row = await store.db.fetchone(
+        "SELECT status, reviewer_notes FROM review_queue WHERE id = ?", (review_id,)
+    )
+    assert row is not None
+    assert row["status"] == "rejected"
+    assert row["reviewer_notes"] == "superseded by retcon"
+    assert await store.pending_review_delta_ids(CAMPAIGN_ID) == set()
+    assert await _mood(store) == "fierce"
+
+
+async def test_swap_turn_deltas_queues_replacement_review_rows(store: StateStore) -> None:
+    await _seed(store)
+    await store.apply_delta(
+        delta=_char_delta("calm"), source="extractor", turn_id="t_1", campaign_id=CAMPAIGN_ID
+    )
+
+    result = await store.swap_turn_deltas(
+        campaign_id=CAMPAIGN_ID,
+        turn_id="t_1",
+        deltas=[_char_delta("fierce")],
+        source="retcon",
+        review_deltas=[_char_delta("suspicious")],
+    )
+
+    # The low-confidence replacement is queued, not applied.
+    assert len(result.queued_review_ids) == 1
     pending = await store.pending_review_delta_ids(CAMPAIGN_ID)
     assert len(pending) == 1
-    assert review_id is not None
+    assert await _mood(store) == "fierce"
+
+
+async def test_swap_turn_deltas_rolls_back_when_review_queueing_fails(store: StateStore) -> None:
+    await _seed(store)
+    await store.apply_delta(
+        delta=_char_delta("calm"), source="extractor", turn_id="t_1", campaign_id=CAMPAIGN_ID
+    )
+
+    # ``None`` is rejected by the store's delta coercion, so the queueing step
+    # fails after the reversal and apply succeeded — everything must roll back.
+    with pytest.raises(StateStoreError):
+        await store.swap_turn_deltas(
+            campaign_id=CAMPAIGN_ID,
+            turn_id="t_1",
+            deltas=[_char_delta("fierce")],
+            source="retcon",
+            review_deltas=[None],
+        )
+
+    log = await store.get_delta_log(campaign_id=CAMPAIGN_ID, include_reversed=True)
+    assert [(r.source, r.reversed_at is None) for r in log] == [("extractor", True)]
+    assert await store.pending_review_delta_ids(CAMPAIGN_ID) == set()
+    assert await _mood(store) == "calm"
 
 
 async def test_swap_turn_deltas_with_no_turn_applies_atomically(store: StateStore) -> None:

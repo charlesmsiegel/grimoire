@@ -121,35 +121,54 @@ class RetconExtractionError(OrchestratorError):
     """Raised when re-extraction fails during a retcon.
 
     Raised before any state is touched: the post text and the turn's deltas
-    are exactly as they were, so the caller can simply retry (#583).
+    are exactly as they were, so the caller can simply retry (#583). Covers
+    both a raising extractor and a result carrying a parse-failure flag
+    (``reason`` holds the flag code in that case).
     """
 
     http_status = 502
 
-    def __init__(self, post_id: str) -> None:
-        super().__init__(
+    def __init__(self, post_id: str, *, reason: str | None = None) -> None:
+        message = (
             f"retcon aborted: could not re-extract state changes for post {post_id!r}; "
             "the post text and campaign state are unchanged"
         )
+        if reason:
+            message += f" (extractor reported {reason})"
+        super().__init__(message)
         self.post_id = post_id
+        self.reason = reason
 
 
 class RetconStateError(OrchestratorError):
     """Raised when the atomic delta swap fails during a retcon.
 
-    The swap (reverse old turn deltas + apply re-extracted ones) is
-    all-or-nothing, so campaign state is exactly as it was before the
-    retcon; the post text edit has been rolled back as well (#583).
+    The swap (reverse old turn deltas + queue/reject review rows + apply
+    re-extracted ones) is all-or-nothing, so the turn's deltas are exactly
+    as they were before the retcon. ``post_restored`` reports whether the
+    compensating edit put the original post text back: when ``False`` the
+    post still shows the new text while state reflects the old — the
+    message says so instead of claiming a clean rollback (#583).
     """
 
     http_status = 500
 
-    def __init__(self, post_id: str) -> None:
-        super().__init__(
-            f"retcon aborted: could not replace the turn's state deltas for post "
-            f"{post_id!r}; campaign state was left unchanged"
-        )
+    def __init__(self, post_id: str, *, post_restored: bool = True) -> None:
+        if post_restored:
+            message = (
+                f"retcon aborted: could not replace the turn's state deltas for post "
+                f"{post_id!r}; campaign state and post text were left unchanged"
+            )
+        else:
+            message = (
+                f"retcon aborted: could not replace the turn's state deltas for post "
+                f"{post_id!r}; campaign state was left unchanged but the edited post "
+                "text could not be restored — the post still shows the new text while "
+                "state reflects the original"
+            )
+        super().__init__(message)
         self.post_id = post_id
+        self.post_restored = post_restored
 
 
 class CampaignIdExists(OrchestratorError):
