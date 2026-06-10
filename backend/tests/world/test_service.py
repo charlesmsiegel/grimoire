@@ -18,7 +18,7 @@ from grimoire.types.common import EntityKind, InGameTime
 from grimoire.types.composition import ResolutionLayer
 from grimoire.types.world import Weather, WeatherKind
 from grimoire.world import WorldService
-from grimoire.world.errors import WorldError, WorldNotFoundError
+from grimoire.world.errors import OverrideTargetError, WorldError, WorldNotFoundError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -442,6 +442,47 @@ async def test_upsert_override_visible_on_detail_resolve(
     resolved = await world.resolve("worlds/wod-london/factions/camarilla", "camp1")
     assert resolved.name == "Camarilla (Fractured)"
     assert resolved.overrides_applied
+
+
+async def test_upsert_override_merges_with_existing_override(
+    world: WorldService, store: StateStore
+) -> None:
+    """PATCH semantics: a second override patch keeps earlier overridden keys."""
+    await _seed_world(world, "wod-london")
+    await _seed_faction(world, "wod-london", "camarilla", name="Camarilla")
+    await _bind_campaign(store, "camp1", [("wod-london", [])])
+
+    await world.upsert_override(
+        "camp1", "faction", "camarilla", {"name": "Camarilla (Fractured)"}, world_id="wod-london"
+    )
+    await world.upsert_override(
+        "camp1", "faction", "camarilla", {"kind": "shadow-court"}, world_id="wod-london"
+    )
+
+    resolved = await world.resolve("worlds/wod-london/factions/camarilla", "camp1")
+    assert resolved.name == "Camarilla (Fractured)"
+    assert resolved.frontmatter["kind"] == "shadow-court"
+
+
+async def test_upsert_override_rejects_emergent_shadowed_entity(
+    world: WorldService, store: StateStore
+) -> None:
+    """Emergent content wins the cascade, so an override could never surface."""
+    await _seed_world(world, "wod-london")
+    await _bind_campaign(store, "camp1", [("wod-london", [])])
+    await store.write_emergent(
+        campaign_id="camp1",
+        kind="item",
+        entity_id="bone-knife",
+        frontmatter={"id": "bone-knife", "name": "Bone Knife"},
+        body="",
+        source="extractor",
+    )
+
+    with pytest.raises(OverrideTargetError):
+        await world.upsert_override(
+            "camp1", "item", "bone-knife", {"name": "X"}, world_id="wod-london"
+        )
 
 
 async def test_upsert_override_rejects_characters_and_unknown_kinds(

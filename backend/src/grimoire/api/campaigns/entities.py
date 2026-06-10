@@ -216,7 +216,9 @@ async def patch_entity_override(
 
     Mirrors ``patch_character_override``: resolve the owning world from the
     campaign's composition unless the payload names it, then write through
-    the owning module (World).
+    the owning module (World). Emergent-only entities are rejected — they
+    are campaign-local source of truth, so there is no library row for an
+    override to apply to.
     """
     if kind == "characters":
         raise HTTPException(status_code=404, detail="use /characters/{id}/override")
@@ -225,19 +227,27 @@ async def patch_entity_override(
     world_id = payload.world_id
     if not world_id:
         try:
-            rows = await world.list_for_campaign(campaign_id, kind)
+            rows = await world.list_resolved_for_campaign(campaign_id, kind)
         except Exception as exc:
             raise map_lookup_errors(exc) from exc
-        for ent in rows:
-            if ent.asset_id == entity_id and ent.world_id:
-                world_id = ent.world_id
-                break
+        match = next((ent for ent in rows if ent.asset_id == entity_id), None)
+        if match is not None and match.world_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{kind.removesuffix('s')} {entity_id!r} is campaign-local emergent "
+                    "content; edit the emergent entity instead of overriding it"
+                ),
+            )
+        if match is not None:
+            world_id = match.world_id
     if not world_id:
         raise HTTPException(
             status_code=404,
             detail=(
                 f"could not resolve owning world for {kind.removesuffix('s')} {entity_id!r} in "
-                f"campaign {campaign_id!r}; pass world_id explicitly for emergent-only entities"
+                f"campaign {campaign_id!r}; pass world_id explicitly when the entity is not "
+                "composed into this campaign"
             ),
         )
     try:

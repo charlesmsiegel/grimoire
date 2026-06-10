@@ -754,6 +754,45 @@ def test_patch_entity_override_writes_and_lists(client, container) -> None:
     assert rows["plain"]["source_chain"][0]["layer"] == "override"
 
 
+def test_patch_entity_override_merges_with_existing(client, container) -> None:
+    """Two override PATCHes accumulate: the second keeps the first's keys."""
+    _seed_cascade_campaign(client, container, kind="item", kind_dir="items")
+
+    first = client.patch(
+        "/api/campaigns/c1/items/plain/override",
+        json={"override": {"name": "Plain (Renamed)"}},
+    )
+    assert first.status_code == 200
+    second = client.patch(
+        "/api/campaigns/c1/items/plain/override",
+        json={"override": {"provenance": "found in the bone orchard"}},
+    )
+    assert second.status_code == 200
+
+    rows = {row["asset_id"]: row for row in client.get("/api/campaigns/c1/items").json()}
+    assert rows["plain"]["name"] == "Plain (Renamed)"
+    assert rows["plain"]["frontmatter"]["provenance"] == "found in the bone orchard"
+
+
+def test_patch_entity_override_409_for_emergent_entity(client, container) -> None:
+    """Emergent rows are campaign-local SSOT: overriding them is rejected both
+    with and without an explicit world_id (the cascade resolves emergent first,
+    so the override could never surface)."""
+    _seed_cascade_campaign(client, container, kind="item", kind_dir="items")
+
+    implicit = client.patch(
+        "/api/campaigns/c1/items/spawned/override",
+        json={"override": {"name": "X"}},
+    )
+    assert implicit.status_code == 409
+
+    explicit = client.patch(
+        "/api/campaigns/c1/items/spawned/override",
+        json={"override": {"name": "X"}, "world_id": "w1"},
+    )
+    assert explicit.status_code == 409
+
+
 def test_patch_entity_override_accepts_explicit_world(client, container) -> None:
     from functools import partial
 
