@@ -5,6 +5,8 @@ export const DELETE_ICON = "🗑";
 export const FORK_ICON = "⑂";
 export const SETTINGS_ICON = "⚙";
 export const CONVERT_ICON = "⇄";
+export const OVERRIDE_ICON = "✎";
+export const PROMOTE_ICON = "⤴";
 
 /** Build the standard Delete (trash) action for a card icon bar. */
 export function deleteAction(opts: {

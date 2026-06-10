@@ -19,11 +19,10 @@ import { RegisteredMechanicsModuleSchema } from "./schemas/mechanics";
 import { ResolvedCharacterSchema, ResolvedEntitySchema } from "./schemas/resolved";
 import { SceneSummarySchema } from "./schemas/scene";
 import { SheetSchemaSchema } from "./schemas/sheetSchema";
-import { GreetingSchema, WorldMetaSchema } from "./schemas/world";
+import { WorldMetaSchema } from "./schemas/world";
 import type { SheetSchema } from "../sheets/types";
 import type {
   Composition,
-  Greeting,
   ImageMetadata,
   RegisteredMechanicsModule,
   ResolvedCharacter,
@@ -70,6 +69,12 @@ export const viewsApi = {
     }),
   listMonsters: (campaignId: string) =>
     api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/monsters`, {
+      checkSchema: ResolvedEntityList,
+    }),
+  /** Cascade-resolved greetings (emergent + overrides), same shape as the
+   * other kind lists — greeting fields live in `frontmatter`. */
+  listGreetings: (campaignId: string) =>
+    api.get<ResolvedEntity[]>(`/api/campaigns/${enc(campaignId)}/greetings`, {
       checkSchema: ResolvedEntityList,
     }),
 
@@ -136,6 +141,18 @@ export const viewsApi = {
       variants,
     }),
 
+  /** Non-character override PATCH; keys shallow-merge into the existing override. */
+  patchEntityOverride: (
+    campaignId: string,
+    kindPlural: string,
+    entityId: string,
+    payload: { override: Record<string, unknown>; world_id?: string; source?: string },
+  ) =>
+    api.patch<{ ok: true; world_id: string; ref: string }>(
+      `/api/campaigns/${enc(campaignId)}/${enc(kindPlural)}/${enc(entityId)}/override`,
+      payload,
+    ),
+
   promoteCharacterToLibrary: (
     campaignId: string,
     entityId: string,
@@ -146,14 +163,21 @@ export const viewsApi = {
       payload,
     ),
 
+  promoteEntityToLibrary: (
+    campaignId: string,
+    kindPlural: string,
+    entityId: string,
+    payload: { target_world_id: string; source?: string },
+  ) =>
+    api.post<unknown>(
+      `/api/campaigns/${enc(campaignId)}/${enc(kindPlural)}/${enc(entityId)}/promote-to-library`,
+      payload,
+    ),
+
   // ---------- Library / mechanics ----------
 
   listWorlds: () =>
     api.get<WorldMeta[]>(`/api/library/worlds`, { checkSchema: z.array(WorldMetaSchema) }),
-  listGreetingsForWorld: (worldId: string) =>
-    api.get<Greeting[]>(`/api/library/worlds/${enc(worldId)}/greetings`, {
-      checkSchema: z.array(GreetingSchema),
-    }),
 
   installedMechanics: () =>
     api.get<RegisteredMechanicsModule[]>(`/api/mechanics/installed`, {

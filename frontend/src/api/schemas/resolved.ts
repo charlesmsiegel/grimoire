@@ -37,6 +37,13 @@ export const ImagePromptTemplateSchema = z.object({
 });
 export type ImagePromptTemplate = z.infer<typeof ImagePromptTemplateSchema>;
 
+export const StructuralRelationshipSchema = z.object({
+  to_ref: z.string(),
+  kind: z.string(),
+  note: z.string(),
+});
+export type StructuralRelationship = z.infer<typeof StructuralRelationshipSchema>;
+
 export const CharacterCardSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -45,8 +52,11 @@ export const CharacterCardSchema = z.object({
   aliases: z.array(z.string()),
   age: z.string().nullable(),
   tags: z.array(z.string()),
+  role_tags: z.array(z.string()),
   voice: VoiceAnchorSchema,
   image: ImagePromptTemplateSchema.nullable(),
+  structural_relationships: z.array(StructuralRelationshipSchema),
+  household_id: z.string().nullable(),
   description: z.string(),
   body: z.string(),
   file_path: z.string(),
