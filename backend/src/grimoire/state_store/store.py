@@ -13,7 +13,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Iterable, Iterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -144,10 +144,19 @@ class UpgradeReport:
 
 @dataclass(frozen=True)
 class SwapResult:
-    """Outcome of :meth:`StateStore.swap_delta_set`."""
+    """Outcome of :meth:`StateStore.swap_delta_set` / :meth:`StateStore.swap_turn_deltas`.
+
+    The review-queue fields are populated only by ``swap_turn_deltas``:
+    ``queued_review_ids`` are the review rows created for the replacement
+    set's low-confidence deltas; ``rejected_review_ids`` are the turn's
+    stale pending review rows rejected because the text they were extracted
+    from was retconned away.
+    """
 
     rewound: list[DeltaRecord]
     applied: list[DeltaRecord]
+    queued_review_ids: list[str] = field(default_factory=list)
+    rejected_review_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1926,26 +1935,58 @@ class StateStore:
         turn_id: str | None,
         deltas: list[Any],
         source: str,
+        review_deltas: list[Any] | None = None,
     ) -> SwapResult:
-        """Atomically replace a turn's applied deltas with ``deltas``.
+        """Atomically replace a turn's recorded effects with re-extracted ones.
 
-        LIFO-reverses every non-reversed delta recorded for ``turn_id`` —
-        skipping queued-but-unapplied review rows, which were never applied
-        to their target — then applies the replacements, all in one
-        transaction. Any reversal or apply failure rolls the whole swap back
-        (file targets touched by a reversal are snapshot/restored), so the
-        campaign is left exactly as it was before the call (#583).
+        In one transaction: rejects the turn's stale pending review rows
+        (their proposals were extracted from text the caller is replacing —
+        approving them later would apply old-text state, mirroring the
+        cascade-delete path's rejection), LIFO-reverses every non-reversed
+        delta recorded for ``turn_id`` — skipping queued-but-unapplied review
+        rows, which were never applied to their target — applies the
+        replacement ``deltas``, and queues ``review_deltas`` for review. Any
+        failure rolls the whole swap back (file targets touched by a reversal
+        are snapshot/restored), so the campaign is left exactly as it was
+        before the call (#583).
 
         ``turn_id=None`` means the post being retconned has no turn: nothing
-        is reversed and the replacements are applied atomically.
+        is reversed or rejected and the replacements are applied atomically.
         """
         rewound: list[DeltaRecord] = []
         applied: list[DeltaRecord] = []
+        queued_review_ids: list[str] = []
+        rejected_review_ids: list[str] = []
         file_snapshots: list[tuple[Path, bytes | None]] = []
         try:
             async with self._txn() as conn:
                 rows: list[aiosqlite.Row] = []
                 if turn_id is not None:
+                    cur = await conn.execute(
+                        """
+                        SELECT rq.id AS review_id, rq.delta_id AS delta_id
+                        FROM review_queue rq
+                        JOIN deltas d ON d.id = rq.delta_id
+                        WHERE rq.status = 'pending'
+                          AND d.campaign_id = ? AND d.turn_id = ?
+                        """,
+                        (campaign_id, turn_id),
+                    )
+                    stale = list(await cur.fetchall())
+                    await cur.close()
+                    for stale_row in stale:
+                        await conn.execute(
+                            """
+                            UPDATE review_queue
+                            SET status = 'rejected', reviewed_at = ?, reviewer_notes = ?
+                            WHERE id = ?
+                            """,
+                            (now_iso(), "superseded by retcon", stale_row["review_id"]),
+                        )
+                        # Never applied, so marking reversed is pure bookkeeping:
+                        # it drops the row from active-delta queries.
+                        await mark_reversed(conn, stale_row["delta_id"])
+                        rejected_review_ids.append(stale_row["review_id"])
                     cur = await conn.execute(
                         """
                         SELECT * FROM deltas
@@ -1977,13 +2018,24 @@ class StateStore:
                         campaign_id=campaign_id,
                     )
                     applied.append(await get_delta(conn, delta_id))
+                for d in review_deltas or []:
+                    queued_review_ids.append(
+                        await self._queue_for_review_on_conn(
+                            conn, delta=d, source=source, campaign_id=campaign_id
+                        )
+                    )
         except BaseException:
             # The SQL transaction rolled back; put reversed file targets back
             # so files and indexes don't drift (write_library_file's pattern).
             for target, before_bytes in reversed(file_snapshots):
                 _restore_file(target, before_bytes)
             raise
-        return SwapResult(rewound=rewound, applied=applied)
+        return SwapResult(
+            rewound=rewound,
+            applied=applied,
+            queued_review_ids=queued_review_ids,
+            rejected_review_ids=rejected_review_ids,
+        )
 
     async def set_current_alternate_delta_set(
         self,
@@ -2060,27 +2112,39 @@ class StateStore:
         campaign_id: str | None = None,
     ) -> str:
         """Persist a low-confidence delta for human review without applying it."""
-        payload = _delta_to_dict(delta)
         async with self._txn() as conn:
-            delta_id = await insert_delta(
-                conn,
-                campaign_id=campaign_id or payload.get("campaign_id"),
-                turn_id=payload.get("turn_id"),
-                source=source or payload.get("source") or "unknown",
-                kind=payload.get("kind") or "other",
-                target_scope=payload.get("target_scope") or "campaign-sqlite",
-                target_table=payload.get("target_table"),
-                target_path=payload.get("target_path"),
-                target_id=payload.get("target_id"),
-                before=payload.get("before"),
-                after=payload.get("after"),
-                confidence=payload.get("confidence"),
-                notes="queued for review",
+            return await self._queue_for_review_on_conn(
+                conn, delta=delta, source=source, campaign_id=campaign_id
             )
-            # The delta is logged but not applied — caller approves later by
-            # calling apply via approve_review_item().
-            review_id = await _queue_for_review(conn, delta_id=delta_id, campaign_id=campaign_id)
-        return review_id
+
+    async def _queue_for_review_on_conn(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        delta: dict | Any,
+        source: str | None = None,
+        campaign_id: str | None = None,
+    ) -> str:
+        """Queue one delta for review inside an already-open transaction."""
+        payload = _delta_to_dict(delta)
+        delta_id = await insert_delta(
+            conn,
+            campaign_id=campaign_id or payload.get("campaign_id"),
+            turn_id=payload.get("turn_id"),
+            source=source or payload.get("source") or "unknown",
+            kind=payload.get("kind") or "other",
+            target_scope=payload.get("target_scope") or "campaign-sqlite",
+            target_table=payload.get("target_table"),
+            target_path=payload.get("target_path"),
+            target_id=payload.get("target_id"),
+            before=payload.get("before"),
+            after=payload.get("after"),
+            confidence=payload.get("confidence"),
+            notes="queued for review",
+        )
+        # The delta is logged but not applied — caller approves later by
+        # calling apply via approve_review_item().
+        return await _queue_for_review(conn, delta_id=delta_id, campaign_id=campaign_id)
 
     async def approve_review_item(self, review_id: str) -> str:
         """Apply a previously-queued delta. Returns the delta id."""

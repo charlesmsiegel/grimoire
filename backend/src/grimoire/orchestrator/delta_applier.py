@@ -21,7 +21,7 @@ from grimoire.orchestrator.helpers import (
 )
 from grimoire.scenes.types import Scene as SceneFileScene
 from grimoire.types.common import CampaignId, SceneId, TurnId
-from grimoire.types.extraction import ExtractionResult
+from grimoire.types.extraction import PARSE_FAILURE_FLAG_CODES, ExtractionResult
 from grimoire.types.extraction_modes import ExtractionMode
 from grimoire.types.state import DeltaKind, StateSnapshot
 
@@ -131,11 +131,7 @@ class DeltaApplier:
         pyd_scene = _pydantic_scene(scene)
         retries = max(0, int(self._config.errors.retry_extractor_on_parse_failure))
         attempts = retries + 1
-        parse_failure_codes = {
-            "llm_json_unparseable",
-            "structured_llm_failed",
-            "llm_call_failed",
-        }
+        parse_failure_codes = PARSE_FAILURE_FLAG_CODES
         last_result: ExtractionResult | None = None
         for attempt in range(attempts):
             try:

@@ -32,6 +32,19 @@ class ExtractionFlag(BaseModel):
     payload: Json = Field(default_factory=dict)
 
 
+# Flag codes that mean the extraction itself failed (LLM call/parse failure)
+# rather than reporting on the content. Consumers treat a result carrying one
+# of these as "broken", not "empty": the turn loop retries on them, the retcon
+# path aborts (#583).
+PARSE_FAILURE_FLAG_CODES: frozenset[str] = frozenset(
+    {
+        "llm_json_unparseable",
+        "structured_llm_failed",
+        "llm_call_failed",
+    }
+)
+
+
 class EntityCandidate(BaseModel):
     """A newly named entity proposed by the Extractor.
 

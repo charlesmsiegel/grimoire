@@ -41,6 +41,7 @@ export function RetconLauncher({
   const [batchId, setBatchId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
 
   async function callRetcon(replay: boolean) {
     setBusy(true);
@@ -51,6 +52,7 @@ export function RetconLauncher({
         new_text: text,
         replay_subsequent: replay,
       });
+      setWarnings(result.warnings ?? []);
       if (replay && result.replay_batch_id) {
         setBatchId(result.replay_batch_id);
         // Seed the modal with a synthetic initial view; the modal will
@@ -103,6 +105,13 @@ export function RetconLauncher({
     return (
       <div className="retcon-launcher-modal" role="dialog" aria-modal aria-label="Retcon">
         <p>Retcon applied. Continuity may flag downstream turns.</p>
+        {warnings.length > 0 && (
+          <ul className="retcon-launcher-warnings" role="alert">
+            {warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        )}
         <button type="button" onClick={onClose} autoFocus>
           Close
         </button>

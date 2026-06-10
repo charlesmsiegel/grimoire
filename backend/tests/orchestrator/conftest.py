@@ -157,12 +157,15 @@ class FakeStateStore:
         turn_id: str | None = None,
         deltas: list[Any] | None = None,
         source: str = "",
+        review_deltas: list[Any] | None = None,
     ) -> Any:
-        """Mirror StateStore.swap_turn_deltas: all-or-nothing reverse+apply."""
+        """Mirror StateStore.swap_turn_deltas: all-or-nothing reverse+apply+queue."""
         reversed_before = list(self.reversed_ids)
         applied_before = list(self.applied)
+        reviewed_before = list(self.reviewed)
         rewound: list[_DeltaRow] = []
         applied: list[_DeltaRow] = []
+        queued_review_ids: list[str] = []
         try:
             if turn_id is not None:
                 log = await self.get_delta_log(
@@ -178,11 +181,16 @@ class FakeStateStore:
                     delta=d, source=source, turn_id=turn_id, campaign_id=campaign_id
                 )
                 applied.append(_DeltaRow(self.applied[-1]))
+            for d in review_deltas or []:
+                queued_review_ids.append(
+                    await self.queue_for_review(delta=d, source=source, campaign_id=campaign_id)
+                )
         except Exception:
             self.reversed_ids = reversed_before
             self.applied = applied_before
+            self.reviewed = reviewed_before
             raise
-        return _SwapOutcome(rewound=rewound, applied=applied)
+        return _SwapOutcome(rewound=rewound, applied=applied, queued_review_ids=queued_review_ids)
 
     async def pending_review_delta_ids(self, campaign_id: str) -> set[str]:
         return set(self.pending_delta_ids)
@@ -220,6 +228,8 @@ class _SwapOutcome:
 
     rewound: list[_DeltaRow]
     applied: list[_DeltaRow]
+    queued_review_ids: list[str] = field(default_factory=list)
+    rejected_review_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -345,7 +355,12 @@ class FakeExtractor:
     ) -> ExtractionResult:
         if self.raise_on_extract is not None:
             raise self.raise_on_extract
-        return ExtractionResult(deltas=list(self.deltas))
+        flags: list[ExtractionFlag] = []
+        if self.scripted_flag_codes:
+            code = self.scripted_flag_codes.pop(0)
+            if code is not None:
+                flags.append(ExtractionFlag(level=FlagLevel.WARNING, code=code, message=code))
+        return ExtractionResult(deltas=list(self.deltas), flags=flags)
 
 
 @dataclass

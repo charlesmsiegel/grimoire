@@ -55,6 +55,9 @@ export interface RetconResultPayload {
   reversed_delta_ids: string[];
   new_delta_ids: string[];
   downstream_flagged_turns: string[];
+  /** Non-fatal degradations (e.g. an incomplete downstream-flagging walk);
+   * fatal failures arrive as HTTP errors instead. */
+  warnings: string[];
   replay_batch_id: string | null;
   replayed_post_ids: string[];
   cancelled_at_post_id: string | null;

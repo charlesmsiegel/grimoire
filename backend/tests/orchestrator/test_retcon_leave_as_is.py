@@ -181,6 +181,52 @@ async def test_extraction_failure_leaves_post_and_state_unchanged(
     assert all(r.reversed_at is None for r in log)
 
 
+async def test_extraction_failure_flag_aborts_before_any_state_change(
+    scenes: SceneManager, real_store: StateStore
+) -> None:
+    # The production extractor reports LLM call/parse failures as flags rather
+    # than raising; routing such a result as "no deltas" would silently wipe
+    # the turn's effects.
+    scene_id, post_id = await _seed_scene_with_turn(scenes, real_store)
+    extractor = FakeExtractor(deltas=[], scripted_flag_codes=["llm_json_unparseable"])
+    orch = _make_orch(scenes, real_store, extractor)
+
+    with pytest.raises(RetconExtractionError) as exc_info:
+        await orch.retcon_post(post_id, "edited text")
+
+    assert exc_info.value.reason == "llm_json_unparseable"
+    assert await _mood(real_store) == "tense"
+    assert await _post_body(scenes, scene_id, post_id) == ORIGINAL_BODY
+    log = await _turn_log(real_store)
+    assert len(log) == 2
+    assert all(r.reversed_at is None for r in log)
+
+
+async def test_stale_pending_review_rows_rejected_by_retcon(
+    scenes: SceneManager, real_store: StateStore
+) -> None:
+    _scene_id, post_id = await _seed_scene_with_turn(scenes, real_store)
+    stale = _char_delta_dict("suspicious")
+    stale["turn_id"] = TURN_ID
+    stale_review_id = await real_store.queue_for_review(
+        delta=stale, source="extractor", campaign_id=CAMPAIGN_ID
+    )
+    orch = _make_orch(scenes, real_store, FakeExtractor(deltas=[_new_delta("anxious")]))
+
+    await orch.retcon_post(post_id, "winifred frowns instead.")
+
+    # The old text's pending proposal can no longer be approved into state
+    # extracted from text that no longer exists.
+    row = await real_store.db.fetchone(
+        "SELECT status, reviewer_notes FROM review_queue WHERE id = ?", (stale_review_id,)
+    )
+    assert row is not None
+    assert row["status"] == "rejected"
+    assert row["reviewer_notes"] == "superseded by retcon"
+    assert await real_store.pending_review_delta_ids(CAMPAIGN_ID) == set()
+    assert await _mood(real_store) == "anxious"
+
+
 async def test_reapply_failure_unwinds_partials_and_restores_state(
     scenes: SceneManager, real_store: StateStore
 ) -> None:
@@ -246,3 +292,36 @@ async def test_reversal_failure_partway_restores_state(
     assert all(r.reversed_at is None for r in log)
     assert await _mood(real_store) == "tense"
     assert await _post_body(scenes, scene.id, narrator.id) == ORIGINAL_BODY
+
+
+async def test_failed_post_restore_is_reported_not_hidden(
+    scenes: SceneManager, real_store: StateStore
+) -> None:
+    """When the swap fails AND the compensating edit fails, the error must
+    say the post still shows the new text — not claim a clean rollback."""
+    scene_id, post_id = await _seed_scene_with_turn(scenes, real_store)
+    extractor = FakeExtractor(deltas=[_new_delta("broken", target_table="not_a_real_table")])
+    orch = _make_orch(scenes, real_store, extractor)
+
+    real_edit = scenes.edit_post
+    calls = {"n": 0}
+
+    async def flaky_edit(post_id: str, new_body: str, source: str) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return await real_edit(post_id, new_body, source)
+        raise RuntimeError("disk full")
+
+    scenes.edit_post = flaky_edit  # type: ignore[method-assign]
+
+    with pytest.raises(RetconStateError) as exc_info:
+        await orch.retcon_post(post_id, "edited text")
+
+    assert exc_info.value.post_restored is False
+    assert "could not be restored" in str(exc_info.value)
+    # Deltas rolled back, but the post truthfully still shows the new text.
+    log = await _turn_log(real_store)
+    assert len(log) == 2
+    assert all(r.reversed_at is None for r in log)
+    assert await _mood(real_store) == "tense"
+    assert await _post_body(scenes, scene_id, post_id) == "edited text"
