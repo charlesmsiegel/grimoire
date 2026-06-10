@@ -8,14 +8,14 @@
  * mechanical sheet rendered through the widget library.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError, errorMessage } from "../../api/client";
 import { campaignApi, canonicalizeCharacterRef, characterRefFor } from "../../api/campaign";
 import { libraryApi } from "../../api/library";
 import { viewsApi } from "../../api/views";
-import type { ResolvedCharacter, WorldMeta } from "../../api/types";
+import type { ResolvedCharacter } from "../../api/types";
 import { useResource } from "../../api/useResource";
 import { CardIconBar } from "../../components/CardIconBar";
 import { deleteAction } from "../../components/cardActions";
@@ -26,9 +26,11 @@ import { SheetRenderer } from "../../sheets";
 import type { SheetValue } from "../../sheets/types";
 import { AsyncSection } from "../../components/AsyncSection";
 import { ChainBadge } from "./common";
+import { characterCardToFrontmatter } from "./characterFrontmatter";
 import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
-import { Dialog } from "../../components/Dialog";
 import { useDestructiveConfirm } from "../../hooks/useDestructiveConfirm";
+import { EditOverrideDialog } from "./EditOverrideDialog";
+import { PromoteToLibraryDialog } from "./PromoteToLibraryDialog";
 
 type SourceFilter = "all" | "library" | "emergent" | "override";
 
@@ -412,8 +414,11 @@ function CharacterDetail({ campaignId, moduleId, character: row, onReload }: Cha
       {overrideOpen && character.world_id && (
         <EditOverrideDialog
           campaignId={campaignId}
-          characterId={character.id}
+          kind="character"
+          entityId={character.id}
           worldId={character.world_id}
+          name={character.name}
+          initialFrontmatter={characterCardToFrontmatter(character)}
           onClose={() => setOverrideOpen(false)}
           onSaved={() => {
             setOverrideOpen(false);
@@ -424,7 +429,9 @@ function CharacterDetail({ campaignId, moduleId, character: row, onReload }: Cha
       {promoteOpen && isEmergent && (
         <PromoteToLibraryDialog
           campaignId={campaignId}
-          characterId={character.id}
+          kind="character"
+          entityId={character.id}
+          name={character.name}
           onClose={() => setPromoteOpen(false)}
           onPromoted={() => {
             setPromoteOpen(false);
@@ -592,174 +599,6 @@ function CastMechanicalSheet({ campaignId, moduleId, characterId }: CastMechanic
         <p className="muted">Sheet schema unavailable.</p>
       )}
     </section>
-  );
-}
-
-interface EditOverrideDialogProps {
-  campaignId: string;
-  characterId: string;
-  worldId: string;
-  onClose: () => void;
-  onSaved: () => void;
-}
-
-function EditOverrideDialog({
-  campaignId,
-  characterId,
-  worldId,
-  onClose,
-  onSaved,
-}: EditOverrideDialogProps) {
-  const [text, setText] = useState("{}");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const save = useCallback(async () => {
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(text);
-    } catch (err) {
-      setError(`Invalid JSON: ${err instanceof Error ? err.message : String(err)}`);
-      return;
-    }
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      setError("Override must be a JSON object.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await viewsApi.patchCharacterOverride(campaignId, characterId, {
-        override: parsed,
-        world_id: worldId,
-      });
-      onSaved();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }, [campaignId, characterId, worldId, text, onSaved]);
-
-  return (
-    <Dialog open onClose={onClose} title="Edit override">
-      <p className="muted">
-        Patch frontmatter for <code>{characterId}</code> in world <code>{worldId}</code>. Submitted
-        as a JSON object; existing override is overwritten.
-      </p>
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        rows={12}
-        spellCheck={false}
-        aria-label="Override JSON"
-      />
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      <div className="modal-actions">
-        <button type="button" onClick={onClose} disabled={busy}>
-          Cancel
-        </button>
-        <button type="button" onClick={() => void save()} disabled={busy}>
-          {busy ? "Saving…" : "Save override"}
-        </button>
-      </div>
-    </Dialog>
-  );
-}
-
-interface PromoteToLibraryDialogProps {
-  campaignId: string;
-  characterId: string;
-  onClose: () => void;
-  onPromoted: () => void;
-}
-
-function PromoteToLibraryDialog({
-  campaignId,
-  characterId,
-  onClose,
-  onPromoted,
-}: PromoteToLibraryDialogProps) {
-  const [worlds, setWorlds] = useState<WorldMeta[] | null>(null);
-  const [target, setTarget] = useState<string>("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    viewsApi
-      .listWorlds()
-      .then((rows) => {
-        if (cancelled) return;
-        setWorlds(rows);
-        setTarget(rows[0]?.id ?? "");
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const promote = useCallback(async () => {
-    if (!target) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await viewsApi.promoteCharacterToLibrary(campaignId, characterId, {
-        target_world_id: target,
-        confirm: true,
-      });
-      onPromoted();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }, [campaignId, characterId, target, onPromoted]);
-
-  return (
-    <Dialog open onClose={onClose} title={`Promote ${characterId} to library`}>
-      {worlds === null ? (
-        <p className="muted">Loading worlds…</p>
-      ) : worlds.length === 0 ? (
-        <p className="error">No worlds available. Create a world first.</p>
-      ) : (
-        <label className="form-field field">
-          <span>Target world</span>
-          <select value={target} onChange={(e) => setTarget(e.target.value)}>
-            {worlds.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name || w.id}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      <div className="modal-actions">
-        <button type="button" onClick={onClose} disabled={busy}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          onClick={() => void promote()}
-          disabled={busy || !target || worlds === null || worlds.length === 0}
-        >
-          {busy ? "Promoting…" : "Promote"}
-        </button>
-      </div>
-    </Dialog>
   );
 }
 

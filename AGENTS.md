@@ -310,8 +310,12 @@ reimplementation is a review smell.
 
 Every card renders a `CardIconBar` (`frontend/src/components/CardIconBar.tsx`) at its
 bottom edge — it is the single home for per-card actions. Cards are the block-level
-`*-card` components (`campaign-card`, `library-card`, `entity-card`, `entity-card-static`,
+`*-card` components (`campaign-card`, `library-card`, `entity-card`, `entity-browser-card`,
 `timeline-card`, `provider-card`, `why-character-card`) plus chat posts (`PostItem`).
+World contents in both scopes render through the shared
+`components/EntityBrowser` (`entity-browser-card` grid): library scope gets edit
+links + delete/convert, campaign scope gets the source-chain badge plus
+edit-override (✎) / promote-to-library (⤴) actions (#601).
 Cards backing a deletable artifact under `~/.grimoire/` start with a Delete (🗑) icon
 built via `deleteAction()`; cards with no delete render an empty bar (invisible until
 populated). Actions are right-aligned by default; pass `align: "start"` to pin one to

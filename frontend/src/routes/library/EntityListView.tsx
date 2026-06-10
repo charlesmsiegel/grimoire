@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import {
   ApiError,
@@ -11,12 +11,11 @@ import {
   type LibraryEntity,
   libraryApi,
 } from "../../api/library";
+import type { ResolvedEntity } from "../../api/types";
 import { useResource } from "../../api/useResource";
-import { CardFilters } from "../../components/CardFilters";
-import { CardIconBar, type CardIconAction } from "../../components/CardIconBar";
+import { type CardIconAction } from "../../components/CardIconBar";
 import { CONVERT_ICON, deleteAction } from "../../components/cardActions";
-import { useCardFilters } from "../../hooks/useCardFilters";
-import { TokenBadge } from "../../components/TokenBadge";
+import { EntityBrowser } from "../../components/EntityBrowser";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
 import { ConvertModal } from "./ConvertModal";
@@ -35,6 +34,61 @@ interface Props {
 
 function isGreeting(v: LibraryEntity | Greeting): v is Greeting {
   return "starting_location" in v && !("frontmatter" in v);
+}
+
+/** Adapt a raw library row into the common resolved-row shape (#601). */
+function libraryEntityToRow(e: LibraryEntity): ResolvedEntity {
+  return {
+    kind: e.kind,
+    asset_id: e.asset_id,
+    world_id: e.world_id,
+    name: e.name || e.asset_id,
+    frontmatter: e.frontmatter,
+    body: e.body,
+    source_chain: [
+      {
+        layer: "library_live",
+        scope: "library",
+        library_id: e.id,
+        world_id: e.world_id,
+        version: e.version,
+        override_applied: false,
+      },
+    ],
+    overrides_applied: [],
+    extras: {},
+  };
+}
+
+/** Greetings come back as typed models; their fields are the frontmatter. */
+function greetingToRow(g: Greeting): ResolvedEntity {
+  return {
+    kind: "greeting",
+    asset_id: g.id,
+    world_id: g.world_id,
+    name: g.name || g.id,
+    frontmatter: {
+      id: g.id,
+      name: g.name,
+      tags: g.tags,
+      starting_location: g.starting_location,
+      starting_time: g.starting_time,
+      mood: g.mood,
+    },
+    body: g.body,
+    source_chain: [
+      {
+        layer: "library_live",
+        scope: "library",
+        library_id: `worlds/${g.world_id}/greetings/${g.id}`,
+        world_id: g.world_id,
+        version: null,
+        override_applied: false,
+      },
+    ],
+    overrides_applied: [],
+    extras: {},
+  };
 }
 
 export function EntityListView({ kindOverride }: Props) {
@@ -198,12 +252,37 @@ export function EntityListView({ kindOverride }: Props) {
         emptyMessage={`No ${kindPlural} yet.`}
         onRetry={reload}
       >
-        <EntityListBody
-          entities={data ?? []}
-          worldId={worldId}
+        <EntityBrowser
+          // Keyed by kind so filter state resets when the :kind route changes.
+          key={kindPlural}
+          rows={(data ?? []).map((e) => (isGreeting(e) ? greetingToRow(e) : libraryEntityToRow(e)))}
           kindPlural={kindPlural}
-          onConvert={setConvertingId}
-          onDelete={openDelete}
+          scope="library"
+          linkFor={(row) =>
+            `/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(
+              row.asset_id,
+            )}`
+          }
+          actionsFor={(row) => {
+            const name = row.name || row.asset_id;
+            return [
+              ...(kindPlural === "lore"
+                ? [
+                    {
+                      key: "convert",
+                      icon: CONVERT_ICON,
+                      label: `Convert ${name} to another category`,
+                      align: "start",
+                      onClick: () => setConvertingId(row.asset_id),
+                    } satisfies CardIconAction,
+                  ]
+                : []),
+              deleteAction({
+                onClick: () => openDelete(row.asset_id, name),
+                label: `Delete ${name}`,
+              }),
+            ];
+          }}
         />
       </AsyncBoundary>
 
@@ -239,102 +318,6 @@ export function EntityListView({ kindOverride }: Props) {
         />
       )}
     </div>
-  );
-}
-
-interface EntityListBodyProps {
-  entities: Array<LibraryEntity | Greeting>;
-  worldId: string;
-  kindPlural: string;
-  onConvert: (id: string) => void;
-  onDelete: (id: string, name: string) => void;
-}
-
-function EntityListBody({
-  entities,
-  worldId,
-  kindPlural,
-  onConvert,
-  onDelete,
-}: EntityListBodyProps) {
-  const { filtered, search, setSearch, selectedTags, toggleTag, clearTags, availableTags } =
-    useCardFilters(entities, {
-      text: (e) => {
-        const id = "asset_id" in e ? e.asset_id : e.id;
-        const body = "body" in e ? e.body : "";
-        return [e.name, id, body];
-      },
-      tags: (e) => (isGreeting(e) ? e.tags : (e as LibraryEntity).tags) ?? [],
-    });
-
-  return (
-    <>
-      <CardFilters
-        search={search}
-        onSearch={setSearch}
-        availableTags={availableTags}
-        selectedTags={selectedTags}
-        onToggleTag={toggleTag}
-        onClearTags={clearTags}
-        searchPlaceholder={`Search ${kindPlural} by name, id, or text…`}
-        searchLabel={`Search ${kindPlural}`}
-        resultSummary={
-          filtered.length === entities.length
-            ? `${entities.length} entr${entities.length === 1 ? "y" : "ies"}`
-            : `${filtered.length} of ${entities.length}`
-        }
-      />
-      {filtered.length === 0 ? (
-        <p className="library-status">No {kindPlural} match the current filters.</p>
-      ) : (
-        <ul className="grid-cards">
-          {filtered.map((e) => {
-            const id = "asset_id" in e ? e.asset_id : e.id;
-            const name = e.name || id;
-            const tags = isGreeting(e) ? e.tags : (e as LibraryEntity).tags;
-            const tokenText =
-              "frontmatter" in e
-                ? `${JSON.stringify(e.frontmatter)}\n${e.body ?? ""}`
-                : (e.body ?? "");
-            return (
-              <li key={id} className="library-card">
-                <Link
-                  to={`/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}/${encodeURIComponent(id)}`}
-                >
-                  <h4>{name}</h4>
-                  <small>{id}</small>
-                  {tags && tags.length > 0 && (
-                    <p className="library-card-meta">{tags.join(" · ")}</p>
-                  )}
-                </Link>
-                <p className="library-card-meta">
-                  <TokenBadge text={tokenText} />
-                </p>
-                <CardIconBar
-                  actions={[
-                    ...(kindPlural === "lore"
-                      ? [
-                          {
-                            key: "convert",
-                            icon: CONVERT_ICON,
-                            label: `Convert ${name} to another category`,
-                            align: "start",
-                            onClick: () => onConvert(id),
-                          } satisfies CardIconAction,
-                        ]
-                      : []),
-                    deleteAction({
-                      onClick: () => onDelete(id, name),
-                      label: `Delete ${name}`,
-                    }),
-                  ]}
-                />
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </>
   );
 }
 

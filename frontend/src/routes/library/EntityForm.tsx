@@ -28,6 +28,8 @@ interface Props {
   onBodyChange: (next: string) => void;
   /** "create" renders only createDefault fields (no Advanced/body). */
   mode?: "edit" | "create";
+  /** Frontmatter-only editing (campaign overrides patch frontmatter, never body). */
+  hideBody?: boolean;
 }
 
 function asString(v: FrontmatterValue | undefined): string {
@@ -58,6 +60,7 @@ export function EntityForm({
   onFrontmatterChange,
   onBodyChange,
   mode = "edit",
+  hideBody = false,
 }: Props) {
   function setKey(key: string, value: FrontmatterValue) {
     onFrontmatterChange({ ...frontmatter, [key]: value });
@@ -211,15 +214,17 @@ export function EntityForm({
         <FrontmatterEditor value={frontmatter} onChange={onFrontmatterChange} hiddenKeys={hidden} />
       </details>
 
-      <section className="entity-editor-panel" aria-labelledby="body-heading">
-        <h4 id="body-heading">Markdown body</h4>
-        <textarea
-          className="entity-body-editor"
-          value={body}
-          rows={24}
-          onChange={(e) => onBodyChange(e.target.value)}
-        />
-      </section>
+      {!hideBody && (
+        <section className="entity-editor-panel" aria-labelledby="body-heading">
+          <h4 id="body-heading">Markdown body</h4>
+          <textarea
+            className="entity-body-editor"
+            value={body}
+            rows={24}
+            onChange={(e) => onBodyChange(e.target.value)}
+          />
+        </section>
+      )}
     </div>
   );
 }

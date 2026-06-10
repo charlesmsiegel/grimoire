@@ -417,10 +417,17 @@ shippable.
 > imports; `.card`/`.chip`/`.grid-cards`/`.form-field` primitives with section
 > classes as modifiers; bespoke `*-empty` classes folded into `.empty-state`;
 > `var(--x, literal)` fallbacks swept and never-defined token names re-pointed
-> at real theme tokens. `.library-card` keeps its own chrome until the
-> `EntityBrowser` extraction (#601). **Still open:** Phase 3's
-> cascade-truthful backend lists (#600) + `EntityBrowser` extraction and
-> override-editing parity (#601).
+> at real theme tokens. Phase 3 has since landed too: the backend half
+> (#600) made campaign kind-list endpoints run the read cascade (emergent +
+> overrides + truthful chains via `WorldService.list_resolved_for_campaign`),
+> added the campaign greetings endpoint, and generalized override PATCH
+> beyond characters (merge semantics); the frontend half (#601) renders both
+> scopes' world contents through the shared `components/EntityBrowser`
+> (`card entity-browser-card`, replacing `entity-card-static` and the
+> `EntityListView` `library-card` usage) with scope-driven affordances —
+> campaign cards expose edit-override (structured `EntityForm` patch mode;
+> the raw-JSON dialog is gone) and promote-to-library. **Still open:**
+> nothing from this audit; every phase is implemented.
 
 **Phase 0 — Quick wins (no design decisions, hours each)**
 1. Add `viewsApi.listMonsters` + Monsters tab in campaign `WorldView` (backend is
@@ -457,21 +464,23 @@ shippable.
 **Phase 3 — Unify the world-contents experience (the §1-§5 fix)**
 12. Backend: make campaign kind-list endpoints resolve through the cascade (emergent +
     overrides + real source chains), add a campaign greetings endpoint, and (if product
-    agrees) generalize the override PATCH beyond characters.
+    agrees) generalize the override PATCH beyond characters. ✔ *Done (#600).*
 13. Frontend: extract `EntityBrowser` from `EntityListView` + `WorldView` with
     scope-driven affordances (edit/delete/convert in library; chain/override/promote in
     campaign); wire the existing generic promote endpoint; replace the raw-JSON
     override dialog with the descriptor-driven `EntityForm` in patch mode.
     *(Characters + Monsters tabs and the appeared-only Cast endpoint already
-    landed — §5 decision note.)*
+    landed — §5 decision note.)* ✔ *Done (#601).*
 
 **Phase 4 — CSS consolidation**
 14. Introduce `.card` / `.chip` / `.grid-cards` / `.empty` / one form-row primitive;
     convert section classes to modifiers; split `index.css` by section; sweep the
     `var(--x, #literal)` fallbacks. ✔ *Done (#602) — primitives live in
     `src/styles/primitives.css` (`.form-field` is the form-row class and
-    `.empty-state` the empty primitive); `.library-card` deferred to the
-    `EntityBrowser` extraction (#601).*
+    `.empty-state` the empty primitive); the `EntityBrowser` extraction (#601)
+    then unified world-contents cards on `card entity-browser-card`
+    (`library-card` remains only on the style-guide/preset/plugin/holiday
+    list views).*
 
 ---
 
