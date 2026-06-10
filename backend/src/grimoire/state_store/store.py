@@ -872,6 +872,50 @@ class StateStore:
             )
         return [_library_row_to_dict(row) for row in rows]
 
+    async def list_snapshot_rows(
+        self, campaign_id: str, world_id: str, kind: str | None = None
+    ) -> list[dict]:
+        """Pinned-bind snapshot rows for one campaign + world, index-row shaped.
+
+        Snapshot membership is what a pinned (``track_latest=false``) world ref
+        looked like at bind time; rows are shaped like ``library_index`` dicts
+        so listing code can treat both sources uniformly. Tags/keywords derive
+        from the snapshotted frontmatter; file metadata columns are absent.
+        """
+        rows = await self.db.fetchall(
+            """
+            SELECT library_id, version, frontmatter, body FROM library_snapshots
+            WHERE campaign_id = ? AND library_id LIKE ?
+            ORDER BY library_id
+            """,
+            (campaign_id, f"worlds/{world_id}/%"),
+        )
+        out: list[dict] = []
+        for row in rows:
+            try:
+                ref = parse_library_id(row["library_id"])
+            except InvalidRefError:
+                continue
+            if kind is not None and ref.kind != kind:
+                continue
+            fm = _json_loads(row["frontmatter"]) or {}
+            out.append(
+                {
+                    "id": row["library_id"],
+                    "world_id": ref.world_id,
+                    "kind": ref.kind,
+                    "asset_id": ref.asset_id,
+                    "name": fm.get("name") or fm.get("title") or ref.asset_id,
+                    "path": "",
+                    "frontmatter": fm,
+                    "body": row["body"] or "",
+                    "tags": list(fm.get("tags") or []),
+                    "keywords": list(fm.get("keywords") or []),
+                    "version": int(row["version"] or 0),
+                }
+            )
+        return out
+
     # ------------------------------------------------------------------
     # Character variants (in-world diff overlays; files only, not indexed)
     # ------------------------------------------------------------------

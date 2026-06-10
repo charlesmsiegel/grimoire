@@ -414,13 +414,31 @@ class CompositionManager:
             include_kinds = _include_to_kinds(ref.get("include"))
             if include_kinds is not None and normalized not in include_kinds:
                 continue
-            rows = await self._store.list_library_in_world(ref["world_id"], normalized)
+            rows = await self._rows_for_ref(campaign_id, ref, normalized)
             for row in rows:
                 asset = row["asset_id"]
                 if asset in seen:
                     continue
                 seen[asset] = _entity_from_row(row)
         return list(seen.values())
+
+    async def _rows_for_ref(self, campaign_id: str, ref: dict, kind: str) -> list[dict]:
+        """Index-shaped rows for one world ref, honouring version pinning.
+
+        A pinned ref (``track_latest=false``) enumerates its bind-time
+        snapshot, so entities added to the live world after binding don't
+        leak in and snapshotted entities survive live deletion — matching
+        the per-entity resolve path, which prefers snapshots for pinned
+        refs. A pinned ref bound with ``snapshot_on_bind`` disabled has no
+        snapshot rows and falls back to the live index, mirroring the
+        resolve path's ``library-fallback``.
+        """
+        world_id = ref["world_id"]
+        if not ref.get("track_latest"):
+            snapshot_rows = await self._store.list_snapshot_rows(campaign_id, world_id)
+            if snapshot_rows:
+                return [row for row in snapshot_rows if row["kind"] == kind]
+        return await self._store.list_library_in_world(world_id, kind)
 
 
 def _maybe_json(value: Any) -> Any:

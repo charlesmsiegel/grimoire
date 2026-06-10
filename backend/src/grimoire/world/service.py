@@ -552,12 +552,19 @@ class WorldService:
                 f"campaign {campaign_id!r}; pass world_id explicitly when the entity "
                 "is not composed into this campaign"
             )
-        try:
-            await self.library.get_entity(world_id, normalized, entity_id)
-        except LibraryNotFoundError as exc:
+        # Snapshot-aware existence check: pinned (track_latest=false) campaigns
+        # list snapshot members that may no longer exist in the live index, and
+        # those rows are legitimate override targets.
+        target = await self.store.resolve_entity(
+            campaign_id=campaign_id,
+            kind=normalized,
+            asset_id=entity_id,
+            world_id=world_id,
+        )
+        if target is None:
             raise WorldNotFoundError(
                 f"cannot override {normalized} {entity_id!r}: no such entity in world {world_id!r}"
-            ) from exc
+            )
         await self.store.merge_override(
             campaign_id=campaign_id,
             world_id=world_id,
