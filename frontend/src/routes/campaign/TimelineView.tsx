@@ -193,7 +193,7 @@ function SceneCard({
   onAnalyze: () => void;
   onDelete: () => void;
 }) {
-  const time = scene.in_game_start?.moment ?? "";
+  const time = scene.in_game_start ?? "";
   const pcSet = new Set(scene.present_pc_refs);
   return (
     <li className={expanded ? "timeline-item active" : "timeline-item"}>
@@ -220,7 +220,7 @@ function SceneCard({
             ))}
           </ul>
         )}
-        {scene.summary && <p className="timeline-summary">{scene.summary}</p>}
+        {scene.final_summary && <p className="timeline-summary">{scene.final_summary}</p>}
         {scene.tags.length > 0 && (
           <ul className="tag-row">
             {scene.tags.map((t) => (
@@ -306,7 +306,7 @@ function filterScenes(
       if (!needle) return true;
       return (
         s.title.toLowerCase().includes(needle) ||
-        s.summary.toLowerCase().includes(needle) ||
+        (s.final_summary ?? "").toLowerCase().includes(needle) ||
         s.slug.toLowerCase().includes(needle)
       );
     })

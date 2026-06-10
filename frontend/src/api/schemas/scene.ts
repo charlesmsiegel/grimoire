@@ -1,14 +1,24 @@
 import { z } from "zod";
 
 /**
- * Wire shapes for scenes and posts (`Scene` / `Post` / `Thread` in
- * `backend/src/grimoire/types/scene.py`, serialized through `to_payload`).
- * Two read views exist over the same `/scenes` payload: the campaign views'
- * `SceneSummary` and the play view's `ApiScene`; both are declared here so
- * they cannot drift from each other. Only fields the frontend reads are
- * declared; unknown extras are tolerated.
+ * Wire shapes for scenes and posts. The scene endpoints serialize the scene
+ * manager's dataclasses (`Scene` / `Post` / `Thread` in
+ * `backend/src/grimoire/scenes/types.py`) through `to_payload`, so
+ * `in_game_start` / `in_game_end` are bare ISO-8601 strings (not the time
+ * engine's `{moment, calendar_id}` object), the closing summary lives in
+ * `final_summary`, and `mood` / `running_summary` are nullable.
+ *
+ * Two read views exist over the same `/scenes` payload — the campaign views'
+ * `SceneSummary` and the play view's `ApiScene` — so both names alias one
+ * schema here and cannot drift from each other. Only fields the frontend
+ * reads are declared; unknown extras are tolerated.
  */
 
+/**
+ * The time engine's timestamp object (`grimoire.types.common.InGameTime`),
+ * used by time-advance payloads. Scene start/end times are *not* this shape —
+ * they arrive as plain ISO strings (see module doc).
+ */
 export const InGameTimeSchema = z.object({
   moment: z.string(),
   calendar_id: z.string().nullable().optional(),
@@ -17,33 +27,10 @@ export type InGameTime = z.infer<typeof InGameTimeSchema>;
 
 export const ThreadSchema = z.object({
   text: z.string(),
-  introduced_in_post: z.string().nullable().optional(),
-  paid_off_in_post: z.string().nullable().optional(),
-  tags: z.array(z.string()),
+  introduced_at_post: z.number().nullable(),
+  paid_off_at_post: z.number().nullable(),
 });
 export type Thread = z.infer<typeof ThreadSchema>;
-
-export const SceneSummarySchema = z.object({
-  id: z.string(),
-  campaign_id: z.string(),
-  ordinal: z.number(),
-  slug: z.string(),
-  title: z.string(),
-  location_ref: z.string().nullable(),
-  in_game_start: InGameTimeSchema.nullable(),
-  in_game_end: InGameTimeSchema.nullable(),
-  present_character_refs: z.array(z.string()),
-  present_pc_refs: z.array(z.string()),
-  mood: z.string(),
-  post_count: z.number(),
-  tags: z.array(z.string()),
-  closed: z.boolean(),
-  threads_introduced: z.array(ThreadSchema),
-  threads_paid_off: z.array(ThreadSchema),
-  summary: z.string(),
-  key_beats: z.array(z.string()),
-});
-export type SceneSummary = z.infer<typeof SceneSummarySchema>;
 
 export const NarratorResponseModeSchema = z.enum([
   "all_at_once",
@@ -59,22 +46,28 @@ export const ApiSceneSchema = z.object({
   slug: z.string(),
   title: z.string(),
   location_ref: z.string().nullable(),
-  in_game_start: InGameTimeSchema.nullable(),
-  in_game_end: InGameTimeSchema.nullable(),
+  in_game_start: z.string().nullable(),
+  in_game_end: z.string().nullable(),
   present_character_refs: z.array(z.string()),
   present_pc_refs: z.array(z.string()),
-  mood: z.string(),
+  mood: z.string().nullable(),
   post_count: z.number(),
+  threads_introduced: z.array(ThreadSchema),
+  threads_paid_off: z.array(ThreadSchema),
+  tags: z.array(z.string()),
   closed: z.boolean(),
-  last_advance_at_post: z.number().nullable(),
-  running_summary: z.string(),
-  summary: z.string(),
-  threads_introduced: z.array(z.object({ text: z.string() })).optional(),
-  threads_paid_off: z.array(z.object({ text: z.string() })).optional(),
-  // Scene override; only present on responses that carry narrator-mode state.
-  narrator_response_mode: NarratorResponseModeSchema.nullable().optional(),
+  last_advance_at_post: z.number(),
+  running_summary: z.string().nullable(),
+  final_summary: z.string().nullable(),
+  key_beats: z.array(z.string()),
+  // Per-scene override; null = inherit the campaign default.
+  narrator_response_mode: NarratorResponseModeSchema.nullable(),
 });
 export type ApiScene = z.infer<typeof ApiSceneSchema>;
+
+/** The campaign views' name for the same wire shape (see module doc). */
+export const SceneSummarySchema = ApiSceneSchema;
+export type SceneSummary = ApiScene;
 
 export const AuthorKindSchema = z.enum(["pc", "narrator", "npc", "system"]);
 
