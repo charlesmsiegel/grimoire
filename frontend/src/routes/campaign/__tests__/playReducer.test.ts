@@ -26,6 +26,35 @@ describe("playReducer image-ready", () => {
     const twice = playReducer(once, { type: "image-ready", image });
     expect(Object.values(twice.images)).toHaveLength(1);
   });
+
+  it("replaces the record with hydrated images on load, but keeps live ones when hydration is absent", () => {
+    const live = playReducer(initialPlayState, {
+      type: "image-ready",
+      image: { id: "img-live", url: "/api/files/live.png", post_id: "post-a" },
+    });
+    const hydrated = playReducer(live, {
+      type: "loaded",
+      pcs: [],
+      activePcRef: null,
+      scene: null,
+      posts: [],
+      images: {
+        "img-db:post-b": { id: "img-db", url: "/api/files/db.png", post_id: "post-b" },
+      },
+    });
+    expect(Object.values(hydrated.images).map((img) => img.id)).toEqual(["img-db"]);
+
+    // A load without hydration data (e.g. the images fetch failed) keeps
+    // whatever live events already delivered.
+    const fallback = playReducer(live, {
+      type: "loaded",
+      pcs: [],
+      activePcRef: null,
+      scene: null,
+      posts: [],
+    });
+    expect(Object.values(fallback.images).map((img) => img.id)).toEqual(["img-live"]);
+  });
 });
 
 describe("playReducer stream-end-if-turn", () => {
