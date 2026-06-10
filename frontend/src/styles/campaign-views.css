@@ -882,3 +882,13 @@ button.primary:disabled {
 .mood-hopeful {
   color: var(--ok);
 }
+
+/* Cast view: per-campaign character-variant selection. */
+.variant-picker select {
+  max-width: 20rem;
+}
+
+.variant-picker-hint {
+  margin: var(--space-1) 0 0;
+  font-size: 0.8rem;
+}

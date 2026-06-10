@@ -56,6 +56,7 @@ from .common import (
 )
 from .composition import (
     CampaignRef,
+    CharacterVariant,
     Composition,
     Greeting,
     LibraryEntity,
@@ -339,6 +340,7 @@ __all__ = [  # noqa: RUF022 — grouped by topic for readability
     "WeatherChange",
     # composition
     "CampaignRef",
+    "CharacterVariant",
     "Composition",
     "Greeting",
     "LibraryEntity",

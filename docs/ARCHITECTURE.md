@@ -231,11 +231,29 @@ Edits in a library view write the file (and update the index). Edits in a campai
 
 Campaigns version-pin library refs by default. Library edits don't silently mutate active campaigns: pinned campaigns continue reading their bound version (via SQLite snapshots) until the user explicitly upgrades the ref, with a diff. The opposite mode is `track_latest: true`, which always reads current files.
 
-### Character variants across worlds
+### Character variants (in-world diff overlays)
 
-No `family_id` field. Variants are recognized by shared asset id. If `worlds/faerun/characters/drizzt.md` and `worlds/mythic-europe/characters/drizzt.md` both exist, the app surfaces "Drizzt (faerun) — also exists in: mythic-europe" via a single query. Variants are independent — editing one has no effect on others. Renaming in one world breaks the link.
+A **variant** is an alternate take on a character within its world: a diff overlay on the base card that a campaign can select (#579). Variants live in the library next to the base character:
 
-The id is the link. Nothing else. Same id-matching applies to items, locations, lore, factions.
+```
+library/worlds/<world>/characters/<id>.md                      # base card (or <id>/card.md)
+library/worlds/<world>/characters/<id>/variants/<variant>.md   # diff overlay
+```
+
+A variant file's frontmatter holds **only the fields that differ** from the base, plus a reserved `label` (display name; `id` is reserved and ignored so a variant can never change the character's identity). A non-empty body replaces the base prose. Variant files are plain markdown a user can hand-edit; they never enter `library_index` — the watcher emits change events for them (cache invalidation) without indexing.
+
+A campaign selects at most one variant per character in `campaign.yaml` (file is SSOT; `PUT /api/campaigns/<id>/variants`):
+
+```yaml
+variants:
+  worlds/wod-london/characters/alistair: young
+```
+
+The resolve cascade applies the selection between the library base and any campaign override: **base → variant diff → campaign override**. Frontmatter merges with the same semantics as overrides (top-level keys replace; `extras` merges key-by-key with `None` tombstones). Unselected campaigns read the base; a dangling selection (variant file deleted) logs a warning and falls back to the base. Variant overlays always read live files — they are not version-pinned with the base snapshot.
+
+Entity ids stay unique per world (one id, one file) and `version` remains a content-revision counter — variants are the only sanctioned way to keep multiple coexisting takes on one character. There is no cross-world linkage: the same id in two worlds is two unrelated entities.
+
+Authoring lives in the entity editor's **Variants** tab; per-campaign selection in the campaign's **Cast** view.
 
 ## Multiple PCs
 
@@ -444,11 +462,11 @@ Core events: `turn_started`, `context_built`, `model_response_received`, `deltas
 4. The Context Builder surfaces "this is a Node (Quintessence 4/day)" alongside the narrative description
 5. Mechanics's capability query for the Rookery returns its Node properties on demand
 
-### Variant linking by id
+### Variant selection per campaign
 
-1. Three character files share asset id `gandalf` across `mythic-europe`, `faerun`, and `wod-london`
-2. The Frontend's character view surfaces "Gandalf: also exists in mythic-europe, faerun, wod-london"
-3. Editing one variant has no effect on the others
+1. `worlds/wod-london/characters/alistair.md` has a variant overlay `characters/alistair/variants/young.md` (`label: Young Alistair`, `age: "25"`, replacement prose)
+2. Campaign A selects it (`variants: {worlds/wod-london/characters/alistair: young}` in `campaign.yaml`); Campaign B selects nothing
+3. Campaign A resolves Alistair as the young portrayal (base fields it doesn't override cascade through); Campaign B keeps the base — same library files, no duplication
 
 ## What ships by default
 

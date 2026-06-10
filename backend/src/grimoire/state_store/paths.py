@@ -215,6 +215,30 @@ def character_dir_layout(world_id: str, asset_id: str, *, data_root: Path) -> Ch
     )
 
 
+def character_variants_dir(data_root: Path, world_id: str, base_id: str) -> Path:
+    """Directory holding a character's in-world variant overlay files.
+
+    Variants live under the character's directory regardless of whether the
+    base card is flat (``characters/<id>.md``) or directory-form
+    (``characters/<id>/card.md``)::
+
+        library/worlds/<world>/characters/<id>/variants/<variant-id>.md
+    """
+    validate_path_component(world_id, name="world_id")
+    validate_path_component(base_id, name="base_id")
+    return library_root(data_root) / "worlds" / world_id / "characters" / base_id / "variants"
+
+
+def character_variant_path(
+    data_root: Path,
+    world_id: str,
+    base_id: str,
+    variant_id: str,
+) -> Path:
+    validate_path_component(variant_id, name="variant_id")
+    return character_variants_dir(data_root, world_id, base_id) / f"{variant_id}.md"
+
+
 def library_path(data_root: Path, library_id: str) -> Path:
     """Return the on-disk path for a library entity.
 

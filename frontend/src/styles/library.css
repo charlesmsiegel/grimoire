@@ -525,21 +525,6 @@
   flex-shrink: 0;
 }
 
-.entity-variants-breadcrumb {
-  margin: var(--space-1) 0 0;
-  font-size: 0.85rem;
-  color: var(--fg-muted);
-}
-
-.entity-variants-breadcrumb a {
-  color: var(--fg-muted);
-  text-decoration: underline;
-}
-
-.entity-variants-breadcrumb a:hover {
-  color: var(--fg);
-}
-
 /* ----- Entity editor ----- */
 
 .entity-editor-body {
@@ -1069,7 +1054,7 @@
   padding-left: var(--space-4);
 }
 
-/* ----- Variants ----- */
+/* ----- Character variants (in-world diff overlays) ----- */
 
 .variants-panel,
 .variants-list {
@@ -1090,105 +1075,57 @@
   font-size: 0.875rem;
 }
 
-.variant-source {
-  color: var(--fg-muted);
-  font-size: 0.85rem;
-}
-
-.variant-snippet {
-  margin: var(--space-1) 0 0;
-  font-size: 0.875rem;
-  color: var(--fg-muted);
-  font-style: italic;
-}
-
 .variants-controls {
   display: flex;
   justify-content: flex-end;
 }
 
-.variants-diff-toggle {
-  background: var(--bg-elev);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-3);
-  font-size: 0.85rem;
-  color: var(--fg);
-  cursor: pointer;
-}
-
-.variants-diff-toggle[aria-pressed="true"] {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-
-.variants-diff-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
-}
-
-.variants-diff-heading {
-  margin: 0;
-  font-size: 0.95rem;
-  color: var(--fg-muted);
-}
-
-.variant-diff {
-  background: var(--bg-elev);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+/* Card chrome comes from the .card primitive. */
+.variant-card {
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
 }
 
-.variant-diff-header {
+.variant-card-head {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: var(--space-3);
+}
+
+.variant-card-id {
+  margin-left: var(--space-2);
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+}
+
+.variant-card-summary {
+  margin: 0;
   font-size: 0.875rem;
   color: var(--fg-muted);
-  flex-wrap: wrap;
 }
 
-.variant-diff-body-meta {
-  font-variant-numeric: tabular-nums;
-}
-
-.variant-diff-rows {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.variant-editor {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-2);
 }
 
-.variant-diff-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+.variant-editor label {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+
+.variant-editor textarea {
+  font-family: var(--font-mono);
   font-size: 0.85rem;
 }
 
-.variant-diff-key {
-  font-weight: 600;
-}
-
-.variant-diff-values {
+.variant-editor-actions {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding-left: var(--space-3);
-}
-
-.variant-diff-side em {
-  color: var(--fg-muted);
-  font-style: normal;
-  margin-right: var(--space-1);
+  justify-content: flex-end;
 }
 
 /* ----- Style guides / image presets ----- */

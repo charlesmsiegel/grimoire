@@ -51,8 +51,11 @@ class LibraryService:
     async def list_greetings(world_id) -> list[Greeting]
     async def get_greeting(world_id, id) -> Greeting
 
-    # Cross-world variants
-    async def variants_of(asset_id, kind) -> list[LibraryEntity]
+    # Character variants (in-world diff overlays)
+    async def list_character_variants(world_id, character_id) -> list[CharacterVariant]
+    async def get_character_variant(world_id, character_id, variant_id) -> CharacterVariant
+    async def upsert_character_variant(world_id, character_id, variant_id, *, label=None, frontmatter=None, body="") -> CharacterVariant
+    async def delete_character_variant(world_id, character_id, variant_id) -> None
 
     # Writes (file + index, mediated by StateStore)
     async def create_world(id, meta, *, source="user") -> WorldMeta
@@ -229,9 +232,9 @@ Snapshot storage cost: pinned snapshots duplicate library content per campaign+b
 
 The emergent file is **left in place**; the spec's "replace campaign-local record with a reference / convert to override" step is **not** implemented yet (see remaining doc). Characters are routed through the Characters module (`world/service.py:687` rejects `character`).
 
-## Cross-world variants
+## Character variants
 
-`variants_of(asset_id, kind)` issues `SELECT * FROM library_index WHERE asset_id = ? AND kind = ?` via `store.variants_of`. There is **no `family_id` field**; the asset id is the link. Renaming an entity in one world breaks the variant link by design.
+Variants are in-world diff overlays at `characters/<id>/variants/<vid>.md` (#579): frontmatter holds only the fields that differ from the base plus the reserved `label`; a non-empty body replaces the base prose. They are read from disk (never indexed in `library_index`); the base character must exist, and the reserved `id` key is dropped so a variant can't change identity. A campaign selects one per character via `campaign.yaml` `variants:`; `StateStore.resolve_entity` applies base → variant diff → override. There is no cross-world linkage — the same id in two worlds is two unrelated entities.
 
 ## Configuration
 

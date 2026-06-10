@@ -718,6 +718,8 @@ class FileWatcher:
             payload["scene_basename"] = watched.scene_basename
         if watched.image_id is not None:
             payload["image_id"] = watched.image_id
+        if watched.variant_of is not None:
+            payload["variant_of"] = watched.variant_of
         await self.bus.emit(Event(type=watched.event_type, payload=payload))
 
     async def _drop_orphan_library_rows(self, seen: set[str]) -> None:
@@ -907,6 +909,7 @@ def _parse_file(watched: WatchedFile) -> _Parsed | None:
         return None
     if watched.kind in {
         "library_entity",
+        "library_character_variant",
         "library_style_guide",
         "emergent",
     }:

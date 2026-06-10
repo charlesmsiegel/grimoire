@@ -52,14 +52,6 @@ class PromotionConfig:
 
 
 @dataclass
-class CrossWorldLookupConfig:
-    # When False, ``cross_world_lookup`` slug-normalizes the asset id
-    # (lower-cased, non-alphanumeric → ``-``) before consulting the
-    # Library, so ``Alistair-Hyde-Smythe`` finds ``alistair-hyde-smythe``.
-    case_sensitive: bool = False
-
-
-@dataclass
 class MultiPCConfig:
     # Informational — current behaviour already matches both flags.
     auto_advance_with_single_pc: bool = True
@@ -78,7 +70,6 @@ class CharactersConfig:
     voice_anchor: VoiceAnchorConfig = None  # type: ignore[assignment]
     capsules: CapsulesConfig = None  # type: ignore[assignment]
     promotion: PromotionConfig = None  # type: ignore[assignment]
-    cross_world_lookup: CrossWorldLookupConfig = None  # type: ignore[assignment]
     multi_pc: MultiPCConfig = None  # type: ignore[assignment]
     cache: CacheConfig = None  # type: ignore[assignment]
 
@@ -93,8 +84,6 @@ class CharactersConfig:
             self.capsules = CapsulesConfig()
         if self.promotion is None:
             self.promotion = PromotionConfig()
-        if self.cross_world_lookup is None:
-            self.cross_world_lookup = CrossWorldLookupConfig()
         if self.multi_pc is None:
             self.multi_pc = MultiPCConfig()
         if self.cache is None:
@@ -105,7 +94,6 @@ __all__ = [
     "CacheConfig",
     "CapsulesConfig",
     "CharactersConfig",
-    "CrossWorldLookupConfig",
     "DriftConfig",
     "MultiPCConfig",
     "PromotionConfig",

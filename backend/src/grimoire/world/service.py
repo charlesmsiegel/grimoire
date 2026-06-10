@@ -8,7 +8,6 @@ provide:
 
 * Composition-aware listing with ``include`` filters
 * Spatial queries (adjacency, ``path_between``, ``locations_within``)
-* Cross-world variant lookup
 * Lore keyword triggers for archive-tier injection
 * Procedural weather + override
 * Calendar / season / holiday queries
@@ -763,21 +762,6 @@ class WorldService:
             return await self.get_location(source_world, target)
         except WorldNotFoundError:
             return None
-
-    # ------------------------------------------------------------------ #
-    # Cross-world variants
-    # ------------------------------------------------------------------ #
-
-    async def cross_world_lookup(
-        self,
-        asset_id: str,
-        kind: EntityKind | str,
-        exclude_world: str | None = None,
-    ) -> list[LibraryEntity]:
-        rows = await self.library.variants_of(asset_id, kind)
-        if exclude_world:
-            rows = [r for r in rows if r.world_id != exclude_world]
-        return rows
 
     # ------------------------------------------------------------------ #
     # Lore

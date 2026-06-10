@@ -68,8 +68,6 @@ class CharactersService:
     async def resolve(character_ref, campaign_id) -> ResolvedCharacter
     async def list_for_campaign(campaign_id, filter=None) -> list[ResolvedCharacter]
 
-    # Cross-world variants
-    async def cross_world_lookup(character_id, exclude_world=None) -> list[Character]
 
     # Views
     async def get_full_card(ref, campaign_id) -> str
@@ -212,9 +210,9 @@ PC roster lives in the `pcs` table (`StateStore.list_pcs/add_pc/remove_pc/set_ac
 
 Per-PC current scene is stored on `CharacterState.current_scene_id`; `current_scene_for_pc` reads it, `set_current_scene_for_pc` writes it.
 
-## Cross-world variants
+## Variants
 
-`cross_world_lookup(character_id, exclude_world=None)` calls `LibraryService.variants_of(character_id, "character")` and projects to `Character`. Identity is by shared `asset_id` across worlds — no `family_id` field, matching spec 08 §Cross-world variant lookup.
+In-world variant overlays are owned by the Library (`characters/<id>/variants/<vid>.md`, #579); `resolve()` picks them up transparently because `StateStore.resolve_entity` applies the campaign's selected variant diff between the library base and any override. The view cache invalidates on `library_entity_changed` events with kind `character` *or* `character_variant`.
 
 ## Compressed views
 

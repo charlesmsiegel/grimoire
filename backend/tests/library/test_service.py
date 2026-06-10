@@ -295,22 +295,60 @@ async def test_update_style_guide_replaces_bullets_and_preserves_intro(
 
 
 # ---------------------------------------------------------------------------
-# Cross-world variants
+# Character variants (in-world diff overlays)
 # ---------------------------------------------------------------------------
 
 
-async def test_variants_of_shared_asset_id(library: LibraryService, store: StateStore) -> None:
+async def test_character_variant_crud_round_trip(
+    library: LibraryService, store: StateStore
+) -> None:
     await _seed_world(store, "faerun")
-    await _seed_world(store, "mythic-europe")
     await _seed_character(store, "faerun", "drizzt", name="Drizzt")
-    await _seed_character(store, "mythic-europe", "drizzt", name="Drizzt")
-    await _seed_character(store, "faerun", "elminster", name="Elminster")
 
-    variants = await library.variants_of("drizzt", EntityKind.CHARACTER)
-    assert {v.world_id for v in variants} == {"faerun", "mythic-europe"}
+    created = await library.upsert_character_variant(
+        "faerun",
+        "drizzt",
+        "redeemed",
+        label="Redeemed Drizzt",
+        frontmatter={"age": 90, "id": "evil-clone"},
+        body="He walked away from the Underdark.",
+    )
+    assert created.id == "redeemed"
+    assert created.character_id == "drizzt"
+    assert created.label == "Redeemed Drizzt"
+    # The reserved `id` key is dropped so a variant can't change identity.
+    assert "id" not in created.frontmatter
+    assert created.frontmatter["age"] == 90
 
-    solo = await library.variants_of("elminster", EntityKind.CHARACTER)
-    assert [v.world_id for v in solo] == ["faerun"]
+    listed = await library.list_character_variants("faerun", "drizzt")
+    assert [v.id for v in listed] == ["redeemed"]
+
+    fetched = await library.get_character_variant("faerun", "drizzt", "redeemed")
+    assert fetched.body == "He walked away from the Underdark."
+
+    await library.delete_character_variant("faerun", "drizzt", "redeemed")
+    assert await library.list_character_variants("faerun", "drizzt") == []
+    with pytest.raises(LibraryNotFoundError):
+        await library.get_character_variant("faerun", "drizzt", "redeemed")
+
+
+async def test_character_variant_requires_existing_base(
+    library: LibraryService, store: StateStore
+) -> None:
+    await _seed_world(store, "faerun")
+    with pytest.raises(LibraryNotFoundError):
+        await library.upsert_character_variant("faerun", "nobody", "young")
+    with pytest.raises(LibraryNotFoundError):
+        await library.list_character_variants("faerun", "nobody")
+
+
+async def test_character_variant_label_defaults_to_id(
+    library: LibraryService, store: StateStore
+) -> None:
+    await _seed_world(store, "faerun")
+    await _seed_character(store, "faerun", "drizzt", name="Drizzt")
+    created = await library.upsert_character_variant("faerun", "drizzt", "young")
+    assert created.label == "young"
 
 
 # ---------------------------------------------------------------------------

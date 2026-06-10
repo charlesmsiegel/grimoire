@@ -286,6 +286,40 @@ async def _write_image_v2(store: StateStore) -> None:
     )
 
 
+def _variant_target(store: StateStore) -> Path:
+    from grimoire.state_store.paths import character_variant_path
+
+    return character_variant_path(store.data_root, "wod", "winifred", "young")
+
+
+async def _write_variant_v1(store: StateStore) -> None:
+    await store.write_character_variant(
+        world_id="wod",
+        base_id="winifred",
+        variant_id="young",
+        frontmatter={"label": "Young winifred"},
+        body="",
+        source="user",
+    )
+
+
+async def _write_variant_v2(store: StateStore) -> None:
+    await store.write_character_variant(
+        world_id="wod",
+        base_id="winifred",
+        variant_id="young",
+        frontmatter={"label": "Young winifred", "age": "25 — must not survive"},
+        body="",
+        source="user",
+    )
+
+
+async def _delete_variant(store: StateStore) -> None:
+    await store.delete_character_variant(
+        world_id="wod", base_id="winifred", variant_id="young", source="user"
+    )
+
+
 _Seed = Callable[[StateStore], Awaitable[None]]
 
 _ROLLBACK_CASES = [
@@ -302,6 +336,13 @@ _ROLLBACK_CASES = [
     pytest.param(_write_content_v1, _write_content_v2, _content_target, id="write_content"),
     pytest.param(None, _write_image_v1, _image_target, id="write_image_metadata-new"),
     pytest.param(_write_image_v1, _write_image_v2, _image_target, id="write_image_metadata"),
+    pytest.param(None, _write_variant_v1, _variant_target, id="write_character_variant-new"),
+    pytest.param(
+        _write_variant_v1, _write_variant_v2, _variant_target, id="write_character_variant"
+    ),
+    pytest.param(
+        _write_variant_v1, _delete_variant, _variant_target, id="delete_character_variant"
+    ),
 ]
 
 

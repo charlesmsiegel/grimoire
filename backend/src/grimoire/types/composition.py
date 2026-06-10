@@ -80,6 +80,28 @@ class LibraryEntity(BaseModel):
     version: int = 0
 
 
+class CharacterVariant(BaseModel):
+    """An in-world variant of a character: a diff overlay on the base card.
+
+    Stored as ``worlds/<world>/characters/<id>/variants/<variant-id>.md``.
+    ``frontmatter`` holds only the fields that differ from the base (plus the
+    reserved ``label``); a non-empty ``body`` replaces the base prose when the
+    variant is selected by a campaign.
+    """
+
+    id: str  # variant id (filename stem), unique per base character
+    world_id: str
+    character_id: str  # base character asset id
+    label: str
+    frontmatter: Json = Field(default_factory=dict)
+    body: str = ""
+    path: str = ""
+    # Set when the overlay file exists but can't be parsed: the entry is
+    # listed as a marker (empty diff) so callers can tell "no variants"
+    # from "broken variant file".
+    error: str | None = None
+
+
 class Greeting(BaseModel):
     id: str
     world_id: str

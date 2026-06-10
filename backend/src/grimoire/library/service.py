@@ -24,11 +24,13 @@ from grimoire.library.reclassify import (
     ReclassificationResult,
 )
 from grimoire.state_store import StateStore
+from grimoire.state_store.errors import NotFoundError
 from grimoire.state_store.indexers import make_library_id
 from grimoire.state_store.paths import parse_library_id
 from grimoire.types.common import EntityKind
 from grimoire.types.composition import (
     CampaignRef,
+    CharacterVariant,
     Composition,
     Greeting,
     LibraryEntity,
@@ -584,13 +586,76 @@ class LibraryService:
         return _greeting_from_row(row)
 
     # ------------------------------------------------------------------ #
-    # Cross-world variants
+    # Character variants (in-world diff overlays on a base character)
     # ------------------------------------------------------------------ #
 
-    async def variants_of(self, asset_id: str, kind: EntityKind | str) -> list[LibraryEntity]:
-        normalized = _normalize_kind(kind)
-        rows = await self.store.variants_of(asset_id, normalized)
-        return [_entity_from_row(row) for row in rows]
+    async def list_character_variants(
+        self, world_id: str, character_id: str
+    ) -> list[CharacterVariant]:
+        await self.get_entity(world_id, "character", character_id)
+        rows = await self.store.list_character_variants(world_id, character_id)
+        return [CharacterVariant.model_validate(row) for row in rows]
+
+    async def get_character_variant(
+        self, world_id: str, character_id: str, variant_id: str
+    ) -> CharacterVariant:
+        row = await self.store.get_character_variant(world_id, character_id, variant_id)
+        if row is None:
+            raise LibraryNotFoundError(
+                f"variant {variant_id!r} of character {character_id!r} "
+                f"not found in world {world_id!r}"
+            )
+        return CharacterVariant.model_validate(row)
+
+    async def upsert_character_variant(
+        self,
+        world_id: str,
+        character_id: str,
+        variant_id: str,
+        *,
+        label: str | None = None,
+        frontmatter: dict | None = None,
+        body: str = "",
+        source: str = "user",
+    ) -> CharacterVariant:
+        """Create or replace a variant overlay of an existing base character.
+
+        ``frontmatter`` holds only the fields that differ from the base; the
+        reserved ``id`` key is dropped so a variant can never change the
+        character's identity. ``label`` is stored as the ``label`` key.
+        """
+        await self.get_entity(world_id, "character", character_id)
+        fm = dict(frontmatter or {})
+        fm.pop("id", None)
+        if label is not None:
+            fm["label"] = label
+        row = await self.store.write_character_variant(
+            world_id=world_id,
+            base_id=character_id,
+            variant_id=variant_id,
+            frontmatter=fm,
+            body=body or "",
+            source=source,
+        )
+        return CharacterVariant.model_validate(row)
+
+    async def delete_character_variant(
+        self,
+        world_id: str,
+        character_id: str,
+        variant_id: str,
+        *,
+        source: str = "user",
+    ) -> None:
+        try:
+            await self.store.delete_character_variant(
+                world_id=world_id,
+                base_id=character_id,
+                variant_id=variant_id,
+                source=source,
+            )
+        except NotFoundError as exc:
+            raise LibraryNotFoundError(str(exc)) from exc
 
     # ------------------------------------------------------------------ #
     # Writes
@@ -973,6 +1038,16 @@ def _build_resolved(
             override_applied=bool(data.get("override")),
         )
     ]
+    applied: list[str] = []
+    if data.get("variant"):
+        applied.append(f"variant:{data['variant']}")
+    if data.get("variant_error"):
+        # Variant state is broken (unreadable campaign.yaml, dangling or
+        # unparseable overlay): resolution fell back to the base, and the
+        # marker keeps "broken" distinguishable from "no selection".
+        applied.append(f"variant-error:{data['variant_error']}")
+    if data.get("override"):
+        applied.append("override")
     return ResolvedEntity(
         kind=EntityKind(kind),
         asset_id=asset_id,
@@ -981,7 +1056,7 @@ def _build_resolved(
         frontmatter=fm,
         body=data.get("body") or "",
         source_chain=chain,
-        overrides_applied=(["override"] if data.get("override") else []),
+        overrides_applied=applied,
     )
 
 

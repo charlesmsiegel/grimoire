@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from grimoire.types.composition import LibraryEntity, WorldMeta
+from grimoire.types.composition import CharacterVariant, LibraryEntity, WorldMeta
 
 
 class FakeLibrary:
@@ -50,31 +50,68 @@ class FakeLibrary:
     async def list_greetings(self, world_id: str) -> list[Any]:
         return []
 
-    async def variants_of(self, asset_id: str, kind: str) -> list[Any]:
-        if asset_id == "alistair" and kind == "character":
-            return [
-                LibraryEntity(
-                    id="worlds/wod-london/characters/alistair",
-                    world_id="wod-london",
-                    kind="character",
-                    asset_id="alistair",
-                    name="Alistair",
-                    path="worlds/wod-london/characters/alistair.md",
-                    frontmatter={"name": "Alistair", "clan": "Ventrue"},
-                    body="A polished elder in a Savile Row suit.",
-                ),
-                LibraryEntity(
-                    id="worlds/wod-paris/characters/alistair",
-                    world_id="wod-paris",
-                    kind="character",
-                    asset_id="alistair",
-                    name="Alistair",
-                    path="worlds/wod-paris/characters/alistair.md",
-                    frontmatter={"name": "Alistair", "clan": "Toreador"},
-                    body="A salon-haunting aesthete.",
-                ),
-            ]
-        return []
+    async def list_character_variants(self, world_id: str, character_id: str) -> list[Any]:
+        from grimoire.library import LibraryNotFoundError
+
+        if character_id != "alistair":
+            raise LibraryNotFoundError(f"character {character_id!r} not found")
+        return [
+            CharacterVariant(
+                id="young",
+                world_id=world_id,
+                character_id=character_id,
+                label="Young Alistair",
+                frontmatter={"label": "Young Alistair", "age": 25},
+                body="A brash newcomer.",
+            )
+        ]
+
+    async def get_character_variant(self, world_id: str, character_id: str, variant_id: str) -> Any:
+        from grimoire.library import LibraryNotFoundError
+
+        if character_id == "alistair" and variant_id == "young":
+            return CharacterVariant(
+                id="young",
+                world_id=world_id,
+                character_id=character_id,
+                label="Young Alistair",
+                frontmatter={"label": "Young Alistair", "age": 25},
+                body="A brash newcomer.",
+            )
+        raise LibraryNotFoundError(f"variant {variant_id!r} not found")
+
+    async def upsert_character_variant(
+        self,
+        world_id: str,
+        character_id: str,
+        variant_id: str,
+        *,
+        label: str | None = None,
+        frontmatter: dict | None = None,
+        body: str = "",
+        source: str = "user",
+    ) -> Any:
+        self.created.append(("character_variant", f"{character_id}/{variant_id}"))
+        fm = dict(frontmatter or {})
+        fm.pop("id", None)
+        if label is not None:
+            fm["label"] = label
+        return CharacterVariant(
+            id=variant_id,
+            world_id=world_id,
+            character_id=character_id,
+            label=str(fm.get("label") or variant_id),
+            frontmatter=fm,
+            body=body,
+        )
+
+    async def delete_character_variant(
+        self, world_id: str, character_id: str, variant_id: str, *, source: str = "user"
+    ) -> None:
+        from grimoire.library import LibraryNotFoundError
+
+        if not (character_id == "alistair" and variant_id == "young"):
+            raise LibraryNotFoundError(f"variant {variant_id!r} not found")
 
     async def dependents(self, world_id: str, kind: str, entity_id: str) -> list[Any]:
         return []
@@ -425,31 +462,49 @@ def test_get_style_guide_edit_returns_parsed_shape(client, container) -> None:
     assert "extra_sections" in body
 
 
-def test_variants_returns_frontmatter_and_body_for_diff(client, container) -> None:
-    """The variants endpoint must surface the full body and frontmatter so the
-    frontend's cross-world diff preview (spec 14 §12) can compute a key/value
-    comparison and a body-length delta entirely on the client."""
+def test_list_character_variants_route(client, container) -> None:
     container.library = FakeLibrary()
-    response = client.get("/api/library/variants/character/alistair")
+    response = client.get("/api/library/worlds/wod-london/characters/alistair/variants")
     assert response.status_code == 200
     body = response.json()
-    assert len(body) == 2
-    assert {row["world_id"] for row in body} == {"wod-london", "wod-paris"}
-    for row in body:
-        assert "frontmatter" in row
-        assert "body" in row
-        assert row["frontmatter"].get("name") == "Alistair"
-        assert row["body"]
-    # The frontmatter differs on `clan` — the diff UI keys off this row.
-    clans = {row["world_id"]: row["frontmatter"]["clan"] for row in body}
-    assert clans == {"wod-london": "Ventrue", "wod-paris": "Toreador"}
+    assert len(body) == 1
+    assert body[0]["id"] == "young"
+    assert body[0]["label"] == "Young Alistair"
+    assert body[0]["frontmatter"]["age"] == 25
+    assert body[0]["body"] == "A brash newcomer."
 
 
-def test_variants_returns_empty_list_for_unique_asset(client, container) -> None:
+def test_list_character_variants_unknown_base_404(client, container) -> None:
     container.library = FakeLibrary()
-    response = client.get("/api/library/variants/character/nobody")
+    response = client.get("/api/library/worlds/wod-london/characters/nobody/variants")
+    assert response.status_code == 404
+
+
+def test_upsert_character_variant_route(client, container) -> None:
+    fake = FakeLibrary()
+    container.library = fake
+    response = client.put(
+        "/api/library/worlds/wod-london/characters/alistair/variants/young",
+        json={
+            "label": "Young Alistair",
+            "frontmatter": {"age": 25, "id": "should-be-dropped"},
+            "body": "A brash newcomer.",
+        },
+    )
     assert response.status_code == 200
-    assert response.json() == []
+    body = response.json()
+    assert body["id"] == "young"
+    assert body["label"] == "Young Alistair"
+    assert "id" not in body["frontmatter"]
+    assert ("character_variant", "alistair/young") in fake.created
+
+
+def test_delete_character_variant_route(client, container) -> None:
+    container.library = FakeLibrary()
+    response = client.delete("/api/library/worlds/wod-london/characters/alistair/variants/young")
+    assert response.status_code == 204
+    missing = client.delete("/api/library/worlds/wod-london/characters/alistair/variants/ghost")
+    assert missing.status_code == 404
 
 
 def test_mechanics_installed(client, container) -> None:

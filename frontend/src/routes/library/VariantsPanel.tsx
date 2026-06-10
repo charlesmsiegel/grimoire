@@ -1,122 +1,293 @@
-import { useCallback, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useState } from "react";
 
-import { libraryApi, type LibraryEntity } from "../../api/library";
+import { libraryApi, type CharacterVariant } from "../../api/library";
+import { errorMessage } from "../../api/client";
 import { useResource } from "../../api/useResource";
+import { CardIconBar } from "../../components/CardIconBar";
+import { deleteAction } from "../../components/cardActions";
+import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
+import { PromptDialog } from "../../components/PromptDialog";
 import { AsyncBoundary } from "./AsyncBoundary";
-import { diffVariants, formatValue } from "./variantDiff";
+import { slugify } from "../../lib/slugify";
 
 interface Props {
-  kindPlural: string;
-  assetId: string;
+  worldId: string;
+  characterId: string;
 }
 
-export function VariantsPanel({ kindPlural, assetId }: Props) {
+/**
+ * In-world variants of a character: each variant is a diff overlay file
+ * (`characters/<id>/variants/<variant-id>.md`) holding only the frontmatter
+ * fields that differ from the base, plus an optional replacement body. A
+ * campaign picks one variant per character (Cast view → Variant).
+ */
+export function VariantsPanel({ worldId, characterId }: Props) {
   const { data, loading, error, reload } = useResource(
-    useCallback(() => libraryApi.variants(kindPlural, assetId), [kindPlural, assetId]),
+    useCallback(
+      () => libraryApi.listCharacterVariants(worldId, characterId),
+      [worldId, characterId],
+    ),
   );
-  const [showDiff, setShowDiff] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createErr, setCreateErr] = useState<string | null>(null);
 
-  // Each consecutive pair (A,B) produces a diff entry.
-  const pairs = useMemo(() => {
-    if (!data || data.length < 2) return [];
-    const out: { a: LibraryEntity; b: LibraryEntity }[] = [];
-    for (let i = 0; i < data.length - 1; i += 1) {
-      const a = data[i];
-      const b = data[i + 1];
-      if (a && b) out.push({ a, b });
+  async function handleCreate(label: string) {
+    const id = slugify(label);
+    if (!id) {
+      setCreateErr("Label must contain at least one letter or digit.");
+      return;
     }
-    return out;
-  }, [data]);
+    // PUT is an upsert — creating over an existing id would silently erase
+    // that variant's diff and body, so collisions need an explicit edit.
+    if (data?.some((v) => v.id === id)) {
+      setCreateErr(`A variant with id "${id}" already exists — edit it instead.`);
+      return;
+    }
+    setCreateBusy(true);
+    setCreateErr(null);
+    try {
+      await libraryApi.putCharacterVariant(worldId, characterId, id, { label });
+      setCreateOpen(false);
+      reload();
+    } catch (err) {
+      setCreateErr(errorMessage(err));
+    } finally {
+      setCreateBusy(false);
+    }
+  }
 
   return (
     <section className="variants-panel">
       <p className="variants-intro">
-        Entities across worlds sharing the asset id <code>{assetId}</code>. Each variant is fully
-        independent — editing one has no effect on others.
+        Alternate takes on <code>{characterId}</code> within this world. A variant stores only the
+        fields it changes (plus an optional replacement description); campaigns pick one per
+        character from the Cast view, and unselected campaigns keep the base.
       </p>
+      <div className="variants-controls">
+        <button type="button" onClick={() => setCreateOpen(true)}>
+          New variant
+        </button>
+      </div>
       <AsyncBoundary
         loading={loading}
         error={error}
         empty={!data || data.length === 0}
-        emptyMessage="No other worlds declare an asset with this id."
+        emptyMessage="No variants yet — the base card is the only take on this character."
         onRetry={reload}
       >
-        {data && data.length >= 2 && (
-          <div className="variants-controls">
-            <button
-              type="button"
-              className="variants-diff-toggle"
-              onClick={() => setShowDiff((prev) => !prev)}
-              aria-pressed={showDiff}
-            >
-              {showDiff ? "Hide diff" : "Show diff"}
-            </button>
-          </div>
-        )}
         <ul className="variants-list">
-          {data?.map((entity) => (
-            <li key={entity.id}>
-              <Link
-                to={`/library/worlds/${encodeURIComponent(entity.world_id ?? "")}/${kindPlural}/${encodeURIComponent(entity.asset_id)}`}
-              >
-                <strong>{entity.name || entity.asset_id}</strong>
-                <span className="variant-source"> — {entity.world_id}</span>
-              </Link>
-              {entity.body && <p className="variant-snippet">{entity.body.slice(0, 180)}…</p>}
+          {data?.map((variant) => (
+            <li key={variant.id}>
+              <VariantCard
+                worldId={worldId}
+                characterId={characterId}
+                variant={variant}
+                onChanged={reload}
+              />
             </li>
           ))}
         </ul>
-        {showDiff && pairs.length > 0 && (
-          <div className="variants-diff-section">
-            <h4 className="variants-diff-heading">Pairwise diffs</h4>
-            {pairs.map(({ a, b }) => (
-              <VariantPairDiff key={`${a.id}::${b.id}`} a={a} b={b} />
-            ))}
-          </div>
-        )}
       </AsyncBoundary>
+      {createOpen && (
+        <PromptDialog
+          open
+          title="New variant"
+          label="Variant label"
+          placeholder="Young Alistair"
+          hint="The id is the slugified label; the variant starts empty and overrides nothing until you add fields."
+          confirmLabel="Create"
+          busy={createBusy}
+          error={createErr}
+          onSubmit={(value) => void handleCreate(value)}
+          onCancel={() => {
+            setCreateOpen(false);
+            setCreateErr(null);
+          }}
+        />
+      )}
     </section>
   );
 }
 
-function VariantPairDiff({ a, b }: { a: LibraryEntity; b: LibraryEntity }) {
-  const diff = useMemo(() => diffVariants(a, b), [a, b]);
-  const labelA = a.world_id ?? "(no world)";
-  const labelB = b.world_id ?? "(no world)";
+interface VariantCardProps {
+  worldId: string;
+  characterId: string;
+  variant: CharacterVariant;
+  onChanged: () => void;
+}
+
+function VariantCard({ worldId, characterId, variant, onChanged }: VariantCardProps) {
+  const [editing, setEditing] = useState(false);
+  const [deleting, setDeleting] = useState<{ busy: boolean; err: string | null } | null>(null);
+
+  const diffKeys = Object.keys(variant.frontmatter).filter((k) => k !== "label");
+
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeleting({ busy: true, err: null });
+    try {
+      await libraryApi.deleteCharacterVariant(worldId, characterId, variant.id);
+      setDeleting(null);
+      onChanged();
+    } catch (err) {
+      setDeleting({ busy: false, err: errorMessage(err) });
+    }
+  }
+
   return (
-    <article className="variant-diff" aria-label={`Diff ${labelA} vs ${labelB}`}>
-      <header className="variant-diff-header">
-        <span>
-          <strong>{labelA}</strong> vs <strong>{labelB}</strong>
-        </span>
-        <span className="variant-diff-body-meta">
-          body: {diff.bodyLengthA} → {diff.bodyLengthB} chars (
-          {diff.bodyLengthDelta >= 0 ? "+" : ""}
-          {diff.bodyLengthDelta})
-        </span>
+    <article className="card variant-card">
+      <header className="variant-card-head">
+        <div>
+          <strong>{variant.label}</strong> <code className="variant-card-id">{variant.id}</code>
+        </div>
+        {!variant.error && (
+          <button type="button" onClick={() => setEditing((prev) => !prev)}>
+            {editing ? "Close" : "Edit"}
+          </button>
+        )}
       </header>
-      {diff.rows.length === 0 ? (
-        <p className="empty-state">Frontmatter is identical.</p>
-      ) : (
-        <ul className="variant-diff-rows">
-          {diff.rows.map((row) => (
-            <li key={row.key} className="variant-diff-row">
-              <code className="variant-diff-key">{row.key}</code>
-              <span className="variant-diff-values">
-                <span className="variant-diff-side">
-                  <em>A=</em>
-                  <code>{formatValue(row.a)}</code>
+      {variant.error && (
+        <p className="library-error" role="alert">
+          This variant file can’t be parsed and is ignored at resolve time — fix it on disk or
+          delete it. ({variant.error})
+        </p>
+      )}
+      {!editing && !variant.error && (
+        <p className="variant-card-summary">
+          {diffKeys.length > 0 ? (
+            <>
+              Overrides:{" "}
+              {diffKeys.map((k, i) => (
+                <span key={k}>
+                  {i > 0 && ", "}
+                  <code>{k}</code>
                 </span>
-                <span className="variant-diff-side">
-                  <em>B=</em>
-                  <code>{formatValue(row.b)}</code>
-                </span>
-              </span>
-            </li>
-          ))}
-        </ul>
+              ))}
+            </>
+          ) : (
+            "No field overrides yet."
+          )}
+          {variant.body.trim() && " Replaces the description."}
+        </p>
+      )}
+      {editing && (
+        <VariantEditor
+          worldId={worldId}
+          characterId={characterId}
+          variant={variant}
+          onSaved={() => {
+            setEditing(false);
+            onChanged();
+          }}
+        />
+      )}
+      <CardIconBar
+        actions={[
+          deleteAction({
+            onClick: () => setDeleting({ busy: false, err: null }),
+            label: `Delete variant ${variant.label}`,
+          }),
+        ]}
+      />
+      {deleting && (
+        <ConfirmDestructiveDialog
+          open
+          title={`Delete variant "${variant.label}"?`}
+          body={
+            <p>
+              Campaigns selecting this variant fall back to the base character. The overlay file is
+              removed from the library.
+            </p>
+          }
+          confirmLabel="Delete"
+          busy={deleting.busy}
+          error={deleting.err}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setDeleting(null)}
+        />
       )}
     </article>
+  );
+}
+
+interface VariantEditorProps {
+  worldId: string;
+  characterId: string;
+  variant: CharacterVariant;
+  onSaved: () => void;
+}
+
+function VariantEditor({ worldId, characterId, variant, onSaved }: VariantEditorProps) {
+  const [label, setLabel] = useState(variant.label);
+  // JSON text mirrors the override editor in the campaign Cast view — the
+  // diff is a small set of frontmatter keys, not a full character form.
+  const [diffText, setDiffText] = useState(() => {
+    const diff: Record<string, unknown> = { ...variant.frontmatter };
+    delete diff.label;
+    return JSON.stringify(diff, null, 2);
+  });
+  const [body, setBody] = useState(variant.body);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save() {
+    let frontmatter: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(diffText || "{}");
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new Error("the diff must be a JSON object of frontmatter keys");
+      }
+      frontmatter = parsed as Record<string, unknown>;
+    } catch (parseErr) {
+      setErr(errorMessage(parseErr));
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await libraryApi.putCharacterVariant(worldId, characterId, variant.id, {
+        label,
+        frontmatter,
+        body,
+      });
+      onSaved();
+    } catch (saveErr) {
+      setErr(errorMessage(saveErr));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="variant-editor">
+      <label className="form-field">
+        Label
+        <input value={label} onChange={(e) => setLabel(e.target.value)} />
+      </label>
+      <label className="form-field">
+        Overridden fields (JSON object; only keys that differ from the base)
+        <textarea
+          value={diffText}
+          onChange={(e) => setDiffText(e.target.value)}
+          rows={6}
+          spellCheck={false}
+        />
+      </label>
+      <label className="form-field">
+        Replacement description (empty keeps the base prose)
+        <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={4} />
+      </label>
+      {err && (
+        <p className="library-error" role="alert">
+          {err}
+        </p>
+      )}
+      <div className="variant-editor-actions">
+        <button type="button" onClick={() => void save()} disabled={busy}>
+          {busy ? "Saving…" : "Save variant"}
+        </button>
+      </div>
+    </div>
   );
 }

@@ -442,10 +442,80 @@ async def entity_dependents(
         raise map_lookup_errors(exc) from exc
 
 
-@router.get("/library/variants/{kind}/{asset_id}")
-async def variants(kind: str, asset_id: str, library: LibraryDep) -> Any:
+# --------------------------------------------------------------------------- #
+# Character variants (in-world diff overlays)
+# --------------------------------------------------------------------------- #
+
+
+class UpsertVariantPayload(BaseModel):
+    label: str | None = None
+    frontmatter: dict[str, Any] = Field(default_factory=dict)
+    body: str = ""
+    source: str = "user"
+
+
+@router.get("/library/worlds/{world_id}/characters/{character_id}/variants")
+async def list_character_variants(
+    world_id: str,
+    character_id: str,
+    library: LibraryDep,
+) -> Any:
     try:
-        return to_payload(await library.variants_of(asset_id, kind))
+        return to_payload(await library.list_character_variants(world_id, character_id))
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.get("/library/worlds/{world_id}/characters/{character_id}/variants/{variant_id}")
+async def get_character_variant(
+    world_id: str,
+    character_id: str,
+    variant_id: str,
+    library: LibraryDep,
+) -> Any:
+    try:
+        return to_payload(await library.get_character_variant(world_id, character_id, variant_id))
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.put("/library/worlds/{world_id}/characters/{character_id}/variants/{variant_id}")
+async def upsert_character_variant(
+    world_id: str,
+    character_id: str,
+    variant_id: str,
+    payload: UpsertVariantPayload,
+    library: LibraryDep,
+) -> Any:
+    try:
+        return to_payload(
+            await library.upsert_character_variant(
+                world_id,
+                character_id,
+                variant_id,
+                label=payload.label,
+                frontmatter=payload.frontmatter,
+                body=payload.body,
+                source=payload.source,
+            )
+        )
+    except Exception as exc:
+        raise map_lookup_errors(exc) from exc
+
+
+@router.delete(
+    "/library/worlds/{world_id}/characters/{character_id}/variants/{variant_id}",
+    status_code=204,
+)
+async def delete_character_variant(
+    world_id: str,
+    character_id: str,
+    variant_id: str,
+    library: LibraryDep,
+    source: str = "user",
+) -> None:
+    try:
+        await library.delete_character_variant(world_id, character_id, variant_id, source=source)
     except Exception as exc:
         raise map_lookup_errors(exc) from exc
 

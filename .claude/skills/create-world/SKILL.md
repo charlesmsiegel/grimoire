@@ -81,21 +81,34 @@ Resolve once: `GRIMOIRE_DATA_ROOT` if set, else `~/.grimoire`. Worlds live at
    will index them automatically; if the app isn't running it will index on next
    start.
 
-## Character variants (multiple versions of a character)
+## Character variants (alternate versions of a character)
 
-Grimoire's only built-in "variant" mechanism is **cross-world**: the same
-character `id` (filename stem) authored in more than one world is treated as a
-variant of that character (`GET /library/variants/...`, cross-world lookup). So
-to make alternate versions today, author the character with the **same id in
-different worlds** (e.g. `alistair` in `wod-london` and in `wod-chicago`), each a
-different portrayal.
+A character can carry **in-world variants** (app issue
+[#579](https://github.com/charlesmsiegel/grimoire/issues/579)): diff overlay
+files at `characters/<id>/variants/<variant-id>.md`. A variant's frontmatter
+holds **only the fields that differ** from the base card, plus a reserved
+`label:` (display name — e.g. "Young Alistair"). A non-empty markdown body
+replaces the base prose. Don't repeat unchanged fields, don't set `id:` (it's
+ignored), and don't author a variant for a character that doesn't exist.
 
-There is **no in-world way to hold multiple coexisting versions of one
-character** — within a single world an `id` is unique (one id, one file), and
-`version` is just a content-revision counter. If the user wants in-world
-alternates, explain this limitation rather than faking it with near-duplicate
-ids. The concept is tracked for clarification in app issue
-[#579](https://github.com/charlesmsiegel/grimoire/issues/579).
+```markdown
+---
+label: "Young Alistair"
+name: "Young Alistair"
+age: "25"
+---
+A brash newcomer to the chantry, decades before the polish.
+```
+
+Campaigns pick at most one variant per character (a `variants:` map in
+`campaign.yaml`); unselected campaigns read the base. So author the base card
+as the canonical portrayal and keep variants as deltas — an alternate age, an
+AU alignment, a different station in life.
+
+Within a world an `id` is still unique (one id, one file) and `version` is a
+content-revision counter, not an alternate. A genuinely different character
+deserves its own id; a per-campaign tweak belongs in that campaign's
+overrides; an alternate *take* on the same character is a variant.
 
 ## Mechanics traits & sheets
 

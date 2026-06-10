@@ -103,7 +103,9 @@ Library + campaign content:
 ```python
 await store.get_library_entity(library_id)                          # → dict | None
 await store.list_library_in_world(world_id, kind=None)              # → list[dict]
-await store.variants_of(asset_id, kind)                             # cross-world by asset_id
+await store.list_character_variants(world_id, base_id)              # variant overlays (files only)
+await store.get_character_variant(world_id, base_id, variant_id)
+await store.get_campaign_variant_selections(campaign_id)            # campaign.yaml `variants:` map
 await store.get_override(campaign_id, library_id)                   # → dict | None (yaml patch)
 await store.get_emergent(campaign_id, kind, entity_id)              # → {frontmatter, body} | None
 await store.list_emergent(campaign_id, kind)

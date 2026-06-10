@@ -12,7 +12,6 @@ World is a thin behavior layer on top of `LibraryService`. The library owns mark
 
 - Composition-aware listing with `include` filters
 - Spatial queries over locations (`adjacent_locations`, `path_between`, `locations_within`)
-- Cross-world variant lookup by shared `asset_id`
 - Lore keyword triggers for archive-tier injection
 - Deterministic per-campaign procedural weather, with a campaign-local override
 - Calendar / season / holiday queries
@@ -78,9 +77,6 @@ class WorldService:
     async def path_between(world_id, src_id, dst_id) -> list[LocationConnection]
     async def locations_within(world_id, parent_id, depth=1) -> list[Location]
 
-    # Cross-world variants
-    async def cross_world_lookup(asset_id, kind, exclude_world=None) -> list[LibraryEntity]
-
     # Lore
     async def search_lore(query, campaign_id, top_k=5) -> list[LoreEntry]
     async def lore_by_keyword(keyword, campaign_id, *, min_length=4) -> list[LoreEntry]
@@ -120,7 +116,6 @@ class WorldService:
 | Per-kind library file CRUD | `LibraryService` | World gates on `_OWNED_KINDS` and forbids `character` |
 | Resolution cascade | `LibraryService.resolve` | World re-exports `resolve()` and `list_for_campaign()` as a one-line passthrough |
 | Composition filters | `LibraryService.list_for_composition` | World wraps for the typed listing methods |
-| Variant lookup by `asset_id` | `LibraryService.variants_of` | World adds `exclude_world` filtering |
 | Spatial graph | `WorldService` | Pure in-memory BFS / parent-chain over `Location.connections` |
 | Lore keyword scan | `WorldService` | Linear scan over composition-filtered entities; FTS is `StateStore.keyword_search` and is not used here yet |
 | Calendar / season / holiday | `WorldService` + `world/calendar.py` | Calendar parsed on demand from `WorldMeta.calendar` (no caching) |
@@ -219,6 +214,6 @@ The forked world is fully independent — no shared references back to the sourc
 
 Coverage hot-spots:
 
-- `test_service.py` — CRUD per kind, character-rejection, spatial queries (adjacent / path / within-depth), composition filters, cross-world variants, lore triggers (keyword, scan-post, scored search), calendar + season + holiday, weather determinism / per-location variance / indoor / override, faction state round-trip, fork (copy + reindex + collision + missing source), promotion (location promotion + character refusal)
+- `test_service.py` — CRUD per kind, character-rejection, spatial queries (adjacent / path / within-depth), composition filters, lore triggers (keyword, scan-post, scored search), calendar + season + holiday, weather determinism / per-location variance / indoor / override, faction state round-trip, fork (copy + reindex + collision + missing source), promotion (location promotion + character refusal)
 - `test_calendar.py` — parser normalization, season wrap-around, hemisphere fallback, holiday lookup
 - `test_weather.py` — determinism, hour variation, indoor invariant, climate-zone distribution shifts (50-sample arctic/desert checks)

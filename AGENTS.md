@@ -134,6 +134,20 @@ When resolving an entity in campaign context:
 4. Apply any campaign-local override on top
 5. Not found → missing
 
+### Character variants (in-world diff overlays)
+
+A variant is an alternate take on a character within its world (#579): a diff
+overlay file at `characters/<id>/variants/<variant-id>.md` holding only the
+frontmatter fields that differ from the base (reserved keys: `label` = display
+name, `id` is ignored) plus an optional replacement body. A campaign selects
+at most one variant per character via a `variants:` map in `campaign.yaml`
+(`{worlds/<w>/characters/<id>: <variant-id>}`); the cascade applies
+**base → variant diff → campaign override** with the same merge semantics as
+overrides. Variant files are never indexed in `library_index` — they're read
+from disk at resolve time and the watcher only emits change events for them.
+Lookups are always world-scoped; the same id in two worlds is two unrelated
+entities.
+
 ### Event Bus
 
 Modules communicate through direct typed calls (Protocol interfaces) for synchronous reads, and an async event bus for fan-out notifications. Key events: `turn_started`, `turn_complete`, `scene_started`, `scene_ended`, `time_advanced`, `fact_recorded`, `library_file_changed`, `advance_requested`.
@@ -344,6 +358,7 @@ User data lives at `~/.grimoire/` by default (override with `GRIMOIRE_DATA_ROOT`
 │   ├── worlds/<world-id>/
 │   │   ├── world.yaml           # metadata, calendar, atmosphere
 │   │   ├── characters/          # .md files with YAML frontmatter
+│   │   │   └── <id>/variants/   # in-world variant diff overlays (.md)
 │   │   ├── items/
 │   │   ├── locations/
 │   │   ├── lore/
@@ -353,7 +368,7 @@ User data lives at `~/.grimoire/` by default (override with `GRIMOIRE_DATA_ROOT`
 │   └── image-presets/
 ├── campaigns/
 │   └── <campaign-id>/
-│       ├── campaign.yaml        # composition, PCs, mechanics ref
+│       ├── campaign.yaml        # composition, PCs, variant selections, mechanics ref
 │       ├── scenes/              # .md prose + .yaml sidecars
 │       ├── overrides/           # campaign-local edits to library entities
 │       ├── emergent/            # campaign-spawned content
