@@ -45,8 +45,28 @@ async def test_parse_failure_counts_and_emits_watcher_error(
     assert payload["path"] == str(target)
     assert payload["failure_count"] == 1
     assert "FrontmatterError" in payload["error"]
+    # Library-scoped failure: no campaign_id, so the stream bridge broadcasts.
+    assert "campaign_id" not in payload
     # The dropped change never reached the index, so no change event either.
     assert collector.of_type("library_file_changed") == []
+
+
+async def test_campaign_parse_failure_carries_campaign_id(
+    watcher: FileWatcher,
+    store: StateStore,
+    bus: EventBus,
+) -> None:
+    """A campaign-scoped failure routes to that campaign's WS channel —
+    the payload must carry campaign_id or the bridge broadcasts it."""
+    collector = EventCollector(bus, "watcher_error")
+    target = store.data_root / "campaigns" / "c1" / "emergent" / "characters" / "bad.md"
+    _write(target, "---\nname: Broken\nno closing fence")
+
+    await watcher.process_path(target)
+
+    errors = collector.of_type("watcher_error")
+    assert len(errors) == 1
+    assert errors[0].payload["campaign_id"] == "c1"
 
 
 async def test_scan_now_reports_failures_in_summary_and_indexed_event(
@@ -75,6 +95,58 @@ async def test_scan_now_reports_failures_in_summary_and_indexed_event(
     report2 = await watcher.scan_now()
     assert report2["failures"] == 0
     assert watcher.failure_count == 1
+
+
+async def test_scan_failures_are_scan_local_not_counter_deltas(
+    watcher: FileWatcher,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The scan report counts only its own dropped changes — failures
+    recorded concurrently (live events, overlapping scans) don't bleed in."""
+    root = store.data_root / "library" / "worlds" / "wod-london" / "characters"
+    _write(root / "good.md", "---\nname: Good\n---\nFine prose.")
+
+    # Simulate a concurrent live-event failure landing mid-scan by bumping
+    # the process-wide counter from under the scan.
+    original = watcher._mtime_skip
+
+    def mtime_skip_with_concurrent_failure(path, mtime_cache):
+        watcher._failure_counts["process"] += 1
+        return original(path, mtime_cache)
+
+    monkeypatch.setattr(watcher, "_mtime_skip", mtime_skip_with_concurrent_failure)
+
+    report = await watcher.scan_now(scope="library")
+    assert report["failures"] == 0
+    assert watcher.failure_counts()["process"] >= 1
+
+
+async def test_inventory_rebuild_skips_feed_scan_failures(
+    watcher: FileWatcher,
+    store: StateStore,
+    bus: EventBus,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A skipped holder loses its derived inventory rows — the scan must
+    report it, not just log it (#587 review)."""
+    collector = EventCollector(bus, "watcher_error")
+
+    async def rebuild_with_skips() -> int:
+        return 2
+
+    monkeypatch.setattr(store, "rebuild_inventory_holdings_from_files", rebuild_with_skips)
+
+    report = await watcher.scan_now(scope="campaigns")
+
+    assert report["failures"] == 2
+    assert watcher.failure_counts() == {"inventory_rebuild": 2}
+    errors = collector.of_type("watcher_error")
+    assert len(errors) == 1
+    payload = errors[0].payload
+    assert payload["stage"] == "inventory_rebuild"
+    assert payload["count"] == 2
+    assert payload["failure_count"] == 2
 
 
 async def test_safe_process_records_processing_failure(

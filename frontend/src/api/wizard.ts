@@ -224,7 +224,7 @@ export interface CampaignsRescanReport {
   scope: "all" | "library" | "campaigns";
   library_files: number;
   campaign_files: number;
-  /** Files whose change was dropped during the scan (parse/index errors). */
+  /** Changes this scan dropped: unparseable files + skipped inventory holders. */
   failures: number;
 }
 

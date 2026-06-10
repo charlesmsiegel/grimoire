@@ -124,7 +124,12 @@ export function CampaignsView() {
     setRefreshErr(null);
     try {
       await discoverCampaigns();
-      await rescanCampaigns();
+      const report = await rescanCampaigns();
+      if (report.failures > 0) {
+        setRefreshErr(
+          `Rescan skipped ${report.failures} unreadable file${report.failures === 1 ? "" : "s"} — see backend log.`,
+        );
+      }
       await reload();
     } catch (err) {
       setRefreshErr(err instanceof ApiError ? err.message : String(err));

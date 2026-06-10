@@ -220,26 +220,37 @@ class FileWatcher:
         """Cumulative failure counts keyed by stage."""
         return dict(self._failure_counts)
 
-    async def _record_failure(self, *, stage: str, path: Path | str, error: BaseException) -> None:
+    async def _record_failure(
+        self,
+        *,
+        stage: str,
+        path: Path | str,
+        error: BaseException | str,
+        campaign_id: str | None = None,
+        count: int = 1,
+    ) -> None:
         """Count a failure and emit ``watcher_error`` so it is observable.
 
         Called wherever the watcher degrades by dropping a change (parse
         error, scene reindex failure, processing crash). The counter and
         event let callers and the UI distinguish "nothing changed" from
         "a change was dropped and the index drifted from disk".
+
+        ``campaign_id`` scopes the event to one campaign's WebSocket channel;
+        without it the stream bridge broadcasts to every campaign, which is
+        only right for library-scoped failures.
         """
-        self._failure_counts[stage] += 1
-        await self.bus.emit(
-            Event(
-                type=events.WATCHER_ERROR,
-                payload={
-                    "stage": stage,
-                    "path": str(path),
-                    "error": f"{type(error).__name__}: {error}",
-                    "failure_count": self.failure_count,
-                },
-            )
-        )
+        self._failure_counts[stage] += count
+        payload: dict[str, Any] = {
+            "stage": stage,
+            "path": str(path),
+            "error": error if isinstance(error, str) else f"{type(error).__name__}: {error}",
+            "count": count,
+            "failure_count": self.failure_count,
+        }
+        if campaign_id is not None:
+            payload["campaign_id"] = campaign_id
+        await self.bus.emit(Event(type=events.WATCHER_ERROR, payload=payload))
 
     # ------------------------------------------------------------------ #
     # Public processing API
@@ -282,8 +293,10 @@ class FileWatcher:
         catching up to disk.
 
         Returns a summary dict with the scope, the per-root file counts, and
-        the number of failures incurred during the scan (files whose change
-        was dropped), so the caller can surface both to the UI.
+        the number of failures incurred by this scan (files whose change was
+        dropped, plus inventory holders the rebuild skipped), so the caller
+        can surface both to the UI. The count is scan-local — concurrent
+        scans or live watcher events don't bleed into it.
         """
         if scope not in {"all", "library", "campaigns"}:
             raise ValueError(f"unknown scan scope {scope!r}")
@@ -295,7 +308,7 @@ class FileWatcher:
         seen_content: set[str] = set()
         library_files = 0
         campaign_files = 0
-        failures_before = self.failure_count
+        failures = 0
 
         mtime_cache = await self.store.bulk_load_index_mtimes()
 
@@ -313,7 +326,8 @@ class FileWatcher:
                             seen_library.add(watched.library_id)
                         await asyncio.sleep(0)
                         continue
-                    await self._reindex(watched, emit=False)
+                    if not await self._reindex(watched, emit=False):
+                        failures += 1
                     library_files += 1
                     if watched.library_id is not None and watched.scope == "library":
                         seen_library.add(watched.library_id)
@@ -334,7 +348,8 @@ class FileWatcher:
                             seen_content.add(cid)
                         await asyncio.sleep(0)
                         continue
-                    await self._reindex(watched, emit=False)
+                    if not await self._reindex(watched, emit=False):
+                        failures += 1
                     campaign_files += 1
                     cid = watched.content_index_id
                     if cid is not None:
@@ -345,9 +360,7 @@ class FileWatcher:
             await self._drop_orphan_library_rows(seen_library)
         if do_campaigns:
             await self._drop_orphan_content_rows(seen_content)
-            await self._rebuild_inventory_holdings()
-
-        failures = self.failure_count - failures_before
+            failures += await self._rebuild_inventory_holdings()
         await self.bus.emit(
             Event(
                 type=events.LIBRARY_INDEXED,
@@ -495,7 +508,11 @@ class FileWatcher:
     # Internal reindex and emit helpers
     # ------------------------------------------------------------------ #
 
-    async def _reindex(self, watched: WatchedFile, *, emit: bool) -> None:
+    async def _reindex(self, watched: WatchedFile, *, emit: bool) -> bool:
+        """Reindex one classified file. Returns ``False`` when the change was
+        dropped (unparseable file), ``True`` otherwise — scans count their own
+        dropped changes from this instead of diffing the process-wide failure
+        counter, which concurrent scans / live events would pollute."""
         path = watched.path
         # Consume any pending write expectation up front so it can't survive
         # early returns (parse error, spurious-event dedup) and falsely flag
@@ -505,14 +522,16 @@ class FileWatcher:
             parsed = _parse_file(watched)
         except (FrontmatterError, YamlError, OSError) as exc:
             logger.warning("watcher: failed to parse %s: %s", path, exc)
-            await self._record_failure(stage="parse", path=path, error=exc)
-            return
+            await self._record_failure(
+                stage="parse", path=path, error=exc, campaign_id=watched.campaign_id
+            )
+            return False
 
         prior = self._known_hashes.get(path)
         new_hash = None if parsed is None else _compute_index_hash(parsed.frontmatter, parsed.body)
 
         if path in self._known_hashes and prior == new_hash:
-            return  # Spurious event — content didn't change.
+            return True  # Spurious event — content didn't change.
 
         change_type = _change_type(prior, new_hash, path in self._known_hashes)
 
@@ -557,9 +576,11 @@ class FileWatcher:
                 pass
             except Exception as exc:
                 logger.exception("scene manager reindex failed for %s", path)
-                await self._record_failure(stage="scene_reindex", path=path, error=exc)
+                await self._record_failure(
+                    stage="scene_reindex", path=path, error=exc, campaign_id=watched.campaign_id
+                )
             else:
-                return
+                return True
 
         if emit:
             await self._emit(
@@ -568,6 +589,7 @@ class FileWatcher:
                 content_hash_value=new_hash,
                 conflict=conflict,
             )
+        return True
 
     def _enqueue_embedding(
         self,
@@ -660,7 +682,9 @@ class FileWatcher:
                 await self.store.delete_embeddings(ref)
             except Exception as exc:
                 logger.exception("watcher: failed to delete embeddings for %s", ref)
-                await self._record_failure(stage="delete_embeddings", path=ref, error=exc)
+                await self._record_failure(
+                    stage="delete_embeddings", path=ref, error=exc, campaign_id=watched.campaign_id
+                )
 
     async def _emit(
         self,
@@ -702,16 +726,28 @@ class FileWatcher:
     async def _drop_orphan_content_rows(self, seen: set[str]) -> None:
         await self._drop_orphans("campaign_content_index", seen)
 
-    async def _rebuild_inventory_holdings(self) -> None:
+    async def _rebuild_inventory_holdings(self) -> int:
         """Repopulate the derived inventory_holdings table from `inventory:`
         sections in overlay files. Delegates to the storage layer, which owns
         the table and does a full truncate-and-repopulate (so removed sections
-        and removed holders leave no stale rows)."""
+        and removed holders leave no stale rows).
+
+        Returns the number of holder files the rebuild skipped — each one's
+        derived rows are now missing, so the count feeds the scan's failure
+        signal instead of stopping at a log line.
+        """
         skipped = await self.store.rebuild_inventory_holdings_from_files()
         if skipped:
             logger.warning(
                 "watcher: inventory rebuild skipped %d unparseable holder file(s)", skipped
             )
+            await self._record_failure(
+                stage="inventory_rebuild",
+                path=self.data_root / "campaigns",
+                error=f"{skipped} unparseable holder file(s); see per-file warnings above",
+                count=skipped,
+            )
+        return skipped
 
     async def _drop_orphans(self, table: str, seen: set[str]) -> None:
         """Delete every ``table`` row whose id isn't in ``seen``.
@@ -755,7 +791,18 @@ class FileWatcher:
             await self.process_path(path)
         except Exception as exc:
             logger.exception("watcher: process_path failed for %s", path)
-            await self._record_failure(stage="process", path=path, error=exc)
+            # Re-classify (pure path logic) so a campaign-scoped failure is
+            # routed to that campaign's stream instead of broadcast.
+            try:
+                watched = classify_path(self.data_root, path)
+            except Exception:
+                watched = None
+            await self._record_failure(
+                stage="process",
+                path=path,
+                error=exc,
+                campaign_id=watched.campaign_id if watched is not None else None,
+            )
 
     async def _safe_handle_directory_move(self, src: Path, dest: Path) -> None:
         try:
