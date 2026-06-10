@@ -234,6 +234,44 @@ async def test_multi_round_applied_deltas_accumulate_in_audit_fragment(tmp_path:
     assert len(applied_fragments[0].payload["applied_deltas"]) == 2
 
 
+async def test_multi_round_inventory_warnings_accumulate_in_audit_fragment(
+    tmp_path: Path,
+) -> None:
+    """Inventory failures in multiple rounds merge into one warnings fragment;
+    per-round emission would keep only the final round's warning in the audit."""
+    import asyncio
+
+    inventory = FakeInventory(raise_on_apply=RuntimeError("inventory boom"))
+    orch, sm, ws = _make_orchestrator(
+        tmp_path=tmp_path,
+        inventory=inventory,
+        deltas=[_inventory_delta()],
+        campaign_config=MULTI_CALL_CONFIG,
+        speaker_timeout=2.0,
+    )
+    await _start_scene(sm, npc_refs=["worlds/w/characters/alice", "worlds/w/characters/bob"])
+    fragments = _subscribe_fragments(orch)
+
+    submit_task = asyncio.create_task(orch.submit_post("camp1", "pc1", "Hello everyone"))
+    for _ in range(100):
+        await asyncio.sleep(0.05)
+        if [m["type"] for _, m in ws.messages].count("speaker_round_waiting") >= 1:
+            break
+    await orch.next_speaker("camp1")
+    for _ in range(100):
+        await asyncio.sleep(0.05)
+        if [m["type"] for _, m in ws.messages].count("speaker_round_waiting") >= 2:
+            break
+    await asyncio.wait_for(submit_task, timeout=10.0)
+
+    assert len(inventory.calls) == 2
+    warning_fragments = [e for e in fragments if "warnings" in e.payload]
+    assert len(warning_fragments) == 1
+    warnings = warning_fragments[0].payload["warnings"]
+    assert len(warnings) == 2
+    assert all(w["module"] == "inventory" for w in warnings)
+
+
 async def test_speaker_round_updates_holdings_with_real_inventory(tmp_path: Path) -> None:
     """End-to-end over the real StateStore + InventoryService: a speaker-round
     INVENTORY_CHANGE delta lands in ``inventory_holdings`` exactly as a

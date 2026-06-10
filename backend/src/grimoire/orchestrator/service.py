@@ -145,12 +145,15 @@ class _ExtractionApplyResult:
     queued_ids: list[str] = field(default_factory=list)
     transient_writes: list[dict] = field(default_factory=list)
     transient_conflicts: list[dict] = field(default_factory=list)
+    # WarningRecord-shaped dicts (stage failures flagged on the turn audit).
+    warnings: list[dict] = field(default_factory=list)
 
     def merge(self, other: _ExtractionApplyResult) -> None:
         self.applied_ids.extend(other.applied_ids)
         self.queued_ids.extend(other.queued_ids)
         self.transient_writes.extend(other.transient_writes)
         self.transient_conflicts.extend(other.transient_conflicts)
+        self.warnings.extend(other.warnings)
 
 
 class _NullAutoDisable:
@@ -1604,17 +1607,13 @@ class OrchestratorService:
                 logger.exception(
                     "inventory apply failed for turn %s; flagged on turn audit", turn_id
                 )
-                await self._emit_fragment(
-                    turn_id,
-                    campaign_id,
-                    warnings=[
-                        {
-                            "timestamp": self._clock().isoformat(),
-                            "module": "inventory",
-                            "message": f"inventory apply failed: {exc}",
-                            "payload": {"scene_id": scene_id, "stage": "inventory_apply"},
-                        }
-                    ],
+                result.warnings.append(
+                    {
+                        "timestamp": self._clock().isoformat(),
+                        "module": "inventory",
+                        "message": f"inventory apply failed: {exc}",
+                        "payload": {"scene_id": scene_id, "stage": "inventory_apply"},
+                    }
                 )
 
         if self._transient_state is not None and getattr(extraction, "transient_updates", None):
@@ -1658,6 +1657,8 @@ class OrchestratorService:
                 transient_state_writes=result.transient_writes,
                 transient_state_conflicts=result.transient_conflicts,
             )
+        if result.warnings:
+            await self._emit_fragment(turn_id, campaign_id, warnings=result.warnings)
 
     async def _run_speaker_loop(
         self,
