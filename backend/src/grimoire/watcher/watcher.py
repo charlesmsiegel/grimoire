@@ -402,8 +402,9 @@ class FileWatcher:
         left untouched (still pointing at the old paths) so an accidental
         rename can be reverted without losing index state.
         """
-        src_resolved = Path(src).resolve(strict=False)
-        dest_resolved = Path(dest).resolve(strict=False)
+        src_resolved, dest_resolved = await asyncio.to_thread(
+            lambda: (Path(src).resolve(strict=False), Path(dest).resolve(strict=False))
+        )
 
         library_root = self.data_root / "library"
         campaigns_root = self.data_root / "campaigns"
@@ -460,8 +461,9 @@ class FileWatcher:
         to point at the now-missing original paths, and the caller is expected
         to either undo the rename on disk or trigger a manual cleanup.
         """
-        src_resolved = Path(src).resolve(strict=False)
-        dest_resolved = Path(dest).resolve(strict=False)
+        src_resolved, dest_resolved = await asyncio.to_thread(
+            lambda: (Path(src).resolve(strict=False), Path(dest).resolve(strict=False))
+        )
         pending = self._pending_renames.pop(dest_resolved, None)
         if pending is None:
             # Unknown rename — nothing to do. Don't raise; reconciliation is
@@ -480,12 +482,14 @@ class FileWatcher:
         # directory names.
         await self._delete_index_rows(pending)
         self._forget_hashes_under(pending.src)
-        if dest_resolved.exists():
-            for path in _iter_files(dest_resolved):
-                watched = classify_path(self.data_root, path)
-                if watched is None:
-                    continue
-                await self._reindex(watched, emit=False)
+        paths = await asyncio.to_thread(
+            lambda: list(_iter_files(dest_resolved)) if dest_resolved.exists() else []
+        )
+        for path in paths:
+            watched = classify_path(self.data_root, path)
+            if watched is None:
+                continue
+            await self._reindex(watched, emit=False)
 
     # ------------------------------------------------------------------ #
     # Write coordination (conflict detection)
@@ -841,7 +845,9 @@ class FileWatcher:
         whose stored path falls inside the moved subtree is in scope.
         """
         try:
-            rel = str(Path(src).resolve().relative_to(self.data_root))
+            rel = await asyncio.to_thread(
+                lambda: str(Path(src).resolve().relative_to(self.data_root))
+            )
         except (ValueError, OSError):
             return [], []
         prefix = rel.rstrip("/") + "/"

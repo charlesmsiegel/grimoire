@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -87,7 +88,7 @@ async def run_import_pipeline(
     embedding_queue: Any | None = None,
 ) -> AsyncIterator[ImportProgress]:
     """Run the full import pipeline, yielding progress events."""
-    parsed = parse_import_source(md_path)
+    parsed = await asyncio.to_thread(parse_import_source, md_path)
     n_posts = parsed.post_count
     if n_posts == 0:
         raise ValueError("No posts found — file must use grimoire format: ## Post N — author")
@@ -123,7 +124,7 @@ async def run_import_pipeline(
     naming = getattr(getattr(scene_manager, "config", None), "files", None)
     _pattern = getattr(naming, "scene_naming_pattern", None) or "{ordinal:04d}-{slug}"
     dest_md, _ = scene_paths(scene_manager.data_root, scene, naming_pattern=_pattern)
-    if dest_md.resolve() == md_path.resolve():
+    if await asyncio.to_thread(lambda: dest_md.resolve() == md_path.resolve()):
         raise ValueError(f"Source file is already in the campaign scenes directory: {md_path}")
 
     # Restore active scene state — import should not change what's "current".
@@ -144,7 +145,7 @@ async def run_import_pipeline(
         )
         pattern = getattr(naming, "scene_naming_pattern", None) or "{ordinal:04d}-{slug}"
         _, yaml_path = scene_paths(scene_manager.data_root, scene, naming_pattern=pattern)
-        write_sidecar(yaml_path, scene)
+        await asyncio.to_thread(write_sidecar, yaml_path, scene)
 
     tick = 1
     yield ImportProgress(step="copy", current=tick, total=total, detail="Scene created")
@@ -224,7 +225,7 @@ async def run_import_pipeline(
         try:
             from grimoire.watcher.watcher import EmbeddingJob
 
-            md_body = md_path.read_text(encoding="utf-8")
+            md_body = await asyncio.to_thread(md_path.read_text, encoding="utf-8")
             embedding_queue.enqueue(
                 EmbeddingJob(
                     ref=scene.id,

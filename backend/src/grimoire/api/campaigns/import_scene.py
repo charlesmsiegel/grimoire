@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import asdict
@@ -20,6 +21,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _resolve_source_file(raw: str) -> Path:
+    """Resolve and validate an import source path (blocking; run via to_thread)."""
+    try:
+        md_path = Path(raw).resolve()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {exc}") from exc
+    if not md_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {raw}")
+    return md_path
+
+
 class ImportPreviewRequest(BaseModel):
     path: str
 
@@ -35,14 +47,9 @@ async def preview_import(
     campaign_id: str,
     body: ImportPreviewRequest,
 ) -> ImportPreviewResponse:
+    md_path = await asyncio.to_thread(_resolve_source_file, body.path)
     try:
-        md_path = Path(body.path).resolve()
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid path: {exc}") from exc
-    if not md_path.is_file():
-        raise HTTPException(status_code=400, detail=f"Not a file: {body.path}")
-    try:
-        parsed = parse_import_source(md_path)
+        parsed = await asyncio.to_thread(parse_import_source, md_path)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if parsed.post_count == 0:
@@ -83,12 +90,7 @@ async def import_scene(
     row = await state_store.db.fetchone("SELECT id FROM campaigns WHERE id = ?", (campaign_id,))
     if not row:
         raise HTTPException(status_code=404, detail=f"Campaign not found: {campaign_id}")
-    try:
-        md_path = Path(body.path).resolve()
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid path: {exc}") from exc
-    if not md_path.is_file():
-        raise HTTPException(status_code=400, detail=f"Not a file: {body.path}")
+    md_path = await asyncio.to_thread(_resolve_source_file, body.path)
 
     metadata = body.model_dump(exclude={"path", "title"})
     eq = getattr(getattr(container, "file_watcher", None), "embedding_queue", None)

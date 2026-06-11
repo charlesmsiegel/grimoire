@@ -21,6 +21,7 @@ aiosqlite connection without standing up the full ``StateStore``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -412,13 +413,16 @@ class SceneIndexer:
         monitor, embedding worker).
         """
         campaigns_root = self._manager.data_root / "campaigns"
-        if not campaigns_root.exists():
-            return
+        campaign_dirs = await asyncio.to_thread(
+            lambda: (
+                [d for d in campaigns_root.iterdir() if d.is_dir()]
+                if campaigns_root.exists()
+                else []
+            )
+        )
 
         acquire = getattr(self._db, "acquire", None)
-        for campaign_dir in campaigns_root.iterdir():
-            if not campaign_dir.is_dir():
-                continue
+        for campaign_dir in campaign_dirs:
             scenes_dir_path = campaign_dir / "scenes"
             if acquire is not None:
                 async with acquire() as conn:
@@ -434,21 +438,23 @@ class SceneIndexer:
                 await self._backfill_campaign(scenes_dir_path, self._db)
 
     async def _backfill_campaign(self, scenes_dir_path: Path, db: _DB) -> None:
-        if not scenes_dir_path.exists():
-            return
-        for yaml_path in sorted(scenes_dir_path.glob("*.yaml")):
+        yaml_paths = await asyncio.to_thread(
+            lambda: sorted(scenes_dir_path.glob("*.yaml")) if scenes_dir_path.exists() else []
+        )
+        for yaml_path in yaml_paths:
             try:
-                scene = read_sidecar(yaml_path)
+                scene = await asyncio.to_thread(read_sidecar, yaml_path)
             except Exception:  # pragma: no cover - tolerate corrupt sidecar
                 logger.warning("backfill: failed to read sidecar %s", yaml_path)
                 continue
             md_path = yaml_path.with_suffix(".md")
             await upsert_scene_row(db, scene=scene, file_path=md_path)
             await delete_posts_for_scene(db, scene.id)
-            if not md_path.exists():
+            if not await asyncio.to_thread(md_path.exists):
                 continue
-            records = read_sidecar_post_records(yaml_path)
-            for order, kind, pc_ref, npc_ref, body in read_posts(md_path, scene.id):
+            records = await asyncio.to_thread(read_sidecar_post_records, yaml_path)
+            posts = await asyncio.to_thread(read_posts, md_path, scene.id)
+            for order, kind, pc_ref, npc_ref, body in posts:
                 record = records.get(str(order))
                 post_id = record.id if record else f"{scene.id}#post-{order}"
                 await upsert_post_row(
