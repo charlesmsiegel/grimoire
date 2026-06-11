@@ -255,13 +255,14 @@ class LLMGatewayService:
         about LLM/embedding providers).
         """
         Route.parse(route)  # validate before touching any state
+        await self._ensure_campaign_routing_loaded(campaign_id)
         if kind == "imagegen":
             if campaign_id is not None:
                 self._imagegen_routes.setdefault(campaign_id, {})[task] = route
         else:
             self._router.set_route(task, route, campaign_id)
         if campaign_id is not None and self._data_root is not None:
-            await self._persist_campaign_route(campaign_id, task, route, kind=kind)
+            self._persist_campaign_route(campaign_id, task, route, kind=kind)
 
     async def set_tier_route(
         self,
@@ -276,10 +277,11 @@ class LLMGatewayService:
         blocks on the file.
         """
         Route.parse(route)  # validate before touching any state
+        await self._ensure_campaign_routing_loaded(campaign_id)
         self._router.set_tier_route(campaign_id, tier, route)
         yaml_path = self._campaign_yaml_path(campaign_id)
         if yaml_path is not None:
-            await self._route_mgr.write_tier_block(campaign_id)
+            self._route_mgr.write_tier_block(campaign_id)
 
     async def clear_tier_route(
         self,
@@ -287,10 +289,11 @@ class LLMGatewayService:
         tier: Tier,
     ) -> None:
         """Remove a tier route from in-memory state and campaign.yaml."""
+        await self._ensure_campaign_routing_loaded(campaign_id)
         self._router.clear_tier_route(campaign_id, tier)
         yaml_path = self._campaign_yaml_path(campaign_id)
         if yaml_path is not None:
-            await self._route_mgr.write_tier_block(campaign_id)
+            self._route_mgr.write_tier_block(campaign_id)
 
     async def clear_route(
         self,
@@ -300,13 +303,14 @@ class LLMGatewayService:
         kind: str = "llm",
     ) -> None:
         """Remove a per-campaign route entry and rewrite the YAML block."""
+        await self._ensure_campaign_routing_loaded(campaign_id)
         if kind == "imagegen":
             if campaign_id is not None:
                 self._imagegen_routes.get(campaign_id, {}).pop(task, None)
         else:
             self._router.clear_route(task, campaign_id)
         if campaign_id is not None and self._data_root is not None:
-            await self._delete_campaign_route(campaign_id, task, kind=kind)
+            self._delete_campaign_route(campaign_id, task, kind=kind)
 
     def imagegen_route(self, task: str, campaign_id: CampaignId) -> Route | None:
         """Return the per-campaign imagegen route for ``task``, if any.
@@ -1750,15 +1754,26 @@ class LLMGatewayService:
     async def _load_campaign_routing(self, campaign_id: CampaignId) -> None:
         return await self._route_mgr.load_campaign_routing(campaign_id)
 
-    async def _persist_campaign_route(
+    async def _ensure_campaign_routing_loaded(self, campaign_id: CampaignId | None) -> None:
+        """Load campaign routing before a route mutation touches it.
+
+        Mutating the resolver while the campaign's first lazy load is still
+        applying YAML would let the loader overwrite the fresh route with the
+        stale on-disk value; loading first (which awaits any in-flight load)
+        makes the mutation strictly ordered after the load.
+        """
+        if campaign_id is not None and campaign_id not in self._loaded_campaigns:
+            await self._route_mgr.load_campaign_routing(campaign_id)
+
+    def _persist_campaign_route(
         self, campaign_id: CampaignId, task: str, route: str, *, kind: str = "llm"
     ) -> None:
-        await self._route_mgr.persist_campaign_route(campaign_id, task, route, kind=kind)
+        self._route_mgr.persist_campaign_route(campaign_id, task, route, kind=kind)
 
-    async def _delete_campaign_route(
+    def _delete_campaign_route(
         self, campaign_id: CampaignId, task: str, *, kind: str = "llm"
     ) -> None:
-        await self._route_mgr.delete_campaign_route(campaign_id, task, kind=kind)
+        self._route_mgr.delete_campaign_route(campaign_id, task, kind=kind)
 
     # ------------------------------------------------------------------ #
     # Internals
