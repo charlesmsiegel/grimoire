@@ -438,6 +438,12 @@ class FileWatcher:
 
         try:
             library_ids, content_index_ids = await self._collect_affected_index_rows(src_resolved)
+            if self._pending_renames.get(dest_resolved) is not pending:
+                # A newer move re-keyed this destination while we were
+                # collecting; it owns the acknowledgement flow now — emitting
+                # for the stale entry would let an ack reconcile the wrong
+                # rename.
+                return
             pending.library_ids = library_ids
             pending.content_index_ids = content_index_ids
             await self._emit_rename_detected(event_type, pending, library_ids, content_index_ids)

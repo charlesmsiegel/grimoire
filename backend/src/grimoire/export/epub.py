@@ -20,6 +20,7 @@ truthy; the warning is recorded on the ``ExportResult`` either way.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import os
 import re
@@ -996,6 +997,10 @@ def _write_epub_atomic(output_path: Path, book: _BuiltBook) -> None:
     tmp_path = output_path.with_name(f"{output_path.name}.{uuid.uuid4().hex}.tmp")
     try:
         _write_epub(tmp_path, book)
+        # os.replace transfers the temp file's default mode; keep an existing
+        # destination's (possibly stricter) permissions instead.
+        with contextlib.suppress(OSError):
+            tmp_path.chmod(output_path.stat().st_mode & 0o7777)
         os.replace(tmp_path, output_path)
     finally:
         tmp_path.unlink(missing_ok=True)

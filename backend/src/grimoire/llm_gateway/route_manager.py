@@ -62,10 +62,14 @@ class RouteManager:
 
     async def _load_campaign_routing_locked(self, campaign_id: CampaignId) -> None:
         yaml_path = self.campaign_yaml_path(campaign_id)
-        if yaml_path is None or not await asyncio.to_thread(yaml_path.is_file):
+        # Deliberately synchronous: campaign.yaml is written synchronously on
+        # the event loop by several modules, so a loop-side read of this one
+        # small file can never observe a torn write — a threaded read could,
+        # and a torn parse here would be cached as loaded-with-no-routes.
+        if yaml_path is None or not yaml_path.is_file():
             return
         try:
-            raw = await asyncio.to_thread(load_yaml, yaml_path)
+            raw = load_yaml(yaml_path)
         except Exception:
             logger.warning(
                 "llm_gateway: failed to parse %s; campaign routing not loaded",
