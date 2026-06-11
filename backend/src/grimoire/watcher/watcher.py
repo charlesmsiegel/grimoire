@@ -402,9 +402,12 @@ class FileWatcher:
         left untouched (still pointing at the old paths) so an accidental
         rename can be reverted without losing index state.
         """
-        src_resolved, dest_resolved = await asyncio.to_thread(
-            lambda: (Path(src).resolve(strict=False), Path(dest).resolve(strict=False))
-        )
+        # Resolved synchronously (no thread hop): the per-file events for the
+        # moved subtree are racing this handler, and yielding before
+        # ``_pending_renames`` is keyed below would let them slip past the
+        # suppression window. ``resolve(strict=False)`` is a few syscalls.
+        src_resolved = self._resolve_for_suppression(src)
+        dest_resolved = self._resolve_for_suppression(dest)
 
         library_root = self.data_root / "library"
         campaigns_root = self.data_root / "campaigns"
@@ -417,20 +420,24 @@ class FileWatcher:
         else:
             return
 
-        library_ids, content_index_ids = await self._collect_affected_index_rows(src_resolved)
-
         pending = _PendingRename(
             src=src_resolved,
             dest=dest_resolved,
             scope=scope,
-            library_ids=library_ids,
-            content_index_ids=content_index_ids,
+            library_ids=[],
+            content_index_ids=[],
         )
         # Keying on dest gives reconcile_directory_rename a unique lookup,
         # but we also need to know about pending renames keyed on either
         # prefix when filtering live events. The list-scan in _is_suppressed
-        # handles that — we don't need a parallel index.
+        # handles that — we don't need a parallel index. Registered before
+        # the index-row lookup below so the moved subtree's racing per-file
+        # events are suppressed from the first await onward.
         self._pending_renames[dest_resolved] = pending
+
+        library_ids, content_index_ids = await self._collect_affected_index_rows(src_resolved)
+        pending.library_ids = library_ids
+        pending.content_index_ids = content_index_ids
 
         await self.bus.emit(
             Event(
@@ -461,9 +468,10 @@ class FileWatcher:
         to point at the now-missing original paths, and the caller is expected
         to either undo the rename on disk or trigger a manual cleanup.
         """
-        src_resolved, dest_resolved = await asyncio.to_thread(
-            lambda: (Path(src).resolve(strict=False), Path(dest).resolve(strict=False))
-        )
+        # Same synchronous resolution as handle_directory_move so the lookup
+        # key always matches the one the pending rename was registered under.
+        src_resolved = self._resolve_for_suppression(src)
+        dest_resolved = self._resolve_for_suppression(dest)
         pending = self._pending_renames.pop(dest_resolved, None)
         if pending is None:
             # Unknown rename — nothing to do. Don't raise; reconciliation is

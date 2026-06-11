@@ -108,6 +108,17 @@ def _author_kind_str(kind: AuthorKind | str) -> str:
     return kind.value if hasattr(kind, "value") else str(kind)
 
 
+def _read_post_snapshot(yaml_path: Path, md_path: Path, scene_id: str) -> tuple[dict, list]:
+    """Read a scene's sidecar post records and prose posts in one call.
+
+    Runs in a worker thread as a single hop so the pair is a coherent
+    snapshot — a live append landing between two separate reads would pair
+    new prose with old post identities. ``read_posts`` returns ``[]`` when
+    the ``.md`` file is missing.
+    """
+    return read_sidecar_post_records(yaml_path), read_posts(md_path, scene_id)
+
+
 async def upsert_scene_row(
     db: _DB,
     *,
@@ -450,10 +461,9 @@ class SceneIndexer:
             md_path = yaml_path.with_suffix(".md")
             await upsert_scene_row(db, scene=scene, file_path=md_path)
             await delete_posts_for_scene(db, scene.id)
-            if not await asyncio.to_thread(md_path.exists):
-                continue
-            records = await asyncio.to_thread(read_sidecar_post_records, yaml_path)
-            posts = await asyncio.to_thread(read_posts, md_path, scene.id)
+            records, posts = await asyncio.to_thread(
+                _read_post_snapshot, yaml_path, md_path, scene.id
+            )
             for order, kind, pc_ref, npc_ref, body in posts:
                 record = records.get(str(order))
                 post_id = record.id if record else f"{scene.id}#post-{order}"

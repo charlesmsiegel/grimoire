@@ -148,7 +148,11 @@ async def run_import_pipeline(
         )
         pattern = getattr(naming, "scene_naming_pattern", None) or "{ordinal:04d}-{slug}"
         _, yaml_path = scene_paths(scene_manager.data_root, scene, naming_pattern=pattern)
-        await asyncio.to_thread(write_sidecar, yaml_path, scene)
+        # Deliberately synchronous: scene_started has already been emitted, so
+        # a concurrent append to this scene could interleave with a threaded
+        # write and clobber the sidecar's post records. Writing on the loop
+        # keeps the read-modify-write atomic with other scene mutations.
+        write_sidecar(yaml_path, scene)
 
     tick = 1
     yield ImportProgress(step="copy", current=tick, total=total, detail="Scene created")

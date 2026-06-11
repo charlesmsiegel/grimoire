@@ -53,15 +53,12 @@ class RouteManager:
         async with self._lock_for(campaign_id):
             if campaign_id in self._loaded_campaigns:
                 return
-            try:
-                await self._load_campaign_routing_locked(campaign_id)
-            finally:
-                # Mark loaded even when the YAML is missing or unparsable so
-                # later calls don't retry the disk read every time — but only
-                # after the routing blocks have been applied (or load has
-                # failed), so concurrent callers never see a half-loaded
-                # campaign as loaded.
-                self._loaded_campaigns.add(campaign_id)
+            await self._load_campaign_routing_locked(campaign_id)
+            # Mark loaded only on normal completion: missing or unparsable
+            # YAML returns normally (and shouldn't be retried every call),
+            # but a cancelled or failed load must stay unmarked so the next
+            # caller retries instead of running on half-applied routing.
+            self._loaded_campaigns.add(campaign_id)
 
     async def _load_campaign_routing_locked(self, campaign_id: CampaignId) -> None:
         yaml_path = self.campaign_yaml_path(campaign_id)
