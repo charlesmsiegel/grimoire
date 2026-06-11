@@ -108,15 +108,30 @@ async def run_import_pipeline(
         mood=metadata.get("mood"),
         tags=metadata.get("tags", []),
     )
-    # Save active scene state so import doesn't redirect live play.
+    # Save active scene state so import doesn't redirect live play. Track
+    # every PC the import can touch — the listed present PCs plus any post
+    # author append_post will re-point — recording None when no mapping
+    # existed so restore can pop keys the import created.
     active_key = campaign_id
     prev_active = getattr(scene_manager, "_active_scene", {}).get(active_key)
-    prev_pc_scenes: dict[tuple[str, str], str] = {}
+    prev_pc_scenes: dict[tuple[str, str], str | None] = {}
     pc_scene_map = getattr(scene_manager, "_pc_current_scene", {})
-    for pc_ref in metadata.get("present_pc_refs", []):
+    for pc_ref in [*metadata.get("present_pc_refs", []), *parsed.detected_pc_refs]:
         pc_key = (campaign_id, pc_ref)
-        if pc_key in pc_scene_map:
-            prev_pc_scenes[pc_key] = pc_scene_map[pc_key]
+        if pc_key not in prev_pc_scenes:
+            prev_pc_scenes[pc_key] = pc_scene_map.get(pc_key)
+
+    def _restore_active_state() -> None:
+        # Restore active scene state — import should not change what's "current".
+        if prev_active is not None:
+            scene_manager._active_scene[active_key] = prev_active
+        else:
+            scene_manager._active_scene.pop(active_key, None)
+        for pc_key, prev_id in prev_pc_scenes.items():
+            if prev_id is None:
+                scene_manager._pc_current_scene.pop(pc_key, None)
+            else:
+                scene_manager._pc_current_scene[pc_key] = prev_id
 
     scene = await scene_manager.start_scene(init)
 
@@ -127,14 +142,9 @@ async def run_import_pipeline(
     try:
         same_file = await asyncio.to_thread(lambda: dest_md.resolve() == md_path.resolve())
     finally:
-        # Restore active scene state — import should not change what's
-        # "current", even when the comparison above is cancelled mid-await.
-        if prev_active is not None:
-            scene_manager._active_scene[active_key] = prev_active
-        else:
-            scene_manager._active_scene.pop(active_key, None)
-        for pc_key, prev_id in prev_pc_scenes.items():
-            scene_manager._pc_current_scene[pc_key] = prev_id
+        # Restored in a finally so a cancellation mid-await can't leave live
+        # play redirected to the aborted import.
+        _restore_active_state()
     if same_file:
         raise ValueError(f"Source file is already in the campaign scenes directory: {md_path}")
 
@@ -199,12 +209,7 @@ async def run_import_pipeline(
                 logger.debug("import: could not restore summary cadence", exc_info=True)
         # Re-restore active scene state — append_post re-sets _pc_current_scene
         # on every PC post, undoing the earlier restore.
-        if prev_active is not None:
-            scene_manager._active_scene[active_key] = prev_active
-        else:
-            scene_manager._active_scene.pop(active_key, None)
-        for pc_key, prev_id in prev_pc_scenes.items():
-            scene_manager._pc_current_scene[pc_key] = prev_id
+        _restore_active_state()
 
     tick += 1
     threads_detail = "Thread detection complete"
