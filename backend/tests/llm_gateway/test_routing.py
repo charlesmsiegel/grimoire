@@ -225,9 +225,10 @@ async def test_gateway_set_tier_route_rejects_bad_route(db, plugins, tmp_path: P
 async def test_concurrent_route_persists_do_not_lose_updates(db, plugins, tmp_path: Path) -> None:
     """Concurrent set_route calls for one campaign must all land in the YAML.
 
-    The campaign.yaml read-modify-write runs in a worker thread; without
-    per-campaign serialization, parallel writers read the same stale snapshot
-    and silently drop each other's routes.
+    Guards the loop atomicity of the campaign.yaml read-modify-write: if the
+    write is ever offloaded to a thread without serialization, parallel
+    writers read the same stale snapshot and silently drop each other's
+    routes (or collide on the shared .yaml.tmp path).
     """
     camp_dir = tmp_path / "campaigns" / "camp-1"
     camp_dir.mkdir(parents=True)

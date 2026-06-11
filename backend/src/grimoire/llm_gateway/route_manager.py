@@ -37,9 +37,8 @@ class RouteManager:
         self._data_root = data_root
         self._imagegen_routes = imagegen_routes
         self._loaded_campaigns = loaded_campaigns
-        # Serializes every read-modify-write of a campaign's campaign.yaml
-        # (and the initial routing load) so concurrent mutations offloaded to
-        # threads can't race each other or observe a half-loaded campaign.
+        # Serializes a campaign's initial routing load so concurrent first
+        # requests can't observe a half-loaded campaign.
         self._campaign_locks: dict[CampaignId, asyncio.Lock] = {}
 
     def _lock_for(self, campaign_id: CampaignId) -> asyncio.Lock:
@@ -210,16 +209,15 @@ class RouteManager:
         "imagegen": "imagegen_routing",
     }
 
-    async def persist_campaign_route(
-        self, campaign_id: CampaignId, task: str, route: str, *, kind: str = "llm"
-    ) -> None:
-        async with self._lock_for(campaign_id):
-            await asyncio.to_thread(
-                self._persist_campaign_route_sync, campaign_id, task, route, kind
-            )
+    # The three campaign.yaml writers below are deliberately synchronous on
+    # the event loop rather than offloaded to a thread: campaign.yaml has
+    # other writer modules (e.g. StateStore.set_campaign_variant_selections)
+    # whose read-modify-writes rely on loop atomicity, so a threaded write
+    # here could interleave with them and silently drop their updates. Each
+    # write is one small YAML file on a settings-change path.
 
-    def _persist_campaign_route_sync(
-        self, campaign_id: CampaignId, task: str, route: str, kind: str
+    def persist_campaign_route(
+        self, campaign_id: CampaignId, task: str, route: str, *, kind: str = "llm"
     ) -> None:
         block = self._BLOCK_FOR_KIND.get(kind, "model_routing")
         data = self._read_campaign_yaml_for_write(campaign_id)
@@ -230,13 +228,9 @@ class RouteManager:
         data[block][task] = route
         self._atomic_write_campaign_yaml(campaign_id, data)
 
-    async def delete_campaign_route(
+    def delete_campaign_route(
         self, campaign_id: CampaignId, task: str, *, kind: str = "llm"
     ) -> None:
-        async with self._lock_for(campaign_id):
-            await asyncio.to_thread(self._delete_campaign_route_sync, campaign_id, task, kind)
-
-    def _delete_campaign_route_sync(self, campaign_id: CampaignId, task: str, kind: str) -> None:
         block = self._BLOCK_FOR_KIND.get(kind, "model_routing")
         data = self._read_campaign_yaml_for_write(campaign_id)
         if data is None:
@@ -249,12 +243,8 @@ class RouteManager:
             data.pop(block, None)
         self._atomic_write_campaign_yaml(campaign_id, data)
 
-    async def write_tier_block(self, campaign_id: CampaignId) -> None:
+    def write_tier_block(self, campaign_id: CampaignId) -> None:
         """Serialize the resolver's tier state back to ``campaign.yaml``."""
-        async with self._lock_for(campaign_id):
-            await asyncio.to_thread(self._write_tier_block_sync, campaign_id)
-
-    def _write_tier_block_sync(self, campaign_id: CampaignId) -> None:
         data = self._read_campaign_yaml_for_write(campaign_id)
         if data is None:
             return
