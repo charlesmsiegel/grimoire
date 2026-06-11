@@ -510,11 +510,15 @@ class FileWatcher:
         # key always matches the one the pending rename was registered under.
         src_resolved = self._resolve_for_suppression(src)
         dest_resolved = self._resolve_for_suppression(dest)
-        pending = self._pending_renames.pop(dest_resolved, None)
-        if pending is None:
-            # Unknown rename — nothing to do. Don't raise; reconciliation is
-            # best-effort and the caller may retry after a missed event.
+        pending = self._pending_renames.get(dest_resolved)
+        if pending is None or pending.src != src_resolved:
+            # Unknown rename — or the destination was since re-keyed by a
+            # newer move, in which case this acknowledgement belongs to the
+            # replaced event and must not reconcile the newer one's rows.
+            # Don't raise; reconciliation is best-effort and the caller may
+            # retry after a missed event.
             return
+        del self._pending_renames[dest_resolved]
 
         if not accept:
             # Drop the in-memory hashes for the old subtree so a later
