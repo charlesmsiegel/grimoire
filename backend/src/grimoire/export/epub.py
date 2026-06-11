@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import os
 import re
 import shutil
 import subprocess
@@ -281,7 +282,7 @@ class EpubAdapter:
         snapshot.options = await self._maybe_generate_cover(campaign_id, options, snapshot)
 
         book = _build_book(snapshot, self._clock())
-        await asyncio.to_thread(_write_epub, output_path, book)
+        await asyncio.to_thread(_write_epub_atomic, output_path, book)
 
         warnings = list(snapshot.warnings)
         if (options.extra or {}).get("validate") and self.epubcheck_path:
@@ -982,6 +983,22 @@ def _render_nav(
 
 
 # ---------- packaging ---------------------------------------------------- #
+
+
+def _write_epub_atomic(output_path: Path, book: _BuiltBook) -> None:
+    """Package to a unique temp file, then atomically publish to ``output_path``.
+
+    The export coroutine awaits this in a worker thread; if that await is
+    cancelled the thread keeps writing. The unique temp name keeps a retried
+    export from clobbering the in-flight write, and ``os.replace`` guarantees
+    ``output_path`` only ever holds a complete EPUB.
+    """
+    tmp_path = output_path.with_name(f"{output_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        _write_epub(tmp_path, book)
+        os.replace(tmp_path, output_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def _write_epub(output_path: Path, book: _BuiltBook) -> None:

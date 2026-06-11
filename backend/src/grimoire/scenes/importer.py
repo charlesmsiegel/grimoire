@@ -124,16 +124,19 @@ async def run_import_pipeline(
     naming = getattr(getattr(scene_manager, "config", None), "files", None)
     _pattern = getattr(naming, "scene_naming_pattern", None) or "{ordinal:04d}-{slug}"
     dest_md, _ = scene_paths(scene_manager.data_root, scene, naming_pattern=_pattern)
-    if await asyncio.to_thread(lambda: dest_md.resolve() == md_path.resolve()):
+    try:
+        same_file = await asyncio.to_thread(lambda: dest_md.resolve() == md_path.resolve())
+    finally:
+        # Restore active scene state — import should not change what's
+        # "current", even when the comparison above is cancelled mid-await.
+        if prev_active is not None:
+            scene_manager._active_scene[active_key] = prev_active
+        else:
+            scene_manager._active_scene.pop(active_key, None)
+        for pc_key, prev_id in prev_pc_scenes.items():
+            scene_manager._pc_current_scene[pc_key] = prev_id
+    if same_file:
         raise ValueError(f"Source file is already in the campaign scenes directory: {md_path}")
-
-    # Restore active scene state — import should not change what's "current".
-    if prev_active is not None:
-        scene_manager._active_scene[active_key] = prev_active
-    else:
-        scene_manager._active_scene.pop(active_key, None)
-    for pc_key, prev_id in prev_pc_scenes.items():
-        scene_manager._pc_current_scene[pc_key] = prev_id
 
     in_game_end = parse_iso_datetime(metadata.get("in_game_end"))
     if in_game_end is not None:

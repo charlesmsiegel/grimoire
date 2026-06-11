@@ -64,6 +64,28 @@ class SwapResult:
     rejected_review_ids: list[str] = field(default_factory=list)
 
 
+def _apply_file_reversal(target: Path, before: Any) -> None:
+    """Apply a delta reversal's file mutation: delete ``target`` or restore it.
+
+    Deliberately synchronous rather than offloaded to a thread: this runs
+    inside the reversal's SQLite transaction, and staying on the event loop
+    keeps the mutation atomic with respect to other coroutines — it can
+    neither interleave with a concurrent write to the same file nor keep
+    running in a worker thread after a cancelled reversal has unwound. The
+    cost is one small file operation.
+    """
+    if before is None:
+        # The file did not exist before — delete it now.
+        target.unlink(missing_ok=True)
+        return
+    fm = before.get("frontmatter") if isinstance(before, dict) else None
+    body = (before.get("body") if isinstance(before, dict) else None) or ""
+    if target.suffix == ".yaml":
+        write_yaml(target, fm if fm is not None else before)
+    else:
+        write_markdown(target, ParsedDocument(frontmatter=fm or {}, body=body))
+
+
 class DeltaOps:
     """Reversible-delta machinery over the ``deltas`` / ``review_queue`` tables.
 
@@ -177,10 +199,8 @@ class DeltaOps:
         if delta.target_path is None:
             raise StateStoreError(f"file delta {delta.id} has no target_path")
         target = Path(delta.target_path)
+        _apply_file_reversal(target, delta.before)
         if delta.before is None:
-            # The file did not exist before — delete it now.
-            if target.exists():
-                target.unlink()
             if delta.target_scope == "library" and delta.target_id:
                 await delete_library_index_row(conn, delta.target_id)
             if delta.target_scope == "campaign-file" and delta.target_id:
@@ -190,11 +210,6 @@ class DeltaOps:
         before = delta.before
         fm = before.get("frontmatter") if isinstance(before, dict) else None
         body = (before.get("body") if isinstance(before, dict) else None) or ""
-
-        if target.suffix == ".yaml":
-            write_yaml(target, fm if fm is not None else before)
-        else:
-            write_markdown(target, ParsedDocument(frontmatter=fm or {}, body=body))
 
         if delta.target_scope == "library" and delta.target_id:
             await upsert_library_index(
