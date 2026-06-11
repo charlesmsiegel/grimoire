@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -219,6 +220,25 @@ async def test_gateway_set_tier_route_rejects_bad_route(db, plugins, tmp_path: P
     gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
     with pytest.raises(ValueError):
         await gw.set_tier_route("camp-1", Tier.HEAVY, "missing_dot")
+
+
+async def test_concurrent_route_persists_do_not_lose_updates(db, plugins, tmp_path: Path) -> None:
+    """Concurrent set_route calls for one campaign must all land in the YAML.
+
+    The campaign.yaml read-modify-write runs in a worker thread; without
+    per-campaign serialization, parallel writers read the same stale snapshot
+    and silently drop each other's routes.
+    """
+    camp_dir = tmp_path / "campaigns" / "camp-1"
+    camp_dir.mkdir(parents=True)
+    (camp_dir / "campaign.yaml").write_text(yaml.safe_dump({"id": "camp-1"}))
+    gw = LLMGatewayService(plugins, db, _minimal_config(), data_root=tmp_path)
+
+    tasks = [f"task-{i}" for i in range(8)]
+    await asyncio.gather(*(gw.set_route(task, "deepseek.pro", "camp-1") for task in tasks))
+
+    raw = yaml.safe_load((camp_dir / "campaign.yaml").read_text())
+    assert set(raw["model_routing"]) == set(tasks)
 
 
 # ---------------------------------------------------------------------------

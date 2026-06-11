@@ -108,8 +108,10 @@ async def get_app_config() -> Any:
 
 @router.patch("/app")
 async def patch_app_config(payload: AppConfigPatch) -> Any:
-    data = _read_app_yaml()
-
+    # Validate library_path (the handler's only await) before reading
+    # app.yaml so the read-modify-write below has no suspension point and
+    # concurrent patches can't clobber each other.
+    candidate: str | None = None
     if payload.library_path is not None:
         candidate = payload.library_path.strip()
         if not candidate:
@@ -122,6 +124,10 @@ async def patch_app_config(payload: AppConfigPatch) -> Any:
             await asyncio.to_thread(lambda: Path(candidate).expanduser())
         except Exception as exc:
             raise HTTPException(status_code=422, detail=f"invalid library_path: {exc}") from exc
+
+    data = _read_app_yaml()
+
+    if candidate is not None:
         data["library_path"] = candidate
 
     if payload.backup is not None:

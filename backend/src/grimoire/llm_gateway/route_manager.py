@@ -37,6 +37,13 @@ class RouteManager:
         self._data_root = data_root
         self._imagegen_routes = imagegen_routes
         self._loaded_campaigns = loaded_campaigns
+        # Serializes every read-modify-write of a campaign's campaign.yaml
+        # (and the initial routing load) so concurrent mutations offloaded to
+        # threads can't race each other or observe a half-loaded campaign.
+        self._campaign_locks: dict[CampaignId, asyncio.Lock] = {}
+
+    def _lock_for(self, campaign_id: CampaignId) -> asyncio.Lock:
+        return self._campaign_locks.setdefault(campaign_id, asyncio.Lock())
 
     def campaign_yaml_path(self, campaign_id: CampaignId) -> Path | None:
         if self._data_root is None:
@@ -44,7 +51,20 @@ class RouteManager:
         return self._data_root / "campaigns" / campaign_id / "campaign.yaml"
 
     async def load_campaign_routing(self, campaign_id: CampaignId) -> None:
-        self._loaded_campaigns.add(campaign_id)
+        async with self._lock_for(campaign_id):
+            if campaign_id in self._loaded_campaigns:
+                return
+            try:
+                await self._load_campaign_routing_locked(campaign_id)
+            finally:
+                # Mark loaded even when the YAML is missing or unparsable so
+                # later calls don't retry the disk read every time — but only
+                # after the routing blocks have been applied (or load has
+                # failed), so concurrent callers never see a half-loaded
+                # campaign as loaded.
+                self._loaded_campaigns.add(campaign_id)
+
+    async def _load_campaign_routing_locked(self, campaign_id: CampaignId) -> None:
         yaml_path = self.campaign_yaml_path(campaign_id)
         if yaml_path is None or not await asyncio.to_thread(yaml_path.is_file):
             return
@@ -190,8 +210,16 @@ class RouteManager:
         "imagegen": "imagegen_routing",
     }
 
-    def persist_campaign_route(
+    async def persist_campaign_route(
         self, campaign_id: CampaignId, task: str, route: str, *, kind: str = "llm"
+    ) -> None:
+        async with self._lock_for(campaign_id):
+            await asyncio.to_thread(
+                self._persist_campaign_route_sync, campaign_id, task, route, kind
+            )
+
+    def _persist_campaign_route_sync(
+        self, campaign_id: CampaignId, task: str, route: str, kind: str
     ) -> None:
         block = self._BLOCK_FOR_KIND.get(kind, "model_routing")
         data = self._read_campaign_yaml_for_write(campaign_id)
@@ -202,9 +230,13 @@ class RouteManager:
         data[block][task] = route
         self._atomic_write_campaign_yaml(campaign_id, data)
 
-    def delete_campaign_route(
+    async def delete_campaign_route(
         self, campaign_id: CampaignId, task: str, *, kind: str = "llm"
     ) -> None:
+        async with self._lock_for(campaign_id):
+            await asyncio.to_thread(self._delete_campaign_route_sync, campaign_id, task, kind)
+
+    def _delete_campaign_route_sync(self, campaign_id: CampaignId, task: str, kind: str) -> None:
         block = self._BLOCK_FOR_KIND.get(kind, "model_routing")
         data = self._read_campaign_yaml_for_write(campaign_id)
         if data is None:
@@ -215,6 +247,22 @@ class RouteManager:
         existing.pop(task, None)
         if not existing:
             data.pop(block, None)
+        self._atomic_write_campaign_yaml(campaign_id, data)
+
+    async def write_tier_block(self, campaign_id: CampaignId) -> None:
+        """Serialize the resolver's tier state back to ``campaign.yaml``."""
+        async with self._lock_for(campaign_id):
+            await asyncio.to_thread(self._write_tier_block_sync, campaign_id)
+
+    def _write_tier_block_sync(self, campaign_id: CampaignId) -> None:
+        data = self._read_campaign_yaml_for_write(campaign_id)
+        if data is None:
+            return
+        tiers = self._router.tiers_for(campaign_id)
+        if tiers:
+            data["model_tiers"] = {tier.value: route for tier, route in tiers.items()}
+        else:
+            data.pop("model_tiers", None)
         self._atomic_write_campaign_yaml(campaign_id, data)
 
     def _read_campaign_yaml_for_write(self, campaign_id: CampaignId) -> dict | None:
