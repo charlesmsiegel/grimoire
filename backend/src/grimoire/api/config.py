@@ -16,6 +16,7 @@ tabs can add to the same file without touching this router.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -118,7 +119,7 @@ async def patch_app_config(payload: AppConfigPatch) -> Any:
         if "\x00" in candidate:
             raise HTTPException(status_code=422, detail="library_path contains a null byte")
         try:
-            Path(candidate).expanduser()
+            await asyncio.to_thread(lambda: Path(candidate).expanduser())
         except Exception as exc:
             raise HTTPException(status_code=422, detail=f"invalid library_path: {exc}") from exc
         data["library_path"] = candidate
@@ -304,26 +305,32 @@ class BrowseFilesResponse(BaseModel):
     entries: list[dict[str, Any]]
 
 
+def _list_directory(base: Path, glob: str) -> list[dict[str, Any]]:
+    """List picker entries under ``base`` (blocking; run via to_thread)."""
+    entries: list[dict[str, Any]] = []
+    for child in sorted(base.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+        if child.name.startswith("."):
+            continue
+        if child.is_dir():
+            entries.append({"name": child.name, "path": str(child), "is_dir": True})
+        elif child.match(glob):
+            entries.append({"name": child.name, "path": str(child), "is_dir": False})
+    return entries
+
+
 @router.get("/browse-files")
 async def browse_files(
     directory: str | None = None,
     glob: str = "*.gguf",
 ) -> BrowseFilesResponse:
     """List files and directories for a server-side file picker."""
-    base = Path(directory).resolve() if directory else Path.home()
+    base = await asyncio.to_thread(lambda: Path(directory).resolve() if directory else Path.home())
 
-    if not base.is_dir():
+    if not await asyncio.to_thread(base.is_dir):
         raise HTTPException(status_code=400, detail=f"Not a directory: {base}")
 
-    entries: list[dict[str, Any]] = []
     try:
-        for child in sorted(base.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
-            if child.name.startswith("."):
-                continue
-            if child.is_dir():
-                entries.append({"name": child.name, "path": str(child), "is_dir": True})
-            elif child.match(glob):
-                entries.append({"name": child.name, "path": str(child), "is_dir": False})
+        entries = await asyncio.to_thread(_list_directory, base, glob)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=f"Permission denied: {base}") from exc
 
@@ -335,11 +342,11 @@ async def gguf_introspect(path: str) -> Any:
     """Read metadata from a GGUF file without loading the model."""
     from grimoire.gguf import GGUFError, introspect
 
-    resolved = Path(path).resolve()
-    if not resolved.is_file():
+    resolved = await asyncio.to_thread(lambda: Path(path).resolve())
+    if not await asyncio.to_thread(resolved.is_file):
         raise HTTPException(status_code=400, detail=f"Not a file: {path}")
     try:
-        return introspect(resolved)
+        return await asyncio.to_thread(introspect, resolved)
     except GGUFError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

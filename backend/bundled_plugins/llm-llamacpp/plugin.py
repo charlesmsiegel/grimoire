@@ -240,7 +240,7 @@ class LlamaCppLLMProvider:
                 message="model_path not configured",
             )
         path = Path(self._model_path)
-        if not path.exists():
+        if not await asyncio.to_thread(path.exists):
             return HealthStatus(
                 level=HealthLevel.UNHEALTHY,
                 target_id=self.id,

@@ -19,6 +19,7 @@ truthy; the warning is recorded on the ``ExportResult`` either way.
 
 from __future__ import annotations
 
+import asyncio
 import html
 import re
 import shutil
@@ -280,15 +281,18 @@ class EpubAdapter:
         snapshot.options = await self._maybe_generate_cover(campaign_id, options, snapshot)
 
         book = _build_book(snapshot, self._clock())
-        _write_epub(output_path, book)
+        await asyncio.to_thread(_write_epub, output_path, book)
 
         warnings = list(snapshot.warnings)
         if (options.extra or {}).get("validate") and self.epubcheck_path:
-            warnings.extend(_run_epubcheck(self.epubcheck_path, output_path))
+            warnings.extend(
+                await asyncio.to_thread(_run_epubcheck, self.epubcheck_path, output_path)
+            )
 
+        size_bytes = (await asyncio.to_thread(output_path.stat)).st_size
         return ExportResult(
             format="epub",
-            size_bytes=output_path.stat().st_size,
+            size_bytes=size_bytes,
             scene_count=snapshot.scene_count,
             word_count=snapshot.word_count,
             image_count=snapshot.image_count,

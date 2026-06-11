@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -45,10 +46,10 @@ class RouteManager:
     async def load_campaign_routing(self, campaign_id: CampaignId) -> None:
         self._loaded_campaigns.add(campaign_id)
         yaml_path = self.campaign_yaml_path(campaign_id)
-        if yaml_path is None or not yaml_path.is_file():
+        if yaml_path is None or not await asyncio.to_thread(yaml_path.is_file):
             return
         try:
-            raw = load_yaml(yaml_path)
+            raw = await asyncio.to_thread(load_yaml, yaml_path)
         except Exception:
             logger.warning(
                 "llm_gateway: failed to parse %s; campaign routing not loaded",

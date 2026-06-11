@@ -261,7 +261,9 @@ class LLMGatewayService:
         else:
             self._router.set_route(task, route, campaign_id)
         if campaign_id is not None and self._data_root is not None:
-            self._persist_campaign_route(campaign_id, task, route, kind=kind)
+            await asyncio.to_thread(
+                self._persist_campaign_route, campaign_id, task, route, kind=kind
+            )
 
     async def set_tier_route(
         self,
@@ -279,7 +281,7 @@ class LLMGatewayService:
         self._router.set_tier_route(campaign_id, tier, route)
         yaml_path = self._campaign_yaml_path(campaign_id)
         if yaml_path is not None:
-            self._write_tier_block(campaign_id)
+            await asyncio.to_thread(self._write_tier_block, campaign_id)
 
     async def clear_tier_route(
         self,
@@ -290,7 +292,7 @@ class LLMGatewayService:
         self._router.clear_tier_route(campaign_id, tier)
         yaml_path = self._campaign_yaml_path(campaign_id)
         if yaml_path is not None:
-            self._write_tier_block(campaign_id)
+            await asyncio.to_thread(self._write_tier_block, campaign_id)
 
     def _write_tier_block(self, campaign_id: CampaignId) -> None:
         """Serialize the resolver's tier state back to ``campaign.yaml``."""
@@ -318,7 +320,7 @@ class LLMGatewayService:
         else:
             self._router.clear_route(task, campaign_id)
         if campaign_id is not None and self._data_root is not None:
-            self._delete_campaign_route(campaign_id, task, kind=kind)
+            await asyncio.to_thread(self._delete_campaign_route, campaign_id, task, kind=kind)
 
     def imagegen_route(self, task: str, campaign_id: CampaignId) -> Route | None:
         """Return the per-campaign imagegen route for ``task``, if any.
