@@ -11,6 +11,7 @@ without touching the OS event source.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections import Counter, deque
@@ -440,13 +441,27 @@ class FileWatcher:
             pending.library_ids = library_ids
             pending.content_index_ids = content_index_ids
             await self._emit_rename_detected(event_type, pending, library_ids, content_index_ids)
-        except BaseException:
+        except BaseException as exc:
             # Setup failed or was cancelled before the user could be asked to
             # reconcile — drop our suppression entry (and only ours; a newer
             # rename may have re-keyed the same destination) so subsequent
-            # file events aren't silently swallowed forever.
+            # file events aren't silently swallowed forever. The per-file
+            # events suppressed in the window are gone, so surface the drift
+            # instead of replaying them: re-keying the index without the
+            # user's acknowledgement is what this flow exists to prevent.
             if self._pending_renames.get(dest_resolved) is pending:
                 del self._pending_renames[dest_resolved]
+            logger.warning(
+                "watcher: rename setup aborted for %s -> %s; index rows may "
+                "reference the old paths until a rescan",
+                src_resolved,
+                dest_resolved,
+            )
+            if not isinstance(exc, asyncio.CancelledError):
+                with contextlib.suppress(Exception):
+                    await self._record_failure(
+                        stage="rename_setup", path=str(dest_resolved), error=exc
+                    )
             raise
 
     async def _emit_rename_detected(
