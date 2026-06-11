@@ -435,17 +435,34 @@ class FileWatcher:
         # events are suppressed from the first await onward.
         self._pending_renames[dest_resolved] = pending
 
-        library_ids, content_index_ids = await self._collect_affected_index_rows(src_resolved)
-        pending.library_ids = library_ids
-        pending.content_index_ids = content_index_ids
+        try:
+            library_ids, content_index_ids = await self._collect_affected_index_rows(src_resolved)
+            pending.library_ids = library_ids
+            pending.content_index_ids = content_index_ids
+            await self._emit_rename_detected(event_type, pending, library_ids, content_index_ids)
+        except BaseException:
+            # Setup failed or was cancelled before the user could be asked to
+            # reconcile — drop our suppression entry (and only ours; a newer
+            # rename may have re-keyed the same destination) so subsequent
+            # file events aren't silently swallowed forever.
+            if self._pending_renames.get(dest_resolved) is pending:
+                del self._pending_renames[dest_resolved]
+            raise
 
+    async def _emit_rename_detected(
+        self,
+        event_type: str,
+        pending: _PendingRename,
+        library_ids: list[str],
+        content_index_ids: list[str],
+    ) -> None:
         await self.bus.emit(
             Event(
                 type=event_type,
                 payload={
-                    "src_path": str(src_resolved),
-                    "dest_path": str(dest_resolved),
-                    "scope": scope,
+                    "src_path": str(pending.src),
+                    "dest_path": str(pending.dest),
+                    "scope": pending.scope,
                     "library_ids": list(library_ids),
                     "content_index_ids": list(content_index_ids),
                 },

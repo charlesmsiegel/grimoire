@@ -108,17 +108,6 @@ def _author_kind_str(kind: AuthorKind | str) -> str:
     return kind.value if hasattr(kind, "value") else str(kind)
 
 
-def _read_post_snapshot(yaml_path: Path, md_path: Path, scene_id: str) -> tuple[dict, list]:
-    """Read a scene's sidecar post records and prose posts in one call.
-
-    Runs in a worker thread as a single hop so the pair is a coherent
-    snapshot — a live append landing between two separate reads would pair
-    new prose with old post identities. ``read_posts`` returns ``[]`` when
-    the ``.md`` file is missing.
-    """
-    return read_sidecar_post_records(yaml_path), read_posts(md_path, scene_id)
-
-
 async def upsert_scene_row(
     db: _DB,
     *,
@@ -453,16 +442,23 @@ class SceneIndexer:
             lambda: sorted(scenes_dir_path.glob("*.yaml")) if scenes_dir_path.exists() else []
         )
         for yaml_path in yaml_paths:
+            # Per-scene reads are deliberately synchronous on the event loop:
+            # the files are small, and live scene mutations also write them
+            # synchronously on the loop, so reading here without yielding is
+            # what keeps each scene's sidecar/prose pair a coherent snapshot.
+            # Only the directory listing above is offloaded (backfill also
+            # runs from the rescan/discover endpoints while play is live).
             try:
-                scene = await asyncio.to_thread(read_sidecar, yaml_path)
+                scene = read_sidecar(yaml_path)
             except Exception:  # pragma: no cover - tolerate corrupt sidecar
                 logger.warning("backfill: failed to read sidecar %s", yaml_path)
                 continue
             md_path = yaml_path.with_suffix(".md")
             await upsert_scene_row(db, scene=scene, file_path=md_path)
             await delete_posts_for_scene(db, scene.id)
-            records, posts = await asyncio.to_thread(
-                _read_post_snapshot, yaml_path, md_path, scene.id
+            records, posts = (
+                read_sidecar_post_records(yaml_path),
+                read_posts(md_path, scene.id),
             )
             for order, kind, pc_ref, npc_ref, body in posts:
                 record = records.get(str(order))
