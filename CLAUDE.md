@@ -239,9 +239,11 @@ review smell. Grep before adding a `_parse_*` / `_slug*` / `_json*` / `_now*`.
   `raise HTTPException(404, …)`. Service-present-or-503 goes through the
   `api.deps` `get_*` providers.
 - **Carving up a large service**: follow the `host=self` coordinator pattern
-  (`AuxiliaryCoordinator` / `RetconCoordinator` / `ForkCoordinator`) — coordinators
-  use the host surface they're handed, not `host._privates` (#589 introduces a
-  typed `OrchestratorHost` Protocol).
+  (`AuxiliaryCoordinator` / `RetconCoordinator` / `ForkCoordinator`, and the
+  state-store's `DeltaOps` / `InventoryStore` / `SearchStore` /
+  `ContextPinStore`) — coordinators use the host surface they're handed
+  (explicit deps like a `txn` factory or a bound public method), not
+  `host._privates` (#589 introduces a typed `OrchestratorHost` Protocol).
 
 ### Error handling
 
