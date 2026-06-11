@@ -35,6 +35,8 @@ from grimoire.state_store.delta_log import queue_for_review as _queue_for_review
 from grimoire.state_store.errors import NotFoundError, StateStoreError
 from grimoire.state_store.file_snapshots import snapshot_file_before
 from grimoire.state_store.indexers import (
+    delete_campaign_content_row,
+    delete_library_index_row,
     upsert_campaign_content_index,
     upsert_library_index,
 )
@@ -180,12 +182,9 @@ class DeltaOps:
             if target.exists():
                 target.unlink()
             if delta.target_scope == "library" and delta.target_id:
-                await conn.execute("DELETE FROM library_index WHERE id = ?", (delta.target_id,))
+                await delete_library_index_row(conn, delta.target_id)
             if delta.target_scope == "campaign-file" and delta.target_id:
-                await conn.execute(
-                    "DELETE FROM campaign_content_index WHERE id = ?",
-                    (delta.target_id,),
-                )
+                await delete_campaign_content_row(conn, delta.target_id)
             return
 
         before = delta.before

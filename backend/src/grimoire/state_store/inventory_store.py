@@ -8,7 +8,6 @@ SSOT remains the ``inventory:`` sections in campaign overlay files, which
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
@@ -19,7 +18,7 @@ import aiosqlite
 from grimoire.files import load_yaml, read_markdown
 from grimoire.state_store.paths import KIND_TO_DIR, campaigns_root
 from grimoire.storage import Database
-from grimoire.util import new_id, slugify_id
+from grimoire.util import new_id, safe_json_loads, slugify_id
 
 logger = logging.getLogger(__name__)
 
@@ -270,7 +269,7 @@ class InventoryStore:
         )
         if row is None:
             return None
-        fm = json.loads(row["frontmatter"]) if row["frontmatter"] else {}
+        fm = safe_json_loads(row["frontmatter"]) or {}
         return {"item_ref": row["asset_id"], "item_name": fm.get("name", name)}
 
     async def create_emergent_item(
