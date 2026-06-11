@@ -224,7 +224,7 @@ class _DeltaRow:
 
 @dataclass
 class _SwapOutcome:
-    """Duck-type of ``grimoire.state_store.store.SwapResult``."""
+    """Duck-type of ``grimoire.state_store.delta_ops.SwapResult``."""
 
     rewound: list[_DeltaRow]
     applied: list[_DeltaRow]
