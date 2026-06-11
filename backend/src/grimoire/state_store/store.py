@@ -11,9 +11,9 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator, Iterable, Iterator
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -29,32 +29,28 @@ from grimoire.files import (
     write_yaml,
 )
 from grimoire.observability.metrics import NULL_METRICS, MetricsRegistryProtocol
+from grimoire.state_store.context_pins import ContextPinStore
 from grimoire.state_store.delta_log import (
     DeltaRecord,
-    get_delta,
     insert_delta,
-    list_deltas,
-    mark_reversed,
-    primary_key_columns,
-    reverse_sqlite_delta,
-    upsert_row,
     validate_table_columns,
 )
-from grimoire.state_store.delta_log import queue_for_review as _queue_for_review
+from grimoire.state_store.delta_ops import DeltaOps, SwapResult
 from grimoire.state_store.errors import (
     InvalidRefError,
     NotFoundError,
     StateStoreError,
 )
+from grimoire.state_store.file_snapshots import snapshot_file_before
 from grimoire.state_store.indexers import (
     delete_library_index_row,
     make_library_id,
     upsert_campaign_content_index,
     upsert_library_index,
 )
+from grimoire.state_store.inventory_store import InventoryStore
 from grimoire.state_store.paths import (
     KIND_TO_DIR,
-    campaign_id_for_path,
     campaigns_root,
     character_variant_path,
     character_variants_dir,
@@ -67,21 +63,15 @@ from grimoire.state_store.paths import (
     sheet_path,
     validate_path_component,
 )
-from grimoire.state_store.search import (
-    SearchHit,
-    delete_embeddings_for_ref,
-    insert_embedding,
-    keyword_search_facts,
-    keyword_search_library,
-)
-from grimoire.state_store.search import vector_search as _vector_search
+from grimoire.state_store.search import SearchHit
+from grimoire.state_store.search_store import SearchStore
 from grimoire.state_store.snapshots import (
     remove_snapshots_for_world,
     upgrade_snapshots,
     write_snapshots_for_world,
 )
 from grimoire.storage import Database
-from grimoire.util import new_id, now_iso
+from grimoire.util import now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -100,39 +90,6 @@ def _json_loads(value: Any) -> Any:
     if isinstance(value, (dict, list)):
         return value
     return json.loads(value)
-
-
-def _restore_file(target: Path, before_bytes: bytes | None) -> None:
-    """Undo a disk mutation when the surrounding SQL transaction rolled back.
-
-    If the file did not exist beforehand, unlink the new write; otherwise
-    restore the original bytes. Used by library and campaign file writes so
-    file state and ``library_index`` / ``campaign_content_index`` never drift
-    apart when the index update fails.
-    """
-    if before_bytes is None:
-        with contextlib.suppress(FileNotFoundError):
-            target.unlink()
-    else:
-        target.write_bytes(before_bytes)
-
-
-@contextlib.contextmanager
-def _snapshot_file_before(target: Path) -> Iterator[None]:
-    """Restore ``target``'s prior bytes (or absence) when the wrapped block fails.
-
-    Every file mutation and its index/delta-log transaction must run inside
-    this block: a SQL rollback (or cancellation) would otherwise leave the
-    file changed with no delta-log record of it, and that divergence does not
-    self-heal — the watcher re-indexes content, not delta history. See BUGS.md
-    ("apply_delta path leaves orphan files when SQL rolls back").
-    """
-    before_bytes = target.read_bytes() if target.exists() else None
-    try:
-        yield
-    except BaseException:
-        _restore_file(target, before_bytes)
-        raise
 
 
 # Variant-file frontmatter keys that describe the variant itself and must not
@@ -178,23 +135,6 @@ class UpgradeReport:
 
 
 @dataclass(frozen=True)
-class SwapResult:
-    """Outcome of :meth:`StateStore.swap_delta_set` / :meth:`StateStore.swap_turn_deltas`.
-
-    The review-queue fields are populated only by ``swap_turn_deltas``:
-    ``queued_review_ids`` are the review rows created for the replacement
-    set's low-confidence deltas; ``rejected_review_ids`` are the turn's
-    stale pending review rows rejected because the text they were extracted
-    from was retconned away.
-    """
-
-    rewound: list[DeltaRecord]
-    applied: list[DeltaRecord]
-    queued_review_ids: list[str] = field(default_factory=list)
-    rejected_review_ids: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
 class FileWriteResult:
     """What :meth:`StateStore.write_library_file` returns to callers."""
 
@@ -225,6 +165,18 @@ class StateStore:
         self.data_root = Path(data_root)
         self._metrics: MetricsRegistryProtocol = metrics
         self._bus: EventBus | None = event_bus
+        # Coordinators (#521): cohesive clusters extracted out of this class.
+        # Each is handed the store's transaction factory explicitly so its
+        # multi-step writes share BEGIN IMMEDIATE + metrics behaviour.
+        self._delta_ops = DeltaOps(db=db, data_root=self.data_root, txn=self._txn)
+        self._inventory = InventoryStore(
+            db=db,
+            data_root=self.data_root,
+            txn=self._txn,
+            write_emergent=self.write_emergent,
+        )
+        self._search = SearchStore(db=db)
+        self._context_pins = ContextPinStore(db=db)
 
     def set_metrics(self, metrics: MetricsRegistryProtocol) -> None:
         self._metrics = metrics
@@ -310,7 +262,7 @@ class StateStore:
         else:
             before_payload = None
 
-        with _snapshot_file_before(target):
+        with snapshot_file_before(target):
             # Write the file.
             if ref.kind in {"world", "image_preset"}:
                 write_yaml(target, frontmatter)
@@ -400,9 +352,9 @@ class StateStore:
                     )
 
         with contextlib.ExitStack() as snapshots:
-            snapshots.enter_context(_snapshot_file_before(target))
+            snapshots.enter_context(snapshot_file_before(target))
             for vpath, _vpayload, _vid in variant_snapshots:
-                snapshots.enter_context(_snapshot_file_before(vpath))
+                snapshots.enter_context(snapshot_file_before(vpath))
             target.unlink()
             for vpath, _vpayload, _vid in variant_snapshots:
                 vpath.unlink()
@@ -478,7 +430,7 @@ class StateStore:
             before_payload = load_yaml(target) or {}
 
         composite_id = f"campaigns/{campaign_id}/overrides/{library_id}"
-        with _snapshot_file_before(target):
+        with snapshot_file_before(target):
             write_yaml(target, patch)
             async with self._txn() as conn:
                 await upsert_campaign_content_index(
@@ -559,7 +511,7 @@ class StateStore:
         before_payload = load_yaml(target) or {}
 
         composite_id = f"campaigns/{campaign_id}/overrides/{library_id}"
-        with _snapshot_file_before(target):
+        with snapshot_file_before(target):
             target.unlink()
             async with self._txn() as conn:
                 from grimoire.state_store.indexers import delete_campaign_content_row
@@ -603,7 +555,7 @@ class StateStore:
         before_payload = {"frontmatter": doc.frontmatter, "body": doc.body}
 
         composite_id = f"campaigns/{campaign_id}/emergent/{kind}/{entity_id}"
-        with _snapshot_file_before(target):
+        with snapshot_file_before(target):
             target.unlink()
             async with self._txn() as conn:
                 from grimoire.state_store.indexers import delete_campaign_content_row
@@ -642,7 +594,7 @@ class StateStore:
             before_payload = {"frontmatter": doc.frontmatter, "body": doc.body}
 
         composite_id = f"campaigns/{campaign_id}/emergent/{kind}/{entity_id}"
-        with _snapshot_file_before(target):
+        with snapshot_file_before(target):
             write_markdown(target, ParsedDocument(frontmatter=frontmatter, body=body))
             async with self._txn() as conn:
                 await upsert_campaign_content_index(
@@ -689,7 +641,7 @@ class StateStore:
             before_payload = load_yaml(target) or {}
 
         composite_id = f"campaigns/{campaign_id}/sheets/{kind}/{entity_id}.{mechanics_id}"
-        with _snapshot_file_before(target):
+        with snapshot_file_before(target):
             write_yaml(target, sheet)
             async with self._txn() as conn:
                 await upsert_campaign_content_index(
@@ -737,7 +689,7 @@ class StateStore:
             before_payload = load_yaml(target) or {}
 
         composite_id = f"campaigns/{campaign_id}/content/{kind}/{content_id}.{mechanics_id}"
-        with _snapshot_file_before(target):
+        with snapshot_file_before(target):
             write_yaml(target, payload)
             async with self._txn() as conn:
                 await upsert_campaign_content_index(
@@ -819,7 +771,7 @@ class StateStore:
             before_payload = load_yaml(target) or {}
 
         composite_id = f"campaigns/{campaign_id}/images/{image_id}"
-        with _snapshot_file_before(target):
+        with snapshot_file_before(target):
             write_yaml(target, metadata)
             async with self._txn() as conn:
                 await upsert_campaign_content_index(
@@ -999,7 +951,7 @@ class StateStore:
         else:
             before_payload = None
 
-        with _snapshot_file_before(target):
+        with snapshot_file_before(target):
             write_markdown(target, ParsedDocument(frontmatter=frontmatter, body=body))
 
             async with self._txn() as conn:
@@ -1047,7 +999,7 @@ class StateStore:
         doc = read_markdown(target)
         before_payload = {"frontmatter": doc.frontmatter, "body": doc.body}
 
-        with _snapshot_file_before(target):
+        with snapshot_file_before(target):
             target.unlink()
             async with self._txn() as conn:
                 delta_id = await insert_delta(
@@ -1213,146 +1165,36 @@ class StateStore:
         provenance: str | None,
         notes: str | None,
     ) -> None:
-        rid = f"{campaign_id}:{holder_kind}:{holder_id}:{item_ref}"
-        await self.db.execute(
-            """
-            INSERT INTO inventory_holdings
-              (id, campaign_id, holder_kind, holder_id, item_ref, item_name,
-               quantity, fungible, equipped, provenance, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              item_name=excluded.item_name, quantity=excluded.quantity,
-              fungible=excluded.fungible, equipped=excluded.equipped,
-              provenance=excluded.provenance, notes=excluded.notes
-            """,
-            (
-                rid,
-                campaign_id,
-                holder_kind,
-                holder_id,
-                item_ref,
-                item_name,
-                int(quantity),
-                int(fungible),
-                int(equipped),
-                provenance,
-                notes,
-            ),
+        await self._inventory.upsert_holding(
+            campaign_id=campaign_id,
+            holder_kind=holder_kind,
+            holder_id=holder_id,
+            item_ref=item_ref,
+            item_name=item_name,
+            quantity=quantity,
+            fungible=fungible,
+            equipped=equipped,
+            provenance=provenance,
+            notes=notes,
         )
 
     async def delete_inventory_holding(
         self, campaign_id: str, holder_kind: str, holder_id: str, item_ref: str
     ) -> None:
-        rid = f"{campaign_id}:{holder_kind}:{holder_id}:{item_ref}"
-        await self.db.execute("DELETE FROM inventory_holdings WHERE id = ?", (rid,))
+        await self._inventory.delete_holding(campaign_id, holder_kind, holder_id, item_ref)
 
     async def clear_holder_inventory(
         self, campaign_id: str, holder_kind: str, holder_id: str
     ) -> None:
-        await self.db.execute(
-            "DELETE FROM inventory_holdings WHERE campaign_id=? AND holder_kind=? AND holder_id=?",
-            (campaign_id, holder_kind, holder_id),
-        )
+        await self._inventory.clear_holder(campaign_id, holder_kind, holder_id)
 
     async def rebuild_inventory_holdings_from_files(self) -> int:
-        """Rebuild the derived ``inventory_holdings`` table by reading the
-        ``inventory:`` sections directly from campaign overlay files (the SSOT).
+        """Rebuild the derived ``inventory_holdings`` table from overlay files.
 
-        Reads files rather than ``campaign_content_index`` so the rebuild is
-        immune to content-index keying (emergent rows are keyed by the raw
-        ``kind`` while the watcher classifies by directory). A full
-        truncate-and-repopulate, so removed sections and removed holders leave
-        no stale rows. The storage layer owns this derived table and file I/O.
-
-        A holder file that fails to parse is logged (with its path + exception)
-        and skipped rather than aborting the whole rebuild — the SSOT file is
-        intact, so this is a recoverable partial rebuild. Returns the number of
-        holder files skipped so a bad file is observable to callers.
+        Returns the number of holder files skipped because they failed to
+        parse (see :meth:`InventoryStore.rebuild_holdings_from_files`).
         """
-        from grimoire.state_store.paths import KIND_TO_DIR
-
-        dir_to_kind = {dir_name: kind for kind, dir_name in KIND_TO_DIR.items()}
-        wanted = {"character", "location"}
-        # Rows hold campaign_id, kind, holder_id, entries
-        discovered: list[tuple[str, str, str, list]] = []
-        skipped = 0
-
-        def _subdirs(parent: Path) -> list[Path]:
-            if not parent.is_dir():
-                return []
-            return [p for p in parent.iterdir() if p.is_dir()]
-
-        def _entries(block: object) -> list:
-            return (block or {}).get("entries") or [] if isinstance(block, dict) else []
-
-        root = campaigns_root(self.data_root)
-        for camp_dir in _subdirs(root):
-            cid = camp_dir.name
-            # Emergent holders: emergent/<dir>/<id>.md (markdown + frontmatter).
-            for kind_dir in _subdirs(camp_dir / "emergent"):
-                kind = dir_to_kind.get(kind_dir.name, kind_dir.name)
-                if kind not in wanted:
-                    continue
-                for f in kind_dir.glob("*.md"):
-                    try:
-                        fm = read_markdown(f).frontmatter or {}
-                    except Exception:
-                        logger.warning("inventory rebuild: failed to parse %s", f, exc_info=True)
-                        skipped += 1
-                        continue
-                    entries = _entries(fm.get("inventory"))
-                    if entries:
-                        discovered.append((cid, kind, f.stem, entries))
-            # Library-scoped holders: overrides/worlds/<world>/<dir>/<id>.yaml.
-            for world_dir in _subdirs(camp_dir / "overrides" / "worlds"):
-                for kind_dir in _subdirs(world_dir):
-                    kind = dir_to_kind.get(kind_dir.name, kind_dir.name)
-                    if kind not in wanted:
-                        continue
-                    for f in kind_dir.glob("*.yaml"):
-                        try:
-                            data = load_yaml(f) or {}
-                        except Exception:
-                            logger.warning(
-                                "inventory rebuild: failed to parse %s", f, exc_info=True
-                            )
-                            skipped += 1
-                            continue
-                        entries = _entries(data.get("inventory"))
-                        if entries:
-                            discovered.append((cid, kind, f.stem, entries))
-
-        async with self._txn() as conn:
-            await conn.execute("DELETE FROM inventory_holdings")
-            for cid, kind, hid, entries in discovered:
-                for e in entries:
-                    rid = f"{cid}:{kind}:{hid}:{e['item_ref']}"
-                    await conn.execute(
-                        """
-                        INSERT INTO inventory_holdings
-                          (id, campaign_id, holder_kind, holder_id, item_ref, item_name,
-                           quantity, fungible, equipped, provenance, notes)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(id) DO UPDATE SET
-                          item_name=excluded.item_name, quantity=excluded.quantity,
-                          fungible=excluded.fungible, equipped=excluded.equipped,
-                          provenance=excluded.provenance, notes=excluded.notes
-                        """,
-                        (
-                            rid,
-                            cid,
-                            kind,
-                            hid,
-                            e["item_ref"],
-                            e.get("item_name", e["item_ref"]),
-                            int(e.get("quantity", 1)),
-                            int(bool(e.get("fungible", False))),
-                            int(bool(e.get("equipped", False))),
-                            e.get("provenance"),
-                            e.get("notes"),
-                        ),
-                    )
-        return skipped
+        return await self._inventory.rebuild_holdings_from_files()
 
     async def list_inventory_holdings(
         self,
@@ -1362,19 +1204,9 @@ class StateStore:
         holder_id: str | None = None,
         item_ref: str | None = None,
     ) -> list[dict]:
-        sql = "SELECT * FROM inventory_holdings WHERE campaign_id = ?"
-        params: list = [campaign_id]
-        if holder_kind is not None:
-            sql += " AND holder_kind = ?"
-            params.append(holder_kind)
-        if holder_id is not None:
-            sql += " AND holder_id = ?"
-            params.append(holder_id)
-        if item_ref is not None:
-            sql += " AND item_ref = ?"
-            params.append(item_ref)
-        rows = await self.db.fetchall(sql, tuple(params))
-        return [dict(r) for r in rows]
+        return await self._inventory.list_holdings(
+            campaign_id, holder_kind=holder_kind, holder_id=holder_id, item_ref=item_ref
+        )
 
     async def record_inventory_flag(
         self,
@@ -1385,85 +1217,42 @@ class StateStore:
         flag_reason: str,
         created_at: str,
     ) -> str:
-        from grimoire.util import new_id
-
-        fid = new_id("invflag")
-        await self.db.execute(
-            """
-            INSERT INTO inventory_flags
-              (id, campaign_id, turn_id, op_json, flag_reason, resolved, created_at)
-            VALUES (?, ?, ?, ?, ?, 0, ?)
-            """,
-            (fid, campaign_id, turn_id, op_json, flag_reason, created_at),
+        return await self._inventory.record_flag(
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            op_json=op_json,
+            flag_reason=flag_reason,
+            created_at=created_at,
         )
-        return fid
 
     async def list_inventory_flags(self, campaign_id: str, *, resolved: bool) -> list[dict]:
-        rows = await self.db.fetchall(
-            "SELECT * FROM inventory_flags WHERE campaign_id=? AND resolved=? "
-            "ORDER BY created_at DESC",
-            (campaign_id, int(resolved)),
-        )
-        return [dict(r) for r in rows]
+        return await self._inventory.list_flags(campaign_id, resolved=resolved)
 
     async def resolve_inventory_flag(self, campaign_id: str, flag_id: str) -> None:
-        await self.db.execute(
-            "UPDATE inventory_flags SET resolved=1 WHERE campaign_id=? AND id=?",
-            (campaign_id, flag_id),
-        )
+        await self._inventory.resolve_flag(campaign_id, flag_id)
 
     async def delete_inventory_flag(self, campaign_id: str, flag_id: str) -> None:
         """Remove a flag outright — used when the apply that recorded it rolls
         back (#584), so no review row survives for an unapplied change."""
-        await self.db.execute(
-            "DELETE FROM inventory_flags WHERE campaign_id=? AND id=?",
-            (campaign_id, flag_id),
-        )
+        await self._inventory.delete_flag(campaign_id, flag_id)
 
     async def find_item_by_name(self, campaign_id: str, name: str) -> dict | None:
         """Resolve an item name to a campaign-visible item via the content index."""
-        import json
-
-        from grimoire.util import slugify_id
-
-        slug = slugify_id(name)
-        row = await self.db.fetchone(
-            "SELECT asset_id, frontmatter FROM campaign_content_index "
-            "WHERE campaign_id=? AND entity_subkind='item' AND asset_id=?",
-            (campaign_id, slug),
-        )
-        if row is None:
-            return None
-        fm = json.loads(row["frontmatter"]) if row["frontmatter"] else {}
-        return {"item_ref": row["asset_id"], "item_name": fm.get("name", name)}
+        return await self._inventory.find_item_by_name(campaign_id, name)
 
     async def create_emergent_item(
         self, campaign_id: str, name: str, *, source: str, turn_id: str | None = None
     ) -> str:
-        from grimoire.util import slugify_id
-
-        slug = slugify_id(name)
-        await self.write_emergent(
-            campaign_id=campaign_id,
-            kind="item",
-            entity_id=slug,
-            frontmatter={"id": slug, "name": name, "tags": ["emergent"]},
-            body="",
-            source=source,
-            turn_id=turn_id,
+        return await self._inventory.create_emergent_item(
+            campaign_id, name, source=source, turn_id=turn_id
         )
-        return slug
 
     async def campaign_exists(self, campaign_id: str) -> bool:
         row = await self.db.fetchone("SELECT 1 FROM campaigns WHERE id = ?", (campaign_id,))
         return row is not None
 
     async def count_deltas(self, campaign_id: str) -> int:
-        row = await self.db.fetchone(
-            "SELECT COUNT(*) AS cnt FROM deltas WHERE campaign_id = ?",
-            (campaign_id,),
-        )
-        return int(row["cnt"]) if row else 0
+        return await self._delta_ops.count_deltas(campaign_id)
 
     # ------------------------------------------------------------------
     # Composition-aware resolve cascade
@@ -2057,7 +1846,7 @@ class StateStore:
         return {row["character_ref"]: row["tier_pin"] for row in rows}
 
     # ------------------------------------------------------------------
-    # Delta log
+    # Delta log / delta sets / review queue (delegated to DeltaOps)
     # ------------------------------------------------------------------
 
     async def apply_delta(
@@ -2070,142 +1859,16 @@ class StateStore:
         delta_set_id: str | None = None,
     ) -> str:
         """Apply a delta to the SQLite layer and record it in ``deltas``."""
-        async with self._txn() as conn:
-            return await self._apply_delta_on_conn(
-                conn,
-                delta=delta,
-                source=source,
-                turn_id=turn_id,
-                campaign_id=campaign_id,
-                delta_set_id=delta_set_id,
-            )
-
-    async def _apply_delta_on_conn(
-        self,
-        conn: aiosqlite.Connection,
-        *,
-        delta: dict | Any,
-        source: str | None = None,
-        turn_id: str | None = None,
-        campaign_id: str | None = None,
-        delta_set_id: str | None = None,
-    ) -> str:
-        """Apply one delta inside an already-open transaction. Returns delta id."""
-        payload = _delta_to_dict(delta)
-        target_scope = payload.get("target_scope")
-        target_table = payload.get("target_table")
-        kind = payload.get("kind", "other")
-        after = payload.get("after") or {}
-        provided_before = payload.get("before")
-
-        captured_before: Any | None = None
-        if target_scope == "campaign-sqlite":
-            if not target_table:
-                raise StateStoreError("campaign-sqlite delta missing target_table")
-            captured_before = await _capture_current_row(conn, target_table, after)
-            await upsert_row(conn, table=target_table, values=after)
-        elif target_scope in ("library", "campaign-file", "campaign-local"):
-            pass
-        else:
-            raise StateStoreError(f"unknown target_scope {target_scope!r}; use file APIs for files")
-
-        before_for_log = provided_before if provided_before is not None else captured_before
-        delta_id = await insert_delta(
-            conn,
-            campaign_id=campaign_id or payload.get("campaign_id"),
-            turn_id=turn_id or payload.get("turn_id"),
-            source=source or payload.get("source") or "unknown",
-            kind=kind,
-            target_scope=target_scope,
-            target_table=target_table,
-            target_path=payload.get("target_path"),
-            target_id=payload.get("target_id"),
-            before=before_for_log,
-            after=after,
-            confidence=payload.get("confidence"),
-            notes=payload.get("notes"),
-            delta_set_id=delta_set_id or payload.get("delta_set_id"),
+        return await self._delta_ops.apply_delta(
+            delta=delta,
+            source=source,
+            turn_id=turn_id,
+            campaign_id=campaign_id,
+            delta_set_id=delta_set_id,
         )
-        return delta_id
 
     async def reverse_delta(self, delta_id: str) -> None:
-        async with self._txn() as conn:
-            await self._reverse_delta_on_conn(conn, delta_id)
-
-    async def _reverse_delta_on_conn(
-        self,
-        conn: aiosqlite.Connection,
-        delta_id: str,
-    ) -> None:
-        delta = await get_delta(conn, delta_id)
-        if delta.reversed_at is not None:
-            raise StateStoreError(f"delta {delta_id} already reversed at {delta.reversed_at}")
-        if delta.target_scope == "campaign-sqlite":
-            await reverse_sqlite_delta(conn, delta)
-        elif delta.target_scope in ("library", "campaign-file"):
-            await self._reverse_file_delta(conn, delta)
-        else:
-            raise StateStoreError(f"cannot reverse delta with scope {delta.target_scope!r}")
-        await mark_reversed(conn, delta_id)
-
-    async def _reverse_file_delta(
-        self,
-        conn: aiosqlite.Connection,
-        delta: DeltaRecord,
-    ) -> None:
-        if delta.target_path is None:
-            raise StateStoreError(f"file delta {delta.id} has no target_path")
-        target = Path(delta.target_path)
-        if delta.before is None:
-            # The file did not exist before — delete it now.
-            if target.exists():
-                target.unlink()
-            if delta.target_scope == "library" and delta.target_id:
-                await conn.execute("DELETE FROM library_index WHERE id = ?", (delta.target_id,))
-            if delta.target_scope == "campaign-file" and delta.target_id:
-                await conn.execute(
-                    "DELETE FROM campaign_content_index WHERE id = ?",
-                    (delta.target_id,),
-                )
-            return
-
-        before = delta.before
-        fm = before.get("frontmatter") if isinstance(before, dict) else None
-        body = (before.get("body") if isinstance(before, dict) else None) or ""
-
-        if target.suffix == ".yaml":
-            write_yaml(target, fm if fm is not None else before)
-        else:
-            write_markdown(target, ParsedDocument(frontmatter=fm or {}, body=body))
-
-        if delta.target_scope == "library" and delta.target_id:
-            await upsert_library_index(
-                conn,
-                data_root=self.data_root,
-                library_id=delta.target_id,
-                path=target,
-                frontmatter=fm or {},
-                body=body,
-            )
-        elif delta.target_scope == "campaign-file" and delta.target_id:
-            cid = campaign_id_for_path(self.data_root, target) or ""
-            kind = _content_kind_from_id(delta.target_id)
-            await upsert_campaign_content_index(
-                conn,
-                data_root=self.data_root,
-                campaign_id=cid,
-                composite_id=delta.target_id,
-                kind=kind,
-                entity_subkind=None,
-                asset_id=None,
-                path=target,
-                frontmatter=fm,
-                body=body,
-            )
-
-    # ------------------------------------------------------------------
-    # Delta sets (swipes / alternates)
-    # ------------------------------------------------------------------
+        await self._delta_ops.reverse_delta(delta_id)
 
     async def apply_delta_set(
         self,
@@ -2217,20 +1880,13 @@ class StateStore:
         source: str,
     ) -> list[DeltaRecord]:
         """Apply every delta atomically, tagging each with ``delta_set_id``."""
-        records: list[DeltaRecord] = []
-        async with self._txn() as conn:
-            for d in deltas:
-                delta_id = await self._apply_delta_on_conn(
-                    conn,
-                    delta=d,
-                    source=source,
-                    turn_id=turn_id,
-                    campaign_id=campaign_id,
-                    delta_set_id=delta_set_id,
-                )
-                rec = await get_delta(conn, delta_id)
-                records.append(rec)
-        return records
+        return await self._delta_ops.apply_delta_set(
+            deltas=deltas,
+            delta_set_id=delta_set_id,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            source=source,
+        )
 
     async def rewind_delta_set(
         self,
@@ -2239,24 +1895,7 @@ class StateStore:
         campaign_id: str,
     ) -> list[DeltaRecord]:
         """LIFO-reverse every non-reversed delta tagged with ``delta_set_id``."""
-        reversed_records: list[DeltaRecord] = []
-        async with self._txn() as conn:
-            cur = await conn.execute(
-                """
-                SELECT * FROM deltas
-                WHERE campaign_id = ?
-                  AND delta_set_id = ? AND reversed_at IS NULL
-                ORDER BY applied_at DESC, rowid DESC
-                """,
-                (campaign_id, delta_set_id),
-            )
-            rows = await cur.fetchall()
-            await cur.close()
-            for row in rows:
-                delta_id = row["id"]
-                await self._reverse_delta_on_conn(conn, delta_id)
-                reversed_records.append(await get_delta(conn, delta_id))
-        return reversed_records
+        return await self._delta_ops.rewind_delta_set(delta_set_id, campaign_id=campaign_id)
 
     async def re_activate_delta_set(
         self,
@@ -2265,31 +1904,9 @@ class StateStore:
         campaign_id: str,
     ) -> int:
         """Re-apply every previously-reversed delta in a set (oldest first)."""
-        count = 0
-        async with self._txn() as conn:
-            cur = await conn.execute(
-                """
-                SELECT * FROM deltas
-                WHERE campaign_id = ?
-                  AND delta_set_id = ? AND reversed_at IS NOT NULL
-                ORDER BY applied_at ASC, rowid ASC
-                """,
-                (campaign_id, delta_set_id),
-            )
-            rows = await cur.fetchall()
-            await cur.close()
-            for row in rows:
-                rec = DeltaRecord.from_row(row)
-                if rec.target_scope == "campaign-sqlite" and rec.target_table:
-                    after = rec.after or {}
-                    if after:
-                        await upsert_row(conn, table=rec.target_table, values=after)
-                await conn.execute(
-                    "UPDATE deltas SET reversed_at = NULL WHERE id = ?",
-                    (rec.id,),
-                )
-                count += 1
-        return count
+        return await self._delta_ops.re_activate_delta_set(
+            delta_set_id=delta_set_id, campaign_id=campaign_id
+        )
 
     async def swap_delta_set(
         self,
@@ -2302,59 +1919,14 @@ class StateStore:
         source: str,
     ) -> SwapResult:
         """Atomic rewind of one set followed by application of another."""
-        rewound: list[DeltaRecord] = []
-        applied: list[DeltaRecord] = []
-        async with self._txn() as conn:
-            cur = await conn.execute(
-                """
-                SELECT id FROM deltas
-                WHERE campaign_id = ?
-                  AND delta_set_id = ? AND reversed_at IS NULL
-                ORDER BY applied_at DESC, rowid DESC
-                """,
-                (campaign_id, rewind_set_id),
-            )
-            rewind_rows = await cur.fetchall()
-            await cur.close()
-            for row in rewind_rows:
-                await self._reverse_delta_on_conn(conn, row["id"])
-                rewound.append(await get_delta(conn, row["id"]))
-
-            if apply_deltas:
-                for d in apply_deltas:
-                    delta_id = await self._apply_delta_on_conn(
-                        conn,
-                        delta=d,
-                        source=source,
-                        turn_id=turn_id,
-                        campaign_id=campaign_id,
-                        delta_set_id=apply_set_id,
-                    )
-                    applied.append(await get_delta(conn, delta_id))
-            else:
-                cur = await conn.execute(
-                    """
-                    SELECT * FROM deltas
-                    WHERE campaign_id = ?
-                      AND delta_set_id = ? AND reversed_at IS NOT NULL
-                    ORDER BY applied_at ASC, rowid ASC
-                    """,
-                    (campaign_id, apply_set_id),
-                )
-                rows = await cur.fetchall()
-                await cur.close()
-                for row in rows:
-                    rec = DeltaRecord.from_row(row)
-                    if rec.target_scope == "campaign-sqlite" and rec.target_table:
-                        after = rec.after or {}
-                        if after:
-                            await upsert_row(conn, table=rec.target_table, values=after)
-                    await conn.execute(
-                        "UPDATE deltas SET reversed_at = NULL WHERE id = ?",
-                        (rec.id,),
-                    )
-                    applied.append(await get_delta(conn, rec.id))
-        return SwapResult(rewound=rewound, applied=applied)
+        return await self._delta_ops.swap_delta_set(
+            rewind_set_id=rewind_set_id,
+            apply_deltas=apply_deltas,
+            apply_set_id=apply_set_id,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            source=source,
+        )
 
     async def swap_turn_deltas(
         self,
@@ -2367,94 +1939,15 @@ class StateStore:
     ) -> SwapResult:
         """Atomically replace a turn's recorded effects with re-extracted ones.
 
-        In one transaction: rejects the turn's stale pending review rows
-        (their proposals were extracted from text the caller is replacing —
-        approving them later would apply old-text state, mirroring the
-        cascade-delete path's rejection), LIFO-reverses every non-reversed
-        delta recorded for ``turn_id`` — skipping queued-but-unapplied review
-        rows, which were never applied to their target — applies the
-        replacement ``deltas``, and queues ``review_deltas`` for review. Any
-        failure rolls the whole swap back (file targets touched by a reversal
-        are snapshot/restored), so the campaign is left exactly as it was
-        before the call (#583).
-
-        ``turn_id=None`` means the post being retconned has no turn: nothing
-        is reversed or rejected and the replacements are applied atomically.
+        See :meth:`DeltaOps.swap_turn_deltas` for the transaction semantics
+        (#583).
         """
-        rewound: list[DeltaRecord] = []
-        applied: list[DeltaRecord] = []
-        queued_review_ids: list[str] = []
-        rejected_review_ids: list[str] = []
-        # File targets are snapshot as the reversal walk reaches them; the
-        # stack restores them (LIFO) after a failed transaction rolls back.
-        with contextlib.ExitStack() as file_snapshots:
-            async with self._txn() as conn:
-                rows: list[aiosqlite.Row] = []
-                if turn_id is not None:
-                    cur = await conn.execute(
-                        """
-                        SELECT rq.id AS review_id, rq.delta_id AS delta_id
-                        FROM review_queue rq
-                        JOIN deltas d ON d.id = rq.delta_id
-                        WHERE rq.status = 'pending'
-                          AND d.campaign_id = ? AND d.turn_id = ?
-                        """,
-                        (campaign_id, turn_id),
-                    )
-                    stale = list(await cur.fetchall())
-                    await cur.close()
-                    for stale_row in stale:
-                        await conn.execute(
-                            """
-                            UPDATE review_queue
-                            SET status = 'rejected', reviewed_at = ?, reviewer_notes = ?
-                            WHERE id = ?
-                            """,
-                            (now_iso(), "superseded by retcon", stale_row["review_id"]),
-                        )
-                        # Never applied, so marking reversed is pure bookkeeping:
-                        # it drops the row from active-delta queries.
-                        await mark_reversed(conn, stale_row["delta_id"])
-                        rejected_review_ids.append(stale_row["review_id"])
-                    cur = await conn.execute(
-                        """
-                        SELECT * FROM deltas
-                        WHERE campaign_id = ? AND turn_id = ? AND reversed_at IS NULL
-                          AND id NOT IN (
-                            SELECT delta_id FROM review_queue WHERE status = 'pending'
-                          )
-                        ORDER BY applied_at DESC, rowid DESC
-                        """,
-                        (campaign_id, turn_id),
-                    )
-                    rows = list(await cur.fetchall())
-                    await cur.close()
-                for row in rows:
-                    rec = DeltaRecord.from_row(row)
-                    if rec.target_scope in ("library", "campaign-file") and rec.target_path:
-                        file_snapshots.enter_context(_snapshot_file_before(Path(rec.target_path)))
-                    await self._reverse_delta_on_conn(conn, rec.id)
-                    rewound.append(await get_delta(conn, rec.id))
-                for d in deltas:
-                    delta_id = await self._apply_delta_on_conn(
-                        conn,
-                        delta=d,
-                        source=source,
-                        turn_id=turn_id,
-                        campaign_id=campaign_id,
-                    )
-                    applied.append(await get_delta(conn, delta_id))
-                for d in review_deltas or []:
-                    queued_review_ids.append(
-                        await self._queue_for_review_on_conn(
-                            conn, delta=d, source=source, campaign_id=campaign_id
-                        )
-                    )
-        return SwapResult(
-            rewound=rewound,
-            applied=applied,
-            queued_review_ids=queued_review_ids,
-            rejected_review_ids=rejected_review_ids,
+        return await self._delta_ops.swap_turn_deltas(
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            deltas=deltas,
+            source=source,
+            review_deltas=review_deltas,
         )
 
     async def set_current_alternate_delta_set(
@@ -2465,15 +1958,9 @@ class StateStore:
         delta_set_id: str,
     ) -> None:
         """Record which delta set is the current primary for ``post_id``."""
-        async with self._txn() as conn:
-            await conn.execute(
-                """
-                INSERT OR REPLACE INTO current_alternate_delta_sets
-                  (campaign_id, post_id, delta_set_id, updated_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (campaign_id, post_id, delta_set_id, now_iso()),
-            )
+        await self._delta_ops.set_current_alternate_delta_set(
+            campaign_id=campaign_id, post_id=post_id, delta_set_id=delta_set_id
+        )
 
     async def clear_current_alternate_delta_set(
         self,
@@ -2481,14 +1968,9 @@ class StateStore:
         campaign_id: str,
         post_id: str,
     ) -> None:
-        async with self._txn() as conn:
-            await conn.execute(
-                """
-                DELETE FROM current_alternate_delta_sets
-                WHERE campaign_id = ? AND post_id = ?
-                """,
-                (campaign_id, post_id),
-            )
+        await self._delta_ops.clear_current_alternate_delta_set(
+            campaign_id=campaign_id, post_id=post_id
+        )
 
     async def current_delta_set_for(
         self,
@@ -2498,31 +1980,9 @@ class StateStore:
         set_id: str | None = None,
     ) -> str | None:
         """Look up the primary delta set for ``post_id``."""
-        async with self.db.acquire() as conn:
-            if post_id is not None:
-                cur = await conn.execute(
-                    """
-                    SELECT delta_set_id FROM current_alternate_delta_sets
-                    WHERE campaign_id = ? AND post_id = ?
-                    """,
-                    (campaign_id, post_id),
-                )
-                row = await cur.fetchone()
-                await cur.close()
-                return row["delta_set_id"] if row else None
-            if set_id is None:
-                return None
-            cur = await conn.execute(
-                """
-                SELECT delta_set_id FROM current_alternate_delta_sets
-                WHERE campaign_id = ? AND delta_set_id = ?
-                LIMIT 1
-                """,
-                (campaign_id, set_id),
-            )
-            row = await cur.fetchone()
-            await cur.close()
-            return row["delta_set_id"] if row else None
+        return await self._delta_ops.current_delta_set_for(
+            post_id=post_id, campaign_id=campaign_id, set_id=set_id
+        )
 
     async def queue_for_review(
         self,
@@ -2532,125 +1992,24 @@ class StateStore:
         campaign_id: str | None = None,
     ) -> str:
         """Persist a low-confidence delta for human review without applying it."""
-        async with self._txn() as conn:
-            return await self._queue_for_review_on_conn(
-                conn, delta=delta, source=source, campaign_id=campaign_id
-            )
-
-    async def _queue_for_review_on_conn(
-        self,
-        conn: aiosqlite.Connection,
-        *,
-        delta: dict | Any,
-        source: str | None = None,
-        campaign_id: str | None = None,
-    ) -> str:
-        """Queue one delta for review inside an already-open transaction."""
-        payload = _delta_to_dict(delta)
-        delta_id = await insert_delta(
-            conn,
-            campaign_id=campaign_id or payload.get("campaign_id"),
-            turn_id=payload.get("turn_id"),
-            source=source or payload.get("source") or "unknown",
-            kind=payload.get("kind") or "other",
-            target_scope=payload.get("target_scope") or "campaign-sqlite",
-            target_table=payload.get("target_table"),
-            target_path=payload.get("target_path"),
-            target_id=payload.get("target_id"),
-            before=payload.get("before"),
-            after=payload.get("after"),
-            confidence=payload.get("confidence"),
-            notes="queued for review",
+        return await self._delta_ops.queue_for_review(
+            delta=delta, source=source, campaign_id=campaign_id
         )
-        # The delta is logged but not applied — caller approves later by
-        # calling apply via approve_review_item().
-        return await _queue_for_review(conn, delta_id=delta_id, campaign_id=campaign_id)
 
     async def approve_review_item(self, review_id: str) -> str:
         """Apply a previously-queued delta. Returns the delta id."""
-        async with self._txn() as conn:
-            cur = await conn.execute(
-                "SELECT delta_id, status FROM review_queue WHERE id = ?",
-                (review_id,),
-            )
-            row = await cur.fetchone()
-            await cur.close()
-            if row is None:
-                raise NotFoundError(f"review item {review_id} not found")
-            if row["status"] != "pending":
-                raise StateStoreError(f"review item {review_id} already {row['status']}")
-            delta = await get_delta(conn, row["delta_id"])
-            if delta.target_scope == "campaign-sqlite" and delta.target_table:
-                await upsert_row(conn, table=delta.target_table, values=delta.after or {})
-            await conn.execute(
-                """
-                UPDATE review_queue
-                SET status = 'approved', reviewed_at = ?
-                WHERE id = ?
-                """,
-                (now_iso(), review_id),
-            )
-        return delta.id
+        return await self._delta_ops.approve_review_item(review_id)
 
     async def reject_review_item(self, review_id: str, *, notes: str = "") -> None:
-        async with self._txn() as conn:
-            cur = await conn.execute(
-                "SELECT delta_id FROM review_queue WHERE id = ?",
-                (review_id,),
-            )
-            row = await cur.fetchone()
-            await cur.close()
-            if row is None:
-                raise NotFoundError(f"review item {review_id} not found")
-            await conn.execute(
-                """
-                UPDATE review_queue
-                SET status = 'rejected', reviewed_at = ?, reviewer_notes = ?
-                WHERE id = ?
-                """,
-                (now_iso(), notes, review_id),
-            )
-            # Mark the unapplied delta as reversed so it doesn't appear in
-            # active-deltas queries.
-            await mark_reversed(conn, row["delta_id"])
+        await self._delta_ops.reject_review_item(review_id, notes=notes)
 
     async def pending_review_delta_ids(self, campaign_id: str) -> set[str]:
-        """Delta ids that are queued for review but not yet applied.
-
-        These rows live in the delta table (so ``get_delta_log`` returns them)
-        but were never applied to their target, so they must not be reversed —
-        reversing a never-applied delta with ``before=None`` would delete a live
-        row. Rejected review items are already ``mark_reversed``, so only
-        ``pending`` rows need filtering.
-        """
-        async with self.db.acquire() as conn:
-            cur = await conn.execute(
-                "SELECT delta_id FROM review_queue WHERE campaign_id = ? AND status = 'pending'",
-                (campaign_id,),
-            )
-            rows = await cur.fetchall()
-            await cur.close()
-        return {row["delta_id"] for row in rows}
+        """Delta ids that are queued for review but not yet applied."""
+        return await self._delta_ops.pending_review_delta_ids(campaign_id)
 
     async def pending_review_items(self, campaign_id: str) -> list[tuple[str, str | None]]:
-        """``(review_id, turn_id)`` for each pending review item in the campaign.
-
-        Joins the review queue to the delta table so callers (cascade delete)
-        can reject the review rows that belong to turns being removed.
-        """
-        async with self.db.acquire() as conn:
-            cur = await conn.execute(
-                """
-                SELECT rq.id AS review_id, d.turn_id AS turn_id
-                FROM review_queue rq
-                JOIN deltas d ON d.id = rq.delta_id
-                WHERE rq.campaign_id = ? AND rq.status = 'pending'
-                """,
-                (campaign_id,),
-            )
-            rows = await cur.fetchall()
-            await cur.close()
-        return [(row["review_id"], row["turn_id"]) for row in rows]
+        """``(review_id, turn_id)`` for each pending review item in the campaign."""
+        return await self._delta_ops.pending_review_items(campaign_id)
 
     async def get_delta_log(
         self,
@@ -2661,19 +2020,16 @@ class StateStore:
         include_reversed: bool = True,
         limit: int | None = None,
     ) -> list[DeltaRecord]:
-        since_str = since.isoformat() if isinstance(since, datetime) else since
-        async with self.db.acquire() as conn:
-            return await list_deltas(
-                conn,
-                campaign_id=campaign_id,
-                since=since_str,
-                turn_id=turn_id,
-                include_reversed=include_reversed,
-                limit=limit,
-            )
+        return await self._delta_ops.get_delta_log(
+            campaign_id=campaign_id,
+            since=since,
+            turn_id=turn_id,
+            include_reversed=include_reversed,
+            limit=limit,
+        )
 
     # ------------------------------------------------------------------
-    # Embeddings + search
+    # Embeddings + search (delegated to SearchStore)
     # ------------------------------------------------------------------
 
     async def add_embedding(
@@ -2687,25 +2043,18 @@ class StateStore:
         model: str,
         campaign_id: str | None = None,
     ) -> str:
-        embedding_id = new_id("emb", length=16)
-        async with self.db.acquire() as conn:
-            await insert_embedding(
-                conn,
-                embedding_id=embedding_id,
-                scope=scope,
-                ref=ref,
-                source_kind=source_kind,
-                text=text,
-                vector=vector,
-                model=model,
-                embedded_at=now_iso(),
-                campaign_id=campaign_id,
-            )
-        return embedding_id
+        return await self._search.add_embedding(
+            ref=ref,
+            scope=scope,
+            source_kind=source_kind,
+            text=text,
+            vector=vector,
+            model=model,
+            campaign_id=campaign_id,
+        )
 
     async def delete_embeddings(self, ref: str) -> int:
-        async with self.db.acquire() as conn:
-            return await delete_embeddings_for_ref(conn, ref)
+        return await self._search.delete_embeddings(ref)
 
     async def vector_search(
         self,
@@ -2716,15 +2065,13 @@ class StateStore:
         include_library: bool = True,
         top_k: int = 8,
     ) -> list[SearchHit]:
-        async with self.db.acquire() as conn:
-            return await _vector_search(
-                conn,
-                query_vector=query_vector,
-                campaign_id=campaign_id,
-                source_kinds=source_kinds,
-                include_library=include_library,
-                top_k=top_k,
-            )
+        return await self._search.vector_search(
+            query_vector=query_vector,
+            campaign_id=campaign_id,
+            source_kinds=source_kinds,
+            include_library=include_library,
+            top_k=top_k,
+        )
 
     async def keyword_search(
         self,
@@ -2735,42 +2082,16 @@ class StateStore:
         top_k: int = 5,
         include_retired: bool = False,
     ) -> list[SearchHit]:
-        kinds_set = set(kinds)
-        hits: list[SearchHit] = []
-        async with self.db.acquire() as conn:
-            if "fact" in kinds_set:
-                hits.extend(
-                    await keyword_search_facts(
-                        conn,
-                        query=query,
-                        campaign_id=campaign_id,
-                        include_retired=include_retired,
-                        top_k=top_k,
-                    )
-                )
-            if kinds_set & {"character", "item", "location", "lore", "faction"}:
-                hits.extend(
-                    await keyword_search_library(
-                        conn,
-                        query=query,
-                        kinds=list(
-                            kinds_set
-                            & {
-                                "character",
-                                "item",
-                                "location",
-                                "lore",
-                                "faction",
-                            }
-                        ),
-                        top_k=top_k,
-                    )
-                )
-        hits.sort(key=lambda h: h.score, reverse=True)
-        return hits[:top_k]
+        return await self._search.keyword_search(
+            query=query,
+            campaign_id=campaign_id,
+            kinds=kinds,
+            top_k=top_k,
+            include_retired=include_retired,
+        )
 
     # ------------------------------------------------------------------
-    # Context inspector pins / excludes
+    # Context inspector pins / excludes (delegated to ContextPinStore)
     # ------------------------------------------------------------------
 
     async def write_context_pin(
@@ -2786,46 +2107,18 @@ class StateStore:
         created_by: str = "user",
         pin_id: str | None = None,
     ) -> str:
-        """Insert a context pin/exclude row.
-
-        TTL is stored as an integer turn count alongside
-        ``created_at_turn_id``. Expiry is resolved at read time by counting
-        turns elapsed between ``created_at_turn_id`` and the current turn id
-        using ``turn_audits.created_at`` ordering — turn ids themselves are
-        random hex and not lexicographically comparable.
-        """
-        if kind not in ("pin", "exclude"):
-            raise ValueError(f"context pin kind must be 'pin' or 'exclude', got {kind!r}")
-        target_kind = "source" if target_source_id else "entity"
-        if target_kind == "entity" and not (target_entity_kind and target_entity_id):
-            raise ValueError("entity-targeted pin requires both entity_kind and entity_id")
-        if ttl_turns is not None and ttl_turns <= 0:
-            raise ValueError(f"ttl_turns must be positive when set, got {ttl_turns}")
-        pid = pin_id or new_id("ctx_pin", length=16)
-        await self.db.execute(
-            """
-            INSERT INTO context_pins (
-                id, campaign_id, kind, target_kind,
-                target_source_id, target_entity_kind, target_entity_id,
-                created_at, created_by, created_at_turn_id, ttl_turns
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                pid,
-                campaign_id,
-                kind,
-                target_kind,
-                target_source_id,
-                target_entity_kind,
-                target_entity_id,
-                now_iso(),
-                created_by,
-                created_at_turn_id,
-                ttl_turns,
-            ),
+        """Insert a context pin/exclude row (see :meth:`ContextPinStore.write_pin`)."""
+        return await self._context_pins.write_pin(
+            campaign_id=campaign_id,
+            kind=kind,
+            target_source_id=target_source_id,
+            target_entity_kind=target_entity_kind,
+            target_entity_id=target_entity_id,
+            created_at_turn_id=created_at_turn_id,
+            ttl_turns=ttl_turns,
+            created_by=created_by,
+            pin_id=pin_id,
         )
-        return pid
 
     async def list_active_context_pins(
         self,
@@ -2833,75 +2126,10 @@ class StateStore:
         campaign_id: str,
         current_turn_id: str | None = None,
     ) -> list[dict]:
-        """Return every active pin/exclude for the campaign.
-
-        Active = ``cleared_at IS NULL`` AND TTL not exhausted. TTL is
-        exhausted when the number of canonical turns recorded in
-        ``turn_audits`` between ``created_at_turn_id`` (exclusive) and
-        ``current_turn_id`` (inclusive) is >= ``ttl_turns``. Rows with
-        ``ttl_turns IS NULL`` never expire.
-        """
-        rows = await self.db.fetchall(
-            """
-            SELECT * FROM context_pins
-            WHERE campaign_id = ? AND cleared_at IS NULL
-            ORDER BY created_at
-            """,
-            (campaign_id,),
+        """Return every active (uncleared, TTL-unexpired) pin/exclude."""
+        return await self._context_pins.list_active(
+            campaign_id=campaign_id, current_turn_id=current_turn_id
         )
-        out: list[dict] = []
-        for row in rows:
-            ttl = row["ttl_turns"]
-            if ttl is None or current_turn_id is None or row["created_at_turn_id"] is None:
-                out.append(dict(row))
-                continue
-            elapsed = await self._turns_elapsed(
-                campaign_id=campaign_id,
-                from_turn_id=row["created_at_turn_id"],
-                to_turn_id=current_turn_id,
-            )
-            if elapsed is None or elapsed < int(ttl):
-                out.append(dict(row))
-        return out
-
-    async def _turns_elapsed(
-        self,
-        *,
-        campaign_id: str,
-        from_turn_id: str,
-        to_turn_id: str,
-    ) -> int | None:
-        """Count canonical turns between two turn ids.
-
-        Uses ``turn_audits.created_at`` ordering. Returns ``None`` when
-        either turn id is unknown to the audit table (caller treats this
-        as "TTL not yet exhausted" so a missing audit can't silently
-        evict pins).
-        """
-        rows = await self.db.fetchall(
-            """
-            SELECT turn_id, created_at FROM turn_audits
-            WHERE campaign_id = ?
-              AND turn_id IN (?, ?)
-            """,
-            (campaign_id, from_turn_id, to_turn_id),
-        )
-        by_id = {row["turn_id"]: row["created_at"] for row in rows}
-        if from_turn_id not in by_id or to_turn_id not in by_id:
-            return None
-        start = by_id[from_turn_id]
-        end = by_id[to_turn_id]
-        if end < start:
-            return 0
-        count_row = await self.db.fetchone(
-            """
-            SELECT COUNT(*) AS n FROM turn_audits
-            WHERE campaign_id = ?
-              AND created_at > ? AND created_at <= ?
-            """,
-            (campaign_id, start, end),
-        )
-        return int(count_row["n"]) if count_row else 0
 
     async def mark_context_pin_cleared(
         self,
@@ -2909,10 +2137,7 @@ class StateStore:
         pin_id: str,
         cleared_by: str = "user",
     ) -> None:
-        await self.db.execute(
-            "UPDATE context_pins SET cleared_at = ?, cleared_by = ? WHERE id = ?",
-            (now_iso(), cleared_by, pin_id),
-        )
+        await self._context_pins.mark_cleared(pin_id=pin_id, cleared_by=cleared_by)
 
 
 # ---------------------------------------------------------------------------
@@ -2996,84 +2221,3 @@ def _character_state_row_to_dict(row: aiosqlite.Row) -> dict:
         "updated_at_turn": row["updated_at_turn"],
         "appearances_since_last_drift_check": int(row["appearances_since_last_drift_check"] or 0),
     }
-
-
-def _delta_to_dict(value: Any) -> dict:
-    if value is None:
-        raise StateStoreError("delta is None")
-    if isinstance(value, dict):
-        return value
-    # Try to interoperate with pydantic models (StateDelta).
-    if hasattr(value, "model_dump"):
-        return value.model_dump()
-    if hasattr(value, "__dict__"):
-        return dict(value.__dict__)
-    raise StateStoreError(f"cannot convert delta of type {type(value).__name__}")
-
-
-async def _capture_current_row(
-    conn: aiosqlite.Connection,
-    table: str,
-    after: dict,
-) -> dict | None:
-    """Look up the current row for the PK in ``after``; ``None`` if absent.
-
-    ``table`` is interpolated into the SELECT — safe today because
-    ``primary_key_columns`` returns ``None`` for any table that isn't in
-    the hard-coded ``_PRIMARY_KEYS`` allowlist, so the gate below already
-    rejects untrusted names. The explicit membership check makes that
-    invariant local to this function rather than relying on a transitive
-    property of a helper in another module.
-    """
-    pk = primary_key_columns(table)
-    if pk is None:
-        return None
-    if table not in _CAPTURE_SAFE_TABLES:
-        # Belt-and-braces: should be unreachable because primary_key_columns
-        # returns None for anything outside this set. If a future edit adds
-        # a table to _PRIMARY_KEYS but forgets to extend _CAPTURE_SAFE_TABLES,
-        # we'd rather fail closed here than silently interpolate the new
-        # name. Mismatch is a programming error, not a runtime contingency.
-        raise StateStoreError(f"refusing to capture from non-allowlisted table {table!r}")
-    if not all(col in after for col in pk):
-        return None
-    where = " AND ".join(f"{c} = ?" for c in pk)
-    params = tuple(after[c] for c in pk)
-    async with conn.execute(
-        f"SELECT * FROM {table} WHERE {where}",
-        params,
-    ) as cur:
-        row = await cur.fetchone()
-    if row is None:
-        return None
-    return dict(row)
-
-
-# Tables _capture_current_row is allowed to SELECT from. Must be a
-# superset of the keys in delta_log._PRIMARY_KEYS for the check above
-# to pass; kept as a separate constant so a future edit to either has
-# to consciously mirror it.
-_CAPTURE_SAFE_TABLES: frozenset[str] = frozenset(
-    {
-        "character_state",
-        "location_state",
-        "faction_state",
-        "facts",
-        "commitments",
-        "relationships",
-        "knowledge_state",
-        "calendar",
-        "images",
-        "scenes",
-        "posts",
-    }
-)
-
-
-def _content_kind_from_id(composite_id: str) -> str:
-    """Infer ``kind`` for ``campaign_content_index`` from a composite id."""
-    parts = composite_id.split("/")
-    # campaigns/<id>/<kind>/...
-    if len(parts) >= 3 and parts[0] == "campaigns":
-        return parts[2].rstrip("s") if parts[2].endswith("s") else parts[2]
-    return "unknown"
