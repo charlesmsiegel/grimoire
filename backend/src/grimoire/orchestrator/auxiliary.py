@@ -79,10 +79,7 @@ class AuxiliaryCoordinator:
         edited_text: str | None = None,
     ) -> dict[str, Any]:
         from grimoire.auxiliary.types import CommitAction
-        from grimoire.orchestrator.errors import (
-            AuxiliaryAlreadyCommittedError,
-            AuxiliaryNotFoundError,
-        )
+        from grimoire.orchestrator.errors import AuxiliaryNotFoundError
 
         await self._require_campaign(campaign_id)
         aux = self._inflight_aux.pop(result_id, None)
@@ -186,7 +183,6 @@ class AuxiliaryCoordinator:
             "result_id": result_id,
             "text": text,
         }
-        _ = AuxiliaryAlreadyCommittedError
 
     async def _characters_active_pc(self, campaign_id: CampaignId) -> CharacterRef:
         getter = getattr(self._context, "_characters", None)

@@ -36,14 +36,8 @@ class PreRollConfig:
 
 
 @dataclass
-class MultiPCConfig:
-    advance_required: bool = True
-
-
-@dataclass
 class BackgroundWorkConfig:
     drift_check_sampling: float = 0.25
-    npc_tick_after_each_turn: bool = True
 
 
 @dataclass
@@ -75,13 +69,10 @@ class SpeakerLoopConfig:
 
 @dataclass
 class OrchestratorConfig:
-    per_campaign_concurrency: int = 1
     turn_timeout_seconds: float = 180.0
-    stream_response: bool = True
     main_llm_task: str = "main"
     scene_break: SceneBreakConfig = None  # type: ignore[assignment]
     pre_roll: PreRollConfig = None  # type: ignore[assignment]
-    multi_pc: MultiPCConfig = None  # type: ignore[assignment]
     background_work: BackgroundWorkConfig = None  # type: ignore[assignment]
     errors: ErrorConfig = None  # type: ignore[assignment]
     heartbeat: HeartbeatConfig = None  # type: ignore[assignment]
@@ -93,8 +84,6 @@ class OrchestratorConfig:
             self.scene_break = SceneBreakConfig()
         if self.pre_roll is None:
             self.pre_roll = PreRollConfig()
-        if self.multi_pc is None:
-            self.multi_pc = MultiPCConfig()
         if self.background_work is None:
             self.background_work = BackgroundWorkConfig()
         if self.errors is None:
@@ -111,7 +100,6 @@ __all__ = [
     "BackgroundWorkConfig",
     "ErrorConfig",
     "HeartbeatConfig",
-    "MultiPCConfig",
     "OrchestratorConfig",
     "PreRollConfig",
     "SceneBreakConfig",
