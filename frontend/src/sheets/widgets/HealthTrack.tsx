@@ -1,3 +1,4 @@
+import { useRowIds } from "../../hooks/useRowIds";
 import type { HealthRow, SeverityLevel, WidgetProps } from "../types";
 
 type RowValue = "" | "/" | "x" | "*";
@@ -38,6 +39,7 @@ export function HealthTrackWidget({
     severities,
   );
   const marks: ReadonlyArray<RowValue> = value?.rows ?? rows.map<RowValue>(() => "");
+  const { keys } = useRowIds(rows.length);
 
   const cycle = (idx: number) => {
     if (readOnly) return;
@@ -61,7 +63,7 @@ export function HealthTrackWidget({
         return (
           <button
             type="button"
-            key={idx}
+            key={keys[idx]}
             className={`sheet-health-cell sheet-health-${mark || "empty"}`}
             data-severity={row.severity}
             aria-label={`${row.label ?? row.severity ?? "row"} ${idx + 1}: ${mark || "empty"}`}

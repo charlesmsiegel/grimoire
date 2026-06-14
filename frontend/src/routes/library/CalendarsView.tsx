@@ -12,6 +12,7 @@ import type {
   UpdateCalendarPayload,
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
+import { useRowIds } from "../../hooks/useRowIds";
 import { CardIconBar } from "../../components/CardIconBar";
 import { deleteAction } from "../../components/cardActions";
 import { AsyncBoundary } from "./AsyncBoundary";
@@ -366,6 +367,7 @@ function CalendarForm({
   const [custom, setCustom] = useState<CustomCalendarConfig>(initial.custom);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const monthIds = useRowIds(custom.months.length);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -400,10 +402,12 @@ function CalendarForm({
   }
 
   function removeMonth(idx: number) {
+    monthIds.removeAt(idx);
     setCustom((c) => ({ ...c, months: c.months.filter((_, i) => i !== idx) }));
   }
 
   function addMonth() {
+    monthIds.insertAt(custom.months.length);
     setCustom((c) => ({
       ...c,
       months: [...c.months, { name: `Month ${c.months.length + 1}`, days: 30 }],
@@ -452,7 +456,7 @@ function CalendarForm({
         <fieldset className="calendar-months-fieldset">
           <legend>Months</legend>
           {custom.months.map((m, i) => (
-            <div key={i} className="calendar-month-row">
+            <div key={monthIds.keys[i]} className="calendar-month-row">
               <input
                 value={m.name}
                 onChange={(e) => updateMonth(i, { name: e.target.value })}

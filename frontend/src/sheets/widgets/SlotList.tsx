@@ -1,3 +1,4 @@
+import { useRowIds } from "../../hooks/useRowIds";
 import type { WidgetProps } from "../types";
 
 export function SlotListWidget({
@@ -9,6 +10,7 @@ export function SlotListWidget({
 }: WidgetProps<ReadonlyArray<string | null> | null>) {
   const size = property.size ?? 0;
   const slots = Array.from({ length: size }, (_, i) => value?.[i] ?? null);
+  const { keys } = useRowIds(slots.length);
 
   const update = (idx: number, raw: string) => {
     if (readOnly) return;
@@ -24,7 +26,7 @@ export function SlotListWidget({
       aria-label={property.title ?? name}
     >
       {slots.map((slot, idx) => (
-        <li key={idx} className="sheet-slot">
+        <li key={keys[idx]} className="sheet-slot">
           <span className="sheet-slot-index" aria-hidden="true">
             {idx + 1}
           </span>
