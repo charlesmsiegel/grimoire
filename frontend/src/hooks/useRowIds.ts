@@ -1,6 +1,18 @@
 import { useRef } from "react";
 
 /**
+ * Process-wide monotonic counter for ephemeral row keys. A bare counter is
+ * enough — these ids only need to be unique among the rows React is currently
+ * diffing, never persisted or shared. We deliberately avoid
+ * `crypto.randomUUID()`, which is secure-context-only and so `undefined` when
+ * Grimoire is served over plain HTTP on a LAN address
+ * (`GRIMOIRE_FRONTEND_HOST=0.0.0.0`); calling it there would throw before the
+ * list rendered.
+ */
+let rowKeyCounter = 0;
+const newRowKey = () => `row-${rowKeyCounter++}`;
+
+/**
  * Stable, non-index keys for a controlled list whose items carry no id of
  * their own (slot values, power rows, calendar months, …).
  *
@@ -23,7 +35,7 @@ export function useRowIds(count: number) {
 
   if (ids.current.length !== count) {
     if (count > ids.current.length) {
-      while (ids.current.length < count) ids.current.push(crypto.randomUUID());
+      while (ids.current.length < count) ids.current.push(newRowKey());
     } else {
       ids.current = ids.current.slice(0, count);
     }
@@ -32,7 +44,7 @@ export function useRowIds(count: number) {
   return {
     keys: ids.current as ReadonlyArray<string>,
     insertAt(idx: number) {
-      ids.current = [...ids.current.slice(0, idx), crypto.randomUUID(), ...ids.current.slice(idx)];
+      ids.current = [...ids.current.slice(0, idx), newRowKey(), ...ids.current.slice(idx)];
     },
     removeAt(idx: number) {
       ids.current = ids.current.filter((_, i) => i !== idx);
