@@ -9,9 +9,10 @@ interface Draft {
 const start = initialEditState<Draft>({ body: "" });
 
 describe("editReducer", () => {
-  it("seeds a clean draft with no dialogs open", () => {
+  it("seeds a clean draft (draft === baseline) with no dialogs open", () => {
     expect(start).toEqual<EditState<Draft>>({
       draft: { body: "" },
+      baseline: { body: "" },
       saving: false,
       saveErr: null,
       confirm: null,
@@ -19,9 +20,11 @@ describe("editReducer", () => {
     });
   });
 
-  it("walks load → edit → ask-confirm → save → done", () => {
+  it("walks load → edit → ask-confirm → save → done, advancing the baseline", () => {
     let s = editReducer(start, { type: "edit", draft: { body: "hi" } });
     expect(s.draft.body).toBe("hi");
+    // Baseline unchanged by editing → caller sees the row as dirty.
+    expect(s.baseline.body).toBe("");
 
     s = editReducer(s, { type: "ask-confirm", dependents: [{ id: "c1", name: "C1" }] });
     expect(s.confirm?.dependents).toHaveLength(1);
@@ -31,8 +34,21 @@ describe("editReducer", () => {
 
     s = editReducer(s, { type: "save-ok" });
     expect(s).toMatchObject({ saving: false, confirm: null });
-    // The edited draft survives a successful save (it now matches the reload).
+    // The edited draft survives, and the baseline advances to match it, so the
+    // row is clean immediately — no duplicate-save window during the reload.
     expect(s.draft.body).toBe("hi");
+    expect(s.baseline.body).toBe("hi");
+  });
+
+  it("reset re-seeds draft and baseline from a fresh (e.g. normalized) load", () => {
+    let s = editReducer(start, { type: "edit", draft: { body: "  hi  " } });
+    s = editReducer(s, { type: "save-start" });
+    s = editReducer(s, { type: "save-ok" });
+    // Server trimmed on save; the reload delivers the canonical value.
+    s = editReducer(s, { type: "reset", draft: { body: "hi" } });
+    expect(s.draft.body).toBe("hi");
+    expect(s.baseline.body).toBe("hi");
+    expect(s).toMatchObject({ saving: false, saveErr: null, confirm: null, deleting: null });
   });
 
   it("records a save error and closes the confirm dialog", () => {

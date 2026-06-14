@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useReducer } from "react";
+import { useCallback, useMemo, useReducer, useState } from "react";
 import { Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -93,6 +93,10 @@ interface EntityDraft {
   body: string;
 }
 
+function toEntityDraft(entity: LibraryEntity): EntityDraft {
+  return { frontmatter: ensureFrontmatter(entity.frontmatter), body: entity.body };
+}
+
 const SUB_TABS = (isCharacter: boolean, basePath: string) => [
   { to: basePath, label: "Editor", end: true },
   ...(isCharacter
@@ -114,14 +118,20 @@ function EntityEditorBody({
 }: EditorBodyProps) {
   const navigate = useNavigate();
   const [state, dispatch] = useReducer(editReducer<EntityDraft>, entity, (e) =>
-    initialEditState<EntityDraft>({ frontmatter: ensureFrontmatter(e.frontmatter), body: e.body }),
+    initialEditState(toEntityDraft(e)),
   );
-  const { draft, saving, saveErr, confirm, deleting } = state;
+  // Re-seed when a fresh entity revision arrives (reload after save, retry),
+  // via React's render-time "previous prop" pattern — no mirror effect. A new
+  // load object replaces the draft + baseline, so a server that normalizes on
+  // save (e.g. trims fields) leaves the editor clean and canonical.
+  const [seededFrom, setSeededFrom] = useState(entity);
+  if (entity !== seededFrom) {
+    setSeededFrom(entity);
+    dispatch({ type: "reset", draft: toEntityDraft(entity) });
+  }
+  const { draft, baseline, saving, saveErr, confirm, deleting } = state;
   const { frontmatter, body } = draft;
-  const dirty = !deepEqual(draft, {
-    frontmatter: ensureFrontmatter(entity.frontmatter),
-    body: entity.body,
-  });
+  const dirty = !deepEqual(draft, baseline);
 
   async function confirmDelete() {
     dispatch({ type: "delete-start" });
@@ -421,10 +431,18 @@ function GreetingEditorBody({
 }) {
   const navigate = useNavigate();
   const [state, dispatch] = useReducer(editReducer<GreetingFormValue>, greeting, (g) =>
-    initialEditState<GreetingFormValue>(greetingToForm(g)),
+    initialEditState(greetingToForm(g)),
   );
-  const { draft: form, saving, saveErr, confirm, deleting } = state;
-  const dirty = !deepEqual(form, greetingToForm(greeting));
+  // Re-seed when a fresh greeting revision arrives (see EntityEditorBody).
+  // greetingFormToPayload trims on save, so this keeps the form canonical and
+  // clean after the reload returns the trimmed values.
+  const [seededFrom, setSeededFrom] = useState(greeting);
+  if (greeting !== seededFrom) {
+    setSeededFrom(greeting);
+    dispatch({ type: "reset", draft: greetingToForm(greeting) });
+  }
+  const { draft: form, baseline, saving, saveErr, confirm, deleting } = state;
+  const dirty = !deepEqual(form, baseline);
 
   async function confirmDelete() {
     dispatch({ type: "delete-start" });
