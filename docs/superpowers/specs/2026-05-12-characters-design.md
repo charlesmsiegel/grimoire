@@ -103,7 +103,6 @@ class CharactersService:
     # Multi-PC turn semantics
     async def present_pcs_in_scene(scene, campaign_id=None) -> list[PCEntry]
     async def should_auto_respond(scene, campaign_id=None) -> bool
-    async def pending_pc_inputs_since_last_advance(scene, posts) -> list[Post]
 
     # Capabilities
     async def capabilities_of(ref, campaign_id) -> list[Capability]
@@ -136,7 +135,6 @@ The shape closely mirrors spec 08 §Interface. Notable adaptations vs. the spec 
 - `set_current_scene_for_pc` accepts a `scene_id: str`, not a `SceneRef`.
 - `present_pcs_in_scene` / `should_auto_respond` take a `Scene` object plus optional `campaign_id` (the scene already carries it).
 - `recommend_tiers` returns the per-character mapping for a single scene; see "Tier recommendation" for what's actually computed.
-- `pending_pc_inputs_since_last_advance(scene, posts)` is host-driven — the caller supplies the post list, the service applies the threshold from `scene.last_advance_at_post`.
 
 ## Character schema (as shipped)
 
@@ -205,8 +203,6 @@ PC roster lives in the `pcs` table (`StateStore.list_pcs/add_pc/remove_pc/set_ac
 `present_pcs_in_scene(scene, ...)` unions `scene.present_pc_refs` with PCs from the roster that appear in `scene.present_character_refs`.
 
 `should_auto_respond(scene, ...)` returns `True` when ≤1 PC is present. The Orchestrator uses this to decide whether to LLM-respond immediately or wait for an explicit `advance`.
-
-`pending_pc_inputs_since_last_advance(scene, posts)` filters `posts` to PC-authored entries whose `order_in_scene > scene.last_advance_at_post`.
 
 Per-PC current scene is stored on `CharacterState.current_scene_id`; `current_scene_for_pc` reads it, `set_current_scene_for_pc` writes it.
 

@@ -111,21 +111,21 @@ Other event types in spec 01 are owned by other modules (`imagegen_job_failed` i
 
 ```python
 OrchestratorConfig(
-    per_campaign_concurrency=1,
     turn_timeout_seconds=180.0,         # config exists; not yet enforced in _run_turn
-    stream_response=True,
     main_llm_task="main",
     scene_break=SceneBreakConfig(auto_threshold=0.8, prompt_threshold=0.5),
     pre_roll=PreRollConfig(confirm_before_executing="never"),
-    multi_pc=MultiPCConfig(advance_required=True),
-    background_work=BackgroundWorkConfig(drift_check_sampling=0.25,
-                                          npc_tick_after_each_turn=True),
+    background_work=BackgroundWorkConfig(drift_check_sampling=0.25),
     errors=ErrorConfig(retry_extractor_on_parse_failure=1,
                        surface_partial_response_on_llm_error=True),
 )
 ```
 
-`background_work` and `errors` fields exist for API stability; the behaviors they configure are deferred to the remaining-design spec.
+`errors` fields and `background_work.drift_check_sampling` are live; the
+remaining behaviors they configure are deferred to the remaining-design spec.
+(The never-read `per_campaign_concurrency`, `stream_response`, `multi_pc`, and
+`background_work.npc_tick_after_each_turn` settings were removed in #593 — they
+were exposed but had no consumer.)
 
 ## Error handling (as implemented)
 
