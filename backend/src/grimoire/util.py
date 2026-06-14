@@ -102,22 +102,34 @@ def json_equal(left: Any, right: Any) -> bool:
 def extract_json_object(text: str) -> dict | None:
     """Pull the first JSON object out of LLM output, tolerating ``` fences.
 
-    Strips an optional Markdown code fence, then takes the substring from the
-    first ``{`` to the last ``}``. Returns ``None`` if no object is found or it
+    Tries the complete response first — the outermost ``{`` to ``}`` span — so a
+    valid object whose *string values* embed a Markdown fence (e.g. an evidence
+    field quoting a ``` ```python ``` block) still parses. Only if that fails
+    does it fall back to extracting a fenced code block (prose-wrapped
+    ``` ```json\\n{...}\\n``` ```). Returns ``None`` if no object is found or it
     doesn't parse — callers treat that as "model didn't produce usable JSON".
     """
     text = text.strip()
+    parsed = _loads_brace_span(text)
+    if parsed is not None:
+        return parsed
     fence = _JSON_FENCE.search(text)
     if fence is not None:
-        text = fence.group(1)
+        return _loads_brace_span(fence.group(1))
+    return None
+
+
+def _loads_brace_span(text: str) -> dict | None:
+    """Parse the substring from the first ``{`` to the last ``}`` as a JSON object."""
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
         return None
     try:
-        return json.loads(text[start : end + 1])
+        result = json.loads(text[start : end + 1])
     except json.JSONDecodeError:
         return None
+    return result if isinstance(result, dict) else None
 
 
 def serialize_vector(vector: list[float]) -> bytes:
