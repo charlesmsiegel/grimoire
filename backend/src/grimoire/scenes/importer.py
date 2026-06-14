@@ -184,7 +184,7 @@ async def run_import_pipeline(
     try:
         for i, (_order, kind, pc_ref, npc_ref, body) in enumerate(parsed.posts):
             post = Post(
-                id=uuid.uuid4().hex,
+                id=str(uuid.uuid4()),
                 scene_id=scene.id,
                 order_in_scene=i + 1,
                 author_kind=kind,
@@ -192,7 +192,7 @@ async def run_import_pipeline(
                 is_player=(kind == AuthorKind.PC),
                 created_at=base_ts
                 + timedelta(milliseconds=i),  # distinct per post for fork cutoffs
-                turn_id=uuid.uuid4().hex,
+                turn_id=str(uuid.uuid4()),
                 author_pc_ref=pc_ref,
                 author_npc_ref=npc_ref,
             )

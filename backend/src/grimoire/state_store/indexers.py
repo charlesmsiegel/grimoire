@@ -21,17 +21,11 @@ from grimoire.state_store.paths import (
     parse_library_id,
     relative_to_root,
 )
-from grimoire.util import now_iso
+from grimoire.util import now_iso, safe_json_dumps
 
 
 def file_mtime_iso(path: Path) -> str:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).isoformat()
-
-
-def _json_or_none(value: object) -> str | None:
-    if value is None:
-        return None
-    return json.dumps(value, sort_keys=True)
 
 
 def _name_from(frontmatter: dict, fallback: str) -> str:
@@ -116,8 +110,8 @@ async def upsert_library_index(
             relative_to_root(data_root, path),
             json.dumps(frontmatter, sort_keys=True),
             body,
-            _json_or_none(tags),
-            _json_or_none(keywords),
+            safe_json_dumps(tags),
+            safe_json_dumps(keywords),
             file_mtime_iso(path),
             chash,
             now_iso(),
@@ -176,7 +170,7 @@ async def upsert_campaign_content_index(
             entity_subkind,
             asset_id,
             relative_to_root(data_root, path),
-            _json_or_none(frontmatter) if frontmatter is not None else None,
+            safe_json_dumps(frontmatter) if frontmatter is not None else None,
             body,
             file_mtime_iso(path),
             chash,

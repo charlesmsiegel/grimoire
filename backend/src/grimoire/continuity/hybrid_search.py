@@ -14,11 +14,11 @@ keyword-only.
 from __future__ import annotations
 
 import logging
-import struct
 from typing import Protocol
 
 from grimoire.continuity.protocols import ContinuityStore, FactSearchIndex
 from grimoire.continuity.types import Fact, FactId
+from grimoire.util import serialize_vector
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +27,6 @@ class QueryEmbedder(Protocol):
     """Minimal seam over the LLM Gateway's embed call."""
 
     async def embed(self, task: str, texts: list[str]) -> list[list[float]]: ...
-
-
-def _serialise_vector(vector: list[float]) -> bytes:
-    return struct.pack(f"<{len(vector)}f", *vector)
 
 
 class HybridFactSearchIndex(FactSearchIndex):
@@ -152,7 +148,7 @@ class HybridFactSearchIndex(FactSearchIndex):
             return []
         if not vectors or not vectors[0]:
             return []
-        qvec = _serialise_vector(list(vectors[0]))
+        qvec = serialize_vector(list(vectors[0]))
 
         where = [
             "embeddings.source_kind = 'fact'",

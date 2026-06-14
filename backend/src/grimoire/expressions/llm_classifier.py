@@ -12,16 +12,15 @@ gateway integration lives outside this file.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Awaitable, Callable, Iterable
-from typing import Any
 
 from grimoire.types.expressions import (
     CoreExpression,
     ExpressionChange,
     is_known_label,
 )
+from grimoire.util import extract_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +82,8 @@ async def llm_classify(
         logger.warning("expression LLM call failed: %s", exc)
         return []
 
-    payload = _parse_json_safely(response)
-    if not isinstance(payload, dict):
+    payload = extract_json_object(response)
+    if payload is None:
         return []
 
     present_ids = {cid for cid, _ in present_list}
@@ -108,26 +107,6 @@ async def llm_classify(
             )
         )
     return out
-
-
-def _parse_json_safely(text: str) -> Any:
-    # Models routinely wrap JSON in markdown fences or trailing
-    # commentary; trim to the first balanced object.
-    s = text.strip()
-    if s.startswith("```"):
-        s = s.strip("`")
-        # Drop a leading "json" hint if present.
-        if s.lower().startswith("json"):
-            s = s[4:]
-    # Find the first opening brace and the matching closing brace.
-    start = s.find("{")
-    end = s.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        return None
-    try:
-        return json.loads(s[start : end + 1])
-    except json.JSONDecodeError:
-        return None
 
 
 def merge_changes(

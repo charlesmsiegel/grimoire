@@ -6,7 +6,6 @@ import pytest
 
 from grimoire.extractor.config import ExtractorConfig
 from grimoire.extractor.llm_strategy import (
-    _extract_json_payload,
     extract_with_llm,
     parse_llm_payload,
 )
@@ -16,22 +15,6 @@ from grimoire.types.scene import Scene
 from grimoire.types.state import DeltaKind, StateSnapshot
 
 from .conftest import FakeGateway
-
-
-def test_extract_json_payload_handles_fenced_block():
-    text = 'Here you go:\n```json\n{"facts": []}\n```'
-    payload = _extract_json_payload(text)
-    assert payload == {"facts": []}
-
-
-def test_extract_json_payload_handles_bare_object():
-    text = '{"facts": [{"text": "Hi", "confidence": 0.9}]}'
-    payload = _extract_json_payload(text)
-    assert payload is not None and payload["facts"][0]["text"] == "Hi"
-
-
-def test_extract_json_payload_returns_none_for_garbage():
-    assert _extract_json_payload("totally not json") is None
 
 
 def test_parse_payload_emits_typed_deltas():

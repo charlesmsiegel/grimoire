@@ -10,20 +10,13 @@ Keyword search runs against ``facts_fts`` (and could be extended to
 
 from __future__ import annotations
 
-import struct
 from dataclasses import dataclass
 
 import aiosqlite
 
-
-def serialize_vector(vector: list[float]) -> bytes:
-    """Pack a float vector into the little-endian f32 BLOB sqlite-vec expects."""
-    return struct.pack(f"<{len(vector)}f", *vector)
-
-
-def deserialize_vector(blob: bytes) -> list[float]:
-    n = len(blob) // 4
-    return list(struct.unpack(f"<{n}f", blob))
+# Re-exported for callers that have long imported the vector wire format from
+# here; the canonical implementation now lives in ``grimoire.util``.
+from grimoire.util import deserialize_vector, serialize_vector
 
 
 @dataclass(frozen=True)

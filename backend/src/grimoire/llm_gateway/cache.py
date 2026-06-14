@@ -7,28 +7,15 @@ swap forces a recompute.
 
 from __future__ import annotations
 
-import array
 import asyncio
 import hashlib
 
 from grimoire.storage.db import Database
-from grimoire.util import now_iso
-
-_FLOAT_TYPECODE = "f"  # 32-bit float, native byte order
+from grimoire.util import deserialize_vector, now_iso, serialize_vector
 
 
 def _text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _vector_to_blob(vector: list[float]) -> bytes:
-    return array.array(_FLOAT_TYPECODE, vector).tobytes()
-
-
-def _blob_to_vector(blob: bytes) -> list[float]:
-    arr = array.array(_FLOAT_TYPECODE)
-    arr.frombytes(blob)
-    return arr.tolist()
 
 
 class EmbeddingCache:
@@ -53,7 +40,7 @@ class EmbeddingCache:
         if row is None:
             return None
         await self._touch(_text_hash(text), model_id)
-        return _blob_to_vector(bytes(row["vector"]))
+        return deserialize_vector(bytes(row["vector"]))
 
     async def get_many(self, texts: list[str], model_id: str) -> dict[str, list[float]]:
         """Bulk lookup keyed by *text* (not hash)."""
@@ -67,7 +54,7 @@ class EmbeddingCache:
             f"WHERE model_id = ? AND text_hash IN ({placeholders})",
             (model_id, *hashes),
         )
-        by_hash = {row["text_hash"]: _blob_to_vector(bytes(row["vector"])) for row in rows}
+        by_hash = {row["text_hash"]: deserialize_vector(bytes(row["vector"])) for row in rows}
         result: dict[str, list[float]] = {}
         for text, h in zip(unique, hashes, strict=True):
             if h in by_hash:
@@ -85,7 +72,7 @@ class EmbeddingCache:
                 await conn.execute(
                     "INSERT OR REPLACE INTO embedding_cache "
                     "(text_hash, model_id, vector, cached_at) VALUES (?, ?, ?, ?)",
-                    (_text_hash(text), model_id, _vector_to_blob(vector), now),
+                    (_text_hash(text), model_id, serialize_vector(vector), now),
                 )
             await self._evict_if_needed(conn)
 

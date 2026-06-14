@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import struct
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -119,6 +120,23 @@ def extract_json_object(text: str) -> dict | None:
         return None
 
 
+def serialize_vector(vector: list[float]) -> bytes:
+    """Pack a float vector into the little-endian f32 BLOB ``sqlite-vec`` expects.
+
+    The embedding store, the continuity hybrid search, and the embedding cache
+    all share this wire format; keep them on this one encoding so a packing
+    change lands in one place (and so the cache stays little-endian regardless
+    of host byte order).
+    """
+    return struct.pack(f"<{len(vector)}f", *vector)
+
+
+def deserialize_vector(blob: bytes) -> list[float]:
+    """Unpack a little-endian f32 BLOB back into a float vector."""
+    n = len(blob) // 4
+    return list(struct.unpack(f"<{n}f", blob))
+
+
 def canonicalize_character_ref(ref: str) -> str:
     """Collapse any recognized character-ref spelling to one canonical string.
 
@@ -162,6 +180,7 @@ def canonicalize_character_ref(ref: str) -> str:
 
 __all__ = [
     "canonicalize_character_ref",
+    "deserialize_vector",
     "extract_json_object",
     "json_equal",
     "new_id",
@@ -169,5 +188,6 @@ __all__ = [
     "parse_iso_datetime",
     "safe_json_dumps",
     "safe_json_loads",
+    "serialize_vector",
     "slugify_id",
 ]
