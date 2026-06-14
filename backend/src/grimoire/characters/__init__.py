@@ -19,6 +19,7 @@ from grimoire.characters.errors import (
     ImportError_,
     PromotionError,
 )
+from grimoire.characters.import_preview import ImportPreviewCache, PreviewSlot
 from grimoire.characters.imports import (
     parse_charx,
     parse_plaintext,
@@ -57,11 +58,13 @@ __all__ = [
     "DriftInput",
     "HeuristicDriftChecker",
     "ImportError_",
+    "ImportPreviewCache",
     "LLMCapsuleDrafter",
     "LLMEnrichCallable",
     "LLMEnrichment",
     "LLMVoiceAnchorDrafter",
     "PostFetcher",
+    "PreviewSlot",
     "PromotionError",
     "SheetMigrator",
     "enrich_with_llm",

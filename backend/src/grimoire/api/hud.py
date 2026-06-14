@@ -7,13 +7,12 @@ routes are thin: aggregate, single-widget refresh, config CRUD, and an
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from grimoire.api.container import ServiceContainer
-from grimoire.api.deps import get_container
+from grimoire.api.deps import HudConfigDep, HudDep
 from grimoire.api.util import map_lookup_errors
 from grimoire.hud.config import (
     HudConfig,
@@ -27,40 +26,6 @@ from grimoire.hud.config import (
 from grimoire.types.hud import AggregateResult, HudWidget, WidgetSnapshot
 
 router = APIRouter(prefix="/campaigns")
-
-
-def _get_hud(container: ServiceContainer) -> Any:
-    hud = getattr(container, "extras", {}).get("hud") or getattr(container, "hud", None)
-    if hud is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="hud service not configured",
-        )
-    return hud
-
-
-def _get_hud_config(container: ServiceContainer) -> Any:
-    cfg = getattr(container, "extras", {}).get("hud_config") or getattr(
-        container, "hud_config", None
-    )
-    if cfg is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="hud config service not configured",
-        )
-    return cfg
-
-
-def get_hud(request: Request) -> Any:
-    return _get_hud(get_container(request))
-
-
-def get_hud_config(request: Request) -> Any:
-    return _get_hud_config(get_container(request))
-
-
-HudDep = Annotated[Any, Depends(get_hud)]
-HudConfigDep = Annotated[Any, Depends(get_hud_config)]
 
 
 class OrderedWidgetPayload(BaseModel):
@@ -163,7 +128,5 @@ __all__ = [
     "HudConfigPayload",
     "OrderedWidgetPayload",
     "WidgetGroupPayload",
-    "get_hud",
-    "get_hud_config",
     "router",
 ]
