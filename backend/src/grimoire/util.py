@@ -113,9 +113,17 @@ def extract_json_object(text: str) -> dict | None:
     parsed = _loads_brace_span(text)
     if parsed is not None:
         return parsed
-    fence = _JSON_FENCE.search(text)
-    if fence is not None:
-        return _loads_brace_span(fence.group(1))
+    # Fall back to fenced code blocks for prose-wrapped output. Scan every
+    # fence and skip any whose body isn't itself a JSON object (e.g. a
+    # ```python snippet that merely mentions ``{...}``) so an unrelated leading
+    # fence can't shadow the real ```json block.
+    for fence in _JSON_FENCE.finditer(text):
+        body = fence.group(1).lstrip()
+        if not body.startswith("{"):
+            continue
+        parsed = _loads_brace_span(body)
+        if parsed is not None:
+            return parsed
     return None
 
 
