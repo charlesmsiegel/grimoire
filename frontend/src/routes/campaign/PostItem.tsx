@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { auxiliaryApi, type AuxiliaryResult } from "../../api/auxiliary";
 import { CardIconBar, type CardIconAction } from "../../components/CardIconBar";
@@ -86,12 +86,9 @@ export function PostItem({
 }: Props) {
   const name = authorName(post, pcs);
   const isDirection = post.author_kind === "system" && post.is_player;
-  const alternates = useMemo(() => post.alternates ?? [], [post.alternates]);
-  const initialCursor = useMemo(
-    () => primaryCursor(alternates, post.primary_alternate_id),
-    [alternates, post.primary_alternate_id],
-  );
-  const [cursor, setCursor] = useState(initialCursor);
+  const alternates = post.alternates ?? [];
+  // Only read on the first render as the initial cursor; no memo needed.
+  const [cursor, setCursor] = useState(() => primaryCursor(alternates, post.primary_alternate_id));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -117,10 +114,11 @@ export function PostItem({
 
   const isModelPost = post.author_kind !== "pc" && !post.is_player;
   const authorRef = post.author_npc_ref ?? post.author_pc_ref ?? null;
-  const continueCandidates = useMemo(() => {
-    if (authorRef) return [authorRef];
-    return presentCharacterRefs.length > 0 ? [...presentCharacterRefs] : [];
-  }, [authorRef, presentCharacterRefs]);
+  const continueCandidates = authorRef
+    ? [authorRef]
+    : presentCharacterRefs.length > 0
+      ? [...presentCharacterRefs]
+      : [];
 
   const showStrip = alternates.length > 1;
   const current = alternates[cursor];
