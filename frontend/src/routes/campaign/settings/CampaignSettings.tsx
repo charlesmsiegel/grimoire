@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { api } from "../../../api/client";
-import { type CampaignRecord, errorMessage } from "./shared";
+import { useResource } from "../../../api/useResource";
+import { type CampaignRecord } from "./shared";
 import { GeneralTab } from "./GeneralTab";
 import { RoutingTab } from "./RoutingTab";
 import { ImageGenTab } from "./ImageGenTab";
@@ -43,35 +44,19 @@ const TABS: { id: Tab; label: string }[] = [
 export function CampaignSettings() {
   const { campaignId } = useParams();
   const [tab, setTab] = useState<Tab>("general");
-  const [campaign, setCampaign] = useState<CampaignRecord | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!campaignId) return;
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void (async () => {
-      try {
-        const data = await api.get<CampaignRecord>(
-          `/api/campaigns/${encodeURIComponent(campaignId)}`,
-        );
-        if (!cancelled) {
-          setCampaign(data);
-          setLoading(false);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(errorMessage(err));
-          setLoading(false);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignId]);
+  const {
+    data: loaded,
+    error,
+    loading,
+  } = useResource(
+    useCallback(
+      () =>
+        campaignId
+          ? api.get<CampaignRecord>(`/api/campaigns/${encodeURIComponent(campaignId)}`)
+          : Promise.resolve<CampaignRecord | null>(null),
+      [campaignId],
+    ),
+  );
 
   if (!campaignId) return null;
 
@@ -92,28 +77,42 @@ export function CampaignSettings() {
       {loading && <p className="wizard-meta">Loading…</p>}
       {error && (
         <p className="wizard-error" role="alert">
-          {error}
+          {error.message}
         </p>
       )}
 
-      {campaign && (
-        <div className="tab-panel">
-          {tab === "general" && (
-            <GeneralTab key={campaign.id} campaign={campaign} onUpdate={setCampaign} />
-          )}
-          {tab === "expressions" && <ExpressionsTab key={campaignId} campaignId={campaignId} />}
-          {tab === "routing" && <RoutingTab key={campaignId} campaignId={campaignId} />}
-          {tab === "imagegen" && <ImageGenTab key={campaignId} campaignId={campaignId} />}
-          {tab === "mechanics" && (
-            <MechanicsTab key={campaign.id} campaign={campaign} onUpdate={setCampaign} />
-          )}
-          {tab === "narrator" && <NarratorTab key={campaignId} campaignId={campaignId} />}
-          {tab === "generation" && <GenerationTab key={campaignId} campaignId={campaignId} />}
-          {tab === "summaries" && <SummariesTab key={campaignId} campaignId={campaignId} />}
-          {tab === "storage" && <StorageTab key={campaignId} campaignId={campaignId} />}
-          {tab === "advanced" && <AdvancedTab key={campaignId} campaignId={campaignId} />}
-        </div>
-      )}
+      {loaded && <SettingsTabs campaignId={campaignId} tab={tab} initialCampaign={loaded} />}
     </section>
+  );
+}
+
+function SettingsTabs({
+  campaignId,
+  tab,
+  initialCampaign,
+}: {
+  campaignId: string;
+  tab: Tab;
+  initialCampaign: CampaignRecord;
+}) {
+  const [campaign, setCampaign] = useState<CampaignRecord>(initialCampaign);
+
+  return (
+    <div className="tab-panel">
+      {tab === "general" && (
+        <GeneralTab key={campaign.id} campaign={campaign} onUpdate={setCampaign} />
+      )}
+      {tab === "expressions" && <ExpressionsTab key={campaignId} campaignId={campaignId} />}
+      {tab === "routing" && <RoutingTab key={campaignId} campaignId={campaignId} />}
+      {tab === "imagegen" && <ImageGenTab key={campaignId} campaignId={campaignId} />}
+      {tab === "mechanics" && (
+        <MechanicsTab key={campaign.id} campaign={campaign} onUpdate={setCampaign} />
+      )}
+      {tab === "narrator" && <NarratorTab key={campaignId} campaignId={campaignId} />}
+      {tab === "generation" && <GenerationTab key={campaignId} campaignId={campaignId} />}
+      {tab === "summaries" && <SummariesTab key={campaignId} campaignId={campaignId} />}
+      {tab === "storage" && <StorageTab key={campaignId} campaignId={campaignId} />}
+      {tab === "advanced" && <AdvancedTab key={campaignId} campaignId={campaignId} />}
+    </div>
   );
 }

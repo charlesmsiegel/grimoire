@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { errorMessage } from "../../api/client";
+import { useResource } from "../../api/useResource";
 import {
   type PluginConfig,
   type PluginKind,
@@ -96,25 +97,12 @@ const KIND_COPY: Record<
 export function StartupWizard({ onClose, title = "Set up Grimoire" }: StartupWizardProps) {
   const navigate = useNavigate();
   const [stepIdx, setStepIdx] = useState(0);
-  const [manifests, setManifests] = useState<PluginManifest[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const data = await pluginsApi.listInstalled();
-        if (!cancelled) setManifests(data);
-      } catch (err) {
-        if (!cancelled) setLoadError(errorMessage(err));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const manifestsState = useResource(useCallback(() => pluginsApi.listInstalled(), []));
+  const manifests = manifestsState.data;
+  const loadError = manifestsState.error ? errorMessage(manifestsState.error) : null;
 
   const step = STEPS[stepIdx]!;
   const isLast = stepIdx === STEPS.length - 1;

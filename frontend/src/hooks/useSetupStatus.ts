@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useResource } from "../api/useResource";
 import { type SetupStatus, setupApi } from "../api/setup";
 
 /**
@@ -15,30 +16,24 @@ export function useSetupStatus(): {
   reload: () => void;
   setLocal: (next: SetupStatus) => void;
 } {
-  const [status, setStatus] = useState<SetupStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
-
+  const loader = useCallback(() => setupApi.status(), []);
+  const { data, error, loading, reload } = useResource(loader);
+  // ``setLocal`` writes an optimistic override; a fresh fetch overwrites it,
+  // mirroring the original (single status slot mutated by both load + setLocal).
+  const [local, setLocal] = useState<SetupStatus | null>(null);
+  const lastDataRef = useRef<SetupStatus | null>(null);
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void (async () => {
-      try {
-        const data = await setupApi.status();
-        if (!cancelled) setStatus(data);
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [tick]);
+    if (data !== lastDataRef.current) {
+      lastDataRef.current = data;
+      setLocal(null);
+    }
+  }, [data]);
 
-  const reload = useCallback(() => setTick((t) => t + 1), []);
-  return { status, loading, error, reload, setLocal: setStatus };
+  return {
+    status: local ?? data,
+    loading,
+    error: error?.message ?? null,
+    reload,
+    setLocal,
+  };
 }

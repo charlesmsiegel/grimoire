@@ -1,22 +1,17 @@
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
+import { useResource } from "../api/useResource";
 import { ensureTokenizer, estimateTokens } from "./tokens";
 
 /** Badge showing an approximate token cost for a block of text. */
 export function TokenBadge({ text, className }: { text: string; className?: string }) {
-  // `ready` flips once the real encoder is loaded, forcing a recompute from
-  // the len/4 fallback to the exact count.
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    let active = true;
-    void ensureTokenizer().then(() => active && setReady(true));
-    return () => {
-      active = false;
-    };
-  }, []);
+  // `data` flips to non-null once the real encoder is loaded, forcing a
+  // recompute from the len/4 fallback to the exact count.
+  const loadTokenizer = useCallback(() => ensureTokenizer(), []);
+  const { data } = useResource(loadTokenizer);
 
-  // `ready` is read so the value recomputes when the encoder arrives.
-  void ready;
+  // `data` is read so the value recomputes when the encoder arrives.
+  void data;
   const count = estimateTokens(text);
   return (
     <span

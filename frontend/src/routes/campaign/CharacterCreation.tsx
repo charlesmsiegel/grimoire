@@ -10,11 +10,12 @@
  * eyeball the resulting sheet without persisting anything.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { campaignApi } from "../../api/campaign";
 import { errorMessage } from "../../api/client";
 import { mechanicsApi, type CreationStep } from "../../api/library";
+import { useResource } from "../../api/useResource";
 import { renderField } from "../../sheets/renderField";
 import { SheetRenderer } from "../../sheets/SheetRenderer";
 import type { SchemaProperty, SheetSchema } from "../../sheets/types";
@@ -39,12 +40,6 @@ export interface CharacterCreationProps {
   heading?: string;
 }
 
-interface WizardState {
-  steps: CreationStep[];
-  loading: boolean;
-  error: string | null;
-}
-
 export function CharacterCreation({
   moduleId,
   steps: initialSteps,
@@ -55,45 +50,38 @@ export function CharacterCreation({
   onComplete,
   heading,
 }: CharacterCreationProps) {
-  const [state, setState] = useState<WizardState>({
-    steps: initialSteps ?? [],
-    loading: !initialSteps && Boolean(loadSteps),
-    error: null,
-  });
+  const stepsResource = useResource(
+    useCallback(
+      () => (initialSteps || !loadSteps ? Promise.resolve(initialSteps ?? []) : loadSteps()),
+      // Match the original effect: re-fetch only when the module changes, not
+      // on every render-fresh `loadSteps`/`initialSteps` identity.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [moduleId],
+    ),
+  );
+  const steps = stepsResource.data ?? [];
+  // Only show the loading line when there's actually a fetch to wait on; an
+  // inline `initialSteps` resolves immediately.
+  const loading = !initialSteps && Boolean(loadSteps) && stepsResource.loading;
+  const loadError = stepsResource.error ? errorMessage(stepsResource.error) : null;
+
   const [outputs, setOutputs] = useState<Record<string, Record<string, unknown>>>({});
   const [currentIdx, setCurrentIdx] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [finalSheet, setFinalSheet] = useState<Record<string, unknown> | null>(null);
 
-  useEffect(() => {
-    if (initialSteps || !loadSteps) return;
-    let cancelled = false;
-    setState({ steps: [], loading: true, error: null });
-    loadSteps()
-      .then((steps) => {
-        if (!cancelled) setState({ steps, loading: false, error: null });
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setState({ steps: [], loading: false, error: errorMessage(err) });
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [moduleId]);
-
-  if (state.loading) {
+  if (loading) {
     return <p className="wizard-meta">Loading creation steps…</p>;
   }
-  if (state.error) {
+  if (loadError) {
     return (
       <p className="wizard-error" role="alert">
-        Failed to load creation steps: {state.error}
+        Failed to load creation steps: {loadError}
       </p>
     );
   }
-  if (state.steps.length === 0) {
+  if (steps.length === 0) {
     return (
       <p className="wizard-meta">
         This mechanics module does not declare any character-creation steps.
@@ -136,7 +124,7 @@ export function CharacterCreation({
     );
   }
 
-  const step = state.steps[currentIdx];
+  const step = steps[currentIdx];
   if (!step) {
     return <p className="wizard-meta">No current step.</p>;
   }
@@ -153,10 +141,10 @@ export function CharacterCreation({
   };
 
   const isFirst = currentIdx === 0;
-  const isLast = currentIdx === state.steps.length - 1;
+  const isLast = currentIdx === steps.length - 1;
 
   const goBack = () => setCurrentIdx((i) => Math.max(0, i - 1));
-  const goNext = () => setCurrentIdx((i) => Math.min(state.steps.length - 1, i + 1));
+  const goNext = () => setCurrentIdx((i) => Math.min(steps.length - 1, i + 1));
   const skip = () => {
     setOutputs((prev) => {
       const next = { ...prev };
@@ -184,7 +172,7 @@ export function CharacterCreation({
     <div className="wizard-route character-creation-wizard">
       {heading && <h3 className="wizard-step-heading">{heading}</h3>}
       <ol className="wizard-stepper" aria-label="Creation steps">
-        {state.steps.map((s, i) => (
+        {steps.map((s, i) => (
           <li key={s.id} className={i === currentIdx ? "current" : i < currentIdx ? "done" : ""}>
             <span className="wizard-step-index">{i + 1}</span>
             <span>{s.title}</span>

@@ -10,70 +10,53 @@
  * URL: /campaigns/:campaignId/debug/prompt/:turnId?
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
-import {
-  observabilityApi,
-  type PromptDiff,
-  type PromptResponse,
-  type TurnAuditSummary,
-} from "../../api/observability";
+import { observabilityApi, type PromptDiff, type PromptResponse } from "../../api/observability";
+import { useResource } from "../../api/useResource";
 
 export function PromptDebugView() {
   const { campaignId = "", turnId } = useParams<{ campaignId: string; turnId?: string }>();
-  const [turns, setTurns] = useState<TurnAuditSummary[]>([]);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(turnId ?? null);
-  const [prompt, setPrompt] = useState<PromptResponse | null>(null);
   const [diff, setDiff] = useState<PromptDiff | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
 
-  // Use a ref so the listTurns effect only depends on campaignId. Reading
-  // selectedTurnId directly would either re-fetch when the user clicks a turn
-  // (wasteful) or trip react-hooks/exhaustive-deps.
+  const turnsResource = useResource(
+    useCallback(() => observabilityApi.listTurns(campaignId, 50), [campaignId]),
+  );
+  const turns = useMemo(() => turnsResource.data ?? [], [turnsResource.data]);
+
+  // Use a ref so the auto-select effect can read the current selection without
+  // re-running when the user clicks a turn. Reading selectedTurnId directly
+  // would either re-fire or trip react-hooks/exhaustive-deps.
   const selectedTurnIdRef = useRef(selectedTurnId);
   selectedTurnIdRef.current = selectedTurnId;
 
+  // Auto-select the most recent turn once the list resolves.
+  const loadedTurns = turnsResource.data;
   useEffect(() => {
-    let cancelled = false;
-    observabilityApi
-      .listTurns(campaignId, 50)
-      .then((rows) => {
-        if (cancelled) return;
-        setTurns(rows);
-        if (!selectedTurnIdRef.current && rows.length > 0) {
-          setSelectedTurnId(rows[0]!.turn_id);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignId]);
+    if (!loadedTurns) return;
+    if (!selectedTurnIdRef.current && loadedTurns.length > 0) {
+      setSelectedTurnId(loadedTurns[0]!.turn_id);
+    }
+  }, [loadedTurns]);
 
-  useEffect(() => {
-    if (!selectedTurnId) return;
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    observabilityApi
-      .getPrompt(selectedTurnId)
-      .then((res) => {
-        if (!cancelled) setPrompt(res);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedTurnId]);
+  const promptResource = useResource(
+    useCallback(
+      () =>
+        selectedTurnId
+          ? observabilityApi.getPrompt(selectedTurnId)
+          : Promise.resolve<PromptResponse | null>(null),
+      [selectedTurnId],
+    ),
+  );
+  const prompt = promptResource.data;
+  const loading = selectedTurnId ? promptResource.loading : false;
+
+  // Single error region: surface a list/prompt load failure or a diff failure.
+  const displayError =
+    error ?? turnsResource.error?.message ?? promptResource.error?.message ?? null;
 
   const previousTurnId = useMemo(() => {
     if (!selectedTurnId) return null;
@@ -119,6 +102,7 @@ export function PromptDebugView() {
                     onClick={() => {
                       setSelectedTurnId(t.turn_id);
                       setDiff(null);
+                      setError(null);
                     }}
                   >
                     <strong>{t.turn_id}</strong>
@@ -136,9 +120,9 @@ export function PromptDebugView() {
         </aside>
 
         <div className="prompt-debug-main">
-          {error && (
+          {displayError && (
             <p className="error" role="alert">
-              {error}
+              {displayError}
             </p>
           )}
           {loading && <p className="muted">Loading prompt…</p>}

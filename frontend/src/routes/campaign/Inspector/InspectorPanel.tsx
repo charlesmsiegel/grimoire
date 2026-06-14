@@ -8,9 +8,10 @@
  * input + session id, which this panel debounces into POST /preview calls.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { inspectorApi, type ContextSourceExplanation } from "../../../api/inspector";
+import { useResource } from "../../../api/useResource";
 import { InspectorOverlay } from "./InspectorOverlay";
 import { SourceList } from "./SourceList";
 import { TokenBars } from "./TokenBars";
@@ -39,28 +40,20 @@ export function InspectorPanel({
     enabled,
   });
 
-  const [explanations, setExplanations] = useState<ContextSourceExplanation[]>([]);
-  const [explainErr, setExplainErr] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
 
-  useEffect(() => {
-    if (!live.handle) return;
-    let cancelled = false;
-    inspectorApi
-      .explain(campaignId, live.handle, sessionId)
-      .then((rows) => {
-        if (!cancelled) {
-          setExplanations(rows);
-          setExplainErr(null);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) setExplainErr(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignId, sessionId, live.handle]);
+  const handle = live.handle;
+  const explain = useResource(
+    useCallback(
+      () =>
+        handle
+          ? inspectorApi.explain(campaignId, handle, sessionId)
+          : Promise.resolve<ContextSourceExplanation[]>([]),
+      [campaignId, sessionId, handle],
+    ),
+  );
+  const explanations = explain.data ?? [];
+  const explainErr = explain.error?.message ?? null;
 
   const handleChanged = useCallback(() => {
     live.refresh();

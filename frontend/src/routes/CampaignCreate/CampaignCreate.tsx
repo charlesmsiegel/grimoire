@@ -2,14 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { errorMessage } from "../../api/client";
+import { useResource } from "../../api/useResource";
 import { pcProfileApi } from "../../api/campaign";
 import {
   type CampaignCreateInput,
   type CharacterSummary,
   type GreetingSummary,
   type ImagePresetSummary,
-  type MechanicsModuleSummary,
-  type WorldSummary,
   type StyleGuideSummary,
   addCampaignPC,
   createCampaign,
@@ -53,16 +52,9 @@ export function CampaignCreate() {
   const [idEdited, setIdEdited] = useState(false);
   const [step, setStep] = useState(0);
 
-  const [worlds, setWorlds] = useState<LoadState<WorldSummary[]>>({
-    data: [],
-    loading: true,
-    error: null,
-  });
-  const [mechanics, setMechanics] = useState<LoadState<MechanicsModuleSummary[]>>({
-    data: [],
-    loading: true,
-    error: null,
-  });
+  // Worlds and mechanics are needed across multiple steps; load once on mount.
+  const worlds = useResource(useCallback(() => fetchWorlds(), []));
+  const mechanics = useResource(useCallback(() => fetchInstalledMechanics(), []));
   const [styleGuides, setStyleGuides] = useState<LoadState<StyleGuideSummary[]>>({
     data: [],
     loading: false,
@@ -88,30 +80,6 @@ export function CampaignCreate() {
   // Each lazy fetch fires at most once per wizard session. An empty array or
   // a persistent error must not trigger an infinite refetch loop.
   const styleAssetsAttempted = useRef(false);
-
-  // Initial fetches — worlds and mechanics are needed across multiple steps.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const data = await fetchWorlds();
-        if (!cancelled) setWorlds({ data, loading: false, error: null });
-      } catch (err) {
-        if (!cancelled) setWorlds({ data: [], loading: false, error: errorMessage(err) });
-      }
-    })();
-    void (async () => {
-      try {
-        const data = await fetchInstalledMechanics();
-        if (!cancelled) setMechanics({ data, loading: false, error: null });
-      } catch (err) {
-        if (!cancelled) setMechanics({ data: [], loading: false, error: errorMessage(err) });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   // Style guides and image presets — lazy-load when arriving at step 5.
   useEffect(() => {
@@ -332,18 +300,18 @@ export function CampaignCreate() {
         <StepComposition
           draft={draft}
           update={update}
-          worlds={worlds.data}
+          worlds={worlds.data ?? []}
           loading={worlds.loading}
-          error={worlds.error}
+          error={worlds.error?.message ?? null}
         />
       )}
       {step === 2 && (
         <StepMechanics
           draft={draft}
           update={update}
-          modules={mechanics.data}
+          modules={mechanics.data ?? []}
           loading={mechanics.loading}
-          error={mechanics.error}
+          error={mechanics.error?.message ?? null}
         />
       )}
       {step === 3 && (
@@ -353,7 +321,7 @@ export function CampaignCreate() {
           candidates={castByWorld}
           loading={castLoading}
           error={castError}
-          worlds={worlds.data}
+          worlds={worlds.data ?? []}
         />
       )}
       {step === 4 && (
