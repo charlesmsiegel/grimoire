@@ -4,6 +4,7 @@
 
 @import "./styles/tokens.css";
 @import "./styles/primitives.css";
+@import "./styles/icons.css";
 @import "./styles/app-shell.css";
 @import "./styles/markdown.css";
 @import "./styles/campaign-list.css";

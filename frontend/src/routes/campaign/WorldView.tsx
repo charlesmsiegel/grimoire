@@ -21,7 +21,7 @@ import type { ResolvedCharacter, ResolvedEntity } from "../../api/types";
 import { useResource } from "../../api/useResource";
 import { AsyncSection } from "../../components/AsyncSection";
 import { type CardIconAction } from "../../components/CardIconBar";
-import { OVERRIDE_ICON, PROMOTE_ICON } from "../../components/cardActions";
+import { PencilIcon, PromoteIcon } from "../../components/icons";
 import { EntityBrowser } from "../../components/EntityBrowser";
 import { ChainBadge, Tabs } from "./common";
 import { characterCardToFrontmatter } from "./characterFrontmatter";
@@ -114,7 +114,7 @@ function campaignActions(
     return [
       {
         key: "promote",
-        icon: PROMOTE_ICON,
+        icon: <PromoteIcon />,
         label: `Promote ${name} to library`,
         onClick: () => handlers.onPromote(row),
       },
@@ -124,7 +124,7 @@ function campaignActions(
   return [
     {
       key: "override",
-      icon: OVERRIDE_ICON,
+      icon: <PencilIcon />,
       label: `Edit override for ${name}`,
       onClick: () => handlers.onEditOverride(row),
     },

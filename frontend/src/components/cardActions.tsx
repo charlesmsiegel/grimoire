@@ -1,12 +1,8 @@
 import type { CardIconAction } from "./CardIconBar";
+import { TrashIcon } from "./icons";
 
-// TODO(#516): replace emoji icons with shared SVG icon components.
-export const DELETE_ICON = "🗑";
-export const FORK_ICON = "⑂";
-export const SETTINGS_ICON = "⚙";
-export const CONVERT_ICON = "⇄";
-export const OVERRIDE_ICON = "✎";
-export const PROMOTE_ICON = "⤴";
+// Card-icon-bar actions use the shared SVG icon set (#516); render the icon
+// component for the action (e.g. `icon: <ForkIcon />`).
 
 /** Build the standard Delete (trash) action for a card icon bar. */
 export function deleteAction(opts: {
@@ -17,7 +13,7 @@ export function deleteAction(opts: {
 }): CardIconAction {
   return {
     key: "delete",
-    icon: DELETE_ICON,
+    icon: <TrashIcon />,
     label: opts.label ?? "Delete",
     variant: "danger",
     onClick: opts.onClick,

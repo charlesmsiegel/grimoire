@@ -6,6 +6,7 @@ import { type PluginSummary, fetchInstalledPlugins } from "../../api/wizard";
 import { useResource } from "../../api/useResource";
 import { errorMessage } from "./shared";
 import { ProviderCard, type ModelSlot } from "./ProviderCard";
+import { EmbeddingsIcon, ImageIcon, SparkleIcon } from "../../components/icons";
 
 const LLM_SLOTS: ModelSlot[] = [
   { key: "heavy", label: "Heavy model", sublabel: "Generation — narration, summaries, rewrites" },
@@ -153,7 +154,7 @@ export function ProvidersTab() {
 
       <ProviderCard
         title="Language Models"
-        icon="✦"
+        icon={<SparkleIcon />}
         plugins={llmPlugins}
         manifests={manifests}
         modelSlots={LLM_SLOTS}
@@ -164,7 +165,7 @@ export function ProvidersTab() {
 
       <ProviderCard
         title="Embeddings"
-        icon="⊕"
+        icon={<EmbeddingsIcon />}
         plugins={embedPlugins}
         manifests={manifests}
         modelSlots={EMBED_SLOTS}
@@ -175,7 +176,7 @@ export function ProvidersTab() {
 
       <ProviderCard
         title="Image Generation"
-        icon="◎"
+        icon={<ImageIcon />}
         plugins={imageBackends}
         manifests={manifests}
         modelSlots={IMAGEGEN_SLOTS}

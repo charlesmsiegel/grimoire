@@ -12,7 +12,8 @@ import {
 import { useStore } from "../state/useStore";
 import type { CampaignSummary } from "../state/storeContext";
 import { CardIconBar } from "../components/CardIconBar";
-import { deleteAction, FORK_ICON, SETTINGS_ICON } from "../components/cardActions";
+import { deleteAction } from "../components/cardActions";
+import { ForkIcon, GearIcon } from "../components/icons";
 import { ForkDialog } from "./campaign/ForkDialog";
 import { ConfirmDestructiveDialog } from "../components/ConfirmDestructiveDialog";
 import { useDestructiveConfirm } from "../hooks/useDestructiveConfirm";
@@ -88,14 +89,14 @@ function CampaignCard({ node, depth, onFork, onDelete, busyDeleting }: CampaignC
         actions={[
           {
             key: "fork",
-            icon: FORK_ICON,
+            icon: <ForkIcon />,
             label: `Fork campaign ${node.campaign.name}`,
             align: "start",
             onClick: () => onFork(node.campaign),
           },
           {
             key: "settings",
-            icon: SETTINGS_ICON,
+            icon: <GearIcon />,
             label: `Settings for campaign ${node.campaign.name}`,
             onClick: () => navigate(`/campaigns/${node.campaign.id}/settings`),
           },

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useResource } from "../../api/useResource";
@@ -16,7 +16,7 @@ export interface ModelSlot {
 
 interface Props {
   title: string;
-  icon: string;
+  icon: ReactNode;
   plugins: PluginSummary[];
   manifests: PluginManifest[];
   modelSlots: ModelSlot[];
