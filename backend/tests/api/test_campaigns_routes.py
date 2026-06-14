@@ -6,6 +6,8 @@ from typing import Any, ClassVar
 
 import pytest
 
+from grimoire.state_store.errors import ConflictError, NotFoundError
+from grimoire.types.mechanics import BulkSheetCreateResult, SheetRef
 from tests.api.conftest import _FakeAttr
 from tests.mocks import FakeCharacters, FakeContinuity, FakeOrchestrator
 
@@ -441,143 +443,62 @@ def test_patch_character_override_404_when_world_unresolvable(client, container)
     assert response.status_code == 404
 
 
-class _BulkRow(dict):
-    pass
-
-
-class FakeStateStoreForBulk:
-    def __init__(
-        self,
-        *,
-        mechanics_module: str | None,
-        existing: set[tuple[str, str]] | None = None,
-    ) -> None:
-        self._mechanics = mechanics_module
-        self.existing = existing or set()
-        self.writes: list[tuple[str, str, str, dict]] = []
-        self.db = self
-
-    async def fetchone(self, sql: str, params: tuple) -> dict | None:
-        if "FROM campaigns WHERE id = ?" in sql:
-            cid = params[0]
-            if cid != "c1":
-                return None
-            return _BulkRow(mechanics_module=self._mechanics)
-        return None
-
-    async def get_sheet(
-        self,
-        *,
-        campaign_id: str,
-        kind: str,
-        entity_id: str,
-        mechanics_id: str,
-    ) -> dict | None:
-        if (kind, entity_id) in self.existing:
-            return {"_existing": True}
-        return None
-
-    async def list_sheet_entity_ids(
-        self,
-        *,
-        campaign_id: str,
-        kind: str,
-        mechanics_id: str,
-    ) -> set[str]:
-        return {entity_id for (k, entity_id) in self.existing if k == kind}
-
-    async def write_sheet(
-        self,
-        *,
-        campaign_id: str,
-        kind: str,
-        entity_id: str,
-        mechanics_id: str,
-        sheet: dict,
-        source: str,
-        turn_id: str | None = None,
-    ) -> str:
-        self.writes.append((kind, entity_id, mechanics_id, sheet))
-        return "ok"
-
-
-class _FakeModule:
-    sheet_kinds: ClassVar[list[str]] = ["character"]
-
-    def initialize_sheet(self, kind: str, entity_id: str) -> dict:
-        return {"kind": kind, "entity_id": entity_id, "initialized": True}
+# The orchestration itself (created/skipped/writes, listing, sheet kinds) is
+# unit-tested in tests/mechanics/test_service_bulk_sheets.py. These route tests
+# verify the endpoint is a thin pass-through that forwards the cast/world
+# services and maps domain errors to HTTP status codes.
 
 
 class FakeMechanicsForBulk:
-    def __init__(self, *, module: Any = None) -> None:
-        self._module = module
+    def __init__(self, *, result: Any = None, error: Exception | None = None) -> None:
+        self._result = result
+        self._error = error
+        self.calls: list[dict[str, Any]] = []
 
-    def get_module(self, module_id: str) -> Any:
-        return self._module
+    async def bulk_create_missing_sheets(
+        self, campaign_id: str, *, characters: Any, world: Any, source: str = "api"
+    ) -> Any:
+        self.calls.append({"campaign_id": campaign_id, "characters": characters, "world": world})
+        if self._error is not None:
+            raise self._error
+        return self._result
 
-    async def module_info(self, module_id: str) -> Any:
-        return None
 
-
-def test_bulk_create_missing_sheets_creates_and_skips(client, container) -> None:
-    state_store = FakeStateStoreForBulk(
-        mechanics_module="vamp",
-        existing={("character", "alistair")},
+def test_bulk_create_missing_sheets_delegates_and_returns_payload(client, container) -> None:
+    result = BulkSheetCreateResult(
+        created=[SheetRef(kind="character", entity_id="dorian")],
+        skipped=[SheetRef(kind="character", entity_id="alistair")],
     )
-    chars = FakeCharactersWithOverride()
-    chars.resolved["c1"] = [
-        _FakeResolved("alistair", "wod-london"),
-        _FakeResolved("dorian", "wod-london"),
-    ]
-    container.state_store = state_store
-    container.characters = chars
-    container.mechanics = FakeMechanicsForBulk(module=_FakeModule())
-
-    class FakeWorld:
-        async def list_for_campaign(self, campaign_id: str, kind: str) -> list[Any]:
-            return []
-
-    container.world = FakeWorld()
+    fake = FakeMechanicsForBulk(result=result)
+    container.mechanics = fake
+    container.characters = FakeCharactersWithOverride()
+    container.world = _FakeAttr()
 
     response = client.post("/api/campaigns/c1/sheets/bulk-create-missing")
     assert response.status_code == 200
     body = response.json()
-    assert body["skipped"] == [{"kind": "character", "entity_id": "alistair"}]
     assert body["created"] == [{"kind": "character", "entity_id": "dorian"}]
-    assert state_store.writes == [
-        (
-            "character",
-            "dorian",
-            "vamp",
-            {"kind": "character", "entity_id": "dorian", "initialized": True},
-        )
-    ]
+    assert body["skipped"] == [{"kind": "character", "entity_id": "alistair"}]
+    # The endpoint forwards the owning services to the mechanics method.
+    assert fake.calls[0]["campaign_id"] == "c1"
+    assert fake.calls[0]["characters"] is container.characters
+    assert fake.calls[0]["world"] is container.world
 
 
 def test_bulk_create_missing_sheets_409_when_no_mechanics(client, container) -> None:
-    container.state_store = FakeStateStoreForBulk(mechanics_module=None)
+    container.mechanics = FakeMechanicsForBulk(
+        error=ConflictError("campaign 'c1' has no mechanics module bound")
+    )
     container.characters = FakeCharactersWithOverride()
-    container.mechanics = FakeMechanicsForBulk()
-
-    class FakeWorld:
-        async def list_for_campaign(self, campaign_id: str, kind: str) -> list[Any]:
-            return []
-
-    container.world = FakeWorld()
+    container.world = _FakeAttr()
     response = client.post("/api/campaigns/c1/sheets/bulk-create-missing")
     assert response.status_code == 409
 
 
 def test_bulk_create_missing_sheets_404_for_unknown_campaign(client, container) -> None:
-    container.state_store = FakeStateStoreForBulk(mechanics_module=None)
+    container.mechanics = FakeMechanicsForBulk(error=NotFoundError("campaign 'c-other' not found"))
     container.characters = FakeCharactersWithOverride()
-    container.mechanics = FakeMechanicsForBulk()
-
-    class FakeWorld:
-        async def list_for_campaign(self, campaign_id: str, kind: str) -> list[Any]:
-            return []
-
-    container.world = FakeWorld()
+    container.world = _FakeAttr()
     response = client.post("/api/campaigns/c-other/sheets/bulk-create-missing")
     assert response.status_code == 404
 

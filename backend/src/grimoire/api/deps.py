@@ -17,9 +17,12 @@ from grimoire.api.container import ServiceContainer
 if TYPE_CHECKING:
     from grimoire.api.stream import StreamManager
     from grimoire.characters import CharactersService
+    from grimoire.characters.import_preview import ImportPreviewCache
     from grimoire.continuity import ContinuityRegistry
     from grimoire.export.service import ExportService
     from grimoire.extras import ExtrasService as _ExtrasService
+    from grimoire.hud.config import HudConfigService
+    from grimoire.hud.service import HudService
     from grimoire.imagegen import ImageGenService
     from grimoire.library import LibraryService
     from grimoire.llm_gateway.gateway import LLMGatewayService
@@ -113,6 +116,18 @@ def get_observability(request: Request) -> ObservabilityService:
     return _require(get_container(request), "observability")
 
 
+def get_hud(request: Request) -> HudService:
+    return _require(get_container(request), "hud")
+
+
+def get_hud_config(request: Request) -> HudConfigService:
+    return _require(get_container(request), "hud_config")
+
+
+def get_import_preview_cache(request: Request) -> ImportPreviewCache:
+    return _require(get_container(request), "import_preview_cache")
+
+
 def get_stream(request: Request) -> StreamManager:
     return _require(get_container(request), "stream")
 
@@ -161,6 +176,9 @@ PluginsDep = Annotated[Any, Depends(get_plugins)]
 StateStoreDep = Annotated[Any, Depends(get_state_store)]
 OrchestratorDep = Annotated[Any, Depends(get_orchestrator)]
 ObservabilityDep = Annotated[Any, Depends(get_observability)]
+HudDep = Annotated[Any, Depends(get_hud)]
+HudConfigDep = Annotated[Any, Depends(get_hud_config)]
+ImportPreviewCacheDep = Annotated[Any, Depends(get_import_preview_cache)]
 StreamDep = Annotated[Any, Depends(get_stream)]
 TransientStateDep = Annotated[Any, Depends(get_transient_state)]
 InventoryDep = Annotated[Any, Depends(get_inventory)]
@@ -178,7 +196,10 @@ __all__ = [
     "ExportDep",
     "ExtrasServiceDep",
     "FileWatcherDep",
+    "HudConfigDep",
+    "HudDep",
     "ImageGenDep",
+    "ImportPreviewCacheDep",
     "InventoryDep",
     "LLMGatewayDep",
     "LibraryDep",
@@ -200,7 +221,10 @@ __all__ = [
     "get_export",
     "get_extras_service",
     "get_file_watcher",
+    "get_hud",
+    "get_hud_config",
     "get_imagegen",
+    "get_import_preview_cache",
     "get_inventory",
     "get_library",
     "get_llm_gateway",

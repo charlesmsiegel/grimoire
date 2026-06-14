@@ -167,6 +167,24 @@ class MechanicsSwitchResult(BaseModel):
     missing_sheets: list[MissingSheet] = Field(default_factory=list)
 
 
+class SheetRef(BaseModel):
+    """A (kind, entity_id) pair identifying a single mechanical sheet."""
+
+    kind: str
+    entity_id: str
+
+
+class BulkSheetCreateResult(BaseModel):
+    """Outcome of :meth:`MechanicsService.bulk_create_missing_sheets`.
+
+    ``created`` lists the sheets initialised on this run; ``skipped`` lists
+    entities that already had a sheet under the campaign's module.
+    """
+
+    created: list[SheetRef] = Field(default_factory=list)
+    skipped: list[SheetRef] = Field(default_factory=list)
+
+
 class ProposalResolution(BaseModel):
     """Per-proposal disposition for the pre-roll confirmation round-trip.
 

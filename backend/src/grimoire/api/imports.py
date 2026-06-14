@@ -1,86 +1,34 @@
 """REST routes for character-card imports (spec 2026-05-19 §REST).
 
 Preview / commit split: ``preview`` parses the card and stashes the
-``IngestedCharacterCard`` in an in-memory TTL cache so the UI can render
-the parsed character + greetings + lore + warnings before the user
+``IngestedCharacterCard`` in the container-owned
+:class:`~grimoire.characters.import_preview.ImportPreviewCache` so the UI can
+render the parsed character + greetings + lore + warnings before the user
 hits commit. ``commit`` runs ``_finalize_import`` against the stashed
 ingest and writes the import report.
-
-The preview cache is process-local; the cache key returned to the
-client is opaque. It expires after :data:`PREVIEW_TTL_SECONDS` (default
-15 minutes) and is hard-capped at :data:`MAX_PREVIEW_ENTRIES` slots, so a
-burst of previewed-but-never-committed cards can't leak memory: expired
-slots are swept and, if the cap is still reached, the oldest slots are
-evicted before a new one is inserted.
 """
 
 from __future__ import annotations
 
-import time
-import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from grimoire.api.deps import CharactersDep, LibraryDep, StateStoreDep
+from grimoire.api.deps import (
+    CharactersDep,
+    ImportPreviewCacheDep,
+    LibraryDep,
+    StateStoreDep,
+)
 from grimoire.api.util import to_payload
 from grimoire.library.classify import suggest_kind
 from grimoire.library.reclassify import _lore_entry_from_ingested, required_overrides_for
 from grimoire.state_store.paths import library_root
-from grimoire.types.characters import IngestedCharacterCard, IngestOptions, LoreOverride
+from grimoire.types.characters import IngestOptions, LoreOverride
 from grimoire.types.common import EntityKind
 
 router = APIRouter()
-
-
-PREVIEW_TTL_SECONDS = 15 * 60
-
-# Hard cap on concurrently cached previews. Combined with the TTL sweep this
-# bounds the cache regardless of client behaviour: a single local user is never
-# realistically mid-preview on hundreds of cards at once, so the cap only ever
-# bites under abuse, where it degrades to evicting the oldest in-flight preview.
-MAX_PREVIEW_ENTRIES = 256
-
-
-class _PreviewSlot:
-    __slots__ = ("expires_at", "filename", "ingested", "world_id")
-
-    def __init__(
-        self,
-        ingested: IngestedCharacterCard,
-        world_id: str,
-        filename: str,
-        expires_at: float,
-    ) -> None:
-        self.ingested = ingested
-        self.world_id = world_id
-        self.filename = filename
-        self.expires_at = expires_at
-
-
-_PREVIEW_CACHE: dict[str, _PreviewSlot] = {}
-
-
-def _gc_expired() -> None:
-    now = time.time()
-    expired = [k for k, v in _PREVIEW_CACHE.items() if v.expires_at <= now]
-    for key in expired:
-        _PREVIEW_CACHE.pop(key, None)
-
-
-def _store_preview(preview_id: str, slot: _PreviewSlot) -> None:
-    """Cache a preview slot, keeping the cache bounded.
-
-    Sweeps expired slots first; if the cache is still at
-    :data:`MAX_PREVIEW_ENTRIES`, evicts the soonest-to-expire slots until
-    there is room. This guarantees the cache never exceeds the cap.
-    """
-    _gc_expired()
-    while len(_PREVIEW_CACHE) >= MAX_PREVIEW_ENTRIES:
-        oldest = min(_PREVIEW_CACHE, key=lambda k: _PREVIEW_CACHE[k].expires_at)
-        _PREVIEW_CACHE.pop(oldest, None)
-    _PREVIEW_CACHE[preview_id] = slot
 
 
 class CommitPayload(BaseModel):
@@ -94,6 +42,7 @@ async def preview_sillytavern_import(
     world_id: str,
     characters: CharactersDep,
     library: LibraryDep,
+    preview_cache: ImportPreviewCacheDep,
     file: UploadFile,
 ) -> dict[str, Any]:
     """Parse a card without writing it; cache the ingest for a later commit."""
@@ -108,15 +57,10 @@ async def preview_sillytavern_import(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"could not parse card: {exc}") from exc
 
-    preview_id = uuid.uuid4().hex
-    _store_preview(
-        preview_id,
-        _PreviewSlot(
-            ingested=ingested,
-            world_id=world_id,
-            filename=file.filename or "card",
-            expires_at=time.time() + PREVIEW_TTL_SECONDS,
-        ),
+    preview_id = preview_cache.put(
+        ingested,
+        world_id=world_id,
+        filename=file.filename or "card",
     )
     # Avatar bytes don't survive JSON encoding and aren't useful to the
     # client (the preview UI shows the raw upload). Drop them before
@@ -139,7 +83,7 @@ async def preview_sillytavern_import(
 
     return {
         "preview_id": preview_id,
-        "expires_in_seconds": PREVIEW_TTL_SECONDS,
+        "expires_in_seconds": preview_cache.ttl_seconds,
         "ingested": summary,
         "lore_suggestions": lore_suggestions,
     }
@@ -150,10 +94,10 @@ async def commit_sillytavern_import(
     world_id: str,
     payload: CommitPayload,
     characters: CharactersDep,
+    preview_cache: ImportPreviewCacheDep,
 ) -> dict[str, Any]:
     """Commit a previously previewed card to ``world_id``."""
-    _gc_expired()
-    slot = _PREVIEW_CACHE.pop(payload.preview_id, None)
+    slot = preview_cache.take(payload.preview_id)
     if slot is None:
         raise HTTPException(status_code=404, detail="preview not found or expired")
     if slot.world_id != world_id:

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from grimoire.api.stream import StreamManager
     from grimoire.characters import CharactersService
+    from grimoire.characters.import_preview import ImportPreviewCache
     from grimoire.characters.integration import CharactersIntegration
     from grimoire.context.builder import ContextBuilderService
     from grimoire.context.inspector import ContextInspector
@@ -86,6 +87,8 @@ class ServiceContainer:
     hud_config: HudConfigService | None = None
     transient_state: TransientStateService | None = None
     inventory: InventoryService | None = None
+    import_preview_cache: ImportPreviewCache | None = None
+    """``grimoire.characters.import_preview.ImportPreviewCache`` -- two-phase card-import cache."""
     extras_service: _ExtrasService | None = None
     """``grimoire.extras.ExtrasService`` -- narrative extras CRUD + search."""
     calendar: CalendarService | None = None

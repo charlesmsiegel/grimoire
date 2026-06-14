@@ -20,7 +20,7 @@ from grimoire.mechanics.loader import load_module
 from grimoire.mechanics.null import NULL_MECHANICS_ID, NullMechanicsModule
 from grimoire.mechanics.registry import MechanicsRegistry, RegisteredModule
 from grimoire.mechanics.rng import derive_roll_seed
-from grimoire.state_store.errors import NotFoundError
+from grimoire.state_store.errors import ConflictError, NotFoundError
 from grimoire.state_store.store import StateStore
 from grimoire.types.common import (
     CampaignId,
@@ -31,6 +31,7 @@ from grimoire.types.common import (
     ValidationResult,
 )
 from grimoire.types.mechanics import (
+    BulkSheetCreateResult,
     Capability,
     CreationStep,
     MechanicsSwitchResult,
@@ -41,6 +42,7 @@ from grimoire.types.mechanics import (
     ProposedRoll,
     Roll,
     RollResult,
+    SheetRef,
     TickContext,
 )
 from grimoire.types.protocols import MechanicsModule
@@ -669,6 +671,81 @@ class MechanicsService:
                 logger.warning("event emit failed for mechanics_switched: %s", exc)
 
         return MechanicsSwitchResult(previous=previous, current=target, missing_sheets=missing)
+
+    async def bulk_create_missing_sheets(
+        self,
+        campaign_id: CampaignId,
+        *,
+        characters: Any,
+        world: Any,
+        source: str = "api:bulk-create-missing",
+    ) -> BulkSheetCreateResult:
+        """Initialise a sheet for every campaign entity that lacks one.
+
+        Walks the campaign's mechanics module's ``sheet_kinds``, enumerates
+        the entities of each kind (cast for ``character``, world entities
+        otherwise), and writes an initial sheet for any that don't already
+        have one. ``characters`` and ``world`` are the owning services,
+        injected by the caller so this module stays decoupled from them.
+
+        Raises :class:`NotFoundError` (campaign or module absent) or
+        :class:`ConflictError` (no module bound). A failure enumerating
+        entities propagates rather than being silently treated as empty, so
+        callers can tell "no entities" from "the listing broke".
+        """
+        row = await self._state_store.db.fetchone(
+            "SELECT mechanics_module FROM campaigns WHERE id = ?", (campaign_id,)
+        )
+        if row is None:
+            raise NotFoundError(f"campaign {campaign_id!r} not found")
+        module_id = row["mechanics_module"]
+        if not module_id or module_id == NULL_MECHANICS_ID:
+            raise ConflictError(f"campaign {campaign_id!r} has no mechanics module bound")
+        module = self.get_module(module_id)
+        if module is None:
+            raise NotFoundError(f"mechanics module {module_id!r} is not loaded")
+
+        sheet_kinds: list[str] = list(getattr(module, "sheet_kinds", None) or [])
+        if not sheet_kinds:
+            manifest = await self.module_info(module_id)
+            sheet_kinds = list(manifest.sheet_kinds) if manifest else []
+        if not sheet_kinds:
+            sheet_kinds = [_SHEET_KIND_DEFAULT]
+
+        inventory: dict[str, list[str]] = {}
+        for kind in sheet_kinds:
+            if kind == _SHEET_KIND_DEFAULT:
+                rows = await characters.list_for_campaign(campaign_id)
+                inventory[kind] = [r.character.id for r in rows]
+            else:
+                entries = await world.list_for_campaign(campaign_id, kind)
+                ids = [getattr(e, "asset_id", None) or getattr(e, "id", None) for e in entries]
+                inventory[kind] = [i for i in ids if i]
+
+        created: list[SheetRef] = []
+        skipped: list[SheetRef] = []
+        for kind, entity_ids in inventory.items():
+            existing = await self._state_store.list_sheet_entity_ids(
+                campaign_id=campaign_id,
+                kind=kind,
+                mechanics_id=module_id,
+            )
+            for entity_id in entity_ids:
+                if entity_id in existing:
+                    skipped.append(SheetRef(kind=kind, entity_id=entity_id))
+                    continue
+                initial = module.initialize_sheet(kind, entity_id)
+                await self._state_store.write_sheet(
+                    campaign_id=campaign_id,
+                    kind=kind,
+                    entity_id=entity_id,
+                    mechanics_id=module_id,
+                    sheet=initial,
+                    source=source,
+                )
+                created.append(SheetRef(kind=kind, entity_id=entity_id))
+
+        return BulkSheetCreateResult(created=created, skipped=skipped)
 
     async def _compute_missing_sheets(
         self,

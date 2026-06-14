@@ -359,6 +359,11 @@ async def build_llm_services(
         obs = container.observability
     lifecycle.register_async("observability", _StopAdapter(obs.shutdown))
 
+    if container.import_preview_cache is None:
+        from grimoire.characters.import_preview import ImportPreviewCache
+
+        container.import_preview_cache = ImportPreviewCache()
+
     if container.hud_config is None:
         from grimoire.hud.config import HudConfigService
 
