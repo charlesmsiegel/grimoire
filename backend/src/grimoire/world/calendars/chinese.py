@@ -244,7 +244,7 @@ class ChineseEngine(CalendarEngine):
     system = "chinese"
 
     def to_jdn(self, date: DateParts) -> int:
-        return chinese_to_jdn(date.year, date.month, date.day, is_leap=False)
+        return chinese_to_jdn(date.year, date.month, date.day, is_leap=date.era == "leap")
 
     def from_jdn(self, jdn: int) -> DateParts:
         y, m, d, leap = chinese_from_jdn(jdn)
