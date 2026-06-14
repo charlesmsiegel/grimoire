@@ -14,7 +14,7 @@
  * populated from the existing catalog endpoints.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { viewsApi } from "../../api/views";
@@ -426,29 +426,16 @@ function IncludeEditor({
 }
 
 function DiffPreviewModal({ hint, onClose }: { hint: UpgradeHint; onClose: () => void }) {
-  const [diff, setDiff] = useState<WorldDiff | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    viewsApi
-      .worldDiff(hint.world_id, hint.bound, hint.latest)
-      .then((d) => {
-        if (!cancelled) setDiff(d);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [hint.world_id, hint.bound, hint.latest]);
+  const {
+    data: diff,
+    error,
+    loading,
+  } = useResource(
+    useCallback(
+      () => viewsApi.worldDiff(hint.world_id, hint.bound, hint.latest),
+      [hint.world_id, hint.bound, hint.latest],
+    ),
+  );
 
   return (
     <Dialog
@@ -462,7 +449,7 @@ function DiffPreviewModal({ hint, onClose }: { hint: UpgradeHint; onClose: () =>
         {loading && <p>Loading diff…</p>}
         {error && (
           <p className="error" role="alert">
-            {error}
+            {error.message}
           </p>
         )}
         {diff && <DiffRenderer diff={diff} />}

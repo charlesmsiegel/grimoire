@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
-import { observabilityApi, type TaskCostRow } from "../../api/observability";
+import { observabilityApi } from "../../api/observability";
+import { useResource } from "../../api/useResource";
 
 interface Props {
   turnId: string;
@@ -11,30 +12,14 @@ function fmtUsd(value: number): string {
 }
 
 export function CostBreakdown({ turnId }: Props) {
-  const [rows, setRows] = useState<TaskCostRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setRows(null);
-    setError(null);
-    observabilityApi
-      .turnCosts(turnId)
-      .then((data) => {
-        if (!cancelled) setRows(data);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [turnId]);
+  const { data: rows, error } = useResource(
+    useCallback(() => observabilityApi.turnCosts(turnId), [turnId]),
+  );
 
   if (error) {
     return (
       <p className="cost-breakdown-error" role="alert">
-        {error}
+        {error.message}
       </p>
     );
   }
