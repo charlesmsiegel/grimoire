@@ -69,6 +69,34 @@ def _ensure_duration_delta(duration: Duration) -> Duration:
     return Duration(iso8601=duration.iso8601, delta=parsed)
 
 
+def _decode_duration_entry(entry: object) -> Duration | None:
+    """Decode one ``time_advances`` payload entry into a Duration delta.
+
+    Returns ``None`` for entries that are not (or do not carry) a decodable
+    duration; malformed entries are logged and dropped rather than raised.
+    """
+    if isinstance(entry, Duration):
+        return entry
+    if isinstance(entry, dict):
+        blob = entry.get("duration") if "duration" in entry else entry
+        try:
+            if isinstance(blob, Duration):
+                return _ensure_duration_delta(blob)
+            if isinstance(blob, dict):
+                return _ensure_duration_delta(Duration.model_validate(blob))
+            if isinstance(blob, str):
+                return _ensure_duration_delta(Duration(iso8601=blob))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("turn_complete carried undecodable duration %r", blob)
+        return None
+    if isinstance(entry, str):
+        try:
+            return _ensure_duration_delta(Duration(iso8601=entry))
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("turn_complete carried bad ISO duration %r", entry)
+    return None
+
+
 def extract_time_advances_from_deltas(
     deltas: list[StateDelta] | list[Any] | None,
 ) -> list[Duration]:
@@ -158,26 +186,9 @@ class TimeEngineSubscriber:
         time_advances = payload.get("time_advances") or []
         durations: list[Duration] = []
         for entry in time_advances:
-            if isinstance(entry, Duration):
-                durations.append(entry)
-                continue
-            if isinstance(entry, dict):
-                blob = entry.get("duration") if "duration" in entry else entry
-                try:
-                    if isinstance(blob, Duration):
-                        durations.append(_ensure_duration_delta(blob))
-                    elif isinstance(blob, dict):
-                        durations.append(_ensure_duration_delta(Duration.model_validate(blob)))
-                    elif isinstance(blob, str):
-                        durations.append(_ensure_duration_delta(Duration(iso8601=blob)))
-                except Exception:  # pragma: no cover - defensive
-                    logger.warning("turn_complete carried undecodable duration %r", blob)
-                continue
-            if isinstance(entry, str):
-                try:
-                    durations.append(_ensure_duration_delta(Duration(iso8601=entry)))
-                except Exception:  # pragma: no cover - defensive
-                    logger.warning("turn_complete carried bad ISO duration %r", entry)
+            decoded = _decode_duration_entry(entry)
+            if decoded is not None:
+                durations.append(decoded)
         total = _sum_durations(durations)
         if total is None:
             return

@@ -49,25 +49,8 @@ def run_backup(
     try:
         with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for component in config.includes:
-                if component == "library":
-                    lib_dir = data_root / "library"
-                    if lib_dir.is_dir():
-                        _add_directory(zf, lib_dir, arcname_root="library")
-                        components.append("library")
-                elif component == "campaigns":
-                    camp_dir = data_root / "campaigns"
-                    if camp_dir.is_dir():
-                        _add_directory(zf, camp_dir, arcname_root="campaigns")
-                        components.append("campaigns")
-                elif component == "sqlite":
-                    if database_path.is_file():
-                        zf.write(database_path, arcname=database_path.name)
-                        # Include WAL/SHM so a restored backup is consistent.
-                        for suffix in ("-wal", "-shm"):
-                            sibling = database_path.parent / (database_path.name + suffix)
-                            if sibling.is_file():
-                                zf.write(sibling, arcname=sibling.name)
-                        components.append("sqlite")
+                if _add_component(zf, component, data_root=data_root, database_path=database_path):
+                    components.append(component)
     except Exception:
         # Clean up partial tmp on failure.
         with contextlib.suppress(OSError):
@@ -81,6 +64,42 @@ def run_backup(
 
     os.replace(tmp_path, final_path)
     return final_path
+
+
+def _add_component(
+    zf: zipfile.ZipFile,
+    component: str,
+    *,
+    data_root: Path,
+    database_path: Path,
+) -> bool:
+    """Add one configured include to the archive; return whether anything was written."""
+    if component == "library":
+        return _add_dir_component(zf, data_root / "library", arcname_root="library")
+    if component == "campaigns":
+        return _add_dir_component(zf, data_root / "campaigns", arcname_root="campaigns")
+    if component == "sqlite":
+        return _add_sqlite_component(zf, database_path)
+    return False
+
+
+def _add_dir_component(zf: zipfile.ZipFile, directory: Path, *, arcname_root: str) -> bool:
+    if not directory.is_dir():
+        return False
+    _add_directory(zf, directory, arcname_root=arcname_root)
+    return True
+
+
+def _add_sqlite_component(zf: zipfile.ZipFile, database_path: Path) -> bool:
+    if not database_path.is_file():
+        return False
+    zf.write(database_path, arcname=database_path.name)
+    # Include WAL/SHM so a restored backup is consistent.
+    for suffix in ("-wal", "-shm"):
+        sibling = database_path.parent / (database_path.name + suffix)
+        if sibling.is_file():
+            zf.write(sibling, arcname=sibling.name)
+    return True
 
 
 def _add_directory(zf: zipfile.ZipFile, directory: Path, *, arcname_root: str) -> None:

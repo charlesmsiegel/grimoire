@@ -77,6 +77,18 @@ def _patch_dataclass(obj, patch: dict):
     return dataclasses.replace(obj, **patch)
 
 
+def _resolve_target_existing(report: ContradictionReport, target_id: object) -> Fact | None:
+    """Pick the existing fact a resolution targets, or ``None`` when there are no conflicts."""
+    if not report.conflicts:
+        return None
+    if target_id is None:
+        return report.conflicts[0].existing_fact
+    for c in report.conflicts:
+        if c.existing_fact.id == target_id:
+            return c.existing_fact
+    raise ValueError(f"target_fact_id {target_id} not in conflicts")
+
+
 def _involves(commitment: Commitment, refs: Iterable[str]) -> bool:
     refs = set(refs)
     if not refs:
@@ -488,17 +500,7 @@ class ContinuityService(Continuity):
         action = ContradictionResolutionAction(resolution["action"])
         in_post = resolution.get("in_post", "")
         target_id = resolution.get("target_fact_id")
-        target_existing: Fact | None = None
-        if report.conflicts:
-            if target_id is not None:
-                for c in report.conflicts:
-                    if c.existing_fact.id == target_id:
-                        target_existing = c.existing_fact
-                        break
-                if target_existing is None:
-                    raise ValueError(f"target_fact_id {target_id} not in conflicts")
-            else:
-                target_existing = report.conflicts[0].existing_fact
+        target_existing = _resolve_target_existing(report, target_id)
 
         candidate = report.candidate_fact
 
