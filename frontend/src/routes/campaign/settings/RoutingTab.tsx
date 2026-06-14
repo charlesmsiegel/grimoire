@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { configApi } from "../../../api/config";
 import { pluginsApi, type PluginModelInfo } from "../../../api/library";
+import { useResource } from "../../../api/useResource";
 import { type PluginSummary, fetchInstalledPlugins } from "../../../api/wizard";
 import { cleanRoutes, type RoutingValue } from "../../campaignRouting";
 import { SaveIndicator } from "./SaveIndicator";
-import { errorMessage, useAutoSavedResource } from "./shared";
+import { useAutoSavedResource } from "./shared";
 
 const LLM_TASKS = [
   "main",
@@ -40,41 +41,13 @@ function usePluginModels(pluginId: string | null): {
   loading: boolean;
   error: string | null;
 } {
-  const [models, setModels] = useState<PluginModelInfo[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!pluginId) {
-      setModels([]);
-      setLoading(false);
-      setError(null);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void (async () => {
-      try {
-        const rows = await pluginsApi.listModels(pluginId);
-        if (!cancelled) {
-          setModels(rows);
-          setLoading(false);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(errorMessage(err));
-          setModels([]);
-          setLoading(false);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [pluginId]);
-
-  return { models, loading, error };
+  const { data, loading, error } = useResource(
+    useCallback(
+      () => (pluginId ? pluginsApi.listModels(pluginId) : Promise.resolve<PluginModelInfo[]>([])),
+      [pluginId],
+    ),
+  );
+  return { models: data ?? [], loading: pluginId ? loading : false, error: error?.message ?? null };
 }
 
 interface RouteRowProps {
@@ -304,36 +277,16 @@ export function RoutingTab({ campaignId }: { campaignId: string }) {
 }
 
 function RoutingTabAdvanced({ campaignId }: { campaignId: string }) {
-  const [plugins, setPlugins] = useState<PluginSummary[]>([]);
-  const [pluginsLoading, setPluginsLoading] = useState(true);
-  const [pluginsError, setPluginsError] = useState<string | null>(null);
+  const pluginsResource = useResource(useCallback(() => fetchInstalledPlugins(), []));
+  const plugins = useMemo(() => pluginsResource.data ?? [], [pluginsResource.data]);
+  const pluginsLoading = pluginsResource.loading;
+  const pluginsError = pluginsResource.error?.message ?? null;
   const { value, setValue, status, error, ready } = useAutoSavedResource<RoutingValue>(
     campaignId,
     "/routing",
     { llm: {}, embedding: {}, imagegen: {} },
     cleanRoutes,
   );
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const data = await fetchInstalledPlugins();
-        if (!cancelled) {
-          setPlugins(data);
-          setPluginsLoading(false);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setPluginsError(errorMessage(err));
-          setPluginsLoading(false);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const providersFor = useCallback(
     (kind: RoutingKind): PluginSummary[] =>

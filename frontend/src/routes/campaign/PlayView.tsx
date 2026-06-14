@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { campaignApi, type TimeAdvanceResult } from "../../api/campaign";
 import { fetchExpressionsConfig } from "../../api/expressions";
+import { useResource } from "../../api/useResource";
 
 import { IllustrateDialog } from "./IllustrateDialog";
 import { SceneLedgerDialog } from "./SceneLedgerDialog";
@@ -83,19 +84,12 @@ export function PlayView({ campaignId }: Props) {
   const [illustrateOpen, setIllustrateOpen] = useState(false);
   const [hudCollapsed, setHudCollapsed] = useState(false);
 
-  const [expressionsEnabledList, setExpressionsEnabledList] = useState<string[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    void fetchExpressionsConfig(campaignId).then((cfg) => {
-      if (!cancelled) setExpressionsEnabledList(cfg.enabled_characters);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignId]);
+  const expressionsConfig = useResource(
+    useCallback(() => fetchExpressionsConfig(campaignId), [campaignId]),
+  );
   const expressionsEnabledCharacters = useMemo(
-    () => new Set(expressionsEnabledList),
-    [expressionsEnabledList],
+    () => new Set(expressionsConfig.data?.enabled_characters ?? []),
+    [expressionsConfig.data],
   );
 
   const runAction = useCallback(async (fn: () => Promise<unknown>) => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -222,48 +222,43 @@ function ImagePresetCreate() {
 
 function ImagePresetEdit() {
   const { presetId = "" } = useParams();
+  const { data, loading, error } = useResource(
+    useCallback(() => libraryApi.getImagePresetEdit(presetId), [presetId]),
+  );
+
+  if (loading) return <p>Loading…</p>;
+  if (error)
+    return (
+      <p className="library-error" role="alert">
+        {error.message}
+      </p>
+    );
+  if (!data) return null;
+
+  return <ImagePresetEditForm presetId={presetId} initial={data} />;
+}
+
+function ImagePresetEditForm({
+  presetId,
+  initial,
+}: {
+  presetId: string;
+  initial: ImagePresetEditPayload;
+}) {
   const navigate = useNavigate();
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [tagsStr, setTagsStr] = useState("");
-  const [stylePreamble, setStylePreamble] = useState("");
-  const [defaultNegative, setDefaultNegative] = useState("");
-  const [paramsText, setParamsText] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [name, setName] = useState(initial.name);
+  const [description, setDescription] = useState(initial.description);
+  const [tagsStr, setTagsStr] = useState(initial.tags.join(", "));
+  const [stylePreamble, setStylePreamble] = useState(initial.style_preamble);
+  const [defaultNegative, setDefaultNegative] = useState(initial.default_negative_prompt);
+  const [paramsText, setParamsText] = useState(
+    Object.keys(initial.default_params).length > 0
+      ? JSON.stringify(initial.default_params, null, 2)
+      : "",
+  );
   const [busy, setBusy] = useState(false);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setLoadErr(null);
-    libraryApi
-      .getImagePresetEdit(presetId)
-      .then((payload: ImagePresetEditPayload) => {
-        if (cancelled) return;
-        setName(payload.name);
-        setDescription(payload.description);
-        setTagsStr(payload.tags.join(", "));
-        setStylePreamble(payload.style_preamble);
-        setDefaultNegative(payload.default_negative_prompt);
-        setParamsText(
-          Object.keys(payload.default_params).length > 0
-            ? JSON.stringify(payload.default_params, null, 2)
-            : "",
-        );
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setLoadErr(err instanceof ApiError ? err.message : String(err));
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [presetId]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -300,14 +295,6 @@ function ImagePresetEdit() {
       setDeleting(false);
     }
   });
-
-  if (loading) return <p>Loading…</p>;
-  if (loadErr)
-    return (
-      <p className="library-error" role="alert">
-        {loadErr}
-      </p>
-    );
 
   return (
     <section className="library-section">

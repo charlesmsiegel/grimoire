@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, calendarsApi } from "../../api/library";
 import type {
-  Calendar,
   CalendarMonth,
   CalendarSystem,
   CreateCalendarPayload,
@@ -306,29 +305,13 @@ function CalendarCreate() {
 function CalendarEdit() {
   const { calendarId = "" } = useParams();
   const navigate = useNavigate();
-  const [initial, setInitial] = useState<Calendar | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const { data: initial, error } = useResource(
+    useCallback(() => calendarsApi.getCalendar(calendarId), [calendarId]),
+  );
 
-  useEffect(() => {
-    let cancelled = false;
-    calendarsApi
-      .getCalendar(calendarId)
-      .then((cal) => {
-        if (cancelled) return;
-        if (cal.builtin) {
-          setErr("Built-in calendars cannot be edited.");
-        } else {
-          setInitial(cal);
-        }
-      })
-      .catch((e) => setErr(e instanceof ApiError ? e.message : String(e)));
-    return () => {
-      cancelled = true;
-    };
-  }, [calendarId]);
-
-  if (err) return <p className="library-error">{err}</p>;
+  if (error) return <p className="library-error">{error.message}</p>;
   if (!initial) return <p>Loading…</p>;
+  if (initial.builtin) return <p className="library-error">Built-in calendars cannot be edited.</p>;
 
   return (
     <CalendarForm

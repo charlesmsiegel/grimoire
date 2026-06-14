@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 
 import { canonicalizeCharacterRef, type ApiScene, type PCEntry } from "../../../api/campaign";
-import { ApiError } from "../../../api/client";
 import type { WidgetSnapshot } from "../../../api/hud";
 import type { ResolvedCharacter } from "../../../api/types";
+import { useResource } from "../../../api/useResource";
 import { viewsApi } from "../../../api/views";
 import { InspectorPanel } from "../Inspector/InspectorPanel";
 import { WhatChangedPanel } from "../WhatChangedPanel";
@@ -234,79 +234,58 @@ function formatScalar(value: unknown): string {
   return "{…}";
 }
 
+// Stable empty references so the resource loaders below don't churn their
+// `useCallback` identity (which would re-fire the fetch every render).
+const NO_ROWS: ResolvedCharacter[] = [];
+const NO_SHEETS: Record<string, Record<string, unknown> | null> = {};
+
 function useActivePcCharacters(campaignId: string, pcs: PCEntry[]): { rows: ResolvedCharacter[] } {
-  const [rows, setRows] = useState<ResolvedCharacter[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    if (pcs.length === 0) {
-      setRows([]);
-      return () => {
-        cancelled = true;
-      };
-    }
-    viewsApi
-      .listCharacters(campaignId)
-      .then((all) => {
-        if (cancelled) return;
+  const state = useResource(
+    useCallback((): Promise<ResolvedCharacter[]> => {
+      if (pcs.length === 0) return Promise.resolve(NO_ROWS);
+      return viewsApi.listCharacters(campaignId).then((all) => {
         // Normalize both sides: PCs are stored under whatever ref spelling was
         // registered (often a wizard shorthand), while the ref built here is
         // canonical (#517).
         const activeRefs = new Set(pcs.map((p) => canonicalizeCharacterRef(p.character_ref)));
-        setRows(
-          all.filter((c) => {
-            const ref = canonicalizeCharacterRef(
-              c.character.world_id !== null
-                ? `library:worlds/${c.character.world_id}/characters/${c.character.id}`
-                : `campaign:emergent/character/${c.character.id}`,
-            );
-            return activeRefs.has(ref);
-          }),
-        );
-      })
-      .catch(() => {
-        if (!cancelled) setRows([]);
+        return all.filter((c) => {
+          const ref = canonicalizeCharacterRef(
+            c.character.world_id !== null
+              ? `library:worlds/${c.character.world_id}/characters/${c.character.id}`
+              : `campaign:emergent/character/${c.character.id}`,
+          );
+          return activeRefs.has(ref);
+        });
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignId, pcs]);
-  return { rows };
+    }, [campaignId, pcs]),
+  );
+  return { rows: state.data ?? NO_ROWS };
 }
 
 function MechanicsBlock({ campaignId, pcs }: { campaignId: string; pcs: PCEntry[] }) {
   const { rows } = useActivePcCharacters(campaignId, pcs);
-  const [sheets, setSheets] = useState<Record<string, Record<string, unknown> | null>>({});
-
-  useEffect(() => {
-    let cancelled = false;
-    if (rows.length === 0) {
-      setSheets({});
-      return () => {
-        cancelled = true;
-      };
-    }
-    Promise.all(
-      rows.map(async (row) => {
-        try {
-          const sheet = await viewsApi.getSheet(campaignId, "character", row.character.id);
-          return [row.character.id, sheet] as const;
-        } catch (err) {
-          if (err instanceof ApiError && err.status === 404) {
+  const sheetsState = useResource(
+    useCallback((): Promise<Record<string, Record<string, unknown> | null>> => {
+      if (rows.length === 0) return Promise.resolve(NO_SHEETS);
+      return Promise.all(
+        rows.map(async (row) => {
+          try {
+            const sheet = await viewsApi.getSheet(campaignId, "character", row.character.id);
+            return [row.character.id, sheet] as const;
+          } catch {
+            // No sheet for this character (404) or a transient read error —
+            // either way the HUD just omits its mechanics line.
             return [row.character.id, null] as const;
           }
-          return [row.character.id, null] as const;
-        }
-      }),
-    ).then((pairs) => {
-      if (cancelled) return;
-      const next: Record<string, Record<string, unknown> | null> = {};
-      for (const [id, sheet] of pairs) next[id] = sheet;
-      setSheets(next);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignId, rows]);
+        }),
+      ).then((pairs) => {
+        const next: Record<string, Record<string, unknown> | null> = {};
+        for (const [id, sheet] of pairs) next[id] = sheet;
+        return next;
+      });
+    }, [campaignId, rows]),
+  );
+  const sheets = sheetsState.data ?? NO_SHEETS;
 
   const sections = rows
     .map((row) => {

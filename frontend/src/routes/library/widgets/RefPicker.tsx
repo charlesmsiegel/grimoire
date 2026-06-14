@@ -1,6 +1,7 @@
-import { useEffect, useId, useState } from "react";
+import { useCallback, useId } from "react";
 
 import { ENTITY_KIND_PLURAL, type EntityKind, libraryApi } from "../../../api/library";
+import { useResource } from "../../../api/useResource";
 
 interface Suggestion {
   id: string;
@@ -24,11 +25,8 @@ export function RefPicker({
   onChange: (next: string) => void;
 }) {
   const listId = useId();
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-
-  useEffect(() => {
-    let active = true;
-    async function load() {
+  const { data: suggestions } = useResource(
+    useCallback(async () => {
       const results: Suggestion[] = [];
       for (const kind of refKinds) {
         try {
@@ -41,19 +39,15 @@ export function RefPicker({
           // Ref pickers are advisory — failure leaves the input as free text.
         }
       }
-      if (active) setSuggestions(results);
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [worldId, refKinds]);
+      return results;
+    }, [worldId, refKinds]),
+  );
 
   return (
     <>
       <input type="text" list={listId} value={value} onChange={(e) => onChange(e.target.value)} />
       <datalist id={listId}>
-        {suggestions.map((s) => (
+        {(suggestions ?? []).map((s) => (
           <option key={s.id} value={s.id}>
             {s.label}
           </option>

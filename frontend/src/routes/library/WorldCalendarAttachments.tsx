@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
 import { calendarsApi } from "../../api/library";
 import type { Calendar, HolidaySet } from "../../api/library";
+import { useResource } from "../../api/useResource";
 
 interface Props {
   calendarIds: string[];
@@ -26,24 +27,14 @@ export function WorldCalendarAttachments({
   displayCalendarId,
   onChange,
 }: Props) {
-  const [allCalendars, setAllCalendars] = useState<Calendar[]>([]);
-  const [allHolidaySets, setAllHolidaySets] = useState<HolidaySet[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([calendarsApi.listCalendars(), calendarsApi.listHolidaySets()])
-      .then(([cals, sets]) => {
-        if (cancelled) return;
-        setAllCalendars(cals);
-        setAllHolidaySets(sets);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { data, loading } = useResource(
+    useCallback(
+      () => Promise.all([calendarsApi.listCalendars(), calendarsApi.listHolidaySets()]),
+      [],
+    ),
+  );
+  const allCalendars: Calendar[] = data?.[0] ?? [];
+  const allHolidaySets: HolidaySet[] = data?.[1] ?? [];
 
   if (loading) return <p>Loading calendars…</p>;
 

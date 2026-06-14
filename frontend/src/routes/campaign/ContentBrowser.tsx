@@ -9,11 +9,12 @@
  * save sends the raw payload back.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { campaignApi, type ContentEntry } from "../../api/campaign";
 import { errorMessage } from "../../api/client";
 import { mechanicsApi, type RegisteredModule } from "../../api/library";
+import { useResource } from "../../api/useResource";
 import { SheetRenderer } from "../../sheets/SheetRenderer";
 import type { SheetSchema } from "../../sheets/types";
 import { CardIconBar } from "../../components/CardIconBar";
@@ -78,52 +79,60 @@ interface PanelProps {
 
 function ContentKindPanel({ campaignId, module, kind }: PanelProps) {
   const moduleId = module.manifest.id;
-  const themeCss = module.theme_css ?? null;
-  const [entries, setEntries] = useState<ContentEntry[]>([]);
-  const [schema, setSchema] = useState<SheetSchema | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    Promise.all([
-      campaignApi.listContent(campaignId, kind),
-      mechanicsApi.contentSchema(moduleId, kind),
-    ])
-      .then(([list, sch]) => {
-        if (cancelled) return;
-        setEntries(list);
-        setSchema(sch as unknown as SheetSchema);
-        setSelectedId(list[0]?.id ?? null);
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setError(errorMessage(err));
-          setLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignId, kind, moduleId]);
-
-  const selected = useMemo(
-    () => entries.find((e) => e.id === selectedId) ?? null,
-    [entries, selectedId],
+  const {
+    data: loaded,
+    error,
+    loading,
+  } = useResource(
+    useCallback(
+      () =>
+        Promise.all([
+          campaignApi.listContent(campaignId, kind),
+          mechanicsApi.contentSchema(moduleId, kind),
+        ]).then(([list, sch]) => ({ entries: list, schema: sch as unknown as SheetSchema })),
+      [campaignId, kind, moduleId],
+    ),
   );
 
   if (loading) return <p className="muted">Loading {kind}…</p>;
   if (error) {
     return (
       <p className="error" role="alert">
-        Failed to load {kind}: {error}
+        Failed to load {kind}: {errorMessage(error)}
       </p>
     );
   }
+  if (!loaded) return <p className="muted">Loading {kind}…</p>;
+
+  return (
+    <ContentKindEditor
+      campaignId={campaignId}
+      module={module}
+      kind={kind}
+      initialEntries={loaded.entries}
+      schema={loaded.schema}
+    />
+  );
+}
+
+interface KindEditorProps {
+  campaignId: string;
+  module: RegisteredModule;
+  kind: string;
+  initialEntries: ContentEntry[];
+  schema: SheetSchema;
+}
+
+function ContentKindEditor({ campaignId, module, kind, initialEntries, schema }: KindEditorProps) {
+  const moduleId = module.manifest.id;
+  const themeCss = module.theme_css ?? null;
+  const [entries, setEntries] = useState<ContentEntry[]>(initialEntries);
+  const [selectedId, setSelectedId] = useState<string | null>(initialEntries[0]?.id ?? null);
+
+  const selected = useMemo(
+    () => entries.find((e) => e.id === selectedId) ?? null,
+    [entries, selectedId],
+  );
 
   return (
     <div className="content-browser-layout">

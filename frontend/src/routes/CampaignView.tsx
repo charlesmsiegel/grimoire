@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useParams } from "react-router-dom";
 
-import { ApiError } from "../api/client";
 import { campaignApi } from "../api/campaign";
+import { useResource } from "../api/useResource";
 import { markEnd, markStart } from "../state/perf";
 import { PlayView } from "./campaign/PlayView";
 
@@ -21,16 +21,20 @@ const subSections: { to: string; label: string; end?: boolean }[] = [
   { to: "settings", label: "Settings" },
 ];
 
-interface PreservedSummary {
-  active: string | null;
-  preserved: { mechanics_id: string; count: number }[];
-}
-
 export function CampaignView() {
   const { campaignId } = useParams();
-  const [campaignName, setCampaignName] = useState<string | null>(null);
-  const [mechanicsModule, setMechanicsModule] = useState<string | null | undefined>(undefined);
   const [navCollapsed, setNavCollapsed] = useState(false);
+
+  // The load is best-effort: on error we fall back to showing the id and skip
+  // the preserved-sheets check (mechanicsModule stays undefined = "not loaded").
+  const { data: campaign } = useResource(
+    useCallback(
+      () => (campaignId ? campaignApi.get(campaignId) : Promise.resolve(null)),
+      [campaignId],
+    ),
+  );
+  const campaignName = campaign?.name ?? null;
+  const mechanicsModule = campaign ? (campaign.mechanics_module ?? null) : undefined;
 
   const prevIdRef = useRef<string | undefined>(undefined);
   if (campaignId && prevIdRef.current !== campaignId) {
@@ -41,23 +45,6 @@ export function CampaignView() {
     if (campaignId) {
       markEnd("campaign:switch");
     }
-  }, [campaignId]);
-
-  useEffect(() => {
-    if (!campaignId) return;
-    let cancelled = false;
-    campaignApi
-      .get(campaignId)
-      .then((c) => {
-        if (!cancelled) {
-          setCampaignName(c.name ?? null);
-          setMechanicsModule(c.mechanics_module ?? null);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
   }, [campaignId]);
 
   if (!campaignId) {
@@ -124,26 +111,17 @@ export function PreservedSheetsBanner({
   campaignId: string;
   mechanicsModule: string | null | undefined;
 }) {
-  const [summary, setSummary] = useState<PreservedSummary | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
-  useEffect(() => {
-    if (!mechanicsModule) return;
-    let cancelled = false;
-    campaignApi
-      .preservedSheets(campaignId)
-      .then((s) => {
-        if (!cancelled) setSummary(s);
-      })
-      .catch((err: unknown) => {
-        // 404 → endpoint not implemented yet, suppress.
-        if (err instanceof ApiError && err.status === 404) return;
-        // Other errors: silently skip — the banner is best-effort context.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignId, mechanicsModule]);
+  // Best-effort: a 404 (endpoint not implemented) or any other error leaves
+  // data null and the banner hidden. When no mechanics is bound, skip the
+  // fetch entirely (resolve to null).
+  const { data: summary } = useResource(
+    useCallback(
+      () => (mechanicsModule ? campaignApi.preservedSheets(campaignId) : Promise.resolve(null)),
+      [campaignId, mechanicsModule],
+    ),
+  );
 
   if (!summary || dismissed) return null;
   const orphans = summary.preserved.filter(

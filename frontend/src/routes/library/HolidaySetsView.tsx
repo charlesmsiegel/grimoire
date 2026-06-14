@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, calendarsApi } from "../../api/library";
@@ -7,7 +7,6 @@ import type {
   CreateHolidaySetPayload,
   Holiday,
   HolidayRule,
-  HolidaySet,
   UpdateHolidaySetPayload,
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
@@ -278,31 +277,18 @@ function Create() {
 function Edit() {
   const { setId = "" } = useParams();
   const navigate = useNavigate();
-  const [initial, setInitial] = useState<HolidaySet | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const { data, error } = useResource(
+    useCallback(() => calendarsApi.getHolidaySet(setId), [setId]),
+  );
 
-  useEffect(() => {
-    let cancelled = false;
-    calendarsApi
-      .getHolidaySet(setId)
-      .then((s) => {
-        if (cancelled) return;
-        if (s.builtin) setErr("Built-in holiday sets cannot be edited.");
-        else setInitial(s);
-      })
-      .catch((e) => setErr(e instanceof ApiError ? e.message : String(e)));
-    return () => {
-      cancelled = true;
-    };
-  }, [setId]);
-
-  if (err) return <p className="library-error">{err}</p>;
-  if (!initial) return <p>Loading…</p>;
+  if (error) return <p className="library-error">{error.message}</p>;
+  if (!data) return <p>Loading…</p>;
+  if (data.builtin) return <p className="library-error">Built-in holiday sets cannot be edited.</p>;
 
   return (
     <Form
       mode="edit"
-      initial={initial}
+      initial={data}
       onSubmit={async (payload) => {
         const patch: UpdateHolidaySetPayload = {
           name: payload.name,

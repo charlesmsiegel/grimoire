@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, libraryApi } from "../../api/library";
@@ -215,44 +215,41 @@ function StyleGuideCreate() {
 
 function StyleGuideEdit() {
   const { guideId = "" } = useParams();
+  const { data, loading, error } = useResource(
+    useCallback(() => libraryApi.getStyleGuideEdit(guideId), [guideId]),
+  );
+
+  if (loading) return <p>Loading…</p>;
+  if (error)
+    return (
+      <p className="library-error" role="alert">
+        {error.message}
+      </p>
+    );
+  if (!data) return null;
+
+  return <StyleGuideEditForm guideId={guideId} initial={data} />;
+}
+
+function StyleGuideEditForm({
+  guideId,
+  initial,
+}: {
+  guideId: string;
+  initial: StyleGuideEditPayload;
+}) {
   const navigate = useNavigate();
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [tagsStr, setTagsStr] = useState("");
-  const [sections, setSections] = useState<Sections>(emptySections);
-  const [loading, setLoading] = useState(true);
-  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [name, setName] = useState(initial.name);
+  const [description, setDescription] = useState(initial.description);
+  const [tagsStr, setTagsStr] = useState(initial.tags.join(", "));
+  const [sections, setSections] = useState<Sections>({
+    pacing: initial.pacing,
+    voice: initial.voice,
+    themes: initial.themes,
+    avoid: initial.avoid,
+  });
   const [busy, setBusy] = useState(false);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setLoadErr(null);
-    libraryApi
-      .getStyleGuideEdit(guideId)
-      .then((payload: StyleGuideEditPayload) => {
-        if (cancelled) return;
-        setName(payload.name);
-        setDescription(payload.description);
-        setTagsStr(payload.tags.join(", "));
-        setSections({
-          pacing: payload.pacing,
-          voice: payload.voice,
-          themes: payload.themes,
-          avoid: payload.avoid,
-        });
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setLoadErr(err instanceof ApiError ? err.message : String(err));
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [guideId]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -280,14 +277,6 @@ function StyleGuideEdit() {
       setBusy(false);
     }
   }
-
-  if (loading) return <p>Loading…</p>;
-  if (loadErr)
-    return (
-      <p className="library-error" role="alert">
-        {loadErr}
-      </p>
-    );
 
   return (
     <section className="library-section">

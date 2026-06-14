@@ -8,9 +8,10 @@
  * minted post_id, so the chosen emotion is recorded against that post.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
 import { fetchVocabulary, type ExpressionVocabulary } from "../../api/expressions";
+import { useResource } from "../../api/useResource";
 
 interface Props {
   value: string;
@@ -49,21 +50,9 @@ function flattenVocabulary(vocab: ExpressionVocabulary): string[] {
 }
 
 export function ExpressionPicker({ value, onChange, disabled = false }: Props) {
-  const [vocab, setVocab] = useState<ExpressionVocabulary>(FALLBACK_VOCABULARY);
-
-  useEffect(() => {
-    let active = true;
-    fetchVocabulary()
-      .then((v) => {
-        if (active) setVocab(v);
-      })
-      .catch(() => {
-        // Network blip: stick with the fallback core list.
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+  // Network blip: data stays null and we fall back to the core list.
+  const { data } = useResource(useCallback(() => fetchVocabulary(), []));
+  const vocab = data ?? FALLBACK_VOCABULARY;
 
   const options = flattenVocabulary(vocab);
 

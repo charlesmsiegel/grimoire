@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { type PluginManifest, pluginsApi } from "../../api/library";
 import { configApi } from "../../api/config";
 import { type PluginSummary, fetchInstalledPlugins } from "../../api/wizard";
+import { useResource } from "../../api/useResource";
 import { errorMessage } from "./shared";
 import { ProviderCard, type ModelSlot } from "./ProviderCard";
 
@@ -19,11 +20,26 @@ const EMBED_SLOTS: ModelSlot[] = [{ key: "route", label: "Embedding model", clea
 
 const IMAGEGEN_SLOTS: ModelSlot[] = [];
 
+async function fetchPluginCatalog(): Promise<{
+  plugins: PluginSummary[];
+  manifests: PluginManifest[];
+}> {
+  const [plugins, manifests] = await Promise.all([
+    fetchInstalledPlugins(),
+    pluginsApi.listInstalled(),
+  ]);
+  return { plugins, manifests };
+}
+
 export function ProvidersTab() {
-  const [plugins, setPlugins] = useState<PluginSummary[]>([]);
-  const [manifests, setManifests] = useState<PluginManifest[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Primary catalog load (gates loading/error); model defaults are best-effort
+  // and tracked separately because they feed optimistic-update state below.
+  const {
+    data: catalog,
+    error: catalogError,
+    loading,
+  } = useResource(useCallback(() => fetchPluginCatalog(), []));
+  const [defaultsError, setDefaultsError] = useState<string | null>(null);
   const [llmDefaults, setLlmDefaults] = useState<{ heavy: string; light: string }>({
     heavy: "",
     light: "",
@@ -36,22 +52,6 @@ export function ProvidersTab() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      try {
-        const [data, full] = await Promise.all([
-          fetchInstalledPlugins(),
-          pluginsApi.listInstalled(),
-        ]);
-        if (!cancelled) {
-          setPlugins(data);
-          setManifests(full);
-          setLoading(false);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(errorMessage(err));
-          setLoading(false);
-        }
-      }
       try {
         const llm = await configApi.getLLMDefaults();
         if (!cancelled) setLlmDefaults(llm);
@@ -76,6 +76,10 @@ export function ProvidersTab() {
     };
   }, []);
 
+  const plugins = catalog?.plugins ?? [];
+  const manifests = catalog?.manifests ?? [];
+  const error = defaultsError ?? (catalogError ? errorMessage(catalogError) : null);
+
   const llmPlugins = plugins.filter((p) => p.kind === "llm_provider");
   const embedPlugins = plugins.filter((p) => p.kind === "embedding_provider");
   const imageBackends = plugins.filter((p) => p.kind === "imagegen_backend");
@@ -90,7 +94,7 @@ export function ProvidersTab() {
         await configApi.setLLMDefaults(next);
       } catch (err) {
         setLlmDefaults(prev);
-        setError(errorMessage(err));
+        setDefaultsError(errorMessage(err));
       }
     },
     [llmDefaults],
@@ -105,7 +109,7 @@ export function ProvidersTab() {
         await configApi.patchEmbeddingDefaults({ route });
       } catch (err) {
         setEmbedDefaults(prev);
-        setError(errorMessage(err));
+        setDefaultsError(errorMessage(err));
       }
     },
     [embedDefaults],
@@ -119,7 +123,7 @@ export function ProvidersTab() {
         await configApi.patchImagegenDefaults({ backend: providerId });
       } catch (err) {
         setImagegenDefaults(prev);
-        setError(errorMessage(err));
+        setDefaultsError(errorMessage(err));
       }
     },
     [imagegenDefaults],

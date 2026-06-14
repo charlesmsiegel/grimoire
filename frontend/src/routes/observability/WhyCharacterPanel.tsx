@@ -9,7 +9,7 @@
  * Spec: `docs/superpowers/specs/2026-05-20-why-this-character-design.md`.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   observabilityApi,
@@ -21,6 +21,7 @@ import {
 } from "../../api/observability";
 import { viewsApi } from "../../api/views";
 import type { ResolvedCharacter } from "../../api/types";
+import { useResource } from "../../api/useResource";
 import { CardIconBar } from "../../components/CardIconBar";
 import { REASON_LABELS } from "./inclusionReasonLabels";
 
@@ -103,15 +104,31 @@ export function WhyCharacterPanel({ campaignId }: Props) {
   const [turns, setTurns] = useState<TurnAuditSummary[] | null>(null);
   const [turnsError, setTurnsError] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
-  const [prompt, setPrompt] = useState<TurnPromptResponse | null>(null);
-  const [promptError, setPromptError] = useState<string | null>(null);
-  const [characters, setCharacters] = useState<ResolvedCharacter[]>([]);
+
+  // Characters and the selected turn's prompt are plain on-mount/on-change
+  // reads. The turns list stays a hand-rolled effect because it also resets
+  // the user's turn selection when the campaign changes.
+  const charactersState = useResource(
+    useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]),
+  );
+  const characters = useMemo(() => charactersState.data ?? [], [charactersState.data]);
+
+  const promptState = useResource(
+    useCallback(
+      () =>
+        selectedTurnId
+          ? observabilityApi.getTurnPrompt(selectedTurnId)
+          : Promise.resolve<TurnPromptResponse | null>(null),
+      [selectedTurnId],
+    ),
+  );
+  const prompt = promptState.data;
+  const promptError = promptState.error?.message ?? null;
 
   useEffect(() => {
     let cancelled = false;
     setTurns(null);
     setSelectedTurnId(null);
-    setPrompt(null);
     observabilityApi
       .listTurns(campaignId)
       .then((rows) => {
@@ -130,39 +147,6 @@ export function WhyCharacterPanel({ campaignId }: Props) {
       cancelled = true;
     };
   }, [campaignId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    viewsApi
-      .listCharacters(campaignId)
-      .then((rows) => {
-        if (!cancelled) setCharacters(rows);
-      })
-      .catch(() => {
-        if (!cancelled) setCharacters([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignId]);
-
-  useEffect(() => {
-    if (!selectedTurnId) return;
-    let cancelled = false;
-    setPrompt(null);
-    setPromptError(null);
-    observabilityApi
-      .getTurnPrompt(selectedTurnId)
-      .then((res) => {
-        if (!cancelled) setPrompt(res);
-      })
-      .catch((err) => {
-        if (!cancelled) setPromptError(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedTurnId]);
 
   const nameByRef = useMemo(() => buildNameLookup(characters), [characters]);
   const cards = useMemo(

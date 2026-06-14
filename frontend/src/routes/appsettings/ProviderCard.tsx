@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { useResource } from "../../api/useResource";
 import { type PluginConfig, type PluginManifest, pluginsApi } from "../../api/library";
 import { type PluginSummary } from "../../api/wizard";
 import { PluginModelPicker } from "../../components/PluginModelPicker";
@@ -80,8 +81,6 @@ export function ProviderCard({
   loading: parentLoading,
 }: Props) {
   const [selectedId, setSelectedId] = useState<string>("");
-  const [config, setConfig] = useState<PluginConfig | null>(null);
-  const [configLoading, setConfigLoading] = useState(false);
 
   useEffect(() => {
     if (!selectedId && plugins.length === 1) {
@@ -98,27 +97,18 @@ export function ProviderCard({
     if (match) setSelectedId(match.id);
   }, [plugins, defaults, selectedId]);
 
-  useEffect(() => {
-    if (!selectedId) {
-      setConfig(null);
-      return;
-    }
-    let cancelled = false;
-    setConfigLoading(true);
-    void (async () => {
-      try {
-        const cfg = await pluginsApi.getConfig(selectedId);
-        if (!cancelled) setConfig(cfg);
-      } catch {
-        if (!cancelled) setConfig(null);
-      } finally {
-        if (!cancelled) setConfigLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedId]);
+  // Config is best-effort: any error leaves config null. No selection → null.
+  const {
+    data: configData,
+    error: configError,
+    loading: configLoading,
+  } = useResource(
+    useCallback(
+      () => (selectedId ? pluginsApi.getConfig(selectedId) : Promise.resolve(null)),
+      [selectedId],
+    ),
+  );
+  const config: PluginConfig | null = configError ? null : configData;
 
   const activePlugin = plugins.find((p) => p.id === selectedId);
   const activeManifest = manifests.find((m) => m.id === selectedId);

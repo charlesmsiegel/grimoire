@@ -7,15 +7,11 @@
  * time, mood, and tags.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
 import { type LibraryEntity, libraryApi } from "../../api/library";
+import { useResource } from "../../api/useResource";
 import type { GreetingFormValue } from "./greeting-form";
-
-interface CharacterOption {
-  assetId: string;
-  name: string;
-}
 
 interface Props {
   worldId: string;
@@ -27,29 +23,20 @@ interface Props {
 }
 
 export function GreetingFormFields({ worldId, value, onChange, hideName = false }: Props) {
-  const [characters, setCharacters] = useState<CharacterOption[]>([]);
-  const [loadErr, setLoadErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoadErr(null);
-    libraryApi
-      .listEntities(worldId, "characters")
-      .then((rows) => {
-        if (cancelled) return;
-        const opts = (rows as LibraryEntity[])
-          .map((c) => ({ assetId: c.asset_id, name: c.name || c.asset_id }))
-          .sort((a, b) => a.name.localeCompare(b.name));
-        setCharacters(opts);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setLoadErr(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [worldId]);
+  const { data: characters, error: loadErr } = useResource(
+    useCallback(
+      () =>
+        libraryApi
+          .listEntities(worldId, "characters")
+          .then((rows) =>
+            (rows as LibraryEntity[])
+              .map((c) => ({ assetId: c.asset_id, name: c.name || c.asset_id }))
+              .sort((a, b) => a.name.localeCompare(b.name)),
+          ),
+      [worldId],
+    ),
+  );
+  const charList = characters ?? [];
 
   function patch<K extends keyof GreetingFormValue>(key: K, next: GreetingFormValue[K]) {
     onChange({ ...value, [key]: next });
@@ -107,17 +94,17 @@ export function GreetingFormFields({ worldId, value, onChange, hideName = false 
         <small>NPCs and PCs present when the scene opens.</small>
         {loadErr && (
           <p className="library-error" role="alert">
-            {loadErr}
+            {loadErr.message}
           </p>
         )}
-        {characters.length === 0 && !loadErr && (
+        {charList.length === 0 && !loadErr && (
           <p className="empty-state">
             <em>This world has no characters yet. Create some under the Characters tab.</em>
           </p>
         )}
-        {characters.length > 0 && (
+        {charList.length > 0 && (
           <ul className="grid-cards greeting-character-list">
-            {characters.map((c) => (
+            {charList.map((c) => (
               <li key={c.assetId}>
                 <label>
                   <input
@@ -137,7 +124,7 @@ export function GreetingFormFields({ worldId, value, onChange, hideName = false 
         <span>POV character</span>
         <select value={value.povCharacter} onChange={(e) => patch("povCharacter", e.target.value)}>
           <option value="">(none)</option>
-          {characters.map((c) => (
+          {charList.map((c) => (
             <option key={c.assetId} value={c.assetId}>
               {c.name} ({c.assetId})
             </option>

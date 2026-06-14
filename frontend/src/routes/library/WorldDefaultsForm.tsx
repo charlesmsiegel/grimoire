@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
-import { libraryApi, type LibraryEntity } from "../../api/library";
+import { libraryApi } from "../../api/library";
+import { useResource } from "../../api/useResource";
 import { StructuredValueEditor } from "./StructuredValueEditor";
 
 const KNOWN_KEYS = [
@@ -28,22 +29,14 @@ export function WorldDefaultsForm({ value, onChange }: Props) {
     if (!(KNOWN_KEYS as readonly string[]).includes(k)) extras[k] = v;
   }
 
-  const [styleGuides, setStyleGuides] = useState<LibraryEntity[]>([]);
-  const [imagePresets, setImagePresets] = useState<LibraryEntity[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([libraryApi.listStyleGuides(), libraryApi.listImagePresets()]).then(
-      ([sgs, ips]) => {
-        if (cancelled) return;
-        setStyleGuides(sgs);
-        setImagePresets(ips);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { data: catalog } = useResource(
+    useCallback(
+      () => Promise.all([libraryApi.listStyleGuides(), libraryApi.listImagePresets()]),
+      [],
+    ),
+  );
+  const styleGuides = catalog?.[0] ?? [];
+  const imagePresets = catalog?.[1] ?? [];
 
   function patch(key: KnownKey, next: string) {
     onChange({ ...value, [key]: next });
