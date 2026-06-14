@@ -15,7 +15,7 @@ interface Props {
   pcs: PCEntry[];
   images: SceneImage[];
   isLatestModelPost?: boolean;
-  campaignId?: string;
+  campaignId: string;
   presentCharacterRefs?: string[];
   expressionsEnabledCharacters?: ReadonlySet<string>;
   /** Called with this post's turn_id when a reroll request fails, so the parent
@@ -213,7 +213,7 @@ export function PostItem({
     const target = alternates[next];
     if (!target) return;
     await call(async () => {
-      await campaignApi.switchPrimaryAlternate(campaignId!, post.scene_id, post.id, target.id);
+      await campaignApi.switchPrimaryAlternate(campaignId, post.scene_id, post.id, target.id);
       setCursor(next);
     });
   }
@@ -222,7 +222,7 @@ export function PostItem({
     if (!canMutate || !current) return;
     const target = current;
     await call(() =>
-      campaignApi.pinAlternate(campaignId!, post.scene_id, post.id, target.id, !target.pinned),
+      campaignApi.pinAlternate(campaignId, post.scene_id, post.id, target.id, !target.pinned),
     );
   }
 
@@ -230,7 +230,7 @@ export function PostItem({
     if (!canMutate) return false;
     const opts = steeringHint?.trim() ? { steering_hint: steeringHint.trim() } : undefined;
     const ok = await call(() =>
-      campaignApi.regeneratePost(campaignId!, post.scene_id, post.id, opts),
+      campaignApi.regeneratePost(campaignId, post.scene_id, post.id, opts),
     );
     // On success the WS alternate_added event clears the streaming indicator;
     // on failure no such event arrives, so clear it here or the UI stays stuck

@@ -11,7 +11,7 @@ interface Props {
   streaming: PendingTurn | null;
   awaitingResponse: boolean;
   images: Record<string, SceneImage>;
-  campaignId?: string;
+  campaignId: string;
   scene?: ApiScene | null;
   hasMorePosts: boolean;
   onLoadMore: () => void;

@@ -30,6 +30,7 @@ function renderPane(props: Partial<Parameters<typeof ScenePane>[0]> = {}) {
       images={{}}
       hasMorePosts={false}
       onLoadMore={() => {}}
+      campaignId="c1"
       {...props}
     />,
   );
@@ -175,6 +176,7 @@ describe("ScenePane new-turn anchoring", () => {
         images={{}}
         hasMorePosts={false}
         onLoadMore={() => {}}
+        campaignId="c1"
         scene={scene}
       />,
     );
@@ -195,6 +197,7 @@ describe("ScenePane new-turn anchoring", () => {
         images={{}}
         hasMorePosts={false}
         onLoadMore={() => {}}
+        campaignId="c1"
         scene={scene}
       />,
     );
@@ -216,6 +219,7 @@ describe("ScenePane new-turn anchoring", () => {
         images={{}}
         hasMorePosts={false}
         onLoadMore={() => {}}
+        campaignId="c1"
         scene={scene}
       />,
     );
@@ -249,6 +253,7 @@ describe("ScenePane console hygiene", () => {
         images={{}}
         hasMorePosts={false}
         onLoadMore={() => {}}
+        campaignId="c1"
         scene={scene}
       />,
     );
