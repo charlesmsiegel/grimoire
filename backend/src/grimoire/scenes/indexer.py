@@ -366,40 +366,34 @@ class SceneIndexer:
             # Deleting one post renumbers everything after it; the simplest
             # consistent path is to drop the scene's rows and re-insert from
             # the live ``get_posts`` list.
-            await delete_posts_for_scene(self._db, scene.id)
-            for p in await self._manager.get_posts(scene_id):
-                await upsert_post_row(
-                    self._db,
-                    post_id=p.id,
-                    scene_id=scene.id,
-                    campaign_id=scene.campaign_id,
-                    turn_id=p.turn_id or None,
-                    order_in_scene=p.order_in_scene,
-                    author_kind=p.author_kind,
-                    author_pc_ref=p.author_pc_ref,
-                    author_npc_ref=p.author_npc_ref,
-                    body=p.body,
-                    is_player=p.is_player,
-                    created_at=p.created_at,
-                )
+            await self._reindex_scene_posts(scene, scene_id)
         elif event.type == SCENE_FILE_CHANGED:
             # External edit landed; mirror the full post list to be safe.
-            await delete_posts_for_scene(self._db, scene.id)
-            for p in await self._manager.get_posts(scene_id):
-                await upsert_post_row(
-                    self._db,
-                    post_id=p.id,
-                    scene_id=scene.id,
-                    campaign_id=scene.campaign_id,
-                    turn_id=p.turn_id or None,
-                    order_in_scene=p.order_in_scene,
-                    author_kind=p.author_kind,
-                    author_pc_ref=p.author_pc_ref,
-                    author_npc_ref=p.author_npc_ref,
-                    body=p.body,
-                    is_player=p.is_player,
-                    created_at=p.created_at,
-                )
+            await self._reindex_scene_posts(scene, scene_id)
+
+    async def _reindex_scene_posts(self, scene: Scene, scene_id: str) -> None:
+        """Drop the scene's indexed post rows and re-insert from the live list.
+
+        Used when a single-post change would renumber the rest (delete) or an
+        external edit landed (file change): rebuilding from ``get_posts`` is the
+        simplest way to keep the index consistent.
+        """
+        await delete_posts_for_scene(self._db, scene.id)
+        for p in await self._manager.get_posts(scene_id):
+            await upsert_post_row(
+                self._db,
+                post_id=p.id,
+                scene_id=scene.id,
+                campaign_id=scene.campaign_id,
+                turn_id=p.turn_id or None,
+                order_in_scene=p.order_in_scene,
+                author_kind=p.author_kind,
+                author_pc_ref=p.author_pc_ref,
+                author_npc_ref=p.author_npc_ref,
+                body=p.body,
+                is_player=p.is_player,
+                created_at=p.created_at,
+            )
 
     async def backfill(self) -> None:
         """Walk every scene sidecar on disk and bring the index up to date.

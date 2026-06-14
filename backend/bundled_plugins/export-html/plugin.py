@@ -15,6 +15,7 @@ from grimoire.export import (
     apply_filters,
     filter_scenes,
     load_fs_snapshot,
+    resolve_data_root,
     word_count,
 )
 from grimoire.export.selection import filter_context_from_dict
@@ -43,13 +44,6 @@ section.scene h2 { border-bottom: 1px solid #ccc; padding-bottom: 0.25rem; }
 .summary { font-style: italic; color: #555; border-left: 3px solid #aaa; padding-left: 0.6rem; }
 footer { margin-top: 4rem; font-size: 0.8rem; color: #888; }
 """
-
-
-def _data_root(config: dict[str, Any] | None) -> Path:
-    root = (config or {}).get("data_root")
-    if root:
-        return Path(root)
-    return Path(__file__).resolve().parents[3] / "data"
 
 
 def _esc(text: str) -> str:
@@ -89,7 +83,9 @@ class HtmlExportAdapter:
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config: dict[str, Any] = dict(config or {})
-        self._data_root = _data_root(self.config)
+        self._data_root = resolve_data_root(
+            self.config, fallback=Path(__file__).resolve().parents[3] / "data"
+        )
         self._embed_styles_default = bool(self.config.get("embed_styles", True))
 
     def default_options(self) -> ExportOptions:

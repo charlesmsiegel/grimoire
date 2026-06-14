@@ -20,6 +20,16 @@ from grimoire.scenes.storage import read_posts, read_sidecar
 from grimoire.scenes.types import Scene
 
 
+def resolve_data_root(config: dict[str, Any] | None, *, fallback: Path) -> Path:
+    """Return the configured ``data_root`` or ``fallback`` when it is unset.
+
+    Bundled export plugins load standalone, so each computes its own
+    ``fallback`` (relative to its own location) but shares this config lookup.
+    """
+    root = (config or {}).get("data_root")
+    return Path(root) if root else fallback
+
+
 @dataclass(slots=True)
 class SceneRecord:
     scene: Scene

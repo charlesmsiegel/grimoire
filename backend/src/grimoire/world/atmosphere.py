@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from grimoire.templates import render as render_template
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
+from grimoire.world._generation_llm import complete_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -43,23 +43,15 @@ async def generate_atmosphere(
         max_tokens=512,
         temperature=0.7,
     )
-    try:
-        response = await gateway.complete(
-            "world_atmosphere",
-            request,
-            campaign_id=campaign_id,
-            turn_id=None,
-        )
-    except Exception:
-        logger.warning("atmosphere generation failed: gateway error", exc_info=True)
-        return {}
-
-    raw = getattr(response, "text", "") or ""
-    try:
-        parsed = json.loads(raw)
-    except (ValueError, TypeError):
-        return {}
-    if not isinstance(parsed, dict):
+    parsed = await complete_to_dict(
+        gateway=gateway,
+        route="world_atmosphere",
+        request=request,
+        campaign_id=campaign_id,
+        logger=logger,
+        error_label="atmosphere generation failed",
+    )
+    if parsed is None:
         return {}
     return {
         "default_register": str(parsed.get("default_register") or ""),

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
 from grimoire import events
@@ -11,7 +10,7 @@ from grimoire.state_store.indexers import make_library_id
 from grimoire.state_store.paths import parse_library_id
 from grimoire.types.common import EntityKind
 from grimoire.types.composition import CampaignRef, Composition, LibraryEntity, WorldRef
-from grimoire.util import json_equal
+from grimoire.util import json_equal, maybe_json
 
 if TYPE_CHECKING:
     from grimoire.event_bus import EventBus
@@ -77,7 +76,7 @@ class CompositionManager:
             )
             for r in refs_raw
         ]
-        config = _maybe_json(camp_row["config"]) or {}
+        config = maybe_json(camp_row["config"]) or {}
         return Composition(
             worlds=refs,
             mechanics=camp_row["mechanics_module"],
@@ -97,7 +96,7 @@ class CompositionManager:
         if camp_row is None:
             raise LibraryNotFoundError(f"campaign {campaign_id!r} not found")
 
-        config = _maybe_json(camp_row["config"]) or {}
+        config = maybe_json(camp_row["config"]) or {}
         if composition.calendar_ids or "calendar_ids" in config:
             config["calendar_ids"] = list(composition.calendar_ids)
         if composition.holiday_set_ids or "holiday_set_ids" in config:
@@ -439,17 +438,6 @@ class CompositionManager:
             if snapshot_rows:
                 return [row for row in snapshot_rows if row["kind"] == kind]
         return await self._store.list_library_in_world(world_id, kind)
-
-
-def _maybe_json(value: Any) -> Any:
-    if value is None or value == "":
-        return None
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        return json.loads(value)
-    except (TypeError, ValueError):
-        return value
 
 
 def _frontmatter_diff(current: dict, baseline: dict) -> dict:
