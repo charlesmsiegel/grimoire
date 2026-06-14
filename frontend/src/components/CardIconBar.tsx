@@ -1,7 +1,12 @@
+import type { ReactNode } from "react";
+
+import { SpinnerIcon } from "./icons";
+
 export interface CardIconAction {
   key: string;
-  /** Emoji/glyph for now; see the icon-library issue (#516). */
-  icon: string;
+  /** Icon glyph — an SVG icon component from `components/icons` (#516). A bare
+   *  string still renders for one-off glyphs. */
+  icon: ReactNode;
   /** Becomes both aria-label and title. */
   label: string;
   onClick: () => void;
@@ -25,7 +30,7 @@ function IconButton({ action }: { action: CardIconAction }) {
       disabled={action.disabled || action.busy}
       onClick={action.onClick}
     >
-      <span aria-hidden="true">{action.busy ? "…" : action.icon}</span>
+      <span aria-hidden="true">{action.busy ? <SpinnerIcon /> : action.icon}</span>
     </button>
   );
 }

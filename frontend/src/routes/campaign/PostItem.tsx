@@ -3,6 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import { auxiliaryApi, type AuxiliaryResult } from "../../api/auxiliary";
 import { CardIconBar, type CardIconAction } from "../../components/CardIconBar";
 import { deleteAction } from "../../components/cardActions";
+import {
+  ArrowRightIcon,
+  GlobeIcon,
+  PencilIcon,
+  RefreshIcon,
+  TargetIcon,
+} from "../../components/icons";
 import { CharacterSprite } from "../../components/CharacterSprite";
 import { Markdown } from "../../components/Markdown";
 import { campaignApi, type ApiAlternate, type ApiPost, type PCEntry } from "../../api/campaign";
@@ -328,7 +335,7 @@ export function PostItem({
               ? [
                   {
                     key: "edit",
-                    icon: "✎",
+                    icon: <PencilIcon />,
                     label: "Edit post",
                     onClick: () => setEditDraft(displayBody),
                   } satisfies CardIconAction,
@@ -338,14 +345,14 @@ export function PostItem({
               ? [
                   {
                     key: "regenerate",
-                    icon: "🔄",
+                    icon: <RefreshIcon />,
                     label: "Regenerate post",
                     disabled: busy,
                     onClick: () => void regenerate(),
                   } satisfies CardIconAction,
                   {
                     key: "guided-regenerate",
-                    icon: "🎯",
+                    icon: <TargetIcon />,
                     label: "Guided regenerate",
                     disabled: busy,
                     onClick: () => setGuidedHint(""),
@@ -356,7 +363,7 @@ export function PostItem({
               ? [
                   {
                     key: "continue",
-                    icon: "➤",
+                    icon: <ArrowRightIcon />,
                     label: "Continue",
                     disabled: auxBusy,
                     onClick: () => {
@@ -371,7 +378,7 @@ export function PostItem({
               : []),
             {
               key: "translate",
-              icon: "🌐",
+              icon: <GlobeIcon />,
               label: "Translate this post",
               disabled: auxBusy,
               onClick: () => setAuxForm({ kind: "translate", targetLanguage: "" }),

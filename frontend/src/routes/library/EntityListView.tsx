@@ -14,7 +14,8 @@ import {
 import type { ResolvedEntity } from "../../api/types";
 import { useResource } from "../../api/useResource";
 import { type CardIconAction } from "../../components/CardIconBar";
-import { CONVERT_ICON, deleteAction } from "../../components/cardActions";
+import { deleteAction } from "../../components/cardActions";
+import { SwapIcon } from "../../components/icons";
 import { EntityBrowser } from "../../components/EntityBrowser";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
@@ -270,7 +271,7 @@ export function EntityListView({ kindOverride }: Props) {
                 ? [
                     {
                       key: "convert",
-                      icon: CONVERT_ICON,
+                      icon: <SwapIcon />,
                       label: `Convert ${name} to another category`,
                       align: "start",
                       onClick: () => setConvertingId(row.asset_id),

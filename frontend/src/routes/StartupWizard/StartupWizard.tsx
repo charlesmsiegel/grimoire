@@ -13,11 +13,12 @@
  * default model. "Skip" is always available.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { errorMessage } from "../../api/client";
 import { useResource } from "../../api/useResource";
+import { EmbeddingsIcon, ImageIcon, SparkleIcon } from "../../components/icons";
 import {
   type PluginConfig,
   type PluginKind,
@@ -67,10 +68,10 @@ const DEFAULT_KEYS: Record<ProviderKind, string> = {
 
 const KIND_COPY: Record<
   ProviderKind,
-  { lead: string; detail: string; skipNote: string; icon: string }
+  { lead: string; detail: string; skipNote: string; icon: ReactNode }
 > = {
   llm_provider: {
-    icon: "✦",
+    icon: <SparkleIcon />,
     lead: "Pick a language model. Grimoire uses it to narrate scenes, voice NPCs, and summarize long histories.",
     detail:
       "Anything you've installed under ~/.grimoire/plugins shows up here. You can pick a hosted provider (Anthropic, OpenAI, OpenRouter, …) or a local backend (Ollama, llama.cpp). You'll be asked for an API key for hosted providers — the key is stored in the OS keyring when possible.",
@@ -78,7 +79,7 @@ const KIND_COPY: Record<
       "Without an LLM, Grimoire can still browse your library and edit settings, but narration and chat are disabled.",
   },
   embedding_provider: {
-    icon: "❄",
+    icon: <EmbeddingsIcon />,
     lead: "Pick an embedding model. Grimoire uses it to look up relevant lore, characters, and prior scenes when building prompts.",
     detail:
       "Embedding models turn text into vectors so the retrieval layer can find related material. A small local model (e.g., nomic-embed-text via Ollama) is usually plenty; hosted ones work too.",
@@ -86,7 +87,7 @@ const KIND_COPY: Record<
       "Without embeddings, context-building falls back to keyword matching. You can configure this later.",
   },
   imagegen_backend: {
-    icon: "✺",
+    icon: <ImageIcon />,
     lead: "Pick an image generator. Optional — used to illustrate scenes, locations, and characters.",
     detail:
       "Backends register through plugins (e.g., a local Stable Diffusion / ComfyUI bridge, or a hosted backend). Each one declares its own settings and supported models.",

@@ -299,6 +299,9 @@ reimplementation is a review smell.
 - **UI bits**: `components/Tabs` (keyboard-accessible tablist),
   `components/EmptyState`, `components/SaveIndicator`, `components/CardFilters`
   + `hooks/useCardFilters` for list search/tag toolbars, `lib/slugify` for ids.
+- **Icons**: `components/icons/` is the shared SVG icon set — `currentColor`-themed,
+  `em`-sized glyphs (`TrashIcon`, `ForkIcon`, `SpinnerIcon`, …) over the base `Icon`.
+  Reach for an icon component instead of a raw emoji/glyph; add a new one there.
 - **CSS primitives**: `src/index.css` is an ordered @import list over
   `src/styles/*.css` (one file per app area; import order is the cascade, so
   later files win specificity ties). `styles/primitives.css` defines the base
@@ -328,8 +331,10 @@ the left edge (e.g. the campaign card's Fork icon, with Settings + Delete on the
 buttons (`*Dialog*`/`*Confirm*` files) are exempt. Card-root `<button>`s (timeline, cast)
 place the bar in the wrapping `<li>`, not inside the button. Sub-element classes
 (`*-card-actions`, `*-card-head`, …), the `card-filters` toolbar, grid wrappers, and the
-bare `suggestion-card` selection button are not given a bar. Emoji icons are interim
-(tracked by issue #516 for an SVG icon library).
+bare `suggestion-card` selection button are not given a bar. Action icons come from the
+shared SVG icon set in `frontend/src/components/icons/` (themeable via `currentColor`,
+sized in `em` so they inherit the surrounding font-size) — render an icon component
+(`icon: <ForkIcon />`); don't reach for a new emoji/glyph.
 
 ### Content Files
 
