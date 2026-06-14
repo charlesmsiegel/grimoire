@@ -3,7 +3,7 @@ import { type Dispatch, type MutableRefObject, useCallback } from "react";
 import type { ApiPost } from "../../api/campaign";
 import { campaignApi } from "../../api/campaign";
 import { setPcExpression } from "../../api/expressions";
-import { fileUrl } from "../../api/files";
+import { viewsApi } from "../../api/views";
 import { useCampaignEvent } from "../../state/useCampaignEvent";
 import type { WSMessage } from "../../ws/client";
 import type { PlayAction, PlayState } from "./playReducer";
@@ -171,14 +171,12 @@ export function usePlayStreamEvents(
           return;
         case "image_ready": {
           const id = typeof message.image_id === "string" ? message.image_id : null;
-          // The built-in service emits a data-root-relative `file_path`
-          // rather than a ready-made `url`; derive one from it (#582).
-          const explicitUrl = typeof message.url === "string" ? message.url : null;
-          const filePath = typeof message.file_path === "string" ? message.file_path : null;
-          const url = explicitUrl ?? (filePath ? fileUrl(filePath) : null);
           const post_id = typeof message.post_id === "string" ? message.post_id : undefined;
           const prompt = typeof message.prompt === "string" ? message.prompt : undefined;
-          if (id && url) {
+          if (id) {
+            // Derive the campaign-scoped file endpoint from the image id so it
+            // renders under its post — same scheme as the gallery (#582).
+            const url = viewsApi.imageFileUrl(campaignId, id);
             dispatch({ type: "image-ready", image: { id, url, post_id, prompt } });
           }
           return;

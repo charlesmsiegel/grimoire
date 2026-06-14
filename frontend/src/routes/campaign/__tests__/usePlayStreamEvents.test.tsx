@@ -28,9 +28,10 @@ function render(state: PlayState) {
 }
 
 describe("usePlayStreamEvents — image_ready", () => {
-  it("derives the URL from the event's data-root-relative file_path (#582)", () => {
-    // The built-in ImageGen service emits `file_path`, not a ready-made
-    // `url`; the handler must build one or every real event is dropped.
+  it("derives the campaign-scoped file URL from the image id (#582)", () => {
+    // The event carries no ready-made `url`; the handler builds the
+    // campaign-scoped file endpoint from the id — the same scheme the gallery
+    // uses — so the image renders under its post.
     const { dispatch } = render(initialPlayState);
 
     h.captured?.({
@@ -46,38 +47,33 @@ describe("usePlayStreamEvents — image_ready", () => {
       type: "image-ready",
       image: {
         id: "img-1",
-        url: "/api/files/campaigns/c1/images/img-1.png",
+        url: "/api/campaigns/camp/images/img-1/file",
         post_id: "post-1",
         prompt: "noir alley",
       },
     });
   });
 
-  it("prefers an explicit url over file_path", () => {
+  it("derives the URL from the id alone, without file_path or url in the event", () => {
     const { dispatch } = render(initialPlayState);
 
-    h.captured?.({
-      type: "image_ready",
-      image_id: "img-1",
-      url: "https://example.test/img-1.png",
-      file_path: "campaigns/c1/images/img-1.png",
-    });
+    h.captured?.({ type: "image_ready", image_id: "img-1" });
 
     expect(dispatch).toHaveBeenCalledWith({
       type: "image-ready",
       image: {
         id: "img-1",
-        url: "https://example.test/img-1.png",
+        url: "/api/campaigns/camp/images/img-1/file",
         post_id: undefined,
         prompt: undefined,
       },
     });
   });
 
-  it("drops events carrying neither url nor file_path", () => {
+  it("drops events carrying no image_id", () => {
     const { dispatch } = render(initialPlayState);
 
-    h.captured?.({ type: "image_ready", image_id: "img-1" });
+    h.captured?.({ type: "image_ready", post_id: "post-1" });
 
     expect(dispatch).not.toHaveBeenCalled();
   });
