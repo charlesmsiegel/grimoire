@@ -4,7 +4,9 @@
  * thin wrapper over {@link Icon} (a 24×24 stroke glyph); see that module for
  * sizing and accessibility conventions.
  *
- * Path data is the Feather icon set (MIT licensed).
+ * Path data is derived from Feather (https://github.com/feathericons/feather),
+ * used under the MIT License — see `LICENSE-feather.txt` in this directory for
+ * the required copyright and permission notice.
  */
 import { Icon, type IconProps } from "./Icon";
 
@@ -50,6 +52,16 @@ export function TargetIcon(props: IconProps) {
       <circle cx="12" cy="12" r="10" />
       <circle cx="12" cy="12" r="6" />
       <circle cx="12" cy="12" r="2" />
+    </Icon>
+  );
+}
+
+/** Close / discard (was ✕). */
+export function CloseIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
     </Icon>
   );
 }
