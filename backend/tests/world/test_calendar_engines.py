@@ -137,6 +137,23 @@ def test_buddhist_year_offset() -> None:
     assert parts.year == 2568  # 2025 + 543
 
 
+def test_chinese_leap_month_round_trips() -> None:
+    """A leap-month date survives from_jdn -> to_jdn.
+
+    `from_jdn` marks leap months via DateParts.era == "leap"; to_jdn must
+    honour it (passing is_leap), otherwise the regular month is selected
+    and the date lands ~29 days early.
+    """
+    chinese = engine_for(BUILTIN_CALENDARS["chinese"])
+    jdn = 2456068  # falls inside the leap 4th month of Chinese year 2012
+    parts = chinese.from_jdn(jdn)
+    assert parts.era == "leap"
+    assert chinese.to_jdn(parts) == jdn
+    # The same civil month without the leap marker is a different (earlier) day.
+    regular = DateParts(parts.year, parts.month, parts.day)
+    assert chinese.to_jdn(regular) < jdn
+
+
 # ---------------------------------------------------------------------------
 # Custom calendar engine with declarative leap rules
 # ---------------------------------------------------------------------------
