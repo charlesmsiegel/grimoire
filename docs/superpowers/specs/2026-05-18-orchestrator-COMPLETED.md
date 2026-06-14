@@ -15,7 +15,7 @@ Spec 01 §Canonical turn flow step 15 calls for fire-and-forget side effects aft
 - `Time Engine`: advance the clock if the turn indicates time passage
 - `Continuity`: update the ledger (facts, commitments, foreshadowing)
 - `Characters`: drift check on present characters, sampled at `config.background_work.drift_check_sampling` (default 0.25)
-- `Characters` / world: NPC tick if `config.background_work.npc_tick_after_each_turn`
+- `Characters` / world: NPC tick after each turn *(the `config.background_work.npc_tick_after_each_turn` gate was removed in #593 as a never-read setting; re-introduce the flag when this side effect is actually wired)*
 
 Today `_run_turn` ends at step 12 (response post + `turn_complete`) and never schedules these. The `BackgroundWorkConfig` dataclass already exists; only the wiring is missing.
 

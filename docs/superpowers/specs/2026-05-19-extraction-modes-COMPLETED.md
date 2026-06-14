@@ -1,6 +1,8 @@
 ## Extraction Modes — COMPLETED
 
 > **Status:** Shipped 2026-05-19. Backend types + `select_mode` + together parser + tool-use projector + Context Builder mode tail all in tree; orchestrator resolves the route, calls `select_mode(...)`, and threads `extractor_mode` to `context_builder.build` + `extractor.extract` at both canonical (`_continue_turn_after_pre_roll`) and regenerate (`_regenerate_post_core`) callsites; rewrite_post pins SEPARATE. Streaming tool_call surfacing through the gateway is still pending — until then `_NullAutoDisable.tool_use_disabled=True` keeps `AUTO` from picking TOOL_USE.
+>
+> **Update (#593):** the persistent `AutoDisableState` tracker and its `extractor/auto_disable.py` module were removed as verified dead code — fully implemented and unit-tested but never constructed by any production composition (bootstrap never passed `auto_disable=`). Wiring it requires the still-pending tool-call streaming; until that lands, the only live collaborator is the permissive `_NullAutoDisable` policy gate. The `AutoDisableState` / `extractor_mode_health` design below describes the *intended* tracker, not currently-shipped code — the `extractor_mode_health` table (025 migration) remains but is unused.
 
 **Source idea:** `specs/new/extraction-modes.md`
 **Module:** `backend/src/grimoire/extractor/`, `backend/src/grimoire/context/`, `backend/src/grimoire/llm_gateway/`
@@ -276,7 +278,7 @@ Audit example:
 - `extractor/service.py`: `extract()` signature extended; mode-branching in `_run()`.
 - `extractor/together.py` (new): JSON parser + sanity merger.
 - `extractor/tool_use.py` (new): tool-call projector.
-- `extractor/auto_disable.py` (new): `AutoDisableState` reading from `extractor_mode_health`.
+- ~~`extractor/auto_disable.py` (new): `AutoDisableState` reading from `extractor_mode_health`.~~ *(removed in #593 — never wired in production; see status note above.)*
 - `context/builder.py`: signature + mode-branching at end of assembly.
 - `llm_gateway/capabilities.py` (new): static provider table.
 - `orchestrator/service.py`: `select_mode` call site; thread `extractor_mode` into Context Builder + Extractor.
