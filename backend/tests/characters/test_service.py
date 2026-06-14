@@ -379,35 +379,6 @@ async def test_multi_pc_should_auto_respond(
     assert await characters.should_auto_respond(scene_solo) is True
 
 
-async def test_pending_pc_inputs_since_last_advance(
-    characters: CharactersService,
-) -> None:
-    scene = Scene(
-        id="scene-1",
-        campaign_id="c",
-        ordinal=1,
-        slug="s",
-        file_path="x.md",
-        last_advance_at_post=2,
-    )
-    posts = [
-        Post(
-            id=f"p{i}",
-            scene_id="scene-1",
-            order_in_scene=i,
-            author_kind=AuthorKind.PC,
-            body=f"line {i}",
-            is_player=(i % 2 == 1),
-            created_at=datetime.now(UTC),
-            turn_id="t1",
-        )
-        for i in range(1, 6)
-    ]
-    pending = await characters.pending_pc_inputs_since_last_advance(scene, posts)
-    # order > 2 (3,4,5) and is_player True (3,5)
-    assert {p.order_in_scene for p in pending} == {3, 5}
-
-
 # ---------------------------------------------------------------------------
 # Per-PC scene
 # ---------------------------------------------------------------------------

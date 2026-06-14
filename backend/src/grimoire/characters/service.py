@@ -757,14 +757,6 @@ class CharactersService:
         present = await self.present_pcs_in_scene(scene, campaign_id)
         return len(present) <= 1
 
-    async def pending_pc_inputs_since_last_advance(
-        self,
-        scene: Scene,
-        posts: list[Post],
-    ) -> list[Post]:
-        threshold = scene.last_advance_at_post or 0
-        return [p for p in posts if p.order_in_scene > threshold and p.is_player]
-
     # ------------------------------------------------------------------ #
     # Mechanical capabilities
     # ------------------------------------------------------------------ #
