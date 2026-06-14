@@ -21,9 +21,14 @@ from grimoire.types.transient import EntityKind, ObserverKind, TransientValue
 INTERNAL_THOUGHT_FIELDS = frozenset({"internal_thought"})
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PrivacyView:
-    """Resolved per-character privacy triple."""
+    """Resolved per-character privacy triple.
+
+    Fields are keyword-only (``kw_only=True``) so the three booleans are
+    never constructed positionally — ``PrivacyView(True, False, True)`` is
+    unreadable at the call site.
+    """
 
     hud: bool = True
     inline: bool = True
@@ -31,11 +36,11 @@ class PrivacyView:
 
     @classmethod
     def all_open(cls) -> PrivacyView:
-        return cls(True, True, True)
+        return cls(hud=True, inline=True, context=True)
 
     @classmethod
     def all_closed(cls) -> PrivacyView:
-        return cls(False, False, False)
+        return cls(hud=False, inline=False, context=False)
 
 
 def _triple_from_mapping(m: dict[str, Any] | None) -> PrivacyView:
