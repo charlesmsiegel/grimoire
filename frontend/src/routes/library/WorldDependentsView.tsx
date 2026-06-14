@@ -10,6 +10,7 @@ import { Link, useParams } from "react-router-dom";
 
 import { api } from "../../api/client";
 import { useResource } from "../../api/useResource";
+import { AsyncBoundary } from "./AsyncBoundary";
 
 interface CampaignSummary {
   id: string;
@@ -39,6 +40,7 @@ export function WorldDependentsView() {
     data: rows,
     loading,
     error,
+    reload,
   } = useResource(
     useCallback(async (): Promise<DependentRow[]> => {
       const campaigns = await api.get<CampaignSummary[]>(`/api/campaigns`);
@@ -63,51 +65,46 @@ export function WorldDependentsView() {
     }, [worldId]),
   );
 
-  if (loading && rows === null)
-    return <p className="library-status">Loading dependent campaigns…</p>;
-  if (error) {
-    return (
-      <p className="library-error" role="alert">
-        Failed to load: {error.message}
-      </p>
-    );
-  }
-  if (rows === null || rows.length === 0) {
-    return <p className="library-status">No campaigns currently reference this world.</p>;
-  }
-
   return (
-    <section className="world-dependents">
-      <p>
-        Editing entities in this world affects pinned campaigns only after they upgrade their ref;{" "}
-        <code>track_latest</code> campaigns see changes immediately.
-      </p>
-      <table className="library-table">
-        <thead>
-          <tr>
-            <th>Campaign</th>
-            <th>Priority</th>
-            <th>Bound version</th>
-            <th>Tracking</th>
-            <th>Include filter</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(({ campaign, ref }) => (
-            <tr key={campaign.id}>
-              <td>
-                <Link to={`/campaigns/${encodeURIComponent(campaign.id)}`}>
-                  {campaign.name || campaign.id}
-                </Link>
-              </td>
-              <td>{ref.priority}</td>
-              <td>{ref.bound_at_version}</td>
-              <td>{ref.track_latest ? "track latest" : "pinned"}</td>
-              <td>{(ref.include ?? []).join(", ") || "all"}</td>
+    <AsyncBoundary
+      loading={loading && rows === null}
+      error={error}
+      empty={rows !== null && rows.length === 0}
+      emptyMessage="No campaigns currently reference this world."
+      onRetry={reload}
+    >
+      <section className="world-dependents">
+        <p>
+          Editing entities in this world affects pinned campaigns only after they upgrade their ref;{" "}
+          <code>track_latest</code> campaigns see changes immediately.
+        </p>
+        <table className="library-table">
+          <thead>
+            <tr>
+              <th>Campaign</th>
+              <th>Priority</th>
+              <th>Bound version</th>
+              <th>Tracking</th>
+              <th>Include filter</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+          </thead>
+          <tbody>
+            {(rows ?? []).map(({ campaign, ref }) => (
+              <tr key={campaign.id}>
+                <td>
+                  <Link to={`/campaigns/${encodeURIComponent(campaign.id)}`}>
+                    {campaign.name || campaign.id}
+                  </Link>
+                </td>
+                <td>{ref.priority}</td>
+                <td>{ref.bound_at_version}</td>
+                <td>{ref.track_latest ? "track latest" : "pinned"}</td>
+                <td>{(ref.include ?? []).join(", ") || "all"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    </AsyncBoundary>
   );
 }

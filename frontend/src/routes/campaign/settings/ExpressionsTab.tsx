@@ -2,6 +2,7 @@ import { useCallback } from "react";
 
 import { viewsApi } from "../../../api/views";
 import { useResource } from "../../../api/useResource";
+import { AsyncSection } from "../../../components/AsyncSection";
 import { SaveIndicator } from "./SaveIndicator";
 import { useAutoSavedResource } from "./shared";
 
@@ -19,8 +20,6 @@ export function ExpressionsTab({ campaignId }: { campaignId: string }) {
   const charactersState = useResource(
     useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]),
   );
-  const characters = charactersState.data ?? [];
-  const loadError = charactersState.error?.message ?? null;
 
   const enabledSet = new Set(value.enabled_characters);
 
@@ -46,34 +45,28 @@ export function ExpressionsTab({ campaignId }: { campaignId: string }) {
         their name instead of a sprite. Expressions are off by default.
       </p>
 
-      {loadError && (
-        <p className="wizard-error" role="alert">
-          Failed to load characters: {loadError}
-        </p>
-      )}
-
-      {characters.length === 0 && !loadError && (
-        <p className="wizard-meta">No characters found in this campaign.</p>
-      )}
-
-      <ul className="expressions-character-list" style={{ listStyle: "none", padding: 0 }}>
-        {characters.map((rc) => (
-          <li key={rc.character.id}>
-            <label className="form-field wizard-field wizard-field-inline">
-              <input
-                type="checkbox"
-                checked={enabledSet.has(rc.character.id)}
-                onChange={() => toggle(rc.character.id)}
-                disabled={!ready}
-              />
-              <span>
-                {rc.character.name}
-                <small style={{ opacity: 0.6, marginLeft: "0.5em" }}>{rc.character.role}</small>
-              </span>
-            </label>
-          </li>
-        ))}
-      </ul>
+      <AsyncSection state={charactersState} emptyMessage="No characters found in this campaign.">
+        {(characters) => (
+          <ul className="expressions-character-list" style={{ listStyle: "none", padding: 0 }}>
+            {characters.map((rc) => (
+              <li key={rc.character.id}>
+                <label className="form-field wizard-field wizard-field-inline">
+                  <input
+                    type="checkbox"
+                    checked={enabledSet.has(rc.character.id)}
+                    onChange={() => toggle(rc.character.id)}
+                    disabled={!ready}
+                  />
+                  <span>
+                    {rc.character.name}
+                    <small style={{ opacity: 0.6, marginLeft: "0.5em" }}>{rc.character.role}</small>
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        )}
+      </AsyncSection>
 
       <SaveIndicator status={status} error={error} />
     </div>
