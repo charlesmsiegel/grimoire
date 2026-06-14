@@ -67,8 +67,8 @@ def gregorian_day_of_year(year: int, month: int, day: int) -> int:
 class GregorianEngine(CalendarEngine):
     system = "gregorian"
 
-    def to_jdn(self, year: int, month: int, day: int) -> int:
-        return gregorian_to_jdn(year, month, day)
+    def to_jdn(self, date: DateParts) -> int:
+        return gregorian_to_jdn(date.year, date.month, date.day)
 
     def from_jdn(self, jdn: int) -> DateParts:
         y, m, d = gregorian_from_jdn(jdn)

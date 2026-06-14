@@ -56,8 +56,8 @@ class JapaneseEraEngine(CalendarEngine):
     def __init__(self) -> None:
         self._greg = GregorianEngine()
 
-    def to_jdn(self, year: int, month: int, day: int) -> int:
-        return gregorian_to_jdn(year, month, day)
+    def to_jdn(self, date: DateParts) -> int:
+        return gregorian_to_jdn(date.year, date.month, date.day)
 
     def from_jdn(self, jdn: int) -> DateParts:
         gy, gm, gd = gregorian_from_jdn(jdn)

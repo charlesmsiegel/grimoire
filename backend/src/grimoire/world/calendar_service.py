@@ -33,6 +33,7 @@ from grimoire.types.calendar import (
 from grimoire.types.composition import LibraryEntity
 
 from .calendars import (
+    DateParts,
     engine_for,
     get_builtin_calendar,
     get_builtin_holiday_set,
@@ -282,10 +283,10 @@ class CalendarService:
 
     # -------- conversion / reconciliation --------------------------------
 
-    async def date_to_jdn(self, calendar_id: str, year: int, month: int, day: int) -> int:
+    async def date_to_jdn(self, calendar_id: str, date: DateParts) -> int:
         calendar = await self.get_calendar(calendar_id)
         engine = engine_for(calendar)
-        return engine.to_jdn(year, month, day)
+        return engine.to_jdn(date)
 
     async def date_from_jdn(self, calendar_id: str, jdn: int) -> CalendarDate:
         calendar = await self.get_calendar(calendar_id)
@@ -306,12 +307,10 @@ class CalendarService:
         self,
         from_calendar_id: str,
         to_calendar_ids: list[str],
-        year: int,
-        month: int,
-        day: int,
+        date: DateParts,
     ) -> dict[str, CalendarDate]:
         """Convert one date into representations in many calendars."""
-        jdn = await self.date_to_jdn(from_calendar_id, year, month, day)
+        jdn = await self.date_to_jdn(from_calendar_id, date)
         out: dict[str, CalendarDate] = {}
         for cid in to_calendar_ids:
             out[cid] = await self.date_from_jdn(cid, jdn)
@@ -335,11 +334,11 @@ class CalendarService:
         anchor_engine = engine_for(anchor)
         # JDN range for the anchor year [1/1, 12/31 (or last month/last day)].
         try:
-            year_start = anchor_engine.to_jdn(year, 1, 1)
+            year_start = anchor_engine.to_jdn(DateParts(year, 1, 1))
         except Exception:
             return []
         try:
-            year_end = anchor_engine.to_jdn(year + 1, 1, 1) - 1
+            year_end = anchor_engine.to_jdn(DateParts(year + 1, 1, 1)) - 1
         except Exception:
             year_end = year_start + 366
 

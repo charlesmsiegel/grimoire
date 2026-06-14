@@ -81,8 +81,8 @@ def saka_from_jdn(jdn: int) -> tuple[int, int, int]:
 class IndianSakaEngine(CalendarEngine):
     system = "indian_saka"
 
-    def to_jdn(self, year: int, month: int, day: int) -> int:
-        return saka_to_jdn(year, month, day)
+    def to_jdn(self, date: DateParts) -> int:
+        return saka_to_jdn(date.year, date.month, date.day)
 
     def from_jdn(self, jdn: int) -> DateParts:
         y, m, d = saka_from_jdn(jdn)

@@ -11,6 +11,7 @@ from grimoire.state_store import StateStore
 from grimoire.storage import Database
 from grimoire.testing.db_template import stamp_migrated_db
 from grimoire.world.calendar_service import CalendarService
+from grimoire.world.calendars import DateParts
 
 
 @pytest.fixture
@@ -114,9 +115,7 @@ async def test_convert_date_via_jdn(calendar_svc: CalendarService) -> None:
     result = await calendar_svc.convert_date(
         from_calendar_id="gregorian",
         to_calendar_ids=["hebrew", "islamic", "buddhist"],
-        year=2025,
-        month=5,
-        day=22,
+        date=DateParts(2025, 5, 22),
     )
     assert "hebrew" in result and "islamic" in result and "buddhist" in result
     # Buddhist = Gregorian + 543

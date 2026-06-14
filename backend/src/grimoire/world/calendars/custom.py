@@ -117,8 +117,8 @@ class CustomCalendarEngine(CalendarEngine):
         self.config = config
         self.era_name = era_name
 
-    def to_jdn(self, year: int, month: int, day: int) -> int:
-        return custom_to_jdn(year, month, day, self.config)
+    def to_jdn(self, date: DateParts) -> int:
+        return custom_to_jdn(date.year, date.month, date.day, self.config)
 
     def from_jdn(self, jdn: int) -> DateParts:
         y, m, d = custom_from_jdn(jdn, self.config)

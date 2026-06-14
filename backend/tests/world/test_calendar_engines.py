@@ -14,6 +14,7 @@ from grimoire.types.calendar import (
 from grimoire.world.calendars import (
     BUILTIN_CALENDARS,
     BUILTIN_HOLIDAY_SETS,
+    DateParts,
     engine_for,
     jdn_weekday_name,
     occurrences_in_year,
@@ -67,7 +68,7 @@ def test_every_builtin_round_trips_today(calendar_id: str) -> None:
     eng = engine_for(cal)
     jdn = gregorian_to_jdn(2025, 5, 22)
     parts = eng.from_jdn(jdn)
-    assert eng.to_jdn(parts.year, parts.month, parts.day) == jdn
+    assert eng.to_jdn(parts) == jdn
 
 
 @pytest.mark.parametrize("calendar_id", sorted(BUILTIN_CALENDARS.keys()))
@@ -110,12 +111,12 @@ def test_reconciliation_via_jdn() -> None:
     hebrew = engine_for(BUILTIN_CALENDARS["hebrew"])
     islamic = engine_for(BUILTIN_CALENDARS["islamic"])
 
-    jdn = greg.to_jdn(2024, 10, 3)  # Rosh Hashanah eve, ~Hijri 30 Rabi al-Awwal
+    jdn = greg.to_jdn(DateParts(2024, 10, 3))  # Rosh Hashanah eve, ~Hijri 30 Rabi al-Awwal
     h = hebrew.from_jdn(jdn)
     i = islamic.from_jdn(jdn)
     # Round trip back to JDN should match.
-    assert hebrew.to_jdn(h.year, h.month, h.day) == jdn
-    assert islamic.to_jdn(i.year, i.month, i.day) == jdn
+    assert hebrew.to_jdn(h) == jdn
+    assert islamic.to_jdn(i) == jdn
     # Hebrew year 5785 begins at sunset of 2 Oct 2024.
     assert h.year == 5785
 
@@ -123,7 +124,7 @@ def test_reconciliation_via_jdn() -> None:
 def test_julian_lags_gregorian_by_13_days_in_20th_century() -> None:
     greg = engine_for(BUILTIN_CALENDARS["gregorian"])
     julian = engine_for(BUILTIN_CALENDARS["julian"])
-    jdn = greg.to_jdn(2000, 1, 14)  # Russian Orthodox Christmas day
+    jdn = greg.to_jdn(DateParts(2000, 1, 14))  # Russian Orthodox Christmas day
     parts = julian.from_jdn(jdn)
     assert (parts.year, parts.month, parts.day) == (2000, 1, 1)
 
@@ -131,7 +132,7 @@ def test_julian_lags_gregorian_by_13_days_in_20th_century() -> None:
 def test_buddhist_year_offset() -> None:
     greg = engine_for(BUILTIN_CALENDARS["gregorian"])
     buddhist = engine_for(BUILTIN_CALENDARS["buddhist"])
-    jdn = greg.to_jdn(2025, 5, 22)
+    jdn = greg.to_jdn(DateParts(2025, 5, 22))
     parts = buddhist.from_jdn(jdn)
     assert parts.year == 2568  # 2025 + 543
 
@@ -153,9 +154,9 @@ def test_custom_calendar_simple_round_trip() -> None:
     eng = engine_for(cal)
 
     # Year 1 month 1 day 1 = epoch_jdn
-    assert eng.to_jdn(1, 1, 1) == 2400000
+    assert eng.to_jdn(DateParts(1, 1, 1)) == 2400000
     # Last day of year 1 = epoch + 59
-    assert eng.to_jdn(1, 2, 30) == 2400059
+    assert eng.to_jdn(DateParts(1, 2, 30)) == 2400059
     # Round-trip
     parts = eng.from_jdn(2400059)
     assert (parts.year, parts.month, parts.day) == (1, 2, 30)
@@ -217,7 +218,7 @@ def test_custom_leap_month_extends_year() -> None:
     assert custom_year_length(3, config) == 105  # +15 leap month
     # The leap month is at position 2 — after that month, day 1 is the leap
     # month's first day.
-    assert eng.to_jdn(3, 2, 1) == 2400000 + 2 * 90 + 30
+    assert eng.to_jdn(DateParts(3, 2, 1)) == 2400000 + 2 * 90 + 30
     # Reverse
     parts = eng.from_jdn(2400000 + 2 * 90 + 30)
     assert parts.year == 3 and parts.month == 2 and parts.day == 1
