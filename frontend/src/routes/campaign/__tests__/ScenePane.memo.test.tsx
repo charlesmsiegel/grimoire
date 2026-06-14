@@ -65,6 +65,7 @@ describe("ScenePane memoization", () => {
             images={IMAGES}
             hasMorePosts={false}
             onLoadMore={noop}
+            campaignId="c1"
           />
         </div>
       );
@@ -75,8 +76,8 @@ describe("ScenePane memoization", () => {
 
     // Stand in for typing: the parent re-renders but ScenePane's props are
     // unchanged, so the memoized post list must not re-parse.
-    fireEvent.click(screen.getByRole("button"));
-    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(screen.getByRole("button", { name: /draft/i }));
+    fireEvent.click(screen.getByRole("button", { name: /draft/i }));
 
     expect(parseCount).toBe(POSTS.length);
   });
