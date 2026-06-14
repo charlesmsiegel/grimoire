@@ -96,21 +96,6 @@ def _involves(commitment: Commitment, refs: Iterable[str]) -> bool:
     return bool(refs & {commitment.from_id, commitment.to_id} - {None})
 
 
-def _matches_subject(fact: Fact, **filters) -> bool:
-    """Check whether a fact's subject overlaps the requested ids."""
-    subj = fact.about
-    matched_any = False
-    any_filter = False
-    for attr in ("character_ids", "location_ids", "faction_ids", "item_ids"):
-        wanted = filters.get(attr)
-        if not wanted:
-            continue
-        any_filter = True
-        if set(wanted) & set(getattr(subj, attr)):
-            matched_any = True
-    return matched_any if any_filter else True
-
-
 class ContinuityService(Continuity):
     def __init__(
         self,
@@ -330,30 +315,21 @@ class ContinuityService(Continuity):
         limit: int = 50,
         include_retired: bool = False,
     ) -> list[Fact]:
-        all_facts = await self._store.list_facts(include_retired=include_retired)
-        matched = [
-            f
-            for f in all_facts
-            if _matches_subject(
-                f,
-                character_ids=character_ids,
-                location_ids=location_ids,
-                faction_ids=faction_ids,
-                item_ids=item_ids,
-            )
-        ]
-        matched.sort(key=lambda f: f.established_at_in_game, reverse=True)
-        return matched[:limit]
+        return await self._store.facts_about(
+            character_ids=character_ids,
+            location_ids=location_ids,
+            faction_ids=faction_ids,
+            item_ids=item_ids,
+            limit=limit,
+            include_retired=include_retired,
+        )
 
     async def search_facts(self, query: str, top_k: int = 10) -> list[Fact]:
         results = await self._search.search(query, top_k=top_k)
         return [fact for fact, _score in results]
 
     async def recent_facts(self, since: InGameTime, limit: int = 50) -> list[Fact]:
-        all_facts = await self._store.list_facts(include_retired=False)
-        recent = [f for f in all_facts if f.established_at_in_game >= since]
-        recent.sort(key=lambda f: f.established_at_in_game, reverse=True)
-        return recent[:limit]
+        return await self._store.recent_facts(since, limit)
 
     async def facts_known_by(
         self,
@@ -368,29 +344,12 @@ class ContinuityService(Continuity):
         doesn't know shouldn't seed model reactions. Public facts (i.e.
         anything with ``about.scope == "public"`` and no narrow audience
         in ``about.character_ids``) are returned unconditionally so the
-        narrator can still describe what's in the air.
+        narrator can still describe what's in the air. The knowledge-scope
+        join and ordering live in the store.
         """
-        entries = await self._store.knowledge_for_character(character_id)
-        known_ids = {e.fact_id for e in entries if e.knows}
-        all_facts = await self._store.list_facts(include_retired=include_retired)
-        out: list[Fact] = []
-        for fact in all_facts:
-            if fact.id in known_ids:
-                out.append(fact)
-                continue
-            subject = fact.about
-            # No narrow audience and scope is world-level public — everyone
-            # is presumed to be able to know it. Private/household scope
-            # requires explicit knowledge.
-            if subject.scope in ("public", "world") and not subject.character_ids:
-                out.append(fact)
-                continue
-            # Subject explicitly lists this PC — they know about facts
-            # about themselves.
-            if character_id in subject.character_ids:
-                out.append(fact)
-        out.sort(key=lambda f: f.established_at_in_game, reverse=True)
-        return out[:limit]
+        return await self._store.facts_known_by(
+            character_id, limit=limit, include_retired=include_retired
+        )
 
     async def facts_for_terms(
         self,

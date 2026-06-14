@@ -38,6 +38,15 @@ from grimoire.continuity.types import (
 from grimoire.storage import Database
 from grimoire.util import now_iso, safe_json_dumps, safe_json_loads
 
+# Newest-first ordering shared by the filtered fact queries. Mirrors the
+# Python sort `key=established_at_in_game, reverse=True`: InGameTime compares
+# (day_count, label), and the trailing `rowid ASC` reproduces the stable sort's
+# tie-break (insertion order) for facts with an identical timestamp.
+_FACT_ORDER_BY = (
+    "ORDER BY COALESCE(json_extract(facts.in_game_when, '$.day_count'), 0) DESC, "
+    "COALESCE(json_extract(facts.in_game_when, '$.label'), '') DESC, facts.rowid ASC"
+)
+
 
 def _ingame_to_str(t: InGameTime | None) -> str | None:
     if t is None:
@@ -321,6 +330,90 @@ class SqliteContinuityStore(ContinuityStore):
                 """,
                 (self._campaign_id,),
             )
+        return [_fact_from_row(dict(row)) for row in rows]
+
+    async def facts_about(
+        self,
+        *,
+        character_ids: list[str] | None = None,
+        location_ids: list[str] | None = None,
+        faction_ids: list[str] | None = None,
+        item_ids: list[str] | None = None,
+        limit: int = 50,
+        include_retired: bool = False,
+    ) -> list[Fact]:
+        where = ["facts.campaign_id = ?"]
+        params: list[object] = [self._campaign_id]
+        if not include_retired:
+            where.append("facts.retired = 0")
+        subject_clauses: list[str] = []
+        for attr, ids in (
+            ("character_ids", character_ids),
+            ("location_ids", location_ids),
+            ("faction_ids", faction_ids),
+            ("item_ids", item_ids),
+        ):
+            if not ids:
+                continue
+            placeholders = ",".join("?" * len(ids))
+            # `attr` is a fixed column-name literal, never user input.
+            subject_clauses.append(
+                f"EXISTS (SELECT 1 FROM json_each(facts.about, '$.{attr}') je "
+                f"WHERE je.value IN ({placeholders}))"
+            )
+            params.extend(ids)
+        if subject_clauses:
+            where.append("(" + " OR ".join(subject_clauses) + ")")
+        sql = f"SELECT facts.* FROM facts WHERE {' AND '.join(where)} {_FACT_ORDER_BY} LIMIT ?"
+        params.append(limit)
+        rows = await self._db.fetchall(sql, tuple(params))
+        return [_fact_from_row(dict(row)) for row in rows]
+
+    async def recent_facts(self, since: InGameTime, limit: int = 50) -> list[Fact]:
+        # `established_at_in_game >= since` compares (day_count, label) as a
+        # tuple; reproduce that lexicographic comparison in SQL.
+        sql = (
+            "SELECT facts.* FROM facts "
+            "WHERE facts.campaign_id = ? AND facts.retired = 0 AND ("
+            "  COALESCE(json_extract(facts.in_game_when, '$.day_count'), 0) > ? "
+            "  OR (COALESCE(json_extract(facts.in_game_when, '$.day_count'), 0) = ? "
+            "      AND COALESCE(json_extract(facts.in_game_when, '$.label'), '') >= ?)"
+            f") {_FACT_ORDER_BY} LIMIT ?"
+        )
+        rows = await self._db.fetchall(
+            sql,
+            (self._campaign_id, since.day_count, since.day_count, since.label, limit),
+        )
+        return [_fact_from_row(dict(row)) for row in rows]
+
+    async def facts_known_by(
+        self, character_id: str, *, limit: int = 50, include_retired: bool = False
+    ) -> list[Fact]:
+        # A character sees a fact when: they explicitly know it (knowledge_state
+        # row with knows=1); or it is world-level public with no narrow audience;
+        # or its subject explicitly lists them.
+        where = ["facts.campaign_id = ?"]
+        params: list[object] = [character_id, self._campaign_id]
+        if not include_retired:
+            where.append("facts.retired = 0")
+        where.append(
+            "((knowledge_state.knows = 1) "
+            "OR (COALESCE(json_extract(facts.about, '$.scope'), 'public') IN ('public', 'world') "
+            "    AND NOT EXISTS (SELECT 1 FROM json_each(facts.about, '$.character_ids'))) "
+            "OR EXISTS (SELECT 1 FROM json_each(facts.about, '$.character_ids') je "
+            "           WHERE je.value = ?))"
+        )
+        params.append(character_id)
+        sql = (
+            "SELECT facts.* FROM facts "
+            "LEFT JOIN knowledge_state "
+            "  ON knowledge_state.fact_id = facts.id "
+            "  AND knowledge_state.character_ref = ? "
+            "  AND knowledge_state.campaign_id = facts.campaign_id "
+            f"WHERE {' AND '.join(where)} {_FACT_ORDER_BY} LIMIT ?"
+        )
+        params.append(limit)
+        rows = await self._db.fetchall(sql, tuple(params))
         return [_fact_from_row(dict(row)) for row in rows]
 
     # ------------------------------------------------------------------
