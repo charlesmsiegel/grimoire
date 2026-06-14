@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
 
 import { viewsApi } from "../../../api/views";
-import type { ResolvedCharacter } from "../../../api/types";
+import { useResource } from "../../../api/useResource";
 import { SaveIndicator } from "./SaveIndicator";
 import { useAutoSavedResource } from "./shared";
 
@@ -16,23 +16,11 @@ export function ExpressionsTab({ campaignId }: { campaignId: string }) {
     { enabled_characters: [] },
   );
 
-  const [characters, setCharacters] = useState<ResolvedCharacter[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void viewsApi.listCharacters(campaignId).then(
-      (chars) => {
-        if (!cancelled) setCharacters(chars);
-      },
-      (err: unknown) => {
-        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignId]);
+  const charactersState = useResource(
+    useCallback(() => viewsApi.listCharacters(campaignId), [campaignId]),
+  );
+  const characters = charactersState.data ?? [];
+  const loadError = charactersState.error?.message ?? null;
 
   const enabledSet = new Set(value.enabled_characters);
 

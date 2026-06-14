@@ -5,11 +5,11 @@
  * practice (campaigns count, not entity count) so this stays fast.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { ApiError } from "../../api/library";
 import { api } from "../../api/client";
+import { useResource } from "../../api/useResource";
 
 interface CampaignSummary {
   id: string;
@@ -35,48 +35,36 @@ interface DependentRow {
 
 export function WorldDependentsView() {
   const { worldId = "" } = useParams();
-  const [rows, setRows] = useState<DependentRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
-      setError(null);
-      try {
-        const campaigns = await api.get<CampaignSummary[]>(`/api/campaigns`);
-        const compositions = await Promise.all(
-          campaigns.map(async (c) => {
-            try {
-              const comp = await api.get<CompositionPayload>(
-                `/api/campaigns/${encodeURIComponent(c.id)}/composition`,
-              );
-              return { campaign: c, comp };
-            } catch {
-              return { campaign: c, comp: null };
-            }
-          }),
-        );
-        const matched: DependentRow[] = [];
-        for (const { campaign, comp } of compositions) {
-          const ref = comp?.worlds?.find((r) => r.world_id === worldId);
-          if (ref) matched.push({ campaign, ref });
-        }
-        if (!cancelled) setRows(matched);
-      } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err : (err as Error));
-      } finally {
-        if (!cancelled) setLoading(false);
+  const {
+    data: rows,
+    loading,
+    error,
+  } = useResource(
+    useCallback(async (): Promise<DependentRow[]> => {
+      const campaigns = await api.get<CampaignSummary[]>(`/api/campaigns`);
+      const compositions = await Promise.all(
+        campaigns.map(async (c) => {
+          try {
+            const comp = await api.get<CompositionPayload>(
+              `/api/campaigns/${encodeURIComponent(c.id)}/composition`,
+            );
+            return { campaign: c, comp };
+          } catch {
+            return { campaign: c, comp: null };
+          }
+        }),
+      );
+      const matched: DependentRow[] = [];
+      for (const { campaign, comp } of compositions) {
+        const ref = comp?.worlds?.find((r) => r.world_id === worldId);
+        if (ref) matched.push({ campaign, ref });
       }
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [worldId]);
+      return matched;
+    }, [worldId]),
+  );
 
-  if (loading) return <p className="library-status">Loading dependent campaigns…</p>;
+  if (loading && rows === null)
+    return <p className="library-status">Loading dependent campaigns…</p>;
   if (error) {
     return (
       <p className="library-error" role="alert">
@@ -84,7 +72,7 @@ export function WorldDependentsView() {
       </p>
     );
   }
-  if (rows.length === 0) {
+  if (rows === null || rows.length === 0) {
     return <p className="library-status">No campaigns currently reference this world.</p>;
   }
 
