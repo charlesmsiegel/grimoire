@@ -426,11 +426,7 @@ function IncludeEditor({
 }
 
 function DiffPreviewModal({ hint, onClose }: { hint: UpgradeHint; onClose: () => void }) {
-  const {
-    data: diff,
-    error,
-    loading,
-  } = useResource(
+  const state = useResource(
     useCallback(
       () => viewsApi.worldDiff(hint.world_id, hint.bound, hint.latest),
       [hint.world_id, hint.bound, hint.latest],
@@ -446,13 +442,7 @@ function DiffPreviewModal({ hint, onClose }: { hint: UpgradeHint; onClose: () =>
     >
       <DialogClose />
       <div className="diff-body">
-        {loading && <p>Loading diff…</p>}
-        {error && (
-          <p className="error" role="alert">
-            {error.message}
-          </p>
-        )}
-        {diff && <DiffRenderer diff={diff} />}
+        <AsyncSection state={state}>{(diff) => <DiffRenderer diff={diff} />}</AsyncSection>
       </div>
     </Dialog>
   );
