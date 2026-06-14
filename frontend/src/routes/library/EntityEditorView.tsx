@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useReducer } from "react";
 import { Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -10,10 +10,12 @@ import {
   libraryApi,
 } from "../../api/library";
 import { useResource } from "../../api/useResource";
+import { deepEqual } from "../../lib/deepEqual";
 import { Markdown } from "../../components/Markdown";
 import { TokenBadge } from "../../components/TokenBadge";
 import { AsyncBoundary } from "./AsyncBoundary";
 import { ConfirmDestructiveDialog } from "../../components/ConfirmDestructiveDialog";
+import { editReducer, initialEditState } from "./editState";
 import { EntityForm } from "./EntityForm";
 import { getDescriptor } from "./entitySchemas";
 import { ExtrasTable } from "./ExtrasTable";
@@ -54,6 +56,7 @@ export function EntityEditorView() {
       <AsyncBoundary loading={loading} error={error} onRetry={reload}>
         {data && "frontmatter" in data && (
           <EntityEditorBody
+            key={`${worldId}/${kind}/${entityId}`}
             entity={data as LibraryEntity}
             worldId={worldId}
             kindPlural={kind}
@@ -64,6 +67,7 @@ export function EntityEditorView() {
         )}
         {data && !("frontmatter" in data) && (
           <GreetingEditorBody
+            key={`${worldId}/greetings/${entityId}`}
             greeting={data as Greeting}
             worldId={worldId}
             entityId={entityId}
@@ -82,6 +86,11 @@ interface EditorBodyProps {
   entityId: string;
   isCharacter: boolean;
   onReload: () => void;
+}
+
+interface EntityDraft {
+  frontmatter: Frontmatter;
+  body: string;
 }
 
 const SUB_TABS = (isCharacter: boolean, basePath: string) => [
@@ -104,37 +113,28 @@ function EntityEditorBody({
   onReload,
 }: EditorBodyProps) {
   const navigate = useNavigate();
-  const [frontmatter, setFrontmatter] = useState<Frontmatter>(
-    ensureFrontmatter(entity.frontmatter),
+  const [state, dispatch] = useReducer(editReducer<EntityDraft>, entity, (e) =>
+    initialEditState<EntityDraft>({ frontmatter: ensureFrontmatter(e.frontmatter), body: e.body }),
   );
-  const [body, setBody] = useState(entity.body);
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveErr, setSaveErr] = useState<string | null>(null);
-  const [confirmEdit, setConfirmEdit] = useState<null | { dependents: CampaignRef[] }>(null);
-  const [pendingSave, setPendingSave] = useState(false);
-  const [deleting, setDeleting] = useState<{ busy: boolean; err: string | null } | null>(null);
+  const { draft, saving, saveErr, confirm, deleting } = state;
+  const { frontmatter, body } = draft;
+  const dirty = !deepEqual(draft, {
+    frontmatter: ensureFrontmatter(entity.frontmatter),
+    body: entity.body,
+  });
 
   async function confirmDelete() {
-    if (!deleting) return;
-    setDeleting({ ...deleting, busy: true, err: null });
+    dispatch({ type: "delete-start" });
     try {
       await libraryApi.deleteEntity(worldId, kindPlural, entityId);
       navigate(`/library/worlds/${encodeURIComponent(worldId)}/${kindPlural}`);
     } catch (err) {
-      setDeleting({
-        ...deleting,
-        busy: false,
-        err: err instanceof ApiError ? err.message : String(err),
+      dispatch({
+        type: "delete-fail",
+        message: err instanceof ApiError ? err.message : String(err),
       });
     }
   }
-
-  useEffect(() => {
-    setFrontmatter(ensureFrontmatter(entity.frontmatter));
-    setBody(entity.body);
-    setDirty(false);
-  }, [entity]);
 
   const dependents = useResource(
     useCallback(
@@ -144,34 +144,27 @@ function EntityEditorBody({
   );
 
   function patchFrontmatter(next: Frontmatter) {
-    setFrontmatter(next);
-    setDirty(true);
+    dispatch({ type: "edit", draft: { frontmatter: next, body } });
   }
 
   async function performSave() {
-    setSaving(true);
-    setSaveErr(null);
+    dispatch({ type: "save-start" });
     try {
       await libraryApi.updateEntity(worldId, kindPlural, entityId, {
         frontmatter_patch: frontmatter,
         body,
       });
-      setDirty(false);
+      dispatch({ type: "save-ok" });
       onReload();
       dependents.reload();
     } catch (err) {
-      setSaveErr(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setSaving(false);
-      setConfirmEdit(null);
-      setPendingSave(false);
+      dispatch({ type: "save-fail", message: err instanceof ApiError ? err.message : String(err) });
     }
   }
 
   function handleSaveClick() {
-    setPendingSave(true);
     if (dependents.data && dependents.data.length > 0) {
-      setConfirmEdit({ dependents: dependents.data });
+      dispatch({ type: "ask-confirm", dependents: dependents.data });
     } else {
       void performSave();
     }
@@ -198,7 +191,7 @@ function EntityEditorBody({
           <button
             type="button"
             className="entity-editor-delete"
-            onClick={() => setDeleting({ busy: false, err: null })}
+            onClick={() => dispatch({ type: "delete-open" })}
           >
             Delete
           </button>
@@ -237,10 +230,7 @@ function EntityEditorBody({
                 frontmatter={frontmatter}
                 onFrontmatterChange={patchFrontmatter}
                 body={body}
-                onBodyChange={(b) => {
-                  setBody(b);
-                  setDirty(true);
-                }}
+                onBodyChange={(b) => dispatch({ type: "edit", draft: { frontmatter, body: b } })}
               />
               {EXTRAS_SUPPORTED_KINDS.has(kindPlural) ? (
                 <ExtrasTable
@@ -271,18 +261,18 @@ function EntityEditorBody({
         />
       </Routes>
 
-      {confirmEdit && pendingSave && (
+      {confirm && (
         <ConfirmDestructiveDialog
           open
           title="Save edit to library?"
           body={
             <>
               <p>
-                This entity is referenced by {confirmEdit.dependents.length} campaign
-                {confirmEdit.dependents.length === 1 ? "" : "s"}:
+                This entity is referenced by {confirm.dependents.length} campaign
+                {confirm.dependents.length === 1 ? "" : "s"}:
               </p>
               <ul>
-                {confirmEdit.dependents.map((c) => (
+                {confirm.dependents.map((c) => (
                   <li key={c.id}>{c.name || c.id}</li>
                 ))}
               </ul>
@@ -297,10 +287,7 @@ function EntityEditorBody({
           busyLabel="Saving…"
           confirmLabel="Save anyway"
           onConfirm={() => void performSave()}
-          onCancel={() => {
-            setConfirmEdit(null);
-            setPendingSave(false);
-          }}
+          onCancel={() => dispatch({ type: "cancel-save" })}
         />
       )}
 
@@ -322,7 +309,7 @@ function EntityEditorBody({
               : null)
           }
           onConfirm={() => void confirmDelete()}
-          onCancel={() => setDeleting(null)}
+          onCancel={() => dispatch({ type: "delete-close" })}
         />
       )}
     </div>
@@ -433,68 +420,52 @@ function GreetingEditorBody({
   onReload: () => void;
 }) {
   const navigate = useNavigate();
-  const [form, setForm] = useState<GreetingFormValue>(() => greetingToForm(greeting));
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveErr, setSaveErr] = useState<string | null>(null);
-  const [confirmEdit, setConfirmEdit] = useState<null | { dependents: CampaignRef[] }>(null);
-  const [pendingSave, setPendingSave] = useState(false);
-  const [deleting, setDeleting] = useState<{ busy: boolean; err: string | null } | null>(null);
+  const [state, dispatch] = useReducer(editReducer<GreetingFormValue>, greeting, (g) =>
+    initialEditState<GreetingFormValue>(greetingToForm(g)),
+  );
+  const { draft: form, saving, saveErr, confirm, deleting } = state;
+  const dirty = !deepEqual(form, greetingToForm(greeting));
 
   async function confirmDelete() {
-    if (!deleting) return;
-    setDeleting({ ...deleting, busy: true, err: null });
+    dispatch({ type: "delete-start" });
     try {
       await libraryApi.deleteEntity(worldId, "greetings", entityId);
       navigate(`/library/worlds/${encodeURIComponent(worldId)}/greetings`);
     } catch (err) {
-      setDeleting({
-        ...deleting,
-        busy: false,
-        err: err instanceof ApiError ? err.message : String(err),
+      dispatch({
+        type: "delete-fail",
+        message: err instanceof ApiError ? err.message : String(err),
       });
     }
   }
-
-  useEffect(() => {
-    setForm(greetingToForm(greeting));
-    setDirty(false);
-  }, [greeting]);
 
   const dependents = useResource(
     useCallback(() => libraryApi.dependents(worldId, "greetings", entityId), [worldId, entityId]),
   );
 
   function patch(next: GreetingFormValue) {
-    setForm(next);
-    setDirty(true);
+    dispatch({ type: "edit", draft: next });
   }
 
   async function performSave() {
-    setSaving(true);
-    setSaveErr(null);
+    dispatch({ type: "save-start" });
     try {
       const { frontmatter, body } = greetingFormToPayload(form, greeting.id);
       await libraryApi.updateEntity(worldId, "greetings", entityId, {
         frontmatter_patch: frontmatter,
         body,
       });
-      setDirty(false);
+      dispatch({ type: "save-ok" });
       onReload();
       dependents.reload();
     } catch (err) {
-      setSaveErr(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setSaving(false);
-      setConfirmEdit(null);
-      setPendingSave(false);
+      dispatch({ type: "save-fail", message: err instanceof ApiError ? err.message : String(err) });
     }
   }
 
   function handleSaveClick() {
-    setPendingSave(true);
     if (dependents.data && dependents.data.length > 0) {
-      setConfirmEdit({ dependents: dependents.data });
+      dispatch({ type: "ask-confirm", dependents: dependents.data });
     } else {
       void performSave();
     }
@@ -515,7 +486,7 @@ function GreetingEditorBody({
           <button
             type="button"
             className="entity-editor-delete"
-            onClick={() => setDeleting({ busy: false, err: null })}
+            onClick={() => dispatch({ type: "delete-open" })}
           >
             Delete
           </button>
@@ -540,18 +511,18 @@ function GreetingEditorBody({
         <GreetingFormFields worldId={worldId} value={form} onChange={patch} />
       </form>
 
-      {confirmEdit && pendingSave && (
+      {confirm && (
         <ConfirmDestructiveDialog
           open
           title="Save edit to library?"
           body={
             <>
               <p>
-                This entity is referenced by {confirmEdit.dependents.length} campaign
-                {confirmEdit.dependents.length === 1 ? "" : "s"}:
+                This entity is referenced by {confirm.dependents.length} campaign
+                {confirm.dependents.length === 1 ? "" : "s"}:
               </p>
               <ul>
-                {confirmEdit.dependents.map((c) => (
+                {confirm.dependents.map((c) => (
                   <li key={c.id}>{c.name || c.id}</li>
                 ))}
               </ul>
@@ -566,10 +537,7 @@ function GreetingEditorBody({
           busyLabel="Saving…"
           confirmLabel="Save anyway"
           onConfirm={() => void performSave()}
-          onCancel={() => {
-            setConfirmEdit(null);
-            setPendingSave(false);
-          }}
+          onCancel={() => dispatch({ type: "cancel-save" })}
         />
       )}
 
@@ -591,7 +559,7 @@ function GreetingEditorBody({
               : null)
           }
           onConfirm={() => void confirmDelete()}
-          onCancel={() => setDeleting(null)}
+          onCancel={() => dispatch({ type: "delete-close" })}
         />
       )}
     </div>
