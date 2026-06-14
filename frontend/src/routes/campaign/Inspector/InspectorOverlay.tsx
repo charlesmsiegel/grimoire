@@ -16,6 +16,7 @@ import {
   type PreviewSummary,
 } from "../../../api/inspector";
 import { REASON_LABELS } from "../../observability/inclusionReasonLabels";
+import { CloseIcon } from "../../../components/icons";
 import { PinControls } from "./PinControls";
 import { chunkLabel, isPinnable } from "./sourceKinds";
 
@@ -106,7 +107,7 @@ export function InspectorOverlay({
               {raw ? "By source" : "Raw messages"}
             </button>
             <button type="button" onClick={onClose} aria-label="Close">
-              ✕
+              <CloseIcon />
             </button>
           </div>
         </header>
