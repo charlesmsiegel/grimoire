@@ -89,8 +89,8 @@ def _from_jdn(epoch: int, jdn: int) -> tuple[int, int, int]:
 class CopticEngine(CalendarEngine):
     system = "coptic"
 
-    def to_jdn(self, year: int, month: int, day: int) -> int:
-        return _to_jdn(COPTIC_EPOCH, year, month, day)
+    def to_jdn(self, date: DateParts) -> int:
+        return _to_jdn(COPTIC_EPOCH, date.year, date.month, date.day)
 
     def from_jdn(self, jdn: int) -> DateParts:
         y, m, d = _from_jdn(COPTIC_EPOCH, jdn)
@@ -106,8 +106,8 @@ class CopticEngine(CalendarEngine):
 class EthiopianEngine(CalendarEngine):
     system = "ethiopian"
 
-    def to_jdn(self, year: int, month: int, day: int) -> int:
-        return _to_jdn(ETHIOPIAN_EPOCH, year, month, day)
+    def to_jdn(self, date: DateParts) -> int:
+        return _to_jdn(ETHIOPIAN_EPOCH, date.year, date.month, date.day)
 
     def from_jdn(self, jdn: int) -> DateParts:
         y, m, d = _from_jdn(ETHIOPIAN_EPOCH, jdn)

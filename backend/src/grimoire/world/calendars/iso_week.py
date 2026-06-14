@@ -45,9 +45,9 @@ def iso_from_jdn(jdn: int) -> tuple[int, int, int]:
 class IsoWeekEngine(CalendarEngine):
     system = "iso_week"
 
-    def to_jdn(self, year: int, month: int, day: int) -> int:
+    def to_jdn(self, date: DateParts) -> int:
         # Reuse the (year, week, weekday) triple as (year, month, day).
-        return iso_to_jdn(year, month, day)
+        return iso_to_jdn(date.year, date.month, date.day)
 
     def from_jdn(self, jdn: int) -> DateParts:
         y, w, d = iso_from_jdn(jdn)

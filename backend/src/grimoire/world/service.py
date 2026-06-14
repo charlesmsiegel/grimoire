@@ -98,7 +98,7 @@ def _qualify_greeting_ref(ref: str, world_id: str) -> str:
 
 def _seed_from_builtin(cal: WorldCalendar, calendar_id: str) -> WorldCalendar:
     """Populate empty months/weekday_names from a builtin calendar engine."""
-    from grimoire.world.calendars.base import WEEKDAY_NAMES
+    from grimoire.world.calendars.base import WEEKDAY_NAMES, DateParts
     from grimoire.world.calendars.registry import BUILTIN_CALENDARS, engine_for
 
     builtin = BUILTIN_CALENDARS.get(calendar_id)
@@ -108,7 +108,7 @@ def _seed_from_builtin(cal: WorldCalendar, calendar_id: str) -> WorldCalendar:
     ref_year = 2024
     try:
         year_days = engine.year_length_days(ref_year)
-        start_jdn = engine.to_jdn(ref_year, 1, 1)
+        start_jdn = engine.to_jdn(DateParts(ref_year, 1, 1))
     except Exception:
         return cal
     months: list[Month] = []
@@ -123,10 +123,10 @@ def _seed_from_builtin(cal: WorldCalendar, calendar_id: str) -> WorldCalendar:
         name = engine.month_name(parts)
         next_m = parts.month + 1
         try:
-            next_jdn = engine.to_jdn(ref_year, next_m, 1)
+            next_jdn = engine.to_jdn(DateParts(ref_year, next_m, 1))
         except Exception:
             next_jdn = start_jdn + year_days
-        days = next_jdn - engine.to_jdn(ref_year, parts.month, 1)
+        days = next_jdn - engine.to_jdn(DateParts(ref_year, parts.month, 1))
         if days <= 0:
             days = 30
         months.append(Month(name=name, days=days))

@@ -41,7 +41,7 @@ class CalendarEngine:
 
     system: str = ""
 
-    def to_jdn(self, year: int, month: int, day: int) -> int:
+    def to_jdn(self, date: DateParts) -> int:
         raise NotImplementedError
 
     def from_jdn(self, jdn: int) -> DateParts:
@@ -55,6 +55,6 @@ class CalendarEngine:
 
     def year_length_days(self, year: int) -> int:
         """Return total days in a year (used for stardate-style computations)."""
-        next_year_start = self.to_jdn(year + 1, 1, 1)
-        this_year_start = self.to_jdn(year, 1, 1)
+        next_year_start = self.to_jdn(DateParts(year + 1, 1, 1))
+        this_year_start = self.to_jdn(DateParts(year, 1, 1))
         return next_year_start - this_year_start

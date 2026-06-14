@@ -16,6 +16,7 @@ from grimoire.types.calendar import (
     HolidaySet,
 )
 
+from .base import DateParts
 from .gregorian import (
     days_in_gregorian_month,
     gregorian_to_jdn,
@@ -177,7 +178,7 @@ def _native_fixed_to_jdn(year: int, month: int, day: int, system: CalendarSystem
     if factory is None:
         return None
     try:
-        return factory().to_jdn(year, month, day)
+        return factory().to_jdn(DateParts(year, month, day))
     except Exception:
         return None
 

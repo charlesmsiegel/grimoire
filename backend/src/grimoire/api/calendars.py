@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from grimoire.api.deps import CalendarDep
 from grimoire.api.util import map_lookup_errors, to_payload
+from grimoire.world.calendars import DateParts
 
 router = APIRouter()
 
@@ -111,9 +112,7 @@ async def convert_date(payload: ConvertDatePayload, calendar: CalendarDep) -> An
         result = await calendar.convert_date(
             payload.from_calendar_id,
             payload.to_calendar_ids,
-            payload.year,
-            payload.month,
-            payload.day,
+            DateParts(payload.year, payload.month, payload.day),
         )
     except Exception as exc:
         raise map_lookup_errors(exc) from exc

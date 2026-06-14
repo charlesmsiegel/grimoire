@@ -19,8 +19,8 @@ BUDDHIST_OFFSET = 543
 class BuddhistEngine(CalendarEngine):
     system = "buddhist"
 
-    def to_jdn(self, year: int, month: int, day: int) -> int:
-        return gregorian_to_jdn(year - BUDDHIST_OFFSET, month, day)
+    def to_jdn(self, date: DateParts) -> int:
+        return gregorian_to_jdn(date.year - BUDDHIST_OFFSET, date.month, date.day)
 
     def from_jdn(self, jdn: int) -> DateParts:
         gy, gm, gd = gregorian_from_jdn(jdn)

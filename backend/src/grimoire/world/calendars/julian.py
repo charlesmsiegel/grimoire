@@ -37,8 +37,8 @@ def julian_from_jdn(jdn: int) -> tuple[int, int, int]:
 class JulianEngine(CalendarEngine):
     system = "julian"
 
-    def to_jdn(self, year: int, month: int, day: int) -> int:
-        return julian_to_jdn(year, month, day)
+    def to_jdn(self, date: DateParts) -> int:
+        return julian_to_jdn(date.year, date.month, date.day)
 
     def from_jdn(self, jdn: int) -> DateParts:
         y, m, d = julian_from_jdn(jdn)
