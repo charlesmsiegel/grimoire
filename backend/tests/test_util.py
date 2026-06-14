@@ -68,6 +68,20 @@ def test_extract_json_object_returns_none_for_garbage() -> None:
     assert extract_json_object("totally not json") is None
 
 
+def test_extract_json_object_keeps_fence_inside_string_value() -> None:
+    # A complete JSON object whose string value embeds a ``` fence must parse
+    # as a whole — the fence belongs to the data, not a code block wrapping it.
+    text = '{"facts": [{"text": "hi", "evidence": "see:\\n```python\\nprint(1)\\n```"}]}'
+    payload = extract_json_object(text)
+    assert payload is not None
+    assert payload["facts"][0]["evidence"].startswith("see:")
+
+
+def test_extract_json_object_recovers_prose_wrapped_fence() -> None:
+    text = 'Sure thing:\n```json\n{"ok": true}\n```\nlet me know'
+    assert extract_json_object(text) == {"ok": True}
+
+
 def test_vector_roundtrip_is_little_endian() -> None:
     vec = [1.5, -2.0, 0.0, 3.25]
     blob = serialize_vector(vec)
