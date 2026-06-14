@@ -82,6 +82,13 @@ def test_extract_json_object_recovers_prose_wrapped_fence() -> None:
     assert extract_json_object(text) == {"ok": True}
 
 
+def test_extract_json_object_skips_unrelated_leading_fence() -> None:
+    # An unrelated ```python snippet before the real ```json block must not
+    # shadow it: the snippet's body isn't a JSON object, so it's skipped.
+    text = '```python\nconfig = {"facts": []}\n```\n```json\n{"facts": [{"real": 1}]}\n```'
+    assert extract_json_object(text) == {"facts": [{"real": 1}]}
+
+
 def test_vector_roundtrip_is_little_endian() -> None:
     vec = [1.5, -2.0, 0.0, 3.25]
     blob = serialize_vector(vec)
