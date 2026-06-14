@@ -1,6 +1,6 @@
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { CalendarsView } from "../CalendarsView";
 
@@ -82,5 +82,24 @@ describe("CalendarsView", () => {
     expect(screen.getAllByText("Gregorian").length).toBeGreaterThan(0);
     expect(screen.getByText("Built-in")).toBeInTheDocument();
     expect(screen.getByText("Custom")).toBeInTheDocument();
+  });
+
+  it("preserves each month row's identity when an earlier month is deleted", () => {
+    // The create form seeds three months (First/Second/Third).
+    render(
+      <MemoryRouter initialEntries={["/new"]}>
+        <CalendarsView />
+      </MemoryRouter>,
+    );
+
+    const thirdBefore = screen.getByDisplayValue("Third");
+    const removeButtons = screen.getAllByRole("button", { name: "×" });
+    fireEvent.click(removeButtons[0]!);
+
+    expect(screen.queryByDisplayValue("First")).toBeNull();
+    // Stable keys keep the surviving row attached to its own DOM node rather
+    // than reusing it for a shifted neighbour (#547).
+    expect(screen.getByDisplayValue("Third")).toBe(thirdBefore);
+    expect(screen.getByDisplayValue("Second")).toBeInTheDocument();
   });
 });

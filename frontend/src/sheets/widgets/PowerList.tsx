@@ -1,3 +1,4 @@
+import { useRowIds } from "../../hooks/useRowIds";
 import type { PowerItem, WidgetProps } from "../types";
 
 export function PowerListWidget({
@@ -8,6 +9,7 @@ export function PowerListWidget({
   readOnly,
 }: WidgetProps<ReadonlyArray<PowerItem> | null>) {
   const items: PowerItem[] = (value ?? []).slice();
+  const { keys, insertAt, removeAt } = useRowIds(items.length);
   const update = (idx: number, patch: Partial<PowerItem>) => {
     if (readOnly) return;
     const next = items.slice();
@@ -17,10 +19,12 @@ export function PowerListWidget({
   };
   const add = () => {
     if (readOnly) return;
+    insertAt(items.length);
     onChange([...items, { name: "" }]);
   };
   const remove = (idx: number) => {
     if (readOnly) return;
+    removeAt(idx);
     onChange(items.filter((_, i) => i !== idx));
   };
 
@@ -33,7 +37,7 @@ export function PowerListWidget({
     >
       <ul className="sheet-power-items">
         {items.map((item, idx) => (
-          <li key={idx} className="sheet-power-item">
+          <li key={keys[idx]} className="sheet-power-item">
             <input
               type="text"
               className="sheet-power-name"
