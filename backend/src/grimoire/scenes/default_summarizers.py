@@ -13,14 +13,12 @@ are filled by the caller.
 
 from __future__ import annotations
 
-import logging
 from typing import Protocol
 
+from grimoire.scenes._summary_llm import complete_text
 from grimoire.scenes.types import Post, Scene
-from grimoire.types.llm import CompletionRequest, Message, MessageRole
+from grimoire.types.llm import CompletionRequest
 from grimoire.util import extract_json_object
-
-logger = logging.getLogger(__name__)
 
 
 class _Gateway(Protocol):
@@ -50,6 +48,99 @@ def _post_window(posts: list[Post], n: int = 10) -> str:
     return "\n\n".join(parts)
 
 
+_ROLLING_SYSTEM = (
+    "You are a tight-prose scene summarizer for a tabletop RPG companion. "
+    "Maintain a rolling summary that captures the most important narrative "
+    "developments so far. Aim for 3-5 short sentences. No bullet lists."
+)
+_FINAL_SYSTEM_TEMPLATE = (
+    "You are a scene close-out summarizer for a tabletop RPG companion. "
+    "Given the full post history, return a short final summary plus a "
+    "list of {max_key_beats} or fewer key beats that drove the scene. "
+    "Respond with a JSON object ONLY, no prose, no markdown fences."
+)
+
+
+async def _run_rolling_summary(
+    gateway: _Gateway,
+    task: str,
+    *,
+    previous: str | None,
+    posts: list[Post],
+    window: int,
+    model: str,
+    max_tokens: int,
+    label: str,
+) -> str:
+    """Produce/extend a rolling running summary; return ``previous`` on failure."""
+    if not posts:
+        return previous or ""
+    previous_block = (previous or "(no prior summary)").strip()
+    user = (
+        f"Previous running summary:\n{previous_block}\n\n"
+        f"Recent posts:\n{_post_window(posts, n=window)}\n\n"
+        "Return only the updated running summary."
+    )
+    text = await complete_text(
+        gateway,
+        task,
+        system=_ROLLING_SYSTEM,
+        user=user,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=0.4,
+        label=label,
+    )
+    return text if text is not None else (previous or "")
+
+
+async def _run_final_summary(
+    gateway: _Gateway,
+    task: str,
+    *,
+    scene: Scene,
+    posts: list[Post],
+    running: str | None,
+    model: str,
+    max_tokens: int,
+    max_key_beats: int,
+    label: str,
+) -> tuple[str, list[str]]:
+    """Produce the final ``(summary, key_beats)``; fall back to trivial output."""
+    if not posts:
+        return running or scene.running_summary or "", []
+    system = _FINAL_SYSTEM_TEMPLATE.format(max_key_beats=max_key_beats)
+    running_block = (running or scene.running_summary or "(none)").strip()
+    user = (
+        f"Scene title: {scene.title or scene.slug}\n"
+        f"Running summary so far: {running_block}\n\n"
+        f"Full scene posts:\n{_post_window(posts, n=len(posts))}\n\n"
+        'Return JSON of the form: {"summary": "...", "key_beats": ["...", "..."]}'
+    )
+    text = await complete_text(
+        gateway,
+        task,
+        system=system,
+        user=user,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=0.3,
+        label=label,
+    )
+    if text is None:
+        return running or _trivial_summary(scene, posts), []
+    parsed = extract_json_object(text)
+    if parsed is None:
+        return text, []
+    summary = str(parsed.get("summary") or "").strip()
+    beats_raw = parsed.get("key_beats") or []
+    beats = [str(b).strip() for b in beats_raw if isinstance(b, (str, int))]
+    beats = [b for b in beats if b][:max_key_beats]
+    if not summary:
+        summary = _trivial_summary(scene, posts)
+    return summary, beats
+
+
 def make_default_running_summarizer(
     gateway: _Gateway,
     *,
@@ -64,35 +155,16 @@ def make_default_running_summarizer(
     """
 
     async def _summarize(previous: str | None, recent: list[Post]) -> str:
-        if not recent:
-            return previous or ""
-        system = (
-            "You are a tight-prose scene summarizer for a tabletop RPG companion. "
-            "Maintain a rolling summary that captures the most important narrative "
-            "developments so far. Aim for 3-5 short sentences. No bullet lists."
-        )
-        previous_block = (previous or "(no prior summary)").strip()
-        user = (
-            f"Previous running summary:\n{previous_block}\n\n"
-            f"Recent posts:\n{_post_window(recent)}\n\n"
-            "Return only the updated running summary."
-        )
-        request = CompletionRequest(
+        return await _run_rolling_summary(
+            gateway,
+            task,
+            previous=previous,
+            posts=recent,
+            window=10,
             model=model,
-            messages=[Message(role=MessageRole.USER, content=user)],
-            system=system,
             max_tokens=max_tokens,
-            temperature=0.4,
+            label="running summary",
         )
-        try:
-            response = await gateway.complete(task, request)
-        except Exception as exc:
-            logger.warning("running summary LLM call failed: %s", exc)
-            return previous or ""
-        text = getattr(response, "text", None)
-        if not isinstance(text, str) or not text.strip():
-            return previous or ""
-        return text.strip()
 
     return _summarize
 
@@ -115,46 +187,17 @@ def make_default_final_summarizer(
     """
 
     async def _finalize(scene: Scene, posts: list[Post]) -> tuple[str, list[str]]:
-        if not posts:
-            return scene.running_summary or "", []
-        system = (
-            "You are a scene close-out summarizer for a tabletop RPG companion. "
-            "Given the full post history, return a short final summary plus a "
-            f"list of {max_key_beats} or fewer key beats that drove the scene. "
-            "Respond with a JSON object ONLY, no prose, no markdown fences."
-        )
-        running_block = (scene.running_summary or "(none)").strip()
-        user = (
-            f"Scene title: {scene.title or scene.slug}\n"
-            f"Running summary so far: {running_block}\n\n"
-            f"Full scene posts:\n{_post_window(posts, n=len(posts))}\n\n"
-            'Return JSON of the form: {"summary": "...", "key_beats": ["...", "..."]}'
-        )
-        request = CompletionRequest(
+        return await _run_final_summary(
+            gateway,
+            task,
+            scene=scene,
+            posts=posts,
+            running=None,
             model=model,
-            messages=[Message(role=MessageRole.USER, content=user)],
-            system=system,
             max_tokens=max_tokens,
-            temperature=0.3,
+            max_key_beats=max_key_beats,
+            label="final summary",
         )
-        try:
-            response = await gateway.complete(task, request)
-        except Exception as exc:
-            logger.warning("final summary LLM call failed: %s", exc)
-            return _trivial_summary(scene, posts), []
-        text = getattr(response, "text", None)
-        if not isinstance(text, str) or not text.strip():
-            return _trivial_summary(scene, posts), []
-        parsed = extract_json_object(text)
-        if parsed is None:
-            return text.strip(), []
-        summary = str(parsed.get("summary") or "").strip()
-        beats_raw = parsed.get("key_beats") or []
-        beats = [str(b).strip() for b in beats_raw if isinstance(b, (str, int))]
-        beats = [b for b in beats if b][:max_key_beats]
-        if not summary:
-            summary = _trivial_summary(scene, posts)
-        return summary, beats
 
     return _finalize
 
@@ -225,79 +268,31 @@ def make_adaptive_summarizer(
         return _FALLBACK_CONTEXT_WINDOW
 
     async def _rolling_pass(previous: str | None, posts: list[Post]) -> str:
-        if not posts:
-            return previous or ""
-        system = (
-            "You are a tight-prose scene summarizer for a tabletop RPG companion. "
-            "Maintain a rolling summary that captures the most important narrative "
-            "developments so far. Aim for 3-5 short sentences. No bullet lists."
-        )
-        previous_block = (previous or "(no prior summary)").strip()
-        user = (
-            f"Previous running summary:\n{previous_block}\n\n"
-            f"Recent posts:\n{_post_window(posts, n=len(posts))}\n\n"
-            "Return only the updated running summary."
-        )
-        request = CompletionRequest(
+        return await _run_rolling_summary(
+            gateway,
+            running_task,
+            previous=previous,
+            posts=posts,
+            window=len(posts),
             model=model,
-            messages=[Message(role=MessageRole.USER, content=user)],
-            system=system,
             max_tokens=max_tokens,
-            temperature=0.4,
+            label="adaptive rolling summary",
         )
-        try:
-            response = await gateway.complete(running_task, request)
-        except Exception as exc:
-            logger.warning("adaptive rolling summary LLM call failed: %s", exc)
-            return previous or ""
-        text = getattr(response, "text", None)
-        if not isinstance(text, str) or not text.strip():
-            return previous or ""
-        return text.strip()
 
     async def _final_pass(
         scene: Scene, posts: list[Post], running: str | None
     ) -> tuple[str, list[str]]:
-        if not posts:
-            return running or scene.running_summary or "", []
-        system = (
-            "You are a scene close-out summarizer for a tabletop RPG companion. "
-            "Given the full post history, return a short final summary plus a "
-            f"list of {max_key_beats} or fewer key beats that drove the scene. "
-            "Respond with a JSON object ONLY, no prose, no markdown fences."
-        )
-        running_block = (running or scene.running_summary or "(none)").strip()
-        user = (
-            f"Scene title: {scene.title or scene.slug}\n"
-            f"Running summary so far: {running_block}\n\n"
-            f"Full scene posts:\n{_post_window(posts, n=len(posts))}\n\n"
-            'Return JSON of the form: {"summary": "...", "key_beats": ["...", "..."]}'
-        )
-        request = CompletionRequest(
+        return await _run_final_summary(
+            gateway,
+            final_task,
+            scene=scene,
+            posts=posts,
+            running=running,
             model=model,
-            messages=[Message(role=MessageRole.USER, content=user)],
-            system=system,
             max_tokens=max_tokens,
-            temperature=0.3,
+            max_key_beats=max_key_beats,
+            label="adaptive final summary",
         )
-        try:
-            response = await gateway.complete(final_task, request)
-        except Exception as exc:
-            logger.warning("adaptive final summary LLM call failed: %s", exc)
-            return running or _trivial_summary(scene, posts), []
-        text = getattr(response, "text", None)
-        if not isinstance(text, str) or not text.strip():
-            return running or _trivial_summary(scene, posts), []
-        parsed = extract_json_object(text)
-        if parsed is None:
-            return text.strip(), []
-        summary = str(parsed.get("summary") or "").strip()
-        beats_raw = parsed.get("key_beats") or []
-        beats = [str(b).strip() for b in beats_raw if isinstance(b, (str, int))]
-        beats = [b for b in beats if b][:max_key_beats]
-        if not summary:
-            summary = _trivial_summary(scene, posts)
-        return summary, beats
 
     async def _adaptive(scene: Scene, posts: list[Post]) -> tuple[str, list[str]]:
         if not posts:

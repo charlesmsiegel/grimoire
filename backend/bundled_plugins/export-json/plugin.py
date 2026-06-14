@@ -20,6 +20,7 @@ from grimoire.export import (
     apply_filters,
     filter_scenes,
     load_fs_snapshot,
+    resolve_data_root,
     word_count,
 )
 from grimoire.export.selection import filter_context_from_dict
@@ -29,13 +30,6 @@ from grimoire.types.export import (
     ExportResult,
     ExportSelection,
 )
-
-
-def _data_root(config: dict[str, Any] | None) -> Path:
-    root = (config or {}).get("data_root")
-    if root:
-        return Path(root)
-    return Path(__file__).resolve().parents[3] / "data"
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -130,7 +124,9 @@ class JsonExportAdapter:
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config: dict[str, Any] = dict(config or {})
-        self._data_root = _data_root(self.config)
+        self._data_root = resolve_data_root(
+            self.config, fallback=Path(__file__).resolve().parents[3] / "data"
+        )
         self._pretty_default = bool(self.config.get("pretty_print", True))
         self._include_embeddings_default = bool(self.config.get("include_embeddings", False))
 

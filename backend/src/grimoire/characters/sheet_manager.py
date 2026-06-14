@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -422,6 +422,39 @@ class CharacterSheetManager:
             result.warnings.append(f"import report failed: {exc}")
         return result
 
+    async def _create_import_entity(
+        self,
+        *,
+        target_world_id: str,
+        kind: str,
+        entity_id: str,
+        frontmatter: dict[str, Any],
+        body: str,
+        result: ImportResult,
+        warnings: Sequence[str] = (),
+    ) -> None:
+        """Create one imported entity, recording success/failure on ``result``.
+
+        Shared by the greeting/lore/promotion writers: on success the entity is
+        appended to ``result.created`` (plus any per-entity ``warnings``); a
+        failed create is captured in ``result.errors`` so one bad card entry
+        doesn't abort the whole import.
+        """
+        try:
+            await self._library.create_entity(
+                target_world_id,
+                kind,
+                entity_id,
+                frontmatter,
+                body=body,
+                source="characters:import",
+            )
+            result.created.append(f"{kind}:{entity_id}")
+            for w in warnings:
+                result.warnings.append(f"{kind} {entity_id}: {w}")
+        except Exception as exc:
+            result.errors.append(f"{kind} {entity_id!r}: {exc}")
+
     async def _write_greetings(
         self,
         *,
@@ -461,18 +494,14 @@ class CharacterSheetManager:
                     "source_index": greeting.source_index,
                 },
             }
-            try:
-                await self._library.create_entity(
-                    target_world_id,
-                    "greeting",
-                    entity_id,
-                    frontmatter,
-                    body=greeting.body,
-                    source="characters:import",
-                )
-                result.created.append(f"greeting:{entity_id}")
-            except Exception as exc:
-                result.errors.append(f"greeting {entity_id!r}: {exc}")
+            await self._create_import_entity(
+                target_world_id=target_world_id,
+                kind="greeting",
+                entity_id=entity_id,
+                frontmatter=frontmatter,
+                body=greeting.body,
+                result=result,
+            )
 
     async def _write_lore_entries(
         self,
@@ -547,18 +576,14 @@ class CharacterSheetManager:
             frontmatter["at_depth"] = entry.at_depth
         if entry.scan_depth is not None:
             frontmatter["scan_depth"] = entry.scan_depth
-        try:
-            await self._library.create_entity(
-                target_world_id,
-                "lore",
-                entity_id,
-                frontmatter,
-                body=entry.body,
-                source="characters:import",
-            )
-            result.created.append(f"lore:{entity_id}")
-        except Exception as exc:
-            result.errors.append(f"lore {entity_id!r}: {exc}")
+        await self._create_import_entity(
+            target_world_id=target_world_id,
+            kind="lore",
+            entity_id=entity_id,
+            frontmatter=frontmatter,
+            body=entry.body,
+            result=result,
+        )
 
     async def _promote_lore_entry(
         self,
@@ -584,20 +609,15 @@ class CharacterSheetManager:
             "card_asset_id": char_slug,
             "source_index": entry.source_index,
         }
-        try:
-            await self._library.create_entity(
-                target_world_id,
-                kind_str,
-                entity_id,
-                fm,
-                body=body,
-                source="characters:import",
-            )
-            result.created.append(f"{kind_str}:{entity_id}")
-            for w in warnings:
-                result.warnings.append(f"{kind_str} {entity_id}: {w}")
-        except Exception as exc:
-            result.errors.append(f"{kind_str} {entity_id!r}: {exc}")
+        await self._create_import_entity(
+            target_world_id=target_world_id,
+            kind=kind_str,
+            entity_id=entity_id,
+            frontmatter=fm,
+            body=body,
+            result=result,
+            warnings=warnings,
+        )
 
     async def _unique_id(
         self,

@@ -50,6 +50,7 @@ from grimoire.util import (
     canonicalize_character_ref,
     now_iso,
     parse_iso_datetime,
+    safe_json_loads,
     slugify_id,
 )
 
@@ -609,8 +610,6 @@ class CharactersService:
     # ------------------------------------------------------------------ #
 
     async def list_pcs(self, campaign_id: CampaignId) -> list[PCEntry]:
-        import json as _json
-
         rows = await self.store.list_pcs(campaign_id)
         active_ref = self._cache.seed_active_pc_from_rows(campaign_id, rows)
         out: list[PCEntry] = []
@@ -631,8 +630,7 @@ class CharactersService:
                     exc_info=True,
                 )
             last_played_at = parse_iso_datetime(row.get("last_played_at"))
-            raw_tags = row.get("role_tags") or "[]"
-            role_tags = _json.loads(raw_tags) if isinstance(raw_tags, str) else list(raw_tags)
+            role_tags = list(safe_json_loads(row.get("role_tags")) or [])
             out.append(
                 PCEntry(
                     character_ref=char_ref,
@@ -655,8 +653,6 @@ class CharactersService:
         owner: str = "local",
         role_tags: list[str] | None = None,
     ) -> PCEntry:
-        import json as _json
-
         await self.store.add_pc(
             campaign_id=campaign_id,
             character_ref=character_ref,
@@ -673,8 +669,7 @@ class CharactersService:
             rows = await self.store.list_pcs(campaign_id)
             stored = next((r for r in rows if r["character_ref"] == character_ref), None)
             if stored is not None:
-                raw = stored.get("role_tags") or "[]"
-                resolved_tags = _json.loads(raw) if isinstance(raw, str) else list(raw)
+                resolved_tags = list(safe_json_loads(stored.get("role_tags")) or [])
             else:
                 resolved_tags = []
         else:

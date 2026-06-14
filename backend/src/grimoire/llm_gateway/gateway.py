@@ -930,6 +930,64 @@ class LLMGatewayService:
         except Exception:
             logger.exception("failed to record llm_requests row for failed call")
 
+    async def _record_embedding_failure(
+        self,
+        *,
+        task: str,
+        route: Route,
+        model_id: str,
+        error: BaseException,
+        retries: int,
+        input_count: int,
+        campaign_id: CampaignId | None,
+        turn_id: TurnId | None,
+        retry: RetryPolicy | None,
+        timeout: TimeoutPolicy | None,
+    ) -> None:
+        """Wire-log, audit, and emit a failed embedding call.
+
+        Shared by the permanent- and retriable-exhausted branches of
+        ``embed``; ``retries`` is the per-branch count (running total vs total
+        plus the failed batch's exhausted retries).
+        """
+        err = f"{type(error).__name__}: {error}"
+        wire_log.log_error(
+            "embedding",
+            error=err,
+            task=task,
+            provider=route.provider_id,
+            model=model_id,
+            input_count=input_count,
+            retries=retries,
+        )
+        if self._config.observability.log_all_requests:
+            await self._log.record(
+                task=task,
+                provider_id=route.provider_id,
+                model=model_id,
+                retries=retries,
+                error=err,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                retry_override=self._retry_dict(retry),
+                timeout_override=self._timeout_dict(timeout),
+            )
+        await self._emit(
+            events.LLM_REQUEST_FAILED,
+            {
+                "task": task,
+                "provider": route.provider_id,
+                "model": model_id,
+                "campaign_id": campaign_id,
+                "turn_id": turn_id,
+                "error": err,
+                "retries": retries,
+                "fallback_used": False,
+                "retry_override": self._retry_dict(retry),
+                "timeout_override": self._timeout_dict(timeout),
+            },
+        )
+
     # ------------------------------------------------------------------ #
     # Streaming
     # ------------------------------------------------------------------ #
@@ -1448,41 +1506,17 @@ class LLMGatewayService:
                     total_retries += batch_retries
                     all_vectors.extend(batch_vectors)
             except PermanentError as exc:
-                wire_log.log_error(
-                    "embedding",
-                    error=f"{type(exc).__name__}: {exc}",
+                await self._record_embedding_failure(
                     task=task,
-                    provider=route.provider_id,
-                    model=model_id,
-                    input_count=len(missing),
+                    route=route,
+                    model_id=model_id,
+                    error=exc,
                     retries=total_retries,
-                )
-                if self._config.observability.log_all_requests:
-                    await self._log.record(
-                        task=task,
-                        provider_id=route.provider_id,
-                        model=model_id,
-                        retries=total_retries,
-                        error=f"{type(exc).__name__}: {exc}",
-                        campaign_id=campaign_id,
-                        turn_id=turn_id,
-                        retry_override=self._retry_dict(retry),
-                        timeout_override=self._timeout_dict(timeout),
-                    )
-                await self._emit(
-                    events.LLM_REQUEST_FAILED,
-                    {
-                        "task": task,
-                        "provider": route.provider_id,
-                        "model": model_id,
-                        "campaign_id": campaign_id,
-                        "turn_id": turn_id,
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "retries": total_retries,
-                        "fallback_used": False,
-                        "retry_override": self._retry_dict(retry),
-                        "timeout_override": self._timeout_dict(timeout),
-                    },
+                    input_count=len(missing),
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    retry=retry,
+                    timeout=timeout,
                 )
                 raise
             except BaseException as exc:
@@ -1491,41 +1525,17 @@ class LLMGatewayService:
                 # `total_retries` sums batches that succeeded; add the
                 # exhausted-retries count for the batch that finally failed.
                 final_retries = total_retries + resolved_retry.max_retries
-                wire_log.log_error(
-                    "embedding",
-                    error=f"{type(exc).__name__}: {exc}",
+                await self._record_embedding_failure(
                     task=task,
-                    provider=route.provider_id,
-                    model=model_id,
-                    input_count=len(missing),
+                    route=route,
+                    model_id=model_id,
+                    error=exc,
                     retries=final_retries,
-                )
-                if self._config.observability.log_all_requests:
-                    await self._log.record(
-                        task=task,
-                        provider_id=route.provider_id,
-                        model=model_id,
-                        retries=final_retries,
-                        error=f"{type(exc).__name__}: {exc}",
-                        campaign_id=campaign_id,
-                        turn_id=turn_id,
-                        retry_override=self._retry_dict(retry),
-                        timeout_override=self._timeout_dict(timeout),
-                    )
-                await self._emit(
-                    events.LLM_REQUEST_FAILED,
-                    {
-                        "task": task,
-                        "provider": route.provider_id,
-                        "model": model_id,
-                        "campaign_id": campaign_id,
-                        "turn_id": turn_id,
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "retries": final_retries,
-                        "fallback_used": False,
-                        "retry_override": self._retry_dict(retry),
-                        "timeout_override": self._timeout_dict(timeout),
-                    },
+                    input_count=len(missing),
+                    campaign_id=campaign_id,
+                    turn_id=turn_id,
+                    retry=retry,
+                    timeout=timeout,
                 )
                 raise
 

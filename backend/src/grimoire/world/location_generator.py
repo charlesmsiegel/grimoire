@@ -10,12 +10,12 @@ the campaign can store as an emergent entity.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from grimoire.templates import render as render_template
 from grimoire.types.llm import CompletionRequest, Message, MessageRole
+from grimoire.world._generation_llm import complete_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -43,21 +43,12 @@ async def generate_location_frontmatter(
         max_tokens=512,
         temperature=0.7,
     )
-    try:
-        response = await gateway.complete(
-            "world_location_generate",
-            request,
-            campaign_id=campaign_id,
-            turn_id=None,
-        )
-    except Exception:
-        logger.warning("emergent location generation failed: gateway error", exc_info=True)
-        return {}
-    raw = getattr(response, "text", "") or ""
-    try:
-        parsed = json.loads(raw)
-    except (ValueError, TypeError):
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
-    return parsed
+    parsed = await complete_to_dict(
+        gateway=gateway,
+        route="world_location_generate",
+        request=request,
+        campaign_id=campaign_id,
+        logger=logger,
+        error_label="emergent location generation failed",
+    )
+    return parsed if parsed is not None else {}

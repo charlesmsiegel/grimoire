@@ -363,6 +363,47 @@ class ExtractorService:
             duration_ms=int((time.monotonic() - started) * 1000),
         )
 
+    async def _fallback_to_separate(
+        self,
+        *,
+        mode: str,
+        code: str,
+        message: str,
+        response_text: str,
+        scene: Scene,
+        campaign_id: CampaignId,
+        snapshot: StateSnapshot,
+        pre_roll_resolved: bool,
+        turn_id: TurnId | None,
+        evidence: str = "",
+    ) -> ExtractionResult:
+        """Record a failed primary-mode call and re-run via SEPARATE.
+
+        Shared by the together/tool_use dispatchers when the primary input is
+        missing or malformed: log the mode miss, run the SEPARATE pipeline over
+        ``response_text``, and append a WARNING flag describing the fallback.
+        """
+        await self._record_mode_call(mode, success=False)
+        result = await self._run(
+            text=response_text,
+            scene=scene,
+            campaign_id=campaign_id,
+            snapshot=snapshot,
+            from_player=False,
+            player_pc_ref=None,
+            pre_roll_resolved=pre_roll_resolved,
+            turn_id=turn_id,
+        )
+        result.flags.append(
+            ExtractionFlag(
+                level=FlagLevel.WARNING,
+                code=code,
+                message=message,
+                evidence=evidence,
+            )
+        )
+        return result
+
     async def _run_together(
         self,
         *,
@@ -383,50 +424,34 @@ class ExtractorService:
         if tracker_text is None:
             tracker_text = extract_tracker_block(response_text)
         if not tracker_text:
-            await self._record_mode_call("together", success=False)
-            result = await self._run(
-                text=response_text,
+            return await self._fallback_to_separate(
+                mode="together",
+                code="together_no_tracker",
+                message=(
+                    "together mode requested but no tracker block found — fell back to SEPARATE"
+                ),
+                response_text=response_text,
                 scene=scene,
                 campaign_id=campaign_id,
                 snapshot=snapshot,
-                from_player=False,
-                player_pc_ref=None,
                 pre_roll_resolved=pre_roll_resolved,
                 turn_id=turn_id,
             )
-            result.flags.append(
-                ExtractionFlag(
-                    level=FlagLevel.WARNING,
-                    code="together_no_tracker",
-                    message=(
-                        "together mode requested but no tracker block found — fell back to SEPARATE"
-                    ),
-                )
-            )
-            return result
         try:
             parsed = parse_tracker_text(tracker_text)
         except TrackerMalformedError as exc:
-            await self._record_mode_call("together", success=False)
-            result = await self._run(
-                text=response_text,
+            return await self._fallback_to_separate(
+                mode="together",
+                code="together_malformed",
+                message=f"tracker malformed: {exc} — fell back to SEPARATE",
+                evidence=tracker_text[:200],
+                response_text=response_text,
                 scene=scene,
                 campaign_id=campaign_id,
                 snapshot=snapshot,
-                from_player=False,
-                player_pc_ref=None,
                 pre_roll_resolved=pre_roll_resolved,
                 turn_id=turn_id,
             )
-            result.flags.append(
-                ExtractionFlag(
-                    level=FlagLevel.WARNING,
-                    code="together_malformed",
-                    message=f"tracker malformed: {exc} — fell back to SEPARATE",
-                    evidence=tracker_text[:200],
-                )
-            )
-            return result
 
         await self._record_mode_call("together", success=True)
         tracker_deltas = project_tracker_to_deltas(
@@ -467,25 +492,17 @@ class ExtractorService:
         turn_id: TurnId | None,
     ) -> ExtractionResult:
         if not tool_calls:
-            await self._record_mode_call("tool_use", success=False)
-            result = await self._run(
-                text=response_text,
+            return await self._fallback_to_separate(
+                mode="tool_use",
+                code="tool_use_no_calls",
+                message="tool_use mode produced no tool calls — fell back to SEPARATE",
+                response_text=response_text,
                 scene=scene,
                 campaign_id=campaign_id,
                 snapshot=snapshot,
-                from_player=False,
-                player_pc_ref=None,
                 pre_roll_resolved=pre_roll_resolved,
                 turn_id=turn_id,
             )
-            result.flags.append(
-                ExtractionFlag(
-                    level=FlagLevel.WARNING,
-                    code="tool_use_no_calls",
-                    message="tool_use mode produced no tool calls — fell back to SEPARATE",
-                )
-            )
-            return result
 
         await self._record_mode_call("tool_use", success=True)
         tool_deltas, tool_candidates = project_tool_calls(

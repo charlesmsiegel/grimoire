@@ -72,6 +72,20 @@ def safe_json_loads(value: str | dict | list | None) -> Any:
     return json.loads(value)
 
 
+def maybe_json(value: Any) -> Any:
+    """Lenient :func:`safe_json_loads`: return the input unchanged if it won't parse.
+
+    Like ``safe_json_loads`` it passes through ``None``/``""`` (-> ``None``) and
+    already-parsed dicts/lists, but a malformed JSON string is returned as-is
+    rather than raising — for tolerant reads of columns that may hold either
+    JSON or a plain string.
+    """
+    try:
+        return safe_json_loads(value)
+    except (TypeError, ValueError):
+        return value
+
+
 def safe_json_dumps(value: Any) -> str | None:
     """Serialize to JSON with deterministic key ordering, or None passthrough."""
     if value is None:

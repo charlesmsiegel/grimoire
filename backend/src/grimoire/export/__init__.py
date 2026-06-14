@@ -23,6 +23,7 @@ from grimoire.export.data import (
     ImageRecord,
     SceneRecord,
     load_fs_snapshot,
+    resolve_data_root,
 )
 from grimoire.export.epub import EpubAdapter, list_style_presets
 from grimoire.export.errors import (
@@ -85,5 +86,6 @@ __all__ = [
     "filter_scenes",
     "list_style_presets",
     "load_fs_snapshot",
+    "resolve_data_root",
     "word_count",
 ]

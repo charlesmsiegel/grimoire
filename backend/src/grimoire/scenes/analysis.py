@@ -8,22 +8,20 @@ Results route through the existing extraction/review infrastructure.
 from __future__ import annotations
 
 import json
-import logging
 from collections.abc import Callable
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from grimoire.scenes._summary_llm import complete_text
 from grimoire.scenes.types import Post, Scene, Thread
 from grimoire.types.common import CampaignId
 from grimoire.types.extraction import ExtractionResult
-from grimoire.types.llm import CompletionRequest, Message, MessageRole
+from grimoire.types.llm import CompletionRequest
 from grimoire.util import extract_json_object
 
 PayloadParser = Callable[..., Any]
 SchemaFactory = Callable[[], dict]
-
-logger = logging.getLogger(__name__)
 
 _DEFAULT_TASK = "scene_analysis"
 _DEFAULT_MAX_TOKENS = 4096
@@ -223,26 +221,19 @@ def make_scene_analyzer(
         if not posts:
             return SceneAnalysisResult(summary=scene.running_summary or "")
 
-        system = _build_system_prompt(schema)
-        user = _build_user_prompt(scene, posts, scene.running_summary)
-
-        request = CompletionRequest(
+        text = await complete_text(
+            gateway,
+            task,
+            system=_build_system_prompt(schema),
+            user=_build_user_prompt(scene, posts, scene.running_summary),
             model=model,
-            messages=[Message(role=MessageRole.USER, content=user)],
-            system=system,
             max_tokens=max_tokens,
             temperature=0.3,
+            campaign_id=campaign_id,
+            label="scene analysis",
         )
-        try:
-            response = await gateway.complete(task, request, campaign_id=campaign_id)
-        except Exception as exc:
-            logger.warning("scene analysis LLM call failed: %s", exc)
+        if text is None:
             return SceneAnalysisResult()
-
-        text = getattr(response, "text", None)
-        if not isinstance(text, str) or not text.strip():
-            return SceneAnalysisResult()
-
         parsed = extract_json_object(text)
         if parsed is None:
             return SceneAnalysisResult()
@@ -294,26 +285,19 @@ def make_adaptive_scene_analyzer(
         posts: list[Post],
         campaign_id: CampaignId,
     ) -> SceneAnalysisResult:
-        system = _build_system_prompt(schema)
-        user = _build_user_prompt(scene, posts, scene.running_summary)
-
-        request = CompletionRequest(
+        text = await complete_text(
+            gateway,
+            task,
+            system=_build_system_prompt(schema),
+            user=_build_user_prompt(scene, posts, scene.running_summary),
             model=model,
-            messages=[Message(role=MessageRole.USER, content=user)],
-            system=system,
             max_tokens=max_tokens,
             temperature=0.3,
+            campaign_id=campaign_id,
+            label="scene analysis",
         )
-        try:
-            response = await gateway.complete(task, request, campaign_id=campaign_id)
-        except Exception as exc:
-            logger.warning("scene analysis LLM call failed: %s", exc)
+        if text is None:
             return SceneAnalysisResult()
-
-        text = getattr(response, "text", None)
-        if not isinstance(text, str) or not text.strip():
-            return SceneAnalysisResult()
-
         parsed = extract_json_object(text)
         if parsed is None:
             return SceneAnalysisResult()
@@ -349,23 +333,19 @@ def make_adaptive_scene_analyzer(
             f"Scene segment:\n{posts_text}\n\n"
             "Return the JSON analysis for this segment."
         )
-        request = CompletionRequest(
-            model=model,
-            messages=[Message(role=MessageRole.USER, content=user)],
+        text = await complete_text(
+            gateway,
+            task,
             system=system,
+            user=user,
+            model=model,
             max_tokens=max_tokens,
             temperature=0.3,
+            campaign_id=campaign_id,
+            label="windowed analysis",
         )
-        try:
-            response = await gateway.complete(task, request, campaign_id=campaign_id)
-        except Exception as exc:
-            logger.warning("windowed analysis LLM call failed: %s", exc)
+        if text is None:
             return previous_summary or "", ExtractionResult()
-
-        text = getattr(response, "text", None)
-        if not isinstance(text, str) or not text.strip():
-            return previous_summary or "", ExtractionResult()
-
         parsed = extract_json_object(text)
         if parsed is None:
             return previous_summary or "", ExtractionResult()
@@ -409,23 +389,19 @@ def make_adaptive_scene_analyzer(
             f"Post count: {len(posts)}\n\n"
             "Return the final analysis JSON."
         )
-        request = CompletionRequest(
-            model=model,
-            messages=[Message(role=MessageRole.USER, content=user)],
+        text = await complete_text(
+            gateway,
+            task,
             system=system,
+            user=user,
+            model=model,
             max_tokens=max_tokens,
             temperature=0.3,
+            campaign_id=campaign_id,
+            label="final consolidation",
         )
-        try:
-            response = await gateway.complete(task, request, campaign_id=campaign_id)
-        except Exception as exc:
-            logger.warning("final consolidation LLM call failed: %s", exc)
+        if text is None:
             return accumulated_summary, [], [], []
-
-        text = getattr(response, "text", None)
-        if not isinstance(text, str) or not text.strip():
-            return accumulated_summary, [], [], []
-
         parsed = extract_json_object(text)
         if parsed is None:
             return accumulated_summary, [], [], []

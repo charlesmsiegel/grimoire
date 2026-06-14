@@ -9,7 +9,6 @@ typed values (``LibraryEntity``, ``WorldMeta``, ``Greeting``,
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from grimoire.event_bus import Event, EventBus
@@ -42,7 +41,7 @@ from grimoire.types.composition import (
     WorldMeta,
 )
 from grimoire.types.world import LoreEntry
-from grimoire.util import json_equal, parse_iso_datetime
+from grimoire.util import json_equal, maybe_json, parse_iso_datetime
 
 # Entity kinds that live inside a world directory.
 _World_ENTITY_KINDS: frozenset[str] = frozenset(
@@ -893,9 +892,9 @@ def _normalize_row(row: Any) -> dict:
     if isinstance(row, dict):
         return row
     raw = dict(row)
-    raw["frontmatter"] = _maybe_json(raw.get("frontmatter"))
-    raw["tags"] = _maybe_json(raw.get("tags")) or []
-    raw["keywords"] = _maybe_json(raw.get("keywords")) or []
+    raw["frontmatter"] = maybe_json(raw.get("frontmatter"))
+    raw["tags"] = maybe_json(raw.get("tags")) or []
+    raw["keywords"] = maybe_json(raw.get("keywords")) or []
     return raw
 
 
@@ -988,17 +987,6 @@ def _parse_style_guide_body(body: str) -> dict[str, Any]:
         "avoid": sections["Avoid"],
         "extra_sections": extras,
     }
-
-
-def _maybe_json(value: Any) -> Any:
-    if value is None or value == "":
-        return None
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        return json.loads(value)
-    except (TypeError, ValueError):
-        return value
 
 
 def _parse_resolve_ref(entity_id: str) -> tuple[str, str | None, str, bool]:

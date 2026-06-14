@@ -77,7 +77,7 @@ class LibraryScanner:
         campaign_id: str,
         world_id: str,
     ) -> UpgradePreview:
-        from grimoire.library.service import _maybe_json
+        from grimoire.util import maybe_json
 
         camp_row = await self._store.db.fetchone(
             """
@@ -132,7 +132,7 @@ class LibraryScanner:
                     library_id=lib_id,
                     before_version=before_version,
                     after_version=after_version,
-                    before_frontmatter=_maybe_json(snap["frontmatter"]) if snap else None,
+                    before_frontmatter=maybe_json(snap["frontmatter"]) if snap else None,
                     after_frontmatter=(live.get("frontmatter") if live else None),
                     before_body=(snap["body"] if snap and snap["body"] else None),
                     after_body=(live.get("body") if live else None),

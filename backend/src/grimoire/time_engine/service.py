@@ -435,6 +435,46 @@ class TimeEngineService:
                 checkpoint_token=checkpoint_token,
             )
 
+    async def _consume_token_and_run(
+        self,
+        *,
+        campaign_id: CampaignId,
+        scene_id: str | None,
+        reason: TimeAdvanceReason,
+        from_time: InGameTime,
+        to_time: InGameTime,
+        duration: Duration,
+        activity_ref: str | None,
+        checkpoint_token: str | None,
+    ) -> TimeAdvanceResult:
+        """Consume any checkpoint token for these endpoints, then run the pipeline.
+
+        Shared tail of ``_advance_inner`` and ``skip_to``: both quantize their
+        endpoints, then (optionally) validate-and-consume a checkpoint token
+        against the resolved from/to/duration before handing off to
+        ``_run_pipeline``.
+        """
+        if checkpoint_token is not None:
+            self._consume_checkpoint_token(
+                checkpoint_token,
+                campaign_id=campaign_id,
+                from_iso=from_time.moment.isoformat(),
+                to_iso=to_time.moment.isoformat(),
+                duration_iso=duration.iso8601,
+                reason=reason,
+                scene_id=scene_id,
+                activity_ref=activity_ref,
+            )
+        return await self._run_pipeline(
+            campaign_id=campaign_id,
+            scene_id=scene_id,
+            reason=reason,
+            from_time=from_time,
+            to_time=to_time,
+            duration=duration,
+            activity_ref=activity_ref,
+        )
+
     async def _advance_inner(
         self,
         campaign_id: CampaignId,
@@ -479,18 +519,7 @@ class TimeEngineService:
         # Re-derive duration from the quantized endpoints so the result
         # matches the wall-clock movement actually applied.
         effective_duration = _duration_from_timedelta(to.moment - start_q.moment)
-        if checkpoint_token is not None:
-            self._consume_checkpoint_token(
-                checkpoint_token,
-                campaign_id=campaign_id,
-                from_iso=start_q.moment.isoformat(),
-                to_iso=to.moment.isoformat(),
-                duration_iso=effective_duration.iso8601,
-                reason=reason,
-                scene_id=scene_id,
-                activity_ref=activity_ref,
-            )
-        return await self._run_pipeline(
+        return await self._consume_token_and_run(
             campaign_id=campaign_id,
             scene_id=scene_id,
             reason=reason,
@@ -498,6 +527,7 @@ class TimeEngineService:
             to_time=to,
             duration=effective_duration,
             activity_ref=activity_ref,
+            checkpoint_token=checkpoint_token,
         )
 
     async def skip_to(
@@ -540,18 +570,7 @@ class TimeEngineService:
                 calendar_id=target.calendar_id,
             )
         duration = _duration_from_timedelta(target_q.moment - start_q.moment)
-        if checkpoint_token is not None:
-            self._consume_checkpoint_token(
-                checkpoint_token,
-                campaign_id=campaign_id,
-                from_iso=start_q.moment.isoformat(),
-                to_iso=target_q.moment.isoformat(),
-                duration_iso=duration.iso8601,
-                reason=reason,
-                scene_id=scene_id,
-                activity_ref=activity_ref,
-            )
-        return await self._run_pipeline(
+        return await self._consume_token_and_run(
             campaign_id=campaign_id,
             scene_id=scene_id,
             reason=reason,
@@ -559,6 +578,7 @@ class TimeEngineService:
             to_time=target_q,
             duration=duration,
             activity_ref=activity_ref,
+            checkpoint_token=checkpoint_token,
         )
 
     # ------------------------------------------------------------------ #
