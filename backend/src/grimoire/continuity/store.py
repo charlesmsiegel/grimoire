@@ -27,6 +27,7 @@ from grimoire.continuity.types import (
     ContradictionVerdict,
     Fact,
     FactId,
+    InGameTime,
     KnowledgeEntry,
 )
 from grimoire.types.common import TurnId
@@ -39,6 +40,35 @@ def _tokens(text: str, *, min_len: int = 1, case_insensitive: bool = True) -> se
     if case_insensitive:
         raw = [t.lower() for t in raw]
     return {t for t in raw if len(t) >= min_len}
+
+
+def _matches_subject(
+    fact: Fact,
+    *,
+    character_ids: list[str] | None = None,
+    location_ids: list[str] | None = None,
+    faction_ids: list[str] | None = None,
+    item_ids: list[str] | None = None,
+) -> bool:
+    """Whether a fact's subject overlaps any of the requested id lists.
+
+    With no filters supplied every fact matches. Otherwise a fact matches if
+    *any* provided list shares an id with the fact's corresponding subject list.
+    """
+    subj = fact.about
+    any_filter = False
+    for attr, wanted in (
+        ("character_ids", character_ids),
+        ("location_ids", location_ids),
+        ("faction_ids", faction_ids),
+        ("item_ids", item_ids),
+    ):
+        if not wanted:
+            continue
+        any_filter = True
+        if set(wanted) & set(getattr(subj, attr)):
+            return True
+    return not any_filter
 
 
 class InMemoryContinuityStore(ContinuityStore):
@@ -60,6 +90,57 @@ class InMemoryContinuityStore(ContinuityStore):
 
     async def list_facts(self, *, include_retired: bool = False) -> list[Fact]:
         return [f for f in self._facts.values() if include_retired or not f.retired]
+
+    async def facts_about(
+        self,
+        *,
+        character_ids: list[str] | None = None,
+        location_ids: list[str] | None = None,
+        faction_ids: list[str] | None = None,
+        item_ids: list[str] | None = None,
+        limit: int = 50,
+        include_retired: bool = False,
+    ) -> list[Fact]:
+        facts = await self.list_facts(include_retired=include_retired)
+        matched = [
+            f
+            for f in facts
+            if _matches_subject(
+                f,
+                character_ids=character_ids,
+                location_ids=location_ids,
+                faction_ids=faction_ids,
+                item_ids=item_ids,
+            )
+        ]
+        matched.sort(key=lambda f: f.established_at_in_game, reverse=True)
+        return matched[:limit]
+
+    async def recent_facts(self, since: InGameTime, limit: int = 50) -> list[Fact]:
+        facts = await self.list_facts(include_retired=False)
+        recent = [f for f in facts if f.established_at_in_game >= since]
+        recent.sort(key=lambda f: f.established_at_in_game, reverse=True)
+        return recent[:limit]
+
+    async def facts_known_by(
+        self, character_id: str, *, limit: int = 50, include_retired: bool = False
+    ) -> list[Fact]:
+        entries = await self.knowledge_for_character(character_id)
+        known_ids = {e.fact_id for e in entries if e.knows}
+        facts = await self.list_facts(include_retired=include_retired)
+        out: list[Fact] = []
+        for fact in facts:
+            if fact.id in known_ids:
+                out.append(fact)
+                continue
+            subject = fact.about
+            if subject.scope in ("public", "world") and not subject.character_ids:
+                out.append(fact)
+                continue
+            if character_id in subject.character_ids:
+                out.append(fact)
+        out.sort(key=lambda f: f.established_at_in_game, reverse=True)
+        return out[:limit]
 
     async def put_commitment(self, commitment: Commitment) -> None:
         async with self._lock:

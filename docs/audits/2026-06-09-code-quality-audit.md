@@ -320,9 +320,11 @@ CLAUDE.md names "private reimplementation of canonical helpers" a review smell. 
 8. ✅ **Raw YAML I/O** — `hud/config.py:200,212`, `transient_state/config.py:45`,
    `mechanics/authoring.py:199-287` (×4), `scenes/storage.py:353` call `yaml.safe_load/safe_dump`
    directly against the "never call yaml.safe_load" rule (`grimoire.files.yaml_io`).
-9. **Continuity fact queries fetch-all-then-filter ×3** — `facts_about`/`recent_facts`/`facts_known_by`
+9. ✅ **Continuity fact queries fetch-all-then-filter ×3** — `facts_about`/`recent_facts`/`facts_known_by`
    (`continuity/service.py:311-428`) each pull `list_facts()` and filter in Python; push filters into
-   the store (it has SQLite + FTS under it).
+   the store (it has SQLite + FTS under it). *(#594: the three methods are now thin wrappers over
+   `ContinuityStore.facts_about`/`recent_facts`/`facts_known_by`; the SQLite store filters/sorts/limits
+   in the query.)*
 10. Smaller twins worth folding when touched: adaptive summarizer rolling/final passes
     (`default_summarizers.py:190-334`, ~90% identical), `scenes/indexer.py:369/387` loops,
     `characters/sheet_manager.py:463/549` try-blocks, export plugins' identical `_data_root()` ×3,

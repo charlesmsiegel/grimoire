@@ -42,6 +42,24 @@ class ContinuityStore(Protocol):
     async def put_fact(self, fact: Fact) -> None: ...
     async def get_fact(self, fact_id: FactId) -> Fact | None: ...
     async def list_facts(self, *, include_retired: bool = False) -> list[Fact]: ...
+    # Filtered fact queries. SQLite-backed stores push these into the query
+    # (WHERE / ORDER BY / LIMIT) rather than scanning every fact; the in-memory
+    # store filters in Python. All three return newest-first
+    # (established_at_in_game descending, then by label, ties oldest-rowid-first).
+    async def facts_about(
+        self,
+        *,
+        character_ids: list[str] | None = None,
+        location_ids: list[str] | None = None,
+        faction_ids: list[str] | None = None,
+        item_ids: list[str] | None = None,
+        limit: int = 50,
+        include_retired: bool = False,
+    ) -> list[Fact]: ...
+    async def recent_facts(self, since: InGameTime, limit: int = 50) -> list[Fact]: ...
+    async def facts_known_by(
+        self, character_id: str, *, limit: int = 50, include_retired: bool = False
+    ) -> list[Fact]: ...
 
     # Commitments
     async def put_commitment(self, commitment: Commitment) -> None: ...
