@@ -318,54 +318,89 @@ async def bulk_copy(
         await conn.execute("BEGIN IMMEDIATE")
         try:
             for spec in CAMPAIGN_SCOPED_TABLES:
-                table = spec["table"]
-                if not await _table_exists(conn, table):
-                    continue
-                columns = await _table_columns(conn, table)
-                if not columns:
-                    continue
-
-                cutoff_col = spec["cutoff_col"]
-                where = "campaign_id = ?"
-                params: tuple = (original,)
-                if cutoff_iso is not None and cutoff_col and cutoff_col in columns:
-                    where += f" AND {cutoff_col} <= ?"
-                    params = (original, cutoff_iso)
-
-                cur = await conn.execute(f"SELECT * FROM {table} WHERE {where}", params)
-                source_rows = await cur.fetchall()
-                await cur.close()
-                if not source_rows:
-                    rows_per_table[table] = 0
-                    continue
-
-                placeholders = ", ".join("?" for _ in columns)
-                col_list = ", ".join(columns)
-                insert_sql = f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})"
-
-                rewrites: dict[str, str] = spec.get("rewrites", {})
-
-                count = 0
-                for row in source_rows:
-                    values: list[object] = []
-                    for col in columns:
-                        v = row[col]
-                        kind = rewrites.get(col)
-                        if kind == "campaign":
-                            v = new
-                        elif kind == "id":
-                            v = _rewrite_id(v, prefix)
-                        elif kind == "ref":
-                            v = _rewrite_ref(v, prefix)
-                        values.append(v)
-                    await conn.execute(insert_sql, tuple(values))
-                    count += 1
-                rows_per_table[table] = count
+                count = await _copy_table(
+                    conn,
+                    spec,
+                    original=original,
+                    new=new,
+                    cutoff_iso=cutoff_iso,
+                    prefix=prefix,
+                )
+                if count is not None:
+                    rows_per_table[str(spec["table"])] = count
             await conn.execute("COMMIT")
         except Exception:
             await conn.execute("ROLLBACK")
             raise
     return BulkCopyResult(rows_per_table=rows_per_table)
+
+
+def _rewrite_value(value: object, kind: object, *, new: str, prefix: str) -> object:
+    """Apply one column's rewrite rule when copying a row into a fork."""
+    if kind == "campaign":
+        return new
+    if kind == "id":
+        return _rewrite_id(value, prefix)
+    if kind == "ref":
+        return _rewrite_ref(value, prefix)
+    return value
+
+
+def _rewrite_row(
+    row: aiosqlite.Row,
+    columns: list[str],
+    rewrites: dict[str, str],
+    *,
+    new: str,
+    prefix: str,
+) -> tuple:
+    return tuple(
+        _rewrite_value(row[col], rewrites.get(col), new=new, prefix=prefix) for col in columns
+    )
+
+
+async def _copy_table(
+    conn: aiosqlite.Connection,
+    spec: TableSpec,
+    *,
+    original: str,
+    new: str,
+    cutoff_iso: str | None,
+    prefix: str,
+) -> int | None:
+    """Copy one table's campaign-scoped rows into the fork.
+
+    Returns the number of rows copied, or ``None`` when the table is absent
+    or has no columns and was skipped entirely.
+    """
+    table = str(spec["table"])
+    if not await _table_exists(conn, table):
+        return None
+    columns = await _table_columns(conn, table)
+    if not columns:
+        return None
+
+    cutoff_col = spec["cutoff_col"]
+    where = "campaign_id = ?"
+    params: tuple = (original,)
+    if cutoff_iso is not None and cutoff_col and cutoff_col in columns:
+        where += f" AND {cutoff_col} <= ?"
+        params = (original, cutoff_iso)
+
+    cur = await conn.execute(f"SELECT * FROM {table} WHERE {where}", params)
+    source_rows = await cur.fetchall()
+    await cur.close()
+    if not source_rows:
+        return 0
+
+    placeholders = ", ".join("?" for _ in columns)
+    col_list = ", ".join(columns)
+    insert_sql = f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})"
+    rewrites: dict[str, str] = spec.get("rewrites", {})  # type: ignore[assignment]
+
+    for row in source_rows:
+        await conn.execute(insert_sql, _rewrite_row(row, columns, rewrites, new=new, prefix=prefix))
+    return len(source_rows)
 
 
 # ---------------------------------------------------------------------------
