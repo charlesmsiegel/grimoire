@@ -71,25 +71,17 @@ from grimoire.state_store.snapshots import (
     write_snapshots_for_world,
 )
 from grimoire.storage import Database
-from grimoire.util import now_iso
+from grimoire.util import now_iso, safe_json_dumps, safe_json_loads
 
 logger = logging.getLogger(__name__)
 
 
 def _json_dumps(value: Any) -> str | None:
-    if value is None:
-        return None
+    # Already-serialized strings pass through unchanged; everything else goes
+    # through the canonical serializer (sort_keys + default=str).
     if isinstance(value, str):
         return value
-    return json.dumps(value, sort_keys=True, default=str)
-
-
-def _json_loads(value: Any) -> Any:
-    if value is None or value == "":
-        return None
-    if isinstance(value, (dict, list)):
-        return value
-    return json.loads(value)
+    return safe_json_dumps(value)
 
 
 # Variant-file frontmatter keys that describe the variant itself and must not
@@ -850,7 +842,7 @@ class StateStore:
                 continue
             if kind is not None and ref.kind != kind:
                 continue
-            fm = _json_loads(row["frontmatter"]) or {}
+            fm = safe_json_loads(row["frontmatter"]) or {}
             out.append(
                 {
                     "id": row["library_id"],
@@ -1121,7 +1113,7 @@ class StateStore:
         row = await self.db.fetchone("SELECT config FROM campaigns WHERE id = ?", (campaign_id,))
         if row is None:
             return None
-        return _json_loads(row["config"])
+        return safe_json_loads(row["config"])
 
     async def set_campaign_config(self, campaign_id: str, config: dict | None) -> None:
         await self.db.execute(
@@ -1491,7 +1483,7 @@ class StateStore:
                     "source": "library-snapshot",
                     "library_id": library_id,
                     "version": int(snap["version"]),
-                    "frontmatter": _json_loads(snap["frontmatter"]) or {},
+                    "frontmatter": safe_json_loads(snap["frontmatter"]) or {},
                     "body": snap["body"] or "",
                 }
 
@@ -1502,7 +1494,7 @@ class StateStore:
             "source": "library-live" if not prefer_snapshot else "library-fallback",
             "library_id": library_id,
             "version": int(row["version"]),
-            "frontmatter": _json_loads(row["frontmatter"]) or {},
+            "frontmatter": safe_json_loads(row["frontmatter"]) or {},
             "body": row["body"] or "",
         }
 
@@ -1673,7 +1665,7 @@ class StateStore:
             raise NotFoundError(f"campaign {campaign_id!r} does not bind world {world_id!r}")
         if int(ref_row["track_latest"]):
             return UpgradeReport(world_id=world_id, diff={})
-        include = _json_loads(ref_row["include"]) or None
+        include = safe_json_loads(ref_row["include"]) or None
 
         max_row = await self.db.fetchone(
             "SELECT MAX(version) AS v FROM library_index WHERE world_id = ?",
@@ -1809,7 +1801,7 @@ class StateStore:
                 "priority": int(row["priority"]),
                 # Preserve None ("missing => include all kinds") vs [] ("include
                 # nothing"). The library service distinguishes these now.
-                "include": _json_loads(row["include"]) if row["include"] is not None else None,
+                "include": safe_json_loads(row["include"]) if row["include"] is not None else None,
                 "bound_at_version": int(row["bound_at_version"]),
                 "track_latest": bool(int(row["track_latest"])),
                 "bound_at": row["bound_at"],
@@ -2153,11 +2145,11 @@ def _library_row_to_dict(row: aiosqlite.Row) -> dict:
         "asset_id": row["asset_id"],
         "name": row["name"],
         "path": row["path"],
-        "frontmatter": _json_loads(row["frontmatter"]) or {},
+        "frontmatter": safe_json_loads(row["frontmatter"]) or {},
         "body": row["body"] or "",
         "body_compressed": row["body_compressed"],
-        "tags": _json_loads(row["tags"]) or [],
-        "keywords": _json_loads(row["keywords"]) or [],
+        "tags": safe_json_loads(row["tags"]) or [],
+        "keywords": safe_json_loads(row["keywords"]) or [],
         "file_mtime": row["file_mtime"],
         "content_hash": row["content_hash"],
         "indexed_at": row["indexed_at"],
@@ -2173,7 +2165,7 @@ def _content_row_to_dict(row: aiosqlite.Row) -> dict:
         "entity_subkind": row["entity_subkind"],
         "asset_id": row["asset_id"],
         "path": row["path"],
-        "frontmatter": _json_loads(row["frontmatter"]) or {},
+        "frontmatter": safe_json_loads(row["frontmatter"]) or {},
         "body": row["body"] or "",
         "content_hash": row["content_hash"],
         "indexed_at": row["indexed_at"],
@@ -2192,14 +2184,14 @@ def _scene_row_to_dict(row: aiosqlite.Row) -> dict:
         "in_game_start": row["in_game_start"],
         "in_game_end": row["in_game_end"],
         "pov_character_ref": row["pov_character_ref"],
-        "present_character_refs": _json_loads(row["present_character_refs"]) or [],
-        "present_pc_refs": _json_loads(row["present_pc_refs"]) or [],
+        "present_character_refs": safe_json_loads(row["present_character_refs"]) or [],
+        "present_pc_refs": safe_json_loads(row["present_pc_refs"]) or [],
         "post_count": int(row["post_count"]),
         "closed": bool(int(row["closed"])),
         "running_summary": row["running_summary"],
         "summary": row["summary"],
-        "key_beats": _json_loads(row["key_beats"]) or [],
-        "tags": _json_loads(row["tags"]) or [],
+        "key_beats": safe_json_loads(row["key_beats"]) or [],
+        "tags": safe_json_loads(row["tags"]) or [],
     }
 
 
@@ -2211,7 +2203,7 @@ def _character_state_row_to_dict(row: aiosqlite.Row) -> dict:
         "emotional_state": row["emotional_state"],
         "physical_state": row["physical_state"],
         "immediate_intent": row["immediate_intent"],
-        "knowledge_state": _json_loads(row["knowledge_state"]),
+        "knowledge_state": safe_json_loads(row["knowledge_state"]),
         "last_action": row["last_action"],
         "last_screen_time_turn": row["last_screen_time_turn"],
         "visible_to_pc": bool(int(row["visible_to_pc"])),

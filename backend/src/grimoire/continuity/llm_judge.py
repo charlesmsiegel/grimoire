@@ -9,9 +9,7 @@ is wired up.
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 from typing import Protocol
 
 from grimoire.continuity.protocols import ContradictionJudge
@@ -23,6 +21,7 @@ from grimoire.continuity.types import (
 )
 from grimoire.templates import render as render_template
 from grimoire.types.common import TurnId
+from grimoire.util import extract_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +114,7 @@ class LLMContradictionJudge(ContradictionJudge):
         if not isinstance(raw, str):
             return _uncertain(existing, "empty judge response")
 
-        parsed = _extract_json(raw)
+        parsed = extract_json_object(raw)
         if parsed is None:
             return _uncertain(existing, "unparseable judge response")
 
@@ -148,35 +147,6 @@ def _uncertain(existing: Fact, rationale: str) -> ContradictionCandidate:
         confidence=0.0,
         rationale=rationale,
     )
-
-
-_JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
-
-
-def _extract_json(text: str) -> dict | None:
-    """Best-effort JSON extraction.
-
-    Models sometimes wrap JSON in ```json fences or add a sentence before
-    or after. The first balanced ``{...}`` block is parsed; if that fails
-    we return ``None``.
-    """
-    candidate = text.strip()
-    if candidate.startswith("```"):
-        # strip a fenced code block
-        candidate = candidate.strip("`")
-        if candidate.startswith("json"):
-            candidate = candidate[4:]
-        candidate = candidate.strip()
-    match = _JSON_BLOCK_RE.search(candidate)
-    if not match:
-        return None
-    try:
-        result = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(result, dict):
-        return None
-    return result
 
 
 def _clip(text: str, limit: int = 500) -> str:

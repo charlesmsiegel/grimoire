@@ -80,6 +80,7 @@ from .pc_profile import (
 )
 from .promoter import CharacterPromoter
 from .protocols import SheetMigrator
+from .refs import parse_character_ref as _parse_character_ref
 from .sheet_manager import (
     CharacterSheetManager,
     character_from_entity,
@@ -1116,41 +1117,6 @@ class CharactersService:
 _character_from_entity = character_from_entity
 _character_from_frontmatter = character_from_frontmatter
 _frontmatter_from_payload = frontmatter_from_payload
-
-
-class _CharacterRefView:
-    def __init__(self, is_emergent: bool, world_id: str | None, asset_id: str) -> None:
-        self.is_emergent = is_emergent
-        self.world_id = world_id
-        self.asset_id = asset_id
-
-
-def _parse_character_ref(ref: str) -> _CharacterRefView:
-    if not ref:
-        raise CharactersError("empty character_ref")
-    # Normalize first so over-qualified / shorthand spellings (e.g. a world-PC
-    # ref double-prefixed as ``<world>/worlds/<world>/characters/<id>``) resolve
-    # instead of raising — which silently dropped the PC's card from context.
-    ref = canonicalize_character_ref(ref)
-    if ref.startswith("campaign:emergent/"):
-        _, _, rest = ref.partition("campaign:emergent/")
-        parts = rest.strip("/").split("/")
-        if parts[0] == "character" and len(parts) == 2:
-            return _CharacterRefView(True, None, parts[1])
-        if len(parts) == 1:
-            return _CharacterRefView(True, None, parts[0])
-    if ref.startswith("emergent/"):
-        parts = ref.split("/")
-        return _CharacterRefView(True, None, parts[-1])
-    if ref.startswith("library:"):
-        _, _, path = ref.partition("library:")
-        parts = path.strip("/").split("/")
-        if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"characters", "character"}:
-            return _CharacterRefView(False, parts[1], parts[3])
-    parts = ref.strip("/").split("/")
-    if len(parts) >= 4 and parts[0] == "worlds" and parts[2] in {"characters", "character"}:
-        return _CharacterRefView(False, parts[1], parts[3])
-    raise CharactersError(f"unrecognized character_ref {ref!r}")
 
 
 def _asset_id_for_ref(ref: CharacterRef) -> str:

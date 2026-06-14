@@ -16,7 +16,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import re
 from dataclasses import dataclass, field
 
 from grimoire.extractor.config import ExtractorConfig
@@ -29,14 +28,9 @@ from grimoire.types.scene import CastChange, CastChangeProposal, Scene
 from grimoire.types.state import DeltaKind, StateDelta, StateSnapshot
 from grimoire.types.transient import EntityKind as TransientEntityKind
 from grimoire.types.transient import TransientUpdateProposal
-from grimoire.util import slugify_id
+from grimoire.util import extract_json_object, slugify_id
 
 logger = logging.getLogger(__name__)
-
-
-# Match either a fenced ```json block, a fenced ``` block, or raw JSON.
-_FENCED_JSON = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
-_BARE_JSON = re.compile(r"(\{.*\})", re.DOTALL)
 
 
 class LLMGatewayLike:
@@ -63,35 +57,6 @@ class LLMStrategyOutput:
     transient_updates: list[TransientUpdateProposal] = field(default_factory=list)
     cast_changes: list[CastChangeProposal] = field(default_factory=list)
     confidence_avg: float = 0.0
-
-
-def _extract_json_payload(text: str) -> dict | None:
-    """Best-effort extraction of a JSON object from a model response."""
-    if not text:
-        return None
-    fenced = _FENCED_JSON.search(text)
-    if fenced is not None:
-        try:
-            return json.loads(fenced.group(1))
-        except json.JSONDecodeError:
-            pass
-    # Try the whole string first
-    stripped = text.strip()
-    try:
-        loaded = json.loads(stripped)
-        if isinstance(loaded, dict):
-            return loaded
-    except json.JSONDecodeError:
-        pass
-    bare = _BARE_JSON.search(text)
-    if bare is not None:
-        try:
-            loaded = json.loads(bare.group(1))
-            if isinstance(loaded, dict):
-                return loaded
-        except json.JSONDecodeError:
-            return None
-    return None
 
 
 def _make_system_prompt() -> str:
@@ -524,7 +489,7 @@ async def extract_with_llm(
             )
 
         last_text = completion.text
-        payload = _extract_json_payload(completion.text)
+        payload = extract_json_object(completion.text)
         if payload is not None:
             return parse_llm_payload(
                 payload,
