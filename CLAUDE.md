@@ -322,7 +322,7 @@ World contents in both scopes render through the shared
 `components/EntityBrowser` (`entity-browser-card` grid): library scope gets edit
 links + delete/convert, campaign scope gets the source-chain badge plus
 edit-override (✎) / promote-to-library (⤴) actions (#601).
-Cards backing a deletable artifact under `~/.grimoire/` start with a Delete (🗑) icon
+Cards backing a deletable artifact under `~/.grimoire/` start with a Delete (`<TrashIcon />`) icon
 built via `deleteAction()`; cards with no delete render an empty bar (invisible until
 populated). Actions are right-aligned by default; pass `align: "start"` to pin one to
 the left edge (e.g. the campaign card's Fork icon, with Settings + Delete on the right).
