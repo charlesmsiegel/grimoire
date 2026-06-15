@@ -14,8 +14,7 @@ import textwrap
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import yaml
-
+from grimoire.files import dump_yaml, load_yaml
 from grimoire.validation.manifests import validate_mechanics_manifest
 from grimoire.validation.validator import check_schema
 
@@ -195,9 +194,7 @@ class MechanicsAuthor:
             self._check_relative(theme_rel, module_dir)
 
         module_dir.mkdir(parents=True)
-        (module_dir / "manifest.yaml").write_text(
-            yaml.safe_dump(manifest_spec, sort_keys=False), encoding="utf-8"
-        )
+        (module_dir / "manifest.yaml").write_text(dump_yaml(manifest_spec), encoding="utf-8")
         (module_dir / "mechanics.py").write_text(
             generate_mechanics_py(
                 module_id=module_id,
@@ -249,12 +246,12 @@ class MechanicsAuthor:
         manifest_path = module_dir / "manifest.yaml"
         existing: dict[str, Any] = {}
         if manifest_path.is_file():
-            loaded = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            loaded = load_yaml(manifest_path)
             if isinstance(loaded, dict):
                 existing = loaded
         merged = {**existing, **manifest_spec}
         self._validate_manifest(merged)
-        manifest_path.write_text(yaml.safe_dump(merged, sort_keys=False), encoding="utf-8")
+        manifest_path.write_text(dump_yaml(merged), encoding="utf-8")
         return await self._service.rescan()
 
     async def write_sheet_schema(
@@ -284,7 +281,7 @@ class MechanicsAuthor:
         manifest_path = module_dir / "manifest.yaml"
         theme_rel = "theme.css"
         if manifest_path.is_file():
-            data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            data = load_yaml(manifest_path) or {}
             theme_rel = (data.get("ui") or {}).get("theme_css") or "theme.css"
         self._check_relative(theme_rel, module_dir)
         theme_path = module_dir / theme_rel

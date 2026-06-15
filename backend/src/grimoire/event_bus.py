@@ -17,10 +17,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from pydantic import BaseModel
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -116,10 +113,6 @@ class EventBus:
             # handlers still run (instead of one bad handler aborting the
             # rest of the dispatch via gather's default fail-fast).
             await asyncio.gather(*coros, return_exceptions=True)
-
-    async def emit_typed(self, event_type: str, payload: BaseModel) -> None:
-        """Emit an event with a validated Pydantic payload."""
-        await self.emit(Event(type=event_type, payload=payload.model_dump()))
 
     async def _invoke(self, sub: Subscription, event: Event) -> None:
         try:

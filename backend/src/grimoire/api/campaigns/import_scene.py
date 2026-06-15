@@ -87,8 +87,7 @@ async def import_scene(
     state_store: StateStoreDep,
     container: ContainerDep,
 ) -> StreamingResponse:
-    row = await state_store.db.fetchone("SELECT id FROM campaigns WHERE id = ?", (campaign_id,))
-    if not row:
+    if not await state_store.campaign_exists(campaign_id):
         raise HTTPException(status_code=404, detail=f"Campaign not found: {campaign_id}")
     md_path = await asyncio.to_thread(_resolve_source_file, body.path)
 

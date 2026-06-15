@@ -2521,8 +2521,7 @@ class OrchestratorService:
     # ------------------------------------------------------------------ #
 
     async def _require_campaign(self, campaign_id: CampaignId) -> None:
-        row = await self._store.db.fetchone("SELECT id FROM campaigns WHERE id = ?", (campaign_id,))
-        if row is None:
+        if not await self._store.campaign_exists(campaign_id):
             raise UnknownCampaignError(campaign_id)
 
     async def _require_pc(self, campaign_id: CampaignId, pc_ref: CharacterRef) -> None:

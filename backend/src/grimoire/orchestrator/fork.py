@@ -45,13 +45,8 @@ class ForkCoordinator:
         self._clock = clock
 
     async def _require_campaign(self, campaign_id: CampaignId) -> None:
-        row = await self._store.db.fetchone("SELECT id FROM campaigns WHERE id = ?", (campaign_id,))
-        if row is None:
+        if not await self._store.campaign_exists(campaign_id):
             raise UnknownCampaignError(campaign_id)
-
-    async def _campaign_exists(self, campaign_id: str) -> bool:
-        row = await self._store.db.fetchone("SELECT 1 FROM campaigns WHERE id = ?", (campaign_id,))
-        return row is not None
 
     def _is_streaming(self, campaign_id: str) -> bool:
         state = self._host._campaigns.get(campaign_id)
@@ -69,7 +64,7 @@ class ForkCoordinator:
     ) -> ForkCampaignResult:
         await self._require_campaign(campaign_id)
 
-        if await self._campaign_exists(new_campaign_id):
+        if await self._store.campaign_exists(new_campaign_id):
             raise CampaignIdExists(new_campaign_id)
 
         if self._is_streaming(campaign_id):

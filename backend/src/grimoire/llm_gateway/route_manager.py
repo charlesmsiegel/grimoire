@@ -172,15 +172,14 @@ class RouteManager:
             parsed = Route.parse(route)
         except ValueError:
             return
-        if provider_kind == "llm":
-            provider = self._plugins.get_llm_provider(parsed.provider_id)
-        elif provider_kind == "embedding":
-            provider = self._plugins.get_embedding_provider(parsed.provider_id)
-        elif provider_kind == "imagegen":
-            getter = getattr(self._plugins, "get_imagegen_backend", None)
-            provider = getter(parsed.provider_id) if getter is not None else None
-        else:
+        getter = {
+            "llm": self._plugins.get_llm_provider,
+            "embedding": self._plugins.get_embedding_provider,
+            "imagegen": getattr(self._plugins, "get_imagegen_backend", None),
+        }.get(provider_kind)
+        if getter is None:
             return
+        provider = getter(parsed.provider_id)
         if provider is None:
             return
         list_models = getattr(provider, "list_models", None)

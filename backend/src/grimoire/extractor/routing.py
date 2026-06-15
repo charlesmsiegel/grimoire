@@ -13,6 +13,7 @@ from enum import StrEnum
 
 from grimoire.extractor.config import ExtractorConfig
 from grimoire.types.state import StateDelta
+from grimoire.util import classify_confidence
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +42,12 @@ class Routing:
 
 
 def decide(delta: StateDelta, *, config: ExtractorConfig) -> Decision:
-    if delta.confidence >= config.auto_apply_threshold:
-        return Decision.AUTO_APPLY
-    if delta.confidence >= config.review_threshold:
-        return Decision.REVIEW
-    return Decision.DROP
+    tier = classify_confidence(
+        delta.confidence,
+        auto_apply=config.auto_apply_threshold,
+        review=config.review_threshold,
+    )
+    return Decision(tier.value)
 
 
 def route_deltas(deltas: list[StateDelta], *, config: ExtractorConfig) -> Routing:
