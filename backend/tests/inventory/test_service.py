@@ -381,3 +381,144 @@ async def test_manual_ops_never_deduped(store):
     assert second is not None and second["deduped"] == 0
     rows = await store.list_inventory_holdings("c1", holder_kind="character", holder_id="joe")
     assert [(r["item_ref"], r["quantity"]) for r in rows] == [("resource:gold", 10)]
+
+
+async def test_restore_holders_clears_dedup_so_retry_reapplies(store):
+    """#622 (P1): pre-roll resume retries the same turn_id after unwinding the
+    committed batch. restore_holders must drop the turn's dedup memory, or the
+    retry skips the restored op as a 'cross-round duplicate' and the turn
+    completes without its inventory change."""
+    await _enable_with_holder(store)
+    svc = InventoryService(store=store, event_bus=EventBus())
+    op = InventoryOperation(
+        action=InventoryAction.ACQUIRE, item="gold", holder="joe", quantity=10, confidence=1.0
+    )
+
+    # The continuation applies, a later turn stage fails, the orchestrator
+    # unwinds via restore_holders, then the player re-submits the same turn.
+    first = await svc.apply(campaign_id="c1", turn_id="t1", operations=[op])
+    assert first is not None
+    await svc.restore_holders(campaign_id="c1", turn_id="t1", rollback=first["rollback"])
+    assert await store.list_inventory_holdings("c1", holder_kind="character", holder_id="joe") == []
+
+    retry = await svc.apply(campaign_id="c1", turn_id="t1", operations=[op])
+
+    assert retry is not None and retry["deduped"] == 0
+    rows = await store.list_inventory_holdings("c1", holder_kind="character", holder_id="joe")
+    assert [(r["item_ref"], r["quantity"]) for r in rows] == [("resource:gold", 10)]
+
+
+async def test_turn_complete_event_prunes_dedup_memory(store):
+    """#622 (P2): a turn's dedup memory is dropped on turn_complete so the map
+    can't grow unbounded and an active turn is never evicted. A later turn that
+    happens to reuse the id re-applies cleanly."""
+    from grimoire.event_bus import Event
+    from grimoire.events import TURN_COMPLETE
+
+    await _enable_with_holder(store)
+    bus = EventBus()
+    svc = InventoryService(store=store, event_bus=bus)
+    op = InventoryOperation(
+        action=InventoryAction.ACQUIRE, item="gold", holder="joe", quantity=10, confidence=1.0
+    )
+
+    await svc.apply(campaign_id="c1", turn_id="t1", operations=[op])
+    assert ("c1", "t1") in svc._applied_signatures
+
+    await bus.emit(Event(type=TURN_COMPLETE, payload={"campaign_id": "c1", "turn_id": "t1"}))
+    assert ("c1", "t1") not in svc._applied_signatures
+
+    # The same op under the (now reused) id applies again rather than dedup.
+    again = await svc.apply(campaign_id="c1", turn_id="t1", operations=[op])
+    assert again is not None and again["deduped"] == 0
+    rows = await store.list_inventory_holdings("c1", holder_kind="character", holder_id="joe")
+    assert [(r["item_ref"], r["quantity"]) for r in rows] == [("resource:gold", 20)]
+
+
+async def test_holder_case_and_ref_form_canonicalized_in_signature(store):
+    """#622 (P2): the dedup signature case-folds holder ids and uses the
+    resolved trailing segment, so "winifred" and "worlds/w/characters/winifred"
+    are one holder — a restated acquire across rounds is not applied twice."""
+    await _enable_with_holder(store, "winifred")
+    svc = InventoryService(store=store, event_bus=EventBus())
+
+    await svc.apply(
+        campaign_id="c1",
+        turn_id="t1",
+        operations=[
+            InventoryOperation(
+                action=InventoryAction.ACQUIRE, item="gold", holder="winifred", confidence=1.0
+            )
+        ],
+    )
+    second = await svc.apply(
+        campaign_id="c1",
+        turn_id="t1",
+        operations=[
+            InventoryOperation(
+                action=InventoryAction.ACQUIRE,
+                item="gold",
+                holder="worlds/w/characters/winifred",
+                confidence=1.0,
+            )
+        ],
+    )
+
+    assert second is not None and second["deduped"] == 1
+    rows = await store.list_inventory_holdings("c1", holder_kind="character", holder_id="winifred")
+    assert [(r["item_ref"], r["quantity"]) for r in rows] == [("resource:gold", 1)]
+
+
+async def test_consume_unspecified_quantity_distinct_from_explicit(store):
+    """#622 (P2): for CONSUME, an unspecified quantity means 'the whole stack',
+    not 1 — so 'consume one' then 'consume the rest' across rounds are different
+    ops and both apply, while two unspecified consumes dedup."""
+    await _enable_with_holder(store)
+    svc = InventoryService(store=store, event_bus=EventBus())
+    # Seed a stack of 3 rations.
+    await svc.apply(
+        campaign_id="c1",
+        turn_id="t0",
+        operations=[
+            InventoryOperation(
+                action=InventoryAction.ACQUIRE,
+                item="rations",
+                holder="joe",
+                quantity=3,
+                confidence=1.0,
+            )
+        ],
+    )
+
+    # Round 1 consumes one ration; round 2 consumes the remaining stack.
+    consume_one = InventoryOperation(
+        action=InventoryAction.CONSUME, item="rations", holder="joe", quantity=1, confidence=1.0
+    )
+    consume_all = InventoryOperation(
+        action=InventoryAction.CONSUME, item="rations", holder="joe", confidence=1.0
+    )
+    r1 = await svc.apply(campaign_id="c1", turn_id="t1", operations=[consume_one])
+    r2 = await svc.apply(campaign_id="c1", turn_id="t1", operations=[consume_all])
+
+    assert r1 is not None and r1["deduped"] == 0
+    assert r2 is not None and r2["deduped"] == 0
+    assert await store.list_inventory_holdings("c1", holder_kind="character", holder_id="joe") == []
+
+    # Two unspecified consumes *are* a restatement: the second dedups.
+    await svc.apply(
+        campaign_id="c1",
+        turn_id="t2",
+        operations=[
+            InventoryOperation(
+                action=InventoryAction.ACQUIRE, item="rations", holder="joe", confidence=1.0
+            )
+        ],
+    )
+    dup = await svc.apply(
+        campaign_id="c1", turn_id="t3", operations=[consume_all, consume_all.model_copy()]
+    )
+    # Within one round the repeat both apply (within-round repeats are real),
+    # but a second *round* restating it dedups.
+    third_round = await svc.apply(campaign_id="c1", turn_id="t3", operations=[consume_all])
+    assert dup is not None
+    assert third_round is not None and third_round["deduped"] == 1
