@@ -20,6 +20,7 @@ from grimoire.api.util import map_lookup_errors, to_payload
 
 from .helpers import (
     _backfill_ledger_from_greetings,
+    _require_campaign_row,
     _require_scene_owned,
     _seed_greeting_first_post,
 )
@@ -358,10 +359,7 @@ async def seed_first_scene(
 ) -> Any:
     from grimoire.scenes.types import SceneInit
 
-    row = await state_store.db.fetchone("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"campaign {campaign_id!r} not found")
-    camp = dict(row)
+    camp = await _require_campaign_row(state_store, campaign_id)
 
     existing = await scenes.list_scenes(campaign_id)
     if existing:
