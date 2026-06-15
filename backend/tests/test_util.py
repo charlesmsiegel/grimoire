@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 
 from grimoire.util import (
+    ConfidenceTier,
     canonicalize_character_ref,
+    classify_confidence,
     deserialize_vector,
     extract_json_object,
     serialize_vector,
@@ -95,3 +97,18 @@ def test_vector_roundtrip_is_little_endian() -> None:
     # Little-endian f32, four bytes per element, independent of host byte order.
     assert len(blob) == len(vec) * 4
     assert deserialize_vector(blob) == pytest.approx(vec)
+
+
+@pytest.mark.parametrize(
+    ("confidence", "expected"),
+    [
+        (0.95, ConfidenceTier.AUTO_APPLY),
+        (0.7, ConfidenceTier.AUTO_APPLY),  # boundary: >= auto_apply
+        (0.69, ConfidenceTier.REVIEW),
+        (0.5, ConfidenceTier.REVIEW),  # boundary: >= review
+        (0.49, ConfidenceTier.DROP),
+        (0.0, ConfidenceTier.DROP),
+    ],
+)
+def test_classify_confidence(confidence: float, expected: ConfidenceTier) -> None:
+    assert classify_confidence(confidence, auto_apply=0.7, review=0.5) is expected

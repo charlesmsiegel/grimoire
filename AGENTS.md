@@ -231,7 +231,10 @@ review smell. Grep before adding a `_parse_*` / `_slug*` / `_json*` / `_now*`.
   `safe_json_loads` / `safe_json_dumps` (nullable/pre-parsed JSON),
   `extract_json_object()` (JSON in LLM output), `new_id("prefix")` (ids — not
   `uuid4().hex[:n]`), `slugify_id` / `canonicalize_character_ref` (refs),
-  `serialize_vector` / `deserialize_vector` (little-endian f32 embedding BLOBs).
+  `serialize_vector` / `deserialize_vector` (little-endian f32 embedding BLOBs),
+  `classify_confidence(conf, auto_apply=, review=)` → `ConfidenceTier`
+  (the shared auto-apply / review / drop ladder — don't re-inline the
+  two-threshold `if conf >= …` chain).
 - **`grimoire.files`**: `slug.slugify`, `yaml_io` (`load_yaml` / `dump_yaml` /
   `write_yaml`), `frontmatter` (`read_markdown` / `write_markdown`) — never call
   `yaml.safe_load` / `safe_dump` or re-split `---` by hand.
