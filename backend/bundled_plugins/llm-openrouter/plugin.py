@@ -36,26 +36,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 
-# Default `provider` routing applied to every request when the user hasn't
-# configured their own. OpenRouter can serve one model slug from several
-# upstream providers at wildly different prices, so the cost-safe default is to
-# prefer the cheapest (`sort: price`) and *not* silently fall back to a pricier
-# provider when the cheap one is unavailable — fail clearly instead (#515).
-DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
-    "sort": "price",
-    "allow_fallbacks": False,
-}
-
-# Per-model price ceilings for models with known cost-variance traps. `max_price`
-# is a hard cap in USD per million tokens — OpenRouter refuses (rather than
-# silently upgrades to) any provider above it. Seeded from the issue's observed
-# DeepSeek V4 Pro rates; fully overridable via the `provider_overrides` config.
-BUILTIN_PROVIDER_OVERRIDES: dict[str, dict[str, Any]] = {
-    "deepseek/deepseek-v4-pro": {
-        "max_price": {"prompt": 0.435, "completion": 0.87},
-    },
-}
-
 
 def _verify() -> Any:
     """Return an explicit CA bundle path so a broken ``SSL_CERT_FILE`` env
@@ -131,25 +111,20 @@ class OpenRouterLLMProvider:
         # `base_url` points at a strict OpenAI-compatible gateway that rejects
         # the OpenRouter-only request field.
         self._usage_accounting: bool = bool(cfg.get("usage_accounting", True))
-        # Provider routing: a default object merged into every request, plus
-        # per-model overrides merged on top for that model (#515). An explicit
-        # `provider: {}` opts out of routing entirely — including the builtin
-        # price guards; supplying `provider_overrides` replaces the builtin
-        # price-guard set (and still applies even under the `{}` opt-out).
+        # Provider routing: send only what the user explicitly configures. With
+        # nothing set (or an explicit `provider: {}`), no `provider` field is
+        # sent and OpenRouter uses its own/account routing and pricing. Per-model
+        # overrides merge on top of the default for that model (#515).
         user_provider = cfg.get("provider")
         self._provider_default: dict[str, Any] = (
-            dict(user_provider)
-            if isinstance(user_provider, dict)
-            else dict(DEFAULT_PROVIDER_CONFIG)
+            dict(user_provider) if isinstance(user_provider, dict) else {}
         )
-        routing_opted_out = isinstance(user_provider, dict) and not user_provider
         overrides = cfg.get("provider_overrides")
-        if isinstance(overrides, dict):
-            self._provider_overrides: dict[str, dict[str, Any]] = {
-                str(k): dict(v) for k, v in overrides.items() if isinstance(v, dict)
-            }
-        else:
-            self._provider_overrides = {} if routing_opted_out else dict(BUILTIN_PROVIDER_OVERRIDES)
+        self._provider_overrides: dict[str, dict[str, Any]] = (
+            {str(k): dict(v) for k, v in overrides.items() if isinstance(v, dict)}
+            if isinstance(overrides, dict)
+            else {}
+        )
         self._client: Any = None
         self._client_lock = asyncio.Lock()
         self._models_cache: list[ModelInfo] | None = None

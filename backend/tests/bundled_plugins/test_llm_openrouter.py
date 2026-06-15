@@ -247,14 +247,15 @@ def _provider_of(provider, model: str) -> dict:
     return payload.get("provider", {})
 
 
-def test_default_provider_routing_is_cost_safe(openrouter_module) -> None:
-    """With no provider config, every request gets the cost-safe default:
-    prefer the cheapest provider and don't silently fall back to a pricier one.
-    """
+def test_default_provider_routing_defers_to_openrouter(openrouter_module) -> None:
+    """With no provider config, Grimoire injects nothing — the payload carries
+    no `provider` key, so OpenRouter uses its own/account routing and pricing."""
     provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
-    routing = _provider_of(provider, "openai/gpt-4o")
-    assert routing["sort"] == "price"
-    assert routing["allow_fallbacks"] is False
+    request = CompletionRequest(
+        model="openai/gpt-4o", messages=[Message(role=MessageRole.USER, content="hi")]
+    )
+    payload = provider._build_payload(request, stream=False)
+    assert "provider" not in payload
 
 
 def test_usage_accounting_requested_for_cost_observability(openrouter_module) -> None:
@@ -267,13 +268,11 @@ def test_usage_accounting_requested_for_cost_observability(openrouter_module) ->
     assert payload["usage"] == {"include": True}
 
 
-def test_builtin_max_price_guard_for_deepseek_v4_pro(openrouter_module) -> None:
-    """The known cost-variance model ships with a per-million price ceiling so a
-    pricier provider can't silently serve it (issue #515)."""
+def test_no_builtin_price_guard_when_unconfigured(openrouter_module) -> None:
+    """The former built-in deepseek price guard is gone: unset config defers
+    entirely, so even known cost-variance models carry no `provider` field."""
     provider = openrouter_module.OpenRouterLLMProvider(config={"api_key": "k"})
-    routing = _provider_of(provider, "deepseek/deepseek-v4-pro")
-    assert routing["allow_fallbacks"] is False
-    assert routing["max_price"] == {"prompt": 0.435, "completion": 0.87}
+    assert _provider_of(provider, "deepseek/deepseek-v4-pro") == {}
 
 
 def test_user_provider_config_overrides_default(openrouter_module) -> None:
@@ -293,13 +292,12 @@ def test_user_provider_overrides_apply_per_model(openrouter_module) -> None:
             },
         }
     )
-    # The targeted model merges its ceiling over the default base.
-    opus = _provider_of(provider, "anthropic/claude-opus-4-7")
-    assert opus["sort"] == "price"
-    assert opus["max_price"] == {"prompt": 15.0, "completion": 75.0}
-    # User-supplied overrides replace the builtin set, so deepseek no longer
-    # carries its builtin ceiling unless re-declared.
-    assert "max_price" not in _provider_of(provider, "deepseek/deepseek-v4-pro")
+    # The targeted model sends exactly its override (no injected default base).
+    assert _provider_of(provider, "anthropic/claude-opus-4-7") == {
+        "max_price": {"prompt": 15.0, "completion": 75.0}
+    }
+    # Other models still defer entirely.
+    assert _provider_of(provider, "deepseek/deepseek-v4-pro") == {}
 
 
 def test_empty_provider_config_omits_routing(openrouter_module) -> None:
