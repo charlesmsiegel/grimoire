@@ -66,22 +66,65 @@ config_schema:
       type: object
       title: Provider routing (default)
       description: |
-        Default OpenRouter `provider` routing object attached to every
-        request (keys such as `sort`, `allow_fallbacks`, `order`, `only`,
-        `max_price`). Controls which upstream provider serves a model and can
-        cap per-token price. Omit to use Grimoire's cost-safe default
-        (`sort: price`, `allow_fallbacks: false`); set to `{}` to opt out of
-        routing entirely, including the builtin per-model price guards.
+        OpenRouter `provider` routing applied to every request. Leave every
+        field blank to defer entirely to OpenRouter's own/account routing and
+        pricing (nothing is sent). Set fields to constrain which upstream
+        provider serves a model and to cap per-token price.
       additionalProperties: true
+      properties:
+        sort:
+          type: string
+          title: Sort
+          description: Order candidate providers by price, throughput, or latency.
+          enum: [price, throughput, latency]
+        allow_fallbacks:
+          type: boolean
+          title: Allow fallbacks
+          description: Fall back to a pricier/slower provider when the preferred one is unavailable.
+        order:
+          type: array
+          title: Provider order
+          description: Preferred provider slugs, tried in order.
+          items:
+            type: string
+        only:
+          type: array
+          title: Only these providers
+          items:
+            type: string
+        ignore:
+          type: array
+          title: Ignore these providers
+          items:
+            type: string
+        require_parameters:
+          type: boolean
+          title: Require parameters
+          description: Only route to providers that support all request parameters.
+        data_collection:
+          type: string
+          title: Data collection
+          description: Allow or deny providers that may train on prompts.
+          enum: [allow, deny]
+        max_price:
+          type: object
+          title: Max price (USD per million tokens)
+          additionalProperties: false
+          properties:
+            prompt:
+              type: number
+              title: Prompt
+            completion:
+              type: number
+              title: Completion
     provider_overrides:
       type: object
       title: Per-model provider routing
       description: |
         Map of model slug -> provider routing object, merged over the default
-        for that model (nested objects such as `max_price` merge
-        field-by-field). Use `max_price` (USD per million prompt/completion
-        tokens) to cap a specific model's price. Supplying this replaces the
-        builtin price guards (e.g. the DeepSeek V4 Pro ceiling).
+        for that model (nested objects such as `max_price` merge field-by-field).
+        Use it to constrain or price-cap specific models; models you don't list
+        defer to the default routing above.
       additionalProperties:
         type: object
         additionalProperties: true

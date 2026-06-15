@@ -554,3 +554,39 @@ async def test_health_check_healthy_when_models_reachable(openrouter_module) -> 
     _install_mock_transport(provider, lambda r: httpx.Response(200, json={"data": []}))
     status = await provider.health_check()
     assert status.level == HealthLevel.HEALTHY
+
+
+def test_manifest_provider_schema_is_typed_and_valid(openrouter_module) -> None:
+    from pathlib import Path
+
+    import yaml
+
+    from grimoire.validation.validator import check_schema, validate_config
+
+    manifest_path = Path(openrouter_module.__file__).with_name("manifest.yaml")
+    schema = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))["config_schema"]
+    assert check_schema(schema).ok
+
+    provider_props = schema["properties"]["provider"]["properties"]
+    assert provider_props["sort"]["enum"] == ["price", "throughput", "latency"]
+    assert provider_props["allow_fallbacks"]["type"] == "boolean"
+    assert provider_props["order"]["type"] == "array"
+    assert provider_props["max_price"]["properties"]["prompt"]["type"] == "number"
+    # Advanced/unknown routing keys still allowed.
+    assert schema["properties"]["provider"]["additionalProperties"] is True
+    # No defaults: an untouched form must not seed these.
+    assert "default" not in schema["properties"]["provider"]
+    assert "default" not in schema["properties"]["provider_overrides"]
+
+    cfg = {
+        "api_key": "k",
+        "provider": {
+            "sort": "price",
+            "allow_fallbacks": False,
+            "order": ["anthropic"],
+            "max_price": {"prompt": 0.4, "completion": 0.8},
+        },
+        "extra_headers": {"X-Title": "Grimoire"},
+        "provider_overrides": {"deepseek/deepseek-v4-pro": {"max_price": {"prompt": 1.0}}},
+    }
+    assert validate_config(cfg, schema).ok
