@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from grimoire.event_bus import Event, EventBus
+from grimoire.events import TURN_CANCELLED, TURN_COMPLETE
 from grimoire.types.state import DeltaKind, StateDelta
 
 from . import events as inv_events
@@ -55,7 +56,7 @@ def deltas_to_operations(deltas: list[StateDelta]) -> list[InventoryOperation]:
     return ops
 
 
-OpSignature = tuple[str, str, str, str | None, str | None, str | None, int]
+OpSignature = tuple[str, str, str, str | None, str | None, str | None, int | None]
 
 
 def _op_signature(
@@ -71,31 +72,42 @@ def _op_signature(
     """Identity of an applied op for turn-scoped dedup (#622).
 
     Mirrors the ``(action, item, holder, to, quantity)`` tuple the issue calls
-    out, but over *resolved* item/holder ids so two restatements that name the
-    item differently ("the ring" / "ring") collapse. Quantity is normalised the
-    same way ``apply_op`` does (magnitude for every action but ADJUST) so a
-    signed/unsigned restatement of one removal still matches.
+    out, but over *resolved* item ids and case-folded holder ids so two
+    restatements that name the same thing differently ("the ring" / "ring",
+    "winifred" / ".../characters/winifred") collapse.
+
+    Quantity is normalised the way ``apply_op`` interprets it: an unspecified
+    count means 1 for every action *except* CONSUME, where it means "the whole
+    stack" — so CONSUME keeps ``None`` distinct from an explicit count (consuming
+    one unit then consuming the remainder are different ops, not restatements).
+    Magnitude is used for every action but ADJUST so a signed/unsigned
+    restatement of one removal still matches.
     """
-    qty = quantity if quantity is not None else 1
-    if action is not InventoryAction.ADJUST and qty < 0:
-        qty = -qty
+    if action is InventoryAction.CONSUME:
+        qty: int | None = quantity if quantity is None else abs(quantity)
+    else:
+        qty = quantity if quantity is not None else 1
+        if action is not InventoryAction.ADJUST and qty < 0:
+            qty = -qty
     return (
         action.value,
         item_ref,
         holder_kind.value,
-        holder_id,
+        holder_id.casefold(),
         to_kind.value if to_kind is not None else None,
-        to_id,
+        to_id.casefold() if to_id is not None else None,
         qty,
     )
 
 
 class InventoryService:
-    # How many recent turns' applied-op signatures to retain for cross-round
-    # dedup. Rounds of one turn run back-to-back, so only the current turn is
-    # ever consulted; the bound just stops the map growing without limit across
-    # a long session (oldest turn evicted first).
-    _MAX_TURN_SIGNATURES = 64
+    # Safety-net bound on the cross-round dedup map (#622). Entries are normally
+    # dropped the moment their turn ends (turn_complete / turn_cancelled, or an
+    # unwind via restore_holders), so the live size tracks the number of
+    # concurrently-active multi-call turns — this cap only guards against a turn
+    # whose end event never arrives (crash), and is large enough that it never
+    # evicts a genuinely active turn.
+    _MAX_TURN_SIGNATURES = 512
 
     def __init__(
         self,
@@ -109,8 +121,27 @@ class InventoryService:
         self._clock = clock
         self._persist = InventoryPersistence(store)
         # Per-turn set of op signatures already applied in an *earlier* round of
-        # that turn (#622). Keyed by (campaign_id, turn_id); bounded LRU.
+        # that turn (#622). Keyed by (campaign_id, turn_id); pruned on turn end.
         self._applied_signatures: OrderedDict[tuple[str, str], set[OpSignature]] = OrderedDict()
+        # A turn's dedup memory is meaningful only while the turn is in flight;
+        # drop it when the turn ends so the map can't grow unbounded and an
+        # active turn is never evicted. A failed-then-retried turn (pre-roll
+        # resume, #584) is handled separately by restore_holders, which clears
+        # the unwound turn so the retry re-applies its restored ops.
+        self._subscriptions = [
+            self._bus.subscribe(TURN_COMPLETE, self._on_turn_ended),
+            self._bus.subscribe(TURN_CANCELLED, self._on_turn_ended),
+        ]
+
+    def _on_turn_ended(self, event: Event) -> None:
+        campaign_id = event.payload.get("campaign_id")
+        turn_id = event.payload.get("turn_id")
+        if campaign_id is not None and turn_id is not None:
+            self._forget_turn(str(campaign_id), str(turn_id))
+
+    def _forget_turn(self, campaign_id: str, turn_id: str) -> None:
+        """Drop a turn's recorded dedup signatures (#622)."""
+        self._applied_signatures.pop((campaign_id, turn_id), None)
 
     async def _config(self, campaign_id: str) -> InventoryConfig:
         return InventoryConfig.from_campaign_config(
@@ -284,8 +315,11 @@ class InventoryService:
     def _remember_signatures(
         self, campaign_id: str, turn_id: str | None, signatures: set[OpSignature]
     ) -> None:
-        """Fold a committed round's op signatures into the turn's applied set,
-        evicting the oldest turn when the bounded map overflows (#622)."""
+        """Fold a committed round's op signatures into the turn's applied set.
+
+        Turns are normally pruned on completion; the safety-net cap only trips
+        if an end event never arrived, in which case the oldest turn is dropped
+        (#622)."""
         if turn_id is None or not signatures:
             return
         key = (campaign_id, turn_id)
@@ -312,6 +346,13 @@ class InventoryService:
         unwind with the rest of the turn. Restores newest-first and emits
         ``INVENTORY_CHANGED`` so consumers (HUD) refresh.
         """
+        # A restore means this turn's committed inventory is being unwound, so
+        # its dedup memory must go too: pre-roll resume (#584) retries the same
+        # turn_id, and a stale signature would make the retry skip the restored
+        # op as a "cross-round duplicate", completing the turn without its
+        # inventory change (#622).
+        if turn_id is not None:
+            self._forget_turn(campaign_id, turn_id)
         if not rollback:
             return
         await self._rewrite_holders(campaign_id, turn_id, list(reversed(rollback)))

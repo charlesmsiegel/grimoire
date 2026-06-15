@@ -282,15 +282,29 @@ and calls `apply()` again under the **same `turn_id`**. Two NPC responses that
 restate one event ("Alice takes the ring" / "…watches Alice pocket the ring")
 would otherwise apply the additive op twice — doubling a fungible acquire or
 re-running a transfer (reconciling the now-missing source and minting a second
-copy). The service keeps a per-turn set of applied op signatures
-(`(action, resolved item_ref, holder, to, normalised quantity)`) and **skips an
+copy). The service keeps a per-turn set of applied op signatures and **skips an
 op whose signature already applied in an earlier round of the same turn**. The
 snapshot is taken before each round, so the policy is *within-round repeats are
 real, cross-round repeats are restatements*: two genuine 10-gold payments
 narrated in one response (one `apply()` call) both apply, while the same payment
 restated by the next speaker is dropped. `turn_id=None` (manual API ops) opts
-out entirely. The signature map is a bounded LRU over recent turns — only the
-current turn is ever consulted.
+out entirely.
+
+The signature is `(action, resolved item_ref, case-folded holder, to,
+normalised quantity)`. Holder ids are case-folded and reduced to their resolved
+trailing segment so `winifred` / `.../characters/winifred` collapse. Quantity
+follows `apply_op`'s reading — an unspecified count is 1 for every action
+*except* `CONSUME` (where it means "the whole stack"), so a `consume 1` followed
+by a `consume the rest` are distinct, not a restatement.
+
+A turn's signatures are dropped the moment the turn ends (`turn_complete` /
+`turn_cancelled`), so the map's live size tracks only concurrently-active
+multi-call turns and an active turn is never evicted; a generous LRU cap is a
+leak safety-net for a turn whose end event never arrives. **Pre-roll resume**
+(#584) retries the same `turn_id` after unwinding the committed batch, so
+`restore_holders` clears the unwound turn's signatures — otherwise the retry
+would skip the restored op as a cross-round duplicate and complete the turn
+without its inventory change.
 
 ## REST / WebSocket API
 
