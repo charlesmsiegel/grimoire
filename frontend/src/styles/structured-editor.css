@@ -67,3 +67,34 @@
   color: var(--danger);
   background: transparent;
 }
+
+/* ----- SchemaField structured object/array editors ----- */
+
+.schema-object {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+  margin: 0.25rem 0;
+}
+.schema-object > legend {
+  font-weight: 600;
+  padding: 0 0.25rem;
+}
+.schema-kv-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.schema-kv-key {
+  font-family: var(--font-mono);
+  min-width: 12ch;
+}
+.schema-kv-add {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+.json-field-error {
+  color: var(--danger);
+  display: block;
+}
