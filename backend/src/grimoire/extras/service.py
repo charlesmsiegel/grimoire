@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import contextlib
 import warnings
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from grimoire.library.service import LibraryService
 from grimoire.state_store.indexers import make_library_id
@@ -59,6 +59,22 @@ class ExtrasSearchHit:
     entity_id: str
     key: str
     value_text: str
+
+
+@dataclass(frozen=True)
+class _ScopeOps:
+    """Per-scope storage strategy (#523).
+
+    Collapses the three-way ``scope`` branch that the read/write methods used
+    to repeat. ``read`` returns a scope's raw ``extras`` dict; ``apply_patch``
+    merges a ``{key: value}`` patch (``None`` value = override tombstone where
+    the scope supports it); ``rewrite`` replaces the scope's ``extras`` section
+    wholesale. Adding a storage scope is one table entry plus its three ops.
+    """
+
+    read: Callable[..., Awaitable[dict[str, Any]]]
+    apply_patch: Callable[..., Awaitable[None]]
+    rewrite: Callable[..., Awaitable[None]]
 
 
 def _kind_str(kind: EntityKind | str) -> str:
@@ -122,26 +138,17 @@ class ExtrasService:
     ) -> dict[str, ExtraValue]:
         """Single-scope read; no cascade. Used by the entity-detail UI to
         render source badges."""
-        kind = _kind_str(entity_kind)
-        if scope == ExtraScope.LIBRARY:
-            if world_id is None:
-                raise ExtrasNotFoundError("world_id required for library-scope reads")
-            entity = await self.library.get_entity(world_id, kind, entity_id)
-            return _decode_extras((entity.frontmatter or {}).get("extras") or {})
-        if scope == ExtraScope.CAMPAIGN_LOCAL:
-            if campaign_id is None:
-                raise ExtrasNotFoundError("campaign_id required for campaign-local reads")
-            emergent = await self.store.get_emergent(campaign_id, kind, entity_id)
-            if emergent is None:
-                return {}
-            return _decode_extras((emergent.get("frontmatter") or {}).get("extras") or {})
-        if scope == ExtraScope.OVERRIDE:
-            if campaign_id is None or world_id is None:
-                raise ExtrasNotFoundError("campaign_id and world_id required for override reads")
-            library_id = make_library_id(world_id, kind, entity_id)
-            override = await self.store.get_override(campaign_id, library_id)
-            return _decode_extras((override or {}).get("extras") or {})
-        raise ValueError(f"unknown scope {scope}")
+        ops = self._scope_ops(scope)
+        self._require_scope_args(scope, "reads", campaign_id=campaign_id, world_id=world_id)
+        raw = await ops.read(
+            self,
+            kind=_kind_str(entity_kind),
+            entity_id=entity_id,
+            campaign_id=campaign_id,
+            world_id=world_id,
+            strict=True,
+        )
+        return _decode_extras(raw)
 
     # ------------------------------------------------------------------ #
     # Writes
@@ -184,39 +191,17 @@ class ExtrasService:
         projected[key] = extra.model_dump(mode="json")
         warnings_out = _enforce_caps(projected)
 
-        if scope == ExtraScope.LIBRARY:
-            if world_id is None:
-                raise ExtrasNotFoundError("world_id required for library-scope writes")
-            await self.library.update_entity(
-                world_id=world_id,
-                kind=kind,
-                entity_id=entity_id,
-                frontmatter_patch={"extras": {key: extra.model_dump(mode="json")}},
-                source=actor,
-            )
-        elif scope == ExtraScope.CAMPAIGN_LOCAL:
-            if campaign_id is None:
-                raise ExtrasNotFoundError("campaign_id required for campaign-local writes")
-            await self._write_emergent_extras(
-                campaign_id=campaign_id,
-                kind=kind,
-                entity_id=entity_id,
-                patch={key: extra.model_dump(mode="json")},
-                actor=actor,
-            )
-        elif scope == ExtraScope.OVERRIDE:
-            if campaign_id is None or world_id is None:
-                raise ExtrasNotFoundError("campaign_id and world_id required for override writes")
-            await self._write_override_extras(
-                campaign_id=campaign_id,
-                world_id=world_id,
-                kind=kind,
-                entity_id=entity_id,
-                patch={key: extra.model_dump(mode="json")},
-                actor=actor,
-            )
-        else:  # pragma: no cover -- StrEnum membership exhausted above.
-            raise ValueError(f"unknown scope {scope}")
+        ops = self._scope_ops(scope)
+        self._require_scope_args(scope, "writes", campaign_id=campaign_id, world_id=world_id)
+        await ops.apply_patch(
+            self,
+            kind=kind,
+            entity_id=entity_id,
+            campaign_id=campaign_id,
+            world_id=world_id,
+            patch={key: extra.model_dump(mode="json")},
+            actor=actor,
+        )
 
         await self.mirror.upsert(
             campaign_id=(campaign_id or ""),
@@ -243,65 +228,43 @@ class ExtrasService:
     ) -> None:
         validate_extras_key(key)
         kind = _kind_str(entity_kind)
+        ops = self._scope_ops(scope)
+        self._require_scope_args(scope, "delete", campaign_id=campaign_id, world_id=world_id)
 
         if scope == ExtraScope.OVERRIDE:
-            if campaign_id is None or world_id is None:
-                raise ExtrasNotFoundError("campaign_id and world_id required for override delete")
-            # Override-null clears the cascade-resolved key.
-            await self._write_override_extras(
-                campaign_id=campaign_id,
-                world_id=world_id,
+            # Override-null clears the cascade-resolved key (tombstone): the key
+            # stays in the override as ``None`` rather than being removed.
+            await ops.apply_patch(
+                self,
                 kind=kind,
                 entity_id=entity_id,
+                campaign_id=campaign_id,
+                world_id=world_id,
                 patch={key: None},
                 actor=actor,
             )
-        elif scope == ExtraScope.LIBRARY:
-            if world_id is None:
-                raise ExtrasNotFoundError("world_id required for library delete")
+        else:
+            # Library / campaign-local: deep-merge can't remove a key, so read
+            # the scope's extras, drop the key, and rewrite the section whole.
             existing = await self._raw_extras_for_scope(
                 entity_kind=entity_kind,
                 entity_id=entity_id,
                 scope=scope,
-                campaign_id=None,
+                campaign_id=campaign_id,
                 world_id=world_id,
             )
             if key not in existing:
-                raise ExtrasNotFoundError(f"extras key not found in library: {key!r}")
+                raise ExtrasNotFoundError(f"extras key not found in {scope.value}: {key!r}")
             existing.pop(key)
-            # _deep_merge_frontmatter would re-merge the surviving keys but
-            # could not remove ``key`` from the file. Re-write the
-            # frontmatter wholesale through the store.
-            await self._rewrite_library_extras_section(
-                world_id=world_id,
+            await ops.rewrite(
+                self,
                 kind=kind,
                 entity_id=entity_id,
+                campaign_id=campaign_id,
+                world_id=world_id,
                 extras=existing,
                 actor=actor,
             )
-        elif scope == ExtraScope.CAMPAIGN_LOCAL:
-            if campaign_id is None:
-                raise ExtrasNotFoundError("campaign_id required for campaign-local delete")
-            existing = await self._raw_extras_for_scope(
-                entity_kind=entity_kind,
-                entity_id=entity_id,
-                scope=scope,
-                campaign_id=campaign_id,
-                world_id=None,
-            )
-            if key not in existing:
-                raise ExtrasNotFoundError(f"extras key not found in campaign: {key!r}")
-            existing.pop(key)
-            await self._write_emergent_extras(
-                campaign_id=campaign_id,
-                kind=kind,
-                entity_id=entity_id,
-                patch=_replace_extras(existing),
-                actor=actor,
-                replace=True,
-            )
-        else:  # pragma: no cover
-            raise ValueError(f"unknown scope {scope}")
 
         await self.mirror.delete(
             campaign_id=(campaign_id or ""),
@@ -378,6 +341,7 @@ class ExtrasService:
         path for OVERRIDE keeps the tombstone semantics intact for callers
         that want to mask the underlying library value."""
         kind = _kind_str(entity_kind)
+        ops = self._scope_ops(scope)
         existing = await self._raw_extras_for_scope(
             entity_kind=entity_kind,
             entity_id=entity_id,
@@ -388,38 +352,18 @@ class ExtrasService:
         if key not in existing:
             raise ExtrasNotFoundError(f"key not found in {scope.value} scope: {key!r}")
         remaining = {k: v for k, v in existing.items() if k != key}
-        if scope == ExtraScope.LIBRARY:
-            if world_id is None:
-                raise ExtrasNotFoundError("world_id required for library rename")
-            await self._rewrite_library_extras_section(
-                world_id=world_id,
-                kind=kind,
-                entity_id=entity_id,
-                extras=remaining,
-                actor=actor,
-            )
-        elif scope == ExtraScope.CAMPAIGN_LOCAL:
-            if campaign_id is None:
-                raise ExtrasNotFoundError("campaign_id required for campaign-local rename")
-            await self._write_emergent_extras(
-                campaign_id=campaign_id,
-                kind=kind,
-                entity_id=entity_id,
-                patch=remaining,
-                actor=actor,
-                replace=True,
-            )
-        elif scope == ExtraScope.OVERRIDE:
-            if campaign_id is None or world_id is None:
-                raise ExtrasNotFoundError("campaign_id and world_id required for override rename")
-            await self._rewrite_override_extras_section(
-                campaign_id=campaign_id,
-                world_id=world_id,
-                kind=kind,
-                entity_id=entity_id,
-                extras=remaining,
-                actor=actor,
-            )
+        self._require_scope_args(scope, "rename", campaign_id=campaign_id, world_id=world_id)
+        # Wholesale section rewrite for every scope — unlike delete(), rename's
+        # OVERRIDE path strips the key rather than leaving a tombstone behind.
+        await ops.rewrite(
+            self,
+            kind=kind,
+            entity_id=entity_id,
+            campaign_id=campaign_id,
+            world_id=world_id,
+            extras=remaining,
+            actor=actor,
+        )
         await self.mirror.delete(
             campaign_id=(campaign_id or ""),
             entity_kind=kind,
@@ -537,6 +481,198 @@ class ExtrasService:
         return result
 
     # ------------------------------------------------------------------ #
+    # Per-scope storage strategy (#523)
+    # ------------------------------------------------------------------ #
+
+    # Which of (campaign_id, world_id) each scope needs present.
+    _SCOPE_REQUIRED_ARGS: ClassVar[dict[ExtraScope, tuple[str, ...]]] = {
+        ExtraScope.LIBRARY: ("world_id",),
+        ExtraScope.CAMPAIGN_LOCAL: ("campaign_id",),
+        ExtraScope.OVERRIDE: ("campaign_id", "world_id"),
+    }
+
+    def _scope_ops(self, scope: ExtraScope) -> _ScopeOps:
+        ops = self._SCOPE_OPS.get(scope)
+        if ops is None:  # pragma: no cover -- ExtraScope membership is closed.
+            raise ValueError(f"unknown scope {scope}")
+        return ops
+
+    def _missing_scope_args(
+        self, scope: ExtraScope, campaign_id: str | None, world_id: str | None
+    ) -> bool:
+        vals = {"campaign_id": campaign_id, "world_id": world_id}
+        return any(vals[name] is None for name in self._SCOPE_REQUIRED_ARGS[scope])
+
+    def _require_scope_args(
+        self,
+        scope: ExtraScope,
+        op: str,
+        *,
+        campaign_id: str | None,
+        world_id: str | None,
+    ) -> None:
+        """Raise ``ExtrasNotFoundError`` if a required scope arg is missing."""
+        vals = {"campaign_id": campaign_id, "world_id": world_id}
+        missing = [name for name in self._SCOPE_REQUIRED_ARGS[scope] if vals[name] is None]
+        if missing:
+            raise ExtrasNotFoundError(f"{' and '.join(missing)} required for {scope.value} {op}")
+
+    async def _read_library(
+        self,
+        *,
+        kind: str,
+        entity_id: str,
+        campaign_id: str | None,
+        world_id: str | None,
+        strict: bool,
+    ) -> dict[str, Any]:
+        try:
+            entity = await self.library.get_entity(world_id, kind, entity_id)
+        except Exception:
+            if strict:
+                raise
+            return {}
+        return dict((entity.frontmatter or {}).get("extras") or {})
+
+    async def _read_campaign_local(
+        self,
+        *,
+        kind: str,
+        entity_id: str,
+        campaign_id: str | None,
+        world_id: str | None,
+        strict: bool,
+    ) -> dict[str, Any]:
+        emergent = await self.store.get_emergent(campaign_id, kind, entity_id)
+        if emergent is None:
+            return {}
+        return dict((emergent.get("frontmatter") or {}).get("extras") or {})
+
+    async def _read_override(
+        self,
+        *,
+        kind: str,
+        entity_id: str,
+        campaign_id: str | None,
+        world_id: str | None,
+        strict: bool,
+    ) -> dict[str, Any]:
+        library_id = make_library_id(world_id, kind, entity_id)
+        override = await self.store.get_override(campaign_id, library_id)
+        return dict((override or {}).get("extras") or {})
+
+    async def _apply_patch_library(
+        self,
+        *,
+        kind: str,
+        entity_id: str,
+        campaign_id: str | None,
+        world_id: str | None,
+        patch: dict[str, Any],
+        actor: str,
+    ) -> None:
+        await self.library.update_entity(
+            world_id=world_id,
+            kind=kind,
+            entity_id=entity_id,
+            frontmatter_patch={"extras": patch},
+            source=actor,
+        )
+
+    async def _apply_patch_campaign_local(
+        self,
+        *,
+        kind: str,
+        entity_id: str,
+        campaign_id: str | None,
+        world_id: str | None,
+        patch: dict[str, Any],
+        actor: str,
+    ) -> None:
+        await self._write_emergent_extras(
+            campaign_id=campaign_id, kind=kind, entity_id=entity_id, patch=patch, actor=actor
+        )
+
+    async def _apply_patch_override(
+        self,
+        *,
+        kind: str,
+        entity_id: str,
+        campaign_id: str | None,
+        world_id: str | None,
+        patch: dict[str, Any],
+        actor: str,
+    ) -> None:
+        await self._write_override_extras(
+            campaign_id=campaign_id,
+            world_id=world_id,
+            kind=kind,
+            entity_id=entity_id,
+            patch=patch,
+            actor=actor,
+        )
+
+    async def _rewrite_library(
+        self,
+        *,
+        kind: str,
+        entity_id: str,
+        campaign_id: str | None,
+        world_id: str | None,
+        extras: dict[str, Any],
+        actor: str,
+    ) -> None:
+        await self._rewrite_library_extras_section(
+            world_id=world_id, kind=kind, entity_id=entity_id, extras=extras, actor=actor
+        )
+
+    async def _rewrite_campaign_local(
+        self,
+        *,
+        kind: str,
+        entity_id: str,
+        campaign_id: str | None,
+        world_id: str | None,
+        extras: dict[str, Any],
+        actor: str,
+    ) -> None:
+        await self._write_emergent_extras(
+            campaign_id=campaign_id,
+            kind=kind,
+            entity_id=entity_id,
+            patch=extras,
+            actor=actor,
+            replace=True,
+        )
+
+    async def _rewrite_override(
+        self,
+        *,
+        kind: str,
+        entity_id: str,
+        campaign_id: str | None,
+        world_id: str | None,
+        extras: dict[str, Any],
+        actor: str,
+    ) -> None:
+        await self._rewrite_override_extras_section(
+            campaign_id=campaign_id,
+            world_id=world_id,
+            kind=kind,
+            entity_id=entity_id,
+            extras=extras,
+            actor=actor,
+        )
+
+    _SCOPE_OPS: ClassVar[dict[ExtraScope, _ScopeOps]] = {
+        ExtraScope.LIBRARY: _ScopeOps(_read_library, _apply_patch_library, _rewrite_library),
+        ExtraScope.CAMPAIGN_LOCAL: _ScopeOps(
+            _read_campaign_local, _apply_patch_campaign_local, _rewrite_campaign_local
+        ),
+        ExtraScope.OVERRIDE: _ScopeOps(_read_override, _apply_patch_override, _rewrite_override),
+    }
+
+    # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
 
@@ -571,29 +707,17 @@ class ExtrasService:
         campaign_id: str | None,
         world_id: str | None,
     ) -> dict[str, Any]:
-        kind = _kind_str(entity_kind)
-        if scope == ExtraScope.LIBRARY:
-            if world_id is None:
-                return {}
-            try:
-                entity = await self.library.get_entity(world_id, kind, entity_id)
-            except Exception:
-                return {}
-            return dict((entity.frontmatter or {}).get("extras") or {})
-        if scope == ExtraScope.CAMPAIGN_LOCAL:
-            if campaign_id is None:
-                return {}
-            emergent = await self.store.get_emergent(campaign_id, kind, entity_id)
-            if emergent is None:
-                return {}
-            return dict((emergent.get("frontmatter") or {}).get("extras") or {})
-        if scope == ExtraScope.OVERRIDE:
-            if campaign_id is None or world_id is None:
-                return {}
-            library_id = make_library_id(world_id, kind, entity_id)
-            override = await self.store.get_override(campaign_id, library_id)
-            return dict((override or {}).get("extras") or {})
-        raise ValueError(f"unknown scope {scope}")
+        ops = self._scope_ops(scope)
+        if self._missing_scope_args(scope, campaign_id, world_id):
+            return {}
+        return await ops.read(
+            self,
+            kind=_kind_str(entity_kind),
+            entity_id=entity_id,
+            campaign_id=campaign_id,
+            world_id=world_id,
+            strict=False,
+        )
 
     async def _write_override_extras(
         self,
@@ -773,19 +897,6 @@ def _decode_extras(raw: dict[str, Any]) -> dict[str, ExtraValue]:
                 scope=ExtraScope.LIBRARY,
             )
     return out
-
-
-def _replace_extras(entries: dict[str, Any]) -> dict[str, Any]:
-    """Force ``update_entity`` to overwrite the extras dict wholesale.
-
-    ``_deep_merge_frontmatter`` would otherwise merge key-by-key, leaving
-    the deleted key in place. By replacing with a sentinel-stripped copy we
-    only retain keys the caller wanted to keep.
-    """
-    # Return a fresh dict so the merge call replaces the section entirely.
-    # The library service's deep-merge treats dicts as nested merges, so we
-    # instead pre-compute the new dict client-side and pass it as the patch.
-    return dict(entries)
 
 
 def coerce_extras_iterable(items: Iterable[tuple[str, Any]]) -> dict[str, Any]:
