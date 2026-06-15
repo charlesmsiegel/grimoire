@@ -9,9 +9,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from grimoire.util import ConfidenceTier, classify_confidence
+
 ROUTE_AUTO_APPLY = "auto_apply"
 ROUTE_REVIEW = "review"
 ROUTE_DISCARD = "discard"
+
+_TIER_TO_ROUTE = {
+    ConfidenceTier.AUTO_APPLY: ROUTE_AUTO_APPLY,
+    ConfidenceTier.REVIEW: ROUTE_REVIEW,
+    ConfidenceTier.DROP: ROUTE_DISCARD,
+}
 
 
 @dataclass(frozen=True)
@@ -23,11 +31,8 @@ class RoutingThresholds:
 def classify_route(confidence: float, thresholds: RoutingThresholds | None = None) -> str:
     """Return the route name for a given confidence."""
     t = thresholds or RoutingThresholds()
-    if confidence >= t.auto_apply:
-        return ROUTE_AUTO_APPLY
-    if confidence >= t.review:
-        return ROUTE_REVIEW
-    return ROUTE_DISCARD
+    tier = classify_confidence(confidence, auto_apply=t.auto_apply, review=t.review)
+    return _TIER_TO_ROUTE[tier]
 
 
 __all__ = [

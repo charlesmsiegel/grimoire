@@ -5,8 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
-
+from grimoire.files import load_yaml
 from grimoire.transient_state.decay import DEFAULT_DECAY, DecaySpec, merge_overrides
 from grimoire.types.transient import EntityKind
 
@@ -42,7 +41,7 @@ class TransientStateConfig:
     def from_yaml(cls, path: Path) -> TransientStateConfig:
         if not path.exists():
             return cls()
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = load_yaml(path) or {}
         if not isinstance(raw, dict):
             return cls()
         promote_raw = raw.get("promote_to_fact") or {}

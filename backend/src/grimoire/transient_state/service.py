@@ -38,6 +38,21 @@ _TABLE = {
     EntityKind.SCENE: "transient_scene_state",
 }
 
+# The ``FactSubject`` id-list field that carries an entity of each kind, used
+# when promoting a transient value to a fact (#523). Kinds with no fact subject
+# field (e.g. SCENE) yield empty kwargs.
+_FACT_SUBJECT_ID_FIELD = {
+    EntityKind.CHARACTER: "character_ids",
+    EntityKind.LOCATION: "location_ids",
+    EntityKind.FACTION: "faction_ids",
+}
+
+
+def fact_subject_kwargs(entity_kind: EntityKind, entity_id: str) -> dict[str, list[str]]:
+    """Build the ``FactSubject`` id-list kwargs for one entity."""
+    field = _FACT_SUBJECT_ID_FIELD.get(entity_kind)
+    return {field: [entity_id]} if field else {}
+
 
 def _priority_for(provenance: Provenance | _ProvenanceMechanics | str) -> int:
     raw = provenance.value if hasattr(provenance, "value") else str(provenance)
@@ -409,13 +424,7 @@ class TransientStateService:
                 InGameTime,
             )
 
-            subject_kwargs: dict[str, Any] = {}
-            if entity_kind == EntityKind.CHARACTER:
-                subject_kwargs["character_ids"] = [entity_id]
-            elif entity_kind == EntityKind.LOCATION:
-                subject_kwargs["location_ids"] = [entity_id]
-            elif entity_kind == EntityKind.FACTION:
-                subject_kwargs["faction_ids"] = [entity_id]
+            subject_kwargs = fact_subject_kwargs(entity_kind, entity_id)
             fact = Fact(
                 id=f"f_{entity_id}_{field}_{turn_id}",
                 text=f"{entity_id} has {field}: {current.value}",

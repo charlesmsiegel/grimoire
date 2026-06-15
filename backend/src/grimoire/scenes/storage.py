@@ -19,9 +19,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-import yaml
-
-from grimoire.files import atomic_write_text, load_yaml
+from grimoire.files import atomic_write_text, dump_yaml, load_yaml
 from grimoire.files import slugify as _base_slugify
 
 # Canonical impl lives in :mod:`grimoire.files.hashing` and normalizes line
@@ -352,7 +350,7 @@ def write_sidecar(path: Path, scene: Scene, *, post_records: dict | None = None)
     ``id``/``turn_id``/``created_at``/``is_player`` survive process restart.
     """
     data = _scene_to_yaml(scene, post_records=post_records)
-    atomic_write_text(path, yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    atomic_write_text(path, dump_yaml(data))
 
 
 def read_sidecar(path: Path) -> Scene:

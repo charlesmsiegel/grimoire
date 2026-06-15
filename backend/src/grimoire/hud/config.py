@@ -15,8 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from grimoire.files import load_yaml, write_yaml
 from grimoire.hud.widgets import CORE_WIDGETS
 from grimoire.state_store.paths import validate_path_component
 
@@ -197,7 +196,7 @@ class HudConfigService:
         if not path.is_file():
             return default_config()
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            data = load_yaml(path)
             return deserialize(data)
         except Exception as e:
             log.warning("hud.yaml at %s corrupt, falling back to defaults: %s", path, e)
@@ -208,8 +207,7 @@ class HudConfigService:
 
     def save(self, campaign_id: str, cfg: HudConfig) -> None:
         path = self._path(campaign_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(yaml.safe_dump(serialize(cfg), sort_keys=False), encoding="utf-8")
+        write_yaml(path, serialize(cfg))
 
     def reset(self, campaign_id: str) -> HudConfig:
         cfg = default_config()

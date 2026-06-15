@@ -11,6 +11,7 @@ import re
 import struct
 import uuid
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 _DEFAULT_ID_HEX_WIDTH = 12
@@ -198,8 +199,37 @@ def canonicalize_character_ref(ref: str) -> str:
     return ref
 
 
+class ConfidenceTier(StrEnum):
+    """Tier a confidence score falls into under a two-threshold ladder.
+
+    The shared vocabulary behind the auto-apply / review / drop routing that
+    the extractor, expressions, and transient-state pipelines each apply to a
+    ``0.0`` to ``1.0`` confidence score (#523).
+    """
+
+    AUTO_APPLY = "auto_apply"
+    REVIEW = "review"
+    DROP = "drop"
+
+
+def classify_confidence(confidence: float, *, auto_apply: float, review: float) -> ConfidenceTier:
+    """Classify ``confidence`` against the auto-apply / review thresholds.
+
+    ``confidence >= auto_apply`` auto-applies; ``>= review`` queues for review;
+    anything lower drops. Thresholds are passed in so each pipeline tunes
+    independently — only the laddering logic is shared.
+    """
+    if confidence >= auto_apply:
+        return ConfidenceTier.AUTO_APPLY
+    if confidence >= review:
+        return ConfidenceTier.REVIEW
+    return ConfidenceTier.DROP
+
+
 __all__ = [
+    "ConfidenceTier",
     "canonicalize_character_ref",
+    "classify_confidence",
     "deserialize_vector",
     "extract_json_object",
     "json_equal",

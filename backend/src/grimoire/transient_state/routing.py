@@ -24,12 +24,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from grimoire.transient_state.config import TransientStateConfig
-from grimoire.transient_state.service import TransientStateService
+from grimoire.transient_state.service import TransientStateService, fact_subject_kwargs
 from grimoire.types.transient import (
     EntityKind,
     Provenance,
     TransientUpdateProposal,
 )
+from grimoire.util import ConfidenceTier, classify_confidence
 
 ReviewEnqueuer = Callable[[TransientUpdateProposal, str], Awaitable[str]]
 """Async callable: (proposal, campaign_id) -> review_id."""
@@ -132,14 +133,8 @@ async def _promote_via_continuity(
         return False
     from grimoire.types.continuity import Fact, FactScope, FactSource, FactSubject
 
-    subject_kwargs: dict[str, Any] = {}
     kind = EntityKind(proposal.entity_kind)
-    if kind == EntityKind.CHARACTER:
-        subject_kwargs["character_ids"] = [proposal.entity_id]
-    elif kind == EntityKind.LOCATION:
-        subject_kwargs["location_ids"] = [proposal.entity_id]
-    elif kind == EntityKind.FACTION:
-        subject_kwargs["faction_ids"] = [proposal.entity_id]
+    subject_kwargs = fact_subject_kwargs(kind, proposal.entity_id)
     fact = Fact(
         id=f"f_{proposal.entity_id}_{proposal.field}_{source_post_id or 'unknown'}",
         campaign_id=campaign_id,
@@ -179,7 +174,12 @@ async def route_transient_updates(
     summary = RoutingSummary()
     for proposal in proposals:
         kind = EntityKind(proposal.entity_kind)
-        if proposal.confidence >= cfg.auto_apply_threshold:
+        tier = classify_confidence(
+            proposal.confidence,
+            auto_apply=cfg.auto_apply_threshold,
+            review=cfg.review_threshold,
+        )
+        if tier is ConfidenceTier.AUTO_APPLY:
             value = await transient_state.set(
                 campaign_id,
                 kind,
@@ -229,7 +229,7 @@ async def route_transient_updates(
                 )
                 if promoted:
                     summary.promoted_to_fact += 1
-        elif proposal.confidence >= cfg.review_threshold:
+        elif tier is ConfidenceTier.REVIEW:
             if review_enqueuer is not None:
                 await review_enqueuer(proposal, campaign_id)
             summary.enqueued_for_review += 1
