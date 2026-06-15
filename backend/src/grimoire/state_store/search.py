@@ -16,7 +16,7 @@ import aiosqlite
 
 # Re-exported for callers that have long imported the vector wire format from
 # here; the canonical implementation now lives in ``grimoire.util``.
-from grimoire.util import deserialize_vector, serialize_vector
+from grimoire.util import deserialize_vector, sanitize_fts_query, serialize_vector
 
 
 @dataclass(frozen=True)
@@ -141,8 +141,11 @@ async def keyword_search_facts(
     top_k: int = 5,
 ) -> list[SearchHit]:
     """FTS5 search across ``facts``."""
+    match = sanitize_fts_query(query)
+    if not match:
+        return []
     where: list[str] = ["facts_fts MATCH ?"]
-    params: list[object] = [query]
+    params: list[object] = [match]
     if campaign_id is not None:
         where.append("facts.campaign_id = ?")
         params.append(campaign_id)
@@ -180,8 +183,11 @@ async def keyword_search_library(
     top_k: int = 5,
 ) -> list[SearchHit]:
     """FTS5 search across ``library_index``."""
+    match = sanitize_fts_query(query)
+    if not match:
+        return []
     where: list[str] = ["library_index_fts MATCH ?"]
-    params: list[object] = [query]
+    params: list[object] = [match]
     if world_id is not None:
         where.append("library_index.world_id = ?")
         params.append(world_id)

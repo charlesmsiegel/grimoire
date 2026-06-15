@@ -103,6 +103,40 @@ async def test_keyword_search_over_facts(store: StateStore) -> None:
     assert all(h.ref != "f2" for h in hits)
 
 
+async def test_keyword_search_tolerates_fts_operator_chars(store: StateStore) -> None:
+    """The retrieval query carries entity refs (``worlds/w/characters/c``) and
+    prose punctuation, which FTS5 would otherwise parse as operators."""
+    await _seed(store)
+    await store.apply_delta(
+        delta={
+            "kind": "fact_add",
+            "target_scope": "campaign-sqlite",
+            "target_table": "facts",
+            "after": {
+                "id": "f1",
+                "campaign_id": "c1",
+                "text": "winifred visited the Elysium on Tuesday evening.",
+                "retired": 0,
+            },
+        },
+        source="seed",
+    )
+
+    # A query as assembled by ArchiveRetriever.build_retrieval_query: free text
+    # plus a slash-laden character ref and a trailing sentence with a period.
+    query = "Where is winifred? worlds/city/characters/winifred-vespertine met her."
+    hits = await store.keyword_search(query=query, campaign_id="c1")
+    assert hits
+    assert hits[0].ref == "f1"
+
+
+async def test_keyword_search_empty_after_sanitisation(store: StateStore) -> None:
+    """A query of only operator chars sanitises to nothing — return [], not error."""
+    await _seed(store)
+    hits = await store.keyword_search(query="/ . : - *", campaign_id="c1")
+    assert hits == []
+
+
 async def test_delete_embeddings(store: StateStore) -> None:
     await _seed(store)
     await store.add_embedding(
