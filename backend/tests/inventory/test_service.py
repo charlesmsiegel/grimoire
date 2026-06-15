@@ -252,3 +252,132 @@ async def test_restore_holders_rewrites_pre_images(store):
     assert [(e.item_ref, e.quantity) for e in entries] == [("coin", 3)]
     # apply (t0), apply (t1), restore — each surfaced a change event.
     assert len(changed) == 3
+
+
+# --- #622: turn-scoped cross-round dedup --------------------------------------
+#
+# In per_character_multi_call mode every speaker round re-extracts and applies
+# under the same turn_id. Two NPC responses that restate one event must apply
+# the additive op once; genuinely repeated ops within a single response (one
+# apply() call) must both apply. The policy: within-round repeats are real,
+# cross-round repeats are restatements.
+
+
+async def _enable_with_holder(store, holder="joe"):
+    await _enable(store)
+    await store.write_emergent(
+        campaign_id="c1",
+        kind="character",
+        entity_id=holder,
+        frontmatter={"id": holder, "name": holder.title()},
+        body="",
+        source="test",
+    )
+
+
+async def test_cross_round_restatement_acquire_applies_once(store):
+    """#622: the same acquire restated in a second round of the same turn is
+    skipped — a repeated fungible acquire does not double the quantity."""
+    await _enable_with_holder(store)
+    svc = InventoryService(store=store, event_bus=EventBus())
+    op = InventoryOperation(
+        action=InventoryAction.ACQUIRE, item="gold", holder="joe", quantity=10, confidence=1.0
+    )
+
+    first = await svc.apply(campaign_id="c1", turn_id="t1", operations=[op])
+    second = await svc.apply(campaign_id="c1", turn_id="t1", operations=[op])
+
+    assert first is not None and first["deduped"] == 0
+    assert second is not None and second["deduped"] == 1
+    rows = await store.list_inventory_holdings("c1", holder_kind="character", holder_id="joe")
+    assert [(r["item_ref"], r["quantity"]) for r in rows] == [("resource:gold", 10)]
+
+
+async def test_cross_round_restatement_transfer_applies_once(store):
+    """#622 (sharpest case): a transfer restated across rounds does not
+    reconcile a now-missing source item and mint a second copy at the dest."""
+    await _enable_with_holder(store, "alice")
+    await store.write_emergent(
+        campaign_id="c1",
+        kind="character",
+        entity_id="bob",
+        frontmatter={"id": "bob", "name": "Bob"},
+        body="",
+        source="test",
+    )
+    svc = InventoryService(store=store, event_bus=EventBus())
+    await svc.apply(
+        campaign_id="c1",
+        turn_id="t0",
+        operations=[
+            InventoryOperation(
+                action=InventoryAction.ACQUIRE, item="ring", holder="alice", confidence=1.0
+            )
+        ],
+    )
+
+    transfer = InventoryOperation(
+        action=InventoryAction.TRANSFER, item="ring", holder="alice", to="bob", confidence=1.0
+    )
+    # Round 1: "Alice hands Bob the ring". Round 2 restates it.
+    await svc.apply(campaign_id="c1", turn_id="t1", operations=[transfer])
+    second = await svc.apply(campaign_id="c1", turn_id="t1", operations=[transfer])
+
+    assert second is not None and second["deduped"] == 1
+    bob_rows = await store.list_inventory_holdings("c1", holder_kind="character", holder_id="bob")
+    assert [(r["item_ref"], r["quantity"]) for r in bob_rows] == [("ring", 1)]
+    assert (
+        await store.list_inventory_holdings("c1", holder_kind="character", holder_id="alice") == []
+    )
+    # No spurious reconciliation flag from a re-applied transfer.
+    assert await store.list_inventory_flags("c1", resolved=False) == []
+
+
+async def test_within_round_repeats_both_apply(store):
+    """#622 acceptance: two separate 10-gold payments narrated in *one* response
+    (one apply() call) both apply — only cross-round restatements are deduped."""
+    await _enable_with_holder(store)
+    svc = InventoryService(store=store, event_bus=EventBus())
+    pay = InventoryOperation(
+        action=InventoryAction.ACQUIRE, item="gold", holder="joe", quantity=10, confidence=1.0
+    )
+
+    result = await svc.apply(campaign_id="c1", turn_id="t1", operations=[pay, pay])
+
+    assert result is not None and result["deduped"] == 0
+    rows = await store.list_inventory_holdings("c1", holder_kind="character", holder_id="joe")
+    assert [(r["item_ref"], r["quantity"]) for r in rows] == [("resource:gold", 20)]
+
+
+async def test_same_op_different_turns_both_apply(store):
+    """Dedup is turn-scoped: an identical op in a later, distinct turn applies —
+    two separate payments across two turns are not collapsed."""
+    await _enable_with_holder(store)
+    svc = InventoryService(store=store, event_bus=EventBus())
+    pay = InventoryOperation(
+        action=InventoryAction.ACQUIRE, item="gold", holder="joe", quantity=10, confidence=1.0
+    )
+
+    await svc.apply(campaign_id="c1", turn_id="t1", operations=[pay])
+    second = await svc.apply(campaign_id="c1", turn_id="t2", operations=[pay])
+
+    assert second is not None and second["deduped"] == 0
+    rows = await store.list_inventory_holdings("c1", holder_kind="character", holder_id="joe")
+    assert [(r["item_ref"], r["quantity"]) for r in rows] == [("resource:gold", 20)]
+
+
+async def test_manual_ops_never_deduped(store):
+    """turn_id=None (manual API ops) opts out of dedup: two identical manual
+    acquires both apply regardless of how the service is reused."""
+    await _enable_with_holder(store)
+    svc = InventoryService(store=store, event_bus=EventBus())
+    op = InventoryOperation(
+        action=InventoryAction.ACQUIRE, item="gold", holder="joe", quantity=5, confidence=1.0
+    )
+
+    await svc.apply(campaign_id="c1", turn_id=None, operations=[op])
+    second = await svc.apply(campaign_id="c1", turn_id=None, operations=[op])
+
+    assert second is not None and second["deduped"] == 0
+    rows = await store.list_inventory_holdings("c1", holder_kind="character", holder_id="joe")
+    assert [(r["item_ref"], r["quantity"]) for r in rows] == [("resource:gold", 10)]

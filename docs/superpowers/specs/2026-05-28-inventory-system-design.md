@@ -275,6 +275,23 @@ Because mutations are expressed as the same reversible file deltas the system
 already handles, turn undo, campaign forks, and replay all work with no
 inventory-specific reversal code.
 
+### Multi-call turn dedup (#622)
+
+In `per_character_multi_call` mode every speaker round runs its own extraction
+and calls `apply()` again under the **same `turn_id`**. Two NPC responses that
+restate one event ("Alice takes the ring" / "…watches Alice pocket the ring")
+would otherwise apply the additive op twice — doubling a fungible acquire or
+re-running a transfer (reconciling the now-missing source and minting a second
+copy). The service keeps a per-turn set of applied op signatures
+(`(action, resolved item_ref, holder, to, normalised quantity)`) and **skips an
+op whose signature already applied in an earlier round of the same turn**. The
+snapshot is taken before each round, so the policy is *within-round repeats are
+real, cross-round repeats are restatements*: two genuine 10-gold payments
+narrated in one response (one `apply()` call) both apply, while the same payment
+restated by the next speaker is dropped. `turn_id=None` (manual API ops) opts
+out entirely. The signature map is a bounded LRU over recent turns — only the
+current turn is ever consulted.
+
 ## REST / WebSocket API
 
 New router `backend/src/grimoire/api/campaigns/inventory.py`, mounted only when
