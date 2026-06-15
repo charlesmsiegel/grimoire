@@ -382,6 +382,44 @@ async def test_delete_missing_raises(
         )
 
 
+async def test_campaign_local_set_get_delete_roundtrip(
+    extras: ExtrasService, library, store, seed_world, seed_character
+):
+    """Exercise the campaign-local scope end-to-end (set → get_raw → delete),
+    the path that the per-scope strategy table routes through #523."""
+    await _setup(library, store, seed_world, seed_character)
+    await extras.set(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id=CHAR,
+        key="mood",
+        value="brooding",
+        scope=ExtraScope.CAMPAIGN_LOCAL,
+        campaign_id=CAMPAIGN,
+    )
+    raw = await extras.get_raw(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id=CHAR,
+        scope=ExtraScope.CAMPAIGN_LOCAL,
+        campaign_id=CAMPAIGN,
+    )
+    assert raw["mood"].value == "brooding"
+
+    await extras.delete(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id=CHAR,
+        key="mood",
+        scope=ExtraScope.CAMPAIGN_LOCAL,
+        campaign_id=CAMPAIGN,
+    )
+    after = await extras.get_raw(
+        entity_kind=EntityKind.CHARACTER,
+        entity_id=CHAR,
+        scope=ExtraScope.CAMPAIGN_LOCAL,
+        campaign_id=CAMPAIGN,
+    )
+    assert "mood" not in after
+
+
 # ---------------------------------------------------------------------- #
 # Cascade regressions (review bots, 2026-05-19)
 # ---------------------------------------------------------------------- #
