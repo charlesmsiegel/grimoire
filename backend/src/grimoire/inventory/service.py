@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -54,7 +55,48 @@ def deltas_to_operations(deltas: list[StateDelta]) -> list[InventoryOperation]:
     return ops
 
 
+OpSignature = tuple[str, str, str, str | None, str | None, str | None, int]
+
+
+def _op_signature(
+    *,
+    action: InventoryAction,
+    item_ref: str,
+    holder_kind: HolderKind,
+    holder_id: str,
+    to_kind: HolderKind | None,
+    to_id: str | None,
+    quantity: int | None,
+) -> OpSignature:
+    """Identity of an applied op for turn-scoped dedup (#622).
+
+    Mirrors the ``(action, item, holder, to, quantity)`` tuple the issue calls
+    out, but over *resolved* item/holder ids so two restatements that name the
+    item differently ("the ring" / "ring") collapse. Quantity is normalised the
+    same way ``apply_op`` does (magnitude for every action but ADJUST) so a
+    signed/unsigned restatement of one removal still matches.
+    """
+    qty = quantity if quantity is not None else 1
+    if action is not InventoryAction.ADJUST and qty < 0:
+        qty = -qty
+    return (
+        action.value,
+        item_ref,
+        holder_kind.value,
+        holder_id,
+        to_kind.value if to_kind is not None else None,
+        to_id,
+        qty,
+    )
+
+
 class InventoryService:
+    # How many recent turns' applied-op signatures to retain for cross-round
+    # dedup. Rounds of one turn run back-to-back, so only the current turn is
+    # ever consulted; the bound just stops the map growing without limit across
+    # a long session (oldest turn evicted first).
+    _MAX_TURN_SIGNATURES = 64
+
     def __init__(
         self,
         *,
@@ -66,6 +108,9 @@ class InventoryService:
         self._bus = event_bus
         self._clock = clock
         self._persist = InventoryPersistence(store)
+        # Per-turn set of op signatures already applied in an *earlier* round of
+        # that turn (#622). Keyed by (campaign_id, turn_id); bounded LRU.
+        self._applied_signatures: OrderedDict[tuple[str, str], set[OpSignature]] = OrderedDict()
 
     async def _config(self, campaign_id: str) -> InventoryConfig:
         return InventoryConfig.from_campaign_config(
@@ -104,6 +149,19 @@ class InventoryService:
         touched: dict[tuple[HolderKind, str], None] = {}
         flags: list[FlaggedOp] = []
 
+        # Turn-scoped cross-round dedup (#622): in per_character_multi_call mode
+        # every speaker round re-extracts and applies under the *same* turn_id,
+        # so two NPC responses that restate one event ("Alice takes the ring" /
+        # "…watches Alice pocket the ring") would apply the additive op twice.
+        # We skip an op whose signature already applied in an *earlier* round of
+        # this turn. `prior` is a snapshot taken before this round, so genuinely
+        # repeated ops *within one response* (one apply() call) both apply — the
+        # policy is "within-round repeats are real, cross-round repeats are
+        # restatements." turn_id=None (manual API ops) opts out entirely.
+        prior = self._applied_signatures.get((campaign_id, turn_id or ""), set())
+        round_signatures: set[OpSignature] = set()
+        deduped = 0
+
         for op in operations:
             holder_kind, holder_id = self._holder(op.holder)
             if holder_id is None:
@@ -113,6 +171,26 @@ class InventoryService:
                 campaign_id, op.item, turn_id=turn_id
             )
             to_kind, to_id = self._holder(op.to) if op.to else (None, None)
+
+            signature = _op_signature(
+                action=op.action,
+                item_ref=item_ref,
+                holder_kind=holder_kind,
+                holder_id=holder_id,
+                to_kind=to_kind,
+                to_id=to_id,
+                quantity=op.quantity,
+            )
+            if turn_id is not None and signature in prior:
+                deduped += 1
+                logger.debug(
+                    "inventory op deduped within turn %s (campaign %s): %s",
+                    turn_id,
+                    campaign_id,
+                    signature,
+                )
+                continue
+            round_signatures.add(signature)
 
             await self._ensure_loaded(campaign_id, holdings, pristine, holder_kind, holder_id)
             if to_id is not None and to_kind is not None:
@@ -169,6 +247,12 @@ class InventoryService:
             )
             raise
 
+        # Record this round's signatures only after the batch committed, so a
+        # rolled-back round leaves no dedup ghost that would skip a legit retry
+        # (#622). A turn fails terminally on apply failure, but recording on
+        # success keeps the invariant local and obvious.
+        self._remember_signatures(campaign_id, turn_id, round_signatures)
+
         await self._bus.emit(
             Event(
                 type=inv_events.INVENTORY_CHANGED,
@@ -189,10 +273,30 @@ class InventoryService:
         return {
             "touched": len(touched),
             "flags": len(flags),
+            # Ops skipped as cross-round restatements of an earlier round in the
+            # same turn (#622); 0 outside multi-call mode.
+            "deduped": deduped,
             # Pre-images of every holder this apply committed, handed back via
             # restore_holders when a turn stage *after* the apply fails (#584).
             "rollback": [(hk, hid, pristine.get((hk, hid), [])) for hk, hid in touched],
         }
+
+    def _remember_signatures(
+        self, campaign_id: str, turn_id: str | None, signatures: set[OpSignature]
+    ) -> None:
+        """Fold a committed round's op signatures into the turn's applied set,
+        evicting the oldest turn when the bounded map overflows (#622)."""
+        if turn_id is None or not signatures:
+            return
+        key = (campaign_id, turn_id)
+        existing = self._applied_signatures.get(key)
+        if existing is None:
+            self._applied_signatures[key] = set(signatures)
+            while len(self._applied_signatures) > self._MAX_TURN_SIGNATURES:
+                self._applied_signatures.popitem(last=False)
+        else:
+            existing |= signatures
+            self._applied_signatures.move_to_end(key)
 
     async def restore_holders(
         self,

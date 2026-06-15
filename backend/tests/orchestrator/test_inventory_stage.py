@@ -238,6 +238,84 @@ async def test_multi_round_applied_deltas_accumulate_in_audit_fragment(tmp_path:
     assert len(applied_fragments[0].payload["applied_deltas"]) == 2
 
 
+async def test_multi_round_restated_inventory_change_applies_once(tmp_path: Path) -> None:
+    """#622: two speaker rounds in one turn that restate the same
+    ``INVENTORY_CHANGE`` apply the additive op once, not twice — the holding
+    lands at quantity 1, and the second round reports a dedup."""
+    import asyncio
+
+    from grimoire.inventory.service import InventoryService
+    from grimoire.state_store import StateStore
+    from grimoire.storage import Database
+    from grimoire.testing.db_template import stamp_migrated_db
+
+    bus = EventBus()
+    db = Database(stamp_migrated_db(tmp_path / "campaigns.sqlite"), pool_size=2)
+    await db.connect()
+    try:
+        store = StateStore(db, tmp_path / "data")
+        await store.upsert_campaign(campaign_id="camp1", name="C")
+        await store.set_campaign_config(
+            "camp1",
+            {
+                "narrator": {"response_mode": "per_character_multi_call"},
+                "inventory": {"enabled": True},
+            },
+        )
+        await store.add_pc(campaign_id="camp1", character_ref="pc1", display_name="PC One")
+        await store.write_emergent(
+            campaign_id="camp1",
+            kind="character",
+            entity_id="alice",
+            frontmatter={"id": "alice", "name": "Alice"},
+            body="",
+            source="test",
+        )
+
+        sm = SceneManager(
+            tmp_path / "scenes", config=SceneManagerConfig(running_summary_every_n_posts=0)
+        )
+        inventory = InventoryService(store=store, event_bus=bus)
+        ws = WSCollector()
+        orch = OrchestratorService(
+            event_bus=bus,
+            scene_manager=sm,
+            llm_gateway=FakeGateway(chunks=["Alice pockets the ring."]),
+            context_builder=FakeContextBuilder(),
+            extractor=FakeExtractor(deltas=[_inventory_delta()]),
+            state_store=store,
+            inventory=inventory,
+            ws_push=ws,
+            config=OrchestratorConfig(speaker_loop=SpeakerLoopConfig(timeout_seconds=2.0)),
+            clock=fixed_clock(),
+        )
+        await sm.start_scene(
+            SceneInit(
+                campaign_id="camp1",
+                present_character_refs=["alice", "bob"],
+                present_pc_refs=["pc1"],
+            )
+        )
+
+        # Two rounds restating the one acquire: drive a second round via
+        # next_speaker before the loop times out.
+        submit_task = asyncio.create_task(orch.submit_post("camp1", "pc1", "I hand Alice the ring"))
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            if [m["type"] for _, m in ws.messages].count("speaker_round_waiting") >= 1:
+                break
+        await orch.next_speaker("camp1")
+        await asyncio.wait_for(submit_task, timeout=10.0)
+
+        rows = await store.list_inventory_holdings("camp1", item_ref="ring")
+        assert len(rows) == 1
+        assert rows[0]["holder_id"] == "alice"
+        # Restated, not doubled.
+        assert rows[0]["quantity"] == 1
+    finally:
+        await db.close()
+
+
 async def test_speaker_round_updates_holdings_with_real_inventory(tmp_path: Path) -> None:
     """End-to-end over the real StateStore + InventoryService: a speaker-round
     INVENTORY_CHANGE delta lands in ``inventory_holdings`` exactly as a
