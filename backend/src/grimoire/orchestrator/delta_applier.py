@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, ClassVar
 
 from grimoire import events
 from grimoire.event_bus import Event, EventBus
@@ -210,14 +210,7 @@ class DeltaApplier:
                         continue
                     except Exception:
                         logger.exception("world weather-override apply failed; falling through")
-                if self._continuity is not None and delta.kind in (
-                    DeltaKind.FACT_ADD,
-                    DeltaKind.FACT_RETIRE,
-                    DeltaKind.FACT_UPDATE,
-                    DeltaKind.COMMITMENT_ADD,
-                    DeltaKind.COMMITMENT_RESOLVE,
-                    DeltaKind.KNOWLEDGE_REVEAL,
-                ):
+                if self._continuity is not None and delta.kind in self._CONTINUITY_HANDLERS:
                     handled = await self._apply_continuity_delta(
                         delta=delta,
                         campaign_id=campaign_id,
@@ -305,104 +298,23 @@ class DeltaApplier:
         turn_id: TurnId,
     ) -> bool:
         from grimoire.continuity.registry import resolve_continuity
-        from grimoire.continuity.service import ContinuityService
 
         service = resolve_continuity(self._continuity, campaign_id)
         if service is None:
             return False
 
-        payload = delta.after or {}
+        handler = self._CONTINUITY_HANDLERS.get(delta.kind)
+        if handler is None:
+            return False
         try:
-            if delta.kind == DeltaKind.FACT_ADD:
-                fact = _build_continuity_fact(
-                    payload=payload,
-                    confidence=delta.confidence,
-                    source=delta.source or "extractor",
-                    turn_id=turn_id,
-                )
-                report = await service.check_contradictions(fact, turn_id=turn_id)
-                if report.conflicts:
-                    review_id = await self._store.queue_for_review(
-                        delta=delta,
-                        source=delta.source or "extractor",
-                        campaign_id=campaign_id,
-                    )
-                    await self._bus.emit(
-                        Event(
-                            type=events.REVIEW_ITEM_ADDED,
-                            payload={
-                                "campaign_id": campaign_id,
-                                "review_id": review_id,
-                                "turn_id": turn_id,
-                                "report_id": report.id,
-                                "reason": "contradiction_detected",
-                            },
-                        )
-                    )
-                    return True
-                await service.add_fact(fact, source=delta.source or "extractor")
-                return True
-
-            if delta.kind == DeltaKind.FACT_RETIRE:
-                fact_id = payload.get("fact_id") or payload.get("id")
-                if not fact_id:
-                    return False
-                await service.retire_fact(
-                    fact_id,
-                    in_post=str(payload.get("in_post") or turn_id),
-                    reason=str(payload.get("reason") or "retconned"),
-                )
-                return True
-
-            if delta.kind == DeltaKind.FACT_UPDATE:
-                fact_id = payload.get("fact_id") or payload.get("id")
-                if not fact_id:
-                    return False
-                patch = payload.get("patch") or {}
-                # Pass turn_id so the continuity service can record that this
-                # turn edited a fact (used to warn on cascade delete: FACT_UPDATE
-                # has no pre-image and is not reversed).
-                await service.update_fact(fact_id, patch, in_post=turn_id)
-                return True
-
-            if delta.kind == DeltaKind.COMMITMENT_ADD:
-                commitment = _build_continuity_commitment(
-                    payload=payload,
-                    turn_id=turn_id,
-                )
-                if commitment is None:
-                    return False
-                await service.add_commitment(commitment, source=delta.source or "extractor")
-                return True
-
-            if delta.kind == DeltaKind.COMMITMENT_RESOLVE:
-                from grimoire.continuity.types import CommitmentStatus
-
-                cid = payload.get("commitment_id") or payload.get("id")
-                status_raw = str(payload.get("status") or "paid").lower()
-                if not cid:
-                    return False
-                try:
-                    status = CommitmentStatus(status_raw)
-                except ValueError:
-                    return False
-                await service.resolve_commitment(
-                    cid, status, in_post=str(payload.get("in_post") or turn_id)
-                )
-                return True
-
-            if delta.kind == DeltaKind.KNOWLEDGE_REVEAL:
-                fact_id = payload.get("fact_id")
-                to_refs = payload.get("to") or payload.get("character_ids") or []
-                if not fact_id or not to_refs:
-                    return False
-                await service.reveal(
-                    fact_id,
-                    list(to_refs),
-                    in_post=str(payload.get("in_post") or turn_id),
-                    source=delta.source or "extractor",
-                )
-                return True
+            return await handler(
+                self,
+                service=service,
+                payload=delta.after or {},
+                delta=delta,
+                turn_id=turn_id,
+                campaign_id=campaign_id,
+            )
         except Exception:
             logger.exception(
                 "continuity delta apply failed (kind=%s campaign=%s turn=%s)",
@@ -412,8 +324,153 @@ class DeltaApplier:
             )
             return False
 
-        del ContinuityService
-        return False
+    async def _apply_fact_add(
+        self,
+        *,
+        service: Any,
+        payload: dict,
+        delta: Any,
+        turn_id: TurnId,
+        campaign_id: CampaignId,
+    ) -> bool:
+        fact = _build_continuity_fact(
+            payload=payload,
+            confidence=delta.confidence,
+            source=delta.source or "extractor",
+            turn_id=turn_id,
+        )
+        report = await service.check_contradictions(fact, turn_id=turn_id)
+        if report.conflicts:
+            review_id = await self._store.queue_for_review(
+                delta=delta,
+                source=delta.source or "extractor",
+                campaign_id=campaign_id,
+            )
+            await self._bus.emit(
+                Event(
+                    type=events.REVIEW_ITEM_ADDED,
+                    payload={
+                        "campaign_id": campaign_id,
+                        "review_id": review_id,
+                        "turn_id": turn_id,
+                        "report_id": report.id,
+                        "reason": "contradiction_detected",
+                    },
+                )
+            )
+            return True
+        await service.add_fact(fact, source=delta.source or "extractor")
+        return True
+
+    async def _apply_fact_retire(
+        self,
+        *,
+        service: Any,
+        payload: dict,
+        delta: Any,
+        turn_id: TurnId,
+        campaign_id: CampaignId,
+    ) -> bool:
+        fact_id = payload.get("fact_id") or payload.get("id")
+        if not fact_id:
+            return False
+        await service.retire_fact(
+            fact_id,
+            in_post=str(payload.get("in_post") or turn_id),
+            reason=str(payload.get("reason") or "retconned"),
+        )
+        return True
+
+    async def _apply_fact_update(
+        self,
+        *,
+        service: Any,
+        payload: dict,
+        delta: Any,
+        turn_id: TurnId,
+        campaign_id: CampaignId,
+    ) -> bool:
+        fact_id = payload.get("fact_id") or payload.get("id")
+        if not fact_id:
+            return False
+        patch = payload.get("patch") or {}
+        # Pass turn_id so the continuity service can record that this turn
+        # edited a fact (used to warn on cascade delete: FACT_UPDATE has no
+        # pre-image and is not reversed).
+        await service.update_fact(fact_id, patch, in_post=turn_id)
+        return True
+
+    async def _apply_commitment_add(
+        self,
+        *,
+        service: Any,
+        payload: dict,
+        delta: Any,
+        turn_id: TurnId,
+        campaign_id: CampaignId,
+    ) -> bool:
+        commitment = _build_continuity_commitment(payload=payload, turn_id=turn_id)
+        if commitment is None:
+            return False
+        await service.add_commitment(commitment, source=delta.source or "extractor")
+        return True
+
+    async def _apply_commitment_resolve(
+        self,
+        *,
+        service: Any,
+        payload: dict,
+        delta: Any,
+        turn_id: TurnId,
+        campaign_id: CampaignId,
+    ) -> bool:
+        from grimoire.continuity.types import CommitmentStatus
+
+        cid = payload.get("commitment_id") or payload.get("id")
+        status_raw = str(payload.get("status") or "paid").lower()
+        if not cid:
+            return False
+        try:
+            status = CommitmentStatus(status_raw)
+        except ValueError:
+            return False
+        await service.resolve_commitment(
+            cid, status, in_post=str(payload.get("in_post") or turn_id)
+        )
+        return True
+
+    async def _apply_knowledge_reveal(
+        self,
+        *,
+        service: Any,
+        payload: dict,
+        delta: Any,
+        turn_id: TurnId,
+        campaign_id: CampaignId,
+    ) -> bool:
+        fact_id = payload.get("fact_id")
+        to_refs = payload.get("to") or payload.get("character_ids") or []
+        if not fact_id or not to_refs:
+            return False
+        await service.reveal(
+            fact_id,
+            list(to_refs),
+            in_post=str(payload.get("in_post") or turn_id),
+            source=delta.source or "extractor",
+        )
+        return True
+
+    # Continuity delta dispatch: one handler per continuity DeltaKind. The
+    # turn loop's gate (`delta.kind in self._CONTINUITY_HANDLERS`) and the
+    # dispatcher above both read this table, so a new kind is added in one place.
+    _CONTINUITY_HANDLERS: ClassVar[dict[DeltaKind, Callable[..., Awaitable[bool]]]] = {
+        DeltaKind.FACT_ADD: _apply_fact_add,
+        DeltaKind.FACT_RETIRE: _apply_fact_retire,
+        DeltaKind.FACT_UPDATE: _apply_fact_update,
+        DeltaKind.COMMITMENT_ADD: _apply_commitment_add,
+        DeltaKind.COMMITMENT_RESOLVE: _apply_commitment_resolve,
+        DeltaKind.KNOWLEDGE_REVEAL: _apply_knowledge_reveal,
+    }
 
     # ------------------------------------------------------------------ #
     # Internal event helpers
