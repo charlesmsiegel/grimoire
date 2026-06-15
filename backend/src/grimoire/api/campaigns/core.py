@@ -6,7 +6,7 @@ import logging
 import shutil
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 
 from grimoire.api.deps import (
     FileWatcherDep,
@@ -22,6 +22,7 @@ from grimoire.state_store.paths import campaigns_root
 
 from .helpers import (
     _load_campaign_config,
+    _require_campaign_row,
     _seed_greeting_first_post,
     _write_campaign_config,
 )
@@ -215,10 +216,7 @@ async def get_campaign(
     state_store: StateStoreDep,
     library: LibraryDep,
 ) -> Any:
-    row = await state_store.db.fetchone("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"campaign {campaign_id!r} not found")
-    data = dict(row)
+    data = await _require_campaign_row(state_store, campaign_id)
     try:
         data["composition"] = to_payload(await library.get_composition(campaign_id))
         data["composition_error"] = None
@@ -236,10 +234,7 @@ async def update_campaign(
     state_store: StateStoreDep,
     mechanics: MechanicsDep,
 ) -> Any:
-    row = await state_store.db.fetchone("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"campaign {campaign_id!r} not found")
-    current = dict(row)
+    current = await _require_campaign_row(state_store, campaign_id)
     try:
         if payload.mechanics is not None and payload.mechanics != current.get("mechanics_module"):
             await mechanics.switch_module(campaign_id, payload.mechanics or None)

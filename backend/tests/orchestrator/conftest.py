@@ -84,6 +84,9 @@ class FakeStateStore:
     fail_apply_on_call: int | None = None
     _apply_call_count: int = 0
 
+    async def campaign_exists(self, campaign_id: str) -> bool:
+        return campaign_id in self.db.campaigns
+
     async def apply_delta(
         self,
         *,

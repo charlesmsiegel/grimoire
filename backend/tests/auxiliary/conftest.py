@@ -67,6 +67,9 @@ class FakeStateStore:
     applied_sets: list[dict] = field(default_factory=list)
     rewound: list[str] = field(default_factory=list)
 
+    async def campaign_exists(self, campaign_id: str) -> bool:
+        return campaign_id in self.db.campaigns
+
     async def apply_delta_set(self, **kwargs: Any) -> None:
         self.applied_sets.append(kwargs)
 

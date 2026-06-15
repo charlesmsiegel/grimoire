@@ -9,6 +9,8 @@ from fastapi import APIRouter, Body, HTTPException
 from grimoire.api.deps import CharactersDep, MechanicsDep, StateStoreDep, WorldDep
 from grimoire.api.util import map_lookup_errors, to_payload
 
+from .helpers import _require_campaign_row
+
 router = APIRouter()
 
 
@@ -52,11 +54,7 @@ async def put_sheet(
     state_store: StateStoreDep,
     payload: Annotated[dict[str, Any], Body()],
 ) -> Any:
-    row = await state_store.db.fetchone(
-        "SELECT mechanics_module FROM campaigns WHERE id = ?", (campaign_id,)
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"campaign {campaign_id!r} not found")
+    row = await _require_campaign_row(state_store, campaign_id)
     module_id = row["mechanics_module"] or "null"
     try:
         await state_store.write_sheet(

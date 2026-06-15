@@ -158,7 +158,7 @@ def test_import_endpoint_error_frame_carries_status(tmp_path: Path) -> None:
 
     app = _make_test_app()
     state_store = MagicMock()
-    state_store.db.fetchone = AsyncMock(return_value={"id": "camp"})
+    state_store.campaign_exists = AsyncMock(return_value=True)
     app.dependency_overrides[get_state_store] = lambda: state_store
     app.dependency_overrides[get_scenes] = lambda: AsyncMock()
     app.dependency_overrides[get_container] = lambda: MagicMock()
