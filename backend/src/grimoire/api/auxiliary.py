@@ -20,10 +20,6 @@ from pydantic import BaseModel, Field
 from grimoire.api.deps import OrchestratorDep
 from grimoire.api.util import map_lookup_errors, to_payload
 from grimoire.auxiliary.types import AuxiliaryTask, TaskKind
-from grimoire.orchestrator.errors import (
-    AuxiliaryAlreadyCommittedError,
-    AuxiliaryNotFoundError,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -217,11 +213,9 @@ async def accept_auxiliary(
     edited_text = payload.edited_text if payload else None
     try:
         out = await orchestrator.accept_auxiliary(campaign_id, result_id, edited_text=edited_text)
-    except AuxiliaryNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except AuxiliaryAlreadyCommittedError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
+        # AuxiliaryNotFoundError (404) / AuxiliaryAlreadyCommittedError (409)
+        # both carry http_status, so map_lookup_errors translates them.
         raise map_lookup_errors(exc) from exc
     return to_payload(out)
 

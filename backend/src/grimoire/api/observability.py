@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from grimoire.api.deps import ObservabilityDep
+from grimoire.api.util import map_lookup_errors
 from grimoire.types.observability import LogLevel, LogQuery
 
 router = APIRouter(prefix="/observability", tags=["observability"])
@@ -31,7 +32,7 @@ async def get_turn_audit(turn_id: str, observability: ObservabilityDep) -> Any:
     try:
         audit = await observability.get_turn_audit(turn_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise map_lookup_errors(exc) from exc
     return audit.model_dump(mode="json")
 
 
@@ -72,7 +73,7 @@ async def get_turn_prompt(turn_id: str, observability: ObservabilityDep) -> Any:
     try:
         audit = await observability.get_turn_audit(turn_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise map_lookup_errors(exc) from exc
     assembled = getattr(audit, "assembled_messages", None) or []
     messages = [_enrich_message(m) for m in assembled]
     sources = [s.model_dump(mode="json") for s in audit.context_sources]
@@ -102,7 +103,7 @@ async def get_turn_prompt_diff(
     try:
         return await observability.audit_store.diff_prompts(against, turn_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise map_lookup_errors(exc) from exc
 
 
 @router.get("/turns/{turn_id}/deltas")
@@ -119,7 +120,7 @@ async def get_turn_deltas(turn_id: str, observability: ObservabilityDep) -> Any:
     try:
         return await observability.audit_store.deltas_for_turn(turn_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise map_lookup_errors(exc) from exc
 
 
 @router.get("/turns/{turn_id}/costs")
