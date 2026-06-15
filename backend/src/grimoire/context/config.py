@@ -23,7 +23,13 @@ class RetrievalConfig:
     vector_top_k: int = 8
     keyword_top_k: int = 5
     similarity_threshold: float = 0.65
-    embedding_task: str = "extractor.embed"  # reusing existing embed task
+    # Query-time embedding task. MUST match the index-time task the embedding
+    # worker writes under ("library.embed") so queries and the stored corpus
+    # resolve to the same model — cosine distance is only meaningful within one
+    # model, and it's the only embedding task the gateway registers a default
+    # route for. (Was "extractor.embed", a task no provider ever routed → every
+    # query raised RouteNotFoundError and vector search was silently dropped.)
+    embedding_task: str = "library.embed"
     include_library: bool = True
     keyword_kinds: tuple[str, ...] = ("fact",)
     # When set, the builder passes `priority_hints={world_id: priority}` to

@@ -6,9 +6,9 @@ Implements the `FactSearchIndex` protocol against the State Store's
 neither path dominates when one is unavailable.
 
 The vector half needs an embedding for the query; that comes from the
-LLM Gateway via the configured `extractor` (or override) embedding task.
-If embedding fails or no provider is configured, the search degrades to
-keyword-only.
+LLM Gateway via the `library.embed` (or override) embedding task — the same
+task facts are indexed under, so query and corpus share a model. If embedding
+fails or no provider is configured, the search degrades to keyword-only.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Protocol
 
 from grimoire.continuity.protocols import ContinuityStore, FactSearchIndex
 from grimoire.continuity.types import Fact, FactId
-from grimoire.util import serialize_vector
+from grimoire.util import sanitize_fts_query, serialize_vector
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +50,12 @@ class HybridFactSearchIndex(FactSearchIndex):
         Optional. If provided, query embeddings are obtained from this
         seam and a vector pass is run; otherwise the search is keyword-only.
     embed_task:
-        Task name to pass to the embedder. Defaults to ``"extractor"``
-        which is the canonical embedding route in the LLM Gateway spec.
+        Task name to pass to the embedder. Defaults to ``"library.embed"`` —
+        the task the embedding worker indexes facts under, so query and corpus
+        embeddings resolve to the same model. (Was ``"extractor"``, which is the
+        Light *generation* task: it routes to an LLM provider, not an embedding
+        one, so the vector pass always failed and silently fell back to
+        keyword-only.)
     rrf_k:
         Reciprocal-rank-fusion constant. Higher means flatter rank
         weighting; 60 is the literature default.
@@ -64,7 +68,7 @@ class HybridFactSearchIndex(FactSearchIndex):
         *,
         campaign_id: str,
         embedder: QueryEmbedder | None = None,
-        embed_task: str = "extractor",
+        embed_task: str = "library.embed",
         rrf_k: int = 60,
     ) -> None:
         self._store = store
@@ -113,7 +117,7 @@ class HybridFactSearchIndex(FactSearchIndex):
     async def _keyword_search(
         self, query: str, *, top_k: int, include_retired: bool
     ) -> list[FactId]:
-        sanitised = _sanitise_fts_query(query)
+        sanitised = sanitize_fts_query(query)
         if not sanitised:
             return []
         where = [
@@ -171,23 +175,6 @@ class HybridFactSearchIndex(FactSearchIndex):
             logger.exception("vector fact search failed")
             return []
         return [row["id"] for row in rows]
-
-
-def _sanitise_fts_query(query: str) -> str:
-    """Strip FTS5 operators from a free-text query.
-
-    FTS5 treats characters like ``"``, ``*``, ``:`` and ``-`` as
-    operators, so a contradiction-check candidate that mentions a colon
-    or quote would either error or match unintended things. We replace
-    them with spaces and split on whitespace; a trailing wildcard makes
-    short stems match longer tokens.
-    """
-    out: list[str] = []
-    for tok in query.split():
-        cleaned = "".join(ch for ch in tok if ch.isalnum() or ch == "_")
-        if cleaned:
-            out.append(cleaned)
-    return " OR ".join(out)
 
 
 __all__ = ["HybridFactSearchIndex", "QueryEmbedder"]

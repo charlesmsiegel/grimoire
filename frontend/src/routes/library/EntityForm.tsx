@@ -12,11 +12,11 @@ import {
   createDefaultFields,
   managedKeys,
 } from "./entitySchemas";
+import { MapEditor } from "../../components/widgets/MapEditor";
+import { ObjectListEditor } from "../../components/widgets/ObjectListEditor";
+import { StringListEditor } from "../../components/widgets/StringListEditor";
 import { EnumSelect } from "./widgets/EnumSelect";
-import { MapEditor } from "./widgets/MapEditor";
-import { ObjectListEditor } from "./widgets/ObjectListEditor";
 import { RefPicker } from "./widgets/RefPicker";
-import { StringListEditor } from "./widgets/StringListEditor";
 import { TagsInput } from "./widgets/TagsInput";
 
 interface Props {

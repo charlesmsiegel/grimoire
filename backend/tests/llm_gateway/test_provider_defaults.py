@@ -107,6 +107,33 @@ async def test_registers_embed_default_from_configured_embedding_plugin(
     assert routes["library.embed"] == "embed-openrouter.cohere/embed-english-v3.0"
 
 
+async def test_query_side_embedding_tasks_resolve_after_provider_config(
+    empty_db: Database,
+) -> None:
+    """The context builder and continuity hybrid search embed queries at read
+    time. The tasks they use must be ones a configured embedding provider
+    registers a default route for — otherwise vector search raises
+    RouteNotFoundError and is silently dropped (regression: they used
+    "extractor.embed" / "extractor", which no embedding provider ever routed)."""
+    import inspect
+
+    from grimoire.context.config import RetrievalConfig
+    from grimoire.continuity.hybrid_search import HybridFactSearchIndex
+
+    plugins = _ConfiguredPlugins(
+        configs={"embed-openrouter": {"active_model": "cohere/embed-english-v3.0"}},
+        manifests=[_embed_manifest()],
+        embed={"embed-openrouter": FakeEmbeddingProvider(id="embed-or")},
+    )
+    gateway = LLMGatewayService(plugins=plugins, db=empty_db, config=GatewayConfig())
+    await gateway.register_provider_defaults()
+
+    routes = await gateway.list_routes()
+    continuity_task = inspect.signature(HybridFactSearchIndex).parameters["embed_task"].default
+    for task in (RetrievalConfig().embedding_task, continuity_task):
+        assert task in routes, f"embedding task {task!r} has no registered route"
+
+
 async def test_does_not_overwrite_existing_defaults(empty_db: Database) -> None:
     """A route set via env / config / prior call must not be clobbered."""
     plugins = _ConfiguredPlugins(

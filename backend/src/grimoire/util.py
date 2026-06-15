@@ -199,6 +199,26 @@ def canonicalize_character_ref(ref: str) -> str:
     return ref
 
 
+def sanitize_fts_query(query: str) -> str:
+    """Turn free text into a safe FTS5 ``MATCH`` expression.
+
+    FTS5 treats characters like ``"``, ``*``, ``:``, ``-``, ``/`` and ``.`` as
+    query operators, so free text — player input, entity refs such as
+    ``worlds/w/characters/c``, prose punctuation — passed straight to ``MATCH``
+    raises ``fts5: syntax error``. We keep only alphanumerics and underscores
+    per token and OR the surviving tokens together (recall over precision; bm25
+    ranks the results). Returns ``""`` when nothing survives — callers should
+    treat that as "no query" and skip the search rather than running an empty
+    ``MATCH``.
+    """
+    tokens = [
+        cleaned
+        for tok in query.split()
+        if (cleaned := "".join(ch for ch in tok if ch.isalnum() or ch == "_"))
+    ]
+    return " OR ".join(tokens)
+
+
 class ConfidenceTier(StrEnum):
     """Tier a confidence score falls into under a two-threshold ladder.
 
@@ -238,6 +258,7 @@ __all__ = [
     "parse_iso_datetime",
     "safe_json_dumps",
     "safe_json_loads",
+    "sanitize_fts_query",
     "serialize_vector",
     "slugify_id",
 ]

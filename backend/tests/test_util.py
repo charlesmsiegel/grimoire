@@ -10,6 +10,7 @@ from grimoire.util import (
     classify_confidence,
     deserialize_vector,
     extract_json_object,
+    sanitize_fts_query,
     serialize_vector,
 )
 
@@ -112,3 +113,21 @@ def test_vector_roundtrip_is_little_endian() -> None:
 )
 def test_classify_confidence(confidence: float, expected: ConfidenceTier) -> None:
     assert classify_confidence(confidence, auto_apply=0.7, review=0.5) is expected
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("Elysium", "Elysium"),
+        ("the dog barked", "the OR dog OR barked"),
+        # Entity refs and prose punctuation: operator chars are stripped per token.
+        ("worlds/city/characters/winifred-vespertine", "worldscitycharactersflorencevespertine"),
+        ("Where is winifred?", "Where OR is OR winifred"),
+        ("snake_case keeps_underscores", "snake_case OR keeps_underscores"),
+        # Nothing survives → empty string (caller skips the MATCH).
+        ("/ . : - *", ""),
+        ("", ""),
+    ],
+)
+def test_sanitize_fts_query(query: str, expected: str) -> None:
+    assert sanitize_fts_query(query) == expected
