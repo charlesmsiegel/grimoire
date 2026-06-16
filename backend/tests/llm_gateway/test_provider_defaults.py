@@ -89,6 +89,10 @@ async def test_registers_main_and_extractor_from_configured_llm_plugin(
     # instance's `.id` — see the comment on register_provider_defaults.
     assert routes["main"] == "llm-openrouter.deepseek/deepseek-v4-pro"
     assert routes["extractor"] == "llm-openrouter.deepseek/deepseek-v4-pro"
+    # drift_check is a core per-turn task (the contradiction judge) and must
+    # get an app-level default like extractor — otherwise the judge, which
+    # resolves without a campaign_id, raises RouteNotFoundError on every turn.
+    assert routes["drift_check"] == "llm-openrouter.deepseek/deepseek-v4-pro"
 
 
 async def test_registers_embed_default_from_configured_embedding_plugin(

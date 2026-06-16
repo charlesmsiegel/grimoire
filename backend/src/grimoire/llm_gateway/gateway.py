@@ -347,6 +347,10 @@ class LLMGatewayService:
         "scene_suggest",
         "scene_preview",
         "scene_first_post",
+        # The contradiction judge resolves this without a campaign_id, so it
+        # needs an app-level default (mapped to the LIGHT tier) rather than
+        # relying on a per-campaign tier route.
+        "drift_check",
     )
     _DEFAULT_EMBEDDING_TASKS: tuple[str, ...] = ("library.embed",)
 
