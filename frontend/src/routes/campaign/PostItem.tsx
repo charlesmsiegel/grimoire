@@ -236,9 +236,20 @@ export function PostItem({
   async function regenerate(steeringHint?: string): Promise<boolean> {
     if (!canMutate) return false;
     const opts = steeringHint?.trim() ? { steering_hint: steeringHint.trim() } : undefined;
-    const ok = await call(() =>
-      campaignApi.regeneratePost(campaignId, post.scene_id, post.id, opts),
-    );
+    const ok = await call(async () => {
+      const result = await campaignApi.regeneratePost(campaignId, post.scene_id, post.id, opts);
+      // The backend creates the alternate without promoting it (swipes design),
+      // so the rendered .md — and thus the shown body — would stay the old
+      // primary and the new generation would appear to "revert". Promote it,
+      // exactly like navigating a swipe and like the auxiliary rewrite
+      // accept-flow, so the fresh generation becomes the displayed post.
+      await campaignApi.switchPrimaryAlternate(
+        campaignId,
+        post.scene_id,
+        post.id,
+        result.new_alternate_id,
+      );
+    });
     // On success the WS alternate_added event clears the streaming indicator;
     // on failure no such event arrives, so clear it here or the UI stays stuck
     // showing "streaming". A reroll streams under this post's turn_id, so pass
