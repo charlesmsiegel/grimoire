@@ -109,6 +109,34 @@ async def test_post_delete_renumbers_index(setup) -> None:
     assert [r["body_excerpt"] for r in rows] == ["line 0", "line 2"]
 
 
+async def test_primary_switch_resyncs_indexed_body(setup) -> None:
+    """Switching the primary alternate rewrites the .md; the SQLite posts index
+    must follow, or paginated reads keep serving the pre-switch body and a
+    swipe/regenerate appears to "revert" in the UI."""
+    from grimoire.scenes.types import Alternate
+
+    manager, _, db = setup
+    scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))
+    post = new_post(author_kind=AuthorKind.NARRATOR, body="original body", is_player=False)
+    await manager.append_post(scene.id, post)
+
+    alt = Alternate(
+        id="a_new",
+        post_id=post.id,
+        text="the regenerated body",
+        delta_set_id="ds_new",
+        author_kind=post.author_kind,
+        created_at=post.created_at,
+    )
+    await manager.append_alternate(post.id, alt)
+    await manager.set_primary_alternate(post.id, "a_new")
+    await manager.rebuild_md_from_primaries(scene.id)
+
+    row = await db.fetchone("SELECT body FROM posts WHERE id = ?", (post.id,))
+    assert row is not None
+    assert row["body"] == "the regenerated body"
+
+
 async def test_scene_close_marks_row_closed(setup) -> None:
     manager, _, db = setup
     scene = await manager.start_scene(SceneInit(campaign_id="c", title="Scene"))

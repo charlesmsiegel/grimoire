@@ -1592,6 +1592,13 @@ class SceneManager:
                 heading_pattern=self.config.files.post_heading_pattern,
             )
             self._known_body_hashes[scene.id] = content_hash(md_path.read_text(encoding="utf-8"))
+        # The rendered .md now reflects different primaries (e.g. after a swipe,
+        # regenerate-accept, auxiliary rewrite, or retcon replay). Notify so the
+        # SceneIndexer re-syncs the SQLite `posts` index from the file and the
+        # frontend refreshes — otherwise the paginated reads keep serving the
+        # pre-switch body and the change appears to "revert". Emitted outside the
+        # scene lock so a handler can't deadlock on it.
+        await self._emit(SCENE_FILE_CHANGED, scene, post_count=scene.post_count)
 
     # -- File-watcher hook ----------------------------------------------
 
