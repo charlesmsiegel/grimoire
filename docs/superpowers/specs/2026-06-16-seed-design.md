@@ -58,6 +58,15 @@ frontend/
   index.html
   package.json
   vite.config.ts
+scripts/
+  windows/                 # PowerShell (primary target)
+    install.ps1
+    run.ps1
+    shutdown.ps1
+  unix/                    # bash (macOS + Linux)
+    install.sh
+    run.sh
+    shutdown.sh
 ```
 
 ## Data — `~/.grimoire/`
@@ -192,6 +201,37 @@ grimoire wordmark and a link to Config.
 
 `api/client.ts` is a typed `fetch` wrapper raising `ApiError(status, detail)` for non-2xx
 (mirrors the OLD client), plus a small SSE reader helper for the chat stream.
+
+## Dev scripts (`scripts/`)
+
+Cross-platform install / run / shutdown so the seed launches on any machine with no manual
+steps. **Windows is the primary target** (PowerShell `.ps1`); macOS and Linux share bash
+(`.sh`). Each script is small, prints what it's doing, and fails loudly with a clear message
+(e.g. "Python 3.11+ not found", "Node 18+ not found").
+
+Layout:
+
+```
+scripts/windows/{install,run,shutdown}.ps1     # PowerShell 5.1+ compatible
+scripts/unix/{install,run,shutdown}.sh         # bash; macOS + Linux
+```
+
+Behavior (identical across OSes; only the shell differs):
+
+- **install** — verify prerequisites (Python 3.11+, Node 18+); create the backend virtualenv
+  (`backend/.venv`) and `pip install` the backend (editable); `npm install` in `frontend/`.
+  Idempotent — safe to re-run.
+- **run** — start the app in **dev mode**: backend via `uvicorn grimoire.main:app --reload`
+  (port 8000) and the Vite dev server (port 5173, proxying `/api` to 8000). Both are launched
+  as background processes; their PIDs are written to `.run/pids` (gitignored) so `shutdown`
+  can find them. Prints the URL and opens the browser to it. If `.run/pids` already has live
+  processes, it reports "already running" instead of double-starting.
+- **shutdown** — read `.run/pids`, terminate those processes (gracefully, then force if
+  needed), and delete the pidfile. No-op with a friendly message if nothing is running.
+
+A production path (build `frontend/dist`, serve everything from FastAPI on one port) is a
+later addition; the seed's scripts target the dev loop you build on. `.run/` is added to
+`.gitignore`.
 
 ## Theming (the deliberate, non-generic part)
 
