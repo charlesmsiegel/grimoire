@@ -55,7 +55,13 @@ frontend/
     routes/ConfigView.tsx
     main.tsx
     App.tsx
-  index.html
+  public/                  # static assets, sourced from OLD/frontend/public
+    favicon.ico            # app/window icon + Windows shortcut icon
+    grimoire-32.png
+    grimoire-128.png
+    grimoire-256.png       # desktop-entry icon on Linux/macOS
+    grimoire-512.png
+  index.html               # references favicon.ico + the wordmark logo
   package.json
   vite.config.ts
 scripts/
@@ -219,8 +225,18 @@ scripts/unix/{install,run,shutdown}.sh         # bash; macOS + Linux
 Behavior (identical across OSes; only the shell differs):
 
 - **install** — verify prerequisites (Python 3.11+, Node 18+); create the backend virtualenv
-  (`backend/.venv`) and `pip install` the backend (editable); `npm install` in `frontend/`.
-  Idempotent — safe to re-run.
+  (`backend/.venv`) and `pip install` the backend (editable); `npm install` in `frontend/`;
+  then **create a desktop shortcut/icon that launches `run`**, using the grimoire logo.
+  Idempotent — safe to re-run (re-creates the shortcut).
+  - **Windows**: a `Grimoire.lnk` on the user's Desktop whose target is
+    `powershell.exe -ExecutionPolicy Bypass -File <repo>\scripts\windows\run.ps1`, working
+    dir = repo root, icon = `frontend/public/favicon.ico` (created via the `WScript.Shell`
+    COM object).
+  - **macOS**: a double-clickable `Grimoire.command` on the Desktop that runs
+    `scripts/unix/run.sh` (icon set best-effort from `grimoire-512.png` where possible).
+  - **Linux**: a `grimoire.desktop` entry on the Desktop and in
+    `~/.local/share/applications`, `Exec=` running `scripts/unix/run.sh`, `Icon=` pointing
+    at `frontend/public/grimoire-256.png`.
 - **run** — start the app in **dev mode**: backend via `uvicorn grimoire.main:app --reload`
   (port 8000) and the Vite dev server (port 5173, proxying `/api` to 8000). Both are launched
   as background processes; their PIDs are written to `.run/pids` (gitignored) so `shutdown`
