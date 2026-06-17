@@ -69,6 +69,7 @@ scripts/
     install.ps1
     run.ps1
     shutdown.ps1
+    launch.vbs             # pinnable launcher target (runs run.ps1, no console flash)
   unix/                    # bash (macOS + Linux)
     install.sh
     run.sh
@@ -228,10 +229,20 @@ Behavior (identical across OSes; only the shell differs):
   (`backend/.venv`) and `pip install` the backend (editable); `npm install` in `frontend/`;
   then **create a desktop shortcut/icon that launches `run`**, using the grimoire logo.
   Idempotent — safe to re-run (re-creates the shortcut).
-  - **Windows**: a `Grimoire.lnk` on the user's Desktop whose target is
-    `powershell.exe -ExecutionPolicy Bypass -File <repo>\scripts\windows\run.ps1`, working
-    dir = repo root, icon = `frontend/public/favicon.ico` (created via the `WScript.Shell`
-    COM object).
+  - **Windows**: a `Grimoire.lnk` created in **both** the Desktop and the Start Menu
+    Programs folder (`%APPDATA%\Microsoft\Windows\Start Menu\Programs`), so it can be **pinned
+    to the taskbar / Start** via right-click. Two things make it pinnable (Windows refuses to
+    pin shortcuts that target `powershell.exe`/`cmd.exe` directly, and would otherwise group
+    them under "Windows PowerShell"):
+      - **Target a launcher, not powershell** — the shortcut points at
+        `wscript.exe scripts\windows\launch.vbs`; `launch.vbs` invokes `run.ps1` with a
+        hidden window (also avoids a console-window flash). `wscript`-backed shortcuts pin
+        cleanly.
+      - **Identity** — set an explicit `System.AppUserModel.ID` (`"Grimoire"`) on the
+        shortcut's property store so the taskbar treats it as a first-class app rather than a
+        generic script host.
+      - icon = `frontend/public/favicon.ico`; working dir = repo root. Created via the
+        `WScript.Shell` COM object (with the property-store AUMID set afterward).
   - **macOS**: a double-clickable `Grimoire.command` on the Desktop that runs
     `scripts/unix/run.sh` (icon set best-effort from `grimoire-512.png` where possible).
   - **Linux**: a `grimoire.desktop` entry on the Desktop and in
@@ -240,8 +251,12 @@ Behavior (identical across OSes; only the shell differs):
 - **run** — start the app in **dev mode**: backend via `uvicorn grimoire.main:app --reload`
   (port 8000) and the Vite dev server (port 5173, proxying `/api` to 8000). Both are launched
   as background processes; their PIDs are written to `.run/pids` (gitignored) so `shutdown`
-  can find them. Prints the URL and opens the browser to it. If `.run/pids` already has live
-  processes, it reports "already running" instead of double-starting.
+  can find them. Prints the URL and opens the app — preferring the browser's **app mode**
+  where available (`msedge`/`chrome --app=http://localhost:5173`) for a chromeless,
+  app-like window that pairs with the pinned launcher, falling back to the default browser
+  otherwise. If `.run/pids` already has live processes, it reports "already running" instead
+  of double-starting. (True window-grouping of the browser window under the pinned taskbar
+  icon is a packaging concern deferred to a later PWA/webview wrapper.)
 - **shutdown** — read `.run/pids`, terminate those processes (gracefully, then force if
   needed), and delete the pidfile. No-op with a friendly message if nothing is running.
 
