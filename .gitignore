@@ -1,0 +1,18 @@
+# Local-only reference copies
+OLD/
+
+# Brainstorming visual companion
+.superpowers/
+
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node / Vite
+frontend/node_modules/
+frontend/dist/
+
+# Run-time pidfiles
+.run/
