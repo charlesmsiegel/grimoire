@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -104,3 +106,87 @@ def write_config(**fields: str) -> dict[str, str]:
             cfg[key] = value
     _config_path().write_text(dump_frontmatter(cfg, ""), encoding="utf-8")
     return cfg
+
+
+ROLE_TO_LABEL = {"user": "You", "assistant": "Grimoire"}
+LABEL_TO_ROLE = {"You": "user", "Grimoire": "assistant"}
+_MARKER = re.compile(r"^\*\*(You|Grimoire):\*\*[ ]?", re.MULTILINE)
+
+
+class ConversationNotFound(Exception):
+    pass
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _slugify(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return slug or "chat"
+
+
+def _conv_path(cid: str) -> Path:
+    return home() / "conversations" / f"{cid}.md"
+
+
+def create_conversation(title: str) -> str:
+    _ensure_home()
+    now = _now_iso()
+    cid = f"{now[:10]}-{_slugify(title)}"
+    path = _conv_path(cid)
+    n = 2
+    while path.exists():
+        cid = f"{now[:10]}-{_slugify(title)}-{n}"
+        path = _conv_path(cid)
+        n += 1
+    meta = {"title": title, "model": read_config()["model"], "created": now, "updated": now}
+    path.write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+    return cid
+
+
+def list_conversations() -> list[dict[str, str]]:
+    _ensure_home()
+    out = []
+    for path in (home() / "conversations").glob("*.md"):
+        meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+        out.append({
+            "id": path.stem,
+            "title": meta.get("title", path.stem),
+            "model": meta.get("model", ""),
+            "created": meta.get("created", ""),
+            "updated": meta.get("updated", ""),
+        })
+    out.sort(key=lambda m: m["updated"], reverse=True)
+    return out
+
+
+def _parse_messages(body: str) -> list[dict[str, str]]:
+    matches = list(_MARKER.finditer(body))
+    messages = []
+    for i, m in enumerate(matches):
+        label = m.group(1)
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        messages.append({"role": LABEL_TO_ROLE[label], "content": body[start:end].strip()})
+    return messages
+
+
+def read_conversation(cid: str) -> dict:
+    path = _conv_path(cid)
+    if not path.exists():
+        raise ConversationNotFound(cid)
+    meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    return {"meta": {"id": cid, **meta}, "messages": _parse_messages(body)}
+
+
+def append_message(cid: str, role: str, content: str) -> None:
+    path = _conv_path(cid)
+    if not path.exists():
+        raise ConversationNotFound(cid)
+    meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    label = ROLE_TO_LABEL[role]
+    block = f"**{label}:** {content.strip()}\n"
+    body = (body.rstrip() + "\n\n" + block) if body.strip() else block
+    meta["updated"] = _now_iso()
+    path.write_text(dump_frontmatter(meta, body), encoding="utf-8")
