@@ -22,7 +22,27 @@ $front = Start-Process -FilePath "npm.cmd" `
 Set-Content -Path $PidFile -Value @($back.Id, $front.Id)
 
 Write-Host "grimoire running at $Url (backend $($back.Id), frontend $($front.Id))"
-Start-Sleep -Seconds 2
+
+# Wait for the frontend dev server to accept connections before opening a browser.
+# Vite's cold start (first run pre-bundles deps) can take well over a fixed delay.
+Write-Host -NoNewline "Waiting for frontend to be ready"
+$ready = $false
+for ($i = 0; $i -lt 60; $i++) {
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $client.Connect("localhost", 5173)
+        $client.Close()
+        $ready = $true
+        break
+    } catch {
+        Write-Host -NoNewline "."
+        Start-Sleep -Seconds 1
+    }
+}
+Write-Host ""
+if (-not $ready) {
+    Write-Host "Frontend did not become ready in time. Check logs; opening $Url anyway."
+}
 
 # Prefer browser app mode for a chromeless, app-like window.
 $edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
