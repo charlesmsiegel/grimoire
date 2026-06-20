@@ -972,7 +972,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    proxy: { "/api": "http://localhost:8000" },
+    proxy: { "/api": "http://127.0.0.1:8173" },
   },
   test: {
     globals: true,
@@ -1819,7 +1819,7 @@ if [ -f "$PIDFILE" ] && kill -0 $(head -n1 "$PIDFILE") 2>/dev/null; then
 fi
 
 cd "$ROOT/backend"
-.venv/bin/python -m uvicorn grimoire.main:app --reload --port 8000 &
+.venv/bin/python -m uvicorn grimoire.main:app --reload --port 8173 &
 BACK=$!
 cd "$ROOT/frontend"
 npm run dev -- --port 5173 &
@@ -1961,7 +1961,7 @@ if (Test-Path $PidFile) {
 }
 
 $back = Start-Process -FilePath "$Root\backend\.venv\Scripts\python.exe" `
-    -ArgumentList "-m", "uvicorn", "grimoire.main:app", "--reload", "--port", "8000" `
+    -ArgumentList "-m", "uvicorn", "grimoire.main:app", "--reload", "--port", "8173" `
     -WorkingDirectory "$Root\backend" -PassThru -WindowStyle Hidden
 $front = Start-Process -FilePath "npm.cmd" `
     -ArgumentList "run", "dev", "--", "--port", "5173" `

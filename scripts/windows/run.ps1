@@ -14,7 +14,7 @@ if (Test-Path $PidFile) {
 }
 
 $back = Start-Process -FilePath "$Root\backend\.venv\Scripts\python.exe" `
-    -ArgumentList "-m", "uvicorn", "grimoire.main:app", "--reload", "--port", "8000" `
+    -ArgumentList "-m", "uvicorn", "grimoire.main:app", "--reload", "--port", "8173" `
     -WorkingDirectory "$Root\backend" -PassThru -WindowStyle Hidden
 $front = Start-Process -FilePath "npm.cmd" `
     -ArgumentList "run", "dev", "--", "--port", "5173" `
@@ -23,24 +23,31 @@ Set-Content -Path $PidFile -Value @($back.Id, $front.Id)
 
 Write-Host "grimoire running at $Url (backend $($back.Id), frontend $($front.Id))"
 
-# Wait for the frontend dev server to accept connections before opening a browser.
-# Vite's cold start (first run pre-bundles deps) can take well over a fixed delay.
-Write-Host -NoNewline "Waiting for frontend to be ready"
-$ready = $false
-for ($i = 0; $i -lt 60; $i++) {
-    try {
-        $client = New-Object System.Net.Sockets.TcpClient
-        $client.Connect("localhost", 5173)
-        $client.Close()
-        $ready = $true
-        break
-    } catch {
-        Write-Host -NoNewline "."
-        Start-Sleep -Seconds 1
+# Wait for a TCP port to accept connections (cold starts can exceed any fixed delay:
+# Vite pre-bundles deps on first run, uvicorn imports the app).
+function Wait-Port {
+    param([string]$Name, [int]$Port)
+    Write-Host -NoNewline "Waiting for $Name to be ready"
+    for ($i = 0; $i -lt 60; $i++) {
+        try {
+            $client = New-Object System.Net.Sockets.TcpClient
+            $client.Connect("127.0.0.1", $Port)
+            $client.Close()
+            Write-Host ""
+            return $true
+        } catch {
+            Write-Host -NoNewline "."
+            Start-Sleep -Seconds 1
+        }
     }
+    Write-Host ""
+    return $false
 }
-Write-Host ""
-if (-not $ready) {
+
+if (-not (Wait-Port "backend" 8173)) {
+    Write-Host "Backend did not become ready (port 8173). The config page will fail to load; check the backend output."
+}
+if (-not (Wait-Port "frontend" 5173)) {
     Write-Host "Frontend did not become ready in time. Check logs; opening $Url anyway."
 }
 

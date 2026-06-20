@@ -249,7 +249,7 @@ Behavior (identical across OSes; only the shell differs):
     `~/.local/share/applications`, `Exec=` running `scripts/unix/run.sh`, `Icon=` pointing
     at `frontend/public/grimoire-256.png`.
 - **run** — start the app in **dev mode**: backend via `uvicorn grimoire.main:app --reload`
-  (port 8000) and the Vite dev server (port 5173, proxying `/api` to 8000). Both are launched
+  (port 8173) and the Vite dev server (port 5173, proxying `/api` to 8173). Both are launched
   as background processes; their PIDs are written to `.run/pids` (gitignored) so `shutdown`
   can find them. Prints the URL and opens the app — preferring the browser's **app mode**
   where available (`msedge`/`chrome --app=http://localhost:5173`) for a chromeless,
