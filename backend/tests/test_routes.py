@@ -54,3 +54,23 @@ def test_chat_streams_and_persists(client):
     assert 'data: {"done": true}' in resp.text
     conv = client.get(f"/api/conversations/{cid}").json()
     assert conv["messages"][-1] == {"role": "assistant", "content": "Hello"}
+
+
+def test_retry_regenerates_without_adding_a_user_turn(client):
+    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    cid = client.post("/api/conversations", json={"title": "T"}).json()["id"]
+    store.append_message(cid, "user", "hi")  # a turn left dangling by a failed send
+    resp = client.post(f"/api/conversations/{cid}/retry")
+    assert resp.status_code == 200
+    assert 'data: {"delta": "Hel"}' in resp.text
+    conv = client.get(f"/api/conversations/{cid}").json()
+    assert [m["role"] for m in conv["messages"]] == ["user", "assistant"]
+    assert conv["messages"][-1] == {"role": "assistant", "content": "Hello"}
+
+
+def test_retry_missing_key_returns_409(client):
+    cid = client.post("/api/conversations", json={"title": "T"}).json()["id"]
+    store.append_message(cid, "user", "hi")
+    resp = client.post(f"/api/conversations/{cid}/retry")
+    assert resp.status_code == 409
+    assert resp.json()["kind"] == "missing_key"

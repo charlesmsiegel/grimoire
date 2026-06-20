@@ -33,6 +33,27 @@ async def test_auth_error_normalized():
     with pytest.raises(OpenRouterError) as exc:
         [c async for c in client.stream([], "m", "sk-or-x")]
     assert exc.value.kind == "auth"
+    assert exc.value.detail == "bad key"
+
+
+async def test_error_detail_extracts_nested_message():
+    def handler(request):
+        return httpx.Response(404, json={"error": {"message": "No endpoints", "code": 404}})
+
+    client = make_client(handler)
+    with pytest.raises(OpenRouterError) as exc:
+        [c async for c in client.stream([], "m", "sk-or-x")]
+    assert exc.value.detail == "No endpoints"
+
+
+async def test_error_detail_falls_back_to_raw_text():
+    def handler(request):
+        return httpx.Response(500, text="upstream exploded")
+
+    client = make_client(handler)
+    with pytest.raises(OpenRouterError) as exc:
+        [c async for c in client.stream([], "m", "sk-or-x")]
+    assert exc.value.detail == "upstream exploded"
 
 
 async def test_client_ignores_invalid_ssl_cert_file(monkeypatch):
