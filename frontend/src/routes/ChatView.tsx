@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type ConvMeta, type Message } from "../api/client";
+import type { ChatEvent } from "../api/stream";
 
 export default function ChatView({ keySet }: { keySet: boolean }) {
   const [convs, setConvs] = useState<ConvMeta[]>([]);
@@ -38,6 +39,28 @@ export default function ChatView({ keySet }: { keySet: boolean }) {
     selectConv(id);
   }
 
+  async function runStream(start: (onEvent: (e: ChatEvent) => void) => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    let acc = "";
+    try {
+      await start((e) => {
+        if (e.delta) {
+          acc += e.delta;
+          setStreaming(acc);
+        } else if (e.error) {
+          setError(e.error.detail);
+        }
+      });
+      if (acc) setMessages((m) => [...m, { role: "assistant", content: acc }]);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    } finally {
+      setStreaming("");
+      setBusy(false);
+    }
+  }
+
   async function send() {
     if (!input.trim() || busy) return;
     let id = activeId;
@@ -49,25 +72,12 @@ export default function ChatView({ keySet }: { keySet: boolean }) {
     const content = input.trim();
     setInput("");
     setMessages((m) => [...m, { role: "user", content }]);
-    setBusy(true);
-    setError(null);
-    let acc = "";
-    try {
-      await api.chat(id, content, (e) => {
-        if (e.delta) {
-          acc += e.delta;
-          setStreaming(acc);
-        } else if (e.error) {
-          setError(e.error.detail);
-        }
-      });
-      setMessages((m) => [...m, { role: "assistant", content: acc }]);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
-    } finally {
-      setStreaming("");
-      setBusy(false);
-    }
+    await runStream((onEvent) => api.chat(id!, content, onEvent));
+  }
+
+  async function retry() {
+    if (!activeId || busy) return;
+    await runStream((onEvent) => api.retry(activeId, onEvent));
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
@@ -97,7 +107,14 @@ export default function ChatView({ keySet }: { keySet: boolean }) {
             No OpenRouter key set. <Link to="/config">Set your key in Config</Link>.
           </div>
         )}
-        {error && <div className="banner">{error}</div>}
+        {error && (
+          <div className="banner error-banner">
+            <span>{error}</span>
+            <button className="retry" onClick={retry} disabled={busy}>
+              Retry
+            </button>
+          </div>
+        )}
         <div className="stream" ref={streamRef}>
           {messages.map((m, i) => (
             <div className="msg" key={i}>
