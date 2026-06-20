@@ -36,9 +36,9 @@ test("tokensPerDollar formats compactly", () => {
   expect(tokensPerDollar("0.01")).toBe("100"); // 1/0.01 = 100
 });
 
-test("tokensPerDollar renders a free side as infinity", () => {
-  expect(tokensPerDollar("0")).toBe("∞");
-  expect(tokensPerDollar("not-a-number")).toBe("∞");
+test("tokensPerDollar renders a free side as Free", () => {
+  expect(tokensPerDollar("0")).toBe("Free");
+  expect(tokensPerDollar("not-a-number")).toBe("Free");
 });
 
 test("priceLabel renders Free only when both sides are zero", () => {
@@ -51,8 +51,8 @@ test("priceLabel combines both sides", () => {
   );
 });
 
-test("priceLabel shows infinity for a single free side", () => {
+test("priceLabel shows Free for a single free side", () => {
   expect(priceLabel({ id: "x", name: "X", prompt: "0", completion: "0.00002" })).toBe(
-    "∞ / 50K tok/$",
+    "Free / 50K tok/$",
   );
 });

@@ -51,6 +51,16 @@ test("typing filters by name", async () => {
   expect(screen.getByText("google/gemini")).toBeInTheDocument();
 });
 
+test("typing 'free' filters by the price label", async () => {
+  render(<Harness />);
+  const input = screen.getByRole("textbox");
+  fireEvent.focus(input);
+  await screen.findByText("anthropic/claude");
+  fireEvent.change(input, { target: { value: "free" } });
+  await waitFor(() => expect(screen.queryByText("anthropic/claude")).not.toBeInTheDocument());
+  expect(screen.getByText("google/gemini")).toBeInTheDocument();
+});
+
 test("selecting a row sets the model id", async () => {
   const onChange = vi.fn();
   render(<ModelCombobox value="" onChange={onChange} />);

@@ -28,7 +28,12 @@ export default function ModelCombobox({
   const q = value.toLowerCase();
   const matches =
     touched && q
-      ? models.filter((m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
+      ? models.filter(
+          (m) =>
+            m.id.toLowerCase().includes(q) ||
+            m.name.toLowerCase().includes(q) ||
+            priceLabel(m).toLowerCase().includes(q),
+        )
       : models;
 
   function select(id: string) {
