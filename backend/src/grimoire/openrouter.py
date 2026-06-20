@@ -28,6 +28,18 @@ def _status_kind(status: int) -> str:
     return "bad_response"
 
 
+def _extract_error(text: str) -> str:
+    """Pull a human-readable message out of an OpenRouter error body."""
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return text.strip()
+    err = obj.get("error", obj) if isinstance(obj, dict) else obj
+    if isinstance(err, dict):
+        return str(err.get("message") or err.get("detail") or err)
+    return str(err)
+
+
 class OpenRouterClient:
     def __init__(self, http: httpx.AsyncClient | None = None):
         self._http = http
@@ -65,7 +77,7 @@ class OpenRouterClient:
             ) as resp:
                 if resp.status_code >= 400:
                     await resp.aread()
-                    raise OpenRouterError(_status_kind(resp.status_code), resp.text)
+                    raise OpenRouterError(_status_kind(resp.status_code), _extract_error(resp.text))
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue

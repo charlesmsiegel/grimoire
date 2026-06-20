@@ -67,23 +67,22 @@ def get_conversation(cid: str):
         raise HTTPException(status_code=404, detail="conversation not found")
 
 
-@router.post("/conversations/{cid}/chat")
-def post_chat(cid: str, turn: ChatTurn, client: OpenRouterClient = Depends(get_openrouter)):
+def _require_conversation(cid: str) -> dict:
     try:
-        conv = store.read_conversation(cid)
+        return store.read_conversation(cid)
     except store.ConversationNotFound:
         raise HTTPException(status_code=404, detail="conversation not found")
-    cfg = store.read_config()
+
+
+def _require_key(cfg: dict[str, str]) -> None:
     if not cfg["openrouter_key"]:
         raise HTTPException(
             status_code=409,
             detail={"detail": "OpenRouter key not set", "kind": "missing_key"},
         )
 
-    store.append_message(cid, "user", turn.content)
-    messages = [{"role": m["role"], "content": m["content"]} for m in conv["messages"]]
-    messages.append({"role": "user", "content": turn.content})
 
+def _chat_stream(cid: str, messages: list[dict], cfg: dict, client: OpenRouterClient):
     async def event_stream():
         parts: list[str] = []
         try:
@@ -98,3 +97,27 @@ def post_chat(cid: str, turn: ChatTurn, client: OpenRouterClient = Depends(get_o
             yield f"data: {json.dumps({'error': {'detail': exc.detail, 'kind': exc.kind}})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/conversations/{cid}/chat")
+def post_chat(cid: str, turn: ChatTurn, client: OpenRouterClient = Depends(get_openrouter)):
+    conv = _require_conversation(cid)
+    cfg = store.read_config()
+    _require_key(cfg)
+
+    store.append_message(cid, "user", turn.content)
+    messages = [{"role": m["role"], "content": m["content"]} for m in conv["messages"]]
+    messages.append({"role": "user", "content": turn.content})
+    return _chat_stream(cid, messages, cfg, client)
+
+
+@router.post("/conversations/{cid}/retry")
+def post_retry(cid: str, client: OpenRouterClient = Depends(get_openrouter)):
+    conv = _require_conversation(cid)
+    cfg = store.read_config()
+    _require_key(cfg)
+
+    messages = [{"role": m["role"], "content": m["content"]} for m in conv["messages"]]
+    if not messages:
+        raise HTTPException(status_code=400, detail="nothing to retry")
+    return _chat_stream(cid, messages, cfg, client)
