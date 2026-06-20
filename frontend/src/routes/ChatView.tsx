@@ -71,7 +71,7 @@ export default function ChatView({ keySet }: { keySet: boolean }) {
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
     }
@@ -116,7 +116,7 @@ export default function ChatView({ keySet }: { keySet: boolean }) {
         <div className="inputbar">
           <textarea
             rows={3}
-            placeholder="Speak your intent…  (Ctrl/Cmd+Enter to send)"
+            placeholder="Speak your intent…  (Enter to send, Shift+Enter for newline)"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
