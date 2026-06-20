@@ -10,8 +10,8 @@ import { fetchModels } from "../api/models";
 const mockFetchModels = fetchModels as unknown as ReturnType<typeof vi.fn>;
 
 const MODELS = [
-  { id: "anthropic/claude", name: "Claude", prompt: "0.00001", completion: "0.00002" },
-  { id: "google/gemini", name: "Gemini", prompt: "0", completion: "0" },
+  { id: "anthropic/claude", name: "Claude", context: 200000, prompt: "0.00001", completion: "0.00002" },
+  { id: "google/gemini", name: "Gemini", context: 1048576, prompt: "0", completion: "0" },
 ];
 
 function Harness({ initial = "" }: { initial?: string }) {
@@ -49,6 +49,13 @@ test("typing filters by name", async () => {
   fireEvent.change(input, { target: { value: "Gemini" } });
   await waitFor(() => expect(screen.queryByText("anthropic/claude")).not.toBeInTheDocument());
   expect(screen.getByText("google/gemini")).toBeInTheDocument();
+});
+
+test("rows show the model context limit", async () => {
+  render(<Harness />);
+  fireEvent.focus(screen.getByRole("textbox"));
+  expect(await screen.findByText("200K ctx")).toBeInTheDocument();
+  expect(screen.getByText("1M ctx")).toBeInTheDocument();
 });
 
 test("typing 'free' filters by the price label", async () => {

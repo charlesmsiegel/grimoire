@@ -1,4 +1,4 @@
-import { fetchModels, tokensPerDollar, priceLabel } from "./models";
+import { fetchModels, tokensPerDollar, priceLabel, contextLabel } from "./models";
 
 function mockFetch(data: unknown, ok = true) {
   globalThis.fetch = vi.fn().mockResolvedValue({
@@ -10,8 +10,13 @@ function mockFetch(data: unknown, ok = true) {
 test("fetchModels maps fields and sorts by id", async () => {
   mockFetch({
     data: [
-      { id: "z/model", name: "Zed", pricing: { prompt: "0.00001", completion: "0.00002" } },
-      { id: "a/model", name: "Aaa", pricing: { prompt: "0", completion: "0" } },
+      {
+        id: "z/model",
+        name: "Zed",
+        context_length: 131072,
+        pricing: { prompt: "0.00001", completion: "0.00002" },
+      },
+      { id: "a/model", name: "Aaa", context_length: 8192, pricing: { prompt: "0", completion: "0" } },
     ],
   });
   const models = await fetchModels();
@@ -19,6 +24,7 @@ test("fetchModels maps fields and sorts by id", async () => {
   expect(models[1]).toEqual({
     id: "z/model",
     name: "Zed",
+    context: 131072,
     prompt: "0.00001",
     completion: "0.00002",
   });
@@ -42,17 +48,24 @@ test("tokensPerDollar renders a free side as Free", () => {
 });
 
 test("priceLabel renders Free only when both sides are zero", () => {
-  expect(priceLabel({ id: "x", name: "X", prompt: "0", completion: "0" })).toBe("Free");
+  expect(priceLabel({ id: "x", name: "X", context: 0, prompt: "0", completion: "0" })).toBe("Free");
 });
 
 test("priceLabel combines both sides", () => {
-  expect(priceLabel({ id: "x", name: "X", prompt: "0.00001", completion: "0.00005" })).toBe(
-    "100K / 20K tok/$",
-  );
+  expect(
+    priceLabel({ id: "x", name: "X", context: 0, prompt: "0.00001", completion: "0.00005" }),
+  ).toBe("100K / 20K tok/$");
 });
 
 test("priceLabel shows Free for a single free side", () => {
-  expect(priceLabel({ id: "x", name: "X", prompt: "0", completion: "0.00002" })).toBe(
-    "Free / 50K tok/$",
-  );
+  expect(
+    priceLabel({ id: "x", name: "X", context: 0, prompt: "0", completion: "0.00002" }),
+  ).toBe("Free / 50K tok/$");
+});
+
+test("contextLabel formats compactly and omits when unknown", () => {
+  expect(contextLabel(131072)).toBe("131K ctx");
+  expect(contextLabel(1048576)).toBe("1M ctx");
+  expect(contextLabel(8192)).toBe("8K ctx");
+  expect(contextLabel(0)).toBe("");
 });

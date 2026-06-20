@@ -53,9 +53,11 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .combobox-row:last-child { border-bottom: none; }
 .combobox-row:hover { background: var(--bg); }
 .combobox-row-top { display: flex; justify-content: space-between; gap: 12px; }
+.combobox-row-bottom { display: flex; justify-content: space-between; gap: 12px; }
 .combobox-name { color: var(--fg); }
 .combobox-price { color: var(--accent); font-size: 12px; white-space: nowrap; }
 .combobox-id { color: var(--muted); font-size: 12px; }
+.combobox-ctx { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .theme-cards { display: flex; gap: 12px; margin-top: 8px; }
 .theme-card { flex: 1; border: 1px solid var(--muted); border-radius: var(--radius); padding: 12px; cursor: pointer; }
 .theme-card.active { border-color: var(--accent); }

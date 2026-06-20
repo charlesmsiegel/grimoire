@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchModels, priceLabel, type Model } from "../api/models";
+import { fetchModels, priceLabel, contextLabel, type Model } from "../api/models";
 
 export default function ModelCombobox({
   value,
@@ -78,7 +78,10 @@ export default function ModelCombobox({
                 <span className="combobox-name">{m.name}</span>
                 <span className="combobox-price">{priceLabel(m)}</span>
               </div>
-              <div className="combobox-id">{m.id}</div>
+              <div className="combobox-row-bottom">
+                <span className="combobox-id">{m.id}</span>
+                {m.context > 0 && <span className="combobox-ctx">{contextLabel(m.context)}</span>}
+              </div>
             </li>
           ))}
         </ul>
