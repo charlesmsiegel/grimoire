@@ -33,3 +33,27 @@ async def test_auth_error_normalized():
     with pytest.raises(OpenRouterError) as exc:
         [c async for c in client.stream([], "m", "sk-or-x")]
     assert exc.value.kind == "auth"
+
+
+async def test_client_ignores_invalid_ssl_cert_file(monkeypatch):
+    # A stale SSL_CERT_FILE (e.g. left by a removed conda install) must not
+    # crash client construction — fall back to a working CA bundle.
+    monkeypatch.setenv("SSL_CERT_FILE", "Z:/no/such/cacert.pem")
+    client = OpenRouterClient()
+    http = client._client()
+    assert isinstance(http, httpx.AsyncClient)
+    await client.aclose()
+
+
+async def test_stream_surfaces_unexpected_errors(monkeypatch):
+    # Any failure building the HTTP client (not just httpx errors) must be
+    # reported as an OpenRouterError, never escape as a silent empty stream.
+    client = OpenRouterClient()
+
+    def boom():
+        raise FileNotFoundError("no cert")
+
+    monkeypatch.setattr(client, "_client", boom)
+    with pytest.raises(OpenRouterError) as exc:
+        [c async for c in client.stream([], "m", "sk-or-x")]
+    assert exc.value.kind == "network"

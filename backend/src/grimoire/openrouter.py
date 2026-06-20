@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import ssl
 from typing import AsyncIterator
 
+import certifi
 import httpx
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -30,9 +33,19 @@ class OpenRouterClient:
         self._http = http
         self._owns = http is None
 
+    def _verify(self) -> ssl.SSLContext:
+        # httpx trusts $SSL_CERT_FILE, but a stale value (e.g. left by a removed
+        # conda install) points at a missing file and crashes TLS setup. Honor a
+        # valid override; otherwise fall back to certifi's bundle.
+        cert = os.environ.get("SSL_CERT_FILE")
+        cafile = cert if cert and os.path.exists(cert) else certifi.where()
+        return ssl.create_default_context(cafile=cafile)
+
     def _client(self) -> httpx.AsyncClient:
         if self._http is None:
-            self._http = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=30.0))
+            self._http = httpx.AsyncClient(
+                timeout=httpx.Timeout(120.0, connect=30.0), verify=self._verify()
+            )
         return self._http
 
     def _payload(self, messages, model, stream):
@@ -44,8 +57,8 @@ class OpenRouterClient:
     async def stream(self, messages, model: str, key: str) -> AsyncIterator[str]:
         if not key:
             raise OpenRouterError("missing_key", "OpenRouter API key is not set")
-        http = self._client()
         try:
+            http = self._client()
             async with http.stream(
                 "POST", API_URL, headers=self._headers(key),
                 json=self._payload(messages, model, True),
@@ -66,7 +79,11 @@ class OpenRouterClient:
                         continue
                     if delta:
                         yield delta
+        except OpenRouterError:
+            raise
         except httpx.HTTPError as exc:
+            raise OpenRouterError("network", str(exc)) from exc
+        except Exception as exc:  # client/TLS setup and other unexpected failures
             raise OpenRouterError("network", str(exc)) from exc
 
     async def complete(self, messages, model: str, key: str) -> str:
