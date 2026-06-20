@@ -41,6 +41,21 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .config { padding: 24px; max-width: 560px; }
 .config label { display: block; margin: 16px 0 4px; color: var(--muted); }
 .config input[type="text"], .config input[type="password"] { width: 100%; background: var(--surface); color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; }
+.combobox { position: relative; }
+.combobox input[type="text"] { width: 100%; background: var(--surface); color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; }
+.combobox-note { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.combobox-list {
+  position: absolute; z-index: 10; left: 0; right: 0; margin: 4px 0 0; padding: 0;
+  list-style: none; max-height: 320px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--muted); border-radius: var(--radius);
+}
+.combobox-row { padding: 6px 8px; cursor: pointer; border-bottom: 1px solid var(--bg); }
+.combobox-row:last-child { border-bottom: none; }
+.combobox-row:hover { background: var(--bg); }
+.combobox-row-top { display: flex; justify-content: space-between; gap: 12px; }
+.combobox-name { color: var(--fg); }
+.combobox-price { color: var(--accent); font-size: 12px; white-space: nowrap; }
+.combobox-id { color: var(--muted); font-size: 12px; }
 .theme-cards { display: flex; gap: 12px; margin-top: 8px; }
 .theme-card { flex: 1; border: 1px solid var(--muted); border-radius: var(--radius); padding: 12px; cursor: pointer; }
 .theme-card.active { border-color: var(--accent); }
