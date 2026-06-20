@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type Config } from "../api/client";
 import { themeList } from "../theme/themes";
 import { useTheme } from "../theme/ThemeProvider";
+import ModelCombobox from "./ModelCombobox";
 
 export default function ConfigView() {
   const { setTheme } = useTheme();
@@ -41,7 +42,7 @@ export default function ConfigView() {
       />
 
       <label>Model</label>
-      <input type="text" value={model} onChange={(e) => setModel(e.target.value)} />
+      <ModelCombobox value={model} onChange={setModel} />
 
       <label>Theme</label>
       <div className="theme-cards">
