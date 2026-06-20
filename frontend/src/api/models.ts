@@ -28,7 +28,7 @@ function strip(x: number): string {
 
 export function tokensPerDollar(price: string): string {
   const n = Number(price);
-  if (!isFinite(n) || n === 0) return "∞";
+  if (!isFinite(n) || n === 0) return "Free";
   return compact(1 / n);
 }
 
