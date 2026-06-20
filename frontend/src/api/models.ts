@@ -1,4 +1,10 @@
-export type Model = { id: string; name: string; prompt: string; completion: string };
+export type Model = {
+  id: string;
+  name: string;
+  context: number;
+  prompt: string;
+  completion: string;
+};
 
 const MODELS_URL = "https://openrouter.ai/api/v1/models";
 
@@ -10,6 +16,7 @@ export async function fetchModels(): Promise<Model[]> {
     .map((m) => ({
       id: m.id,
       name: m.name,
+      context: m.context_length ?? 0,
       prompt: m.pricing?.prompt ?? "0",
       completion: m.pricing?.completion ?? "0",
     }))
@@ -30,6 +37,13 @@ export function tokensPerDollar(price: string): string {
   const n = Number(price);
   if (!isFinite(n) || n === 0) return "Free";
   return compact(1 / n);
+}
+
+export function contextLabel(context: number): string {
+  if (!context) return "";
+  if (context >= 1e6) return Math.round(context / 1e6) + "M ctx";
+  if (context >= 1e3) return Math.round(context / 1e3) + "K ctx";
+  return context + " ctx";
 }
 
 export function priceLabel(model: Model): string {
