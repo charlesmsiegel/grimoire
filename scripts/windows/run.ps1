@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $RunDir = "$Root\.run"
 $PidFile = "$RunDir\pids"
-$Url = "http://localhost:5173"
+$Url = "http://127.0.0.1:5173"
 New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
 
 if (Test-Path $PidFile) {

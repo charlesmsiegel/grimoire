@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUNDIR="$ROOT/.run"
 PIDFILE="$RUNDIR/pids"
-URL="http://localhost:5173"
+URL="http://127.0.0.1:5173"
 mkdir -p "$RUNDIR"
 
 if [ -f "$PIDFILE" ] && kill -0 $(head -n1 "$PIDFILE") 2>/dev/null; then
