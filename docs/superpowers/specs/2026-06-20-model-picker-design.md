@@ -80,10 +80,12 @@ Behavior:
 - On mount, calls `fetchModels()` into local state (`models`, `loading`, `error`).
 - Renders a text `<input>` bound to `value`; typing calls `onChange(text)` so the
   field always reflects exactly what will be saved (**free text always accepted**).
-- A dropdown of suggestions appears only when the input is focused **and** there is
-  text or the user opened it — not a 340-row list on page load.
-- Suggestions are `models` filtered case-insensitively where the query is a
-  substring of `id` **or** `name`. Each row shows:
+- A dropdown appears when the input is focused. With an empty query it shows the
+  **full sorted list** (all ~340 models) so the user can scroll and discover new
+  ones; the panel has a capped height and scrolls (`max-height` + `overflow-y`).
+  It is not rendered on page load — only on focus.
+- Typing narrows the list: `models` filtered case-insensitively where the query is
+  a substring of `id` **or** `name`. Each row shows:
   - line 1: `name` (left) and price string (right, from the formatter),
   - line 2: `id`.
 - Clicking a row calls `onChange(row.id)` and closes the dropdown.
@@ -111,7 +113,8 @@ No other changes to ConfigView; `save({ model, ... })` is unchanged.
 
 Reuse the existing config styles and theme CSS variables already in use
 (`var(--accent)`, etc.). Add minimal combobox CSS: a positioned dropdown panel
-under the input, hover/active row highlight, two-line rows with the price
+under the input with a capped height and vertical scroll (so the full ~340-row
+list is browsable), hover/active row highlight, two-line rows with the price
 right-aligned. Keep it consistent with the existing minimalist look.
 
 ## Testing
@@ -123,6 +126,7 @@ Vitest + jsdom, matching existing patterns (`api/stream.test.ts`,
   - parses `data[]` into `Model[]` and sorts by id (mocked `fetch`),
   - `tokensPerDollar` formatting: compact units, and the `Free` case for `"0"`.
 - `frontend/src/routes/ModelCombobox.test.tsx`
+  - focusing with an empty query shows the full list,
   - filters suggestions by id and by name,
   - selecting a row calls `onChange` with that id,
   - free-text typing passes through to `onChange` even for an unlisted id,
