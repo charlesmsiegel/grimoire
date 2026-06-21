@@ -13,6 +13,8 @@ export default function ChatView({ keySet }: { keySet: boolean }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
   const streamRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,6 +39,35 @@ export default function ChatView({ keySet }: { keySet: boolean }) {
     const { id } = await api.createConversation();
     setConvs(await api.listConversations());
     selectConv(id);
+  }
+
+  function startEditing(c: ConvMeta) {
+    setEditingId(c.id);
+    setDraft(c.title);
+  }
+
+  async function saveEditing(id: string) {
+    const title = draft.trim();
+    setEditingId(null);
+    if (!title) return;
+    const { id: newId } = await api.renameConversation(id, title);
+    if (activeId === id) setActiveId(newId); // the id changes with the title
+    setConvs(await api.listConversations());
+  }
+
+  async function deleteConv(c: ConvMeta) {
+    if (!window.confirm(`Delete '${c.title}'?`)) return;
+    await api.deleteConversation(c.id);
+    const list = await api.listConversations();
+    setConvs(list);
+    if (activeId === c.id) {
+      if (list.length) {
+        selectConv(list[0].id);
+      } else {
+        setActiveId(null);
+        setMessages([]);
+      }
+    }
   }
 
   async function runStream(start: (onEvent: (e: ChatEvent) => void) => Promise<void>) {
@@ -92,12 +123,48 @@ export default function ChatView({ keySet }: { keySet: boolean }) {
       <aside className="sidebar">
         <button onClick={newConversation}>+ New conversation</button>
         {convs.map((c) => (
-          <div
-            key={c.id}
-            className={"conv-item" + (c.id === activeId ? " active" : "")}
-            onClick={() => selectConv(c.id)}
-          >
-            {c.title}
+          <div key={c.id} className={"conv-item" + (c.id === activeId ? " active" : "")}>
+            {editingId === c.id ? (
+              <input
+                className="conv-rename"
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveEditing(c.id);
+                  else if (e.key === "Escape") setEditingId(null);
+                }}
+                onBlur={() => setEditingId(null)}
+              />
+            ) : (
+              <>
+                <span className="conv-title" onClick={() => selectConv(c.id)}>
+                  {c.title}
+                </span>
+                <span className="conv-actions">
+                  <button
+                    aria-label="Rename"
+                    title="Rename"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEditing(c);
+                    }}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    aria-label="Delete"
+                    title="Delete"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteConv(c);
+                    }}
+                  >
+                    🗑
+                  </button>
+                </span>
+              </>
+            )}
           </div>
         ))}
       </aside>
