@@ -20,9 +20,23 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export type Config = { model: string; theme: string; key_set: boolean };
-export type ConvMeta = { id: string; title: string; model: string; created: string; updated: string };
+export type WorldMeta = {
+  id: string;
+  name: string;
+  created: string;
+  updated: string;
+  counts: Record<string, number>;
+};
+export type CampaignMeta = {
+  id: string;
+  name: string;
+  world: string;
+  created: string;
+  updated: string;
+};
+export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string };
 export type Message = { role: "user" | "assistant"; content: string };
-export type Conversation = { meta: { id: string; title: string }; messages: Message[] };
+export type Scene = { meta: { id: string; title: string }; messages: Message[] };
 
 async function streamPost(
   path: string,
@@ -52,16 +66,37 @@ export const api = {
   getConfig: () => request<Config>("GET", "/api/config"),
   putConfig: (body: Partial<{ model: string; theme: string; openrouter_key: string }>) =>
     request<Config>("PUT", "/api/config", body),
-  listConversations: () => request<ConvMeta[]>("GET", "/api/conversations"),
-  createConversation: (title?: string) => request<{ id: string }>("POST", "/api/conversations", { title }),
-  getConversation: (id: string) => request<Conversation>("GET", `/api/conversations/${id}`),
-  renameConversation: (id: string, title: string) =>
-    request<{ id: string; title: string }>("PUT", `/api/conversations/${id}`, { title }),
-  deleteConversation: (id: string) => request<{ ok: boolean }>("DELETE", `/api/conversations/${id}`),
 
-  chat: (id: string, content: string, onEvent: (e: ChatEvent) => void) =>
-    streamPost(`/api/conversations/${id}/chat`, { content }, onEvent),
+  // worlds
+  listWorlds: () => request<WorldMeta[]>("GET", "/api/worlds"),
+  createWorld: (name: string) => request<{ id: string }>("POST", "/api/worlds", { name }),
+  renameWorld: (wid: string, name: string) =>
+    request<{ id: string; name: string }>("PUT", `/api/worlds/${wid}`, { name }),
+  deleteWorld: (wid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}`),
 
-  retry: (id: string, onEvent: (e: ChatEvent) => void) =>
-    streamPost(`/api/conversations/${id}/retry`, undefined, onEvent),
+  // campaigns
+  listCampaigns: () => request<CampaignMeta[]>("GET", "/api/campaigns"),
+  createCampaign: (name: string, world: string) =>
+    request<{ id: string }>("POST", "/api/campaigns", { name, world }),
+  getCampaign: (cid: string) =>
+    request<{ meta: CampaignMeta; body: string }>("GET", `/api/campaigns/${cid}`),
+  renameCampaign: (cid: string, name: string) =>
+    request<{ id: string; name: string }>("PUT", `/api/campaigns/${cid}`, { name }),
+  deleteCampaign: (cid: string) => request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}`),
+
+  // scenes
+  listScenes: (cid: string) => request<SceneMeta[]>("GET", `/api/campaigns/${cid}/scenes`),
+  createScene: (cid: string, title?: string) =>
+    request<{ id: string }>("POST", `/api/campaigns/${cid}/scenes`, { title }),
+  getScene: (cid: string, sid: string) =>
+    request<Scene>("GET", `/api/campaigns/${cid}/scenes/${sid}`),
+  renameScene: (cid: string, sid: string, title: string) =>
+    request<{ id: string; title: string }>("PUT", `/api/campaigns/${cid}/scenes/${sid}`, { title }),
+  deleteScene: (cid: string, sid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/scenes/${sid}`),
+
+  chat: (cid: string, sid: string, content: string, onEvent: (e: ChatEvent) => void) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/chat`, { content }, onEvent),
+  retry: (cid: string, sid: string, onEvent: (e: ChatEvent) => void) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/retry`, undefined, onEvent),
 };

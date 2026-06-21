@@ -22,20 +22,14 @@ body {
   font-family: var(--font-display);
 }
 .topbar a { color: var(--accent); text-decoration: none; }
+.topbar nav { display: flex; gap: 16px; }
 .layout { display: flex; height: calc(100vh - 49px); }
 .sidebar { width: 240px; border-right: 1px solid var(--muted); padding: 12px; overflow-y: auto; }
-.sidebar button, .conv-item {
+.sidebar button {
   display: block; width: 100%; text-align: left; margin-bottom: 6px;
   background: transparent; color: var(--fg); border: 1px solid var(--muted);
   border-radius: var(--radius); padding: 6px 8px; cursor: pointer;
 }
-.conv-item { display: flex; align-items: center; gap: 6px; cursor: default; }
-.conv-item.active { border-color: var(--accent); color: var(--accent); }
-.conv-title { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conv-actions { display: flex; gap: 2px; flex: none; }
-.conv-actions button { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }
-.conv-actions button:hover { color: var(--accent); }
-.conv-rename { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); border-radius: var(--radius); padding: 3px 6px; font-family: var(--font-body); }
 .main { flex: 1; display: flex; flex-direction: column; }
 .stream { flex: 1; overflow-y: auto; padding: 16px; }
 .msg { margin-bottom: 16px; }
@@ -72,3 +66,27 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .theme-card.active { border-color: var(--accent); }
 .cursor { display: inline-block; width: 7px; height: 14px; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
+.row {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  border: 1px solid var(--muted); border-radius: var(--radius);
+  padding: 6px 8px; margin-bottom: 6px;
+}
+.row.active { border-color: var(--accent); color: var(--accent); }
+.row-label { flex: 1; cursor: pointer; overflow: hidden; }
+.row-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-subtitle { display: block; font-size: 11px; color: var(--muted); }
+.row-actions { display: flex; gap: 2px; flex: none; }
+.row-actions button { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }
+.row-actions button:hover { color: var(--accent); }
+.row-rename { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); border-radius: var(--radius); padding: 3px 6px; font-family: var(--font-body); }
+.campaign-header { padding: 10px 16px; border-bottom: 1px solid var(--muted); font-family: var(--font-display); color: var(--accent); }
+.back-link { display: block; margin-bottom: 8px; color: var(--muted); text-decoration: none; font-size: 13px; }
+.back-link:hover { color: var(--accent); }
+.view { padding: 24px; max-width: 720px; }
+.view h2 { font-family: var(--font-display); }
+.view .muted { color: var(--muted); }
+.view .muted a { color: var(--accent); }
+.picker { display: flex; gap: 8px; margin: 12px 0 20px; }
+.picker input, .picker select { background: var(--surface); color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; }
+.picker input { flex: 1; }
+.list { display: flex; flex-direction: column; }

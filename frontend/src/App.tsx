@@ -3,7 +3,9 @@ import { Link, Route, Routes } from "react-router-dom";
 import { api } from "./api/client";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { DEFAULT_THEME } from "./theme/themes";
-import ChatView from "./routes/ChatView";
+import CampaignsView from "./routes/CampaignsView";
+import CampaignView from "./routes/CampaignView";
+import WorldsView from "./routes/WorldsView";
 import ConfigView from "./routes/ConfigView";
 
 export default function App() {
@@ -28,10 +30,16 @@ export default function App() {
         <Link to="/" style={{ fontWeight: 600 }}>
           ✦ grimoire
         </Link>
-        <Link to="/config">Config</Link>
+        <nav>
+          <Link to="/">Campaigns</Link>
+          <Link to="/worlds">Worlds</Link>
+          <Link to="/config">Config</Link>
+        </nav>
       </div>
       <Routes>
-        <Route path="/" element={<ChatView keySet={keySet} />} />
+        <Route path="/" element={<CampaignsView />} />
+        <Route path="/campaigns/:cid" element={<CampaignView keySet={keySet} />} />
+        <Route path="/worlds" element={<WorldsView />} />
         <Route path="/config" element={<ConfigView />} />
       </Routes>
     </ThemeProvider>
