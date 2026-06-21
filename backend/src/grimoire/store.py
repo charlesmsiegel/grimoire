@@ -180,6 +180,40 @@ def read_conversation(cid: str) -> dict:
     return {"meta": {"id": cid, **meta}, "messages": _parse_messages(body)}
 
 
+def rename_conversation(cid: str, title: str) -> str:
+    """Update the title and rename the file to match. Returns the new id.
+
+    The creation date prefix is preserved and `updated` is left unchanged, so
+    only the slug changes and the list order is stable.
+    """
+    path = _conv_path(cid)
+    if not path.exists():
+        raise ConversationNotFound(cid)
+    meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    meta["title"] = title
+
+    prefix = meta.get("created", _now_iso())[:10]
+    new_cid = f"{prefix}-{_slugify(title)}"
+    new_path = _conv_path(new_cid)
+    n = 2
+    while new_path != path and new_path.exists():
+        new_cid = f"{prefix}-{_slugify(title)}-{n}"
+        new_path = _conv_path(new_cid)
+        n += 1
+
+    path.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    if new_path != path:
+        path.rename(new_path)
+    return new_cid
+
+
+def delete_conversation(cid: str) -> None:
+    path = _conv_path(cid)
+    if not path.exists():
+        raise ConversationNotFound(cid)
+    path.unlink()
+
+
 def append_message(cid: str, role: str, content: str) -> None:
     path = _conv_path(cid)
     if not path.exists():
