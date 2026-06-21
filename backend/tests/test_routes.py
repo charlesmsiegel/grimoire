@@ -74,3 +74,32 @@ def test_retry_missing_key_returns_409(client):
     resp = client.post(f"/api/conversations/{cid}/retry")
     assert resp.status_code == 409
     assert resp.json()["kind"] == "missing_key"
+
+
+def test_rename_conversation(client):
+    cid = client.post("/api/conversations", json={"title": "Old"}).json()["id"]
+    resp = client.put(f"/api/conversations/{cid}", json={"title": "New Name"})
+    assert resp.status_code == 200
+    new_id = resp.json()["id"]
+    assert new_id.endswith("new-name")  # filename reflects the new title
+    metas = client.get("/api/conversations").json()
+    assert [c["title"] for c in metas] == ["New Name"]
+    assert [c["id"] for c in metas] == [new_id]
+
+
+def test_rename_blank_title_returns_400(client):
+    cid = client.post("/api/conversations", json={"title": "Old"}).json()["id"]
+    resp = client.put(f"/api/conversations/{cid}", json={"title": "   "})
+    assert resp.status_code == 400
+
+
+def test_delete_conversation(client):
+    cid = client.post("/api/conversations", json={"title": "Doomed"}).json()["id"]
+    resp = client.delete(f"/api/conversations/{cid}")
+    assert resp.status_code == 200
+    assert client.get("/api/conversations").json() == []
+
+
+def test_delete_missing_returns_404(client):
+    resp = client.delete("/api/conversations/nope")
+    assert resp.status_code == 404

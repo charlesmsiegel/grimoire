@@ -12,17 +12,19 @@ action.
 
 ### `store.py`
 
-- `rename_conversation(cid, title)`: load the file, set `meta["title"] = title`,
-  rewrite. **Keep the filename/id stable** (the id becomes opaque relative to the
-  title, which is fine — it's only an identifier). Does **not** change `updated`,
-  so renaming does not reorder the list. Raises `ConversationNotFound` if missing.
+- `rename_conversation(cid, title) -> new_cid`: set `meta["title"] = title` and
+  **rename the file to match** — new id is `{created-date}-{slug(title)}` (creation
+  date prefix preserved, collisions get a `-2` suffix). Returns the new id. Does
+  **not** change `updated`, so renaming does not reorder the list. Raises
+  `ConversationNotFound` if missing. A no-op slug (same title) returns the same id.
 - `delete_conversation(cid)`: remove the file; raise `ConversationNotFound` if it
   doesn't exist.
 
 ### `routes.py`
 
 - `PUT /conversations/{cid}` body `{title}`: 400 if title is blank/whitespace;
-  otherwise rename and return `{"id": cid, "title": title}`. 404 if missing.
+  otherwise rename and return `{"id": new_cid, "title": title}` (id reflects the
+  new title). 404 if missing.
 - `DELETE /conversations/{cid}`: delete and return `{"ok": true}`. 404 if missing.
 
 ## Frontend
@@ -44,8 +46,9 @@ State: `editingId: string | null` and `draft: string`.
 
 - **Rename**: ✎ sets `editingId` to the row id and `draft` to its title, replacing
   the title with an `<input>` (autofocused). Enter → if `draft.trim()` is
-  non-empty, `renameConversation` then `setConvs(await listConversations())` and
-  clear `editingId`; Esc or blur → cancel (clear `editingId`). Blank draft cancels.
+  non-empty, `renameConversation` (which returns the **new id**, since the file is
+  renamed); if the edited row was `activeId`, update `activeId` to the new id; then
+  `setConvs(await listConversations())` and clear `editingId`. Esc or blur → cancel.
 - **Delete**: 🗑 → `window.confirm("Delete '<title>'?")`; on OK,
   `deleteConversation`, then refresh the list. If the deleted id was `activeId`,
   select the first remaining conversation (or clear `activeId`/`messages` if none).
@@ -58,8 +61,10 @@ buttons (hover to accent). The inline rename input matches the sidebar width.
 
 ## Testing (TDD)
 
-- `store`: rename updates title, keeps the same id, leaves `updated` unchanged;
-  delete removes the file; delete of a missing id raises `ConversationNotFound`.
+- `store`: rename updates title, changes the id to reflect the new title, moves
+  the messages to the new id (old id gone), leaves `updated` unchanged, and a
+  no-op slug returns the same id; delete removes the file; delete of a missing id
+  raises `ConversationNotFound`.
 - `routes`: `PUT` renames (the new title shows in the list); blank title → 400;
   `DELETE` removes it (gone from the list); delete missing → 404.
 - `api/client`: `renameConversation` issues PUT with the title; `deleteConversation`
@@ -71,4 +76,3 @@ buttons (hover to accent). The inline rename input matches the sidebar width.
 ## Out of scope (YAGNI)
 
 - No drag-reorder, no multi-select, no undo.
-- Renaming does not rename the underlying file (id stays put).

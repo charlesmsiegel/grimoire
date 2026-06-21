@@ -29,6 +29,10 @@ class NewConversation(BaseModel):
     title: str | None = None
 
 
+class RenameConversation(BaseModel):
+    title: str
+
+
 class ChatTurn(BaseModel):
     content: str
 
@@ -65,6 +69,27 @@ def get_conversation(cid: str):
         return store.read_conversation(cid)
     except store.ConversationNotFound:
         raise HTTPException(status_code=404, detail="conversation not found")
+
+
+@router.put("/conversations/{cid}")
+def put_conversation(cid: str, body: RenameConversation):
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is required")
+    try:
+        new_cid = store.rename_conversation(cid, title)
+    except store.ConversationNotFound:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return {"id": new_cid, "title": title}
+
+
+@router.delete("/conversations/{cid}")
+def delete_conversation(cid: str):
+    try:
+        store.delete_conversation(cid)
+    except store.ConversationNotFound:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return {"ok": True}
 
 
 def _require_conversation(cid: str) -> dict:
