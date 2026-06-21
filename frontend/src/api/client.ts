@@ -55,6 +55,9 @@ export const api = {
   listConversations: () => request<ConvMeta[]>("GET", "/api/conversations"),
   createConversation: (title?: string) => request<{ id: string }>("POST", "/api/conversations", { title }),
   getConversation: (id: string) => request<Conversation>("GET", `/api/conversations/${id}`),
+  renameConversation: (id: string, title: string) =>
+    request<{ id: string; title: string }>("PUT", `/api/conversations/${id}`, { title }),
+  deleteConversation: (id: string) => request<{ ok: boolean }>("DELETE", `/api/conversations/${id}`),
 
   chat: (id: string, content: string, onEvent: (e: ChatEvent) => void) =>
     streamPost(`/api/conversations/${id}/chat`, { content }, onEvent),

@@ -29,7 +29,13 @@ body {
   background: transparent; color: var(--fg); border: 1px solid var(--muted);
   border-radius: var(--radius); padding: 6px 8px; cursor: pointer;
 }
+.conv-item { display: flex; align-items: center; gap: 6px; cursor: default; }
 .conv-item.active { border-color: var(--accent); color: var(--accent); }
+.conv-title { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-actions { display: flex; gap: 2px; flex: none; }
+.conv-actions button { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }
+.conv-actions button:hover { color: var(--accent); }
+.conv-rename { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); border-radius: var(--radius); padding: 3px 6px; font-family: var(--font-body); }
 .main { flex: 1; display: flex; flex-direction: column; }
 .stream { flex: 1; overflow-y: auto; padding: 16px; }
 .msg { margin-bottom: 16px; }
