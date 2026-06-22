@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api, type WorldMeta } from "../api/client";
 import { EditableRow } from "../components/EditableRow";
 
@@ -8,6 +9,7 @@ function countLabel(counts: Record<string, number> | undefined): string {
 }
 
 export default function WorldsView() {
+  const navigate = useNavigate();
   const [worlds, setWorlds] = useState<WorldMeta[]>([]);
   const [name, setName] = useState("");
 
@@ -51,6 +53,7 @@ export default function WorldsView() {
             key={w.id}
             label={w.name}
             subtitle={countLabel(w.counts)}
+            onSelect={() => navigate(`/worlds/${w.id}`)}
             onRename={(next) => rename(w.id, next)}
             onDelete={() => remove(w)}
           />

@@ -19,6 +19,15 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return res.json() as Promise<T>;
 }
 
+async function requestForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(path, { method: "POST", body: form });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data.detail ?? res.statusText, data.kind);
+  }
+  return res.json() as Promise<T>;
+}
+
 export type Config = { model: string; theme: string; key_set: boolean };
 export type WorldMeta = {
   id: string;
@@ -37,6 +46,73 @@ export type CampaignMeta = {
 export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string };
 export type Message = { role: "user" | "assistant"; content: string };
 export type Scene = { meta: { id: string; title: string }; messages: Message[] };
+
+// entities (locations | lore)
+export type EntityKind = "locations" | "lore";
+export type EntityScope = { kind: "world" | "campaign"; id: string };
+export type EntitySummary = { id: string; name: string; keys?: string };
+export type EntityDetail = { meta: { id: string; name: string; keys?: string }; body: string };
+
+// characters (V3 cards)
+export type CardData = {
+  name: string;
+  description?: string;
+  personality?: string;
+  scenario?: string;
+  first_mes?: string;
+  mes_example?: string;
+  system_prompt?: string;
+  post_history_instructions?: string;
+  alternate_greetings?: string[];
+  [k: string]: unknown;
+};
+export type Card = { spec: string; spec_version: string; data: CardData };
+export type VersionRef = { id: string; name: string };
+export type CharacterSummary = { id: string; name: string; default_version: string; versions: VersionRef[] };
+export type CharacterDetail = {
+  meta: { id: string; name: string; default_version: string };
+  versions: { id: string; name: string; card: Card }[];
+};
+
+// PCs
+export type Persona = { name: string; pronouns: string; summary: string; description: string };
+export type PCSummary = { id: string; name: string; tags: string[]; default_version: string; versions: VersionRef[] };
+export type PCDetail = {
+  meta: { id: string; name: string; tags: string[]; default_version: string };
+  versions: { id: string; name: string; persona: Persona }[];
+};
+
+// greetings & plot maps
+export type Greeting = {
+  id: string;
+  name: string;
+  character: string;
+  version: string;
+  requires_tags: string[];
+  predecessor_join: "all" | "any";
+};
+export type Edges = { leads_to: string[]; excludes: string[] };
+export type GreetingDetail = { meta: Greeting; body: string; edges: Edges };
+export type GreetingDraft = {
+  name: string;
+  character: string;
+  version: string;
+  body?: string;
+  requires_tags?: string[];
+  predecessor_join?: "all" | "any";
+};
+export type Availability = { id: string; name: string; available: boolean; reasons: string[] };
+
+// cast
+export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "npc" };
+export type RosterEntry = { kind: string; id: string; version: string; role: string; scenes: string[] };
+
+// lorebook import
+export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKind };
+
+function entityBase(scope: EntityScope): string {
+  return scope.kind === "world" ? `/api/worlds/${scope.id}` : `/api/campaigns/${scope.id}`;
+}
 
 async function streamPost(
   path: string,
@@ -99,4 +175,105 @@ export const api = {
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/chat`, { content }, onEvent),
   retry: (cid: string, sid: string, onEvent: (e: ChatEvent) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/retry`, undefined, onEvent),
+
+  getWorld: (wid: string) =>
+    request<{ meta: WorldMeta; body: string; counts: Record<string, number> }>("GET", `/api/worlds/${wid}`),
+
+  // entities (locations | lore), world or campaign scope
+  listEntities: (scope: EntityScope, kind: EntityKind) =>
+    request<EntitySummary[]>("GET", `${entityBase(scope)}/${kind}`),
+  createEntity: (scope: EntityScope, kind: EntityKind, body: { name: string; body?: string; keys?: string }) =>
+    request<{ id: string }>("POST", `${entityBase(scope)}/${kind}`, body),
+  readEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
+    request<EntityDetail>("GET", `${entityBase(scope)}/${kind}/${id}`),
+  updateEntity: (scope: EntityScope, kind: EntityKind, id: string,
+                 patch: { name?: string; body?: string; keys?: string }) =>
+    request<{ ok: boolean }>("PUT", `${entityBase(scope)}/${kind}/${id}`, patch),
+  deleteEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
+    request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/${kind}/${id}`),
+
+  // tags
+  listTags: (wid: string) => request<Record<string, string>>("GET", `/api/worlds/${wid}/tags`),
+  addTag: (wid: string, name: string) => request<{ id: string }>("POST", `/api/worlds/${wid}/tags`, { name }),
+  renameTag: (wid: string, tid: string, name: string) =>
+    request<{ id: string; name: string }>("PUT", `/api/worlds/${wid}/tags/${tid}`, { name }),
+  deleteTag: (wid: string, tid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/tags/${tid}`),
+
+  // characters
+  listCharacters: (wid: string) => request<CharacterSummary[]>("GET", `/api/worlds/${wid}/characters`),
+  createCharacter: (wid: string, body: { name: string; version_name?: string; card?: Card }) =>
+    request<{ character: string; version: string }>("POST", `/api/worlds/${wid}/characters`, body),
+  readCharacter: (wid: string, cid: string) =>
+    request<CharacterDetail>("GET", `/api/worlds/${wid}/characters/${cid}`),
+  setDefaultVersion: (wid: string, cid: string, vid: string) =>
+    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}`, { default_version: vid }),
+  deleteCharacter: (wid: string, cid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/characters/${cid}`),
+  createVersion: (wid: string, cid: string, body: { name: string; card: Card }) =>
+    request<{ version: string }>("POST", `/api/worlds/${wid}/characters/${cid}/versions`, body),
+  updateVersion: (wid: string, cid: string, vid: string, card: Card) =>
+    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}/versions/${vid}`, { card }),
+  deleteVersion: (wid: string, cid: string, vid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/characters/${cid}/versions/${vid}`),
+  importCharacter: (wid: string, file: File, format: string, into?: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("format", format);
+    if (into) form.append("into", into);
+    return requestForm<{ character: string; version: string }>(`/api/worlds/${wid}/characters/import`, form);
+  },
+
+  // pcs
+  listPCs: (wid: string) => request<PCSummary[]>("GET", `/api/worlds/${wid}/pcs`),
+  createPC: (wid: string, body: { name: string; tags?: string[]; persona?: Persona }) =>
+    request<{ pc: string; version: string }>("POST", `/api/worlds/${wid}/pcs`, body),
+  readPC: (wid: string, pid: string) => request<PCDetail>("GET", `/api/worlds/${wid}/pcs/${pid}`),
+  updatePC: (wid: string, pid: string, patch: { default_version?: string; tags?: string[] }) =>
+    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/pcs/${pid}`, patch),
+  deletePC: (wid: string, pid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/pcs/${pid}`),
+  createPCVersion: (wid: string, pid: string, body: { name: string; persona: Persona }) =>
+    request<{ version: string }>("POST", `/api/worlds/${wid}/pcs/${pid}/versions`, body),
+  updatePCVersion: (wid: string, pid: string, vid: string, persona: Persona) =>
+    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/pcs/${pid}/versions/${vid}`, { persona }),
+  deletePCVersion: (wid: string, pid: string, vid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/pcs/${pid}/versions/${vid}`),
+
+  // greetings & plot maps
+  listGreetings: (wid: string) => request<Greeting[]>("GET", `/api/worlds/${wid}/greetings`),
+  createGreeting: (wid: string, draft: GreetingDraft) =>
+    request<{ id: string }>("POST", `/api/worlds/${wid}/greetings`, draft),
+  readGreeting: (wid: string, gid: string) =>
+    request<GreetingDetail>("GET", `/api/worlds/${wid}/greetings/${gid}`),
+  updateGreeting: (wid: string, gid: string,
+                   patch: { name?: string; body?: string; requires_tags?: string[]; predecessor_join?: string }) =>
+    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}`, patch),
+  deleteGreeting: (wid: string, gid: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/greetings/${gid}`),
+  setEdges: (wid: string, gid: string, edges: { leads_to?: string[]; excludes?: string[] }) =>
+    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}/edges`, edges),
+  importGreetings: (wid: string, body: { character: string; version: string }) =>
+    request<{ greetings: string[] }>("POST", `/api/worlds/${wid}/greetings/import`, body),
+
+  // campaign cast & play
+  listAppearances: (cid: string) => request<RosterEntry[]>("GET", `/api/campaigns/${cid}/appearances`),
+  getCast: (cid: string, sid: string) => request<Actor[]>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast`),
+  addToCast: (cid: string, sid: string,
+              body: { kind: string; id: string; version?: string; role?: string }) =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/cast`, body),
+  availableGreetings: (cid: string) =>
+    request<Availability[]>("GET", `/api/campaigns/${cid}/greetings/available`),
+  startFromGreeting: (cid: string, sid: string, greeting: string) =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/start-from-greeting`, { greeting }),
+  opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/opener`, { prompt }, onEvent),
+
+  // lorebook import
+  lorebookParse: (wid: string, file: File, format: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("format", format);
+    return requestForm<{ entries: LoreEntryDraft[] }>(`/api/worlds/${wid}/lorebook/parse`, form);
+  },
+  lorebookImport: (wid: string, entries: LoreEntryDraft[]) =>
+    request<{ created: { kind: string; id: string }[] }>("POST", `/api/worlds/${wid}/lorebook/import`, { entries }),
 };

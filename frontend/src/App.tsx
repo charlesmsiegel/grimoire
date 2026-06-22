@@ -6,6 +6,7 @@ import { DEFAULT_THEME } from "./theme/themes";
 import CampaignsView from "./routes/CampaignsView";
 import CampaignView from "./routes/CampaignView";
 import WorldsView from "./routes/WorldsView";
+import WorldView from "./routes/WorldView";
 import ConfigView from "./routes/ConfigView";
 
 export default function App() {
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="/" element={<CampaignsView />} />
         <Route path="/campaigns/:cid" element={<CampaignView keySet={keySet} />} />
         <Route path="/worlds" element={<WorldsView />} />
+        <Route path="/worlds/:wid" element={<WorldView />} />
         <Route path="/config" element={<ConfigView />} />
       </Routes>
     </ThemeProvider>
