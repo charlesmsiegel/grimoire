@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import campaigns, entities, worlds
+from . import appearances, campaigns, characters, entities, worlds
 
 
 def _world_id(cid: str) -> str:
@@ -59,7 +59,50 @@ def incoming(cid: str) -> list[dict]:
         if mine_h is not None:
             item["mine"] = _entity_blob(croot, kind, eid)
         out.append(item)
+    return out + _character_incoming(cid)
+
+
+def _card_blob(root: Path, char_id: str, vid: str) -> dict:
+    card = characters.read_card(root, char_id, vid)
+    return {"name": card["data"].get("name", char_id), "version": vid, "card": card}
+
+
+def _character_incoming(cid: str) -> list[dict]:
+    wroot = worlds.world_root(_world_id(cid))
+    croot = campaigns.campaign_root(cid)
+    out: list[dict] = []
+    for char_id, rec in sorted(appearances.record(cid).items()):
+        vid = rec["version"]
+        world_h = characters.card_hash(wroot, char_id, vid)
+        if world_h is None or world_h == rec["base"]:
+            continue  # world unchanged (or locked version deleted, which we skip)
+        mine_h = characters.card_hash(croot, char_id, vid)
+        status = "update" if mine_h == rec["base"] else "conflict"
+        item = {"ref": {"kind": "characters", "id": char_id}, "status": status,
+                "world": _card_blob(wroot, char_id, vid)}
+        if mine_h is not None:
+            item["mine"] = _card_blob(croot, char_id, vid)
+        out.append(item)
     return out
+
+
+def _advance_character(cid: str, char_id: str, *, copy: bool) -> bool:
+    wroot = worlds.world_root(_world_id(cid))
+    croot = campaigns.campaign_root(cid)
+    rec = appearances.record(cid).get(char_id)
+    if rec is None:
+        return False
+    vid = rec["version"]
+    world_h = characters.card_hash(wroot, char_id, vid)
+    if world_h is None or rec["base"] == world_h:
+        return False  # not pending
+    if copy:
+        src = wroot / "characters" / char_id / f"{vid}.json"
+        dst = croot / "characters" / char_id / f"{vid}.json"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    appearances.set_base(cid, char_id, world_h)
+    return True
 
 
 def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
@@ -67,9 +110,14 @@ def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
     wroot = worlds.world_root(wid)
     croot = campaigns.campaign_root(cid)
     manifest = campaigns.read_manifest(cid)
-    changed = False
+    manifest_changed = False  # loc/lore manifest write
+    touched = False           # any ref advanced → bump campaign.updated
     for ref in refs:
         kind, eid = ref["kind"], ref["id"]
+        if kind == "characters":
+            if _advance_character(cid, eid, copy=copy):
+                touched = True
+            continue
         world_h = entities.entity_hash(wroot, kind, eid) if wroot.exists() else None
         if world_h is None or manifest.get(_ref_str(kind, eid)) == world_h:
             continue  # not pending (no world file, or base already == world): no-op
@@ -79,9 +127,11 @@ def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
             dst_dir.mkdir(parents=True, exist_ok=True)
             (dst_dir / f"{eid}.md").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
         manifest[_ref_str(kind, eid)] = world_h
-        changed = True
-    if changed:
+        manifest_changed = True
+        touched = True
+    if manifest_changed:
         campaigns.write_manifest(cid, manifest)
+    if touched:
         campaigns.touch(cid)
 
 

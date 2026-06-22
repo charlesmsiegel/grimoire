@@ -11,14 +11,14 @@ def test_create_list_read(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("Drowned Realm")
     assert wid == "drowned-realm"
-    entities.create_entity(worlds.world_root(wid), "characters", "Seraphine")
+    entities.create_entity(worlds.world_root(wid), "locations", "Drowned Library")
     listed = worlds.list_worlds()
     assert len(listed) == 1
     assert listed[0]["name"] == "Drowned Realm"
-    assert listed[0]["counts"]["characters"] == 1
+    assert listed[0]["counts"]["locations"] == 1
     w = worlds.read_world(wid)
     assert w["meta"]["id"] == wid
-    assert w["counts"]["characters"] == 1
+    assert w["counts"]["locations"] == 1
 
 
 def test_rename_keeps_id(monkeypatch, tmp_path):

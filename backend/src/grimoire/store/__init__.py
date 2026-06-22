@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from . import campaigns, entities, scenes, sync, worlds
+from . import appearances, campaigns, cards, characters, entities, scenes, sync, worlds
+from .appearances import AppearError
 from .campaigns import CampaignNotFound
+from .cards import CardParseError
+from .characters import CharacterNotFound, VersionNotFound
 from .config import DEFAULT_MODEL, DEFAULT_THEME, read_config, write_config
 from .entities import EntityNotFound, UnknownKind
 from .frontmatter import dump_frontmatter, parse_frontmatter
@@ -30,7 +33,14 @@ __all__ = [
     "WorldNotFound",
     "campaigns",
     "CampaignNotFound",
+    "cards",
+    "CardParseError",
+    "characters",
+    "CharacterNotFound",
+    "VersionNotFound",
     "sync",
     "scenes",
     "SceneNotFound",
+    "appearances",
+    "AppearError",
 ]

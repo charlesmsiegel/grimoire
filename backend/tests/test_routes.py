@@ -1,4 +1,5 @@
 import importlib
+import io
 import json
 
 import pytest
@@ -57,12 +58,52 @@ def test_world_crud(client):
 
 def test_world_entity_crud(client):
     wid = _world(client)
-    eid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine", "body": "Keeper"}).json()["id"]
-    assert eid == "seraphine"
-    assert [e["id"] for e in client.get(f"/api/worlds/{wid}/characters").json()] == [eid]
-    client.put(f"/api/worlds/{wid}/characters/{eid}", json={"body": "Updated"})
-    assert client.get(f"/api/worlds/{wid}/characters/{eid}").json()["body"].strip() == "Updated"
-    assert client.delete(f"/api/worlds/{wid}/characters/{eid}").status_code == 200
+    eid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Drowned Library", "body": "Keeper"}).json()["id"]
+    assert eid == "drowned-library"
+    assert [e["id"] for e in client.get(f"/api/worlds/{wid}/locations").json()] == [eid]
+    client.put(f"/api/worlds/{wid}/locations/{eid}", json={"body": "Updated"})
+    assert client.get(f"/api/worlds/{wid}/locations/{eid}").json()["body"].strip() == "Updated"
+    assert client.delete(f"/api/worlds/{wid}/locations/{eid}").status_code == 200
+
+
+def test_world_character_container_crud(client):
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"})
+    cid = r.json()["character"]
+    assert cid == "seraphine"
+    # default version exists
+    got = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
+    assert [v["id"] for v in got["versions"]] == ["default"]
+    # add a version
+    vid = client.post(f"/api/worlds/{wid}/characters/{cid}/versions",
+                      json={"name": "Corrupted", "card": got["versions"][0]["card"]}).json()["version"]
+    assert vid == "corrupted"
+    # world counts include characters
+    assert client.get(f"/api/worlds/{wid}").json()["counts"]["characters"] == 1
+    # an unmatched deep path 404s
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}/extra/nope").status_code == 404
+    # delete
+    assert client.delete(f"/api/worlds/{wid}/characters/{cid}").status_code == 200
+
+
+def test_character_import_export_json(client):
+    wid = _world(client)
+    card = {"spec": "chara_card_v3", "spec_version": "3.0",
+            "data": {"name": "Imported", "description": "x", "extensions": {}}}
+    files = {"file": ("c.json", io.BytesIO(json.dumps(card).encode()), "application/json")}
+    r = client.post(f"/api/worlds/{wid}/characters/import", files=files, data={"format": "json"})
+    assert r.status_code == 200
+    cid, vid = r.json()["character"], r.json()["version"]
+    exp = client.get(f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/export", params={"format": "json"})
+    assert exp.status_code == 200
+    assert json.loads(exp.content)["data"]["name"] == "Imported"
+
+
+def test_character_import_garbage_400(client):
+    wid = _world(client)
+    files = {"file": ("c.json", io.BytesIO(b"nonsense"), "application/json")}
+    r = client.post(f"/api/worlds/{wid}/characters/import", files=files, data={"format": "json"})
+    assert r.status_code == 400
 
 
 def test_unknown_kind_404(client):
@@ -73,9 +114,9 @@ def test_unknown_kind_404(client):
 # ---- campaigns ----
 def test_campaign_create_copies_world(client):
     wid = _world(client)
-    client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine", "body": "Keeper"})
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "Drowned Library", "body": "Keeper"})
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
-    assert client.get(f"/api/campaigns/{cid}/characters/seraphine").json()["body"].strip() == "Keeper"
+    assert client.get(f"/api/campaigns/{cid}/locations/drowned-library").json()["body"].strip() == "Keeper"
 
 
 def test_campaign_missing_world_400(client):
@@ -106,9 +147,29 @@ def test_reject_flow(client):
 def test_world_push_view(client):
     wid = _world(client)
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
-    client.post(f"/api/worlds/{wid}/characters", json={"name": "A", "body": "a"})
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "A", "body": "a"})
     rows = client.get(f"/api/worlds/{wid}/campaigns").json()
     assert rows == [{"id": cid, "name": "Run", "pending": {"new": 1, "update": 0, "conflict": 0}}]
+
+
+# ---- cast & suggestions ----
+def test_cast_and_suggestions_flow(client):
+    wid = _world(client)
+    sera = {"spec": "chara_card_v3", "spec_version": "3.0",
+            "data": {"name": "Seraphine", "description": "She serves the Drowned King.", "extensions": {}}}
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine", "card": sera})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Drowned King"})
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Docks"}).json()["id"]
+    # manual appearance
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                       json={"character": "seraphine", "version": "default"}).status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json() == ["seraphine"]
+    # suggestion surfaces drowned-king, then dismiss hides it
+    sugg = client.get(f"/api/campaigns/{cid}/scenes/{sid}/suggestions").json()
+    assert [s["character"] for s in sugg] == ["drowned-king"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/suggestions/dismiss", json={"character": "drowned-king"})
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/suggestions").json() == []
 
 
 # ---- scenes (re-homed chat) ----

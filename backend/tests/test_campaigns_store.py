@@ -10,14 +10,14 @@ def home(monkeypatch, tmp_path):
 def test_copy_on_create_copies_entities_and_writes_manifest(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("W")
-    eid = entities.create_entity(worlds.world_root(wid), "characters", "Seraphine", "Keeper.")
+    eid = entities.create_entity(worlds.world_root(wid), "locations", "Seraphine", "Keeper.")
     cid = campaigns.create_campaign("Run One", wid)
     # the entity was copied into the campaign verbatim
-    copied = entities.read_entity(campaigns.campaign_root(cid), "characters", eid)
+    copied = entities.read_entity(campaigns.campaign_root(cid), "locations", eid)
     assert copied["meta"]["name"] == "Seraphine"
     # the manifest base hash matches the world's current hash
     manifest = campaigns.read_manifest(cid)
-    assert manifest["characters/seraphine"] == entities.entity_hash(worlds.world_root(wid), "characters", eid)
+    assert manifest["locations/seraphine"] == entities.entity_hash(worlds.world_root(wid), "locations", eid)
 
 
 def test_create_against_missing_world_raises(monkeypatch, tmp_path):
@@ -50,12 +50,12 @@ def test_list_read_rename_delete(monkeypatch, tmp_path):
 def test_deleting_world_leaves_campaign_copy_intact(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("W")
-    entities.create_entity(worlds.world_root(wid), "characters", "Seraphine", "Keeper.")
+    entities.create_entity(worlds.world_root(wid), "locations", "Seraphine", "Keeper.")
     cid = campaigns.create_campaign("Run", wid)
     worlds.delete_world(wid)
     # the campaign and its copied entity survive
     assert campaigns.read_campaign(cid)["meta"]["id"] == cid
-    assert entities.read_entity(campaigns.campaign_root(cid), "characters", "seraphine")["body"].strip() == "Keeper."
+    assert entities.read_entity(campaigns.campaign_root(cid), "locations", "seraphine")["body"].strip() == "Keeper."
 
 
 def test_manifest_roundtrip_with_slash_keys(monkeypatch, tmp_path):

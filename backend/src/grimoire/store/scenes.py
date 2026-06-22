@@ -109,6 +109,27 @@ def delete_scene(cid: str, sid: str) -> None:
     p.unlink()
 
 
+def get_dismissed(cid: str, sid: str) -> list[str]:
+    """Suggestion ids the user dismissed for this scene. Missing scene ⇒ none."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        return []
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    return [x for x in meta.get("dismissed", "").split(",") if x]
+
+
+def add_dismissed(cid: str, sid: str, char_id: str) -> None:
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    current = [x for x in meta.get("dismissed", "").split(",") if x]
+    if char_id not in current:
+        current.append(char_id)
+    meta["dismissed"] = ",".join(current)
+    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
 def append_message(cid: str, sid: str, role: str, content: str) -> None:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
