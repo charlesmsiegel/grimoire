@@ -153,6 +153,17 @@ class Opener(BaseModel):
     prompt: str
 
 
+class LoreEntry(BaseModel):
+    name: str
+    keys: list[str] = []
+    body: str = ""
+    category: str = "lore"
+
+
+class LorebookCommit(BaseModel):
+    entries: list[LoreEntry]
+
+
 # ---- config ----
 def _public_config(cfg: dict[str, str]) -> dict:
     return {"model": cfg["model"], "theme": cfg["theme"], "key_set": bool(cfg["openrouter_key"])}
@@ -502,6 +513,27 @@ def delete_world_greeting(wid: str, gid: str):
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     return {"ok": True}
+
+
+# ---- world lorebook import (declared before the generic /{kind} routes) ----
+@router.post("/worlds/{wid}/lorebook/parse")
+async def post_lorebook_parse(wid: str, file: UploadFile = File(...), format: str = Form(...)):
+    _world_root_or_404(wid)
+    data = await file.read()
+    try:
+        return {"entries": store.lorebook.parse(data, format)}
+    except (store.lorebook.LorebookError, store.cards.CardParseError) as exc:
+        raise HTTPException(status_code=400, detail=f"could not parse: {exc}")
+
+
+@router.post("/worlds/{wid}/lorebook/import")
+def post_lorebook_import(wid: str, body: LorebookCommit):
+    root = _world_root_or_404(wid)
+    try:
+        created = store.lorebook.commit(root, [e.model_dump() for e in body.entries])
+    except store.lorebook.LorebookError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"created": created}
 
 
 # ---- generic entity CRUD (shared by worlds and campaigns) ----

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from . import (
     appearances, campaigns, cards, characters, context, entities, greetings,
-    pcs, playing, scenes, sync, tags, worlds,
+    lorebook, pcs, playing, scenes, sync, tags, worlds,
 )
 from .appearances import AppearError
 from .campaigns import CampaignNotFound
 from .cards import CardParseError
 from .characters import CharacterNotFound, VersionNotFound
 from .greetings import GreetingNotFound
+from .lorebook import LorebookError
 from .playing import PlayError
 from .pcs import PCNotFound, PCVersionNotFound
 from .tags import TagNotFound
@@ -60,4 +61,6 @@ __all__ = [
     "GreetingNotFound",
     "playing",
     "PlayError",
+    "lorebook",
+    "LorebookError",
 ]

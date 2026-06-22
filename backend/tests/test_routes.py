@@ -376,3 +376,62 @@ def test_opener_requires_key(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/opener",
                        json={"prompt": "x"}).status_code == 409
+
+
+# ---- lorebook / world-info import (2c) ----
+def test_lorebook_parse_then_import(client):
+    wid = _world(client)
+    book = {"entries": {
+        "0": {"key": ["pact"], "comment": "Salt Pact", "content": "It binds."},
+        "1": {"key": ["docks"], "comment": "The Docks", "content": "Wet planks."},
+    }}
+    files = {"file": ("wi.json", io.BytesIO(json.dumps(book).encode()), "application/json")}
+    parsed = client.post(f"/api/worlds/{wid}/lorebook/parse", files=files,
+                         data={"format": "lorebook"})
+    assert parsed.status_code == 200
+    entries = parsed.json()["entries"]
+    assert {e["name"] for e in entries} == {"Salt Pact", "The Docks"}
+    # parse writes nothing
+    assert client.get(f"/api/worlds/{wid}/lore").json() == []
+
+    # route the docks entry to locations, keep the other as lore, then commit
+    for e in entries:
+        if e["name"] == "The Docks":
+            e["category"] = "locations"
+    created = client.post(f"/api/worlds/{wid}/lorebook/import", json={"entries": entries})
+    assert created.status_code == 200
+    kinds = {c["kind"] for c in created.json()["created"]}
+    assert kinds == {"lore", "locations"}
+    assert [e["name"] for e in client.get(f"/api/worlds/{wid}/lore").json()] == ["Salt Pact"]
+    assert [e["name"] for e in client.get(f"/api/worlds/{wid}/locations").json()] == ["The Docks"]
+
+
+def test_lorebook_parse_bad_file_400(client):
+    wid = _world(client)
+    files = {"file": ("x.json", io.BytesIO(b"not json"), "application/json")}
+    r = client.post(f"/api/worlds/{wid}/lorebook/parse", files=files, data={"format": "lorebook"})
+    assert r.status_code == 400
+
+
+def test_lorebook_import_unknown_category_400(client):
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/lorebook/import",
+                    json={"entries": [{"name": "X", "keys": [], "body": "y", "category": "bogus"}]})
+    assert r.status_code == 400
+
+
+def test_lorebook_imported_key_activates_in_builder(client):
+    # end-to-end sanity: an imported keyed entry feeds the context builder
+    wid = _world(client)
+    book = {"entries": {"0": {"key": ["leviathan"], "comment": "Leviathan", "content": "the beast"}}}
+    files = {"file": ("wi.json", io.BytesIO(json.dumps(book).encode()), "application/json")}
+    entries = client.post(f"/api/worlds/{wid}/lorebook/parse", files=files,
+                          data={"format": "lorebook"}).json()["entries"]
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    # commit into the CAMPAIGN root via the store (campaign-scoped lore the builder reads)
+    import grimoire.store as store
+    store.lorebook.commit(store.campaigns.campaign_root(cid), entries)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "the leviathan rises")
+    msgs = store.context.build_messages(cid, sid)
+    assert any("the beast" in m["content"] for m in msgs if m["role"] == "system")
