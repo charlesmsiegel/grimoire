@@ -106,6 +106,30 @@ def test_character_import_garbage_400(client):
     assert r.status_code == 400
 
 
+def test_world_tag_vocabulary_crud(client):
+    wid = _world(client)
+    tid = client.post(f"/api/worlds/{wid}/tags", json={"name": "Student"}).json()["id"]
+    assert tid == "student"
+    assert client.get(f"/api/worlds/{wid}/tags").json() == {"student": "Student"}
+    client.put(f"/api/worlds/{wid}/tags/{tid}", json={"name": "Pupil"})
+    assert client.get(f"/api/worlds/{wid}/tags").json() == {"student": "Pupil"}
+    assert client.delete(f"/api/worlds/{wid}/tags/{tid}").status_code == 200
+    assert client.get(f"/api/worlds/{wid}/tags").json() == {}
+    assert client.put(f"/api/worlds/{wid}/tags/ghost", json={"name": "X"}).status_code == 404
+
+
+def test_world_pc_crud_and_tag_validation(client):
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/tags", json={"name": "Student"})
+    r = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Elara", "tags": ["student"]})
+    pid = r.json()["pc"]
+    assert pid == "elara"
+    assert client.get(f"/api/worlds/{wid}/pcs/{pid}").json()["meta"]["tags"] == ["student"]
+    assert client.get(f"/api/worlds/{wid}").json()["counts"]["pcs"] == 1
+    assert client.post(f"/api/worlds/{wid}/pcs", json={"name": "Rook", "tags": ["ghost"]}).status_code == 400
+    assert client.delete(f"/api/worlds/{wid}/pcs/{pid}").status_code == 200
+
+
 def test_unknown_kind_404(client):
     wid = _world(client)
     assert client.get(f"/api/worlds/{wid}/weapons").status_code == 404
@@ -163,13 +187,52 @@ def test_cast_and_suggestions_flow(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Docks"}).json()["id"]
     # manual appearance
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
-                       json={"character": "seraphine", "version": "default"}).status_code == 200
-    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json() == ["seraphine"]
+                       json={"kind": "characters", "id": "seraphine", "version": "default"}).status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json() == [
+        {"kind": "characters", "id": "seraphine", "role": "npc"}]
     # suggestion surfaces drowned-king, then dismiss hides it
     sugg = client.get(f"/api/campaigns/{cid}/scenes/{sid}/suggestions").json()
     assert [s["character"] for s in sugg] == ["drowned-king"]
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/suggestions/dismiss", json={"character": "drowned-king"})
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/suggestions").json() == []
+
+
+def test_cast_pc_and_character_as_player(client):
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "desmond"})
+    client.post(f"/api/worlds/{wid}/pcs", json={"name": "Elara"})
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    # a PC casts as player automatically
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                       json={"kind": "pcs", "id": "elara"}).status_code == 200
+    # a character cast explicitly as player
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                       json={"kind": "characters", "id": "desmond", "role": "player"}).status_code == 200
+    cast = client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json()
+    assert {"kind": "pcs", "id": "elara", "role": "player"} in cast
+    assert {"kind": "characters", "id": "desmond", "role": "player"} in cast
+    roster = client.get(f"/api/campaigns/{cid}/appearances").json()
+    assert {r["kind"] for r in roster} == {"pcs", "characters"}
+
+
+def test_recasting_with_different_role_or_version_409(client):
+    wid = _world(client)
+    got = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()
+    cid = got["character"]
+    # add a second version so a version-mismatch is possible
+    base = client.get(f"/api/worlds/{wid}/characters/{cid}").json()["versions"][0]["card"]
+    client.post(f"/api/worlds/{wid}/characters/{cid}/versions", json={"name": "Alt", "card": base})
+    camp = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{camp}/scenes", json={"title": "S"}).json()["id"]
+    # first appearance locks version=default, role=npc
+    client.post(f"/api/campaigns/{camp}/scenes/{sid}/cast", json={"kind": "characters", "id": "seraphine"})
+    # re-cast as player -> role lock conflict
+    assert client.post(f"/api/campaigns/{camp}/scenes/{sid}/cast",
+                       json={"kind": "characters", "id": "seraphine", "role": "player"}).status_code == 409
+    # re-cast with a different version -> version lock conflict
+    assert client.post(f"/api/campaigns/{camp}/scenes/{sid}/cast",
+                       json={"kind": "characters", "id": "seraphine", "version": "alt"}).status_code == 409
 
 
 # ---- scenes (re-homed chat) ----

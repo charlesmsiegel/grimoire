@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import appearances, campaigns, characters, entities, worlds
+from . import appearances, campaigns, characters, entities, pcs, worlds
 
 
 def _world_id(cid: str) -> str:
@@ -59,49 +59,54 @@ def incoming(cid: str) -> list[dict]:
         if mine_h is not None:
             item["mine"] = _entity_blob(croot, kind, eid)
         out.append(item)
-    return out + _character_incoming(cid)
+    return out + _actor_incoming(cid)
 
 
-def _card_blob(root: Path, char_id: str, vid: str) -> dict:
-    card = characters.read_card(root, char_id, vid)
-    return {"name": card["data"].get("name", char_id), "version": vid, "card": card}
+def _actor_blob(root: Path, kind: str, actor_id: str, vid: str) -> dict:
+    if kind == "characters":
+        card = characters.read_card(root, actor_id, vid)
+        return {"name": card["data"].get("name", actor_id), "version": vid, "card": card}
+    persona = pcs.read_persona(root, actor_id, vid)
+    return {"name": persona.get("name", actor_id), "version": vid, "persona": persona}
 
 
-def _character_incoming(cid: str) -> list[dict]:
+def _actor_incoming(cid: str) -> list[dict]:
     wroot = worlds.world_root(_world_id(cid))
     croot = campaigns.campaign_root(cid)
     out: list[dict] = []
-    for char_id, rec in sorted(appearances.record(cid).items()):
+    for ref, rec in sorted(appearances.record(cid).items()):
+        kind, actor_id = ref.split("/", 1)
         vid = rec["version"]
-        world_h = characters.card_hash(wroot, char_id, vid)
+        world_h = appearances.actor_hash(wroot, kind, actor_id, vid)
         if world_h is None or world_h == rec["base"]:
             continue  # world unchanged (or locked version deleted, which we skip)
-        mine_h = characters.card_hash(croot, char_id, vid)
+        mine_h = appearances.actor_hash(croot, kind, actor_id, vid)
         status = "update" if mine_h == rec["base"] else "conflict"
-        item = {"ref": {"kind": "characters", "id": char_id}, "status": status,
-                "world": _card_blob(wroot, char_id, vid)}
+        item = {"ref": {"kind": kind, "id": actor_id}, "status": status,
+                "world": _actor_blob(wroot, kind, actor_id, vid)}
         if mine_h is not None:
-            item["mine"] = _card_blob(croot, char_id, vid)
+            item["mine"] = _actor_blob(croot, kind, actor_id, vid)
         out.append(item)
     return out
 
 
-def _advance_character(cid: str, char_id: str, *, copy: bool) -> bool:
+def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
     wroot = worlds.world_root(_world_id(cid))
     croot = campaigns.campaign_root(cid)
-    rec = appearances.record(cid).get(char_id)
+    rec = appearances.record(cid).get(f"{kind}/{actor_id}")
     if rec is None:
         return False
     vid = rec["version"]
-    world_h = characters.card_hash(wroot, char_id, vid)
+    world_h = appearances.actor_hash(wroot, kind, actor_id, vid)
     if world_h is None or rec["base"] == world_h:
         return False  # not pending
     if copy:
-        src = wroot / "characters" / char_id / f"{vid}.json"
-        dst = croot / "characters" / char_id / f"{vid}.json"
+        ext = "json" if kind == "characters" else "md"
+        src = wroot / kind / actor_id / f"{vid}.{ext}"
+        dst = croot / kind / actor_id / f"{vid}.{ext}"
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-    appearances.set_base(cid, char_id, world_h)
+    appearances.set_base(cid, kind, actor_id, world_h)
     return True
 
 
@@ -114,8 +119,8 @@ def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
     touched = False           # any ref advanced → bump campaign.updated
     for ref in refs:
         kind, eid = ref["kind"], ref["id"]
-        if kind == "characters":
-            if _advance_character(cid, eid, copy=copy):
+        if kind in appearances.ACTOR_KINDS:
+            if _advance_actor(cid, kind, eid, copy=copy):
                 touched = True
             continue
         world_h = entities.entity_hash(wroot, kind, eid) if wroot.exists() else None

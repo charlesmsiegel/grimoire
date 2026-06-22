@@ -64,6 +64,27 @@ class DefaultVersion(BaseModel):
     default_version: str
 
 
+class PCCreate(BaseModel):
+    name: str
+    tags: list[str] = []
+    version_name: str = "default"
+    persona: dict | None = None
+
+
+class PCUpdate(BaseModel):
+    default_version: str | None = None
+    tags: list[str] | None = None
+
+
+class PersonaVersionCreate(BaseModel):
+    name: str
+    persona: dict
+
+
+class PersonaVersionUpdate(BaseModel):
+    persona: dict
+
+
 class Ref(BaseModel):
     kind: str
     id: str
@@ -86,8 +107,10 @@ class ChatTurn(BaseModel):
 
 
 class Appear(BaseModel):
-    character: str
+    kind: str = "characters"
+    id: str
     version: str | None = None
+    role: str | None = None
 
 
 class Dismiss(BaseModel):
@@ -153,6 +176,124 @@ def delete_world(wid: str):
 @router.get("/worlds/{wid}/campaigns")
 def get_world_campaigns(wid: str):
     return store.sync.campaigns_for_world(wid)
+
+
+# ---- world tags (declared before the generic /{kind} routes) ----
+@router.get("/worlds/{wid}/tags")
+def get_world_tags(wid: str):
+    return store.tags.read_tags(_world_root_or_404(wid))
+
+
+@router.post("/worlds/{wid}/tags")
+def post_world_tag(wid: str, body: NameBody):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    return {"id": store.tags.add_tag(_world_root_or_404(wid), name)}
+
+
+@router.put("/worlds/{wid}/tags/{tid}")
+def put_world_tag(wid: str, tid: str, body: NameBody):
+    try:
+        store.tags.rename_tag(_world_root_or_404(wid), tid, body.name.strip())
+    except store.tags.TagNotFound:
+        raise HTTPException(status_code=404, detail="tag not found")
+    return {"id": tid, "name": body.name.strip()}
+
+
+@router.delete("/worlds/{wid}/tags/{tid}")
+def delete_world_tag(wid: str, tid: str):
+    try:
+        store.tags.delete_tag(_world_root_or_404(wid), tid)
+    except store.tags.TagNotFound:
+        raise HTTPException(status_code=404, detail="tag not found")
+    return {"ok": True}
+
+
+# ---- world PCs (declared before the generic /{kind} routes) ----
+def _validate_tags(root, tags: list[str]) -> None:
+    for t in tags:
+        if not store.tags.has_tag(root, t):
+            raise HTTPException(status_code=400, detail=f"unknown tag: {t}")
+
+
+@router.get("/worlds/{wid}/pcs")
+def get_world_pcs(wid: str):
+    return store.pcs.list_pcs(_world_root_or_404(wid))
+
+
+@router.post("/worlds/{wid}/pcs")
+def post_world_pc(wid: str, body: PCCreate):
+    root = _world_root_or_404(wid)
+    _validate_tags(root, body.tags)
+    pid, vid = store.pcs.create_pc(root, body.name, body.tags, body.version_name, body.persona)
+    return {"pc": pid, "version": vid}
+
+
+@router.get("/worlds/{wid}/pcs/{pid}")
+def get_world_pc(wid: str, pid: str):
+    try:
+        return store.pcs.read_pc(_world_root_or_404(wid), pid)
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+
+
+@router.put("/worlds/{wid}/pcs/{pid}")
+def put_world_pc(wid: str, pid: str, body: PCUpdate):
+    root = _world_root_or_404(wid)
+    try:
+        if body.tags is not None:
+            _validate_tags(root, body.tags)
+            store.pcs.set_tags(root, pid, body.tags)
+        if body.default_version is not None:
+            store.pcs.set_default_version(root, pid, body.default_version)
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+    except store.pcs.PCVersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return {"ok": True}
+
+
+@router.delete("/worlds/{wid}/pcs/{pid}")
+def delete_world_pc(wid: str, pid: str):
+    try:
+        store.pcs.delete_pc(_world_root_or_404(wid), pid)
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+    return {"ok": True}
+
+
+@router.post("/worlds/{wid}/pcs/{pid}/versions")
+def post_pc_version(wid: str, pid: str, body: PersonaVersionCreate):
+    try:
+        vid = store.pcs.create_version(_world_root_or_404(wid), pid, body.name, body.persona)
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+    return {"version": vid}
+
+
+@router.put("/worlds/{wid}/pcs/{pid}/versions/{vid}")
+def put_pc_version(wid: str, pid: str, vid: str, body: PersonaVersionUpdate):
+    try:
+        store.pcs.update_version(_world_root_or_404(wid), pid, vid, body.persona)
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+    except store.pcs.PCVersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return {"ok": True}
+
+
+@router.delete("/worlds/{wid}/pcs/{pid}/versions/{vid}")
+def delete_pc_version(wid: str, pid: str, vid: str):
+    try:
+        store.pcs.delete_version(_world_root_or_404(wid), pid, vid)
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+    except store.pcs.PCVersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
 
 
 # ---- world characters (dedicated; declared before the generic /{kind} routes) ----
@@ -534,16 +675,23 @@ def get_scene_cast(cid: str, sid: str):
 @router.post("/campaigns/{cid}/scenes/{sid}/cast")
 def post_scene_cast(cid: str, sid: str, body: Appear):
     _require_scene(cid, sid)
-    wid = store.campaigns.read_campaign(cid)["meta"].get("world", "")
-    wroot = store.worlds.world_root(wid)
+    if body.kind not in store.appearances.ACTOR_KINDS:
+        raise HTTPException(status_code=404, detail="unknown actor kind")
+    wroot = store.worlds.world_root(store.campaigns.read_campaign(cid)["meta"].get("world", ""))
+    role = "player" if body.kind == "pcs" else (body.role or "npc")
+    if role not in ("player", "npc"):
+        raise HTTPException(status_code=400, detail="role must be player or npc")
     version = body.version
-    if version is None:
-        try:
-            version = store.characters.read_character(wroot, body.character)["meta"]["default_version"]
-        except store.characters.CharacterNotFound:
-            raise HTTPException(status_code=404, detail="character not found")
     try:
-        store.appearances.appear(cid, sid, body.character, version)
+        if version is None:
+            if body.kind == "characters":
+                version = store.characters.read_character(wroot, body.id)["meta"]["default_version"]
+            else:
+                version = store.pcs.read_pc(wroot, body.id)["meta"]["default_version"]
+    except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
+        raise HTTPException(status_code=404, detail="actor not found")
+    try:
+        store.appearances.appear(cid, sid, body.kind, body.id, version, role)
     except store.appearances.AppearError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return {"ok": True}
