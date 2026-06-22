@@ -89,3 +89,35 @@ records a `player` role but deliberately injects nothing. This work builds the c
 - Whether tag gating should also consider character-cast-as-player tags (Spec 1 keeps tags on PCs
   only; may need extending).
 - Frontend: the plot-map graph editor (deferred with the rest of the frontend).
+
+## G. Lorebook / world-info import (spec 2c) — captured decisions
+
+Decided during the context-builder brainstorm; this is the data-population path for the `keys`
+the context builder (2a) now consumes.
+
+- **Two sources, one destination.** Importing a **standalone lorebook** file (SillyTavern
+  world-info / lorebook JSON) **and** a character card's **embedded `character_book`** both create
+  first-class **Lore** entries (markdown body + comma-joined `keys`). There is **no** separate
+  per-card lorebook mechanism — everything becomes a keyed entity the builder already understands.
+- **Per-entry category routing at import.** Each imported entry can be **sent to a different
+  category** (default `lore`; routable to `locations`, etc.). So import is parse → (review/route)
+  → commit, not a blind dump.
+- **Activation is already built.** The keyword-now / smarter-later choice landed in 2a's pluggable
+  `activate()` seam; 2c only *populates* `keys` + bodies. No activation logic ships in 2c.
+
+### Open questions for 2c (resolve before its plan)
+
+- **ST lorebook → entity field mapping.** ST world-info entries carry more than keys+content
+  (secondary/“selective” keys, `constant`, insertion `position`/order, `comment`/name,
+  case-sensitivity, probability). v1 likely maps **primary keys → `keys`**, **content → body**,
+  **comment → name**; decide whether to drop advanced fields or stash them under an entity
+  `extensions`/extra frontmatter for later fidelity. (`constant` entries map naturally to our
+  **keyless = always-on** rule.)
+- **Where routing happens:** an import endpoint that returns parsed entries for the client to
+  categorize then commit, vs. a one-shot import with a default category. Leans toward
+  parse-then-commit so routing is a real choice (needs frontend — see the frontend status note).
+- **Dedup / re-import:** importing the same lorebook twice — uniquify ids (current behavior) vs.
+  update-in-place vs. skip-existing.
+- **File formats:** ST lorebooks ship as bare `.json`, and `character_book` rides inside the V3
+  card formats the character-cards import already parses (`.json`/PNG/`.charx`) — 2c can reuse
+  that card parser to reach `character_book`.
