@@ -31,6 +31,27 @@ def _substitute(text: str, subs: dict[str, str]) -> str:
     return text
 
 
+def scene_substitutions(cid: str, sid: str) -> dict[str, str]:
+    """Token map for a scene's current cast: {{user}} -> player names, {{char}} -> NPC names."""
+    croot = campaigns.campaign_root(cid)
+    npc_names: list[str] = []
+    player_names: list[str] = []
+    for a in appearances.scene_cast(cid, sid):
+        vid = appearances.locked_version(cid, a["kind"], a["id"])
+        try:
+            if a["role"] == "npc":
+                npc_names.append(characters.read_card(croot, a["id"], vid)["data"].get("name", ""))
+            elif a["kind"] == "pcs":
+                player_names.append(pcs.read_persona(croot, a["id"], vid).get("name", a["id"]))
+            else:
+                player_names.append(characters.read_card(croot, a["id"], vid)["data"].get("name", a["id"]))
+        except (characters.CharacterNotFound, characters.VersionNotFound,
+                pcs.PCNotFound, pcs.PCVersionNotFound):
+            continue
+    return {"{{user}}": ", ".join(n for n in player_names if n),
+            "{{char}}": ", ".join(n for n in npc_names if n)}
+
+
 def _npc_block(data: dict) -> str:
     parts = [data.get(f, "").strip() for f in ("description", "personality", "scenario")]
     return "\n".join(p for p in parts if p)
@@ -56,6 +77,39 @@ def _world_info(croot, recent_text: str) -> str:
             entries.append({"name": e["meta"].get("name", meta["id"]), "body": e["body"].strip(), "keys": keys})
     selected = activate(entries, recent_text)
     return "\n\n".join(e["body"] for e in selected if e["body"])
+
+
+OPENER_INSTRUCTION = (
+    "Write the opening narration for a new scene based on the prompt below. "
+    "Set the scene vividly in the second person. Do not speak or act for the player."
+)
+
+
+def build_opener_messages(cid: str, sid: str, prompt: str) -> list[dict]:
+    """A world-informed, character-less opener: instruction + player personas + activated
+    world-info (driven by the prompt). Ephemeral — the caller does not persist the result."""
+    croot = campaigns.campaign_root(cid)
+    subs = scene_substitutions(cid, sid)
+    player_blocks: list[str] = []
+    for a in appearances.scene_cast(cid, sid):
+        if a["role"] != "player":
+            continue
+        vid = appearances.locked_version(cid, a["kind"], a["id"])
+        try:
+            if a["kind"] == "pcs":
+                player_blocks.append(_pc_persona_block(pcs.read_persona(croot, a["id"], vid)))
+            else:
+                player_blocks.append(_char_player_block(characters.read_card(croot, a["id"], vid)["data"]))
+        except (pcs.PCNotFound, pcs.PCVersionNotFound,
+                characters.CharacterNotFound, characters.VersionNotFound):
+            continue
+    parts = [OPENER_INSTRUCTION] + [b for b in player_blocks if b]
+    wi = _world_info(croot, prompt)
+    if wi:
+        parts.append(wi)
+    system_text = _substitute("\n\n".join(parts), subs)
+    return [{"role": "system", "content": system_text},
+            {"role": "user", "content": _substitute(prompt, subs)}]
 
 
 def build_messages(cid: str, sid: str) -> list[dict]:

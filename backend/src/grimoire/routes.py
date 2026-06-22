@@ -119,6 +119,40 @@ class Dismiss(BaseModel):
     character: str
 
 
+class GreetingCreate(BaseModel):
+    name: str
+    character: str
+    version: str
+    body: str = ""
+    requires_tags: list[str] = []
+    predecessor_join: str = "all"
+
+
+class GreetingUpdate(BaseModel):
+    name: str | None = None
+    body: str | None = None
+    requires_tags: list[str] | None = None
+    predecessor_join: str | None = None
+
+
+class Edges(BaseModel):
+    leads_to: list[str] | None = None
+    excludes: list[str] | None = None
+
+
+class ImportGreetings(BaseModel):
+    character: str
+    version: str
+
+
+class StartFromGreeting(BaseModel):
+    greeting: str
+
+
+class Opener(BaseModel):
+    prompt: str
+
+
 # ---- config ----
 def _public_config(cfg: dict[str, str]) -> dict:
     return {"model": cfg["model"], "theme": cfg["theme"], "key_set": bool(cfg["openrouter_key"])}
@@ -405,6 +439,71 @@ def get_character_export(wid: str, cid: str, vid: str, format: str = "json"):
     return Response(content=blob, media_type=_EXPORT_MEDIA[format])
 
 
+# ---- world greetings (declared before the generic /{kind} routes) ----
+@router.get("/worlds/{wid}/greetings")
+def get_world_greetings(wid: str):
+    return store.greetings.list_greetings(_world_root_or_404(wid))
+
+
+@router.post("/worlds/{wid}/greetings")
+def post_world_greeting(wid: str, body: GreetingCreate):
+    gid = store.greetings.create_greeting(_world_root_or_404(wid), body.name, body.character,
+                                          body.version, body.body, body.requires_tags,
+                                          body.predecessor_join)
+    return {"id": gid}
+
+
+@router.post("/worlds/{wid}/greetings/import")
+def post_world_greetings_import(wid: str, body: ImportGreetings):
+    root = _world_root_or_404(wid)
+    try:
+        gids = store.greetings.import_from_character(root, body.character, body.version)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return {"greetings": gids}
+
+
+@router.get("/worlds/{wid}/greetings/{gid}")
+def get_world_greeting(wid: str, gid: str):
+    try:
+        return store.greetings.read_greeting(_world_root_or_404(wid), gid)
+    except store.greetings.GreetingNotFound:
+        raise HTTPException(status_code=404, detail="greeting not found")
+
+
+@router.put("/worlds/{wid}/greetings/{gid}")
+def put_world_greeting(wid: str, gid: str, body: GreetingUpdate):
+    try:
+        store.greetings.update_greeting(_world_root_or_404(wid), gid, name=body.name,
+                                        body=body.body, requires_tags=body.requires_tags,
+                                        predecessor_join=body.predecessor_join)
+    except store.greetings.GreetingNotFound:
+        raise HTTPException(status_code=404, detail="greeting not found")
+    return {"ok": True}
+
+
+@router.put("/worlds/{wid}/greetings/{gid}/edges")
+def put_world_greeting_edges(wid: str, gid: str, body: Edges):
+    root = _world_root_or_404(wid)
+    try:
+        store.greetings.read_greeting(root, gid)
+    except store.greetings.GreetingNotFound:
+        raise HTTPException(status_code=404, detail="greeting not found")
+    store.greetings.set_edges(root, gid, body.leads_to, body.excludes)
+    return {"ok": True}
+
+
+@router.delete("/worlds/{wid}/greetings/{gid}")
+def delete_world_greeting(wid: str, gid: str):
+    try:
+        store.greetings.delete_greeting(_world_root_or_404(wid), gid)
+    except store.greetings.GreetingNotFound:
+        raise HTTPException(status_code=404, detail="greeting not found")
+    return {"ok": True}
+
+
 # ---- generic entity CRUD (shared by worlds and campaigns) ----
 def _world_root_or_404(wid: str):
     if not store.worlds.world_meta_path(wid).exists():
@@ -586,6 +685,19 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: Op
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+def _ephemeral_stream(messages: list[dict], cfg: dict, client: OpenRouterClient):
+    """Stream a generation without persisting it to any scene (used by the opener)."""
+    async def event_stream():
+        try:
+            async for delta in client.stream(messages, cfg["model"], cfg["openrouter_key"]):
+                yield f"data: {json.dumps({'delta': delta})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+        except OpenRouterError as exc:
+            yield f"data: {json.dumps({'error': {'detail': exc.detail, 'kind': exc.kind}})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @router.get("/campaigns/{cid}/scenes")
 def get_scenes(cid: str):
     try:
@@ -709,6 +821,34 @@ def post_dismiss(cid: str, sid: str, body: Dismiss):
     _require_scene(cid, sid)
     store.scenes.add_dismissed(cid, sid, body.character)
     return {"ok": True}
+
+
+# ---- campaign greetings / play (declared before the generic /{kind} routes) ----
+@router.get("/campaigns/{cid}/greetings/available")
+def get_available_greetings(cid: str):
+    _campaign_root_or_404(cid)
+    return store.playing.available_greetings(cid)
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/start-from-greeting")
+def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting):
+    _require_scene(cid, sid)
+    try:
+        store.playing.start_from_greeting(cid, sid, body.greeting)
+    except store.greetings.GreetingNotFound:
+        raise HTTPException(status_code=404, detail="greeting not found")
+    except (store.playing.PlayError, store.appearances.AppearError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True}
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/opener")
+def post_opener(cid: str, sid: str, body: Opener, client: OpenRouterClient = Depends(get_openrouter)):
+    _require_scene(cid, sid)
+    cfg = store.read_config()
+    _require_key(cfg)
+    messages = store.context.build_opener_messages(cid, sid, body.prompt)
+    return _ephemeral_stream(messages, cfg, client)
 
 
 # ---- campaign entity CRUD (generic; declared last so literal sub-paths win) ----
