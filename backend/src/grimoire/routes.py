@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from . import store
@@ -45,6 +45,25 @@ class EntityUpdate(BaseModel):
     body: str | None = None
 
 
+class CharacterCreate(BaseModel):
+    name: str
+    version_name: str = "default"
+    card: dict | None = None
+
+
+class VersionCreate(BaseModel):
+    name: str
+    card: dict
+
+
+class VersionUpdate(BaseModel):
+    card: dict
+
+
+class DefaultVersion(BaseModel):
+    default_version: str
+
+
 class Ref(BaseModel):
     kind: str
     id: str
@@ -64,6 +83,15 @@ class RenameScene(BaseModel):
 
 class ChatTurn(BaseModel):
     content: str
+
+
+class Appear(BaseModel):
+    character: str
+    version: str | None = None
+
+
+class Dismiss(BaseModel):
+    character: str
 
 
 # ---- config ----
@@ -125,6 +153,113 @@ def delete_world(wid: str):
 @router.get("/worlds/{wid}/campaigns")
 def get_world_campaigns(wid: str):
     return store.sync.campaigns_for_world(wid)
+
+
+# ---- world characters (dedicated; declared before the generic /{kind} routes) ----
+@router.get("/worlds/{wid}/characters")
+def get_world_characters(wid: str):
+    return store.characters.list_characters(_world_root_or_404(wid))
+
+
+@router.post("/worlds/{wid}/characters")
+def post_world_character(wid: str, body: CharacterCreate):
+    cid, vid = store.characters.create_character(
+        _world_root_or_404(wid), body.name, body.version_name, body.card
+    )
+    return {"character": cid, "version": vid}
+
+
+@router.get("/worlds/{wid}/characters/{cid}")
+def get_world_character(wid: str, cid: str):
+    try:
+        return store.characters.read_character(_world_root_or_404(wid), cid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+
+
+@router.put("/worlds/{wid}/characters/{cid}")
+def put_world_character(wid: str, cid: str, body: DefaultVersion):
+    try:
+        store.characters.set_default_version(_world_root_or_404(wid), cid, body.default_version)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return {"ok": True}
+
+
+@router.delete("/worlds/{wid}/characters/{cid}")
+def delete_world_character(wid: str, cid: str):
+    try:
+        store.characters.delete_character(_world_root_or_404(wid), cid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    return {"ok": True}
+
+
+@router.post("/worlds/{wid}/characters/{cid}/versions")
+def post_world_version(wid: str, cid: str, body: VersionCreate):
+    try:
+        vid = store.characters.create_version(_world_root_or_404(wid), cid, body.name, body.card)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    return {"version": vid}
+
+
+@router.put("/worlds/{wid}/characters/{cid}/versions/{vid}")
+def put_world_version(wid: str, cid: str, vid: str, body: VersionUpdate):
+    try:
+        store.characters.update_version(_world_root_or_404(wid), cid, vid, body.card)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return {"ok": True}
+
+
+@router.delete("/worlds/{wid}/characters/{cid}/versions/{vid}")
+def delete_world_version(wid: str, cid: str, vid: str):
+    try:
+        store.characters.delete_version(_world_root_or_404(wid), cid, vid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+_EXPORT_MEDIA = {"json": "application/json", "png": "image/png", "charx": "application/zip"}
+
+
+@router.post("/worlds/{wid}/characters/import")
+async def post_character_import(wid: str, file: UploadFile = File(...),
+                                format: str = Form(...), into: str | None = Form(None),
+                                name: str | None = Form(None)):
+    root = _world_root_or_404(wid)
+    data = await file.read()
+    try:
+        cid, vid = store.characters.import_card(root, data, format, into_cid=into, name=name)
+    except store.cards.CardParseError as exc:
+        raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    return {"character": cid, "version": vid}
+
+
+@router.get("/worlds/{wid}/characters/{cid}/versions/{vid}/export")
+def get_character_export(wid: str, cid: str, vid: str, format: str = "json"):
+    root = _world_root_or_404(wid)
+    if format not in _EXPORT_MEDIA:
+        raise HTTPException(status_code=400, detail="unknown format")
+    try:
+        blob = store.characters.export_card(root, cid, vid, format)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return Response(content=blob, media_type=_EXPORT_MEDIA[format])
 
 
 # ---- generic entity CRUD (shared by worlds and campaigns) ----
@@ -381,6 +516,50 @@ def post_retry(cid: str, sid: str, client: OpenRouterClient = Depends(get_openro
     if not messages:
         raise HTTPException(status_code=400, detail="nothing to retry")
     return _chat_stream(cid, sid, messages, cfg, client)
+
+
+# ---- campaign cast & suggestions (declared before the generic /{kind} routes) ----
+@router.get("/campaigns/{cid}/appearances")
+def get_appearances(cid: str):
+    _campaign_root_or_404(cid)
+    return store.appearances.roster(cid)
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/cast")
+def get_scene_cast(cid: str, sid: str):
+    _require_scene(cid, sid)
+    return store.appearances.scene_cast(cid, sid)
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/cast")
+def post_scene_cast(cid: str, sid: str, body: Appear):
+    _require_scene(cid, sid)
+    wid = store.campaigns.read_campaign(cid)["meta"].get("world", "")
+    wroot = store.worlds.world_root(wid)
+    version = body.version
+    if version is None:
+        try:
+            version = store.characters.read_character(wroot, body.character)["meta"]["default_version"]
+        except store.characters.CharacterNotFound:
+            raise HTTPException(status_code=404, detail="character not found")
+    try:
+        store.appearances.appear(cid, sid, body.character, version)
+    except store.appearances.AppearError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/suggestions")
+def get_scene_suggestions(cid: str, sid: str):
+    _require_scene(cid, sid)
+    return store.appearances.suggestions(cid, sid)
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/suggestions/dismiss")
+def post_dismiss(cid: str, sid: str, body: Dismiss):
+    _require_scene(cid, sid)
+    store.scenes.add_dismissed(cid, sid, body.character)
+    return {"ok": True}
 
 
 # ---- campaign entity CRUD (generic; declared last so literal sub-paths win) ----

@@ -17,3 +17,4 @@ frontend/*.tsbuildinfo
 
 # Run-time pidfiles
 .run/
+**/results.json

@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from . import entities
+from . import characters, entities
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home, now_iso, slugify, uniquify
 
@@ -41,7 +41,7 @@ def list_worlds() -> list[dict]:
                 "name": meta.get("name", d.name),
                 "created": meta.get("created", ""),
                 "updated": meta.get("updated", ""),
-                "counts": entities.entity_counts(d),
+                "counts": {**entities.entity_counts(d), "characters": characters.character_count(d)},
             })
     out.sort(key=lambda m: m["updated"], reverse=True)
     return out
@@ -64,7 +64,9 @@ def read_world(wid: str) -> dict:
     if not mp.exists():
         raise WorldNotFound(wid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    return {"meta": {"id": wid, **meta}, "body": body, "counts": entities.entity_counts(world_root(wid))}
+    root = world_root(wid)
+    return {"meta": {"id": wid, **meta}, "body": body,
+            "counts": {**entities.entity_counts(root), "characters": characters.character_count(root)}}
 
 
 def rename_world(wid: str, name: str) -> None:

@@ -13,7 +13,7 @@ from pathlib import Path
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
-ENTITY_KINDS: tuple[str, ...] = ("characters", "locations", "lore")
+ENTITY_KINDS: tuple[str, ...] = ("locations", "lore")
 
 
 class EntityNotFound(Exception):
