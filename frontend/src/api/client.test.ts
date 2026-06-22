@@ -87,3 +87,71 @@ test("retry posts to the scene retry endpoint", async () => {
     expect.objectContaining({ method: "POST" }),
   );
 });
+
+test("addTag POSTs the name to the world tags endpoint", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "student" }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.addTag("w", "Student");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/w/tags",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "Student" }) }),
+  );
+});
+
+test("listEntities resolves the scope base path", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk([]));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.listEntities({ kind: "campaign", id: "run" }, "lore");
+  expect(fetchMock).toHaveBeenCalledWith("/api/campaigns/run/lore", expect.objectContaining({ method: "GET" }));
+});
+
+test("updateEntity PUTs keys", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.updateEntity({ kind: "world", id: "w" }, "lore", "salt", { keys: "pact,salt" });
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/w/lore/salt",
+    expect.objectContaining({ method: "PUT", body: JSON.stringify({ keys: "pact,salt" }) }),
+  );
+});
+
+test("addToCast POSTs kind+id to the scene cast endpoint", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.addToCast("run", "s1", { kind: "pcs", id: "elara" });
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/campaigns/run/scenes/s1/cast",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ kind: "pcs", id: "elara" }) }),
+  );
+});
+
+test("setEdges PUTs to the greeting edges endpoint", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.setEdges("w", "g1", { leads_to: ["g2"] });
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/w/greetings/g1/edges",
+    expect.objectContaining({ method: "PUT", body: JSON.stringify({ leads_to: ["g2"] }) }),
+  );
+});
+
+test("lorebookImport POSTs the entries array", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ created: [] }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const entries = [{ name: "A", keys: ["k"], body: "b", category: "lore" as const }];
+  await api.lorebookImport("w", entries);
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/w/lorebook/import",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ entries }) }),
+  );
+});
+
+test("lorebookParse posts multipart form data", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ entries: [] }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.lorebookParse("w", new File(["{}"], "wi.json"), "lorebook");
+  const [path, opts] = fetchMock.mock.calls[0];
+  expect(path).toBe("/api/worlds/w/lorebook/parse");
+  expect(opts.method).toBe("POST");
+  expect(opts.body).toBeInstanceOf(FormData);
+});

@@ -335,7 +335,9 @@ def test_greeting_crud_import_edges_and_start(client):
                      json={"name": "Reckoning", "character": "seraphine", "version": "default",
                            "body": "It ends here."}).json()["id"]
     client.put(f"/api/worlds/{wid}/greetings/{imported[0]}/edges", json={"leads_to": [g2]})
-    assert client.get(f"/api/worlds/{wid}/greetings/{imported[0]}").json()["meta"]["character"] == "seraphine"
+    read = client.get(f"/api/worlds/{wid}/greetings/{imported[0]}").json()
+    assert read["meta"]["character"] == "seraphine"
+    assert read["edges"]["leads_to"] == [g2]   # edges surfaced on read for the editor
     assert [x["id"] for x in client.get(f"/api/worlds/{wid}/greetings").json()] == sorted([imported[0], g2])
 
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]

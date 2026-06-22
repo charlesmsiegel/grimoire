@@ -2,6 +2,9 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import CampaignView from "./CampaignView";
 
+// CastPanel has its own test + makes its own API calls; stub it here to keep this test focused.
+vi.mock("../components/CastPanel", () => ({ CastPanel: () => null }));
+
 vi.mock("../api/client", () => ({
   api: {
     getCampaign: vi.fn(),

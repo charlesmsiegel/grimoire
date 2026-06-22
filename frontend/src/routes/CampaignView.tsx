@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { api, type SceneMeta, type Message } from "../api/client";
 import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
+import { CastPanel } from "../components/CastPanel";
 
 export default function CampaignView({ keySet }: { keySet: boolean }) {
   const { cid = "" } = useParams();
@@ -142,6 +143,15 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
               Retry
             </button>
           </div>
+        )}
+        {activeId && (
+          <CastPanel
+            cid={cid}
+            sid={activeId}
+            sceneEmpty={messages.length === 0}
+            keySet={keySet}
+            onSeeded={() => selectScene(activeId)}
+          />
         )}
         <div className="stream" ref={streamRef}>
           {messages.map((m, i) => (
