@@ -318,3 +318,61 @@ def test_scene_rename_and_delete(client):
 def test_scene_missing_404(client):
     _wid, cid = _campaign(client)
     assert client.delete(f"/api/campaigns/{cid}/scenes/nope").status_code == 404
+
+
+# ---- greetings & plot maps (2b) ----
+def test_greeting_crud_import_edges_and_start(client):
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"})
+    got = client.get(f"/api/worlds/{wid}/characters/seraphine").json()
+    card = got["versions"][0]["card"]
+    card["data"]["first_mes"] = "You meet Seraphine."
+    client.put(f"/api/worlds/{wid}/characters/seraphine/versions/default", json={"card": card})
+    imported = client.post(f"/api/worlds/{wid}/greetings/import",
+                           json={"character": "seraphine", "version": "default"}).json()["greetings"]
+    assert len(imported) == 1
+    g2 = client.post(f"/api/worlds/{wid}/greetings",
+                     json={"name": "Reckoning", "character": "seraphine", "version": "default",
+                           "body": "It ends here."}).json()["id"]
+    client.put(f"/api/worlds/{wid}/greetings/{imported[0]}/edges", json={"leads_to": [g2]})
+    assert client.get(f"/api/worlds/{wid}/greetings/{imported[0]}").json()["meta"]["character"] == "seraphine"
+    assert [x["id"] for x in client.get(f"/api/worlds/{wid}/greetings").json()] == sorted([imported[0], g2])
+
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Opening"}).json()["id"]
+    avail = client.get(f"/api/campaigns/{cid}/greetings/available").json()
+    assert {x["id"]: x["available"] for x in avail}[imported[0]] is True
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                    json={"greeting": imported[0]})
+    assert r.status_code == 200
+    scene = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()
+    assert scene["messages"][0]["content"] == "You meet Seraphine."
+    # starting again on a non-empty scene -> 409
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                       json={"greeting": g2}).status_code == 409
+
+
+def test_start_from_greeting_unknown_404(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                       json={"greeting": "nope"}).status_code == 404
+
+
+def test_opener_streams_without_persisting(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/opener",
+                       json={"prompt": "Begin in a tavern."}) as r:
+        body = "".join(r.iter_text())
+    assert "Hel" in body and "lo" in body and '"done": true' in body
+    # ephemeral: the scene is untouched
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == []
+
+
+def test_opener_requires_key(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/opener",
+                       json={"prompt": "x"}).status_code == 409

@@ -165,6 +165,24 @@ def test_substitute_handles_backslash_name(monkeypatch, tmp_path):
     assert context.build_messages(cid, sid)[-1]["content"] == r"hi A\1B"
 
 
+def test_build_opener_messages(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    pcs.create_pc(worlds.world_root(wid), "Elara", [],
+                  persona={"name": "Elara", "pronouns": "", "summary": "", "description": "a scholar"})
+    ap.appear(cid, sid, "pcs", "elara", "default", "player")
+    entities.create_entity(croot, "lore", "Always", "ambient lore", keys="")
+    entities.create_entity(croot, "lore", "Salt", "salt lore", keys="salt")
+    msgs = context.build_opener_messages(cid, sid, "A storm over the salt marshes for {{user}}.")
+    assert msgs[0]["role"] == "system" and msgs[-1]["role"] == "user"
+    sys = msgs[0]["content"]
+    assert "a scholar" in sys          # player persona present
+    assert "ambient lore" in sys       # always-on lore present
+    assert "salt lore" in sys          # 'salt' activated by the prompt text
+    assert "{{user}}" not in sys       # substituted
+    assert msgs[-1]["content"] == "A storm over the salt marshes for Elara."
+
+
 def test_depth_zero_and_unparseable_fallback(monkeypatch, tmp_path):
     from grimoire.store import config
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
