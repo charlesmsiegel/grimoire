@@ -18,6 +18,13 @@ def test_first_read_creates_defaults(monkeypatch, tmp_path):
     assert (tmp_path / "config.md").exists()
 
 
+def test_context_scan_depth_default_and_write(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    assert s.read_config()["context_scan_depth"] == "8"
+    s.write_config(context_scan_depth="5")
+    assert s.read_config()["context_scan_depth"] == "5"
+
+
 def test_write_merges_without_clearing(monkeypatch, tmp_path):
     s = reload_with_home(monkeypatch, tmp_path)
     s.write_config(openrouter_key="sk-or-secret")

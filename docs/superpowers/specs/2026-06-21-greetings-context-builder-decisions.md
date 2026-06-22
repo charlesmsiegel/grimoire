@@ -15,6 +15,10 @@ finally injects state into the LLM, starting with `{{user}}`) and **greetings & 
 
 ## A. Context builder & prompt injection
 
+> **Superseded — now a full spec:** [`2026-06-22-context-builder-design.md`](2026-06-22-context-builder-design.md)
+> (Spec 2a). Lorebook/`character_book` import became its own spec (2c). The notes below are kept
+> for history; the spec is authoritative.
+
 The worlds/campaigns and character-cards specs deferred *all* prompt injection; the PCs spec
 records a `player` role but deliberately injects nothing. This work builds the context builder.
 
