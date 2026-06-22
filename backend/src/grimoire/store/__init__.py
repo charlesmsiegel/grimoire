@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from . import appearances, campaigns, cards, characters, entities, scenes, sync, worlds
+from . import appearances, campaigns, cards, characters, entities, pcs, scenes, sync, tags, worlds
 from .appearances import AppearError
 from .campaigns import CampaignNotFound
 from .cards import CardParseError
 from .characters import CharacterNotFound, VersionNotFound
+from .pcs import PCNotFound, PCVersionNotFound
+from .tags import TagNotFound
 from .config import DEFAULT_MODEL, DEFAULT_THEME, read_config, write_config
 from .entities import EntityNotFound, UnknownKind
 from .frontmatter import dump_frontmatter, parse_frontmatter
@@ -43,4 +45,9 @@ __all__ = [
     "SceneNotFound",
     "appearances",
     "AppearError",
+    "tags",
+    "TagNotFound",
+    "pcs",
+    "PCNotFound",
+    "PCVersionNotFound",
 ]
