@@ -7,7 +7,8 @@ from .paths import ensure_home, home
 
 DEFAULT_MODEL = "anthropic/claude-opus-4.1"
 DEFAULT_THEME = "occult"
-_CONFIG_KEYS = ("openrouter_key", "model", "theme")
+DEFAULT_SCAN_DEPTH = "8"
+_CONFIG_KEYS = ("openrouter_key", "model", "theme", "context_scan_depth")
 
 
 def _config_path():
@@ -18,7 +19,8 @@ def read_config() -> dict[str, str]:
     ensure_home()
     path = _config_path()
     if not path.exists():
-        defaults = {"openrouter_key": "", "model": DEFAULT_MODEL, "theme": DEFAULT_THEME}
+        defaults = {"openrouter_key": "", "model": DEFAULT_MODEL, "theme": DEFAULT_THEME,
+                    "context_scan_depth": DEFAULT_SCAN_DEPTH}
         path.write_text(dump_frontmatter(defaults, ""), encoding="utf-8")
         return defaults
     meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -26,6 +28,7 @@ def read_config() -> dict[str, str]:
         "openrouter_key": meta.get("openrouter_key", ""),
         "model": meta.get("model", DEFAULT_MODEL),
         "theme": meta.get("theme", DEFAULT_THEME),
+        "context_scan_depth": meta.get("context_scan_depth", DEFAULT_SCAN_DEPTH),
     }
 
 

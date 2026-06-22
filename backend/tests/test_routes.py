@@ -130,6 +130,14 @@ def test_world_pc_crud_and_tag_validation(client):
     assert client.delete(f"/api/worlds/{wid}/pcs/{pid}").status_code == 200
 
 
+def test_entity_keys_via_routes(client):
+    wid = _world(client)
+    eid = client.post(f"/api/worlds/{wid}/lore", json={"name": "Salt Pact", "body": "p", "keys": "pact"}).json()["id"]
+    assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]["keys"] == "pact"
+    client.put(f"/api/worlds/{wid}/lore/{eid}", json={"keys": "pact, salt"})
+    assert client.get(f"/api/worlds/{wid}/lore/{eid}").json()["meta"]["keys"] == "pact, salt"
+
+
 def test_unknown_kind_404(client):
     wid = _world(client)
     assert client.get(f"/api/worlds/{wid}/weapons").status_code == 404
@@ -233,6 +241,37 @@ def test_recasting_with_different_role_or_version_409(client):
     # re-cast with a different version -> version lock conflict
     assert client.post(f"/api/campaigns/{camp}/scenes/{sid}/cast",
                        json={"kind": "characters", "id": "seraphine", "version": "alt"}).status_code == 409
+
+
+class CapturingOpenRouter:
+    def __init__(self):
+        self.messages = None
+
+    async def stream(self, messages, model, key):
+        self.messages = messages
+        for d in ["ok"]:
+            yield d
+
+
+def test_chat_injects_system_message(client):
+    wid = _world(client)
+    sera = {"spec": "chara_card_v3", "spec_version": "3.0",
+            "data": {"name": "Seraphine", "description": "the drowned keeper", "extensions": {}}}
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine", "card": sera})
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"kind": "characters", "id": "seraphine"})
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: cap
+
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hello"}) as r:
+        for _ in r.iter_lines():
+            pass
+    assert cap.messages[0]["role"] == "system"
+    assert "the drowned keeper" in cap.messages[0]["content"]
+    assert cap.messages[-1] == {"role": "user", "content": "hello"}
 
 
 # ---- scenes (re-homed chat) ----

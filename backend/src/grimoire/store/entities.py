@@ -62,19 +62,21 @@ def read_entity(root: Path, kind: str, eid: str) -> dict:
     return {"meta": {"id": eid, **meta}, "body": body}
 
 
-def create_entity(root: Path, kind: str, name: str, body: str = "") -> str:
+def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = "") -> str:
     _check_kind(kind)
     d = _kind_dir(root, kind)
     d.mkdir(parents=True, exist_ok=True)
     eid = uniquify(slugify(name), lambda c: _entity_path(root, kind, c).exists())
-    _entity_path(root, kind, eid).write_text(
-        dump_frontmatter({"name": name}, body), encoding="utf-8"
-    )
+    meta = {"name": name}
+    if keys:
+        meta["keys"] = keys
+    _entity_path(root, kind, eid).write_text(dump_frontmatter(meta, body), encoding="utf-8")
     return eid
 
 
 def update_entity(
-    root: Path, kind: str, eid: str, name: str | None = None, body: str | None = None
+    root: Path, kind: str, eid: str, name: str | None = None,
+    body: str | None = None, keys: str | None = None,
 ) -> None:
     _check_kind(kind)
     p = _entity_path(root, kind, eid)
@@ -83,6 +85,8 @@ def update_entity(
     meta, cur_body = parse_frontmatter(p.read_text(encoding="utf-8"))
     if name is not None:
         meta["name"] = name
+    if keys is not None:
+        meta["keys"] = keys
     new_body = cur_body if body is None else body
     p.write_text(dump_frontmatter(meta, new_body), encoding="utf-8")
 

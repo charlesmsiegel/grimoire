@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import appearances, campaigns, cards, characters, entities, pcs, scenes, sync, tags, worlds
+from . import appearances, campaigns, cards, characters, context, entities, pcs, scenes, sync, tags, worlds
 from .appearances import AppearError
 from .campaigns import CampaignNotFound
 from .cards import CardParseError
@@ -50,4 +50,5 @@ __all__ = [
     "pcs",
     "PCNotFound",
     "PCVersionNotFound",
+    "context",
 ]

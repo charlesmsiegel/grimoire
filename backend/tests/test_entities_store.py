@@ -59,6 +59,19 @@ def test_traversal_ids_are_rejected(tmp_path: Path):
     assert entities.entity_hash(tmp_path, "locations", "../x") is None
 
 
+def test_keys_round_trip(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "Salt Pact", "the pact", keys="pact, salt")
+    assert entities.read_entity(tmp_path, "lore", eid)["meta"]["keys"] == "pact, salt"
+    # update can change keys without touching the body
+    entities.update_entity(tmp_path, "lore", eid, keys="pact")
+    got = entities.read_entity(tmp_path, "lore", eid)
+    assert got["meta"]["keys"] == "pact"
+    assert got["body"].strip() == "the pact"
+    # entities without keys read as empty string
+    e2 = entities.create_entity(tmp_path, "lore", "No Keys", "x")
+    assert entities.read_entity(tmp_path, "lore", e2)["meta"].get("keys", "") == ""
+
+
 def test_all_refs_and_counts(tmp_path: Path):
     entities.create_entity(tmp_path, "lore", "A")
     entities.create_entity(tmp_path, "locations", "B")

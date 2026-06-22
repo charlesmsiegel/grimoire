@@ -38,11 +38,13 @@ class NewCampaign(BaseModel):
 class EntityCreate(BaseModel):
     name: str
     body: str = ""
+    keys: str = ""
 
 
 class EntityUpdate(BaseModel):
     name: str | None = None
     body: str | None = None
+    keys: str | None = None
 
 
 class CharacterCreate(BaseModel):
@@ -425,7 +427,7 @@ def _entity_list(root, kind: str):
 
 def _entity_create(root, kind: str, body: EntityCreate):
     try:
-        return {"id": store.entities.create_entity(root, kind, body.name, body.body)}
+        return {"id": store.entities.create_entity(root, kind, body.name, body.body, body.keys)}
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
 
@@ -441,7 +443,7 @@ def _entity_read(root, kind: str, eid: str):
 
 def _entity_update(root, kind: str, eid: str, body: EntityUpdate):
     try:
-        store.entities.update_entity(root, kind, eid, name=body.name, body=body.body)
+        store.entities.update_entity(root, kind, eid, name=body.name, body=body.body, keys=body.keys)
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
     except store.entities.EntityNotFound:
@@ -639,12 +641,11 @@ def _require_scene(cid: str, sid: str) -> dict:
 
 @router.post("/campaigns/{cid}/scenes/{sid}/chat")
 def post_chat(cid: str, sid: str, turn: ChatTurn, client: OpenRouterClient = Depends(get_openrouter)):
-    scene = _require_scene(cid, sid)
+    _require_scene(cid, sid)
     cfg = store.read_config()
     _require_key(cfg)
     store.scenes.append_message(cid, sid, "user", turn.content)
-    messages = [{"role": m["role"], "content": m["content"]} for m in scene["messages"]]
-    messages.append({"role": "user", "content": turn.content})
+    messages = store.context.build_messages(cid, sid)
     return _chat_stream(cid, sid, messages, cfg, client)
 
 
@@ -653,9 +654,9 @@ def post_retry(cid: str, sid: str, client: OpenRouterClient = Depends(get_openro
     scene = _require_scene(cid, sid)
     cfg = store.read_config()
     _require_key(cfg)
-    messages = [{"role": m["role"], "content": m["content"]} for m in scene["messages"]]
-    if not messages:
+    if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to retry")
+    messages = store.context.build_messages(cid, sid)
     return _chat_stream(cid, sid, messages, cfg, client)
 
 
