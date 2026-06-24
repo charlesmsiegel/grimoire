@@ -24,6 +24,7 @@ export default function WorldView() {
   const { wid = "" } = useParams();
   const [name, setName] = useState("");
   const [tab, setTab] = useState<TabKey>("characters");
+  const [charReset, setCharReset] = useState(0);
 
   useEffect(() => {
     api.getWorld(wid).then((w) => setName(w.meta.name)).catch(() => setName(wid));
@@ -39,14 +40,14 @@ export default function WorldView() {
           <button
             key={t.key}
             className={"tab" + (tab === t.key ? " active" : "")}
-            onClick={() => setTab(t.key)}
+            onClick={() => { setTab(t.key); if (t.key === "characters") setCharReset((n) => n + 1); }}
           >
             {t.label}
           </button>
         ))}
       </div>
 
-      {tab === "characters" && <CharacterEditor wid={wid} />}
+      {tab === "characters" && <CharacterEditor wid={wid} resetSignal={charReset} />}
       {tab === "pcs" && <PCEditor wid={wid} />}
       {tab === "tags" && <TagEditor wid={wid} />}
       {tab === "locations" && <EntityEditor wid={wid} kind="locations" />}

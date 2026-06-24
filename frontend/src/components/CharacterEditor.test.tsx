@@ -33,13 +33,19 @@ beforeEach(() => {
   (api.importCharacter as any).mockResolvedValue({ character: "imp", version: "default" });
   (api.putImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.deleteImage as any).mockResolvedValue({ ok: true });
+  (api.deleteCharacter as any).mockResolvedValue({ ok: true });
   (api.importCharacterBook as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
 });
 
+// reach the edit form: grid -> click a card's Edit button -> form
+async function openEditForm() {
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  await screen.findByLabelText("Description");
+}
+
 test("imports an embedded character_book and shows the result", async () => {
   render(<CharacterEditor wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
-  await screen.findByLabelText("Description");
+  await openEditForm();
   fireEvent.click(screen.getByRole("button", { name: /import .* lore/i }));
   await waitFor(() => expect(api.importCharacterBook).toHaveBeenCalledWith("w", "seraphine", "default"));
   await screen.findByText(/imported 1/i);
@@ -47,8 +53,7 @@ test("imports an embedded character_book and shows the result", async () => {
 
 test("uploads an avatar for the selected version", async () => {
   render(<CharacterEditor wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
-  await screen.findByLabelText("Description");
+  await openEditForm();
   const input = screen.getByLabelText("Upload avatar");
   fireEvent.change(input, { target: { files: [new File(["x"], "a.png", { type: "image/png" })] } });
   await waitFor(() => expect(api.putImage).toHaveBeenCalledWith("w", "seraphine", "default", "avatar", expect.any(File)));
@@ -64,8 +69,7 @@ test("creating a character prompts and posts the name", async () => {
 
 test("editing description + alternate greetings (repeatable) saves a rebuilt card", async () => {
   render(<CharacterEditor wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
-  await screen.findByLabelText("Description");
+  await openEditForm();
   fireEvent.change(screen.getByLabelText("Description"), { target: { value: "cold keeper" } });
   // the seed card has one greeting "hi"; add a second and edit both
   fireEvent.click(screen.getByRole("button", { name: /add greeting/i }));
@@ -83,8 +87,7 @@ test("editing description + alternate greetings (repeatable) saves a rebuilt car
 
 test("editing creator and tags saves them", async () => {
   render(<CharacterEditor wid="w" />);
-  fireEvent.click(await screen.findByText("Seraphine"));
-  await screen.findByLabelText("Creator");
+  await openEditForm();
   fireEvent.change(screen.getByLabelText("Creator"), { target: { value: "anon" } });
   fireEvent.change(screen.getByLabelText("Tags"), { target: { value: "fantasy, oc " } });
   fireEvent.click(screen.getByRole("button", { name: /save version/i }));
@@ -93,6 +96,33 @@ test("editing creator and tags saves them", async () => {
     expect(card.data.creator).toBe("anon");
     expect(card.data.tags).toEqual(["fantasy", "oc"]);
   });
+});
+
+test("clicking a card shows read-only details, then Edit opens the form", async () => {
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine")); // card main -> detail
+  await screen.findByRole("heading", { name: "Seraphine" });
+  expect(screen.getByText("keeper")).toBeInTheDocument(); // description shown read-only
+  expect(screen.queryByLabelText("Description")).toBeNull(); // not the edit form yet
+  expect(screen.queryByRole("button", { name: /save version/i })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i })); // detail's Edit
+  await screen.findByLabelText("Description"); // now the form
+});
+
+test("a card's Delete button deletes the character", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+  await waitFor(() => expect(api.deleteCharacter).toHaveBeenCalledWith("w", "seraphine"));
+});
+
+test("bumping resetSignal returns from the editor to the grid", async () => {
+  const { rerender } = render(<CharacterEditor wid="w" resetSignal={0} />);
+  await openEditForm(); // in the edit form
+  rerender(<CharacterEditor wid="w" resetSignal={1} />);
+  await screen.findByRole("button", { name: /new character/i }); // back at the grid
+  expect(screen.queryByLabelText("Description")).toBeNull();
 });
 
 test("importing a .json posts multipart with json format", async () => {
