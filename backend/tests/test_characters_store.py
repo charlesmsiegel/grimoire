@@ -116,6 +116,25 @@ def test_json_import_download_failure_is_swallowed(tmp_path, monkeypatch):
     assert assets.image_path(tmp_path, cid, vid, assets.AVATAR) is None
 
 
+def test_json_import_decodes_data_uri_avatar(tmp_path):
+    # an embedded base64 data-URI avatar is decoded and stored without any network.
+    import base64 as _b64
+    import json as _json
+    from grimoire.store import assets
+    png = b"\x89PNG\r\n\x1a\nDATA"
+    card = ch.blank_card("Imp")
+    card["data"]["avatar"] = "data:image/png;base64," + _b64.b64encode(png).decode()
+    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+    p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
+    assert p is not None and p.read_bytes() == png and p.suffix == ".png"
+
+
+def test_avatar_candidate_found_in_extensions(tmp_path):
+    # the V2->V3 upconvert relocates an unknown `avatar` field into extensions; still found.
+    card = {"data": {"name": "x", "extensions": {"avatar": "https://x/p.png"}}}
+    assert ch._avatar_candidates(card) == ["https://x/p.png"]
+
+
 def test_download_avatar_blocks_internal_hosts(tmp_path):
     # SSRF guard: internal/loopback targets resolve but must be refused (no avatar, no raise).
     card = ch.blank_card("Imp")

@@ -8,11 +8,13 @@ Unlike generic entities (one markdown file each), a character is a directory:
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
 import shutil
 import socket
+import ssl
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -209,18 +211,63 @@ _CT_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
            "image/gif": "gif", "image/webp": "webp"}
 
 
-def _avatar_url(card: dict) -> str | None:
+_IMG_EXTS = ("png", "jpg", "jpeg", "gif", "webp")
+
+
+def _avatar_candidates(card: dict) -> list[str]:
+    """Every place a card might carry an avatar: V3 `assets`, a top-level `avatar`
+    string, and either relocated into `extensions` by the V2->V3 upconvert."""
     data = card.get("data", {})
-    for a in data.get("assets") or []:
-        if isinstance(a, dict) and a.get("type") in ("icon", "avatar"):
-            uri = a.get("uri", "")
-            if isinstance(uri, str) and uri.startswith(("http://", "https://")):
-                return uri
-    av = data.get("avatar")
-    return av if isinstance(av, str) and av.startswith(("http://", "https://")) else None
+    ext = data.get("extensions") or {}
+    out: list[str] = []
+    for assets_src in (data.get("assets"), ext.get("assets")):
+        for a in assets_src or []:
+            if isinstance(a, dict) and a.get("type") in ("icon", "avatar"):
+                uri = a.get("uri")
+                if isinstance(uri, str) and uri:
+                    out.append(uri)
+    for src in (data.get("avatar"), ext.get("avatar"), card.get("avatar")):
+        if isinstance(src, str) and src:
+            out.append(src)
+    return out
+
+
+def _sniff_ext(raw: bytes) -> str | None:
+    """Identify an image by its magic bytes (some hosts mislabel the content-type)."""
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if raw[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if raw[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _decode_data_uri(uri: str) -> tuple[bytes, str] | None:
+    """Decode a `data:image/...;base64,...` avatar embedded in the card (no network)."""
+    if not uri.startswith("data:"):
+        return None
+    header, _, b64 = uri.partition(",")
+    if "base64" not in header:
+        return None
+    try:
+        raw = base64.b64decode(b64, validate=False)
+    except Exception:  # noqa: BLE001
+        return None
+    if not raw or len(raw) > _AVATAR_MAX_BYTES:
+        return None
+    mime = header[len("data:"):].split(";")[0].strip().lower()
+    ext = _CT_EXT.get(mime) or _sniff_ext(raw)
+    return (raw, ext) if ext else None
 
 
 _MAX_REDIRECTS = 5
+_AVATAR_UA = "Mozilla/5.0 (grimoire avatar fetch)"
+# Trust certifi's CA bundle explicitly, independent of any ambient SSL_CERT_FILE
+# (a host Python like Anaconda can point that at a path httpx can't load).
+_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 
 def _host_is_blocked(host: str) -> bool:
@@ -247,13 +294,9 @@ def _host_is_blocked(host: str) -> bool:
 
 
 def _http_get_bytes(url: str) -> tuple[bytes, str | None]:
-    """Fetch an image, validating each redirect hop and aborting early past the cap.
-
-    Pin trust to certifi's CA bundle rather than the ambient SSL_CERT_FILE, which a
-    host Python (e.g. Anaconda) can point at a path httpx can't load — that would
-    otherwise fail every HTTPS avatar fetch.
-    """
-    with httpx.Client(timeout=10.0, follow_redirects=False, verify=certifi.where()) as client:
+    """Fetch an image, validating each redirect hop and aborting early past the cap."""
+    headers = {"User-Agent": _AVATAR_UA, "Accept": "image/*,*/*"}
+    with httpx.Client(timeout=10.0, follow_redirects=False, verify=_SSL_CTX, headers=headers) as client:
         for _ in range(_MAX_REDIRECTS + 1):
             parsed = urlparse(url)
             if parsed.scheme not in ("http", "https") or not parsed.hostname:
@@ -280,23 +323,38 @@ def _http_get_bytes(url: str) -> tuple[bytes, str | None]:
         raise ValueError("too many redirects")
 
 
-def _download_avatar(card: dict) -> tuple[bytes, str] | None:
-    url = _avatar_url(card)
-    if not url:
-        return None
+def _download_url(url: str) -> tuple[bytes, str] | None:
     try:
         content, ctype = _http_get_bytes(url)
     except Exception:  # noqa: BLE001 — best-effort; import never fails on download
         return None
     if not content or len(content) > _AVATAR_MAX_BYTES:
         return None
+    sniff = _sniff_ext(content)
     ct = (ctype or "").split(";")[0].strip().lower()
-    if ct and not ct.startswith("image/"):
-        return None
-    ext = _CT_EXT.get(ct) or url.rsplit(".", 1)[-1].lower()
-    if ext not in ("png", "jpg", "jpeg", "gif", "webp"):
+    if sniff is None and not ct.startswith("image/"):
+        return None  # doesn't look like an image by magic bytes or content-type
+    ext = sniff or _CT_EXT.get(ct) or url.rsplit(".", 1)[-1].lower()
+    if ext not in _IMG_EXTS:
         ext = "png"
     return content, ext
+
+
+def _download_avatar(card: dict) -> tuple[bytes, str] | None:
+    """Best-effort avatar bytes from a card: embedded data-URI first, else a URL fetch.
+
+    Scans every avatar location (assets/avatar, and their extensions-relocated forms);
+    never raises into the import path — a miss just means no avatar.
+    """
+    for uri in _avatar_candidates(card):
+        embedded = _decode_data_uri(uri)
+        if embedded:
+            return embedded
+        if uri.startswith(("http://", "https://")):
+            got = _download_url(uri)
+            if got:
+                return got
+    return None
 
 
 def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
