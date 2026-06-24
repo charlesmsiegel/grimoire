@@ -49,9 +49,10 @@ test("switching to the PCs tab renders the PC editor", async () => {
   expect(screen.getByRole("button", { name: /new pc/i })).toBeInTheDocument();
 });
 
-test("switching to the Import tab renders the lorebook importer", async () => {
+test("the Lore tab hosts the lorebook importer", async () => {
   renderAt();
   await screen.findByText("Drowned Realm");
-  fireEvent.click(screen.getByRole("button", { name: "Import" }));
+  fireEvent.click(screen.getByRole("button", { name: "Lore" }));
+  fireEvent.click(screen.getByText(/import lorebook/i)); // expand the details
   expect(screen.getByRole("button", { name: /parse/i })).toBeInTheDocument();
 });

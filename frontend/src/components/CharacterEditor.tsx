@@ -121,10 +121,8 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
     const file = e.target.files?.[0];
     if (!file || !detail) return;
     setError(null);
-    const ext = file.name.split(".").pop()?.toLowerCase();
-    const fmt = ext === "png" ? "png" : ext === "charx" ? "charx" : "json";
     try {
-      const { version } = await api.importCharacter(wid, file, fmt, detail.meta.id);
+      const { version } = await api.importCharacter(wid, file, formatOf(file), detail.meta.id);
       const d = await api.readCharacter(wid, detail.meta.id);
       setDetail(d);
       loadVersion(d, version);
@@ -183,21 +181,29 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
     setAvatarBust((n) => n + 1);
   }
 
-  async function onImport(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setError(null);
+  function formatOf(file: File): string {
     const ext = file.name.split(".").pop()?.toLowerCase();
-    const fmt = ext === "png" ? "png" : ext === "charx" ? "charx" : "json";
-    try {
-      const { character } = await api.importCharacter(wid, file, fmt);
-      await reload();
-      await openDetail(character);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
-    } finally {
-      e.target.value = "";
+    return ext === "png" ? "png" : ext === "charx" ? "charx" : "json";
+  }
+
+  async function onImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    setError(null);
+    const failures: string[] = [];
+    let last: string | null = null;
+    for (const file of files) {
+      try {
+        const { character } = await api.importCharacter(wid, file, formatOf(file));
+        last = character;
+      } catch (err: any) {
+        failures.push(`${file.name}: ${err.detail ?? String(err)}`);
+      }
     }
+    e.target.value = "";
+    await reload();
+    if (failures.length) setError(`Could not import — ${failures.join("; ")}`);
+    else if (files.length === 1 && last) await openDetail(last);
   }
 
   const avatarSrc = (cid: string, version: string, bust = false) =>
@@ -209,7 +215,7 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
         <div className="grid-toolbar">
           <button className="primary" onClick={newCharacter}>+ New character</button>
           <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
-          <input ref={fileRef} type="file" accept=".json,.png,.charx" hidden aria-label="Import character card" onChange={onImport} />
+          <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden aria-label="Import character card" onChange={onImport} />
         </div>
         {error && <div className="banner">{error}</div>}
         {chars.length === 0 ? (

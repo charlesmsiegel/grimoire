@@ -15,7 +15,6 @@ const TABS = [
   { key: "locations", label: "Locations" },
   { key: "lore", label: "Lore" },
   { key: "greetings", label: "Greetings" },
-  { key: "import", label: "Import" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -25,6 +24,7 @@ export default function WorldView() {
   const [name, setName] = useState("");
   const [tab, setTab] = useState<TabKey>("characters");
   const [charReset, setCharReset] = useState(0);
+  const [loreReset, setLoreReset] = useState(0);
 
   useEffect(() => {
     api.getWorld(wid).then((w) => setName(w.meta.name)).catch(() => setName(wid));
@@ -51,9 +51,16 @@ export default function WorldView() {
       {tab === "pcs" && <PCEditor wid={wid} />}
       {tab === "tags" && <TagEditor wid={wid} />}
       {tab === "locations" && <EntityEditor wid={wid} kind="locations" />}
-      {tab === "lore" && <EntityEditor wid={wid} kind="lore" />}
+      {tab === "lore" && (
+        <>
+          <details className="import-section">
+            <summary>Import lorebook / world-info</summary>
+            <LorebookImport wid={wid} onImported={() => setLoreReset((n) => n + 1)} />
+          </details>
+          <EntityEditor key={loreReset} wid={wid} kind="lore" />
+        </>
+      )}
       {tab === "greetings" && <GreetingEditor wid={wid} />}
-      {tab === "import" && <LorebookImport wid={wid} />}
     </div>
   );
 }
