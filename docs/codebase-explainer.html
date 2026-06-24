@@ -53,9 +53,19 @@
   .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
   .diagram{background:#fbf8f1;border:1px solid var(--line);border-radius:var(--radius);
            padding:22px;margin:20px 0;text-align:center;overflow-x:auto}
-  .diagram .mermaid{font-size:15px}
-  .diagram .edgeLabel,.diagram .edgeLabel p{background:#fbf8f1 !important;color:#231a10 !important}
-  .diagram .messageText,.diagram .loopText,.diagram .noteText tspan{fill:#231a10 !important}
+  /* Mermaid renders inside <pre class="mermaid"> — strip the global <pre> box
+     (dark bg + light text) so the SVG sits on the light .diagram surface and
+     foreignObject labels don't inherit the cream text color. */
+  pre.mermaid{background:transparent !important;border:none;padding:0;margin:0 auto;
+              color:#1c1208;overflow:visible;font-family:Georgia,serif}
+  .diagram svg{max-width:100%;height:auto}
+  .diagram .nodeLabel,.diagram .nodeLabel *,
+  .diagram .edgeLabel,.diagram .edgeLabel *,
+  .diagram .cluster-label,.diagram .cluster-label *,
+  .diagram .label,.diagram .label *{color:#1c1208 !important}
+  .diagram .edgeLabel,.diagram .edgeLabel p{background-color:#fbf8f1 !important}
+  .diagram .messageText,.diagram .loopText,.diagram text.actor,
+  .diagram .note text,.diagram .noteText{fill:#1c1208 !important}
   table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
   th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
   th{color:var(--accent);font-family:var(--font-display);font-weight:600;font-size:13px;
