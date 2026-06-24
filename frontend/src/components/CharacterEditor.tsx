@@ -24,6 +24,7 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
   const [mode, setMode] = useState<Mode>("grid");
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const versionFileRef = useRef<HTMLInputElement>(null);
   const avatarRef = useRef<HTMLInputElement>(null);
   const [avatarBust, setAvatarBust] = useState(0);
   const [bookMsg, setBookMsg] = useState<string | null>(null);
@@ -114,6 +115,25 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
     const { version } = await api.createVersion(wid, detail.meta.id, { name, card: buildCard() });
     await select(detail.meta.id);
     loadVersion(await api.readCharacter(wid, detail.meta.id), version);
+  }
+
+  async function onImportVersion(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !detail) return;
+    setError(null);
+    const ext = file.name.split(".").pop()?.toLowerCase();
+    const fmt = ext === "png" ? "png" : ext === "charx" ? "charx" : "json";
+    try {
+      const { version } = await api.importCharacter(wid, file, fmt, detail.meta.id);
+      const d = await api.readCharacter(wid, detail.meta.id);
+      setDetail(d);
+      loadVersion(d, version);
+      await reload();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    } finally {
+      e.target.value = "";
+    }
   }
 
   async function setDefault() {
@@ -288,6 +308,9 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
               ))}
             </select>
             <button className="subtle" onClick={addVersion}>+ Version</button>
+            <button className="subtle" onClick={() => versionFileRef.current?.click()}>Import version</button>
+            <input ref={versionFileRef} type="file" accept=".json,.png,.charx" hidden
+                   aria-label="Import version" onChange={onImportVersion} />
             <button className="subtle" onClick={setDefault}>Set default</button>
             <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>
           </div>

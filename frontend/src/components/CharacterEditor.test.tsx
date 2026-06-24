@@ -140,3 +140,12 @@ test("importing a .png posts multipart with png format", async () => {
   fireEvent.change(input, { target: { files: [new File(["x"], "fay.png", { type: "image/png" })] } });
   await waitFor(() => expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "png"));
 });
+
+test("import version posts importCharacter into the current character", async () => {
+  render(<CharacterEditor wid="w" />);
+  await openEditForm();
+  const input = screen.getByLabelText("Import version");
+  fireEvent.change(input, { target: { files: [new File(["{}"], "v.json")] } });
+  await waitFor(() =>
+    expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "json", "seraphine"));
+});
