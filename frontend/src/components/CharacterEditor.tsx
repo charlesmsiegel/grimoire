@@ -23,6 +23,7 @@ export function CharacterEditor({ wid }: { wid: string }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const avatarRef = useRef<HTMLInputElement>(null);
   const [avatarBust, setAvatarBust] = useState(0);
+  const [bookMsg, setBookMsg] = useState<string | null>(null);
 
   const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
   useEffect(() => {
@@ -60,6 +61,20 @@ export function CharacterEditor({ wid }: { wid: string }) {
     setVid(v.id);
     setCard(v.card);
     setGreetings(v.card.data.alternate_greetings ?? []);
+    setBookMsg(null);
+  }
+
+  const bookCount = card?.data.character_book?.entries?.length ?? 0;
+
+  async function importBook() {
+    if (!detail) return;
+    setBookMsg(null);
+    try {
+      const { created } = await api.importCharacterBook(wid, detail.meta.id, vid);
+      setBookMsg(`Imported ${created.length} entr${created.length === 1 ? "y" : "ies"} to world lore`);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
   }
 
   async function select(cid: string) {
@@ -234,6 +249,15 @@ export function CharacterEditor({ wid }: { wid: string }) {
                 </button>
               </div>
             </Field>
+
+            {bookCount > 0 && (
+              <div className="book-import">
+                <button className="subtle" type="button" onClick={importBook}>
+                  Import {bookCount} embedded lore {bookCount === 1 ? "entry" : "entries"} to world
+                </button>
+                {bookMsg && <span className="field-hint">{bookMsg}</span>}
+              </div>
+            )}
 
             <div className="form-actions">
               <button className="primary" onClick={save}>Save version</button>
