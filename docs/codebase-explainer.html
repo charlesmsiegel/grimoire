@@ -51,8 +51,11 @@
         padding:20px 24px;margin:20px 0}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
   .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-  .diagram{background:#faf6ec;border:1px solid var(--line);border-radius:var(--radius);
-           padding:20px;margin:20px 0;text-align:center;overflow-x:auto}
+  .diagram{background:#fbf8f1;border:1px solid var(--line);border-radius:var(--radius);
+           padding:22px;margin:20px 0;text-align:center;overflow-x:auto}
+  .diagram .mermaid{font-size:15px}
+  .diagram .edgeLabel,.diagram .edgeLabel p{background:#fbf8f1 !important;color:#231a10 !important}
+  .diagram .messageText,.diagram .loopText,.diagram .noteText tspan{fill:#231a10 !important}
   table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
   th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
   th{color:var(--accent);font-family:var(--font-display);font-weight:600;font-size:13px;
@@ -205,9 +208,9 @@ flowchart TB
     ST <--> FS
     OR <--> LLM
 
-    style CTX fill:#efe2ff,stroke:#8a6db0,stroke-width:2px
-    style FS fill:#f3ead2,stroke:#c8a45c
-    style LLM fill:#dceaf3,stroke:#5fa3c9
+    style CTX fill:#e3d4f5,stroke:#5e3f8c,stroke-width:3px,color:#1c1208
+    style FS fill:#efe1c2,stroke:#7a5c22,stroke-width:2px,color:#1c1208
+    style LLM fill:#cfe4f2,stroke:#23607f,stroke-width:2px,color:#10202b
     </pre>
   </div>
   <p>Three things to internalize from this diagram:</p>
@@ -373,8 +376,8 @@ flowchart TB
     ASM --> SUB[Apply token substitution<br/>user → players, char → npcs]
     SUB --> OUT([messages: system + history + post_history])
 
-    style ASM fill:#efe2ff,stroke:#8a6db0,stroke-width:2px
-    style WI fill:#f3ead2,stroke:#c8a45c
+    style ASM fill:#e3d4f5,stroke:#5e3f8c,stroke-width:3px,color:#1c1208
+    style WI fill:#efe1c2,stroke:#7a5c22,stroke-width:2px,color:#1c1208
     </pre>
   </div>
 
@@ -390,8 +393,8 @@ flowchart TB
     E["5 · Activated World-Info<br/><i>keyword-selected lore & locations</i>"]
     A --> B --> C --> D --> E
     E --> SYS[[One system message]]
-    style E fill:#f3ead2,stroke:#c8a45c
-    style SYS fill:#efe2ff,stroke:#8a6db0,stroke-width:2px
+    style E fill:#efe1c2,stroke:#7a5c22,stroke-width:2px,color:#1c1208
+    style SYS fill:#e3d4f5,stroke:#5e3f8c,stroke-width:3px,color:#1c1208
     </pre>
   </div>
 
@@ -483,16 +486,16 @@ flowchart TB
     Q3 -- yes --> UPD["status: UPDATE<br/>campaign copy untouched"]
     Q3 -- no --> CONF["status: CONFLICT<br/>both sides changed"]
 
-    style NEW fill:#dceaf3,stroke:#5fa3c9
-    style UPD fill:#e6f3e0,stroke:#6fae6f
-    style CONF fill:#f6e3e3,stroke:#c46b6b
+    style NEW fill:#cfe4f2,stroke:#23607f,stroke-width:2px,color:#10202b
+    style UPD fill:#d7eccb,stroke:#356b22,stroke-width:2px,color:#13230d
+    style CONF fill:#f4d2d2,stroke:#9e3838,stroke-width:2px,color:#2b0f0f
     </pre>
   </div>
 
   <div class="legend">
-    <span><span class="sw" style="background:#5fa3c9"></span> NEW — exists in world, absent in campaign</span>
-    <span><span class="sw" style="background:#6fae6f"></span> UPDATE — safe fast-forward</span>
-    <span><span class="sw" style="background:#c46b6b"></span> CONFLICT — diverged both ways</span>
+    <span><span class="sw" style="background:#cfe4f2;border:1px solid #23607f"></span> NEW — exists in world, absent in campaign</span>
+    <span><span class="sw" style="background:#d7eccb;border:1px solid #356b22"></span> UPDATE — safe fast-forward</span>
+    <span><span class="sw" style="background:#f4d2d2;border:1px solid #9e3838"></span> CONFLICT — diverged both ways</span>
   </div>
 
   <p><strong>Accept vs. reject</strong> are the same operation with one flag (<code>_advance(..., copy=)</code>):</p>
@@ -579,7 +582,7 @@ flowchart TB
     WV --> LI["LorebookImport"]
     CF --> MC["ModelCombobox<br/>openrouter catalog"]
 
-    style CV fill:#efe2ff,stroke:#8a6db0,stroke-width:2px
+    style CV fill:#e3d4f5,stroke:#5e3f8c,stroke-width:3px,color:#1c1208
     </pre>
   </div>
   <p>Shared primitives keep the editors consistent: <code>EditableRow</code> (inline rename/delete list item used everywhere), <code>Field</code> (label + control wrapper), and the <code>ThemeProvider</code> which applies a theme by writing CSS custom properties onto <code>:root</code>. Three themes ship: <strong>occult</strong> (default), <strong>terminal</strong>, <strong>ink</strong>.</p>
@@ -604,7 +607,7 @@ flowchart LR
     PARSE -->|"{done}"| FIN["push final assistant msg<br/>clear streaming"]
     PARSE -->|"{error}"| ERR["error banner + Retry"]
 
-    style ACC fill:#efe2ff,stroke:#8a6db0
+    style ACC fill:#e3d4f5,stroke:#5e3f8c,stroke-width:3px,color:#1c1208
     </pre>
   </div>
   <ol>
@@ -689,13 +692,45 @@ flowchart LR
     startOnLoad:true,
     theme:'base',
     themeVariables:{
+      darkMode:false,
       fontFamily:'Georgia, serif',
-      primaryColor:'#f3ead2',
-      primaryBorderColor:'#c8a45c',
-      primaryTextColor:'#2a2018',
-      lineColor:'#8a6db0',
-      secondaryColor:'#efe2ff',
-      tertiaryColor:'#ffffff'
+      fontSize:'15px',
+      background:'#fbf8f1',
+      /* flowchart nodes */
+      mainBkg:'#efe1c2',
+      primaryColor:'#efe1c2',
+      primaryBorderColor:'#7a5c22',
+      primaryTextColor:'#1c1208',
+      nodeTextColor:'#1c1208',
+      secondaryColor:'#e3d4f5',
+      secondaryBorderColor:'#5e3f8c',
+      secondaryTextColor:'#1c1208',
+      tertiaryColor:'#ffffff',
+      tertiaryBorderColor:'#7a5c22',
+      tertiaryTextColor:'#1c1208',
+      /* edges + clusters */
+      lineColor:'#5b4636',
+      edgeLabelBackground:'#fbf8f1',
+      clusterBkg:'#f4ecda',
+      clusterBorder:'#7a5c22',
+      titleColor:'#3a2a12',
+      /* sequence diagram */
+      actorBkg:'#efe1c2',
+      actorBorder:'#7a5c22',
+      actorTextColor:'#1c1208',
+      actorLineColor:'#8a7a62',
+      signalColor:'#3a2a12',
+      signalTextColor:'#1c1208',
+      labelBoxBkgColor:'#e3d4f5',
+      labelBoxBorderColor:'#5e3f8c',
+      labelTextColor:'#1c1208',
+      loopTextColor:'#1c1208',
+      noteBkgColor:'#fff1c2',
+      noteBorderColor:'#b88a2e',
+      noteTextColor:'#1c1208',
+      sequenceNumberColor:'#ffffff',
+      activationBkgColor:'#e3d4f5',
+      activationBorderColor:'#5e3f8c'
     },
     flowchart:{curve:'basis',useMaxWidth:true},
     sequence:{useMaxWidth:true}
