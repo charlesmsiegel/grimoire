@@ -18,7 +18,8 @@ def _safe(part: str) -> bool:
 
 
 def _safe_name(name: str) -> bool:
-    return _safe(name) and "." not in name
+    # reject "." (ambiguous with ext) and glob metacharacters (the cleanup/lookup globs name.*)
+    return _safe(name) and "." not in name and not any(c in name for c in "*?[]")
 
 
 def _norm_ext(ext: str) -> str:

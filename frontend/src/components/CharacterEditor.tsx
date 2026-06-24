@@ -41,6 +41,7 @@ export function CharacterEditor({ wid }: { wid: string }) {
     try {
       await api.putImage(wid, detail.meta.id, vid, "avatar", file);
       await select(detail.meta.id);
+      await reload();
       setAvatarBust((n) => n + 1);
     } catch (err: any) {
       setError(err.detail ?? String(err));
@@ -53,6 +54,7 @@ export function CharacterEditor({ wid }: { wid: string }) {
     if (!detail) return;
     await api.deleteImage(wid, detail.meta.id, vid, "avatar");
     await select(detail.meta.id);
+    await reload();
     setAvatarBust((n) => n + 1);
   }
 
