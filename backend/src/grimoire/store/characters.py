@@ -9,9 +9,12 @@ Unlike generic entities (one markdown file each), a character is a directory:
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import shutil
+import socket
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 
@@ -216,19 +219,59 @@ def _avatar_url(card: dict) -> str | None:
     return av if isinstance(av, str) and av.startswith(("http://", "https://")) else None
 
 
+_MAX_REDIRECTS = 5
+
+
+def _host_is_blocked(host: str) -> bool:
+    """True if the host resolves to (or is) a private/loopback/link-local/reserved address.
+
+    A proportionate SSRF guard for a local single-user app: it blocks the obvious
+    internal targets. A determined DNS-rebinding attacker could still slip past
+    (httpx re-resolves on connect); pinning the socket to the validated IP would
+    close that, at more complexity than this best-effort fetch warrants.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return True  # unresolvable -> block (best-effort: just means no avatar)
+    for info in infos:
+        try:
+            addr = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return True
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+            return True
+    return False
+
+
 def _http_get_bytes(url: str) -> tuple[bytes, str | None]:
-    """Fetch an image, aborting early if it exceeds the cap (never buffers a huge body)."""
-    with httpx.stream("GET", url, timeout=10.0, follow_redirects=True) as r:
-        r.raise_for_status()
-        cl = r.headers.get("content-length")
-        if cl and cl.isdigit() and int(cl) > _AVATAR_MAX_BYTES:
-            raise ValueError("avatar too large")
-        buf = bytearray()
-        for chunk in r.iter_bytes():
-            buf.extend(chunk)
-            if len(buf) > _AVATAR_MAX_BYTES:
-                raise ValueError("avatar too large")
-        return bytes(buf), r.headers.get("content-type")
+    """Fetch an image, validating each redirect hop and aborting early past the cap."""
+    with httpx.Client(timeout=10.0, follow_redirects=False) as client:
+        for _ in range(_MAX_REDIRECTS + 1):
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                raise ValueError("bad avatar url")
+            if _host_is_blocked(parsed.hostname):
+                raise ValueError("blocked avatar host")
+            with client.stream("GET", url) as r:
+                if r.is_redirect:
+                    loc = r.headers.get("location")
+                    if not loc:
+                        raise ValueError("redirect without location")
+                    url = str(r.url.join(loc))
+                    continue
+                r.raise_for_status()
+                cl = r.headers.get("content-length")
+                if cl and cl.isdigit() and int(cl) > _AVATAR_MAX_BYTES:
+                    raise ValueError("avatar too large")
+                buf = bytearray()
+                for chunk in r.iter_bytes():
+                    buf.extend(chunk)
+                    if len(buf) > _AVATAR_MAX_BYTES:
+                        raise ValueError("avatar too large")
+                return bytes(buf), r.headers.get("content-type")
+        raise ValueError("too many redirects")
 
 
 def _download_avatar(card: dict) -> tuple[bytes, str] | None:
