@@ -188,3 +188,8 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .detail-field .role { margin-bottom: 4px; }
 .detail-text { white-space: pre-wrap; }
 .detail-greeting { padding: 8px 12px; background: var(--surface); border-left: 2px solid var(--muted); border-radius: var(--radius); margin-bottom: 6px; }
+
+/* collapsible lorebook import inside the Lore tab */
+.import-section { margin-bottom: 16px; border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px 12px; }
+.import-section > summary { cursor: pointer; font-weight: bold; color: var(--accent); }
+.import-section[open] > summary { margin-bottom: 12px; }

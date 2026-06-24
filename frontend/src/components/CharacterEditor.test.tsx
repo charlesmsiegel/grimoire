@@ -141,6 +141,19 @@ test("importing a .png posts multipart with png format", async () => {
   await waitFor(() => expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "png"));
 });
 
+test("import card accepts multiple files and imports each", async () => {
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  const input = screen.getByLabelText("Import character card");
+  fireEvent.change(input, { target: { files: [
+    new File(["{}"], "a.json"),
+    new File(["x"], "b.png", { type: "image/png" }),
+  ] } });
+  await waitFor(() => expect(api.importCharacter).toHaveBeenCalledTimes(2));
+  expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "json");
+  expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "png");
+});
+
 test("import version posts importCharacter into the current character", async () => {
   render(<CharacterEditor wid="w" />);
   await openEditForm();

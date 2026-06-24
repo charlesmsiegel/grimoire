@@ -3,7 +3,7 @@ import { api, type EntityKind, type LoreEntryDraft } from "../api/client";
 
 const FORMATS = ["lorebook", "json", "png", "charx"];
 
-export function LorebookImport({ wid }: { wid: string }) {
+export function LorebookImport({ wid, onImported }: { wid: string; onImported?: () => void }) {
   const [format, setFormat] = useState("lorebook");
   const [entries, setEntries] = useState<LoreEntryDraft[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +36,7 @@ export function LorebookImport({ wid }: { wid: string }) {
       setResult(`Imported ${created.length} ${created.length === 1 ? "entry" : "entries"}.`);
       setEntries(null);
       if (fileRef.current) fileRef.current.value = "";
+      onImported?.();
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
