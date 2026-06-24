@@ -5,7 +5,8 @@ vi.mock("../api/client", () => ({
   api: {
     getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
     availableGreetings: vi.fn(), addToCast: vi.fn(), startFromGreeting: vi.fn(),
-    opener: vi.fn(), createGreeting: vi.fn(),
+    opener: vi.fn(), createGreeting: vi.fn(), listAppearances: vi.fn(),
+    campaignImageUrl: (c: string, ch: string, v: string, n: string) => `/cimg/${c}/${ch}/${v}/${n}`,
   },
 }));
 import { api } from "../api/client";
@@ -23,6 +24,16 @@ beforeEach(() => {
   (api.addToCast as any).mockResolvedValue({ ok: true });
   (api.startFromGreeting as any).mockResolvedValue({ ok: true });
   (api.createGreeting as any).mockResolvedValue({ id: "g" });
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "characters", id: "sera", version: "default", role: "npc", scenes: ["s"] },
+  ]);
+});
+
+test("character cast row shows the locked-version avatar", async () => {
+  (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "sera", role: "npc" }]);
+  renderPanel();
+  const img = await screen.findByAltText("sera avatar");
+  expect(img.getAttribute("src")).toContain("/cimg/c/sera/default/avatar");
 });
 
 function renderPanel(props: Partial<{ sceneEmpty: boolean; keySet: boolean; onSeeded: () => void }> = {}) {
