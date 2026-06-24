@@ -81,3 +81,48 @@ def test_read_exposes_images_and_list_has_avatar(tmp_path):
     assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"img", "png")
     assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == ["avatar"]
     assert ch.list_characters(tmp_path)[0]["has_avatar"] is True
+
+
+def test_png_import_saves_avatar(tmp_path):
+    from grimoire.store import assets, cards
+    blob = cards.dumps(ch.blank_card("Imp"), "png")
+    cid, vid = ch.import_card(tmp_path, blob, "png")
+    p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
+    assert p is not None and p.read_bytes() == blob
+
+
+def test_json_import_downloads_avatar_url(tmp_path, monkeypatch):
+    import json as _json
+    from grimoire.store import assets
+    card = ch.blank_card("Imp")
+    card["data"]["assets"] = [{"type": "icon", "uri": "https://x/pic.png", "name": "main", "ext": "png"}]
+    monkeypatch.setattr(ch, "_http_get_bytes", lambda url: (b"DOWNLOADED", "image/png"))
+    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+    p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
+    assert p is not None and p.read_bytes() == b"DOWNLOADED" and p.suffix == ".png"
+
+
+def test_json_import_download_failure_is_swallowed(tmp_path, monkeypatch):
+    import json as _json
+    from grimoire.store import assets
+    card = ch.blank_card("Imp")
+    card["data"]["assets"] = [{"type": "icon", "uri": "https://x/pic.png"}]
+
+    def boom(url):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(ch, "_http_get_bytes", boom)
+    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")  # must not raise
+    assert assets.image_path(tmp_path, cid, vid, assets.AVATAR) is None
+
+
+def test_json_import_no_url_makes_no_call(tmp_path, monkeypatch):
+    import json as _json
+    from grimoire.store import assets
+
+    def boom(url):
+        raise AssertionError("should not be called")
+
+    monkeypatch.setattr(ch, "_http_get_bytes", boom)
+    cid, vid = ch.import_card(tmp_path, _json.dumps(ch.blank_card("Imp")).encode(), "json")
+    assert assets.image_path(tmp_path, cid, vid, assets.AVATAR) is None
