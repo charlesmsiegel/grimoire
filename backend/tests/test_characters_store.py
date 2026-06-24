@@ -69,3 +69,15 @@ def test_counts_and_refs(tmp_path):
     ch.create_character(tmp_path, "B")
     assert ch.character_count(tmp_path) == 2
     assert set(ch.character_refs(tmp_path)) == {"a", "b"}
+
+
+def test_read_exposes_images_and_list_has_avatar(tmp_path):
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    # no images yet
+    assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == []
+    assert ch.list_characters(tmp_path)[0]["has_avatar"] is False
+    # add an avatar to the default version
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"img", "png")
+    assert ch.read_character(tmp_path, cid)["versions"][0]["images"] == ["avatar"]
+    assert ch.list_characters(tmp_path)[0]["has_avatar"] is True
