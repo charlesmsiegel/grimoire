@@ -450,6 +450,47 @@ def get_character_export(wid: str, cid: str, vid: str, format: str = "json"):
     return Response(content=blob, media_type=_EXPORT_MEDIA[format])
 
 
+_IMAGE_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "gif": "image/gif", "webp": "image/webp"}
+
+
+def _serve_image(root, cid: str, vid: str, name: str):
+    p = store.assets.image_path(root, cid, vid, name)
+    if p is None:
+        raise HTTPException(status_code=404, detail="image not found")
+    ext = p.suffix.lstrip(".").lower()
+    return Response(content=p.read_bytes(), media_type=_IMAGE_MEDIA.get(ext, "application/octet-stream"))
+
+
+@router.get("/worlds/{wid}/characters/{cid}/versions/{vid}/images")
+def list_world_images(wid: str, cid: str, vid: str):
+    return store.assets.list_images(_world_root_or_404(wid), cid, vid)
+
+
+@router.get("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}")
+def get_world_image(wid: str, cid: str, vid: str, name: str):
+    return _serve_image(_world_root_or_404(wid), cid, vid, name)
+
+
+@router.put("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}")
+async def put_world_image(wid: str, cid: str, vid: str, name: str, file: UploadFile = File(...)):
+    root = _world_root_or_404(wid)
+    data = await file.read()
+    fn = file.filename or ""
+    ext = fn.rsplit(".", 1)[-1] if "." in fn else ""
+    try:
+        stored = store.assets.put_image(root, cid, vid, name, data, ext)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"name": name, "ext": stored}
+
+
+@router.delete("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}")
+def delete_world_image(wid: str, cid: str, vid: str, name: str):
+    store.assets.delete_image(_world_root_or_404(wid), cid, vid, name)
+    return {"ok": True}
+
+
 # ---- world greetings (declared before the generic /{kind} routes) ----
 @router.get("/worlds/{wid}/greetings")
 def get_world_greetings(wid: str):
@@ -812,6 +853,11 @@ def post_retry(cid: str, sid: str, client: OpenRouterClient = Depends(get_openro
 def get_appearances(cid: str):
     _campaign_root_or_404(cid)
     return store.appearances.roster(cid)
+
+
+@router.get("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
+def get_campaign_image(cid: str, char: str, vid: str, name: str):
+    return _serve_image(_campaign_root_or_404(cid), char, vid, name)
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/cast")
