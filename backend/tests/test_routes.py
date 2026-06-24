@@ -141,6 +141,29 @@ def test_character_import_garbage_400(client):
     assert r.status_code == 400
 
 
+def test_character_book_import_route(client):
+    wid = _world(client)
+    card = {"spec": "chara_card_v3", "spec_version": "3.0", "data": {
+        "name": "Sera",
+        "character_book": {"entries": [{"keys": ["pact"], "content": "the salt pact", "name": "Pact"}]},
+        "extensions": {},
+    }}
+    cid = client.post(f"/api/worlds/{wid}/characters",
+                      json={"name": "Sera", "card": card}).json()["character"]
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/lorebook/import")
+    assert r.status_code == 200
+    created = r.json()["created"]
+    assert len(created) == 1 and created[0]["kind"] == "lore"
+    assert any(e["id"] == created[0]["id"] for e in client.get(f"/api/worlds/{wid}/lore").json())
+
+
+def test_character_book_import_empty(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/lorebook/import")
+    assert r.status_code == 200 and r.json() == {"created": []}
+
+
 def test_world_tag_vocabulary_crud(client):
     wid = _world(client)
     tid = client.post(f"/api/worlds/{wid}/tags", json={"name": "Student"}).json()["id"]
