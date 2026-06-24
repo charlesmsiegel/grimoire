@@ -95,10 +95,18 @@ test("editing creator and tags saves them", async () => {
   });
 });
 
-test("importing a file posts multipart to importCharacter", async () => {
+test("importing a .json posts multipart with json format", async () => {
   render(<CharacterEditor wid="w" />);
   await screen.findByText("Seraphine");
-  const input = screen.getByLabelText("Import character JSON");
+  const input = screen.getByLabelText("Import character card");
   fireEvent.change(input, { target: { files: [new File(["{}"], "c.json")] } });
   await waitFor(() => expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "json"));
+});
+
+test("importing a .png posts multipart with png format", async () => {
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  const input = screen.getByLabelText("Import character card");
+  fireEvent.change(input, { target: { files: [new File(["x"], "fay.png", { type: "image/png" })] } });
+  await waitFor(() => expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "png"));
 });

@@ -141,8 +141,10 @@ export function CharacterEditor({ wid }: { wid: string }) {
     const file = e.target.files?.[0];
     if (!file) return;
     setError(null);
+    const ext = file.name.split(".").pop()?.toLowerCase();
+    const fmt = ext === "png" ? "png" : ext === "charx" ? "charx" : "json";
     try {
-      const { character } = await api.importCharacter(wid, file, "json");
+      const { character } = await api.importCharacter(wid, file, fmt);
       await reload();
       await select(character);
     } catch (err: any) {
@@ -156,8 +158,8 @@ export function CharacterEditor({ wid }: { wid: string }) {
     <div className="editor">
       <div className="editor-list">
         <button className="primary new" onClick={newCharacter}>+ New character</button>
-        <button className="subtle new" onClick={() => fileRef.current?.click()}>Import JSON</button>
-        <input ref={fileRef} type="file" accept=".json" hidden aria-label="Import character JSON" onChange={onImport} />
+        <button className="subtle new" onClick={() => fileRef.current?.click()}>Import card</button>
+        <input ref={fileRef} type="file" accept=".json,.png,.charx" hidden aria-label="Import character card" onChange={onImport} />
         {chars.map((c) => (
           <button
             key={c.id}
