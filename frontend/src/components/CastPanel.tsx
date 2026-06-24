@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  api, type Actor, type Availability, type CharacterSummary, type PCSummary,
+  api, type Actor, type Availability, type CharacterSummary, type PCSummary, type RosterEntry,
 } from "../api/client";
 
 export function CastPanel({
@@ -16,6 +16,7 @@ export function CastPanel({
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [pcs, setPCs] = useState<PCSummary[]>([]);
   const [avail, setAvail] = useState<Availability[]>([]);
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [kind, setKind] = useState<"characters" | "pcs">("characters");
@@ -31,6 +32,7 @@ export function CastPanel({
   useEffect(() => {
     reloadCast();
     api.availableGreetings(cid).then(setAvail).catch(() => setAvail([]));
+    api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
   }, [cid, sid, reloadCast]);
 
   // the world's characters/pcs are needed to add actors; load lazily from the campaign's world
@@ -110,12 +112,22 @@ export function CastPanel({
         <div>
           <div className="role">In this scene</div>
           {cast.length === 0 && <div className="field-hint">No one cast yet.</div>}
-          {cast.map((a) => (
-            <div className="cast-row" key={`${a.kind}/${a.id}`}>
-              <span>{a.id}</span>
-              <span className="role">{a.kind === "pcs" ? "PC" : "character"} · {a.role}</span>
-            </div>
-          ))}
+          {cast.map((a) => {
+            const ver = a.kind === "characters"
+              ? roster.find((r) => r.kind === "characters" && r.id === a.id)?.version
+              : undefined;
+            return (
+              <div className="cast-row" key={`${a.kind}/${a.id}`}>
+                {ver
+                  ? <img className="row-avatar" alt={`${a.id} avatar`}
+                         src={api.campaignImageUrl(cid, a.id, ver, "avatar")}
+                         onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                  : null}
+                <span>{a.id}</span>
+                <span className="role">{a.kind === "pcs" ? "PC" : "character"} · {a.role}</span>
+              </div>
+            );
+          })}
         </div>
 
         <div>
