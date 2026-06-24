@@ -6,6 +6,8 @@ vi.mock("../api/client", () => ({
     listCharacters: vi.fn(), readCharacter: vi.fn(), createCharacter: vi.fn(),
     updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
     deleteCharacter: vi.fn(), importCharacter: vi.fn(),
+    putImage: vi.fn(), deleteImage: vi.fn(),
+    imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
   },
 }));
 import { api } from "../api/client";
@@ -16,16 +18,27 @@ const CARD = {
 };
 const DETAIL = {
   meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
-  versions: [{ id: "default", name: "default", card: CARD }],
+  versions: [{ id: "default", name: "default", card: CARD, images: ["avatar"] }],
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine", default_version: "default", versions: [] }]);
+  (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: true, versions: [] }]);
   (api.readCharacter as any).mockResolvedValue(DETAIL);
   (api.createCharacter as any).mockResolvedValue({ character: "rook", version: "default" });
   (api.updateVersion as any).mockResolvedValue({ ok: true });
   (api.importCharacter as any).mockResolvedValue({ character: "imp", version: "default" });
+  (api.putImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
+  (api.deleteImage as any).mockResolvedValue({ ok: true });
+});
+
+test("uploads an avatar for the selected version", async () => {
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByLabelText("Description");
+  const input = screen.getByLabelText("Upload avatar");
+  fireEvent.change(input, { target: { files: [new File(["x"], "a.png", { type: "image/png" })] } });
+  await waitFor(() => expect(api.putImage).toHaveBeenCalledWith("w", "seraphine", "default", "avatar", expect.any(File)));
 });
 
 test("creating a character prompts and posts the name", async () => {
