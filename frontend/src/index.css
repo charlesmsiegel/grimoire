@@ -162,3 +162,13 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .greeting-list { display: flex; flex-direction: column; gap: 8px; }
 .greeting-row { display: flex; gap: 6px; }
 .greeting-row textarea { flex: 1; }
+
+/* character grid (cards with avatars) */
+.grid-toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
+.char-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+.char-card { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; background: var(--surface); border: 1px solid var(--muted); border-radius: var(--radius); cursor: pointer; color: var(--fg); font-family: var(--font-body); }
+.char-card:hover { border-color: var(--accent); }
+.char-card-avatar { width: 100px; height: 100px; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--muted); }
+.char-card-avatar-empty { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; background: var(--bg); }
+.char-card-name { font-weight: bold; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.editor-body .back { margin-bottom: 12px; }

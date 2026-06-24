@@ -16,6 +16,7 @@ import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
+import certifi
 import httpx
 
 from . import assets
@@ -246,8 +247,13 @@ def _host_is_blocked(host: str) -> bool:
 
 
 def _http_get_bytes(url: str) -> tuple[bytes, str | None]:
-    """Fetch an image, validating each redirect hop and aborting early past the cap."""
-    with httpx.Client(timeout=10.0, follow_redirects=False) as client:
+    """Fetch an image, validating each redirect hop and aborting early past the cap.
+
+    Pin trust to certifi's CA bundle rather than the ambient SSL_CERT_FILE, which a
+    host Python (e.g. Anaconda) can point at a path httpx can't load — that would
+    otherwise fail every HTTPS avatar fetch.
+    """
+    with httpx.Client(timeout=10.0, follow_redirects=False, verify=certifi.where()) as client:
         for _ in range(_MAX_REDIRECTS + 1):
             parsed = urlparse(url)
             if parsed.scheme not in ("http", "https") or not parsed.hostname:

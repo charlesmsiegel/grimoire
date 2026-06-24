@@ -155,29 +155,33 @@ export function CharacterEditor({ wid }: { wid: string }) {
   }
 
   return (
-    <div className="editor">
-      <div className="editor-list">
-        <button className="primary new" onClick={newCharacter}>+ New character</button>
-        <button className="subtle new" onClick={() => fileRef.current?.click()}>Import card</button>
-        <input ref={fileRef} type="file" accept=".json,.png,.charx" hidden aria-label="Import character card" onChange={onImport} />
-        {chars.map((c) => (
-          <button
-            key={c.id}
-            className={"row" + (detail?.meta.id === c.id ? " active" : "")}
-            onClick={() => select(c.id)}
-          >
-            {c.has_avatar
-              ? <img className="row-avatar" alt="" src={api.imageUrl(wid, c.id, c.default_version, "avatar")} />
-              : <span className="row-avatar row-avatar-empty" aria-hidden="true" />}
-            {c.name}
-          </button>
-        ))}
-      </div>
-
-      <div className="editor-body">
-        {!detail || !card ? (
-          <div className="editor-empty">Select or create a character.</div>
-        ) : (
+    <div className="character-editor">
+      {!detail || !card ? (
+        <>
+          <div className="grid-toolbar">
+            <button className="primary" onClick={newCharacter}>+ New character</button>
+            <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
+            <input ref={fileRef} type="file" accept=".json,.png,.charx" hidden aria-label="Import character card" onChange={onImport} />
+          </div>
+          {error && <div className="banner">{error}</div>}
+          {chars.length === 0 ? (
+            <div className="editor-empty">No characters yet. Create one or import a card.</div>
+          ) : (
+            <div className="char-grid">
+              {chars.map((c) => (
+                <button key={c.id} className="char-card" onClick={() => select(c.id)}>
+                  {c.has_avatar
+                    ? <img className="char-card-avatar" alt="" src={api.imageUrl(wid, c.id, c.default_version, "avatar")} />
+                    : <div className="char-card-avatar char-card-avatar-empty">no avatar</div>}
+                  <span className="char-card-name">{c.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="editor-body">
+          <button className="subtle back" onClick={() => { setDetail(null); setCard(null); reload(); }}>‹ All characters</button>
           <div className="form">
             {error && <div className="banner">{error}</div>}
             <div className="picker">
@@ -267,8 +271,8 @@ export function CharacterEditor({ wid }: { wid: string }) {
               <button className="primary" onClick={save}>Save version</button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
