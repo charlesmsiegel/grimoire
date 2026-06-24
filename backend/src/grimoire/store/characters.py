@@ -13,6 +13,8 @@ import json
 import shutil
 from pathlib import Path
 
+import httpx
+
 from . import assets
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
@@ -198,15 +200,64 @@ def character_refs(root: Path) -> list[str]:
     return sorted(p.name for p in d.iterdir() if p.is_dir() and (p / "character.md").exists())
 
 
+_AVATAR_MAX_BYTES = 8 * 1024 * 1024
+_CT_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
+           "image/gif": "gif", "image/webp": "webp"}
+
+
+def _avatar_url(card: dict) -> str | None:
+    data = card.get("data", {})
+    for a in data.get("assets") or []:
+        if isinstance(a, dict) and a.get("type") in ("icon", "avatar"):
+            uri = a.get("uri", "")
+            if isinstance(uri, str) and uri.startswith(("http://", "https://")):
+                return uri
+    av = data.get("avatar")
+    return av if isinstance(av, str) and av.startswith(("http://", "https://")) else None
+
+
+def _http_get_bytes(url: str) -> tuple[bytes, str | None]:
+    r = httpx.get(url, timeout=10.0, follow_redirects=True)
+    r.raise_for_status()
+    return r.content, r.headers.get("content-type")
+
+
+def _download_avatar(card: dict) -> tuple[bytes, str] | None:
+    url = _avatar_url(card)
+    if not url:
+        return None
+    try:
+        content, ctype = _http_get_bytes(url)
+    except Exception:  # noqa: BLE001 — best-effort; import never fails on download
+        return None
+    if not content or len(content) > _AVATAR_MAX_BYTES:
+        return None
+    ct = (ctype or "").split(";")[0].strip().lower()
+    if ct and not ct.startswith("image/"):
+        return None
+    ext = _CT_EXT.get(ct) or url.rsplit(".", 1)[-1].lower()
+    if ext not in ("png", "jpg", "jpeg", "gif", "webp"):
+        ext = "png"
+    return content, ext
+
+
 def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
                 name: str | None = None) -> tuple[str, str]:
     from . import cards
     card = cards.loads(data, fmt)  # raises cards.CardParseError on bad input
     cname = name or card["data"].get("name", "Imported")
     if into_cid is None:
-        return create_character(root, cname, "default", card)
-    vid = create_version(root, into_cid, card.get("data", {}).get("character_version") or cname, card)
-    return into_cid, vid
+        cid, vid = create_character(root, cname, "default", card)
+    else:
+        cid = into_cid
+        vid = create_version(root, into_cid, card.get("data", {}).get("character_version") or cname, card)
+    if fmt == "png":
+        assets.put_image(root, cid, vid, assets.AVATAR, data, "png")  # the PNG is the avatar
+    else:
+        dl = _download_avatar(card)
+        if dl:
+            assets.put_image(root, cid, vid, assets.AVATAR, dl[0], dl[1])
+    return cid, vid
 
 
 def export_card(root: Path, cid: str, vid: str, fmt: str) -> bytes:
