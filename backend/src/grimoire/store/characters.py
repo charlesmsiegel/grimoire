@@ -13,6 +13,7 @@ import json
 import shutil
 from pathlib import Path
 
+from . import assets
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
@@ -128,7 +129,12 @@ def read_character(root: Path, cid: str) -> dict:
     versions = []
     for vid in _version_ids(root, cid):
         card = read_card(root, cid, vid)
-        versions.append({"id": vid, "name": card["data"].get("name", vid), "card": card})
+        versions.append({
+            "id": vid,
+            "name": card["data"].get("name", vid),
+            "card": card,
+            "images": [i["name"] for i in assets.list_images(root, cid, vid)],
+        })
     return {
         "meta": {"id": cid, "name": meta.get("name", cid), "default_version": meta.get("default_version", "")},
         "versions": versions,
@@ -142,10 +148,12 @@ def list_characters(root: Path) -> list[dict]:
         for cd in sorted(p for p in d.iterdir() if p.is_dir() and (p / "character.md").exists()):
             cid = cd.name
             meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+            default = meta.get("default_version", "")
             out.append({
                 "id": cid,
                 "name": meta.get("name", cid),
-                "default_version": meta.get("default_version", ""),
+                "default_version": default,
+                "has_avatar": assets.image_path(root, cid, default, assets.AVATAR) is not None,
                 "versions": [{"id": v, "name": read_card(root, cid, v)["data"].get("name", v)}
                              for v in _version_ids(root, cid)],
             })

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from . import (
-    appearances, campaigns, cards, characters, context, entities, greetings,
-    lorebook, pcs, playing, scenes, sync, tags, worlds,
+    appearances, assets, campaigns, cards, characters, context, entities,
+    greetings, lorebook, pcs, playing, scenes, sync, tags, worlds,
 )
 from .appearances import AppearError
 from .campaigns import CampaignNotFound
@@ -41,6 +41,7 @@ __all__ = [
     "WorldNotFound",
     "campaigns",
     "CampaignNotFound",
+    "assets",
     "cards",
     "CardParseError",
     "characters",
