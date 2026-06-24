@@ -82,3 +82,13 @@ def test_commit_routes_and_writes_keys(tmp_path):
 def test_commit_unknown_category_raises(tmp_path):
     with pytest.raises(lorebook.LorebookError):
         lorebook.commit(tmp_path, [{"name": "X", "keys": [], "body": "y", "category": "bogus"}])
+
+
+def test_from_character_book_normalizes():
+    book = {"entries": [
+        {"keys": ["pact"], "content": "the salt pact", "name": "Pact", "enabled": True},
+        {"keys": ["off"], "content": "skip me", "enabled": False},
+    ]}
+    out = lorebook.from_character_book(book)
+    assert out == [{"name": "Pact", "keys": ["pact"], "body": "the salt pact", "category": "lore"}]
+    assert lorebook.from_character_book(None) == []

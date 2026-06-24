@@ -450,6 +450,20 @@ def get_character_export(wid: str, cid: str, vid: str, format: str = "json"):
     return Response(content=blob, media_type=_EXPORT_MEDIA[format])
 
 
+@router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/lorebook/import")
+def post_character_lorebook_import(wid: str, cid: str, vid: str):
+    root = _world_root_or_404(wid)
+    try:
+        card = store.characters.read_card(root, cid, vid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    book = card.get("data", {}).get("character_book") or {}
+    created = store.lorebook.commit(root, store.lorebook.from_character_book(book))
+    return {"created": created}
+
+
 _IMAGE_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                 "gif": "image/gif", "webp": "image/webp"}
 

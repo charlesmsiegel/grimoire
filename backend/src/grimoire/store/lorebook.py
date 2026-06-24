@@ -66,6 +66,11 @@ def parse(data: bytes, fmt: str) -> list[dict]:
     raise LorebookError(f"unknown format: {fmt}")
 
 
+def from_character_book(book) -> list[dict]:
+    """Normalize a card's embedded character_book into commit-ready entries."""
+    return _normalize(book or {})
+
+
 def commit(root: Path, entries: list[dict]) -> list[dict]:
     created: list[dict] = []
     for e in entries:
