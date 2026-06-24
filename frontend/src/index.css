@@ -166,9 +166,25 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 /* character grid (cards with avatars) */
 .grid-toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
 .char-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
-.char-card { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; background: var(--surface); border: 1px solid var(--muted); border-radius: var(--radius); cursor: pointer; color: var(--fg); font-family: var(--font-body); }
+.char-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; background: var(--surface); border: 1px solid var(--muted); border-radius: var(--radius); }
 .char-card:hover { border-color: var(--accent); }
-.char-card-avatar { width: 100px; height: 100px; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--muted); }
-.char-card-avatar-empty { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; background: var(--bg); }
+.char-card-main { display: flex; flex-direction: column; gap: 8px; padding: 0; width: 100%; background: transparent; border: none; cursor: pointer; color: var(--fg); font-family: var(--font-body); }
+.char-card-main:hover .char-card-name { color: var(--accent); }
+.char-card-avatar { width: 100%; height: auto; display: block; border-radius: var(--radius); }
+.char-card-avatar-empty { display: flex; align-items: center; justify-content: center; aspect-ratio: 2 / 3; color: var(--muted); font-size: 11px; background: var(--bg); border: 1px solid var(--muted); }
 .char-card-name { font-weight: bold; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.char-card-actions { display: flex; gap: 6px; }
+.char-card-actions button { flex: 1; }
 .editor-body .back { margin-bottom: 12px; }
+
+/* character detail (read-only) */
+.detail { display: flex; flex-direction: column; gap: 16px; }
+.detail-head { display: flex; gap: 16px; align-items: flex-start; }
+.detail-avatar { width: 160px; flex: none; height: auto; display: block; border-radius: var(--radius); border: 1px solid var(--muted); }
+.detail-avatar.avatar-empty { aspect-ratio: 2 / 3; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; background: var(--bg); }
+.detail-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.detail-meta h3 { margin: 0; }
+.detail-actions { display: flex; gap: 6px; flex: none; }
+.detail-field .role { margin-bottom: 4px; }
+.detail-text { white-space: pre-wrap; }
+.detail-greeting { padding: 8px 12px; background: var(--surface); border-left: 2px solid var(--muted); border-radius: var(--radius); margin-bottom: 6px; }
