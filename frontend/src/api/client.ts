@@ -19,8 +19,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return res.json() as Promise<T>;
 }
 
-async function requestForm<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(path, { method: "POST", body: form });
+async function requestForm<T>(path: string, form: FormData, method = "POST"): Promise<T> {
+  const res = await fetch(path, { method, body: form });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new ApiError(res.status, data.detail ?? res.statusText, data.kind);
@@ -64,14 +64,18 @@ export type CardData = {
   system_prompt?: string;
   post_history_instructions?: string;
   alternate_greetings?: string[];
+  creator?: string;
+  creator_notes?: string;
+  tags?: string[];
+  character_book?: { entries?: unknown[] };
   [k: string]: unknown;
 };
 export type Card = { spec: string; spec_version: string; data: CardData };
 export type VersionRef = { id: string; name: string };
-export type CharacterSummary = { id: string; name: string; default_version: string; versions: VersionRef[] };
+export type CharacterSummary = { id: string; name: string; default_version: string; has_avatar?: boolean; versions: VersionRef[] };
 export type CharacterDetail = {
   meta: { id: string; name: string; default_version: string };
-  versions: { id: string; name: string; card: Card }[];
+  versions: { id: string; name: string; card: Card; images?: string[] }[];
 };
 
 // PCs
@@ -222,6 +226,21 @@ export const api = {
     if (into) form.append("into", into);
     return requestForm<{ character: string; version: string }>(`/api/worlds/${wid}/characters/import`, form);
   },
+  imageUrl: (wid: string, cid: string, vid: string, name: string) =>
+    `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}`,
+  campaignImageUrl: (cid: string, char: string, vid: string, name: string) =>
+    `/api/campaigns/${cid}/characters/${char}/versions/${vid}/images/${name}`,
+  putImage: (wid: string, cid: string, vid: string, name: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<{ name: string; ext: string }>(
+      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}`, form, "PUT");
+  },
+  deleteImage: (wid: string, cid: string, vid: string, name: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}`),
+  importCharacterBook: (wid: string, cid: string, vid: string) =>
+    request<{ created: { kind: string; id: string }[] }>(
+      "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/lorebook/import`),
 
   // pcs
   listPCs: (wid: string) => request<PCSummary[]>("GET", `/api/worlds/${wid}/pcs`),
