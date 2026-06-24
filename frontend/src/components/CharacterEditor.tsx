@@ -10,6 +10,7 @@ const TEXT_FIELDS: { key: string; label: string; area?: boolean }[] = [
   { key: "mes_example", label: "Example dialogue", area: true },
   { key: "system_prompt", label: "System prompt", area: true },
   { key: "post_history_instructions", label: "Post-history instructions", area: true },
+  { key: "creator_notes", label: "Creator notes", area: true },
 ];
 
 export function CharacterEditor({ wid }: { wid: string }) {
@@ -17,7 +18,7 @@ export function CharacterEditor({ wid }: { wid: string }) {
   const [detail, setDetail] = useState<CharacterDetail | null>(null);
   const [vid, setVid] = useState("");
   const [card, setCard] = useState<Card | null>(null);
-  const [alt, setAlt] = useState("");
+  const [greetings, setGreetings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -30,7 +31,7 @@ export function CharacterEditor({ wid }: { wid: string }) {
     const v = d.versions.find((x) => x.id === id) ?? d.versions[0];
     setVid(v.id);
     setCard(v.card);
-    setAlt((v.card.data.alternate_greetings ?? []).join("\n"));
+    setGreetings(v.card.data.alternate_greetings ?? []);
   }
 
   async function select(cid: string) {
@@ -40,14 +41,13 @@ export function CharacterEditor({ wid }: { wid: string }) {
     loadVersion(d, d.meta.default_version);
   }
 
-  function setField(key: string, value: string) {
+  function setField(key: string, value: unknown) {
     if (!card) return;
     setCard({ ...card, data: { ...card.data, [key]: value } });
   }
 
   function buildCard(): Card {
-    const greetings = alt.split("\n").map((s) => s.trim()).filter(Boolean);
-    return { ...card!, data: { ...card!.data, alternate_greetings: greetings } };
+    return { ...card!, data: { ...card!.data, alternate_greetings: greetings.filter((g) => g.trim() !== "") } };
   }
 
   async function newCharacter() {
@@ -146,6 +146,16 @@ export function CharacterEditor({ wid }: { wid: string }) {
             <Field label="Name">
               <input type="text" value={card.data.name ?? ""} onChange={(e) => setField("name", e.target.value)} />
             </Field>
+            <Field label="Creator">
+              <input type="text" value={card.data.creator ?? ""} onChange={(e) => setField("creator", e.target.value)} />
+            </Field>
+            <Field label="Tags" hint="comma-separated">
+              <input
+                type="text"
+                value={(card.data.tags ?? []).join(", ")}
+                onChange={(e) => setField("tags", e.target.value.split(",").map((t) => t.trim()).filter(Boolean))}
+              />
+            </Field>
             {TEXT_FIELDS.map((f) => (
               <Field key={f.key} label={f.label}>
                 <textarea
@@ -155,8 +165,26 @@ export function CharacterEditor({ wid }: { wid: string }) {
                 />
               </Field>
             ))}
-            <Field label="Alternate greetings" hint="one greeting per line">
-              <textarea value={alt} rows={4} onChange={(e) => setAlt(e.target.value)} />
+            <Field label="Alternate greetings" hint="each greeting may span multiple lines">
+              <div className="greeting-list">
+                {greetings.map((g, i) => (
+                  <div className="greeting-row" key={i}>
+                    <textarea
+                      aria-label={`Greeting ${i + 1}`}
+                      value={g}
+                      rows={3}
+                      onChange={(e) => setGreetings(greetings.map((x, j) => (j === i ? e.target.value : x)))}
+                    />
+                    <button className="subtle" type="button"
+                            onClick={() => setGreetings(greetings.filter((_, j) => j !== i))}>
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button className="subtle" type="button" onClick={() => setGreetings([...greetings, ""])}>
+                  + Add greeting
+                </button>
+              </div>
             </Field>
 
             <div className="form-actions">

@@ -36,18 +36,36 @@ test("creating a character prompts and posts the name", async () => {
   await waitFor(() => expect(api.createCharacter).toHaveBeenCalledWith("w", { name: "Rook" }));
 });
 
-test("editing description + alternate greetings saves a rebuilt card", async () => {
+test("editing description + alternate greetings (repeatable) saves a rebuilt card", async () => {
   render(<CharacterEditor wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   await screen.findByLabelText("Description");
   fireEvent.change(screen.getByLabelText("Description"), { target: { value: "cold keeper" } });
-  fireEvent.change(screen.getByLabelText("Alternate greetings"), { target: { value: "one\ntwo\n" } });
+  // the seed card has one greeting "hi"; add a second and edit both
+  fireEvent.click(screen.getByRole("button", { name: /add greeting/i }));
+  const areas = screen.getAllByLabelText(/greeting \d+/i);
+  fireEvent.change(areas[0], { target: { value: "line one\nstill one" } });
+  fireEvent.change(areas[1], { target: { value: "two" } });
   fireEvent.click(screen.getByRole("button", { name: /save version/i }));
   await waitFor(() => {
     const card = (api.updateVersion as any).mock.calls[0][3];
     expect(card.data.description).toBe("cold keeper");
-    expect(card.data.alternate_greetings).toEqual(["one", "two"]);
+    expect(card.data.alternate_greetings).toEqual(["line one\nstill one", "two"]);
     expect(card.spec).toBe("chara_card_v3"); // preserved
+  });
+});
+
+test("editing creator and tags saves them", async () => {
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByLabelText("Creator");
+  fireEvent.change(screen.getByLabelText("Creator"), { target: { value: "anon" } });
+  fireEvent.change(screen.getByLabelText("Tags"), { target: { value: "fantasy, oc " } });
+  fireEvent.click(screen.getByRole("button", { name: /save version/i }));
+  await waitFor(() => {
+    const card = (api.updateVersion as any).mock.calls[0][3];
+    expect(card.data.creator).toBe("anon");
+    expect(card.data.tags).toEqual(["fantasy", "oc"]);
   });
 });
 
