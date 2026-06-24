@@ -217,9 +217,18 @@ def _avatar_url(card: dict) -> str | None:
 
 
 def _http_get_bytes(url: str) -> tuple[bytes, str | None]:
-    r = httpx.get(url, timeout=10.0, follow_redirects=True)
-    r.raise_for_status()
-    return r.content, r.headers.get("content-type")
+    """Fetch an image, aborting early if it exceeds the cap (never buffers a huge body)."""
+    with httpx.stream("GET", url, timeout=10.0, follow_redirects=True) as r:
+        r.raise_for_status()
+        cl = r.headers.get("content-length")
+        if cl and cl.isdigit() and int(cl) > _AVATAR_MAX_BYTES:
+            raise ValueError("avatar too large")
+        buf = bytearray()
+        for chunk in r.iter_bytes():
+            buf.extend(chunk)
+            if len(buf) > _AVATAR_MAX_BYTES:
+                raise ValueError("avatar too large")
+        return bytes(buf), r.headers.get("content-type")
 
 
 def _download_avatar(card: dict) -> tuple[bytes, str] | None:

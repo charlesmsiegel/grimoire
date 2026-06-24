@@ -33,5 +33,7 @@ def test_unsafe_and_unsupported_rejected(tmp_path):
     with pytest.raises(ValueError):
         assets.put_image(tmp_path, "sera", "default", "a.b", b"a", "png")  # dot in name
     with pytest.raises(ValueError):
+        assets.put_image(tmp_path, "sera", "default", "*", b"a", "png")  # glob metacharacter
+    with pytest.raises(ValueError):
         assets.put_image(tmp_path, "sera", "default", "avatar", b"a", "svg")  # not allowlisted
     assert assets.image_path(tmp_path, "..", "default", "avatar") is None  # unsafe cid
