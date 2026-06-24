@@ -116,6 +116,15 @@ def test_json_import_download_failure_is_swallowed(tmp_path, monkeypatch):
     assert assets.image_path(tmp_path, cid, vid, assets.AVATAR) is None
 
 
+def test_download_avatar_blocks_internal_hosts(tmp_path):
+    # SSRF guard: internal/loopback targets resolve but must be refused (no avatar, no raise).
+    card = ch.blank_card("Imp")
+    card["data"]["assets"] = [{"type": "icon", "uri": "http://127.0.0.1/pic.png"}]
+    assert ch._download_avatar(card) is None
+    card["data"]["assets"] = [{"type": "icon", "uri": "http://10.0.0.1/pic.png"}]
+    assert ch._download_avatar(card) is None
+
+
 def test_json_import_no_url_makes_no_call(tmp_path, monkeypatch):
     import json as _json
     from grimoire.store import assets
