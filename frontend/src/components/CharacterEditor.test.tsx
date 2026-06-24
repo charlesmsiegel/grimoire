@@ -6,7 +6,7 @@ vi.mock("../api/client", () => ({
     listCharacters: vi.fn(), readCharacter: vi.fn(), createCharacter: vi.fn(),
     updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
     deleteCharacter: vi.fn(), importCharacter: vi.fn(),
-    putImage: vi.fn(), deleteImage: vi.fn(),
+    putImage: vi.fn(), deleteImage: vi.fn(), importCharacterBook: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
   },
 }));
@@ -14,7 +14,10 @@ import { api } from "../api/client";
 
 const CARD = {
   spec: "chara_card_v3", spec_version: "3.0",
-  data: { name: "Seraphine", description: "keeper", alternate_greetings: ["hi"], extensions: {} },
+  data: {
+    name: "Seraphine", description: "keeper", alternate_greetings: ["hi"], extensions: {},
+    character_book: { entries: [{ keys: ["pact"], content: "x" }] },
+  },
 };
 const DETAIL = {
   meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
@@ -30,6 +33,16 @@ beforeEach(() => {
   (api.importCharacter as any).mockResolvedValue({ character: "imp", version: "default" });
   (api.putImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.deleteImage as any).mockResolvedValue({ ok: true });
+  (api.importCharacterBook as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
+});
+
+test("imports an embedded character_book and shows the result", async () => {
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByLabelText("Description");
+  fireEvent.click(screen.getByRole("button", { name: /import .* lore/i }));
+  await waitFor(() => expect(api.importCharacterBook).toHaveBeenCalledWith("w", "seraphine", "default"));
+  await screen.findByText(/imported 1/i);
 });
 
 test("uploads an avatar for the selected version", async () => {
