@@ -99,6 +99,41 @@ def test_character_import_export_json(client):
     assert json.loads(exp.content)["data"]["name"] == "Imported"
 
 
+def test_character_image_routes(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images"
+    # absent
+    assert client.get(base).json() == []
+    assert client.get(f"{base}/avatar").status_code == 404
+    # upload
+    files = {"file": ("a.png", io.BytesIO(b"\x89PNGdata"), "image/png")}
+    r = client.put(f"{base}/avatar", files=files)
+    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert client.get(base).json() == [{"name": "avatar", "ext": "png"}]
+    got = client.get(f"{base}/avatar")
+    assert got.status_code == 200 and got.content == b"\x89PNGdata"
+    assert got.headers["content-type"].startswith("image/png")
+    # bad type -> 400
+    bad = client.put(f"{base}/avatar", files={"file": ("a.svg", io.BytesIO(b"<svg/>"), "image/svg+xml")})
+    assert bad.status_code == 400
+    # delete
+    assert client.delete(f"{base}/avatar").status_code == 200
+    assert client.get(f"{base}/avatar").status_code == 404
+
+
+def test_campaign_image_route_serves_copied_avatar(client):
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    client.put(f"/api/worlds/{wid}/characters/{chid}/versions/default/images/avatar",
+               files={"file": ("a.png", io.BytesIO(b"PNGBYTES"), "image/png")})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S1"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
+    got = client.get(f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/avatar")
+    assert got.status_code == 200 and got.content == b"PNGBYTES"
+
+
 def test_character_import_garbage_400(client):
     wid = _world(client)
     files = {"file": ("c.json", io.BytesIO(b"nonsense"), "application/json")}
