@@ -21,11 +21,39 @@ export function CharacterEditor({ wid }: { wid: string }) {
   const [greetings, setGreetings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const avatarRef = useRef<HTMLInputElement>(null);
+  const [avatarBust, setAvatarBust] = useState(0);
 
   const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
   useEffect(() => {
     reload();
   }, [reload]);
+
+  const hasAvatar = (detail && card)
+    ? (detail.versions.find((v) => v.id === vid)?.images ?? []).includes("avatar")
+    : false;
+
+  async function onAvatar(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !detail) return;
+    setError(null);
+    try {
+      await api.putImage(wid, detail.meta.id, vid, "avatar", file);
+      await select(detail.meta.id);
+      setAvatarBust((n) => n + 1);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    } finally {
+      e.target.value = "";
+    }
+  }
+
+  async function removeAvatar() {
+    if (!detail) return;
+    await api.deleteImage(wid, detail.meta.id, vid, "avatar");
+    await select(detail.meta.id);
+    setAvatarBust((n) => n + 1);
+  }
 
   function loadVersion(d: CharacterDetail, id: string) {
     const v = d.versions.find((x) => x.id === id) ?? d.versions[0];
@@ -119,6 +147,9 @@ export function CharacterEditor({ wid }: { wid: string }) {
             className={"row" + (detail?.meta.id === c.id ? " active" : "")}
             onClick={() => select(c.id)}
           >
+            {c.has_avatar
+              ? <img className="row-avatar" alt="" src={api.imageUrl(wid, c.id, c.default_version, "avatar")} />
+              : <span className="row-avatar row-avatar-empty" aria-hidden="true" />}
             {c.name}
           </button>
         ))}
@@ -141,6 +172,23 @@ export function CharacterEditor({ wid }: { wid: string }) {
               <button className="subtle" onClick={addVersion}>+ Version</button>
               <button className="subtle" onClick={setDefault}>Set default</button>
               <button className="subtle" onClick={deleteCharacter}>Delete</button>
+            </div>
+
+            <div className="avatar-block">
+              {hasAvatar ? (
+                <img className="avatar" alt="avatar"
+                     src={`${api.imageUrl(wid, detail.meta.id, vid, "avatar")}?v=${avatarBust}`} />
+              ) : (
+                <div className="avatar avatar-empty" aria-label="no avatar">no avatar</div>
+              )}
+              <div className="avatar-actions">
+                <button className="subtle" type="button" onClick={() => avatarRef.current?.click()}>
+                  {hasAvatar ? "Replace" : "Upload"}
+                </button>
+                {hasAvatar && <button className="subtle" type="button" onClick={removeAvatar}>Remove</button>}
+                <input ref={avatarRef} type="file" accept="image/*" hidden
+                       aria-label="Upload avatar" onChange={onAvatar} />
+              </div>
             </div>
 
             <Field label="Name">
