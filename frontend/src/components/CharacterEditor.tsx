@@ -28,6 +28,8 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
   const avatarRef = useRef<HTMLInputElement>(null);
   const [avatarBust, setAvatarBust] = useState(0);
   const [bookMsg, setBookMsg] = useState<string | null>(null);
+  const [localizeProg, setLocalizeProg] = useState<{ done: number; total: number } | null>(null);
+  const [localizeMsg, setLocalizeMsg] = useState<string | null>(null);
 
   const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
   useEffect(() => {
@@ -51,6 +53,46 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
     setCard(v.card);
     setGreetings(v.card.data.alternate_greetings ?? []);
     setBookMsg(null);
+    setLocalizeMsg(null);
+    setLocalizeProg(null);
+  }
+
+  // Download every remote image referenced in the card's text into the local
+  // asset store and rewrite the text to it, driving a progress bar from the
+  // server's SSE events. Reloads the version afterward so the rewrites show.
+  async function runLocalize(cid: string, version: string) {
+    setLocalizeMsg(null);
+    setLocalizeProg({ done: 0, total: 0 });
+    let finalMsg = "";
+    try {
+      await api.localizeImages(wid, cid, version, (e) => {
+        if (e.error) {
+          finalMsg = `Localize failed: ${e.error.detail}`;
+        } else if (e.summary) {
+          const s = e.summary;
+          finalMsg =
+            s.total === 0
+              ? "No remote images found"
+              : `Localized ${s.localized} image${s.localized === 1 ? "" : "s"}` +
+                (s.skipped ? `, skipped ${s.skipped}` : "") +
+                (s.failed ? `, ${s.failed} failed` : "") +
+                (s.capped ? " (download cap reached)" : "");
+        } else if (typeof e.done === "number") {
+          setLocalizeProg({ done: e.done, total: e.total ?? 0 });
+        } else if (typeof e.total === "number") {
+          setLocalizeProg({ done: 0, total: e.total });
+        }
+      });
+      // show the rewritten text + any new images for the version we localized
+      const d = await api.readCharacter(wid, cid);
+      setDetail(d);
+      loadVersion(d, version);  // clears localizeMsg, so set the summary after it
+    } catch (err: any) {
+      finalMsg = `Localize failed: ${err.detail ?? String(err)}`;
+    } finally {
+      setLocalizeProg(null);
+      if (finalMsg) setLocalizeMsg(finalMsg);
+    }
   }
 
   const bookCount = card?.data.character_book?.entries?.length ?? 0;
@@ -127,6 +169,7 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
       setDetail(d);
       loadVersion(d, version);
       await reload();
+      await runLocalize(detail.meta.id, version);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     } finally {
@@ -203,7 +246,11 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
     e.target.value = "";
     await reload();
     if (failures.length) setError(`Could not import — ${failures.join("; ")}`);
-    else if (files.length === 1 && last) await openDetail(last);
+    else if (files.length === 1 && last) {
+      await openDetail(last);
+      const d = await api.readCharacter(wid, last);
+      await runLocalize(last, d.meta.default_version);
+    }
   }
 
   const avatarSrc = (cid: string, version: string, bust = false) =>
@@ -335,6 +382,20 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
               <input ref={avatarRef} type="file" accept="image/*" hidden
                      aria-label="Upload avatar" onChange={onAvatar} />
             </div>
+          </div>
+
+          <div className="localize-block">
+            <button className="subtle" type="button" disabled={!!localizeProg}
+                    onClick={() => runLocalize(detail.meta.id, vid)}>
+              {localizeProg ? "Localizing…" : "Localize images"}
+            </button>
+            {localizeProg && (
+              <div className="localize-progress">
+                <progress value={localizeProg.done} max={localizeProg.total || 1} />
+                <span className="field-hint">{localizeProg.done}/{localizeProg.total}</span>
+              </div>
+            )}
+            {localizeMsg && <span className="field-hint">{localizeMsg}</span>}
           </div>
 
           <Field label="Name">
