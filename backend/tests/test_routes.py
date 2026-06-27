@@ -545,3 +545,10 @@ def test_localize_endpoint_404_for_missing_character(client):
     wid = client.post("/api/worlds", json={"name": "W3"}).json()["id"]
     resp = client.post(f"/api/worlds/{wid}/characters/ghost/versions/v/localize")
     assert resp.status_code == 404
+
+
+def test_localize_endpoint_404_for_missing_version(client):
+    wid = client.post("/api/worlds", json={"name": "W4"}).json()["id"]
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Real"}).json()["character"]
+    resp = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/ghostver/localize")
+    assert resp.status_code == 404
