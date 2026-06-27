@@ -6,8 +6,12 @@ into the per-version asset store; rewrites the text to the local serving URL.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
+
+from . import assets
+from . import fetch as _fetch
 
 # Order matters: earlier patterns win overlapping spans. Each has one capture
 # group holding the URL/data-uri.
@@ -71,3 +75,115 @@ def find_refs(text: str) -> list[Ref]:
 
     taken.sort(key=lambda r: r.start)
     return taken
+
+
+_TEXT_FIELDS = ("description", "personality", "scenario", "first_mes",
+                "mes_example", "system_prompt", "post_history_instructions",
+                "creator_notes")
+
+
+def _iter_fields(card: dict):
+    """Yield (getter, setter) for every localizable text field of the card.
+
+    getter() -> str; setter(new_text) writes it back into the card structure.
+    """
+    data = card.get("data") or {}
+
+    for key in _TEXT_FIELDS:
+        if isinstance(data.get(key), str):
+            yield (lambda k=key: data[k]), (lambda v, k=key: data.__setitem__(k, v))
+
+    greetings = data.get("alternate_greetings")
+    if isinstance(greetings, list):
+        for i, g in enumerate(greetings):
+            if isinstance(g, str):
+                yield (lambda i=i: greetings[i]), (lambda v, i=i: greetings.__setitem__(i, v))
+
+    book = data.get("character_book")
+    entries = (book or {}).get("entries") if isinstance(book, dict) else None
+    if isinstance(entries, list):
+        for i, ent in enumerate(entries):
+            if isinstance(ent, dict) and isinstance(ent.get("content"), str):
+                yield (lambda i=i: entries[i]["content"]), (lambda v, i=i: entries[i].__setitem__("content", v))
+
+
+def _serving_url(wid: str, cid: str, vid: str, name: str) -> str:
+    return f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}"
+
+
+def _store(root, cid, vid, got) -> str:
+    raw, ext = got
+    name = "embed-" + hashlib.sha256(raw).hexdigest()[:12]
+    assets.put_image(root, cid, vid, name, raw, ext)
+    return name
+
+
+def localize_card(card, root, cid, vid, wid, *, fetch=None, cap=None):
+    """Generator: download every referenced image, store it, and rewrite the
+    text in `card` in place — yielding {"total": N}, then {"done": k, "total": N}
+    per ref, then {"summary": {...}}. The caller persists `card` afterward."""
+    if fetch is None:
+        fetch = _fetch.download_url
+    data = card.get("data") or {}
+    if cap is None:
+        alts = data.get("alternate_greetings")
+        n_greetings = 1 + (len(alts) if isinstance(alts, list) else 0)
+        cap = 10 * n_greetings
+
+    fields = list(_iter_fields(card))
+    # plan: (field index, ref) for every ref in every field
+    plan = [(idx, ref) for idx, (getter, _setter) in enumerate(fields)
+            for ref in find_refs(getter())]
+    total = len(plan)
+    yield {"total": total}
+
+    localized = skipped = failed = 0
+    capped = False
+    seen: dict[str, str] = {}                      # raw url/data-uri -> stored asset name
+    edits: dict[int, list[tuple[Ref, str]]] = {}   # field index -> [(ref, name)]
+    downloads = 0
+
+    for done, (idx, ref) in enumerate(plan, start=1):
+        name = None
+        if ref.url in seen:
+            name = seen[ref.url]
+        elif ref.url.startswith("data:"):
+            got = _fetch.decode_data_uri(ref.url)
+            if got is None:
+                skipped += 1
+            else:
+                name = _store(root, cid, vid, got)
+        elif downloads >= cap:
+            capped = True
+            skipped += 1
+        else:
+            downloads += 1
+            try:
+                got = fetch(ref.url)
+            except Exception:  # noqa: BLE001 — best-effort; a miss never breaks the card
+                got = None
+                failed += 1
+                got_failed = True
+            else:
+                got_failed = False
+            if got is not None:
+                name = _store(root, cid, vid, got)
+            elif not got_failed:
+                skipped += 1  # download returned None (non-image / blocked host)
+        if name is not None:
+            seen[ref.url] = name
+            edits.setdefault(idx, []).append((ref, name))
+            localized += 1
+        yield {"done": done, "total": total}
+
+    # apply rewrites per field, last span first so offsets stay valid
+    for idx, items in edits.items():
+        getter, setter = fields[idx]
+        text = getter()
+        for ref, name in sorted(items, key=lambda it: it[0].start, reverse=True):
+            url = _serving_url(wid, cid, vid, name)
+            text = text[:ref.start] + url + text[ref.end:]
+        setter(text)
+
+    yield {"summary": {"total": total, "localized": localized,
+                       "skipped": skipped, "failed": failed, "capped": capped}}
