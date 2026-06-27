@@ -96,6 +96,30 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
   }
 
   const bookCount = card?.data.character_book?.entries?.length ?? 0;
+  // localize reads/writes the server-stored card, so running it with unsaved
+  // editor changes would discard them — guard the button when the form is dirty.
+  const storedCard = detail?.versions.find((v) => v.id === vid)?.card;
+  const dirty = !!(card && storedCard && JSON.stringify(buildCard()) !== JSON.stringify(storedCard));
+
+  function localizeControls(blocked: boolean, blockedHint?: string) {
+    if (!detail) return null;
+    return (
+      <div className="localize-block">
+        <button className="subtle" type="button" disabled={!!localizeProg || blocked}
+                onClick={() => runLocalize(detail.meta.id, vid)}>
+          {localizeProg ? "Localizing…" : "Localize images"}
+        </button>
+        {localizeProg && (
+          <div className="localize-progress">
+            <progress value={localizeProg.done} max={localizeProg.total || 1} />
+            <span className="field-hint">{localizeProg.done}/{localizeProg.total}</span>
+          </div>
+        )}
+        {!localizeProg && blocked && blockedHint && <span className="field-hint">{blockedHint}</span>}
+        {localizeMsg && <span className="field-hint">{localizeMsg}</span>}
+      </div>
+    );
+  }
 
   async function select(cid: string) {
     setError(null);
@@ -323,6 +347,8 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
               </div>
             </div>
 
+            {localizeControls(false)}
+
             {TEXT_FIELDS.map((f) => {
               const val = (card.data[f.key] as string) ?? "";
               return val.trim() ? (
@@ -384,19 +410,7 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
             </div>
           </div>
 
-          <div className="localize-block">
-            <button className="subtle" type="button" disabled={!!localizeProg}
-                    onClick={() => runLocalize(detail.meta.id, vid)}>
-              {localizeProg ? "Localizing…" : "Localize images"}
-            </button>
-            {localizeProg && (
-              <div className="localize-progress">
-                <progress value={localizeProg.done} max={localizeProg.total || 1} />
-                <span className="field-hint">{localizeProg.done}/{localizeProg.total}</span>
-              </div>
-            )}
-            {localizeMsg && <span className="field-hint">{localizeMsg}</span>}
-          </div>
+          {localizeControls(dirty, "Save your changes before localizing images")}
 
           <Field label="Name">
             <input type="text" value={card.data.name ?? ""} onChange={(e) => setField("name", e.target.value)} />
