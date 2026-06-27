@@ -111,10 +111,15 @@ def _serving_url(wid: str, cid: str, vid: str, name: str) -> str:
     return f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}"
 
 
-def _store(root, cid, vid, got) -> str:
+def _store(root, cid, vid, got) -> str | None:
+    """Store downloaded bytes under a content-hash name; None if the store
+    rejects them (keeps localize_card best-effort even for an odd fetcher)."""
     raw, ext = got
     name = "embed-" + hashlib.sha256(raw).hexdigest()[:12]
-    assets.put_image(root, cid, vid, name, raw, ext)
+    try:
+        assets.put_image(root, cid, vid, name, raw, ext)
+    except Exception:  # noqa: BLE001 — e.g. unsupported ext from a caller's fetch
+        return None
     return name
 
 
@@ -153,6 +158,8 @@ def localize_card(card, root, cid, vid, wid, *, fetch=None, cap=None):
                 skipped += 1
             else:
                 name = _store(root, cid, vid, got)
+                if name is None:
+                    failed += 1  # bytes decoded but the store rejected them
         elif downloads >= cap:
             capped = True
             skipped += 1
@@ -168,6 +175,8 @@ def localize_card(card, root, cid, vid, wid, *, fetch=None, cap=None):
                 got_failed = False
             if got is not None:
                 name = _store(root, cid, vid, got)
+                if name is None:
+                    failed += 1  # downloaded but the store rejected the bytes
             elif not got_failed:
                 skipped += 1  # download returned None (non-image / blocked host)
         if name is not None:
