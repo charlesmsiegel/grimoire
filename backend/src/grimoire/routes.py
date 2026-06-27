@@ -450,6 +450,28 @@ def get_character_export(wid: str, cid: str, vid: str, format: str = "json"):
     return Response(content=blob, media_type=_EXPORT_MEDIA[format])
 
 
+@router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/localize")
+def post_character_localize(wid: str, cid: str, vid: str):
+    root = _world_root_or_404(wid)
+    try:
+        card = store.characters.read_card(root, cid, vid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+
+    def event_stream():
+        changed = False
+        for ev in store.localize.localize_card(card, root, cid, vid, wid):
+            if ev.get("summary", {}).get("localized"):
+                changed = True
+            yield f"data: {json.dumps(ev)}\n\n"
+        if changed:
+            store.characters.update_version(root, cid, vid, card)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/lorebook/import")
 def post_character_lorebook_import(wid: str, cid: str, vid: str):
     root = _world_root_or_404(wid)
