@@ -14,7 +14,7 @@ from dataclasses import dataclass
 _PATTERNS = [
     re.compile(r"!\[[^\]]*\]\(\s*(<[^>]+>|[^)\s]+)"),          # markdown image: ![alt](url ...)
     re.compile(r"<img\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE),  # <img src="url">
-    re.compile(r"(data:image/[^\s)\"'>]+)"),                    # bare/standalone data-uri
+    re.compile(r"(data:image/[^\s)\"'>\]]+)"),                  # bare/standalone data-uri
     re.compile(r"(https?://[^\s)\"'>\]]+)"),                    # bare url
 ]
 
@@ -28,11 +28,25 @@ class Ref:
     url: str
 
 
-def _clean_url(u: str) -> str:
-    u = u.strip()
-    if u.startswith("<") and u.endswith(">"):  # markdown <url> form
-        u = u[1:-1]
-    return u.rstrip(".,);")  # trailing punctuation that commonly abuts bare urls
+def _clean_span(raw: str, s0: int, e0: int) -> tuple[str, int, int]:
+    """Trim a raw capture down to the bare URL, keeping the span exact so that
+    `text[start:end] == url` (Task 3 splices the local URL into that span).
+
+    Strips surrounding whitespace, a markdown `<url>` wrapper, and trailing
+    punctuation (`.,);`) that commonly abuts a bare URL in prose. A URL that
+    legitimately ends in `)` (e.g. a Wikipedia `..._(disambiguation)` link) is
+    truncated — an accepted best-effort limitation.
+    """
+    s, e = s0, e0
+    while s < e and raw[s - s0].isspace():
+        s += 1
+    while e > s and raw[e - s0 - 1].isspace():
+        e -= 1
+    if e - s >= 2 and raw[s - s0] == "<" and raw[e - s0 - 1] == ">":
+        s, e = s + 1, e - 1
+    while e > s and raw[e - s0 - 1] in ".,);":
+        e -= 1
+    return raw[s - s0:e - s0], s, e
 
 
 def find_refs(text: str) -> list[Ref]:
@@ -46,10 +60,9 @@ def find_refs(text: str) -> list[Ref]:
 
     for pat in _PATTERNS:
         for m in pat.finditer(text):
-            s, e = m.start(1), m.end(1)
+            url, s, e = _clean_span(m.group(1), m.start(1), m.end(1))
             if overlaps(s, e):
                 continue
-            url = _clean_url(m.group(1))
             if not url or url.startswith(_LOCAL_PREFIX):
                 occupied.append((s, e))  # claim span so a later bare-url pass skips it
                 continue

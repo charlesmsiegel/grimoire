@@ -44,3 +44,43 @@ def test_spans_are_non_overlapping_and_ordered():
     refs = localize.find_refs(text)
     assert [r.url for r in refs] == ["https://h/a.png", "https://h/b.png"]
     assert all(refs[i].end <= refs[i + 1].start for i in range(len(refs) - 1))
+
+
+def test_span_exactly_covers_url_so_rewrite_is_clean():
+    # the span must equal the url text — not include trailing prose punctuation
+    text = "see https://h/a.png. Next sentence."
+    refs = localize.find_refs(text)
+    assert len(refs) == 1
+    r = refs[0]
+    assert r.url == "https://h/a.png"
+    assert text[r.start:r.end] == "https://h/a.png"  # period left intact
+    # splicing a replacement preserves the surrounding text
+    rewritten = text[:r.start] + "LOCAL" + text[r.end:]
+    assert rewritten == "see LOCAL. Next sentence."
+
+
+def test_find_standalone_data_uri():
+    text = "prefix data:image/png;base64,AAAA suffix"
+    refs = localize.find_refs(text)
+    assert [r.url for r in refs] == ["data:image/png;base64,AAAA"]
+    assert all(text[r.start:r.end] == r.url for r in refs)
+
+
+def test_find_markdown_angle_bracket_url():
+    refs = localize.find_refs("![a](<https://h/a.png>)")
+    assert [r.url for r in refs] == ["https://h/a.png"]
+    text = "![a](<https://h/a.png>)"
+    assert all(text[r.start:r.end] == r.url for r in refs)
+
+
+def test_empty_and_non_string_input():
+    assert localize.find_refs("") == []
+    assert localize.find_refs(None) == []  # type: ignore[arg-type]
+
+
+def test_already_local_bare_url_is_claimed_not_rematched():
+    # an https url that is actually a local serving url would be matched by the
+    # bare-url pattern; the local-prefix skip must drop it (no Ref emitted)
+    text = "/api/worlds/w/characters/c/versions/v/images/embed-abc and https://h/a.png"
+    refs = localize.find_refs(text)
+    assert [r.url for r in refs] == ["https://h/a.png"]
