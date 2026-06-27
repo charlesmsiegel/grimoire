@@ -467,11 +467,10 @@ def post_character_localize(wid: str, cid: str, vid: str):
                 if "summary" in ev and ev["summary"].get("localized"):
                     changed = True
                 yield f"data: {json.dumps(ev)}\n\n"
+            if changed:
+                store.characters.update_version(root, cid, vid, card)
         except Exception as exc:  # noqa: BLE001 — surface a stream error like the chat routes
             yield f"data: {json.dumps({'error': {'detail': str(exc), 'kind': 'localize'}})}\n\n"
-            return
-        if changed:
-            store.characters.update_version(root, cid, vid, card)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
