@@ -1,10 +1,24 @@
 export type ChatEvent = { delta?: string; done?: boolean; error?: { detail: string; kind: string } };
 
+export type LocalizeSummary = {
+  total: number;
+  localized: number;
+  skipped: number;
+  failed: number;
+  capped: boolean;
+};
+export type LocalizeEvent = {
+  total?: number;
+  done?: number;
+  summary?: LocalizeSummary;
+  error?: { detail: string; kind: string };
+};
+
 // Appends a chunk to `buffer`, emits each complete `data:` event, returns the leftover buffer.
-export function parseSSEChunk(
+export function parseSSEChunk<T = ChatEvent>(
   buffer: string,
   chunk: string,
-  emit: (event: ChatEvent) => void,
+  emit: (event: T) => void,
 ): string {
   buffer += chunk;
   let idx: number;
@@ -16,7 +30,7 @@ export function parseSSEChunk(
     const data = line.slice("data:".length).trim();
     if (!data) continue;
     try {
-      emit(JSON.parse(data) as ChatEvent);
+      emit(JSON.parse(data) as T);
     } catch {
       // ignore malformed event fragments
     }

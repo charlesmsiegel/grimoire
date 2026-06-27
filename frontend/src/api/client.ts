@@ -1,4 +1,4 @@
-import { parseSSEChunk, type ChatEvent } from "./stream";
+import { parseSSEChunk, type ChatEvent, type LocalizeEvent } from "./stream";
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: string, public kind?: string) {
@@ -118,10 +118,10 @@ function entityBase(scope: EntityScope): string {
   return scope.kind === "world" ? `/api/worlds/${scope.id}` : `/api/campaigns/${scope.id}`;
 }
 
-async function streamPost(
+async function streamPost<T = ChatEvent>(
   path: string,
   body: unknown,
-  onEvent: (e: ChatEvent) => void,
+  onEvent: (e: T) => void,
 ): Promise<void> {
   const res = await fetch(path, {
     method: "POST",
@@ -138,7 +138,7 @@ async function streamPost(
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    buffer = parseSSEChunk(buffer, decoder.decode(value, { stream: true }), onEvent);
+    buffer = parseSSEChunk<T>(buffer, decoder.decode(value, { stream: true }), onEvent);
   }
 }
 
@@ -226,6 +226,9 @@ export const api = {
     if (into) form.append("into", into);
     return requestForm<{ character: string; version: string }>(`/api/worlds/${wid}/characters/import`, form);
   },
+  localizeImages: (wid: string, cid: string, vid: string, onEvent: (e: LocalizeEvent) => void) =>
+    streamPost<LocalizeEvent>(
+      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/localize`, undefined, onEvent),
   imageUrl: (wid: string, cid: string, vid: string, name: string) =>
     `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}`,
   campaignImageUrl: (cid: string, char: string, vid: string, name: string) =>

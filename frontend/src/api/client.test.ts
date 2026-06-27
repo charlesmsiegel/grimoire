@@ -78,6 +78,25 @@ test("chat posts to the scene chat endpoint and forwards SSE events", async () =
   expect(events).toEqual([{ delta: "hi" }, { done: true }]);
 });
 
+test("localizeImages posts to the localize endpoint and forwards SSE events", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(
+    sseResponse([
+      'data: {"total":1}\n\n',
+      'data: {"done":1,"total":1}\n\n',
+      'data: {"summary":{"total":1,"localized":1,"skipped":0,"failed":0,"capped":false}}\n\n',
+    ]),
+  );
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const events: any[] = [];
+  await api.localizeImages("w", "c", "v", (e) => events.push(e));
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/w/characters/c/versions/v/localize",
+    expect.objectContaining({ method: "POST" }),
+  );
+  expect(events[0]).toEqual({ total: 1 });
+  expect(events[2].summary.localized).toBe(1);
+});
+
 test("retry posts to the scene retry endpoint", async () => {
   const fetchMock = vi.fn().mockResolvedValue(sseResponse(['data: {"done":true}\n\n']));
   globalThis.fetch = fetchMock as unknown as typeof fetch;
