@@ -89,10 +89,18 @@ def count_refs(card: dict) -> int:
     """Total refs across all localizable fields — drives the progress total."""
 
 def localize_card(card, root, cid, vid, wid, *, fetch=fetch.download_url,
-                  on_progress=None, cap=None) -> Summary:
-    """Download every referenced image, store it, rewrite the text in place.
-    Mutates and returns nothing meaningful beyond Summary; caller persists card."""
+                  cap=None) -> Iterator[dict]:
+    """Generator that downloads every referenced image, stores it, and rewrites
+    the text in `card` in place — yielding progress events as it goes:
+        {"total": N}                       # emitted first, after scanning
+        {"done": k, "total": N}            # after each ref (downloaded or skipped)
+        {"summary": {...}}                 # emitted last
+    The caller drives the generator to completion and then persists `card`."""
 ```
+
+`find_refs` stays a pure function (testable in isolation); `localize_card`
+computes the total internally via `find_refs` over the localizable fields and
+yields it first, so the progress total comes from the upfront regex scan.
 
 `find_refs` matching order matters: data-URIs, then markdown, then HTML img,
 then bare URLs over the spans not already claimed. Overlapping matches are
@@ -114,7 +122,7 @@ For each ref, in field order:
    `/api/worlds/{wid}/characters/{cid}/versions/{vid}/images/embed-<hash>`.
    For a markdown ref `![alt](url)` the rewrite preserves `alt`; for an HTML
    `<img>` only the `src` value is swapped; a bare URL is replaced in place.
-5. Call `on_progress(done, total)` after each ref (downloaded or skipped).
+5. Yield `{"done": done, "total": total}` after each ref (downloaded or skipped).
 
 Rewrites are applied per field from the **last span to the first** so earlier
 spans' offsets stay valid.
@@ -158,25 +166,29 @@ part of the import flow, just as a separate streamed call that drives the bar.
 
 `POST /api/worlds/{wid}/characters/{cid}/versions/{vid}/localize`
 
-Responds with a streamed **NDJSON** body (one JSON object per line). Browser
-`EventSource` is GET-only, so the client reads the `fetch` response body as a
-stream. Event sequence:
+Responds with **Server-Sent Events** (`text/event-stream`), matching the
+existing chat/retry endpoints (`_chat_stream`). Each event is a
+`data: {json}\n\n` frame; the frontend reuses `streamPost` + `parseSSEChunk`.
+Event sequence:
 
 ```
-{"type":"start","total":N}
-{"type":"progress","done":1,"total":N}
+data: {"total": N}
+data: {"done": 1, "total": N}
 ...
-{"type":"progress","done":N,"total":N}
-{"type":"done","summary":{...}}
+data: {"done": N, "total": N}
+data: {"summary": {...}}
 ```
 
-Server flow: load the stored version JSON → `count_refs` for `total` →
-`localize_card(..., on_progress=emit)` → persist the rewritten JSON → emit
-`done`. The endpoint is idempotent: already-local refs are skipped, so the
-button is safe to click repeatedly, and it doubles as the "run later if it
-didn't finish" and "re-scan an existing card" path.
+Server flow: load the stored version JSON → drive `localize_card(...)` (a
+generator), forwarding each yielded dict as an SSE `data:` frame → after the
+generator is exhausted, persist the rewritten JSON via `update_version`. The
+endpoint is idempotent: already-local refs are skipped, so the button is safe
+to click repeatedly, and it doubles as the "run later if it didn't finish" and
+"re-scan an existing card" path.
 
-If `total == 0`, emit `start` then `done` immediately (bar shows complete).
+If there are no refs, the generator yields `{"total": 0}` then the `summary`
+immediately (bar shows complete). The blocking `httpx` downloads run fine
+because FastAPI iterates a sync generator in a threadpool.
 
 ### Frontend (`CharacterEditor.tsx`)
 
@@ -204,8 +216,9 @@ If `total == 0`, emit `start` then `done` immediately (bar shows complete).
   attributes; data-URI; bare URL; **skip already-local** `/api/worlds/…`; no
   double-match where a bare-URL pattern overlaps a markdown/html span;
   ordering/non-overlap resolution.
-- `count_refs`: totals across multiple fields including
-  `alternate_greetings[]` and `character_book.entries[]`.
+- total event: `localize_card`'s first yielded `{"total": N}` counts refs
+  across multiple fields including `alternate_greetings[]` and
+  `character_book.entries[]`.
 - `localize_card` with an **injected fake `fetch`**: rewrites to the serving
   URL; content-hash naming; dedupe (same bytes → one `put_image`, both refs
   rewritten to the same name); idempotent re-scan (second pass is a no-op);
@@ -217,8 +230,9 @@ If `total == 0`, emit `start` then `done` immediately (bar shows complete).
 (re-pointed at the new module); add a `download_url` non-image rejection test if
 not already covered.
 
-Endpoint test: NDJSON event sequence (`start` → `progress`× → `done`) with a
-fake fetch; persisted card reflects rewrites; `total == 0` short-circuit.
+Endpoint test: SSE event sequence (`{total}` → `{done}`× → `{summary}`) parsed
+from the `data:` frames with a fake fetch; persisted card reflects rewrites;
+no-refs short-circuit (`{total: 0}` then `{summary}`).
 
 ## Files touched
 
