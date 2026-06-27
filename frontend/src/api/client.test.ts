@@ -1,4 +1,5 @@
 import { api } from "./client";
+import type { LocalizeEvent } from "./stream";
 
 function sseResponse(chunks: string[]) {
   let i = 0;
@@ -87,14 +88,17 @@ test("localizeImages posts to the localize endpoint and forwards SSE events", as
     ]),
   );
   globalThis.fetch = fetchMock as unknown as typeof fetch;
-  const events: any[] = [];
+  const events: LocalizeEvent[] = [];
   await api.localizeImages("w", "c", "v", (e) => events.push(e));
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/worlds/w/characters/c/versions/v/localize",
     expect.objectContaining({ method: "POST" }),
   );
-  expect(events[0]).toEqual({ total: 1 });
-  expect(events[2].summary.localized).toBe(1);
+  expect(events).toEqual([
+    { total: 1 },
+    { done: 1, total: 1 },
+    { summary: { total: 1, localized: 1, skipped: 0, failed: 0, capped: false } },
+  ]);
 });
 
 test("retry posts to the scene retry endpoint", async () => {
