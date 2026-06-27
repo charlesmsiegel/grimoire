@@ -1,6 +1,7 @@
 import pytest
 
 from grimoire.store import characters as ch
+from grimoire.store import fetch
 
 
 def test_create_and_read_single_card(tmp_path):
@@ -96,7 +97,7 @@ def test_json_import_downloads_avatar_url(tmp_path, monkeypatch):
     from grimoire.store import assets
     card = ch.blank_card("Imp")
     card["data"]["assets"] = [{"type": "icon", "uri": "https://x/pic.png", "name": "main", "ext": "png"}]
-    monkeypatch.setattr(ch, "_http_get_bytes", lambda url: (b"DOWNLOADED", "image/png"))
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"DOWNLOADED", "image/png"))
     cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
     p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
     assert p is not None and p.read_bytes() == b"DOWNLOADED" and p.suffix == ".png"
@@ -111,7 +112,7 @@ def test_json_import_download_failure_is_swallowed(tmp_path, monkeypatch):
     def boom(url):
         raise RuntimeError("network down")
 
-    monkeypatch.setattr(ch, "_http_get_bytes", boom)
+    monkeypatch.setattr(fetch, "_http_get_bytes", boom)
     cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")  # must not raise
     assert assets.image_path(tmp_path, cid, vid, assets.AVATAR) is None
 
@@ -151,6 +152,6 @@ def test_json_import_no_url_makes_no_call(tmp_path, monkeypatch):
     def boom(url):
         raise AssertionError("should not be called")
 
-    monkeypatch.setattr(ch, "_http_get_bytes", boom)
+    monkeypatch.setattr(fetch, "_http_get_bytes", boom)
     cid, vid = ch.import_card(tmp_path, _json.dumps(ch.blank_card("Imp")).encode(), "json")
     assert assets.image_path(tmp_path, cid, vid, assets.AVATAR) is None

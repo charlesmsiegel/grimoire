@@ -8,20 +8,12 @@ Unlike generic entities (one markdown file each), a character is a directory:
 
 from __future__ import annotations
 
-import base64
 import hashlib
-import ipaddress
 import json
 import shutil
-import socket
-import ssl
 from pathlib import Path
-from urllib.parse import urlparse
 
-import certifi
-import httpx
-
-from . import assets
+from . import assets, fetch
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
@@ -206,14 +198,6 @@ def character_refs(root: Path) -> list[str]:
     return sorted(p.name for p in d.iterdir() if p.is_dir() and (p / "character.md").exists())
 
 
-_AVATAR_MAX_BYTES = 8 * 1024 * 1024
-_CT_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
-           "image/gif": "gif", "image/webp": "webp"}
-
-
-_IMG_EXTS = ("png", "jpg", "jpeg", "gif", "webp")
-
-
 def _avatar_candidates(card: dict) -> list[str]:
     """Every place a card might carry an avatar: V3 `assets`, a top-level `avatar`
     string, and either relocated into `extensions` by the V2->V3 upconvert."""
@@ -232,114 +216,6 @@ def _avatar_candidates(card: dict) -> list[str]:
     return out
 
 
-def _sniff_ext(raw: bytes) -> str | None:
-    """Identify an image by its magic bytes (some hosts mislabel the content-type)."""
-    if raw[:8] == b"\x89PNG\r\n\x1a\n":
-        return "png"
-    if raw[:3] == b"\xff\xd8\xff":
-        return "jpg"
-    if raw[:6] in (b"GIF87a", b"GIF89a"):
-        return "gif"
-    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
-        return "webp"
-    return None
-
-
-def _decode_data_uri(uri: str) -> tuple[bytes, str] | None:
-    """Decode a `data:image/...;base64,...` avatar embedded in the card (no network)."""
-    if not uri.startswith("data:"):
-        return None
-    header, _, b64 = uri.partition(",")
-    if "base64" not in header:
-        return None
-    try:
-        raw = base64.b64decode(b64, validate=False)
-    except Exception:  # noqa: BLE001
-        return None
-    if not raw or len(raw) > _AVATAR_MAX_BYTES:
-        return None
-    mime = header[len("data:"):].split(";")[0].strip().lower()
-    ext = _CT_EXT.get(mime) or _sniff_ext(raw)
-    return (raw, ext) if ext else None
-
-
-_MAX_REDIRECTS = 5
-_AVATAR_UA = "Mozilla/5.0 (grimoire avatar fetch)"
-# Trust certifi's CA bundle explicitly, independent of any ambient SSL_CERT_FILE
-# (a host Python like Anaconda can point that at a path httpx can't load).
-_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
-
-
-def _host_is_blocked(host: str) -> bool:
-    """True if the host resolves to (or is) a private/loopback/link-local/reserved address.
-
-    A proportionate SSRF guard for a local single-user app: it blocks the obvious
-    internal targets. A determined DNS-rebinding attacker could still slip past
-    (httpx re-resolves on connect); pinning the socket to the validated IP would
-    close that, at more complexity than this best-effort fetch warrants.
-    """
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
-        return True  # unresolvable -> block (best-effort: just means no avatar)
-    for info in infos:
-        try:
-            addr = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            return True
-        if (addr.is_private or addr.is_loopback or addr.is_link_local
-                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
-            return True
-    return False
-
-
-def _http_get_bytes(url: str) -> tuple[bytes, str | None]:
-    """Fetch an image, validating each redirect hop and aborting early past the cap."""
-    headers = {"User-Agent": _AVATAR_UA, "Accept": "image/*,*/*"}
-    with httpx.Client(timeout=10.0, follow_redirects=False, verify=_SSL_CTX, headers=headers) as client:
-        for _ in range(_MAX_REDIRECTS + 1):
-            parsed = urlparse(url)
-            if parsed.scheme not in ("http", "https") or not parsed.hostname:
-                raise ValueError("bad avatar url")
-            if _host_is_blocked(parsed.hostname):
-                raise ValueError("blocked avatar host")
-            with client.stream("GET", url) as r:
-                if r.is_redirect:
-                    loc = r.headers.get("location")
-                    if not loc:
-                        raise ValueError("redirect without location")
-                    url = str(r.url.join(loc))
-                    continue
-                r.raise_for_status()
-                cl = r.headers.get("content-length")
-                if cl and cl.isdigit() and int(cl) > _AVATAR_MAX_BYTES:
-                    raise ValueError("avatar too large")
-                buf = bytearray()
-                for chunk in r.iter_bytes():
-                    buf.extend(chunk)
-                    if len(buf) > _AVATAR_MAX_BYTES:
-                        raise ValueError("avatar too large")
-                return bytes(buf), r.headers.get("content-type")
-        raise ValueError("too many redirects")
-
-
-def _download_url(url: str) -> tuple[bytes, str] | None:
-    try:
-        content, ctype = _http_get_bytes(url)
-    except Exception:  # noqa: BLE001 — best-effort; import never fails on download
-        return None
-    if not content or len(content) > _AVATAR_MAX_BYTES:
-        return None
-    sniff = _sniff_ext(content)
-    ct = (ctype or "").split(";")[0].strip().lower()
-    if sniff is None and not ct.startswith("image/"):
-        return None  # doesn't look like an image by magic bytes or content-type
-    ext = sniff or _CT_EXT.get(ct) or url.rsplit(".", 1)[-1].lower()
-    if ext not in _IMG_EXTS:
-        ext = "png"
-    return content, ext
-
-
 def _download_avatar(card: dict) -> tuple[bytes, str] | None:
     """Best-effort avatar bytes from a card: embedded data-URI first, else a URL fetch.
 
@@ -347,11 +223,11 @@ def _download_avatar(card: dict) -> tuple[bytes, str] | None:
     never raises into the import path — a miss just means no avatar.
     """
     for uri in _avatar_candidates(card):
-        embedded = _decode_data_uri(uri)
+        embedded = fetch.decode_data_uri(uri)
         if embedded:
             return embedded
         if uri.startswith(("http://", "https://")):
-            got = _download_url(uri)
+            got = fetch.download_url(uri)
             if got:
                 return got
     return None
