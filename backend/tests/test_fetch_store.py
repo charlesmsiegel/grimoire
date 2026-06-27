@@ -24,3 +24,24 @@ def test_decode_data_uri_rejects_non_data_uri():
 def test_host_is_blocked_blocks_loopback():
     assert fetch.host_is_blocked("127.0.0.1") is True
     assert fetch.host_is_blocked("localhost") is True
+
+
+def test_download_url_rejects_non_image(monkeypatch):
+    # bytes that aren't an image and a non-image content-type -> None
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"<html>nope", "text/html"))
+    assert fetch.download_url("https://h/page") is None
+
+
+def test_download_url_accepts_sniffed_image_despite_bad_content_type(monkeypatch):
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "application/octet-stream"))
+    got = fetch.download_url("https://h/x")
+    assert got is not None and got[1] == "png"
+
+
+def test_download_url_swallows_errors(monkeypatch):
+    def boom(url):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(fetch, "_http_get_bytes", boom)
+    assert fetch.download_url("https://h/x") is None
