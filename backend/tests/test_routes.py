@@ -495,3 +495,53 @@ def test_lorebook_imported_key_activates_in_builder(client):
     store.scenes.append_message(cid, sid, "user", "the leviathan rises")
     msgs = store.context.build_messages(cid, sid)
     assert any("the beast" in m["content"] for m in msgs if m["role"] == "system")
+
+
+def test_localize_endpoint_streams_and_rewrites(client, monkeypatch):
+    wid = client.post("/api/worlds", json={"name": "W"}).json()["id"]
+    card = {
+        "spec": "chara_card_v3", "spec_version": "3.0",
+        "data": {"name": "Img", "description": "![a](https://h/a.png)",
+                 "alternate_greetings": []},
+    }
+    blob = io.BytesIO(json.dumps(card).encode())
+    r = client.post(f"/api/worlds/{wid}/characters/import",
+                    files={"file": ("c.json", blob, "application/json")},
+                    data={"format": "json"})
+    cid, vid = r.json()["character"], r.json()["version"]
+
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    monkeypatch.setattr(store.fetch, "download_url", lambda url: (png, "png"))
+
+    resp = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/localize")
+    assert resp.status_code == 200
+    events = [json.loads(line[len("data:"):].strip())
+              for line in resp.text.splitlines() if line.startswith("data:")]
+    assert events[0] == {"total": 1}
+    assert events[-1]["summary"]["localized"] == 1
+
+    exported = client.get(
+        f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/export?format=json").json()
+    assert "/api/worlds/" in exported["data"]["description"]
+
+
+def test_localize_endpoint_no_refs_short_circuits(client):
+    wid = client.post("/api/worlds", json={"name": "W2"}).json()["id"]
+    card = {"spec": "chara_card_v3", "spec_version": "3.0",
+            "data": {"name": "Plain", "description": "no images", "alternate_greetings": []}}
+    blob = io.BytesIO(json.dumps(card).encode())
+    r = client.post(f"/api/worlds/{wid}/characters/import",
+                    files={"file": ("c.json", blob, "application/json")},
+                    data={"format": "json"})
+    cid, vid = r.json()["character"], r.json()["version"]
+    resp = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/localize")
+    events = [json.loads(l[len("data:"):].strip())
+              for l in resp.text.splitlines() if l.startswith("data:")]
+    assert events[0] == {"total": 0}
+    assert events[-1]["summary"]["total"] == 0
+
+
+def test_localize_endpoint_404_for_missing_character(client):
+    wid = client.post("/api/worlds", json={"name": "W3"}).json()["id"]
+    resp = client.post(f"/api/worlds/{wid}/characters/ghost/versions/v/localize")
+    assert resp.status_code == 404
