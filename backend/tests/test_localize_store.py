@@ -168,8 +168,22 @@ def test_cap_scales_with_greetings(tmp_path):
     fetch = _fake_fetch({u: (_PNG[:8] + bytes([i]) + _PNG[9:], "png") for i, u in enumerate(urls)})
     events = _run(card, tmp_path, fetch=fetch)
     summary = events[-1]["summary"]
+    assert summary["total"] == 12
     assert summary["localized"] == 10
+    assert summary["skipped"] == 2
     assert summary["capped"] is True
+
+
+def test_fetch_exception_counts_as_failed_and_never_raises(tmp_path):
+    card = {"data": {"description": "![a](https://h/a.png)", "alternate_greetings": []}}
+
+    def boom(url):
+        raise RuntimeError("network down")
+
+    events = _run(card, tmp_path, fetch=boom)  # must not raise
+    summary = events[-1]["summary"]
+    assert summary["failed"] == 1 and summary["localized"] == 0
+    assert card["data"]["description"] == "![a](https://h/a.png)"  # untouched
 
 
 def test_localizes_greetings_and_lorebook_entries(tmp_path):
