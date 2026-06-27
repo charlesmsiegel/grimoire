@@ -1,4 +1,6 @@
-from grimoire.store import localize
+import re as _re
+
+from grimoire.store import assets, localize
 
 
 def test_find_markdown_image():
@@ -84,3 +86,101 @@ def test_already_local_bare_url_is_claimed_not_rematched():
     text = "/api/worlds/w/characters/c/versions/v/images/embed-abc and https://h/a.png"
     refs = localize.find_refs(text)
     assert [r.url for r in refs] == ["https://h/a.png"]
+
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+def _fake_fetch(mapping):
+    def f(url):
+        return mapping.get(url)
+    return f
+
+
+def _run(card, tmp_path, cid="c", vid="v", wid="w", **kw):
+    return list(localize.localize_card(card, tmp_path, cid, vid, wid, **kw))
+
+
+def test_localizes_markdown_image_and_rewrites(tmp_path):
+    card = {"data": {"description": "x ![a](https://h/a.png) y", "alternate_greetings": []}}
+    fetch = _fake_fetch({"https://h/a.png": (_PNG, "png")})
+    events = _run(card, tmp_path, fetch=fetch)
+    assert events[0] == {"total": 1}
+    summary = events[-1]["summary"]
+    assert summary["localized"] == 1 and summary["failed"] == 0
+    desc = card["data"]["description"]
+    m = _re.search(r"/api/worlds/w/characters/c/versions/v/images/(embed-[0-9a-f]{12})", desc)
+    assert m, desc
+    assert assets.image_path(tmp_path, "c", "v", m.group(1)) is not None
+
+
+def test_non_image_is_left_untouched(tmp_path):
+    card = {"data": {"description": "see https://h/page now", "alternate_greetings": []}}
+    fetch = _fake_fetch({})  # returns None -> not an image
+    events = _run(card, tmp_path, fetch=fetch)
+    assert card["data"]["description"] == "see https://h/page now"
+    assert events[-1]["summary"]["skipped"] == 1
+    assert events[-1]["summary"]["localized"] == 0
+
+
+def test_dedupes_identical_bytes(tmp_path):
+    card = {"data": {
+        "description": "![a](https://h/a.png)",
+        "personality": "![b](https://h/b.png)",
+        "alternate_greetings": [],
+    }}
+    fetch = _fake_fetch({"https://h/a.png": (_PNG, "png"), "https://h/b.png": (_PNG, "png")})
+    _run(card, tmp_path, fetch=fetch)
+    names = {p["name"] for p in assets.list_images(tmp_path, "c", "v")}
+    assert len(names) == 1  # same bytes -> one stored file
+    name = names.pop()
+    assert name in card["data"]["description"]
+    assert name in card["data"]["personality"]
+
+
+def test_rescan_is_idempotent(tmp_path):
+    card = {"data": {"description": "![a](https://h/a.png)", "alternate_greetings": []}}
+    fetch = _fake_fetch({"https://h/a.png": (_PNG, "png")})
+    _run(card, tmp_path, fetch=fetch)
+    after_first = card["data"]["description"]
+    events = _run(card, tmp_path, fetch=fetch)  # second pass
+    assert card["data"]["description"] == after_first
+    assert events[0] == {"total": 0}  # nothing left to localize
+
+
+def test_data_uri_is_decoded_without_fetch(tmp_path):
+    uri = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+    card = {"data": {"description": f"![p]({uri})", "alternate_greetings": []}}
+
+    def boom(url):  # fetch must NOT be called for data-uris
+        raise AssertionError("fetch called for data-uri")
+
+    _run(card, tmp_path, fetch=boom)
+    assert "/api/worlds/w/characters/c/versions/v/images/embed-" in card["data"]["description"]
+
+
+def test_cap_scales_with_greetings(tmp_path):
+    # 0 alt greetings -> cap 10; make 12 refs, expect 10 localized + capped
+    urls = [f"https://h/{i}.png" for i in range(12)]
+    body = " ".join(f"![{i}]({u})" for i, u in enumerate(urls))
+    card = {"data": {"description": body, "first_mes": "hi", "alternate_greetings": []}}
+    # each distinct url -> distinct bytes so no dedupe masks the cap
+    fetch = _fake_fetch({u: (_PNG[:8] + bytes([i]) + _PNG[9:], "png") for i, u in enumerate(urls)})
+    events = _run(card, tmp_path, fetch=fetch)
+    summary = events[-1]["summary"]
+    assert summary["localized"] == 10
+    assert summary["capped"] is True
+
+
+def test_localizes_greetings_and_lorebook_entries(tmp_path):
+    card = {"data": {
+        "description": "",
+        "alternate_greetings": ["hi ![g](https://h/g.png)"],
+        "character_book": {"entries": [{"content": "lore ![l](https://h/l.png)"}]},
+    }}
+    fetch = _fake_fetch({"https://h/g.png": (_PNG, "png"),
+                         "https://h/l.png": (_PNG[:8] + b"\x01" + _PNG[9:], "png")})
+    events = _run(card, tmp_path, fetch=fetch)
+    assert events[0] == {"total": 2}
+    assert "/api/worlds/w/" in card["data"]["alternate_greetings"][0]
+    assert "/api/worlds/w/" in card["data"]["character_book"]["entries"][0]["content"]
