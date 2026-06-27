@@ -98,8 +98,14 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
   const bookCount = card?.data.character_book?.entries?.length ?? 0;
   // localize reads/writes the server-stored card, so running it with unsaved
   // editor changes would discard them — guard the button when the form is dirty.
+  // Compare through buildCard()'s normalization (it always rewrites
+  // alternate_greetings) so an unedited card isn't flagged as dirty.
   const storedCard = detail?.versions.find((v) => v.id === vid)?.card;
-  const dirty = !!(card && storedCard && JSON.stringify(buildCard()) !== JSON.stringify(storedCard));
+  const normalizedStored = storedCard && {
+    ...storedCard,
+    data: { ...storedCard.data, alternate_greetings: (storedCard.data.alternate_greetings ?? []).filter((g) => g.trim() !== "") },
+  };
+  const dirty = !!(card && normalizedStored && JSON.stringify(buildCard()) !== JSON.stringify(normalizedStored));
 
   function localizeControls(blocked: boolean, blockedHint?: string) {
     if (!detail) return null;

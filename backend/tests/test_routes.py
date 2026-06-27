@@ -552,3 +552,46 @@ def test_localize_endpoint_404_for_missing_version(client):
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Real"}).json()["character"]
     resp = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/ghostver/localize")
     assert resp.status_code == 404
+
+
+def _import_card(client, wid, description):
+    card = {"spec": "chara_card_v3", "spec_version": "3.0",
+            "data": {"name": "X", "description": description, "alternate_greetings": []}}
+    blob = io.BytesIO(json.dumps(card).encode())
+    r = client.post(f"/api/worlds/{wid}/characters/import",
+                    files={"file": ("c.json", blob, "application/json")},
+                    data={"format": "json"})
+    return r.json()["character"], r.json()["version"]
+
+
+def test_localize_endpoint_emits_error_frame_on_generator_failure(client, monkeypatch):
+    wid = client.post("/api/worlds", json={"name": "WE"}).json()["id"]
+    cid, vid = _import_card(client, wid, "![a](https://h/a.png)")
+
+    def boom(*a, **k):
+        yield {"total": 1}
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(store.localize, "localize_card", boom)
+    resp = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/localize")
+    events = [json.loads(l[len("data:"):].strip())
+              for l in resp.text.splitlines() if l.startswith("data:")]
+    assert events[0] == {"total": 1}
+    assert events[-1]["error"]["kind"] == "localize"
+
+
+def test_localize_endpoint_does_not_persist_when_nothing_localized(client, monkeypatch):
+    wid = client.post("/api/worlds", json={"name": "WN"}).json()["id"]
+    cid, vid = _import_card(client, wid, "see https://h/page now")  # a non-image link
+    monkeypatch.setattr(store.fetch, "download_url", lambda url: None)  # never an image
+
+    calls = []
+    monkeypatch.setattr(store.characters, "update_version",
+                        lambda *a, **k: calls.append(a))
+
+    resp = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/localize")
+    events = [json.loads(l[len("data:"):].strip())
+              for l in resp.text.splitlines() if l.startswith("data:")]
+    assert events[-1]["summary"]["localized"] == 0
+    assert events[-1]["summary"]["skipped"] == 1
+    assert calls == []  # changed-gating skipped the write
