@@ -4,6 +4,7 @@ import { CastPanel } from "./CastPanel";
 vi.mock("../api/client", () => ({
   api: {
     getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
+    listCampaignPCs: vi.fn(),
     availableGreetings: vi.fn(), addToCast: vi.fn(), startFromGreeting: vi.fn(),
     opener: vi.fn(), createGreeting: vi.fn(), listAppearances: vi.fn(),
     campaignImageUrl: (c: string, ch: string, v: string, n: string) => `/cimg/${c}/${ch}/${v}/${n}`,
@@ -17,6 +18,7 @@ beforeEach(() => {
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "c", world: "w" }, body: "" });
   (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine", default_version: "default", versions: [] }]);
   (api.listPCs as any).mockResolvedValue([{ id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
+  (api.listCampaignPCs as any).mockResolvedValue([]);
   (api.availableGreetings as any).mockResolvedValue([
     { id: "open", name: "Open", available: true, reasons: [] },
     { id: "locked", name: "Locked", available: false, reasons: ["missing required tags"] },
@@ -47,6 +49,15 @@ test("renders the current cast", async () => {
   renderPanel();
   await screen.findByText("elara");
   expect(screen.getByText(/PC · player/)).toBeInTheDocument();
+});
+
+test("PC dropdown includes campaign-local PCs", async () => {
+  (api.listPCs as any).mockResolvedValue([{ id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
+  (api.listCampaignPCs as any).mockResolvedValue([{ id: "mara", name: "Mara", tags: [], default_version: "default", versions: [] }]);
+  renderPanel();
+  fireEvent.change(await screen.findByLabelText(/actor kind/i), { target: { value: "pcs" } });
+  await screen.findByRole("option", { name: "Elara" });
+  await screen.findByRole("option", { name: "Mara" });
 });
 
 test("adding an actor posts kind + id (+ role for characters)", async () => {
