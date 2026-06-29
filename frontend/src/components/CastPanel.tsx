@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  api, type Actor, type Availability, type CharacterSummary, type PCSummary, type RosterEntry,
+  api, type Actor, type Availability, type CharacterSummary, type EntitySummary,
+  type PCSummary, type RosterEntry, type SceneLocation,
 } from "../api/client";
 
 export function CastPanel({
@@ -17,6 +18,9 @@ export function CastPanel({
   const [pcs, setPCs] = useState<PCSummary[]>([]);
   const [avail, setAvail] = useState<Availability[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [locations, setLocations] = useState<EntitySummary[]>([]);
+  const [setting, setSetting] = useState<SceneLocation | null>(null);
+  const [locId, setLocId] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const [kind, setKind] = useState<"characters" | "pcs">("characters");
@@ -28,12 +32,16 @@ export function CastPanel({
   const [busy, setBusy] = useState(false);
 
   const reloadCast = useCallback(() => api.getCast(cid, sid).then(setCast), [cid, sid]);
+  const reloadSetting = useCallback(
+    () => api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null)),
+    [cid, sid]);
 
   useEffect(() => {
     reloadCast();
     api.availableGreetings(cid).then(setAvail).catch(() => setAvail([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
-  }, [cid, sid, reloadCast]);
+    reloadSetting();
+  }, [cid, sid, reloadCast, reloadSetting]);
 
   // characters/pcs available to add: world assets plus the campaign's own PC overlays
   useEffect(() => {
@@ -45,6 +53,7 @@ export function CastPanel({
         setPCs([...byId.values()]);
       });
     });
+    api.listEntities({ kind: "campaign", id: cid }, "locations").then(setLocations).catch(() => setLocations([]));
   }, [cid]);
 
   const options = kind === "characters" ? chars : pcs;
@@ -56,6 +65,19 @@ export function CastPanel({
       await api.addToCast(cid, sid, { kind, id: actorId, role: kind === "pcs" ? "player" : role });
       setActorId("");
       await reloadCast();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function setLocation() {
+    if (!locId) return;
+    setError(null);
+    try {
+      await api.setSceneLocation(cid, sid, locId);
+      setLocId("");
+      await reloadSetting();
+      onSeeded(); // refresh the stream so the transition line shows
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -112,6 +134,21 @@ export function CastPanel({
       <summary>Cast &amp; scene setup</summary>
       <div className="panel-body">
         {error && <div className="banner">{error}</div>}
+
+        <div>
+          <div className="role">Setting</div>
+          <div className="field-hint">{setting?.current ? setting.current.name : "No setting"}</div>
+          <div className="picker">
+            <select aria-label="Location" value={locId} onChange={(e) => setLocId(e.target.value)}>
+              <option value="">— pick —</option>
+              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+            <button className="primary" onClick={setLocation}
+                    disabled={!locId || locId === setting?.current?.id}>
+              {setting?.current ? "Move here" : "Set location"}
+            </button>
+          </div>
+        </div>
 
         <div>
           <div className="role">In this scene</div>

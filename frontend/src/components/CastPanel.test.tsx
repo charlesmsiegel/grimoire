@@ -5,6 +5,7 @@ vi.mock("../api/client", () => ({
   api: {
     getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
     listCampaignPCs: vi.fn(),
+    listEntities: vi.fn(), getSceneLocation: vi.fn(), setSceneLocation: vi.fn(),
     availableGreetings: vi.fn(), addToCast: vi.fn(), startFromGreeting: vi.fn(),
     opener: vi.fn(), createGreeting: vi.fn(), listAppearances: vi.fn(),
     campaignImageUrl: (c: string, ch: string, v: string, n: string) => `/cimg/${c}/${ch}/${v}/${n}`,
@@ -19,6 +20,9 @@ beforeEach(() => {
   (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine", default_version: "default", versions: [] }]);
   (api.listPCs as any).mockResolvedValue([{ id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
   (api.listCampaignPCs as any).mockResolvedValue([]);
+  (api.listEntities as any).mockResolvedValue([]);
+  (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
+  (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: false, name: "" });
   (api.availableGreetings as any).mockResolvedValue([
     { id: "open", name: "Open", available: true, reasons: [] },
     { id: "locked", name: "Locked", available: false, reasons: ["missing required tags"] },
@@ -105,4 +109,22 @@ test("generating an opener streams into the preview and can be saved as a greeti
       character: "seraphine", version: "default", body: "Mist rolls in.",
     })),
   );
+});
+
+test("shows the current setting and lists campaign locations", async () => {
+  (api.getSceneLocation as any).mockResolvedValue({ current: { id: "crypt", name: "The Crypt" }, visited: [] });
+  (api.listEntities as any).mockResolvedValue([{ id: "crypt", name: "The Crypt" }, { id: "market", name: "Market" }]);
+  renderPanel();
+  await screen.findByText("The Crypt", { selector: "div.field-hint" });
+  await screen.findByRole("option", { name: "Market" });
+});
+
+test("changing the setting calls setSceneLocation and refreshes the stream", async () => {
+  const onSeeded = vi.fn();
+  (api.listEntities as any).mockResolvedValue([{ id: "market", name: "Market" }]);
+  renderPanel({ onSeeded });
+  fireEvent.change(await screen.findByLabelText("Location"), { target: { value: "market" } });
+  fireEvent.click(screen.getByRole("button", { name: /set location/i }));
+  await waitFor(() => expect(api.setSceneLocation).toHaveBeenCalledWith("c", "s", "market"));
+  await waitFor(() => expect(onSeeded).toHaveBeenCalled());
 });
