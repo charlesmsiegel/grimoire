@@ -15,9 +15,18 @@ vi.mock("../api/client", () => ({
     deleteScene: vi.fn(),
     chat: vi.fn(),
     retry: vi.fn(),
+    getConfig: vi.fn(),
+    editMessage: vi.fn(),
+    // consumed by the embedded SceneInspector
+    getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
+    getCastDetail: vi.fn(), readEntity: vi.fn(),
+    listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
+    campaignImageUrl: () => "/img",
   },
 }));
+vi.mock("../api/models", () => ({ fetchModels: vi.fn() }));
 import { api } from "../api/client";
+import { fetchModels } from "../api/models";
 
 const ONE_SCENE = [{ id: "s1", title: "Old", model: "", created: "", updated: "" }];
 
@@ -31,6 +40,15 @@ beforeEach(() => {
   (api.deleteScene as any).mockResolvedValue({ ok: true });
   (api.chat as any).mockResolvedValue(undefined);
   (api.retry as any).mockResolvedValue(undefined);
+  (api.getConfig as any).mockResolvedValue({ model: "m", theme: "occult", key_set: true, system_prompt: "", quote_color: "off" });
+  (api.editMessage as any).mockResolvedValue({ ok: true });
+  (api.getCast as any).mockResolvedValue([]);
+  (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
+  (api.getSceneContext as any).mockResolvedValue({ model: "m", total_tokens: 0, sections: [] });
+  (api.listCharacters as any).mockResolvedValue([]);
+  (api.listPCs as any).mockResolvedValue([]);
+  (api.listCampaignPCs as any).mockResolvedValue([]);
+  (fetchModels as any).mockResolvedValue([]);
 });
 
 function renderCampaign() {
@@ -47,6 +65,13 @@ test("shows the campaign name and loads its scenes", async () => {
   renderCampaign();
   await screen.findByText("Run One");
   await waitFor(() => expect(api.listScenes).toHaveBeenCalledWith("run"));
+});
+
+test("renders the inspector for an active scene", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  await screen.findByText(/Active characters/i);
+  await screen.findByText(/^Context/);
 });
 
 test("Enter sends a message in the active scene", async () => {
