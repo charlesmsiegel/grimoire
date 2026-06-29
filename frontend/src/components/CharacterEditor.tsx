@@ -392,7 +392,7 @@ export function CharacterEditor({ wid, resetSignal, focus }:
                   <select value={vid} onChange={(e) => loadVersion(detail, e.target.value)} aria-label="Version">
                     {detail.versions.map((v) => (
                       <option key={v.id} value={v.id}>
-                        {v.name}{v.id === detail.meta.default_version ? " (default)" : ""}
+                        {v.name}
                       </option>
                     ))}
                   </select>

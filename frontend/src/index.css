@@ -140,6 +140,8 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .greeting-rendered img { max-width: 100%; height: auto; border-radius: 6px; margin: 8px 0; }
 .greeting-rendered p { margin: 0 0 10px; }
 .greeting-sidebar { width: 240px; flex: none; display: flex; flex-direction: column; gap: 16px; }
+.greeting-sidebar .form-actions { margin-top: 0; }
+.greeting-sidebar .form-actions button { width: 100%; }
 .side-section h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 
 .table { width: 100%; border-collapse: collapse; }

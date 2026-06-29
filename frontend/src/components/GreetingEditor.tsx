@@ -101,6 +101,10 @@ export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCh
   const others = greetings.filter((g) => g.id !== gid);
   const charName = (id: string) => chars.find((c) => c.id === id)?.name ?? id;
   const greetName = (id: string) => greetings.find((g) => g.id === id)?.name ?? id;
+  // the version a present character is cast at: source at the greeting's version, others at their default
+  const presentVid = (id: string) => (id === form.character ? form.version : (chars.find((c) => c.id === id)?.default_version ?? ""));
+  const presentLabel = (id: string) =>
+    chars.find((c) => c.id === id)?.versions.find((v) => v.id === presentVid(id))?.name ?? charName(id);
 
   function sideList(label: string, items: string[], render: (id: string) => string) {
     if (items.length === 0) return null;
@@ -147,9 +151,8 @@ export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCh
                   <div className="chips">
                     {form.present.map((id) => (
                       <button key={id} className="chip on"
-                              onClick={() => onOpenCharacter?.(id, id === form.character ? form.version
-                                : (chars.find((c) => c.id === id)?.default_version ?? ""))}>
-                        {charName(id)}
+                              onClick={() => onOpenCharacter?.(id, presentVid(id))}>
+                        {presentLabel(id)}
                       </button>
                     ))}
                   </div>
