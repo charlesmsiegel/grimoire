@@ -74,6 +74,18 @@ test("renders the inspector for an active scene", async () => {
   await screen.findByText(/^Context/);
 });
 
+test("editing a message saves and reloads", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [{ role: "assistant", content: "hi" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getAllByRole("button", { name: /edit/i })[0]);
+  const ta = await screen.findByLabelText(/edit message/i);
+  fireEvent.change(ta, { target: { value: "hello" } });
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(api.editMessage).toHaveBeenCalledWith("run", "s1", 0, "hello"));
+});
+
 test("Enter sends a message in the active scene", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();

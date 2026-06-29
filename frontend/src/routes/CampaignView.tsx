@@ -19,6 +19,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ctxKey, setCtxKey] = useState(0);
+  const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const streamRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -105,6 +106,13 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     await runStream((onEvent) => api.chat(cid, id!, content, onEvent));
   }
 
+  async function saveEdit() {
+    if (!editing || !activeId) return;
+    await api.editMessage(cid, activeId, editing.index, editing.text);
+    setEditing(null);
+    await selectScene(activeId);
+  }
+
   async function retry() {
     if (!activeId || busy) return;
     await runStream((onEvent) => api.retry(cid, activeId, onEvent));
@@ -159,14 +167,30 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
         )}
         <div className="stream" ref={streamRef}>
           {messages.map((m, i) => (
-            <div className="msg" key={i}>
-              <div className="role">{m.role === "user" ? "You" : "Grimoire"}</div>
-              <Markdown remarkPlugins={[remarkGfm]}>{m.content}</Markdown>
+            <div className={`msg-card ${m.role}`} key={i}>
+              <div className="msg-card-head">
+                <span className="role">{m.role === "user" ? "You" : "Grimoire"}</span>
+                {editing?.index !== i && !busy && (
+                  <button className="msg-edit" onClick={() => setEditing({ index: i, text: m.content })}>Edit</button>
+                )}
+              </div>
+              {editing?.index === i ? (
+                <div className="msg-edit-form">
+                  <textarea aria-label="Edit message" rows={4} value={editing.text}
+                            onChange={(e) => setEditing({ index: i, text: e.target.value })} />
+                  <div className="form-actions">
+                    <button className="subtle" onClick={() => setEditing(null)}>Cancel</button>
+                    <button className="primary" onClick={saveEdit}>Save</button>
+                  </div>
+                </div>
+              ) : (
+                <Markdown remarkPlugins={[remarkGfm]}>{m.content}</Markdown>
+              )}
             </div>
           ))}
           {streaming && (
-            <div className="msg">
-              <div className="role">Grimoire</div>
+            <div className="msg-card assistant">
+              <div className="msg-card-head"><span className="role">Grimoire</span></div>
               <Markdown remarkPlugins={[remarkGfm]}>{streaming}</Markdown>
               <span className="cursor" />
             </div>
