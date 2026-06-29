@@ -253,6 +253,16 @@ def test_scene_context_breakdown(client):
     assert body["total_tokens"] == sum(s["tokens"] for s in body["sections"])
 
 
+def test_edit_message_route(client):
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.put("/api/config", json={"openrouter_key": "sk-test"})
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "helo"})
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/0", json={"content": "hello"}).json() == {"ok": True}
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][0]["content"] == "hello"
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/9", json={"content": "x"}).status_code == 400
+
+
 def test_cast_detail_for_character_and_pc(client):
     wid, cid = _campaign(client)
     sera = {"spec": "chara_card_v3", "spec_version": "3.0",

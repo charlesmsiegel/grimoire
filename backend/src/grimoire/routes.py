@@ -126,6 +126,10 @@ class SceneLocation(BaseModel):
     location: str
 
 
+class EditMessage(BaseModel):
+    content: str
+
+
 class Dismiss(BaseModel):
     character: str
 
@@ -1067,6 +1071,16 @@ def get_cast_detail(cid: str, sid: str, kind: str, id: str):
     except (store.appearances.AppearError, store.characters.CharacterNotFound,
             store.characters.VersionNotFound, store.pcs.PCNotFound, store.pcs.PCVersionNotFound):
         raise HTTPException(status_code=404, detail="actor not found")
+
+
+@router.put("/campaigns/{cid}/scenes/{sid}/messages/{index}")
+def put_scene_message(cid: str, sid: str, index: int, body: EditMessage):
+    _require_scene(cid, sid)
+    try:
+        store.scenes.edit_message(cid, sid, index, body.content)
+    except IndexError:
+        raise HTTPException(status_code=400, detail="message index out of range")
+    return {"ok": True}
 
 
 # ---- campaign greetings / play (declared before the generic /{kind} routes) ----
