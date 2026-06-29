@@ -945,6 +945,19 @@ def get_appearances(cid: str):
     return store.appearances.roster(cid)
 
 
+@router.get("/campaigns/{cid}/pcs")
+def get_campaign_pcs(cid: str):
+    return store.pcs.list_pcs(_campaign_root_or_404(cid))
+
+
+@router.post("/campaigns/{cid}/pcs")
+def post_campaign_pc(cid: str, body: PCCreate):
+    # Campaign-local PC overlay: tags are free strings (no world-vocabulary check).
+    root = _campaign_root_or_404(cid)
+    pid, vid = store.pcs.create_pc(root, body.name, body.tags, body.version_name, body.persona)
+    return {"pc": pid, "version": vid}
+
+
 @router.get("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
 def get_campaign_image(cid: str, char: str, vid: str, name: str):
     return _serve_image(_campaign_root_or_404(cid), char, vid, name)
@@ -966,12 +979,16 @@ def post_scene_cast(cid: str, sid: str, body: Appear):
     if role not in ("player", "npc"):
         raise HTTPException(status_code=400, detail="role must be player or npc")
     version = body.version
+    croot = store.campaigns.campaign_root(cid)
     try:
         if version is None:
             if body.kind == "characters":
                 version = store.characters.read_character(wroot, body.id)["meta"]["default_version"]
             else:
-                version = store.pcs.read_pc(wroot, body.id)["meta"]["default_version"]
+                try:
+                    version = store.pcs.read_pc(wroot, body.id)["meta"]["default_version"]
+                except store.pcs.PCNotFound:
+                    version = store.pcs.read_pc(croot, body.id)["meta"]["default_version"]
     except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
         raise HTTPException(status_code=404, detail="actor not found")
     try:

@@ -176,6 +176,31 @@ def test_world_tag_vocabulary_crud(client):
     assert client.put(f"/api/worlds/{wid}/tags/ghost", json={"name": "X"}).status_code == 404
 
 
+def test_campaign_local_pc_create_seat_and_sync(client):
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    # create a campaign-local PC (overlay; not written to the world)
+    r = client.post(f"/api/campaigns/{cid}/pcs", json={
+        "name": "Mara", "tags": ["rebel"],
+        "persona": {"name": "Mara", "pronouns": "she/her", "summary": "outlaw", "description": "On the run."}})
+    assert r.status_code == 200
+    assert r.json()["pc"] == "mara"
+    # lists at campaign scope, absent at world scope
+    assert [p["id"] for p in client.get(f"/api/campaigns/{cid}/pcs").json()] == ["mara"]
+    assert client.get(f"/api/worlds/{wid}/pcs").json() == []
+    # seat as player with explicit version
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                       json={"kind": "pcs", "id": "mara", "version": "default"}).status_code == 200
+    assert {"kind": "pcs", "id": "mara", "role": "player"} in \
+        client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json()
+    # re-seat in a second scene with version omitted -> resolved from the campaign
+    sid2 = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S2"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid2}/cast",
+                       json={"kind": "pcs", "id": "mara"}).status_code == 200
+    # no spurious incoming sync change for the local PC
+    assert client.get(f"/api/campaigns/{cid}/incoming").json() == []
+
+
 def test_world_pc_crud_and_tag_validation(client):
     wid = _world(client)
     client.post(f"/api/worlds/{wid}/tags", json={"name": "Student"})
