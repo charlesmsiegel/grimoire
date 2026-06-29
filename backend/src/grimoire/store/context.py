@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-from . import appearances, campaigns, characters, config, entities, pcs, scenes
+from . import appearances, briefs, campaigns, characters, config, entities, pcs, scenes, worlds
 
 
 def activate(entries: list[dict], recent_text: str) -> list[dict]:
@@ -112,6 +112,51 @@ def build_opener_messages(cid: str, sid: str, prompt: str) -> list[dict]:
             {"role": "user", "content": _substitute(prompt, subs)}]
 
 
+def _char_name(root, cid: str) -> str:
+    try:
+        return characters.read_character(root, cid)["meta"]["name"]
+    except characters.CharacterNotFound:
+        return cid
+
+
+def _cast_directory(croot, wroot, cid: str, sid: str) -> str:
+    """Off-scene cast as two tiers: campaign-active characters (paragraph) and every
+    other world character (tagline + available versions). Empty string if neither tier
+    has any briefed members."""
+    present = {a["id"] for a in appearances.scene_cast(cid, sid) if a["kind"] == "characters"}
+    roster = appearances.roster(cid)
+    roster_ids = {a["id"] for a in roster if a["kind"] == "characters"}
+
+    active: list[str] = []
+    for a in roster:
+        if a["kind"] != "characters" or a["role"] != "npc" or a["id"] in present:
+            continue
+        b = briefs.read_brief(croot, a["id"])
+        if b and b["body"]:
+            active.append(f"{_char_name(croot, a['id'])}: {b['body']}")
+
+    known: list[str] = []
+    for char_id in characters.character_refs(wroot):
+        if char_id in roster_ids or char_id in present:
+            continue
+        b = briefs.read_brief(wroot, char_id)
+        if not b or not b["tagline"]:
+            continue
+        versions = ", ".join(v["id"] for v in characters.read_character(wroot, char_id)["versions"])
+        suffix = f" (available as: {versions})" if versions else ""
+        known.append(f"{_char_name(wroot, char_id)}: {b['tagline']}{suffix}")
+
+    if not active and not known:
+        return ""
+    parts = ["# Other characters in this world",
+             "# (Not present. Introduce them only if the story calls for it.)"]
+    if active:
+        parts.append("## Active in this campaign, elsewhere\n" + "\n".join(active))
+    if known:
+        parts.append("## Known to exist\n" + "\n".join(known))
+    return "\n\n".join(parts)
+
+
 def build_messages(cid: str, sid: str) -> list[dict]:
     scene = scenes.read_scene(cid, sid)
     history = [{"role": m["role"], "content": m["content"]} for m in scene["messages"]]
@@ -164,6 +209,10 @@ def build_messages(cid: str, sid: str) -> list[dict]:
     wi = _world_info(croot, recent_text)
     if wi:
         parts.append(wi)
+    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"].get("world", ""))
+    directory = _cast_directory(croot, wroot, cid, sid)
+    if directory:
+        parts.append(directory)
     system_text = "\n\n".join(parts).strip()
     post_history = "\n\n".join(
         d.get("post_history_instructions", "").strip() for d in npc_cards
