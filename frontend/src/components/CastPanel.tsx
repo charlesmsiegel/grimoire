@@ -35,11 +35,15 @@ export function CastPanel({
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
   }, [cid, sid, reloadCast]);
 
-  // the world's characters/pcs are needed to add actors; load lazily from the campaign's world
+  // characters/pcs available to add: world assets plus the campaign's own PC overlays
   useEffect(() => {
     api.getCampaign(cid).then((c) => {
       api.listCharacters(c.meta.world).then(setChars);
-      api.listPCs(c.meta.world).then(setPCs);
+      Promise.all([api.listPCs(c.meta.world), api.listCampaignPCs(cid)]).then(([worldPCs, localPCs]) => {
+        const byId = new Map(worldPCs.map((p) => [p.id, p]));
+        for (const p of localPCs) byId.set(p.id, p);
+        setPCs([...byId.values()]);
+      });
     });
   }, [cid]);
 
