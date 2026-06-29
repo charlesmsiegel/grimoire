@@ -92,6 +92,7 @@ export type Greeting = {
   name: string;
   character: string;
   version: string;
+  present: string[];
   requires_tags: string[];
   predecessor_join: "all" | "any";
 };
@@ -102,6 +103,7 @@ export type GreetingDraft = {
   character: string;
   version: string;
   body?: string;
+  present?: string[];
   requires_tags?: string[];
   predecessor_join?: "all" | "any";
 };
@@ -267,7 +269,7 @@ export const api = {
   readGreeting: (wid: string, gid: string) =>
     request<GreetingDetail>("GET", `/api/worlds/${wid}/greetings/${gid}`),
   updateGreeting: (wid: string, gid: string,
-                   patch: { name?: string; body?: string; requires_tags?: string[]; predecessor_join?: string }) =>
+                   patch: { name?: string; body?: string; present?: string[]; requires_tags?: string[]; predecessor_join?: string }) =>
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}`, patch),
   deleteGreeting: (wid: string, gid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/greetings/${gid}`),

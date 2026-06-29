@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type CharacterSummary, type Edges, type Greeting } from "../api/client";
 import { Field } from "./Field";
 
-const BLANK = { name: "", character: "", version: "", body: "", requires_tags: [] as string[], predecessor_join: "all" as "all" | "any" };
+const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any" };
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
 
 export function GreetingEditor({ wid }: { wid: string }) {
@@ -33,7 +33,8 @@ export function GreetingEditor({ wid }: { wid: string }) {
     setGid(id);
     setForm({
       name: g.meta.name, character: g.meta.character, version: g.meta.version,
-      body: g.body.trim(), requires_tags: g.meta.requires_tags, predecessor_join: g.meta.predecessor_join,
+      body: g.body.trim(), present: g.meta.present ?? [], requires_tags: g.meta.requires_tags,
+      predecessor_join: g.meta.predecessor_join,
     });
     setEdges(g.edges);
   }
@@ -47,7 +48,7 @@ export function GreetingEditor({ wid }: { wid: string }) {
       let id = gid;
       if (id) {
         await api.updateGreeting(wid, id, {
-          name: form.name, body: form.body,
+          name: form.name, body: form.body, present: form.present,
           requires_tags: form.requires_tags, predecessor_join: form.predecessor_join,
         });
       } else {
@@ -82,6 +83,11 @@ export function GreetingEditor({ wid }: { wid: string }) {
   function toggleTag(tid: string) {
     const cur = form.requires_tags;
     setForm({ ...form, requires_tags: cur.includes(tid) ? cur.filter((t) => t !== tid) : [...cur, tid] });
+  }
+
+  function togglePresent(cid: string) {
+    const cur = form.present;
+    setForm({ ...form, present: cur.includes(cid) ? cur.filter((c) => c !== cid) : [...cur, cid] });
   }
 
   const others = greetings.filter((g) => g.id !== gid);
@@ -129,6 +135,15 @@ export function GreetingEditor({ wid }: { wid: string }) {
           </div>
           <Field label="Greeting text">
             <textarea value={form.body} rows={6} onChange={(e) => setForm({ ...form, body: e.target.value })} />
+          </Field>
+          <Field label="Present characters" hint="everyone cast into the scene when it starts from this greeting">
+            <div className="chips">
+              {chars.map((c) => (
+                <button key={c.id} className={"chip" + (form.present.includes(c.id) ? " on" : "")}
+                        onClick={() => togglePresent(c.id)}>{c.name}</button>
+              ))}
+              {chars.length === 0 && <span className="field-hint">No characters in this world yet.</span>}
+            </div>
           </Field>
           <Field label="Required tags" hint="the greeting unlocks only if a player PC carries these">
             <div className="chips">

@@ -9,6 +9,7 @@ keyed by greeting id.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from . import characters
@@ -41,21 +42,45 @@ def _tags_list(s: str) -> list[str]:
 
 
 def _meta_dict(gid: str, meta: dict) -> dict:
+    character = meta.get("character", "")
+    # `present` is the full cast at the opener (comma-joined ids, like requires_tags).
+    # When absent it falls back to just the primary character so old greetings work.
+    present = _tags_list(meta.get("present", "")) or ([character] if character else [])
     return {
         "id": gid,
         "name": meta.get("name", gid),
-        "character": meta.get("character", ""),
+        "character": character,
         "version": meta.get("version", ""),
+        "present": present,
         "requires_tags": _tags_list(meta.get("requires_tags", "")),
         "predecessor_join": meta.get("predecessor_join", "all"),
     }
 
 
+def present_in(body: str, source: str, roster: dict[str, str]) -> list[str]:
+    """Who is present at this greeting: the source character plus any character in
+    `roster` (display-name -> id) whose name appears as a whole word in `body`.
+
+    `{{char}}` is the source; `{{user}}` is the player, not a character. Result is
+    ordered source-first, then the rest by first appearance, so it is stable.
+    """
+    found: dict[str, int] = {}
+    for name, cid in roster.items():
+        if cid == source:
+            continue
+        m = re.search(rf"\b{re.escape(name)}\b", body, re.IGNORECASE)
+        if m:
+            found[cid] = m.start()
+    return [source] + sorted(found, key=found.__getitem__)
+
+
 def create_greeting(root: Path, name: str, character: str, version: str, body: str = "",
-                    requires_tags: list[str] | None = None, predecessor_join: str = "all") -> str:
+                    requires_tags: list[str] | None = None, predecessor_join: str = "all",
+                    present: list[str] | None = None) -> str:
     _greetings_dir(root).mkdir(parents=True, exist_ok=True)
     gid = uniquify(slugify(name), lambda c: _greeting_path(root, c).exists())
     meta = {"name": name, "character": character, "version": version,
+            "present": ",".join(present or []),
             "requires_tags": ",".join(requires_tags or []), "predecessor_join": predecessor_join}
     _greeting_path(root, gid).write_text(dump_frontmatter(meta, body), encoding="utf-8")
     return gid
@@ -77,7 +102,8 @@ def list_greetings(root: Path) -> list[dict]:
 
 
 def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str | None = None,
-                    requires_tags: list[str] | None = None, predecessor_join: str | None = None) -> None:
+                    requires_tags: list[str] | None = None, predecessor_join: str | None = None,
+                    present: list[str] | None = None) -> None:
     p = _greeting_path(root, gid)
     if not _safe(gid) or not p.exists():
         raise GreetingNotFound(gid)
@@ -86,6 +112,8 @@ def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str 
         meta["name"] = name
     if requires_tags is not None:
         meta["requires_tags"] = ",".join(requires_tags)
+    if present is not None:
+        meta["present"] = ",".join(present)
     if predecessor_join is not None:
         meta["predecessor_join"] = predecessor_join
     new_body = cur_body if body is None else body
@@ -139,6 +167,7 @@ def delete_greeting(root: Path, gid: str) -> None:
 def import_from_character(root: Path, char_id: str, vid: str) -> list[str]:
     data = characters.read_card(root, char_id, vid).get("data", {})
     cname = data.get("name", char_id)
+    roster = {c["name"]: c["id"] for c in characters.list_characters(root)}
     items: list[tuple[str, str]] = []
     first = data.get("first_mes", "")
     if isinstance(first, str) and first.strip():
@@ -146,7 +175,8 @@ def import_from_character(root: Path, char_id: str, vid: str) -> list[str]:
     for i, alt in enumerate(data.get("alternate_greetings", []) or [], start=1):
         if isinstance(alt, str) and alt.strip():
             items.append((f"{cname} (alt {i})", alt))
-    return [create_greeting(root, name, char_id, vid, body) for name, body in items]
+    return [create_greeting(root, name, char_id, vid, body, present=present_in(body, char_id, roster))
+            for name, body in items]
 
 
 def availability(world_root: Path, plotmap: dict, played, player_tags) -> list[dict]:

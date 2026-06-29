@@ -35,6 +35,36 @@ def test_update_and_missing(tmp_path):
         greetings.read_greeting(root, "nope")
 
 
+def test_present_cast_roundtrips_and_defaults(tmp_path):
+    root = _world(tmp_path)
+    gid = greetings.create_greeting(root, "Arrival: Mara & Rowan", "mara", "main",
+                                    body="Mara and Rowan greet you.", present=["mara", "rowan"])
+    assert greetings.read_greeting(root, gid)["meta"]["present"] == ["mara", "rowan"]
+    # absent present -> defaults to just the primary character
+    g2 = greetings.create_greeting(root, "Solo", "mara", "main", body="hi")
+    assert greetings.read_greeting(root, g2)["meta"]["present"] == ["mara"]
+
+
+def test_update_present(tmp_path):
+    root = _world(tmp_path)
+    gid = greetings.create_greeting(root, "G", "mara", "main", present=["mara"])
+    greetings.update_greeting(root, gid, present=["mara", "rowan"])
+    assert greetings.read_greeting(root, gid)["meta"]["present"] == ["mara", "rowan"]
+
+
+def test_present_in_detects_source_and_mentioned_names():
+    roster = {"Mara": "mara", "Rowan": "rowan", "Lys": "lys"}
+    body = "{{char}} waits. Then Rowan walks in with you, {{user}}."
+    # source mara ({{char}}) + Rowan mentioned; Lys absent; {{user}} is not a character
+    assert greetings.present_in(body, "mara", roster) == ["mara", "rowan"]
+
+
+def test_present_in_matches_whole_words_only():
+    roster = {"Art": "art", "Mara": "mara"}
+    # 'Art' is a substring of 'artwork' and must NOT count as present
+    assert greetings.present_in("The artwork is heavy.", "mara", roster) == ["mara"]
+
+
 def test_plotmap_edges_and_delete_prunes(tmp_path):
     root = _world(tmp_path)
     a = greetings.create_greeting(root, "A", "c", "v")
@@ -59,6 +89,17 @@ def test_import_from_character(tmp_path):
     bodies = sorted(greetings.read_greeting(root, g)["body"].strip() for g in gids)
     assert bodies == ["Alt one.", "Alt two.", "Hello there."]
     assert all(greetings.read_greeting(root, g)["meta"]["character"] == "seraphine" for g in gids)
+
+
+def test_import_sets_present_from_mentions(tmp_path):
+    root = _world(tmp_path)
+    characters.create_character(root, "Rowan", "default", characters.blank_card("Rowan"))
+    card = characters.blank_card("Seraphine")
+    card["data"].update(first_mes="Seraphine and Rowan greet you.", alternate_greetings=[])
+    characters.create_character(root, "Seraphine", "default", card)
+    gids = greetings.import_from_character(root, "seraphine", "default")
+    g = greetings.read_greeting(root, gids[0])
+    assert set(g["meta"]["present"]) == {"seraphine", "rowan"}
 
 
 def test_import_empty_card_returns_empty(tmp_path):

@@ -126,6 +126,7 @@ class GreetingCreate(BaseModel):
     body: str = ""
     requires_tags: list[str] = []
     predecessor_join: str = "all"
+    present: list[str] | None = None
 
 
 class GreetingUpdate(BaseModel):
@@ -133,6 +134,7 @@ class GreetingUpdate(BaseModel):
     body: str | None = None
     requires_tags: list[str] | None = None
     predecessor_join: str | None = None
+    present: list[str] | None = None
 
 
 class Edges(BaseModel):
@@ -540,7 +542,7 @@ def get_world_greetings(wid: str):
 def post_world_greeting(wid: str, body: GreetingCreate):
     gid = store.greetings.create_greeting(_world_root_or_404(wid), body.name, body.character,
                                           body.version, body.body, body.requires_tags,
-                                          body.predecessor_join)
+                                          body.predecessor_join, present=body.present)
     return {"id": gid}
 
 
@@ -572,7 +574,7 @@ def put_world_greeting(wid: str, gid: str, body: GreetingUpdate):
     try:
         store.greetings.update_greeting(_world_root_or_404(wid), gid, name=body.name,
                                         body=body.body, requires_tags=body.requires_tags,
-                                        predecessor_join=body.predecessor_join)
+                                        predecessor_join=body.predecessor_join, present=body.present)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     return {"ok": True}

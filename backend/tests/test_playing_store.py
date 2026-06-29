@@ -65,6 +65,21 @@ def test_start_from_greeting_seeds_appears_marks(monkeypatch, tmp_path):
         playing.start_from_greeting(cid, sid, g)
 
 
+def test_start_from_greeting_casts_all_present(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Mara", "main", characters.blank_card("Mara"))
+    characters.create_character(wroot, "Rowan", "main", characters.blank_card("Rowan"))
+    pcs.create_pc(wroot, "Elara", [])
+    ap.appear(cid, sid, "pcs", "elara", "default", "player")
+    g = greetings.create_greeting(wroot, "Arrival: Mara & Rowan", "mara", "main",
+                                  body="Mara and Rowan arrive.", present=["mara", "rowan"])
+    playing.start_from_greeting(cid, sid, g)
+    # both present characters cast as NPCs, each at their default version
+    assert ap.is_appeared(cid, "characters", "mara")
+    assert ap.is_appeared(cid, "characters", "rowan")
+
+
 def test_start_unavailable_raises(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
