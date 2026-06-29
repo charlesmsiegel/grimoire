@@ -28,7 +28,7 @@ async function requestForm<T>(path: string, form: FormData, method = "POST"): Pr
   return res.json() as Promise<T>;
 }
 
-export type Config = { model: string; theme: string; key_set: boolean };
+export type Config = { model: string; theme: string; key_set: boolean; system_prompt: string; quote_color: string };
 export type WorldMeta = {
   id: string;
   name: string;
@@ -114,6 +114,9 @@ export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "
 export type RosterEntry = { kind: string; id: string; version: string; role: string; scenes: string[] };
 export type SceneLocationRef = { id: string; name: string };
 export type SceneLocation = { current: SceneLocationRef | null; visited: SceneLocationRef[] };
+export type ContextSection = { label: string; text: string; tokens: number };
+export type SceneContext = { model: string; total_tokens: number; sections: ContextSection[] };
+export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
 
 // lorebook import
 export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKind };
@@ -148,7 +151,7 @@ async function streamPost<T = ChatEvent>(
 
 export const api = {
   getConfig: () => request<Config>("GET", "/api/config"),
-  putConfig: (body: Partial<{ model: string; theme: string; openrouter_key: string }>) =>
+  putConfig: (body: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string }>) =>
     request<Config>("PUT", "/api/config", body),
 
   // worlds
@@ -298,6 +301,12 @@ export const api = {
   setSceneLocation: (cid: string, sid: string, location: string) =>
     request<{ ok: boolean; moved: boolean; name: string }>(
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/location`, { location }),
+  getSceneContext: (cid: string, sid: string) =>
+    request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
+  getCastDetail: (cid: string, sid: string, kind: string, id: string) =>
+    request<CastDetail>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}`),
+  editMessage: (cid: string, sid: string, index: number, content: string) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}`, { content }),
   opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/opener`, { prompt }, onEvent),
 
