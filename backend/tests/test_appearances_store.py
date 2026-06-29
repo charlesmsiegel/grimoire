@@ -1,7 +1,7 @@
 import pytest
 
 from grimoire.store import appearances as ap
-from grimoire.store import campaigns, characters, pcs, worlds
+from grimoire.store import briefs, campaigns, characters, pcs, scenes, worlds
 
 
 def _world_with_char(monkeypatch, tmp_path):
@@ -71,3 +71,19 @@ def test_suggestions_still_scan_character_names(monkeypatch, tmp_path):
     ap.appear(cid, "s1", "characters", "seraphine", "default", "npc")
     sugg = ap.suggestions(cid, "s1")
     assert sugg == [{"character": "drowned-king", "name": "Drowned King", "mentioned_by": ["seraphine"]}]
+
+
+def test_appear_copies_brief_into_campaign(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Aese", "main", characters.blank_card("Aese"))
+    briefs.write_brief(wroot, "aese", "A silent snowleopardgirl.", "She keeps house.", "h0")
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+
+    ap.appear(cid, sid, "characters", "aese", "main", "npc")
+
+    croot = campaigns.campaign_root(cid)
+    assert briefs.read_brief(croot, "aese") == {
+        "tagline": "A silent snowleopardgirl.", "base": "h0", "body": "She keeps house."}
