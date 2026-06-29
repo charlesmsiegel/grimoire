@@ -1045,6 +1045,18 @@ def put_scene_location(cid: str, sid: str, body: SceneLocation):
     return {"ok": True, **result}
 
 
+@router.get("/campaigns/{cid}/scenes/{sid}/context")
+def get_scene_context(cid: str, sid: str):
+    scene = _require_scene(cid, sid)
+    sections = []
+    total = 0
+    for s in store.context.context_sections(cid, sid):
+        tokens = store.context.count_tokens(s["text"])
+        total += tokens
+        sections.append({"label": s["label"], "text": s["text"], "tokens": tokens})
+    return {"model": scene["meta"].get("model", ""), "total_tokens": total, "sections": sections}
+
+
 # ---- campaign greetings / play (declared before the generic /{kind} routes) ----
 @router.get("/campaigns/{cid}/greetings/available")
 def get_available_greetings(cid: str):
