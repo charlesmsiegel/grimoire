@@ -609,3 +609,58 @@ def test_localize_endpoint_does_not_persist_when_nothing_localized(client, monke
     assert events[-1]["summary"]["localized"] == 0
     assert events[-1]["summary"]["skipped"] == 1
     assert calls == []  # changed-gating skipped the write
+
+
+class FakeOpenRouterComplete:
+    def __init__(self, text):
+        self.text = text
+
+    async def stream(self, messages, model, key):
+        yield self.text
+
+    async def complete(self, messages, model, key):
+        return self.text
+
+
+def _world_char(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters",
+                      json={"name": "Aese", "version_name": "main"}).json()["character"]
+    return wid, cid
+
+
+def test_get_brief_absent_is_stale(client):
+    wid, cid = _world_char(client)
+    body = client.get(f"/api/worlds/{wid}/characters/{cid}/brief").json()
+    assert body == {"brief": None, "stale": True}
+
+
+def test_put_brief_saves_and_is_fresh(client):
+    wid, cid = _world_char(client)
+    r = client.put(f"/api/worlds/{wid}/characters/{cid}/brief",
+                   json={"tagline": "A snowleopardgirl.", "body": "She keeps house."})
+    assert r.json() == {"ok": True}
+    got = client.get(f"/api/worlds/{wid}/characters/{cid}/brief").json()
+    assert got["stale"] is False
+    assert got["brief"]["tagline"] == "A snowleopardgirl."
+    assert got["brief"]["body"] == "She keeps house."
+
+
+def test_post_brief_derives_from_model(client):
+    wid, cid = _world_char(client)
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.app.dependency_overrides[routes.get_openrouter] = \
+        lambda: FakeOpenRouterComplete("A silent snowleopardgirl.\n\nShe keeps house and is shy.")
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/brief")
+    assert r.status_code == 200
+    brief = r.json()["brief"]
+    assert brief["tagline"] == "A silent snowleopardgirl."
+    assert brief["body"] == "She keeps house and is shy."
+    assert r.json()["stale"] is False
+
+
+def test_post_brief_requires_key(client):
+    wid, cid = _world_char(client)
+    # default fixture key is empty
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/brief")
+    assert r.status_code == 409
