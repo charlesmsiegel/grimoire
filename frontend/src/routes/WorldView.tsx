@@ -25,10 +25,17 @@ export default function WorldView() {
   const [tab, setTab] = useState<TabKey>("characters");
   const [charReset, setCharReset] = useState(0);
   const [loreReset, setLoreReset] = useState(0);
+  const [focusChar, setFocusChar] = useState<{ cid: string; vid: string } | null>(null);
 
   useEffect(() => {
     api.getWorld(wid).then((w) => setName(w.meta.name)).catch(() => setName(wid));
   }, [wid]);
+
+  // a present-character link from the greeting view jumps to that character
+  function openCharacter(cid: string, vid: string) {
+    setFocusChar({ cid, vid });
+    setTab("characters");
+  }
 
   return (
     <div className="view" style={{ maxWidth: 920 }}>
@@ -40,14 +47,14 @@ export default function WorldView() {
           <button
             key={t.key}
             className={"tab" + (tab === t.key ? " active" : "")}
-            onClick={() => { setTab(t.key); if (t.key === "characters") setCharReset((n) => n + 1); }}
+            onClick={() => { setTab(t.key); if (t.key === "characters") { setCharReset((n) => n + 1); setFocusChar(null); } }}
           >
             {t.label}
           </button>
         ))}
       </div>
 
-      {tab === "characters" && <CharacterEditor wid={wid} resetSignal={charReset} />}
+      {tab === "characters" && <CharacterEditor wid={wid} resetSignal={charReset} focus={focusChar} />}
       {tab === "pcs" && <PCEditor wid={wid} />}
       {tab === "tags" && <TagEditor wid={wid} />}
       {tab === "locations" && <EntityEditor wid={wid} kind="locations" />}
@@ -60,7 +67,7 @@ export default function WorldView() {
           <EntityEditor key={loreReset} wid={wid} kind="lore" />
         </>
       )}
-      {tab === "greetings" && <GreetingEditor wid={wid} />}
+      {tab === "greetings" && <GreetingEditor wid={wid} onOpenCharacter={openCharacter} />}
     </div>
   );
 }

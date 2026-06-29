@@ -15,7 +15,8 @@ const TEXT_FIELDS: { key: string; label: string; area?: boolean }[] = [
 
 type Mode = "grid" | "detail" | "edit";
 
-export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal?: number }) {
+export function CharacterEditor({ wid, resetSignal, focus }:
+  { wid: string; resetSignal?: number; focus?: { cid: string; vid: string } | null }) {
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [detail, setDetail] = useState<CharacterDetail | null>(null);
   const [vid, setVid] = useState("");
@@ -44,6 +45,12 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
     setDetail(null);
     setCard(null);
   }, [resetSignal]);
+
+  // arrived via a present-character link: open that character at the given version
+  useEffect(() => {
+    if (focus) focusCharacter(focus.cid, focus.vid);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const hasAvatar = (detail && card)
     ? (detail.versions.find((v) => v.id === vid)?.images ?? []).includes("avatar")
@@ -165,6 +172,14 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
 
   async function openDetail(cid: string) {
     await select(cid);
+    setMode("detail");
+  }
+
+  async function focusCharacter(cid: string, vid: string) {
+    setError(null);
+    const d = await api.readCharacter(wid, cid);
+    setDetail(d);
+    loadVersion(d, d.versions.some((v) => v.id === vid) ? vid : d.meta.default_version);
     setMode("detail");
   }
 

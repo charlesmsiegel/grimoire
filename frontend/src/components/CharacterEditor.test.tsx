@@ -174,6 +174,20 @@ test("bulk import localizes each imported card", async () => {
   expect(api.localizeImages).toHaveBeenCalledWith("w", "b", "default", expect.any(Function));
 });
 
+test("focus prop opens that character at the given version", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "rook", name: "Rook", default_version: "v1" },
+    versions: [
+      { id: "v1", name: "v1", card: CARD, images: [] },
+      { id: "v2", name: "v2", card: CARD, images: [] },
+    ],
+  });
+  render(<CharacterEditor wid="w" focus={{ cid: "rook", vid: "v2" }} />);
+  await waitFor(() => expect(api.readCharacter).toHaveBeenCalledWith("w", "rook"));
+  const version = await screen.findByLabelText("Version") as HTMLSelectElement;
+  expect(version.value).toBe("v2");
+});
+
 test("import version posts importCharacter into the current character", async () => {
   render(<CharacterEditor wid="w" />);
   await openEditForm();
