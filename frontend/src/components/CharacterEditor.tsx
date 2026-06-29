@@ -30,6 +30,8 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
   const [bookMsg, setBookMsg] = useState<string | null>(null);
   const [localizeProg, setLocalizeProg] = useState<{ done: number; total: number } | null>(null);
   const [localizeMsg, setLocalizeMsg] = useState<string | null>(null);
+  const [bulkLocalize, setBulkLocalize] = useState<{ current: number; cards: number } | null>(null);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
 
   const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
   useEffect(() => {
@@ -93,6 +95,33 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
       setLocalizeProg(null);
       if (finalMsg) setLocalizeMsg(finalMsg);
     }
+  }
+
+  // Localize a batch of freshly-imported cards back-to-back, accumulating one
+  // aggregate summary. Stays on the grid (no card is open), so progress and the
+  // result render in the grid toolbar rather than a single card's localize block.
+  async function runBulkLocalize(cards: { cid: string; version: string }[]) {
+    setImportMsg(null);
+    let localized = 0, skipped = 0, failed = 0;
+    for (let i = 0; i < cards.length; i++) {
+      setBulkLocalize({ current: i + 1, cards: cards.length });
+      try {
+        await api.localizeImages(wid, cards[i].cid, cards[i].version, (e) => {
+          if (e.summary) {
+            localized += e.summary.localized;
+            skipped += e.summary.skipped;
+            failed += e.summary.failed;
+          }
+        });
+      } catch {
+        failed += 1;  // a whole card's localize failing shouldn't abort the batch
+      }
+    }
+    setBulkLocalize(null);
+    setImportMsg(
+      `Localized ${localized} image${localized === 1 ? "" : "s"} across ${cards.length} cards` +
+      (skipped ? `, skipped ${skipped}` : "") + (failed ? `, ${failed} failed` : ""),
+    );
   }
 
   const bookCount = card?.data.character_book?.entries?.length ?? 0;
@@ -263,12 +292,13 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
     const files = Array.from(e.target.files ?? []);
     if (!files.length) return;
     setError(null);
+    setImportMsg(null);
     const failures: string[] = [];
-    let last: string | null = null;
+    const imported: { cid: string; version: string }[] = [];
     for (const file of files) {
       try {
-        const { character } = await api.importCharacter(wid, file, formatOf(file));
-        last = character;
+        const { character, version } = await api.importCharacter(wid, file, formatOf(file));
+        imported.push({ cid: character, version });
       } catch (err: any) {
         failures.push(`${file.name}: ${err.detail ?? String(err)}`);
       }
@@ -276,10 +306,12 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
     e.target.value = "";
     await reload();
     if (failures.length) setError(`Could not import — ${failures.join("; ")}`);
-    else if (files.length === 1 && last) {
-      await openDetail(last);
-      const d = await api.readCharacter(wid, last);
-      await runLocalize(last, d.meta.default_version);
+    else if (imported.length === 1) {
+      // single import: open the card so its localize progress shows inline
+      await openDetail(imported[0].cid);
+      await runLocalize(imported[0].cid, imported[0].version);
+    } else if (imported.length > 1) {
+      await runBulkLocalize(imported);
     }
   }
 
@@ -293,6 +325,10 @@ export function CharacterEditor({ wid, resetSignal }: { wid: string; resetSignal
           <button className="primary" onClick={newCharacter}>+ New character</button>
           <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
           <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden aria-label="Import character card" onChange={onImport} />
+          {bulkLocalize && (
+            <span className="field-hint">Localizing card {bulkLocalize.current}/{bulkLocalize.cards}…</span>
+          )}
+          {!bulkLocalize && importMsg && <span className="field-hint">{importMsg}</span>}
         </div>
         {error && <div className="banner">{error}</div>}
         {chars.length === 0 ? (

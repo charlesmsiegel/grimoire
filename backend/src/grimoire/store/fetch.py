@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import certifi
 import httpx
 
-MAX_BYTES = 8 * 1024 * 1024
+MAX_BYTES = 32 * 1024 * 1024
 IMG_EXTS = ("png", "jpg", "jpeg", "gif", "webp")
 _CT_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
            "image/gif": "gif", "image/webp": "webp"}
