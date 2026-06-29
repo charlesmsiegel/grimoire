@@ -261,6 +261,15 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
   outline: none; border-color: var(--accent);
 }
 
+/* ---- transcript message cards ---- */
+.msg-card { border: 1px solid var(--muted); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; }
+.msg-card.assistant { background: var(--surface); border-left: 2px solid var(--accent); }
+.msg-card.user { background: transparent; }
+.msg-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.msg-edit { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; }
+.msg-edit:hover { color: var(--accent); }
+.msg-edit-form textarea { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px; font-family: var(--font-body); resize: vertical; }
+
 /* ---- scene inspector + record drawer ---- */
 .inspector { width: 300px; flex: none; border-left: 1px solid var(--muted); padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
 .inspector-row { display: block; width: 100%; text-align: left; background: transparent; color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 6px 8px; margin-bottom: 6px; cursor: pointer; }
