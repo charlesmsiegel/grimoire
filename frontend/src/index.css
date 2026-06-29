@@ -261,6 +261,8 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
   outline: none; border-color: var(--accent);
 }
 
+.color-quotes .quoted { color: var(--accent); }
+
 /* ---- transcript message cards ---- */
 .msg-card { border: 1px solid var(--muted); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; }
 .msg-card.assistant { background: var(--surface); border-left: 2px solid var(--accent); }

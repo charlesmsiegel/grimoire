@@ -7,6 +7,7 @@ import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
 import { CastPanel } from "../components/CastPanel";
 import { SceneInspector } from "../components/SceneInspector";
+import { quotePlugin } from "../markdown/quotePlugin";
 
 export default function CampaignView({ keySet }: { keySet: boolean }) {
   const { cid = "" } = useParams();
@@ -20,6 +21,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [ctxKey, setCtxKey] = useState(0);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
+  const [colorQuotes, setColorQuotes] = useState(false);
   const streamRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -28,6 +30,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
       setScenes(list);
       if (list.length) selectScene(list[0].id);
     });
+    api.getConfig().then((c) => setColorQuotes(c.quote_color === "on")).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid]);
 
@@ -165,7 +168,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
             onSeeded={() => selectScene(activeId)}
           />
         )}
-        <div className="stream" ref={streamRef}>
+        <div className={"stream" + (colorQuotes ? " color-quotes" : "")} ref={streamRef}>
           {messages.map((m, i) => (
             <div className={`msg-card ${m.role}`} key={i}>
               <div className="msg-card-head">
@@ -184,14 +187,14 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                   </div>
                 </div>
               ) : (
-                <Markdown remarkPlugins={[remarkGfm]}>{m.content}</Markdown>
+                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[quotePlugin]}>{m.content}</Markdown>
               )}
             </div>
           ))}
           {streaming && (
             <div className="msg-card assistant">
               <div className="msg-card-head"><span className="role">Grimoire</span></div>
-              <Markdown remarkPlugins={[remarkGfm]}>{streaming}</Markdown>
+              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[quotePlugin]}>{streaming}</Markdown>
               <span className="cursor" />
             </div>
           )}
