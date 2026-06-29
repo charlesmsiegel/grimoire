@@ -193,3 +193,46 @@ def test_depth_zero_and_unparseable_fallback(monkeypatch, tmp_path):
     assert [m for m in context.build_messages(cid, sid) if m["role"] == "system"] == []
     config.write_config(context_scan_depth="abc")  # unparseable -> fallback 8 -> 'pact' activates
     assert "pact lore" in context.build_messages(cid, sid)[0]["content"]
+
+
+def test_cast_directory_tiers(monkeypatch, tmp_path):
+    from grimoire.store import briefs
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+
+    # present in this scene (full card)
+    characters.create_character(wroot, "Aese", "main", _npc_card("Aese", description="present-desc"))
+    # appeared elsewhere in the campaign (paragraph) — needs a brief to be snapshotted
+    characters.create_character(wroot, "Myval", "main", _npc_card("Myval", description="m"))
+    briefs.write_brief(wroot, "myval", "A raccoongirl rogue.", "Myval prowls the dusk road.",
+                       briefs.default_card_hash(wroot, "myval"))
+    # world-only with a brief and two versions (sentence + version list)
+    characters.create_character(wroot, "Akane", "main", _npc_card("Akane", description="a"))
+    characters.create_version(wroot, "akane", "futa", _npc_card("Akane", description="a"))
+    briefs.write_brief(wroot, "akane", "An eager doggirl.", "Akane wants to please.",
+                       briefs.default_card_hash(wroot, "akane"))
+    # world-only WITHOUT a brief (must be skipped)
+    characters.create_character(wroot, "Ghost", "main", _npc_card("Ghost", description="g"))
+
+    # Myval appears in a different scene -> roster, not in this scene's cast
+    other = scenes.create_scene(cid, "Other")
+    ap.appear(cid, other, "characters", "myval", "main", "npc")
+    # Aese appears in our scene
+    ap.appear(cid, sid, "characters", "aese", "main", "npc")
+    scenes.append_message(cid, sid, "user", "hi")
+
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert "present-desc" in sys                                  # tier 1 full card
+    assert "Myval: Myval prowls the dusk road." in sys           # tier 2 paragraph
+    assert "Akane: An eager doggirl. (available as: futa, main)" in sys  # tier 3 sentence + versions
+    assert "Ghost" not in sys                                     # un-briefed world char skipped
+    assert "Myval" not in sys.split("## Known to exist")[1]       # roster char not in tier 3
+
+
+def test_cast_directory_absent_when_no_briefs(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Aese", "main", _npc_card("Aese", description="d"))
+    ap.appear(cid, sid, "characters", "aese", "main", "npc")
+    scenes.append_message(cid, sid, "user", "hi")
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert "Other characters in this world" not in sys
