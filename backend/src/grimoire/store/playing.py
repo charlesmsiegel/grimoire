@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import appearances, campaigns, context, greetings, pcs, scenes, worlds
+from . import appearances, campaigns, characters, context, greetings, pcs, scenes, worlds
 
 
 class PlayError(Exception):
@@ -60,7 +60,12 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> None:
         raise PlayError("scene already has messages")
     if not {a["id"]: a["available"] for a in available_greetings(cid)}.get(gid, False):
         raise PlayError(f"greeting {gid} is not available")
-    appearances.appear(cid, sid, "characters", g["character"], g["version"], "npc")
+    # Cast everyone present at the opener: the primary at the greeting's version,
+    # any co-present character at its own default version. Deduped, primary first.
+    for cid_ in dict.fromkeys([g["character"], *g["present"]]):
+        version = g["version"] if cid_ == g["character"] else \
+            characters.read_character(wroot, cid_)["meta"]["default_version"]
+        appearances.appear(cid, sid, "characters", cid_, version, "npc")
     _mark_played(cid, gid)
     text = context._substitute(greetings.read_greeting(wroot, gid)["body"],
                                context.scene_substitutions(cid, sid))

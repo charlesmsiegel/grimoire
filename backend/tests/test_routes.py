@@ -379,6 +379,18 @@ def test_scene_missing_404(client):
 
 
 # ---- greetings & plot maps (2b) ----
+def test_greeting_present_cast_roundtrips_over_api(client):
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Rowan"})
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Arrival: Mara & Rowan", "character": "mara",
+                            "version": "default", "body": "Mara and Rowan.",
+                            "present": ["mara", "rowan"]}).json()["id"]
+    read = client.get(f"/api/worlds/{wid}/greetings/{gid}").json()
+    assert read["meta"]["present"] == ["mara", "rowan"]
+
+
 def test_greeting_crud_import_edges_and_start(client):
     wid = _world(client)
     client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"})

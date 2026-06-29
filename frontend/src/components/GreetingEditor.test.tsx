@@ -64,6 +64,32 @@ test("import-from-character posts the selected character + version", async () =>
   );
 });
 
+test("editing a greeting toggles present characters and saves them", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },
+    { id: "rowan", name: "Rowan", default_version: "default", versions: [{ id: "default", name: "default" }] },
+  ]);
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
+    body: "hi", edges: { leads_to: [], excludes: [] },
+  });
+  (api.updateGreeting as any).mockResolvedValue({ ok: true });
+  const { container } = render(<GreetingEditor wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
+  const present = screen.getByText("Present characters").closest(".field") as HTMLElement;
+  fireEvent.click(within(present).getByRole("button", { name: "Rowan" }));
+  fireEvent.click(screen.getByRole("button", { name: /save greeting/i }));
+  await waitFor(() =>
+    expect(api.updateGreeting).toHaveBeenCalledWith("w", "open",
+      expect.objectContaining({ present: ["seraphine", "rowan"] })),
+  );
+});
+
 test("editing a greeting sets leads_to edges", async () => {
   (api.listGreetings as any).mockResolvedValue([
     { id: "open", name: "Open", character: "seraphine", version: "default", requires_tags: [], predecessor_join: "all" },
