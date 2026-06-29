@@ -141,6 +141,27 @@ def append_message(cid: str, sid: str, role: str, content: str) -> None:
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
+def _serialize_messages(messages: list[dict]) -> str:
+    body = ""
+    for m in messages:
+        block = f"**{ROLE_TO_LABEL[m['role']]}:** {m['content'].strip()}\n"
+        body = (body.rstrip() + "\n\n" + block) if body.strip() else block
+    return body
+
+
+def edit_message(cid: str, sid: str, index: int, content: str) -> None:
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    messages = read_scene(cid, sid)["messages"]
+    if index < 0 or index >= len(messages):
+        raise IndexError(index)
+    messages[index]["content"] = content.strip()
+    meta["updated"] = now_iso()
+    p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")
+
+
 def get_location_history(cid: str, sid: str) -> list[str]:
     """Ordered campaign-location ids this scene has been at; last is current. Missing ⇒ []."""
     p = _scene_path(cid, sid)

@@ -76,6 +76,19 @@ def test_get_location_history_missing_scene_is_empty(monkeypatch, tmp_path):
     assert scenes.get_location_history(cid, "nope") == []
 
 
+def test_edit_message_roundtrip_and_bounds(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "user", "frist")
+    scenes.append_message(cid, sid, "assistant", "She nods.")
+    scenes.edit_message(cid, sid, 0, "first")
+    assert scenes.read_scene(cid, sid)["messages"] == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "She nods."}]
+    with pytest.raises(IndexError):
+        scenes.edit_message(cid, sid, 5, "x")
+
+
 def test_rename_changes_id_keeps_order(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Old Title")
