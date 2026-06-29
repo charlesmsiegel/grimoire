@@ -4,6 +4,7 @@ import { api } from "./api/client";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { DEFAULT_THEME } from "./theme/themes";
 import CampaignsView from "./routes/CampaignsView";
+import CampaignWizard from "./routes/CampaignWizard";
 import CampaignView from "./routes/CampaignView";
 import WorldsView from "./routes/WorldsView";
 import WorldView from "./routes/WorldView";
@@ -39,6 +40,7 @@ export default function App() {
       </div>
       <Routes>
         <Route path="/" element={<CampaignsView />} />
+        <Route path="/campaigns/new" element={<CampaignWizard keySet={keySet} />} />
         <Route path="/campaigns/:cid" element={<CampaignView keySet={keySet} />} />
         <Route path="/worlds" element={<WorldsView />} />
         <Route path="/worlds/:wid" element={<WorldView />} />
