@@ -1057,6 +1057,18 @@ def get_scene_context(cid: str, sid: str):
     return {"model": scene["meta"].get("model", ""), "total_tokens": total, "sections": sections}
 
 
+@router.get("/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}")
+def get_cast_detail(cid: str, sid: str, kind: str, id: str):
+    _require_scene(cid, sid)
+    if kind not in store.appearances.ACTOR_KINDS:
+        raise HTTPException(status_code=404, detail="unknown actor kind")
+    try:
+        return store.appearances.cast_detail(cid, sid, kind, id)
+    except (store.appearances.AppearError, store.characters.CharacterNotFound,
+            store.characters.VersionNotFound, store.pcs.PCNotFound, store.pcs.PCVersionNotFound):
+        raise HTTPException(status_code=404, detail="actor not found")
+
+
 # ---- campaign greetings / play (declared before the generic /{kind} routes) ----
 @router.get("/campaigns/{cid}/greetings/available")
 def get_available_greetings(cid: str):

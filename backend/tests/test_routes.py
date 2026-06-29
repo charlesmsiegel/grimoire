@@ -253,6 +253,25 @@ def test_scene_context_breakdown(client):
     assert body["total_tokens"] == sum(s["tokens"] for s in body["sections"])
 
 
+def test_cast_detail_for_character_and_pc(client):
+    wid, cid = _campaign(client)
+    sera = {"spec": "chara_card_v3", "spec_version": "3.0",
+            "data": {"name": "Seraphine", "description": "She serves the Drowned King.",
+                     "personality": "cold", "extensions": {}}}
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine", "card": sera})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"kind": "characters", "id": "seraphine"})
+    client.post(f"/api/campaigns/{cid}/pcs", json={
+        "name": "Mara", "persona": {"name": "Mara", "pronouns": "she/her", "summary": "outlaw", "description": "On the run."}})
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"kind": "pcs", "id": "mara", "version": "default"})
+
+    c = client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/seraphine").json()
+    assert c["name"] == "Seraphine" and "Drowned King" in c["body"] and "cold" in c["body"]
+    p = client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast/pcs/mara").json()
+    assert p["name"] == "Mara" and "On the run." in p["body"]
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/ghost").status_code == 404
+
+
 def test_world_pc_crud_and_tag_validation(client):
     wid = _world(client)
     client.post(f"/api/worlds/{wid}/tags", json={"name": "Student"})
