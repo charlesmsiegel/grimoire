@@ -112,6 +112,8 @@ export type Availability = { id: string; name: string; available: boolean; reaso
 // cast
 export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "npc" };
 export type RosterEntry = { kind: string; id: string; version: string; role: string; scenes: string[] };
+export type SceneLocationRef = { id: string; name: string };
+export type SceneLocation = { current: SceneLocationRef | null; visited: SceneLocationRef[] };
 
 // lorebook import
 export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKind };
@@ -291,6 +293,11 @@ export const api = {
     request<Availability[]>("GET", `/api/campaigns/${cid}/greetings/available`),
   startFromGreeting: (cid: string, sid: string, greeting: string) =>
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/start-from-greeting`, { greeting }),
+  getSceneLocation: (cid: string, sid: string) =>
+    request<SceneLocation>("GET", `/api/campaigns/${cid}/scenes/${sid}/location`),
+  setSceneLocation: (cid: string, sid: string, location: string) =>
+    request<{ ok: boolean; moved: boolean; name: string }>(
+      "PUT", `/api/campaigns/${cid}/scenes/${sid}/location`, { location }),
   opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/opener`, { prompt }, onEvent),
 
