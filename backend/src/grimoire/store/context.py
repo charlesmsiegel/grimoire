@@ -5,6 +5,7 @@ the single swap point for smarter retrieval later.
 
 from __future__ import annotations
 
+import functools
 import re
 
 from . import appearances, briefs, campaigns, characters, config, entities, pcs, scenes, worlds
@@ -159,7 +160,10 @@ def _cast_directory(croot, wroot, cid: str, sid: str) -> str:
     return "\n\n".join(parts)
 
 
-def build_messages(cid: str, sid: str) -> list[dict]:
+def _assemble(cid: str, sid: str) -> dict:
+    """One pass producing substituted, labeled system sections + history + post-history.
+    Shared by build_messages (joins sections into the system message) and
+    context_sections (exposes them for the token breakdown)."""
     scene = scenes.read_scene(cid, sid)
     history = [{"role": m["role"], "content": m["content"]} for m in scene["messages"]]
     croot = campaigns.campaign_root(cid)
@@ -203,11 +207,19 @@ def build_messages(cid: str, sid: str) -> list[dict]:
     # depth 0 => no scan window (history[-0:] would be the WHOLE list, so guard it)
     recent_text = "\n".join(m["content"] for m in history[-depth:]) if depth else ""
 
-    parts: list[str] = []
-    parts += [d.get("system_prompt", "").strip() for d in npc_cards if d.get("system_prompt", "").strip()]
-    parts += [b for b in (_npc_block(d) for d in npc_cards) if b]
-    parts += [b for b in player_blocks if b]
-    parts += [d.get("mes_example", "").strip() for d in npc_cards if d.get("mes_example", "").strip()]
+    sys: list[tuple[str, str]] = []
+
+    def add(label: str, text: str) -> None:
+        text = text.strip()
+        if text:
+            sys.append((label, _substitute(text, subs)))
+
+    add("Global system prompt", config.read_config().get("system_prompt", ""))
+    add("System prompt", "\n\n".join(d.get("system_prompt", "").strip() for d in npc_cards if d.get("system_prompt", "").strip()))
+    add("Character descriptions", "\n\n".join(b for b in (_npc_block(d) for d in npc_cards) if b))
+    add("Player personas", "\n\n".join(b for b in player_blocks if b))
+    add("Message examples", "\n\n".join(d.get("mes_example", "").strip() for d in npc_cards if d.get("mes_example", "").strip()))
+
     history_ids = scenes.get_location_history(cid, sid)
     current_loc = history_ids[-1] if history_ids else None
     exclude: frozenset = frozenset()
@@ -215,27 +227,56 @@ def build_messages(cid: str, sid: str) -> list[dict]:
         try:
             loc_body = entities.read_entity(croot, "locations", current_loc)["body"].strip()
             exclude = frozenset({current_loc})
-            if loc_body:
-                parts.append("# Current setting\n" + loc_body)
+            add("Current setting", "# Current setting\n" + loc_body if loc_body else "")
         except entities.EntityNotFound:
             pass  # referenced location was deleted — omit the setting block
-    wi = _world_info(croot, recent_text, exclude)
-    if wi:
-        parts.append(wi)
+    add("World info", _world_info(croot, recent_text, exclude))
     wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"].get("world", ""))
-    directory = _cast_directory(croot, wroot, cid, sid)
-    if directory:
-        parts.append(directory)
-    system_text = "\n\n".join(parts).strip()
+    add("Off-scene cast", _cast_directory(croot, wroot, cid, sid))
+
     post_history = "\n\n".join(
         d.get("post_history_instructions", "").strip() for d in npc_cards
         if d.get("post_history_instructions", "").strip()
     ).strip()
+    post_history = _substitute(post_history, subs) if post_history else ""
 
+    sub_history = [{"role": m["role"], "content": _substitute(m["content"], subs)} for m in history]
+    return {"system": sys, "history": sub_history, "post_history": post_history}
+
+
+def build_messages(cid: str, sid: str) -> list[dict]:
+    a = _assemble(cid, sid)
     messages: list[dict] = []
+    system_text = "\n\n".join(t for _, t in a["system"]).strip()
     if system_text:
-        messages.append({"role": "system", "content": _substitute(system_text, subs)})
-    messages += [{"role": m["role"], "content": _substitute(m["content"], subs)} for m in history]
-    if post_history:
-        messages.append({"role": "system", "content": _substitute(post_history, subs)})
+        messages.append({"role": "system", "content": system_text})
+    messages += a["history"]
+    if a["post_history"]:
+        messages.append({"role": "system", "content": a["post_history"]})
     return messages
+
+
+def context_sections(cid: str, sid: str) -> list[dict]:
+    a = _assemble(cid, sid)
+    out = [{"label": label, "text": text} for label, text in a["system"]]
+    hist = "\n\n".join(m["content"] for m in a["history"])
+    if hist:
+        out.append({"label": "Conversation history", "text": hist})
+    if a["post_history"]:
+        out.append({"label": "Post-history instructions", "text": a["post_history"]})
+    return out
+
+
+@functools.lru_cache(maxsize=1)
+def _encoder():
+    import tiktoken
+    return tiktoken.get_encoding("cl100k_base")
+
+
+def count_tokens(text: str) -> int:
+    if not text:
+        return 0
+    try:
+        return len(_encoder().encode(text))
+    except Exception:
+        return len(text) // 4
