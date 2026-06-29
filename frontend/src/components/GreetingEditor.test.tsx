@@ -136,6 +136,25 @@ test("the view sidebar shows the full dependency picture", async () => {
   expect(within(within(side).getByText("Requires tags").closest(".side-section") as HTMLElement).getByText("VIP")).toBeInTheDocument();
 });
 
+test("clicking a Depends-on scene navigates to that greeting", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "open", name: "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "any" },
+    { id: "prologue", name: "Prologue", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockImplementation((_w: string, id: string) => Promise.resolve({
+    meta: { id, name: id === "prologue" ? "Prologue" : "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "any" },
+    body: "x", edges: { leads_to: [], excludes: [] }, predecessors: id === "open" ? ["prologue"] : [],
+  }));
+  const { container } = render(<GreetingEditor wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
+  const dep = within(container.querySelector(".greeting-sidebar") as HTMLElement)
+    .getByText("Depends on").closest(".side-section") as HTMLElement;
+  fireEvent.click(within(dep).getByRole("button", { name: "Prologue" }));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "prologue"));
+});
+
 test("editing a greeting toggles present characters and saves them", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },

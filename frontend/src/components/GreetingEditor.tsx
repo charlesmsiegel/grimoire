@@ -106,12 +106,15 @@ export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCh
   const presentLabel = (id: string) =>
     chars.find((c) => c.id === id)?.versions.find((v) => v.id === presentVid(id))?.name ?? charName(id);
 
-  function sideList(label: string, items: string[], render: (id: string) => string) {
+  function sideList(label: string, items: string[], render: (id: string) => string,
+                    onItem?: (id: string) => void) {
     if (items.length === 0) return null;
     return (
       <div className="side-section">
         <h4>{label}</h4>
-        <div className="chips">{items.map((id) => <span key={id} className="chip on">{render(id)}</span>)}</div>
+        <div className="chips">{items.map((id) => onItem
+          ? <button key={id} className="chip on" onClick={() => onItem(id)}>{render(id)}</button>
+          : <span key={id} className="chip on">{render(id)}</span>)}</div>
       </div>
     );
   }
@@ -164,11 +167,13 @@ export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCh
                   <div className="field-hint">
                     {form.predecessor_join === "all" ? "all must be played" : "any unlocks it"}
                   </div>
-                  <div className="chips">{predecessors.map((id) => <span key={id} className="chip on">{greetName(id)}</span>)}</div>
+                  <div className="chips">{predecessors.map((id) => (
+                    <button key={id} className="chip on" onClick={() => select(id)}>{greetName(id)}</button>
+                  ))}</div>
                 </div>
               )}
-              {sideList("Unlocks", edges.leads_to, greetName)}
-              {sideList("Excludes", edges.excludes, greetName)}
+              {sideList("Unlocks", edges.leads_to, greetName, select)}
+              {sideList("Excludes", edges.excludes, greetName, select)}
               {sideList("Requires tags", form.requires_tags, (t) => tags[t] ?? t)}
             </aside>
           </div>
