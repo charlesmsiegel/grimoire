@@ -120,6 +120,10 @@ class Appear(BaseModel):
     role: str | None = None
 
 
+class SceneLocation(BaseModel):
+    location: str
+
+
 class Dismiss(BaseModel):
     character: str
 
@@ -1009,6 +1013,33 @@ def post_dismiss(cid: str, sid: str, body: Dismiss):
     _require_scene(cid, sid)
     store.scenes.add_dismissed(cid, sid, body.character)
     return {"ok": True}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/location")
+def get_scene_location(cid: str, sid: str):
+    _require_scene(cid, sid)
+    croot = store.campaigns.campaign_root(cid)
+    history = store.scenes.get_location_history(cid, sid)
+
+    def ref(eid: str) -> dict:
+        try:
+            name = store.entities.read_entity(croot, "locations", eid)["meta"].get("name", eid)
+        except store.entities.EntityNotFound:
+            name = eid
+        return {"id": eid, "name": name}
+
+    return {"current": ref(history[-1]) if history else None,
+            "visited": [ref(e) for e in history[:-1]]}
+
+
+@router.put("/campaigns/{cid}/scenes/{sid}/location")
+def put_scene_location(cid: str, sid: str, body: SceneLocation):
+    _require_scene(cid, sid)
+    try:
+        result = store.scenes.set_location(cid, sid, body.location)
+    except store.entities.EntityNotFound:
+        raise HTTPException(status_code=404, detail="location not found")
+    return {"ok": True, **result}
 
 
 # ---- campaign greetings / play (declared before the generic /{kind} routes) ----

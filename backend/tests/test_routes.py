@@ -201,6 +201,35 @@ def test_campaign_local_pc_create_seat_and_sync(client):
     assert client.get(f"/api/campaigns/{cid}/incoming").json() == []
 
 
+def test_scene_location_set_get_and_move(client):
+    wid, cid = _campaign(client)
+    a = client.post(f"/api/campaigns/{cid}/locations",
+                    json={"name": "Salt Cathedral", "body": "A drowned basilica."}).json()["id"]
+    b = client.post(f"/api/campaigns/{cid}/locations",
+                    json={"name": "Drowned Market", "body": "Shallow stalls."}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    # first set: silent
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/location", json={"location": a}).json() == \
+        {"ok": True, "moved": False, "name": "Salt Cathedral"}
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == []
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/location").json() == \
+        {"current": {"id": a, "name": "Salt Cathedral"}, "visited": []}
+    # move: announces
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/location", json={"location": b}).json() == \
+        {"ok": True, "moved": True, "name": "Drowned Market"}
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == [
+        {"role": "assistant", "content": "*The scene moves to Drowned Market.*"}]
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/location").json() == \
+        {"current": {"id": b, "name": "Drowned Market"}, "visited": [{"id": a, "name": "Salt Cathedral"}]}
+
+
+def test_scene_location_unknown_404(client):
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/location",
+                      json={"location": "nope"}).status_code == 404
+
+
 def test_world_pc_crud_and_tag_validation(client):
     wid = _world(client)
     client.post(f"/api/worlds/{wid}/tags", json={"name": "Student"})
