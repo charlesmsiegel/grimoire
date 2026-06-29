@@ -238,6 +238,21 @@ def test_scene_location_unknown_404(client):
                       json={"location": "nope"}).status_code == 404
 
 
+def test_scene_context_breakdown(client):
+    wid, cid = _campaign(client)
+    sera = {"spec": "chara_card_v3", "spec_version": "3.0",
+            "data": {"name": "Seraphine", "description": "She serves the Drowned King.", "extensions": {}}}
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine", "card": sera})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"kind": "characters", "id": "seraphine"})
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
+    assert body["model"]
+    labels = [s["label"] for s in body["sections"]]
+    assert "Character descriptions" in labels
+    assert all(s["tokens"] > 0 for s in body["sections"])
+    assert body["total_tokens"] == sum(s["tokens"] for s in body["sections"])
+
+
 def test_world_pc_crud_and_tag_validation(client):
     wid = _world(client)
     client.post(f"/api/worlds/{wid}/tags", json={"name": "Student"})
