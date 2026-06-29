@@ -24,6 +24,8 @@ class ConfigUpdate(BaseModel):
     model: str | None = None
     theme: str | None = None
     openrouter_key: str | None = None
+    system_prompt: str | None = None
+    quote_color: str | None = None
 
 
 class NameBody(BaseModel):
@@ -177,7 +179,8 @@ class LorebookCommit(BaseModel):
 
 # ---- config ----
 def _public_config(cfg: dict[str, str]) -> dict:
-    return {"model": cfg["model"], "theme": cfg["theme"], "key_set": bool(cfg["openrouter_key"])}
+    return {"model": cfg["model"], "theme": cfg["theme"], "key_set": bool(cfg["openrouter_key"]),
+            "system_prompt": cfg.get("system_prompt", ""), "quote_color": cfg.get("quote_color", "off")}
 
 
 @router.get("/config")
