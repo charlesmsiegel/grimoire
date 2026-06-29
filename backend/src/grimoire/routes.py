@@ -66,6 +66,11 @@ class DefaultVersion(BaseModel):
     default_version: str
 
 
+class BriefSave(BaseModel):
+    tagline: str = ""
+    body: str = ""
+
+
 class PCCreate(BaseModel):
     name: str
     tags: list[str] = []
@@ -418,6 +423,48 @@ def delete_world_version(wid: str, cid: str, vid: str):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
+
+
+@router.get("/worlds/{wid}/characters/{cid}/brief")
+def get_character_brief(wid: str, cid: str):
+    root = _world_root_or_404(wid)
+    try:
+        store.characters.read_character(root, cid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    return {"brief": store.briefs.read_brief(root, cid), "stale": store.briefs.is_stale(root, cid)}
+
+
+@router.put("/worlds/{wid}/characters/{cid}/brief")
+def put_character_brief(wid: str, cid: str, body: BriefSave):
+    root = _world_root_or_404(wid)
+    base = store.briefs.default_card_hash(root, cid)
+    if base is None:
+        raise HTTPException(status_code=404, detail="character not found")
+    store.briefs.write_brief(root, cid, body.tagline, body.body, base)
+    return {"ok": True}
+
+
+@router.post("/worlds/{wid}/characters/{cid}/brief")
+async def post_character_brief(wid: str, cid: str,
+                               client: OpenRouterClient = Depends(get_openrouter)):
+    root = _world_root_or_404(wid)
+    cfg = store.read_config()
+    _require_key(cfg)
+    try:
+        ch = store.characters.read_character(root, cid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
+    messages = store.briefs.build_prompt(card["data"])
+    try:
+        text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
+    except OpenRouterError as exc:
+        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+    tagline, paragraph = store.briefs.parse_output(text)
+    store.briefs.write_brief(root, cid, tagline, paragraph,
+                             store.briefs.default_card_hash(root, cid) or "")
+    return {"brief": store.briefs.read_brief(root, cid), "stale": False}
 
 
 _EXPORT_MEDIA = {"json": "application/json", "png": "image/png", "charx": "application/zip"}
