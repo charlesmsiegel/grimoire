@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+﻿import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { GreetingEditor } from "./GreetingEditor";
 
 vi.mock("../api/client", () => ({
@@ -102,7 +102,7 @@ test("clicking a present character opens that character at the right version", a
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
-  const present = within(container.querySelector(".greeting-sidebar") as HTMLElement)
+  const present = within(container.querySelector(".detail-sidebar") as HTMLElement)
     .getByText("Present characters").closest(".side-section") as HTMLElement;
   // source character's chip carries its variant label; co-present stays plain
   fireEvent.click(within(present).getByRole("button", { name: "Seraphine (alt)" }));
@@ -127,7 +127,7 @@ test("the view sidebar shows the full dependency picture", async () => {
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
-  const side = container.querySelector(".greeting-sidebar") as HTMLElement;
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
   const dep = within(side).getByText("Depends on").closest(".side-section") as HTMLElement;
   expect(within(dep).getByText("Prologue")).toBeInTheDocument();
   expect(within(dep).getByText("any unlocks it")).toBeInTheDocument();
@@ -149,7 +149,7 @@ test("clicking a Depends-on scene navigates to that greeting", async () => {
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
-  const dep = within(container.querySelector(".greeting-sidebar") as HTMLElement)
+  const dep = within(container.querySelector(".detail-sidebar") as HTMLElement)
     .getByText("Depends on").closest(".side-section") as HTMLElement;
   fireEvent.click(within(dep).getByRole("button", { name: "Prologue" }));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "prologue"));

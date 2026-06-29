@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { EntityEditor } from "./EntityEditor";
 
 vi.mock("../api/client", () => ({
@@ -18,6 +18,7 @@ beforeEach(() => {
   (api.createEntity as any).mockResolvedValue({ id: "e1" });
   (api.updateEntity as any).mockResolvedValue({ ok: true });
   (api.deleteEntity as any).mockResolvedValue({ ok: true });
+  (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact" }, body: "x" });
 });
 
 test("lists entities and creates one with keys", async () => {
@@ -29,19 +30,32 @@ test("lists entities and creates one with keys", async () => {
   fireEvent.click(screen.getByRole("button", { name: /create lore entry/i }));
   await waitFor(() =>
     expect(api.createEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", {
-      name: "Salt Pact",
-      body: "binds",
-      keys: "pact,salt",
+      name: "Salt Pact", body: "binds", keys: "pact,salt",
     }),
   );
 });
 
+test("clicking an entity shows a read-only view; Edit reveals the form", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
+  (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact,brine" }, body: "Binds **all**" });
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  expect(screen.getByText("all")).toBeInTheDocument();          // markdown rendered
+  expect(container.querySelector("textarea")).toBeNull();        // read-only
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText("pact")).toBeInTheDocument();    // keys in sidebar
+  expect(within(side).getByText("brine")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  expect(container.querySelector("textarea")).not.toBeNull();    // form revealed
+});
+
 test("editing an entity saves with updated keys", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
-  (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact" }, body: "x" });
   render(<EntityEditor wid="w" kind="lore" />);
   fireEvent.click(await screen.findByText("Salt"));
   await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   fireEvent.change(screen.getByLabelText("Keys"), { target: { value: "pact,brine" } });
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
   await waitFor(() =>
@@ -54,7 +68,9 @@ test("deletes after confirm", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   render(<EntityEditor wid="w" kind="lore" />);
-  await screen.findByText("Salt");
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   fireEvent.click(screen.getByRole("button", { name: /delete/i }));
   await waitFor(() => expect(api.deleteEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", "salt"));
 });

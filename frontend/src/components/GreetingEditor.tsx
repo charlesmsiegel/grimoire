@@ -137,14 +137,14 @@ export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCh
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
         {mode === "view" && gid ? (
-          <div className="greeting-view">
-            <div className="greeting-main">
+          <div className="detail-view">
+            <div className="detail-main">
               <h3>{form.name}</h3>
-              <div className="greeting-rendered">
+              <div className="detail-rendered">
                 <Markdown remarkPlugins={[remarkGfm]}>{form.body}</Markdown>
               </div>
             </div>
-            <aside className="greeting-sidebar">
+            <aside className="detail-sidebar">
               <div className="form-actions">
                 <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
               </div>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api, type EntityKind, type EntitySummary } from "../api/client";
-import { EditableRow } from "./EditableRow";
 import { Field } from "./Field";
 
 export function EntityEditor({ wid, kind }: { wid: string; kind: EntityKind }) {
@@ -10,7 +11,9 @@ export function EntityEditor({ wid, kind }: { wid: string; kind: EntityKind }) {
   const [name, setName] = useState("");
   const [body, setBody] = useState("");
   const [keys, setKeys] = useState("");
+  const [mode, setMode] = useState<"view" | "edit">("edit"); // existing entries open read-only
   const [error, setError] = useState<string | null>(null);
+  const label = kind === "lore" ? "lore entry" : "location";
 
   const reload = useCallback(() => api.listEntities(scope, kind).then(setItems), [wid, kind]);
   useEffect(() => {
@@ -24,6 +27,7 @@ export function EntityEditor({ wid, kind }: { wid: string; kind: EntityKind }) {
     setName("");
     setBody("");
     setKeys("");
+    setMode("edit"); // a brand-new entry goes straight to the form
   }
 
   async function select(id: string) {
@@ -33,16 +37,22 @@ export function EntityEditor({ wid, kind }: { wid: string; kind: EntityKind }) {
     setName(e.meta.name);
     setBody(e.body);
     setKeys(e.meta.keys ?? "");
+    setMode("view");
   }
 
   async function save() {
     if (!name.trim()) return;
     setError(null);
     try {
-      if (editing) await api.updateEntity(scope, kind, editing, { name, body, keys });
-      else await api.createEntity(scope, kind, { name, body, keys });
-      await reload();
-      resetForm();
+      if (editing) {
+        await api.updateEntity(scope, kind, editing, { name, body, keys });
+        await reload();
+        await select(editing); // back to the read-only view
+      } else {
+        await api.createEntity(scope, kind, { name, body, keys });
+        await reload();
+        resetForm();
+      }
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -55,43 +65,63 @@ export function EntityEditor({ wid, kind }: { wid: string; kind: EntityKind }) {
     await reload();
   }
 
-  const label = kind === "lore" ? "lore entry" : "location";
+  const keyList = keys.split(",").map((k) => k.trim()).filter(Boolean);
 
   return (
-    <div>
-      {error && <div className="banner">{error}</div>}
-      <div className="list">
+    <div className="editor">
+      <div className="editor-list">
+        <button className="primary new" onClick={resetForm}>+ New {label}</button>
         {items.map((e) => (
-          <EditableRow
-            key={e.id}
-            label={e.name}
-            subtitle={e.keys ? `keys: ${e.keys}` : "always-on"}
-            active={editing === e.id}
-            onSelect={() => select(e.id)}
-            onRename={(next) => api.updateEntity(scope, kind, e.id, { name: next }).then(reload)}
-            onDelete={() => remove(e)}
-          />
+          <button key={e.id} className={"row" + (editing === e.id ? " active" : "")} onClick={() => select(e.id)}>
+            {e.name}
+          </button>
         ))}
         {items.length === 0 && <div className="editor-empty">No {kind} yet.</div>}
       </div>
 
-      <div className="form">
-        <h3>{editing ? `Edit ${label}` : `New ${label}`}</h3>
-        <Field label="Name">
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
-        <Field label="Body">
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={6} />
-        </Field>
-        <Field label="Keys" hint="comma-separated activation triggers; blank = always-on">
-          <input type="text" value={keys} onChange={(e) => setKeys(e.target.value)} />
-        </Field>
-        <div className="form-actions">
-          {editing && <button className="subtle" onClick={resetForm}>New</button>}
-          <button className="primary" onClick={save} disabled={!name.trim()}>
-            {editing ? "Save" : `Create ${label}`}
-          </button>
-        </div>
+      <div className="editor-body">
+        {error && <div className="banner">{error}</div>}
+        {mode === "view" && editing ? (
+          <div className="detail-view">
+            <div className="detail-main">
+              <h3>{name}</h3>
+              <div className="detail-rendered">
+                <Markdown remarkPlugins={[remarkGfm]}>{body}</Markdown>
+              </div>
+            </div>
+            <aside className="detail-sidebar">
+              <div className="form-actions">
+                <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
+              </div>
+              <div className="side-section">
+                <h4>Keys</h4>
+                {keyList.length > 0
+                  ? <div className="chips">{keyList.map((k) => <span key={k} className="chip on">{k}</span>)}</div>
+                  : <div className="field-hint">always-on</div>}
+              </div>
+            </aside>
+          </div>
+        ) : (
+          <div className="form">
+            <h3>{editing ? `Edit ${label}` : `New ${label}`}</h3>
+            <Field label="Name">
+              <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
+            </Field>
+            <Field label="Body">
+              <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={10} />
+            </Field>
+            <Field label="Keys" hint="comma-separated activation triggers; blank = always-on">
+              <input type="text" value={keys} onChange={(e) => setKeys(e.target.value)} />
+            </Field>
+            <div className="form-actions">
+              {editing && <button className="subtle" onClick={() => remove(items.find((x) => x.id === editing)!)}>Delete</button>}
+              {editing && <button className="subtle" onClick={() => select(editing)}>Cancel</button>}
+              <button className="primary" onClick={save} disabled={!name.trim()}>
+                {editing ? "Save" : `Create ${label}`}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
