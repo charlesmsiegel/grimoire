@@ -236,3 +236,23 @@ def test_cast_directory_absent_when_no_briefs(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "user", "hi")
     sys = context.build_messages(cid, sid)[0]["content"]
     assert "Other characters in this world" not in sys
+
+
+def test_current_setting_injected_once(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    loc = entities.create_entity(croot, "locations", "Salt Cathedral", "A drowned basilica of black salt.")
+    scenes.set_location(cid, sid, loc)
+    scenes.append_message(cid, sid, "user", "look around")
+    sys = context.build_messages(cid, sid)[0]["content"]
+    assert "# Current setting" in sys
+    # keyless location would otherwise be always-on in world-info too; exclude prevents a double-inject
+    assert sys.count("A drowned basilica of black salt.") == 1
+
+
+def test_no_setting_block_when_unset(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "hi")
+    msgs = context.build_messages(cid, sid)
+    sys = msgs[0]["content"] if msgs and msgs[0]["role"] == "system" else ""
+    assert "# Current setting" not in sys
