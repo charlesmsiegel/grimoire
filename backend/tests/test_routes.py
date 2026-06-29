@@ -46,6 +46,14 @@ def test_config_never_leaks_key(client):
 
 
 # ---- worlds ----
+def test_config_system_prompt_and_quote_color_roundtrip(client):
+    client.put("/api/config", json={"system_prompt": "Never speak for the PC.", "quote_color": "on"})
+    body = client.get("/api/config").json()
+    assert body["system_prompt"] == "Never speak for the PC."
+    assert body["quote_color"] == "on"
+    assert "openrouter_key" not in body
+
+
 def test_world_crud(client):
     wid = _world(client, "Drowned Realm")
     assert wid == "drowned-realm"
