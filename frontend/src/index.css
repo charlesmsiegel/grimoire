@@ -206,6 +206,60 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .detail-text { white-space: pre-wrap; }
 .detail-greeting { padding: 8px 12px; background: var(--surface); border-left: 2px solid var(--muted); border-radius: var(--radius); margin-bottom: 6px; }
 
+/* ---- campaign creation wizard ---- */
+.wizard { max-width: 600px; }
+
+/* stepper: numbered sigils joined by hairlines; only the active step is named */
+.wizard-steps {
+  display: flex; align-items: center; list-style: none;
+  margin: 18px 0 26px; padding: 0;
+}
+.wizard-step { display: flex; align-items: center; color: var(--muted); }
+.wizard-step .num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; flex: none; border-radius: 50%;
+  border: 1px solid var(--muted); font-size: 12px; font-family: var(--font-display);
+}
+.wizard-step .label {
+  margin-left: 8px; font-size: 11px; letter-spacing: 0.14em;
+  text-transform: uppercase; font-family: var(--font-display); white-space: nowrap;
+}
+.wizard-step .bar { width: 28px; height: 1px; background: var(--muted); margin: 0 10px; flex: none; }
+.wizard-step.on { color: var(--accent); }
+.wizard-step.on .num { border-color: var(--accent); color: var(--accent); }
+.wizard-step.done .num { border-color: var(--accent); color: var(--accent); }
+
+.wizard-body h3 { font-family: var(--font-display); margin: 0 0 4px; }
+.wizard-intro { color: var(--muted); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
+.wizard .field { margin: 14px 0; }
+.wizard .field .role { margin-bottom: 6px; }
+.wizard .chips { margin-bottom: 8px; }
+
+/* repeatable starting-location cards */
+.wizard-location {
+  display: flex; flex-direction: column; gap: 8px;
+  border: 1px solid var(--muted); border-radius: var(--radius);
+  padding: 12px; margin-bottom: 10px;
+}
+.wizard-location input[type="text"], .wizard-location textarea {
+  width: 100%; background: var(--surface); color: var(--fg);
+  border: 1px solid var(--muted); border-radius: var(--radius);
+  padding: 8px; font-family: var(--font-body);
+}
+.wizard-location textarea { resize: vertical; min-height: 56px; }
+.wizard-location .remove { align-self: flex-end; }
+.wizard-add { margin-top: 2px; }
+
+/* footer: Back on the left, primary on the right, parted by a hairline */
+.wizard-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--muted);
+}
+
+.wizard input:focus-visible, .wizard select:focus-visible, .wizard textarea:focus-visible {
+  outline: none; border-color: var(--accent);
+}
+
 /* collapsible lorebook import inside the Lore tab */
 .import-section { margin-bottom: 16px; border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px 12px; }
 .import-section > summary { cursor: pointer; font-weight: bold; color: var(--accent); }
