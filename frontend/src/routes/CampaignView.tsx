@@ -6,6 +6,7 @@ import { api, type SceneMeta, type Message } from "../api/client";
 import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
 import { CastPanel } from "../components/CastPanel";
+import { SceneInspector } from "../components/SceneInspector";
 
 export default function CampaignView({ keySet }: { keySet: boolean }) {
   const { cid = "" } = useParams();
@@ -17,6 +18,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ctxKey, setCtxKey] = useState(0);
   const streamRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,6 +39,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     const scene = await api.getScene(cid, id);
     setMessages(scene.messages);
     setStreaming("");
+    setCtxKey((n) => n + 1);
   }
 
   async function newScene() {
@@ -84,6 +87,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     } finally {
       setStreaming("");
       setBusy(false);
+      setCtxKey((n) => n + 1);
     }
   }
 
@@ -181,6 +185,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           </button>
         </div>
       </section>
+      {activeId && <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey} />}
     </div>
   );
 }
