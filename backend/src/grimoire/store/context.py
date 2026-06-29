@@ -68,10 +68,12 @@ def _char_player_block(data: dict) -> str:
     return "\n".join(x for x in (data.get("name", ""), body) if x).strip()
 
 
-def _world_info(croot, recent_text: str) -> str:
+def _world_info(croot, recent_text: str, exclude: frozenset = frozenset()) -> str:
     entries = []
     for kind in ("lore", "locations"):
         for meta in entities.list_entities(croot, kind):
+            if kind == "locations" and meta["id"] in exclude:
+                continue
             e = entities.read_entity(croot, kind, meta["id"])
             keys = [k.strip() for k in e["meta"].get("keys", "").split(",") if k.strip()]
             entries.append({"name": e["meta"].get("name", meta["id"]), "body": e["body"].strip(), "keys": keys})
@@ -206,7 +208,18 @@ def build_messages(cid: str, sid: str) -> list[dict]:
     parts += [b for b in (_npc_block(d) for d in npc_cards) if b]
     parts += [b for b in player_blocks if b]
     parts += [d.get("mes_example", "").strip() for d in npc_cards if d.get("mes_example", "").strip()]
-    wi = _world_info(croot, recent_text)
+    history_ids = scenes.get_location_history(cid, sid)
+    current_loc = history_ids[-1] if history_ids else None
+    exclude: frozenset = frozenset()
+    if current_loc:
+        try:
+            loc_body = entities.read_entity(croot, "locations", current_loc)["body"].strip()
+            exclude = frozenset({current_loc})
+            if loc_body:
+                parts.append("# Current setting\n" + loc_body)
+        except entities.EntityNotFound:
+            pass  # referenced location was deleted — omit the setting block
+    wi = _world_info(croot, recent_text, exclude)
     if wi:
         parts.append(wi)
     wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"].get("world", ""))
