@@ -182,13 +182,13 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 
 /* character grid (cards with avatars) */
 .grid-toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
-.char-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+.char-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .char-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; background: var(--surface); border: 1px solid var(--muted); border-radius: var(--radius); }
 .char-card:hover { border-color: var(--accent); }
 .char-card-main { display: flex; flex-direction: column; gap: 8px; padding: 0; width: 100%; background: transparent; border: none; cursor: pointer; color: var(--fg); font-family: var(--font-body); }
 .char-card-main:hover .char-card-name { color: var(--accent); }
-.char-card-avatar { width: 100%; height: auto; display: block; border-radius: var(--radius); }
-.char-card-avatar-empty { display: flex; align-items: center; justify-content: center; aspect-ratio: 2 / 3; color: var(--muted); font-size: 11px; background: var(--bg); border: 1px solid var(--muted); }
+.char-card-avatar { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; display: block; border-radius: var(--radius); background: var(--bg); }
+.char-card-avatar-empty { display: flex; align-items: center; justify-content: center; aspect-ratio: 1 / 1; color: var(--muted); font-size: 11px; background: var(--bg); border: 1px solid var(--muted); }
 .char-card-name { font-weight: bold; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .char-card-actions { display: flex; gap: 6px; }
 .char-card-actions button { flex: 1; }
