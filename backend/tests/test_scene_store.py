@@ -41,6 +41,41 @@ def test_create_in_missing_campaign_raises(monkeypatch, tmp_path):
         scenes.create_scene("no-campaign", "X")
 
 
+def test_set_location_first_is_silent_then_move_announces(monkeypatch, tmp_path):
+    from grimoire.store import entities
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    a = entities.create_entity(croot, "locations", "Salt Cathedral", "A drowned basilica.")
+    b = entities.create_entity(croot, "locations", "Drowned Market", "Stalls in the shallows.")
+    sid = scenes.create_scene(cid, "S")
+    # first set: silent
+    assert scenes.set_location(cid, sid, a) == {"moved": False, "name": "Salt Cathedral"}
+    assert scenes.get_location_history(cid, sid) == [a]
+    assert scenes.read_scene(cid, sid)["messages"] == []
+    # change: announces and records
+    assert scenes.set_location(cid, sid, b) == {"moved": True, "name": "Drowned Market"}
+    assert scenes.get_location_history(cid, sid) == [a, b]
+    assert scenes.read_scene(cid, sid)["messages"] == [
+        {"role": "assistant", "content": "*The scene moves to Drowned Market.*"}]
+    # re-select current: no-op
+    assert scenes.set_location(cid, sid, b) == {"moved": False, "name": "Drowned Market"}
+    assert scenes.get_location_history(cid, sid) == [a, b]
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 1
+
+
+def test_set_location_unknown_id_raises(monkeypatch, tmp_path):
+    from grimoire.store import entities
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    with pytest.raises(entities.EntityNotFound):
+        scenes.set_location(cid, sid, "nowhere")
+
+
+def test_get_location_history_missing_scene_is_empty(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    assert scenes.get_location_history(cid, "nope") == []
+
+
 def test_rename_changes_id_keeps_order(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Old Title")

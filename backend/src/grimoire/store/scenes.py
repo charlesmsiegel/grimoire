@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import campaigns
+from . import campaigns, entities
 from .config import read_config
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import now_iso, slugify, uniquify
@@ -139,3 +139,38 @@ def append_message(cid: str, sid: str, role: str, content: str) -> None:
     body = (body.rstrip() + "\n\n" + block) if body.strip() else block
     meta["updated"] = now_iso()
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
+def get_location_history(cid: str, sid: str) -> list[str]:
+    """Ordered campaign-location ids this scene has been at; last is current. Missing ⇒ []."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        return []
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    return [x for x in meta.get("location_history", "").split(",") if x]
+
+
+def set_location(cid: str, sid: str, eid: str) -> dict:
+    """Make campaign location `eid` the scene's current setting.
+
+    First setting on a location-less scene is silent; a real change appends an
+    assistant transition line. Re-selecting the current location is a no-op.
+    Returns {"moved": bool, "name": str}.
+    """
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    croot = campaigns.campaign_root(cid)
+    name = entities.read_entity(croot, "locations", eid)["meta"].get("name", eid)  # raises EntityNotFound
+    history = get_location_history(cid, sid)
+    if history and history[-1] == eid:
+        return {"moved": False, "name": name}
+    moved = bool(history)
+    if moved:
+        append_message(cid, sid, "assistant", f"*The scene moves to {name}.*")
+    # re-read after the possible append_message rewrite, then record the new current
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    history.append(eid)
+    meta["location_history"] = ",".join(history)
+    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    return {"moved": moved, "name": name}
