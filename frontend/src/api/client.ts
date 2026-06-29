@@ -249,6 +249,9 @@ export const api = {
 
   // pcs
   listPCs: (wid: string) => request<PCSummary[]>("GET", `/api/worlds/${wid}/pcs`),
+  createCampaignPC: (cid: string, body: { name: string; tags?: string[]; persona?: Persona }) =>
+    request<{ pc: string; version: string }>("POST", `/api/campaigns/${cid}/pcs`, body),
+  listCampaignPCs: (cid: string) => request<PCSummary[]>("GET", `/api/campaigns/${cid}/pcs`),
   createPC: (wid: string, body: { name: string; tags?: string[]; persona?: Persona }) =>
     request<{ pc: string; version: string }>("POST", `/api/worlds/${wid}/pcs`, body),
   readPC: (wid: string, pid: string) => request<PCDetail>("GET", `/api/worlds/${wid}/pcs/${pid}`),
