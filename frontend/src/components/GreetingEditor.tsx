@@ -7,7 +7,7 @@ import { Field } from "./Field";
 const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any" };
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
 
-export function GreetingEditor({ wid }: { wid: string }) {
+export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCharacter?: (cid: string, vid: string) => void }) {
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [tags, setTags] = useState<Record<string, string>>({});
@@ -101,7 +101,6 @@ export function GreetingEditor({ wid }: { wid: string }) {
   const others = greetings.filter((g) => g.id !== gid);
   const charName = (id: string) => chars.find((c) => c.id === id)?.name ?? id;
   const greetName = (id: string) => greetings.find((g) => g.id === id)?.name ?? id;
-  const versionName = (id: string) => versions.find((v) => v.id === id)?.name ?? id;
 
   function sideList(label: string, items: string[], render: (id: string) => string) {
     if (items.length === 0) return null;
@@ -133,20 +132,29 @@ export function GreetingEditor({ wid }: { wid: string }) {
         {mode === "view" && gid ? (
           <div className="greeting-view">
             <div className="greeting-main">
-              <div className="form-actions">
-                <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
-              </div>
               <h3>{form.name}</h3>
               <div className="greeting-rendered">
                 <Markdown remarkPlugins={[remarkGfm]}>{form.body}</Markdown>
               </div>
             </div>
             <aside className="greeting-sidebar">
-              {sideList("Present characters", form.present, charName)}
-              <div className="side-section">
-                <h4>Character</h4>
-                <div className="field-hint">{charName(form.character)} · {versionName(form.version)}</div>
+              <div className="form-actions">
+                <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
               </div>
+              {form.present.length > 0 && (
+                <div className="side-section">
+                  <h4>Present characters</h4>
+                  <div className="chips">
+                    {form.present.map((id) => (
+                      <button key={id} className="chip on"
+                              onClick={() => onOpenCharacter?.(id, id === form.character ? form.version
+                                : (chars.find((c) => c.id === id)?.default_version ?? ""))}>
+                        {charName(id)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {predecessors.length > 0 && (
                 <div className="side-section">
                   <h4>Depends on</h4>

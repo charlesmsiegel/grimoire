@@ -85,6 +85,31 @@ test("import-from-character posts the selected character + version", async () =>
   );
 });
 
+test("clicking a present character opens that character at the right version", async () => {
+  const onOpenCharacter = vi.fn();
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "v2", name: "v2" }] },
+    { id: "rowan", name: "Rowan", default_version: "main", versions: [{ id: "main", name: "main" }] },
+  ]);
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "open", name: "Open", character: "seraphine", version: "v2", present: ["seraphine", "rowan"], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "open", name: "Open", character: "seraphine", version: "v2", present: ["seraphine", "rowan"], requires_tags: [], predecessor_join: "all" },
+    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [],
+  });
+  const { container } = render(<GreetingEditor wid="w" onOpenCharacter={onOpenCharacter} />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
+  const present = within(container.querySelector(".greeting-sidebar") as HTMLElement)
+    .getByText("Present characters").closest(".side-section") as HTMLElement;
+  fireEvent.click(within(present).getByRole("button", { name: "Seraphine" }));
+  expect(onOpenCharacter).toHaveBeenCalledWith("seraphine", "v2");        // primary -> greeting version
+  fireEvent.click(within(present).getByRole("button", { name: "Rowan" }));
+  expect(onOpenCharacter).toHaveBeenCalledWith("rowan", "main");          // co-present -> its default
+});
+
 test("the view sidebar shows the full dependency picture", async () => {
   (api.listTags as any).mockResolvedValue({ vip: "VIP" });
   (api.listGreetings as any).mockResolvedValue([

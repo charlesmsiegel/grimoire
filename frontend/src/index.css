@@ -125,8 +125,10 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .chip.on { color: var(--accent); border-color: var(--accent); }
 
 .editor { display: flex; gap: 16px; align-items: flex-start; }
-.editor-list { width: 220px; flex: none; }
-.editor-list button.new { width: 100%; margin-bottom: 8px; }
+/* the rail scrolls on its own so a long greeting list doesn't drag the page */
+.editor-list { width: 220px; flex: none; position: sticky; top: 12px;
+  max-height: calc(100vh - 24px); overflow-y: auto; }
+.editor-list button.new { width: 100%; margin-bottom: 8px; position: sticky; top: 0; z-index: 1; }
 .editor-body { flex: 1; min-width: 0; }
 .editor-empty { color: var(--muted); padding: 24px 0; }
 
