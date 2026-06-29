@@ -124,6 +124,25 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
     campaigns.touch(cid)
 
 
+def cast_detail(cid: str, sid: str, kind: str, actor_id: str) -> dict:
+    """Read-only display info for an actor in a scene, from the campaign copy."""
+    if not any(a["kind"] == kind and a["id"] == actor_id for a in scene_cast(cid, sid)):
+        raise AppearError(f"{kind}/{actor_id} is not in scene {sid}")
+    croot = campaigns.campaign_root(cid)
+    vid = locked_version(cid, kind, actor_id)
+    if kind == "characters":
+        data = characters.read_card(croot, actor_id, vid)["data"]
+        labelled = [("Description", "description"), ("Personality", "personality"), ("Scenario", "scenario")]
+        body = "\n\n".join(f"**{lbl}**\n{data.get(f, '').strip()}"
+                           for lbl, f in labelled if data.get(f, "").strip())
+        name = data.get("name", actor_id)
+    else:
+        p = pcs.read_persona(croot, actor_id, vid)
+        body = "\n\n".join(x for x in (p.get("summary", "").strip(), p.get("description", "").strip()) if x)
+        name = p.get("name", actor_id)
+    return {"kind": kind, "id": actor_id, "name": name, "version": vid, "body": body}
+
+
 def roster(cid: str) -> list[dict]:
     out = []
     for ref, r in sorted(record(cid).items()):
