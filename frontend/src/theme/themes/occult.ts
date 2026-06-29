@@ -9,6 +9,7 @@ const occult: Theme = {
     "--fg": "#e8dcc6",
     "--muted": "#8a7a5c",
     "--accent": "#caa45a",
+    "--quote": "#7fc8b0",
     "--font-display": 'Georgia, "Times New Roman", serif',
     "--font-body": 'Georgia, "Times New Roman", serif',
     "--radius": "3px",

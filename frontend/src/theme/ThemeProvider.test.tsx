@@ -19,6 +19,7 @@ test("applies theme tokens and data-theme, and switches", () => {
   );
   expect(document.documentElement.dataset.theme).toBe("occult");
   expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#caa45a");
+  expect(document.documentElement.style.getPropertyValue("--quote")).toBe("#7fc8b0");
 
   fireEvent.click(screen.getByText("switch"));
   expect(screen.getByTestId("name").textContent).toBe("terminal");

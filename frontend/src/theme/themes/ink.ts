@@ -9,6 +9,7 @@ const ink: Theme = {
     "--fg": "#23201a",
     "--muted": "#8a8270",
     "--accent": "#7a2e22",
+    "--quote": "#1f6f78",
     "--font-display": 'Georgia, "Iowan Old Style", serif',
     "--font-body": 'Georgia, "Iowan Old Style", serif',
     "--radius": "2px",

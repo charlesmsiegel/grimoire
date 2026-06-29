@@ -9,6 +9,7 @@ const terminal: Theme = {
     "--fg": "#9ff0a8",
     "--muted": "#3fae57",
     "--accent": "#3fae57",
+    "--quote": "#e3c46b",
     "--font-display": '"Courier New", ui-monospace, monospace',
     "--font-body": '"Courier New", ui-monospace, monospace',
     "--radius": "0px",

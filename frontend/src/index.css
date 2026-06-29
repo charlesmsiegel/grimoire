@@ -4,6 +4,7 @@
   --fg: #e8dcc6;
   --muted: #8a7a5c;
   --accent: #caa45a;
+  --quote: #7fc8b0;
   --font-display: Georgia, "Times New Roman", serif;
   --font-body: Georgia, "Times New Roman", serif;
   --radius: 3px;
@@ -261,7 +262,7 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
   outline: none; border-color: var(--accent);
 }
 
-.color-quotes .quoted { color: var(--accent); }
+.color-quotes .quoted { color: var(--quote); }
 
 /* ---- transcript message cards ---- */
 .msg-card { border: 1px solid var(--muted); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; }
