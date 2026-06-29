@@ -130,6 +130,16 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .editor-body { flex: 1; min-width: 0; }
 .editor-empty { color: var(--muted); padding: 24px 0; }
 
+/* read-only greeting view: rendered body + dependency sidebar */
+.greeting-view { display: flex; gap: 20px; align-items: flex-start; }
+.greeting-main { flex: 1; min-width: 0; }
+.greeting-main h3 { margin: 4px 0 12px; }
+.greeting-rendered { line-height: 1.55; }
+.greeting-rendered img { max-width: 100%; height: auto; border-radius: 6px; margin: 8px 0; }
+.greeting-rendered p { margin: 0 0 10px; }
+.greeting-sidebar { width: 240px; flex: none; display: flex; flex-direction: column; gap: 16px; }
+.side-section h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+
 .table { width: 100%; border-collapse: collapse; }
 .table th, .table td {
   text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--muted);
