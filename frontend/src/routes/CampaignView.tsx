@@ -159,11 +159,11 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
             </button>
           </div>
         )}
-        {activeId && (
+        {activeId && messages.length === 0 && (
           <CastPanel
             cid={cid}
             sid={activeId}
-            sceneEmpty={messages.length === 0}
+            sceneEmpty={true}
             keySet={keySet}
             onSeeded={() => selectScene(activeId)}
           />

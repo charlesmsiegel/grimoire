@@ -3,7 +3,7 @@ import { MemoryRouter, Routes, Route } from "react-router-dom";
 import CampaignView from "./CampaignView";
 
 // CastPanel has its own test + makes its own API calls; stub it here to keep this test focused.
-vi.mock("../components/CastPanel", () => ({ CastPanel: () => null }));
+vi.mock("../components/CastPanel", () => ({ CastPanel: () => <div data-testid="cast-panel" /> }));
 
 vi.mock("../api/client", () => ({
   api: {
@@ -72,6 +72,21 @@ test("renders the inspector for an active scene", async () => {
   renderCampaign();
   await screen.findByText(/Active characters/i);
   await screen.findByText(/^Context/);
+});
+
+test("hides Cast & scene setup once the scene has messages", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [{ role: "assistant", content: "hi" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  expect(screen.queryByTestId("cast-panel")).toBeNull();
+});
+
+test("shows Cast & scene setup for an empty scene", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [] });
+  renderCampaign();
+  await screen.findByTestId("cast-panel");
 });
 
 test("editing a message saves and reloads", async () => {
