@@ -256,3 +256,26 @@ def test_no_setting_block_when_unset(monkeypatch, tmp_path):
     msgs = context.build_messages(cid, sid)
     sys = msgs[0]["content"] if msgs and msgs[0]["role"] == "system" else ""
     assert "# Current setting" not in sys
+
+
+def test_context_sections_labels_and_global_prompt(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(system_prompt="Never speak for the PC.")
+    characters.create_character(worlds.world_root(wid), "Seraphine", "default",
+                                _npc_card("Seraphine", description="keeper"))
+    ap.appear(cid, sid, "characters", "seraphine", "default", "npc")
+    scenes.append_message(cid, sid, "user", "hello")
+    secs = context.context_sections(cid, sid)
+    labels = [s["label"] for s in secs]
+    assert labels[0] == "Global system prompt"
+    assert secs[0]["text"] == "Never speak for the PC."
+    assert "Character descriptions" in labels
+    assert "Conversation history" in labels
+    assert all(s["text"].strip() for s in secs)  # no empty sections
+
+
+def test_count_tokens_positive_and_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    assert context.count_tokens("") == 0
+    assert context.count_tokens("the drowned king waits") > 0
