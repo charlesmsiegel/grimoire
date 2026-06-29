@@ -408,6 +408,8 @@ def test_greeting_crud_import_edges_and_start(client):
     read = client.get(f"/api/worlds/{wid}/greetings/{imported[0]}").json()
     assert read["meta"]["character"] == "seraphine"
     assert read["edges"]["leads_to"] == [g2]   # edges surfaced on read for the editor
+    # the target greeting surfaces its predecessors (what unlocks it) for the view sidebar
+    assert client.get(f"/api/worlds/{wid}/greetings/{g2}").json()["predecessors"] == [imported[0]]
     assert [x["id"] for x in client.get(f"/api/worlds/{wid}/greetings").json()] == sorted([imported[0], g2])
 
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]

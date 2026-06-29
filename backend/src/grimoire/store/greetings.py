@@ -136,6 +136,11 @@ def edges_of(plotmap: dict, gid: str) -> dict:
     return {"leads_to": e.get("leads_to", []), "excludes": e.get("excludes", [])}
 
 
+def predecessors_of(plotmap: dict, gid: str) -> list[str]:
+    """Greetings whose `leads_to` includes `gid` — i.e. what unlocks it. Sorted."""
+    return sorted(src for src, e in plotmap.items() if gid in (e.get("leads_to") or []))
+
+
 def set_edges(root: Path, gid: str, leads_to: list[str] | None = None,
               excludes: list[str] | None = None) -> None:
     data = read_plotmap(root)

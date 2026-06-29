@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api, type CharacterSummary, type Edges, type Greeting } from "../api/client";
 import { Field } from "./Field";
 
@@ -12,6 +14,8 @@ export function GreetingEditor({ wid }: { wid: string }) {
   const [gid, setGid] = useState<string | null>(null); // null = new
   const [form, setForm] = useState(BLANK);
   const [edges, setEdges] = useState<Edges>(NO_EDGES);
+  const [predecessors, setPredecessors] = useState<string[]>([]);
+  const [mode, setMode] = useState<"view" | "edit">("edit"); // existing greetings open in view
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(() => api.listGreetings(wid).then(setGreetings), [wid]);
@@ -25,6 +29,8 @@ export function GreetingEditor({ wid }: { wid: string }) {
     setGid(null);
     setForm(BLANK);
     setEdges(NO_EDGES);
+    setPredecessors([]);
+    setMode("edit"); // a brand-new greeting goes straight to the form
   }
 
   async function select(id: string) {
@@ -37,6 +43,8 @@ export function GreetingEditor({ wid }: { wid: string }) {
       predecessor_join: g.meta.predecessor_join,
     });
     setEdges(g.edges);
+    setPredecessors(g.predecessors ?? []);
+    setMode("view"); // existing greetings are read-only until Edit
   }
 
   const versions = chars.find((c) => c.id === form.character)?.versions ?? [];
@@ -91,6 +99,19 @@ export function GreetingEditor({ wid }: { wid: string }) {
   }
 
   const others = greetings.filter((g) => g.id !== gid);
+  const charName = (id: string) => chars.find((c) => c.id === id)?.name ?? id;
+  const greetName = (id: string) => greetings.find((g) => g.id === id)?.name ?? id;
+  const versionName = (id: string) => versions.find((v) => v.id === id)?.name ?? id;
+
+  function sideList(label: string, items: string[], render: (id: string) => string) {
+    if (items.length === 0) return null;
+    return (
+      <div className="side-section">
+        <h4>{label}</h4>
+        <div className="chips">{items.map((id) => <span key={id} className="chip on">{render(id)}</span>)}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="editor">
@@ -108,8 +129,40 @@ export function GreetingEditor({ wid }: { wid: string }) {
       </div>
 
       <div className="editor-body">
+        {error && <div className="banner">{error}</div>}
+        {mode === "view" && gid ? (
+          <div className="greeting-view">
+            <div className="greeting-main">
+              <div className="form-actions">
+                <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
+              </div>
+              <h3>{form.name}</h3>
+              <div className="greeting-rendered">
+                <Markdown remarkPlugins={[remarkGfm]}>{form.body}</Markdown>
+              </div>
+            </div>
+            <aside className="greeting-sidebar">
+              {sideList("Present characters", form.present, charName)}
+              <div className="side-section">
+                <h4>Character</h4>
+                <div className="field-hint">{charName(form.character)} · {versionName(form.version)}</div>
+              </div>
+              {predecessors.length > 0 && (
+                <div className="side-section">
+                  <h4>Depends on</h4>
+                  <div className="field-hint">
+                    {form.predecessor_join === "all" ? "all must be played" : "any unlocks it"}
+                  </div>
+                  <div className="chips">{predecessors.map((id) => <span key={id} className="chip on">{greetName(id)}</span>)}</div>
+                </div>
+              )}
+              {sideList("Unlocks", edges.leads_to, greetName)}
+              {sideList("Excludes", edges.excludes, greetName)}
+              {sideList("Requires tags", form.requires_tags, (t) => tags[t] ?? t)}
+            </aside>
+          </div>
+        ) : (
         <div className="form">
-          {error && <div className="banner">{error}</div>}
           <h3>{gid ? "Edit greeting" : "New greeting"}</h3>
           <Field label="Name">
             <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -180,12 +233,14 @@ export function GreetingEditor({ wid }: { wid: string }) {
           </Field>
           <div className="form-actions">
             {gid && <button className="subtle" onClick={() => remove(greetings.find((g) => g.id === gid)!)}>Delete</button>}
+            {gid && <button className="subtle" onClick={() => setMode("view")}>Cancel</button>}
             <button className="primary" onClick={save}
                     disabled={!form.name.trim() || !form.character || !form.version}>
               {gid ? "Save greeting" : "Create greeting"}
             </button>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

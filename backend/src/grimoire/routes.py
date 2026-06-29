@@ -565,7 +565,9 @@ def get_world_greeting(wid: str, gid: str):
         g = store.greetings.read_greeting(root, gid)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
-    g["edges"] = store.greetings.edges_of(store.greetings.read_plotmap(root), gid)
+    plotmap = store.greetings.read_plotmap(root)
+    g["edges"] = store.greetings.edges_of(plotmap, gid)
+    g["predecessors"] = store.greetings.predecessors_of(plotmap, gid)
     return g
 
 

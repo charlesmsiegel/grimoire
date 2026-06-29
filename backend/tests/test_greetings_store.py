@@ -65,6 +65,18 @@ def test_present_in_matches_whole_words_only():
     assert greetings.present_in("The artwork is heavy.", "mara", roster) == ["mara"]
 
 
+def test_predecessors_of(tmp_path):
+    root = _world(tmp_path)
+    a = greetings.create_greeting(root, "A", "c", "v")
+    a2 = greetings.create_greeting(root, "A2", "c", "v")
+    b = greetings.create_greeting(root, "B", "c", "v")
+    greetings.set_edges(root, a, leads_to=[b])
+    greetings.set_edges(root, a2, leads_to=[b])
+    pm = greetings.read_plotmap(root)
+    assert greetings.predecessors_of(pm, b) == [a, a2]   # both lead to b, sorted
+    assert greetings.predecessors_of(pm, a) == []
+
+
 def test_plotmap_edges_and_delete_prunes(tmp_path):
     root = _world(tmp_path)
     a = greetings.create_greeting(root, "A", "c", "v")

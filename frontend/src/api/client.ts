@@ -97,7 +97,7 @@ export type Greeting = {
   predecessor_join: "all" | "any";
 };
 export type Edges = { leads_to: string[]; excludes: string[] };
-export type GreetingDetail = { meta: Greeting; body: string; edges: Edges };
+export type GreetingDetail = { meta: Greeting; body: string; edges: Edges; predecessors: string[] };
 export type GreetingDraft = {
   name: string;
   character: string;
