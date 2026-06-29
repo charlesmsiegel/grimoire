@@ -114,6 +114,20 @@ def test_localizes_markdown_image_and_rewrites(tmp_path):
     assert assets.image_path(tmp_path, "c", "v", m.group(1)) is not None
 
 
+def test_html_img_is_localized_as_markdown(tmp_path):
+    # HTML <img> embeds must become markdown images so they render in the app
+    # (react-markdown drops raw HTML). The whole tag is replaced.
+    card = {"data": {"first_mes": 'hi <img alt="x" src="https://h/a.png" width="2"> bye',
+                     "alternate_greetings": []}}
+    fetch = _fake_fetch({"https://h/a.png": (_PNG, "png")})
+    _run(card, tmp_path, fetch=fetch)
+    fm = card["data"]["first_mes"]
+    assert "<img" not in fm  # the raw HTML tag is gone
+    m = _re.search(r"!\[\]\((/api/worlds/w/characters/c/versions/v/images/embed-[0-9a-f]{12})\)", fm)
+    assert m, fm
+    assert fm.startswith("hi ![](") and fm.endswith(") bye")
+
+
 def test_non_image_is_left_untouched(tmp_path):
     card = {"data": {"description": "see https://h/page now", "alternate_greetings": []}}
     fetch = _fake_fetch({})  # returns None -> not an image

@@ -15,12 +15,11 @@ from . import fetch as _fetch
 
 # Order matters: earlier patterns win overlapping spans. Each has one capture
 # group holding the URL/data-uri.
-_PATTERNS = [
-    re.compile(r"!\[[^\]]*\]\(\s*(<[^>]+>|[^)\s]+)"),          # markdown image: ![alt](url ...)
-    re.compile(r"<img\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE),  # <img src="url">
-    re.compile(r"(data:image/[^\s)\"'>\]]+)"),                  # bare/standalone data-uri
-    re.compile(r"(https?://[^\s)\"'>\]]+)"),                    # bare url
-]
+_MD_IMG = re.compile(r"!\[[^\]]*\]\(\s*(<[^>]+>|[^)\s]+)")                      # ![alt](url ...)
+_IMG_TAG = re.compile(r"<img\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)  # <img src="url">
+_DATA_URI = re.compile(r"(data:image/[^\s)\"'>\]]+)")                          # bare/standalone data-uri
+_BARE_URL = re.compile(r"(https?://[^\s)\"'>\]]+)")                            # bare url
+_PATTERNS = [_MD_IMG, _IMG_TAG, _DATA_URI, _BARE_URL]
 
 _LOCAL_PREFIX = "/api/worlds/"
 
@@ -30,6 +29,20 @@ class Ref:
     start: int
     end: int
     url: str
+    # The span actually rewritten during localization, and how. Defaults to the URL
+    # span ([start, end]) with the local URL spliced in place. An HTML <img> tag sets
+    # a wider span covering the whole tag plus `as_markdown`, so the tag is replaced
+    # with a markdown image — react-markdown drops raw HTML, so a localized <img>
+    # would otherwise never render.
+    repl_start: int = -1
+    repl_end: int = -1
+    as_markdown: bool = False
+
+    @property
+    def span(self) -> tuple[int, int]:
+        s = self.start if self.repl_start < 0 else self.repl_start
+        e = self.end if self.repl_end < 0 else self.repl_end
+        return s, e
 
 
 def _clean_span(raw: str, s0: int, e0: int) -> tuple[str, int, int]:
@@ -70,6 +83,14 @@ def find_refs(text: str) -> list[Ref]:
             if not url or url.startswith(_LOCAL_PREFIX):
                 occupied.append((s, e))  # claim span so a later bare-url pass skips it
                 continue
+            if pat is _IMG_TAG:
+                # Replace the whole <img …> tag with a markdown image. Claim the full
+                # tag span so a second URL attribute can't spawn an overlapping ref.
+                close = text.find(">", m.end())
+                if close != -1:
+                    taken.append(Ref(s, e, url, m.start(), close + 1, True))
+                    occupied.append((m.start(), close + 1))
+                    continue
             taken.append(Ref(s, e, url))
             occupied.append((s, e))
 
@@ -189,9 +210,11 @@ def localize_card(card, root, cid, vid, wid, *, fetch=None, cap=None):
     for idx, items in edits.items():
         getter, setter = fields[idx]
         text = getter()
-        for ref, name in sorted(items, key=lambda it: it[0].start, reverse=True):
-            url = _serving_url(wid, cid, vid, name)
-            text = text[:ref.start] + url + text[ref.end:]
+        for ref, name in sorted(items, key=lambda it: it[0].span[0], reverse=True):
+            local = _serving_url(wid, cid, vid, name)
+            start, end = ref.span
+            repl = f"![]({local})" if ref.as_markdown else local
+            text = text[:start] + repl + text[end:]
         setter(text)
 
     yield {"summary": {"total": total, "localized": localized,

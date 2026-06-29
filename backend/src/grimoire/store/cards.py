@@ -76,7 +76,12 @@ def _iter_png_text(data: bytes):
 
 
 def _loads_png(data: bytes) -> dict:
-    chunks = dict(_iter_png_text(data))
+    # First occurrence wins: some exporters append a second, stripped `chara`
+    # chunk after the canonical one. SillyTavern reads the first; dict() would
+    # keep the last, silently dropping greeting images. setdefault keeps first.
+    chunks: dict[str, str] = {}
+    for keyword, text in _iter_png_text(data):
+        chunks.setdefault(keyword, text)
     for key in ("ccv3", "chara"):
         if key in chunks:
             try:

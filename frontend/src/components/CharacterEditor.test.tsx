@@ -5,7 +5,7 @@ vi.mock("../api/client", () => ({
   api: {
     listCharacters: vi.fn(), readCharacter: vi.fn(), createCharacter: vi.fn(),
     updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
-    deleteCharacter: vi.fn(), importCharacter: vi.fn(),
+    deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
     putImage: vi.fn(), deleteImage: vi.fn(), importCharacterBook: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
   },
@@ -31,6 +31,10 @@ beforeEach(() => {
   (api.createCharacter as any).mockResolvedValue({ character: "rook", version: "default" });
   (api.updateVersion as any).mockResolvedValue({ ok: true });
   (api.importCharacter as any).mockResolvedValue({ character: "imp", version: "default" });
+  (api.localizeImages as any).mockImplementation((_w: string, _c: string, _v: string, cb: (e: any) => void) => {
+    cb?.({ summary: { total: 1, localized: 1, skipped: 0, failed: 0, capped: false } });
+    return Promise.resolve();
+  });
   (api.putImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.deleteImage as any).mockResolvedValue({ ok: true });
   (api.deleteCharacter as any).mockResolvedValue({ ok: true });
@@ -152,6 +156,22 @@ test("import card accepts multiple files and imports each", async () => {
   await waitFor(() => expect(api.importCharacter).toHaveBeenCalledTimes(2));
   expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "json");
   expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "png");
+});
+
+test("bulk import localizes each imported card", async () => {
+  (api.importCharacter as any)
+    .mockResolvedValueOnce({ character: "a", version: "default" })
+    .mockResolvedValueOnce({ character: "b", version: "default" });
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  const input = screen.getByLabelText("Import character card");
+  fireEvent.change(input, { target: { files: [
+    new File(["{}"], "a.json"),
+    new File(["x"], "b.png", { type: "image/png" }),
+  ] } });
+  await waitFor(() => expect(api.localizeImages).toHaveBeenCalledTimes(2));
+  expect(api.localizeImages).toHaveBeenCalledWith("w", "a", "default", expect.any(Function));
+  expect(api.localizeImages).toHaveBeenCalledWith("w", "b", "default", expect.any(Function));
 });
 
 test("import version posts importCharacter into the current character", async () => {
