@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from . import (
-    appearances, assets, campaigns, cards, characters, context, entities,
+    appearances, assets, briefs, campaigns, cards, characters, context, entities,
     fetch, greetings, localize, lorebook, pcs, playing, scenes, sync, tags,
     worlds,
 )
