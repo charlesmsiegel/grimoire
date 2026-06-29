@@ -111,8 +111,14 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
     croot = campaigns.campaign_root(cid)
     base = actor_hash(wroot, kind, actor_id, version_id)
     if base is None:
-        raise AppearError(f"world has no {ref}/{version_id}")
-    _copy_actor(wroot, croot, kind, actor_id, version_id)
+        # Campaign-local overlay actor: no world source, so it must already exist
+        # in the campaign. Record an empty world-base; sync skips refs the world
+        # lacks, so a local actor never surfaces as an incoming change.
+        if actor_hash(croot, kind, actor_id, version_id) is None:
+            raise AppearError(f"no {ref}/{version_id} in world or campaign")
+        base = ""
+    else:
+        _copy_actor(wroot, croot, kind, actor_id, version_id)
     data[ref] = {"version": version_id, "base": base, "scenes": [scene_id], "role": role}
     _write(cid, data)
     campaigns.touch(cid)

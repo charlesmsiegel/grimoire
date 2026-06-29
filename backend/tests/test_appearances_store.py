@@ -73,6 +73,39 @@ def test_suggestions_still_scan_character_names(monkeypatch, tmp_path):
     assert sugg == [{"character": "drowned-king", "name": "Drowned King", "mentioned_by": ["seraphine"]}]
 
 
+def test_campaign_local_pc_appears_without_world_source(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid)
+    croot = campaigns.campaign_root(cid)
+    # PC exists only in the campaign (overlay), never in the world
+    pcs.create_pc(croot, "Mara", ["rebel"], persona={"name": "Mara", "pronouns": "she/her",
+                  "summary": "outlaw", "description": "On the run."})
+    ap.appear(cid, "s1", "pcs", "mara", "default", "player")
+    assert ap.players_in_scene(cid, "s1") == [{"kind": "pcs", "id": "mara", "version": "default"}]
+    assert ap.record(cid)["pcs/mara"]["base"] == ""
+    assert pcs.version_hash(worlds.world_root(wid), "mara", "default") is None  # nothing in the world
+
+
+def test_appear_raises_when_actor_in_neither_world_nor_campaign(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid)
+    with pytest.raises(ap.AppearError):
+        ap.appear(cid, "s1", "pcs", "ghost", "default", "player")
+
+
+def test_sync_ignores_campaign_local_pc(monkeypatch, tmp_path):
+    from grimoire.store import sync
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid)
+    croot = campaigns.campaign_root(cid)
+    pcs.create_pc(croot, "Mara", [], persona=pcs.blank_persona("Mara"))
+    ap.appear(cid, "s1", "pcs", "mara", "default", "player")
+    assert sync.incoming(cid) == []
+
+
 def test_appear_copies_brief_into_campaign(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
