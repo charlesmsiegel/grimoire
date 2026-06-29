@@ -123,6 +123,13 @@ def read_card(root: Path, cid: str, vid: str) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def _version_label(card: dict, vid: str) -> str:
+    """Display label for a version: an explicit grimoire_label override (kept in
+    extensions so it never leaks into {{char}}), else the card's own name."""
+    data = card.get("data", {})
+    return (data.get("extensions") or {}).get("grimoire_label") or data.get("name", vid)
+
+
 def read_character(root: Path, cid: str) -> dict:
     _require_char(root, cid)
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
@@ -131,7 +138,7 @@ def read_character(root: Path, cid: str) -> dict:
         card = read_card(root, cid, vid)
         versions.append({
             "id": vid,
-            "name": card["data"].get("name", vid),
+            "name": _version_label(card, vid),
             "card": card,
             "images": [i["name"] for i in assets.list_images(root, cid, vid)],
         })
@@ -154,7 +161,7 @@ def list_characters(root: Path) -> list[dict]:
                 "name": meta.get("name", cid),
                 "default_version": default,
                 "has_avatar": assets.image_path(root, cid, default, assets.AVATAR) is not None,
-                "versions": [{"id": v, "name": read_card(root, cid, v)["data"].get("name", v)}
+                "versions": [{"id": v, "name": _version_label(read_card(root, cid, v), v)}
                              for v in _version_ids(root, cid)],
             })
     return out
