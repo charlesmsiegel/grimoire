@@ -45,6 +45,17 @@ test("editing persona saves the selected version", async () => {
   );
 });
 
+test("editing the birthdate saves it on the persona", async () => {
+  render(<PCEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+  fireEvent.change(await screen.findByLabelText("Birthdate"), { target: { value: "1990-06-29" } });
+  fireEvent.click(screen.getByRole("button", { name: /save persona/i }));
+  await waitFor(() =>
+    expect(api.updatePCVersion).toHaveBeenCalledWith("w", "elara", "default",
+      expect.objectContaining({ birthdate: "1990-06-29" })),
+  );
+});
+
 test("toggling a tag chip updates the PC tags", async () => {
   render(<PCEditor wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
