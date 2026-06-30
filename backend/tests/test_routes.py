@@ -805,3 +805,25 @@ def test_datetime_put_bad_date_is_400(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime", json={"datetime": "2026-13-40"})
     assert r.status_code == 400
+
+
+def test_character_birthdate_route_sets_meta(client):
+    wid = _world(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    r = client.put(f"/api/worlds/{wid}/characters/{chid}/birthdate", json={"birthdate": "1985-03-14"})
+    assert r.json() == {"ok": True}
+    assert client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["birthdate"] == "1985-03-14"
+
+
+def test_datetime_get_includes_cast_age(client):
+    wid = _world(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    client.put(f"/api/worlds/{wid}/characters/{chid}/birthdate", json={"birthdate": "1990-12-25"})
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime", json={"datetime": "2026-12-25"})
+    cast = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()["current"]["cast"]
+    assert cast == [{"kind": "characters", "id": chid, "name": "Seraphine",
+                     "age": 36, "birthday_today": True}]

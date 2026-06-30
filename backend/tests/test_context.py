@@ -294,3 +294,14 @@ def test_today_block_present_when_dated(monkeypatch, tmp_path):
 def test_no_today_block_when_undated(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     assert "Today" not in [s["label"] for s in context.context_sections(cid, sid)]
+
+
+def test_today_block_includes_present_cast_age(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    characters.create_character(croot, "Seraphine", "default", characters.blank_card("Seraphine"))
+    characters.set_birthdate(croot, "seraphine", "1990-12-25")
+    ap.appear(cid, sid, "characters", "seraphine", "default", "npc")
+    scenes.set_datetime(cid, sid, "2026-12-25")
+    today = next(s["text"] for s in context.context_sections(cid, sid) if s["label"] == "Today")
+    assert "Seraphine" in today and "36" in today and "birthday" in today.lower()
