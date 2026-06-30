@@ -301,7 +301,12 @@ def test_chub_gallery_and_lorebooks_routes(client, monkeypatch):
     })
 
     r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-gallery")
-    assert r.status_code == 200 and r.json() == {"attempted": 1, "stored": 1}
+    assert r.status_code == 200
+    events = [json.loads(line[len("data:"):].strip())
+              for line in r.text.splitlines() if line.startswith("data:")]
+    assert events == [
+        {"total": 1}, {"done": 1, "total": 1}, {"summary": {"attempted": 1, "stored": 1}},
+    ]
 
     r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-lorebooks")
     assert r.status_code == 200

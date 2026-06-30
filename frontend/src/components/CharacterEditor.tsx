@@ -46,6 +46,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const [bookMsg, setBookMsg] = useState<string | null>(null);
   const [localizeProg, setLocalizeProg] = useState<{ done: number; total: number } | null>(null);
   const [localizeMsg, setLocalizeMsg] = useState<string | null>(null);
+  const [galleryProg, setGalleryProg] = useState<{ done: number; total: number } | null>(null);
   const [bulkLocalize, setBulkLocalize] = useState<{ current: number; cards: number } | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [birthdate, setBirthdate] = useState("");
@@ -429,15 +430,29 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     if (!detail) return;
     setError(null);
     setImportMsg(null);
+    setGalleryProg({ done: 0, total: 0 });
+    let finalMsg = "";
     try {
-      const result = await api.downloadCharacterChubGallery(wid, detail.meta.id, vid);
-      setImportMsg(
-        result.attempted === 0
-          ? "No gallery images found on chub.ai"
-          : `${result.stored}/${result.attempted} gallery image${result.attempted === 1 ? "" : "s"} downloaded`,
-      );
+      await api.downloadCharacterChubGallery(wid, detail.meta.id, vid, (e) => {
+        if (e.error) {
+          finalMsg = `Gallery download failed: ${e.error.detail}`;
+        } else if (e.summary) {
+          const s = e.summary;
+          finalMsg =
+            s.attempted === 0
+              ? "No gallery images found on chub.ai"
+              : `${s.stored}/${s.attempted} gallery image${s.attempted === 1 ? "" : "s"} downloaded`;
+        } else if (typeof e.done === "number") {
+          setGalleryProg({ done: e.done, total: e.total ?? 0 });
+        } else if (typeof e.total === "number") {
+          setGalleryProg({ done: 0, total: e.total });
+        }
+      });
     } catch (err: any) {
-      setError(err.detail ?? String(err));
+      finalMsg = `Gallery download failed: ${err.detail ?? String(err)}`;
+    } finally {
+      setGalleryProg(null);
+      if (finalMsg) setImportMsg(finalMsg);
     }
   }
 
@@ -542,8 +557,16 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                     {chubSource}
                   </a>
                   <button className="subtle" type="button" onClick={unlinkChub}>Unlink</button>
-                  <button className="subtle" type="button" onClick={downloadChubGallery}>Download gallery</button>
+                  <button className="subtle" type="button" disabled={!!galleryProg} onClick={downloadChubGallery}>
+                    {galleryProg ? "Downloading…" : "Download gallery"}
+                  </button>
                   <button className="subtle" type="button" onClick={downloadChubLorebooks}>Download linked lorebooks</button>
+                  {galleryProg && (
+                    <div className="localize-progress">
+                      <progress value={galleryProg.done} max={galleryProg.total || 1} />
+                      <span className="field-hint">{galleryProg.done}/{galleryProg.total}</span>
+                    </div>
+                  )}
                 </>
               ) : (
                 <button className="subtle" type="button" onClick={linkChub}>Link to chub.ai</button>

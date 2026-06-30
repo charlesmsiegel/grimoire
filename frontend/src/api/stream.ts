@@ -14,6 +14,14 @@ export type LocalizeEvent = {
   error?: { detail: string; kind: string };
 };
 
+export type ChubGallerySummary = { attempted: number; stored: number };
+export type ChubGalleryEvent = {
+  total?: number;
+  done?: number;
+  summary?: ChubGallerySummary;
+  error?: { detail: string; kind: string };
+};
+
 // Appends a chunk to `buffer`, emits each complete `data:` event, returns the leftover buffer.
 export function parseSSEChunk<T = ChatEvent>(
   buffer: string,

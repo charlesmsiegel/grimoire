@@ -478,13 +478,19 @@ def delete_world_character_chub_source(wid: str, cid: str, vid: str):
 def post_world_character_chub_gallery(wid: str, cid: str, vid: str):
     root = _world_root_or_404(wid)
     try:
-        return store.characters.download_chub_gallery(root, cid, vid)
+        node = store.characters.resolve_chub_node(root, cid, vid)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
     except store.characters.VersionNotFound:
         raise HTTPException(status_code=404, detail="version not found")
     except store.chub.ChubFetchError:
         raise HTTPException(status_code=404, detail="could not fetch from chub.ai")
+
+    def event_stream():
+        for ev in store.characters.download_chub_gallery_stream(root, cid, vid, node):
+            yield f"data: {json.dumps(ev)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/chub-lorebooks")

@@ -525,6 +525,47 @@ def test_download_chub_gallery_honors_legacy_character_level_link(tmp_path, monk
     assert ch.download_chub_gallery(tmp_path, cid, default_vid) == {"attempted": 0, "stored": 0}
 
 
+def test_download_chub_gallery_stream_yields_progress_per_image(tmp_path, monkeypatch):
+    from grimoire.store import chub
+
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    node = {"id": 1, "hasGallery": True}
+    monkeypatch.setattr(chub, "fetch_gallery_paths", lambda pid: ["https://g/1.jpg", "https://g/2.jpg"])
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"\xff\xd8\xffJPEGDATA", "image/jpeg"))
+
+    events = list(ch.download_chub_gallery_stream(tmp_path, cid, vid, node))
+    assert events == [
+        {"total": 2},
+        {"done": 1, "total": 2},
+        {"done": 2, "total": 2},
+        {"summary": {"attempted": 2, "stored": 2}},
+    ]
+
+
+def test_download_chub_gallery_stream_one_image_fails(tmp_path, monkeypatch):
+    from grimoire.store import chub
+
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    node = {"id": 1, "hasGallery": True}
+    monkeypatch.setattr(chub, "fetch_gallery_paths", lambda pid: ["https://g/1.jpg", "https://g/2.jpg"])
+
+    def fake_get_bytes(url):
+        if url == "https://g/1.jpg":
+            raise RuntimeError("one image failed")
+        return (b"\xff\xd8\xffJPEGDATA", "image/jpeg")
+
+    monkeypatch.setattr(fetch, "_http_get_bytes", fake_get_bytes)
+
+    events = list(ch.download_chub_gallery_stream(tmp_path, cid, vid, node))
+    assert events[-1] == {"summary": {"attempted": 2, "stored": 1}}
+
+
+def test_download_chub_gallery_stream_no_gallery_short_circuits(tmp_path):
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    events = list(ch.download_chub_gallery_stream(tmp_path, cid, vid, {"id": 1, "hasGallery": False}))
+    assert events == [{"total": 0}, {"summary": {"attempted": 0, "stored": 0}}]
+
+
 def test_download_chub_lorebooks_for_linked_version(tmp_path, monkeypatch):
     from grimoire.store import chub
 
