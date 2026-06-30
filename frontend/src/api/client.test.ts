@@ -55,6 +55,16 @@ test("getSceneDatetime GETs the scene datetime", async () => {
   );
 });
 
+test("createCampaign includes region when given", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "run" }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.createCampaign("Run One", "w1", "GB");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/campaigns",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "Run One", world: "w1", region: "GB" }) }),
+  );
+});
+
 test("createWorld POSTs the name", async () => {
   const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "w" }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;

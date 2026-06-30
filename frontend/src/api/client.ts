@@ -169,8 +169,8 @@ export const api = {
 
   // campaigns
   listCampaigns: () => request<CampaignMeta[]>("GET", "/api/campaigns"),
-  createCampaign: (name: string, world: string) =>
-    request<{ id: string }>("POST", "/api/campaigns", { name, world }),
+  createCampaign: (name: string, world: string, region?: string) =>
+    request<{ id: string }>("POST", "/api/campaigns", region ? { name, world, region } : { name, world }),
   getCampaign: (cid: string) =>
     request<{ meta: CampaignMeta; body: string }>("GET", `/api/campaigns/${cid}`),
   renameCampaign: (cid: string, name: string) =>
