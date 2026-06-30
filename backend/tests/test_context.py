@@ -105,6 +105,22 @@ def test_location_owned_lore_only_shows_at_that_location(monkeypatch, tmp_path):
     assert "hidden under the floor" in context.build_messages(cid, sid)[0]["content"]
 
 
+def test_pc_owned_lore_activates_when_pc_in_scene(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    pid, _vid = pcs.create_pc(croot, "Hero", [], persona=pcs.blank_persona("Hero"))
+    entities.create_entity(croot, "lore", "Hero secret", "She carries a hidden key.",
+                           owners=f"pcs:{pid}")
+    scenes.append_message(cid, sid, "user", "hello")
+
+    # PC not in scene -> owned lore absent
+    assert "hidden key" not in context.build_messages(cid, sid)[0]["content"]
+
+    # bring the PC into the scene as a player -> owned lore present
+    ap.appear(cid, sid, "pcs", pid, "default", "player")
+    assert "hidden key" in context.build_messages(cid, sid)[0]["content"]
+
+
 def test_single_npc_block_order(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Seraphine", "default",

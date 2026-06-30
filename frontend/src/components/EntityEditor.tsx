@@ -6,10 +6,11 @@ import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 
-export function EntityEditor({ wid, kind, nav, onOpenOwner, onOpenLore }: {
+export function EntityEditor({ wid, kind, nav, onNavConsumed, onOpenOwner, onOpenLore }: {
   wid: string;
   kind: EntityKind;
   nav?: { focusEntry?: string; newOwner?: string } | null;
+  onNavConsumed?: () => void;
   onOpenOwner?: (ref: string) => void;
   onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
 }) {
@@ -41,11 +42,21 @@ export function EntityEditor({ wid, kind, nav, onOpenOwner, onOpenLore }: {
     [ownerOpts],
   );
 
-  // inbound navigation from an owner editor: open an entry, or start a new pre-owned entry
+  // inbound navigation from an owner editor: open an entry, or start a new pre-owned entry.
+  // Clear it via onNavConsumed so it doesn't leak into later manual "+ New" / re-entry.
   useEffect(() => {
     if (!nav) return;
-    if (nav.focusEntry) select(nav.focusEntry);
-    else resetForm();
+    if (nav.focusEntry) {
+      select(nav.focusEntry);
+    } else {
+      setEditing(null);
+      setName("");
+      setBody("");
+      setKeys("");
+      setOwners(nav.newOwner ? [nav.newOwner] : []);
+      setMode("edit");
+    }
+    onNavConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nav]);
 
@@ -54,7 +65,7 @@ export function EntityEditor({ wid, kind, nav, onOpenOwner, onOpenLore }: {
     setName("");
     setBody("");
     setKeys("");
-    setOwners(nav?.newOwner ? [nav.newOwner] : []);
+    setOwners([]); // manual "+ New" / post-save: always world-level, never a stale nav owner
     setMode("edit"); // a brand-new entry goes straight to the form
   }
 

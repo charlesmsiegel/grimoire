@@ -89,7 +89,35 @@ test("groups the rail by owner with an Unowned group", async () => {
   const { container } = render(<EntityEditor wid="w" kind="lore" />);
   expect(await screen.findByText("Unowned (world)")).toBeInTheDocument();
   const rail = container.querySelector(".editor-list") as HTMLElement;
-  expect(within(rail).getByText("Tanaka")).toBeInTheDocument(); // owner group heading
+  // "Owned A" sits under the Tanaka group; "World B" under Unowned
+  const tanakaGroup = within(rail).getByText("Tanaka").closest(".rail-group") as HTMLElement;
+  expect(within(tanakaGroup).getByText("Owned A")).toBeInTheDocument();
+  expect(within(tanakaGroup).queryByText("World B")).toBeNull();
+  const unownedGroup = within(rail).getByText("Unowned (world)").closest(".rail-group") as HTMLElement;
+  expect(within(unownedGroup).getByText("World B")).toBeInTheDocument();
+});
+
+test("nav.newOwner pre-checks the owner for a new entry", async () => {
+  render(<EntityEditor wid="w" kind="lore" nav={{ newOwner: "characters:tanaka" }} onNavConsumed={vi.fn()} />);
+  const tanaka = await screen.findByLabelText("Tanaka");
+  expect((tanaka as HTMLInputElement).checked).toBe(true);
+});
+
+test("nav.focusEntry opens that entry in the read-only view", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "a", name: "Owned A", owners: "characters:tanaka" }]);
+  (api.readEntity as any).mockResolvedValue({ meta: { id: "a", name: "Owned A", owners: "characters:tanaka" }, body: "hi" });
+  const { container } = render(<EntityEditor wid="w" kind="lore" nav={{ focusEntry: "a" }} onNavConsumed={vi.fn()} />);
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", "a"));
+  expect(await screen.findByText("hi")).toBeInTheDocument();
+  expect(container.querySelector("textarea")).toBeNull(); // read-only view, not the form
+});
+
+test("manual '+ New' after a nav.newOwner does NOT inherit the stale owner", async () => {
+  // guards the loreNav-never-cleared regression: starting a world-level entry must be unowned
+  render(<EntityEditor wid="w" kind="lore" nav={{ newOwner: "characters:tanaka" }} onNavConsumed={vi.fn()} />);
+  expect((await screen.findByLabelText("Tanaka") as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: /\+ new lore entry/i }));
+  expect((screen.getByLabelText("Tanaka") as HTMLInputElement).checked).toBe(false);
 });
 
 test("owner chip in the read-only view calls onOpenOwner", async () => {
