@@ -4,12 +4,14 @@ import remarkGfm from "remark-gfm";
 import { api, type EntityKind, type EntitySummary } from "../api/client";
 import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import { Field } from "./Field";
+import { OwnedLorePanel } from "./OwnedLorePanel";
 
-export function EntityEditor({ wid, kind, nav, onOpenOwner }: {
+export function EntityEditor({ wid, kind, nav, onOpenOwner, onOpenLore }: {
   wid: string;
   kind: EntityKind;
   nav?: { focusEntry?: string; newOwner?: string } | null;
   onOpenOwner?: (ref: string) => void;
+  onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
 }) {
   const scope = { kind: "world" as const, id: wid };
   const [items, setItems] = useState<EntitySummary[]>([]);
@@ -167,6 +169,14 @@ export function EntityEditor({ wid, kind, nav, onOpenOwner }: {
                     <div className="field-hint">world-level</div>
                   )}
                 </div>
+              )}
+              {kind === "locations" && editing && onOpenLore && (
+                <OwnedLorePanel
+                  wid={wid}
+                  ownerRef={`locations:${editing}`}
+                  onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
+                  onNewEntry={() => onOpenLore({ newOwner: `locations:${editing}` })}
+                />
               )}
             </aside>
           </div>

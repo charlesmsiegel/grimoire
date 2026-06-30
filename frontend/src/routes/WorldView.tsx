@@ -26,6 +26,7 @@ export default function WorldView() {
   const [charReset, setCharReset] = useState(0);
   const [loreReset, setLoreReset] = useState(0);
   const [focusChar, setFocusChar] = useState<{ cid: string; vid: string } | null>(null);
+  const [loreNav, setLoreNav] = useState<{ focusEntry?: string; newOwner?: string } | null>(null);
 
   useEffect(() => {
     api.getWorld(wid).then((w) => setName(w.meta.name)).catch(() => setName(wid));
@@ -35,6 +36,22 @@ export default function WorldView() {
   function openCharacter(cid: string, vid: string) {
     setFocusChar({ cid, vid });
     setTab("characters");
+  }
+
+  // an owner editor's lore panel routes to the Lore tab (open an entry, or start a pre-owned one)
+  function openLore(nav: { focusEntry?: string; newOwner?: string }) {
+    setLoreNav({ ...nav });
+    setTab("lore");
+  }
+
+  // an owner chip inside the Lore tab jumps to that record's tab
+  function openOwner(ref: string) {
+    const i = ref.indexOf(":");
+    const kind = ref.slice(0, i);
+    const id = ref.slice(i + 1);
+    if (kind === "characters") openCharacter(id, ""); // "" -> CharacterEditor falls back to default version
+    else if (kind === "pcs") setTab("pcs");
+    else if (kind === "locations") setTab("locations");
   }
 
   return (
@@ -54,17 +71,17 @@ export default function WorldView() {
         ))}
       </div>
 
-      {tab === "characters" && <CharacterEditor wid={wid} resetSignal={charReset} focus={focusChar} />}
-      {tab === "pcs" && <PCEditor wid={wid} />}
+      {tab === "characters" && <CharacterEditor wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} />}
+      {tab === "pcs" && <PCEditor wid={wid} onOpenLore={openLore} />}
       {tab === "tags" && <TagEditor wid={wid} />}
-      {tab === "locations" && <EntityEditor wid={wid} kind="locations" />}
+      {tab === "locations" && <EntityEditor wid={wid} kind="locations" onOpenLore={openLore} />}
       {tab === "lore" && (
         <>
           <details className="import-section">
             <summary>Import lorebook / world-info</summary>
             <LorebookImport wid={wid} onImported={() => setLoreReset((n) => n + 1)} />
           </details>
-          <EntityEditor key={loreReset} wid={wid} kind="lore" />
+          <EntityEditor key={loreReset} wid={wid} kind="lore" nav={loreNav} onOpenOwner={openOwner} />
         </>
       )}
       {tab === "greetings" && <GreetingEditor wid={wid} onOpenCharacter={openCharacter} />}

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type PCDetail, type PCSummary, type Persona } from "../api/client";
 import { Field } from "./Field";
+import { OwnedLorePanel } from "./OwnedLorePanel";
 
 const BLANK: Persona = { name: "", pronouns: "", summary: "", birthdate: "", description: "" };
 
-export function PCEditor({ wid }: { wid: string }) {
+export function PCEditor({ wid, onOpenLore }:
+  { wid: string; onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void }) {
   const [pcs, setPCs] = useState<PCSummary[]>([]);
   const [tags, setTags] = useState<Record<string, string>>({});
   const [detail, setDetail] = useState<PCDetail | null>(null);
@@ -152,6 +154,15 @@ export function PCEditor({ wid }: { wid: string }) {
             <div className="form-actions">
               <button className="primary" onClick={savePersona}>Save persona</button>
             </div>
+
+            {onOpenLore && (
+              <OwnedLorePanel
+                wid={wid}
+                ownerRef={`pcs:${detail.meta.id}`}
+                onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
+                onNewEntry={() => onOpenLore({ newOwner: `pcs:${detail.meta.id}` })}
+              />
+            )}
           </div>
         )}
       </div>
