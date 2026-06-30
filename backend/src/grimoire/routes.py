@@ -127,6 +127,10 @@ class SceneLocation(BaseModel):
     location: str
 
 
+class SceneDatetime(BaseModel):
+    datetime: str
+
+
 class EditMessage(BaseModel):
     content: str
 
@@ -1047,6 +1051,28 @@ def put_scene_location(cid: str, sid: str, body: SceneLocation):
         result = store.scenes.set_location(cid, sid, body.location)
     except store.entities.EntityNotFound:
         raise HTTPException(status_code=404, detail="location not found")
+    return {"ok": True, **result}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/datetime")
+def get_scene_datetime(cid: str, sid: str):
+    _require_scene(cid, sid)
+    history = store.scenes.get_time_history(cid, sid)
+    current = None
+    if history:
+        cfg = store.calendars.read_calendar(store.campaigns.campaign_root(cid))
+        native = history[-1]
+        current = {"native": native, **store.calendars.today_facts(cfg, native)}
+    return {"current": current, "history": history}
+
+
+@router.put("/campaigns/{cid}/scenes/{sid}/datetime")
+def put_scene_datetime(cid: str, sid: str, body: SceneDatetime):
+    _require_scene(cid, sid)
+    try:
+        result = store.scenes.set_datetime(cid, sid, body.datetime)
+    except store.calendars.CalendarError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, **result}
 
 

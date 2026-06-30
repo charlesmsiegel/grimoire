@@ -785,3 +785,23 @@ def test_campaign_create_defaults_region_us(client):
     from grimoire.store import campaigns, calendars
     _wid, cid = _campaign(client)
     assert calendars.read_calendar(campaigns.campaign_root(cid))["primary"]["region"] == "US"
+
+
+def test_datetime_get_put_roundtrip(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()["current"] is None
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime", json={"datetime": "2026-12-25"})
+    assert r.json() == {"ok": True, "advanced": False, "friendly": "25 December 2026"}
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()
+    assert got["current"]["native"] == "2026-12-25"
+    assert got["current"]["weekday"] == "Friday"
+    assert "Christmas Day" in got["current"]["holidays_today"]
+    assert got["history"] == ["2026-12-25"]
+
+
+def test_datetime_put_bad_date_is_400(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime", json={"datetime": "2026-13-40"})
+    assert r.status_code == 400
