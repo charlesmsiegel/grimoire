@@ -373,6 +373,25 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     }
   }
 
+  async function downloadVersionFromChub() {
+    if (!detail) return;
+    const url = window.prompt("chub.ai character URL or path?")?.trim();
+    if (!url) return;
+    setError(null);
+    setImportMsg(null);
+    try {
+      const result = await api.importCharacterFromChub(wid, url, detail.meta.id);
+      const d = await api.readCharacter(wid, detail.meta.id);
+      setDetail(d);
+      loadVersion(d, result.version);
+      await reload();
+      setImportMsg(describeChubResult(result));
+      await runLocalize(detail.meta.id, result.version);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
   const avatarSrc = (cid: string, version: string, bust = false) =>
     api.imageUrl(wid, cid, version, "avatar") + (bust ? `?v=${avatarBust}` : "");
 
@@ -503,6 +522,8 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                    aria-label="Import version" onChange={onImportVersion} />
             <button className="subtle" onClick={setDefault}>Set default</button>
             <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>
+            <button className="subtle" onClick={downloadVersionFromChub}>Download version from chub.ai</button>
+            {importMsg && <span className="field-hint">{importMsg}</span>}
           </div>
 
           <div className="avatar-block">
