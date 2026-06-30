@@ -1,7 +1,12 @@
 # grimoire — project conventions
 
 FastAPI backend (`backend/`, pytest) + Vite/React frontend (`frontend/`, vitest).
-The app and its data live under `~/.grimoire` (a markdown/JSON store).
+The app and its data live in a markdown/JSON store rooted at `~/.grimoire` by
+default. The root is resolved by `store.home()`: `GRIMOIRE_HOME` env var (tests /
+overrides) → the user-chosen path recorded in the bootstrap pointer
+`~/.grimoire.json` → `~/.grimoire`. The path is editable from the Configuration
+page (Storage location); point it at a synced folder to share a library across
+devices.
 
 ## Frontend: the list/detail page pattern
 

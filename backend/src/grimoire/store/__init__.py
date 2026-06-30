@@ -19,7 +19,9 @@ from .tags import TagNotFound
 from .config import DEFAULT_MODEL, DEFAULT_THEME, read_config, write_config
 from .entities import EntityNotFound, UnknownKind
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import ensure_home, home, now_iso, slugify, uniquify
+from .paths import (
+    data_dir_info, ensure_home, home, now_iso, set_data_dir, slugify, uniquify,
+)
 from .scenes import SceneNotFound
 from .worlds import WorldNotFound
 
@@ -28,6 +30,8 @@ __all__ = [
     "dump_frontmatter",
     "home",
     "ensure_home",
+    "set_data_dir",
+    "data_dir_info",
     "now_iso",
     "slugify",
     "uniquify",

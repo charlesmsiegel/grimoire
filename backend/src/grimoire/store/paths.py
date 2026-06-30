@@ -2,15 +2,56 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+DEFAULT_HOME = Path.home() / ".grimoire"
+
+
+def _pointer_path() -> Path:
+    """Fixed location of the bootstrap pointer that records the data dir.
+
+    This must live *outside* the data dir itself — the data dir is what it
+    points at, so it cannot also store the pointer (chicken/egg). It sits
+    beside the default store as a sibling dotfile.
+    """
+    return Path.home() / ".grimoire.json"
+
+
+def _read_pointer() -> dict:
+    path = _pointer_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (ValueError, OSError):
+        return {}
+
+
+def _pointer_data_dir() -> Path | None:
+    raw = _read_pointer().get("data_dir")
+    return Path(raw).expanduser() if raw else None
+
 
 def home() -> Path:
-    return Path(os.environ.get("GRIMOIRE_HOME") or (Path.home() / ".grimoire"))
+    """Resolve the data root.
+
+    Order: ``GRIMOIRE_HOME`` env var (override / test isolation) → the
+    user-chosen path from the bootstrap pointer → the default ``~/.grimoire``.
+    Resolved live on every call so a path change takes effect immediately.
+    """
+    env = os.environ.get("GRIMOIRE_HOME")
+    if env:
+        return Path(env)
+    pointer = _pointer_data_dir()
+    if pointer:
+        return pointer
+    return DEFAULT_HOME
 
 
 def ensure_home() -> Path:
@@ -18,6 +59,46 @@ def ensure_home() -> Path:
     (base / "worlds").mkdir(parents=True, exist_ok=True)
     (base / "campaigns").mkdir(parents=True, exist_ok=True)
     return base
+
+
+def set_data_dir(path: str | Path | None) -> Path:
+    """Persist the data dir to the bootstrap pointer and return the new root.
+
+    A falsy ``path`` clears the override, reverting to the default. The target
+    directory (and its ``worlds``/``campaigns`` subtrees) is created if missing.
+    Raises ``ValueError`` if the target exists but is not a directory.
+    """
+    pointer = _pointer_path()
+    data = _read_pointer()
+
+    if not path or not str(path).strip():
+        data.pop("data_dir", None)
+        pointer.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        return ensure_home()
+
+    resolved = Path(str(path).strip()).expanduser()
+    if resolved.exists() and not resolved.is_dir():
+        raise ValueError(f"{resolved} exists but is not a directory")
+    resolved.mkdir(parents=True, exist_ok=True)
+
+    data["data_dir"] = str(resolved)
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    pointer.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return ensure_home()
+
+
+def data_dir_info() -> dict:
+    """Describe the active data dir for the settings UI."""
+    env = os.environ.get("GRIMOIRE_HOME")
+    pointer = _pointer_data_dir()
+    current = home()
+    return {
+        "data_dir": str(current),
+        "default": str(DEFAULT_HOME),
+        "is_default": not env and pointer is None,
+        "source": "env" if env else ("custom" if pointer else "default"),
+        "exists": current.exists(),
+    }
 
 
 def now_iso() -> str:

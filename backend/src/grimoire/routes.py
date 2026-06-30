@@ -28,6 +28,10 @@ class ConfigUpdate(BaseModel):
     quote_color: str | None = None
 
 
+class DataDirUpdate(BaseModel):
+    data_dir: str | None = None
+
+
 class NameBody(BaseModel):
     name: str
 
@@ -212,6 +216,20 @@ def get_config():
 def put_config(update: ConfigUpdate):
     fields = {k: v for k, v in update.model_dump().items() if v is not None}
     return _public_config(store.write_config(**fields))
+
+
+@router.get("/config/data-dir")
+def get_data_dir():
+    return store.data_dir_info()
+
+
+@router.put("/config/data-dir")
+def put_data_dir(update: DataDirUpdate):
+    try:
+        store.set_data_dir(update.data_dir)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail={"detail": str(exc), "kind": "data_dir"})
+    return store.data_dir_info()
 
 
 # ---- worlds ----
