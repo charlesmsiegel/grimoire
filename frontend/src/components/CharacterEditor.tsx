@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Card, type CharacterDetail, type CharacterSummary } from "../api/client";
 import { Field } from "./Field";
+import { OwnedLorePanel } from "./OwnedLorePanel";
 
 const TEXT_FIELDS: { key: string; label: string; area?: boolean }[] = [
   { key: "description", label: "Description", area: true },
@@ -15,8 +16,9 @@ const TEXT_FIELDS: { key: string; label: string; area?: boolean }[] = [
 
 type Mode = "grid" | "detail" | "edit";
 
-export function CharacterEditor({ wid, resetSignal, focus }:
-  { wid: string; resetSignal?: number; focus?: { cid: string; vid: string } | null }) {
+export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
+  { wid: string; resetSignal?: number; focus?: { cid: string; vid: string } | null;
+    onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void }) {
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [detail, setDetail] = useState<CharacterDetail | null>(null);
   const [vid, setVid] = useState("");
@@ -418,6 +420,15 @@ export function CharacterEditor({ wid, resetSignal, focus }:
             </div>
 
             {localizeControls(false)}
+
+            {onOpenLore && (
+              <OwnedLorePanel
+                wid={wid}
+                ownerRef={`characters:${detail.meta.id}`}
+                onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
+                onNewEntry={() => onOpenLore({ newOwner: `characters:${detail.meta.id}` })}
+              />
+            )}
 
             {TEXT_FIELDS.map((f) => {
               const val = (card.data[f.key] as string) ?? "";
