@@ -125,6 +125,25 @@ test("clicking a card shows read-only details, then Edit opens the form", async 
   await screen.findByLabelText("Description"); // now the form
 });
 
+test("clicking a character or returning to the list scrolls to the top", async () => {
+  const scrollSpy = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  render(<CharacterEditor wid="w" />);
+
+  fireEvent.click(await screen.findByText("Seraphine")); // grid -> detail
+  await screen.findByRole("heading", { name: "Seraphine" });
+  expect(scrollSpy).toHaveBeenCalledWith(0, 0);
+
+  scrollSpy.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: /all characters/i })); // detail -> grid
+  await screen.findByRole("button", { name: /new character/i });
+  expect(scrollSpy).toHaveBeenCalledWith(0, 0);
+
+  scrollSpy.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i })); // grid card's Edit -> form
+  await screen.findByLabelText("Description");
+  expect(scrollSpy).toHaveBeenCalledWith(0, 0);
+});
+
 test("a card's Delete button deletes the character", async () => {
   vi.spyOn(window, "confirm").mockReturnValue(true);
   render(<CharacterEditor wid="w" />);
