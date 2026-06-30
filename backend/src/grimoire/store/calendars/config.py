@@ -5,7 +5,10 @@ into a campaign on create."""
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
+
+from .base import CalendarError
 
 
 def _blank(region: str = "US") -> dict:
@@ -49,3 +52,32 @@ def write_calendar(root: Path, cfg: dict) -> None:
 
 def copy_calendar(wroot: Path, croot: Path) -> None:
     write_calendar(croot, read_calendar(wroot))
+
+
+def _validate_rule(rule: dict) -> None:
+    if not rule.get("name"):
+        raise CalendarError(f"custom holiday needs a name: {rule!r}")
+    try:
+        month = int(rule["month"])
+    except (KeyError, ValueError, TypeError):
+        raise CalendarError(f"custom holiday needs a valid month: {rule!r}")
+    if not (1 <= month <= 12):
+        raise CalendarError(f"custom holiday month out of range: {rule!r}")
+    try:
+        if "day" in rule:
+            date(2024, month, int(rule["day"]))  # leap year so Feb 29 is allowed
+        else:
+            nth, weekday = int(rule["nth"]), int(rule["weekday"])
+            if not (1 <= nth <= 5 and 0 <= weekday <= 6):
+                raise ValueError
+    except (KeyError, ValueError, TypeError):
+        raise CalendarError(f"custom holiday rule is malformed: {rule!r}")
+
+
+def validate_calendar(cfg: dict) -> None:
+    """Raise CalendarError if any configured calendar has a malformed custom holiday."""
+    for block in (cfg.get("primary"), cfg.get("secondary")):
+        if not block:
+            continue
+        for rule in block.get("custom_holidays", []) or []:
+            _validate_rule(rule)

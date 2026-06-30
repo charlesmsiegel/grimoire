@@ -120,6 +120,12 @@ export type SceneDatetimeFacts = {
   holidays_today: string[]; upcoming: { name: string; in_days: number } | null; cast: SceneDatetimeCast[];
 };
 export type SceneDatetime = { current: SceneDatetimeFacts | null; history: string[] };
+export type CalendarBlock = {
+  provider: string; region: string;
+  custom_holidays: Array<{ name: string; month: number; day?: number; nth?: number; weekday?: number }>;
+  anchor: { native: string; gregorian: string } | null;
+};
+export type CalendarConfig = { primary: CalendarBlock; secondary: CalendarBlock | null };
 export type ContextSection = { label: string; text: string; tokens: number };
 export type SceneContext = { model: string; total_tokens: number; sections: ContextSection[] };
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
@@ -314,6 +320,10 @@ export const api = {
   setSceneDatetime: (cid: string, sid: string, datetime: string) =>
     request<{ ok: boolean; advanced: boolean; friendly: string }>(
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/datetime`, { datetime }),
+  getCalendarConfig: (cid: string) =>
+    request<CalendarConfig>("GET", `/api/campaigns/${cid}/calendar`),
+  setCalendarConfig: (cid: string, cfg: CalendarConfig) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/calendar`, cfg),
   getSceneContext: (cid: string, sid: string) =>
     request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
   getCastDetail: (cid: string, sid: string, kind: string, id: string) =>

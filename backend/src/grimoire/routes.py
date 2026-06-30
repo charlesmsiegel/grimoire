@@ -135,6 +135,11 @@ class SceneDatetime(BaseModel):
     datetime: str
 
 
+class CalendarConfig(BaseModel):
+    primary: dict
+    secondary: dict | None = None
+
+
 class EditMessage(BaseModel):
     content: str
 
@@ -784,6 +789,26 @@ def delete_world_entity(wid: str, kind: str, eid: str):
 @router.get("/campaigns")
 def get_campaigns():
     return store.campaigns.list_campaigns()
+
+
+@router.get("/campaigns/{cid}/calendar")
+def get_calendar_config(cid: str):
+    if not store.campaigns.campaign_meta_path(cid).exists():
+        raise HTTPException(status_code=404, detail="campaign not found")
+    return store.calendars.read_calendar(store.campaigns.campaign_root(cid))
+
+
+@router.put("/campaigns/{cid}/calendar")
+def put_calendar_config(cid: str, body: CalendarConfig):
+    if not store.campaigns.campaign_meta_path(cid).exists():
+        raise HTTPException(status_code=404, detail="campaign not found")
+    cfg = {"primary": body.primary, "secondary": body.secondary}
+    try:
+        store.calendars.validate_calendar(cfg)
+    except store.calendars.CalendarError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    store.calendars.write_calendar(store.campaigns.campaign_root(cid), cfg)
+    return {"ok": True}
 
 
 @router.post("/campaigns")

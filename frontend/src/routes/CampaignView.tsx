@@ -6,6 +6,7 @@ import { api, type SceneMeta, type Message } from "../api/client";
 import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
 import { CastPanel } from "../components/CastPanel";
+import { CalendarConfig } from "../components/CalendarConfig";
 import { SceneInspector } from "../components/SceneInspector";
 import { quotePlugin } from "../markdown/quotePlugin";
 
@@ -143,6 +144,10 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
             onDelete={() => deleteScene(s)}
           />
         ))}
+        <details className="calendar-config-wrap">
+          <summary>Calendar</summary>
+          <CalendarConfig cid={cid} />
+        </details>
       </aside>
       <section className="main">
         <div className="campaign-header">{name}</div>
