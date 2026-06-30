@@ -79,6 +79,15 @@ class CharacterBirthdate(BaseModel):
     birthdate: str = ""
 
 
+class ChubImportBody(BaseModel):
+    url: str
+    into: str | None = None
+
+
+class ChubSourceBody(BaseModel):
+    url: str
+
+
 class BriefSave(BaseModel):
     tagline: str = ""
     body: str = ""
@@ -437,6 +446,29 @@ def put_world_character_birthdate(wid: str, cid: str, body: CharacterBirthdate):
     return {"ok": True}
 
 
+@router.post("/worlds/{wid}/characters/{cid}/chub-source")
+def post_world_character_chub_source(wid: str, cid: str, body: ChubSourceBody):
+    root = _world_root_or_404(wid)
+    full_path = store.chub.parse_full_path(body.url)
+    if full_path is None:
+        raise HTTPException(status_code=400, detail="not a valid chub.ai character URL or path")
+    try:
+        store.characters.set_chub_source(root, cid, full_path)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    return {"chub_source": full_path}
+
+
+@router.delete("/worlds/{wid}/characters/{cid}/chub-source")
+def delete_world_character_chub_source(wid: str, cid: str):
+    root = _world_root_or_404(wid)
+    try:
+        store.characters.clear_chub_source(root, cid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    return {"chub_source": ""}
+
+
 @router.delete("/worlds/{wid}/characters/{cid}")
 def delete_world_character(wid: str, cid: str):
     try:
@@ -537,6 +569,19 @@ async def post_character_import(wid: str, file: UploadFile = File(...),
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
     return {"character": cid, "version": vid}
+
+
+@router.post("/worlds/{wid}/characters/import/chub")
+def post_character_import_chub(wid: str, body: ChubImportBody):
+    root = _world_root_or_404(wid)
+    try:
+        return store.characters.import_from_chub(root, body.url, into_cid=body.into)
+    except store.chub.ChubParseError:
+        raise HTTPException(status_code=400, detail="not a valid chub.ai character URL or path")
+    except store.chub.ChubFetchError:
+        raise HTTPException(status_code=404, detail="could not fetch from chub.ai")
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
 
 
 @router.get("/worlds/{wid}/characters/{cid}/versions/{vid}/export")
