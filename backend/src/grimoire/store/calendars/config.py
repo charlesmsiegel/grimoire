@@ -33,7 +33,10 @@ def read_calendar(root: Path) -> dict:
     p = _path(root)
     if not p.exists():
         return default_calendar()
-    raw = json.loads(p.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return default_calendar()  # corrupt file — fall back rather than crash a render
     primary = _normalize_block(raw.get("primary")) or _blank()
     return {"primary": primary, "secondary": _normalize_block(raw.get("secondary"))}
 
