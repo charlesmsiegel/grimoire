@@ -9,6 +9,7 @@ vi.mock("../api/client", () => ({
     putImage: vi.fn(), deleteImage: vi.fn(), importCharacterBook: vi.fn(),
     importCharacterFromChub: vi.fn(),
     setCharacterBirthdate: vi.fn(),
+    setCharacterChubSource: vi.fn(), clearCharacterChubSource: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
   },
 }));
@@ -243,4 +244,26 @@ test("downloading a version from chub.ai targets the open character", async () =
   await waitFor(() =>
     expect(api.importCharacterFromChub).toHaveBeenCalledWith("w", "creator/imp-variant", "seraphine"));
   await screen.findByText(/^downloaded from chub\.ai$/i);
+});
+
+test("linking a character to chub.ai shows the linked path and allows unlinking", async () => {
+  vi.spyOn(window, "prompt").mockReturnValue("creator/imp");
+  (api.setCharacterChubSource as any).mockResolvedValue({ chub_source: "creator/imp" });
+  (api.clearCharacterChubSource as any).mockResolvedValue({ chub_source: "" });
+  (api.readCharacter as any)
+    .mockResolvedValueOnce(DETAIL) // openEditForm's initial select()
+    .mockResolvedValueOnce({ ...DETAIL, meta: { ...DETAIL.meta, chub_source: "creator/imp" } }); // after linking
+
+  render(<CharacterEditor wid="w" />);
+  await openEditForm();
+  expect(screen.queryByText(/linked to chub\.ai/i)).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: /^link to chub\.ai$/i }));
+  await waitFor(() => expect(api.setCharacterChubSource).toHaveBeenCalledWith("w", "seraphine", "creator/imp"));
+  await screen.findByText(/linked to chub\.ai: creator\/imp/i);
+
+  (api.readCharacter as any).mockResolvedValueOnce(DETAIL); // after unlinking, reverts
+  fireEvent.click(screen.getByRole("button", { name: /^unlink$/i }));
+  await waitFor(() => expect(api.clearCharacterChubSource).toHaveBeenCalledWith("w", "seraphine"));
+  await screen.findByRole("button", { name: /^link to chub\.ai$/i });
 });

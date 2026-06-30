@@ -392,6 +392,25 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     }
   }
 
+  async function linkChub() {
+    if (!detail) return;
+    const url = window.prompt("chub.ai character URL or path?")?.trim();
+    if (!url) return;
+    setError(null);
+    try {
+      await api.setCharacterChubSource(wid, detail.meta.id, url);
+      await select(detail.meta.id);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function unlinkChub() {
+    if (!detail) return;
+    await api.clearCharacterChubSource(wid, detail.meta.id);
+    await select(detail.meta.id);
+  }
+
   const avatarSrc = (cid: string, version: string, bust = false) =>
     api.imageUrl(wid, cid, version, "avatar") + (bust ? `?v=${avatarBust}` : "");
 
@@ -524,6 +543,17 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
             <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>
             <button className="subtle" onClick={downloadVersionFromChub}>Download version from chub.ai</button>
             {importMsg && <span className="field-hint">{importMsg}</span>}
+          </div>
+
+          <div className="chub-source-block">
+            {detail.meta.chub_source ? (
+              <>
+                <span className="field-hint">Linked to chub.ai: {detail.meta.chub_source}</span>
+                <button className="subtle" type="button" onClick={unlinkChub}>Unlink</button>
+              </>
+            ) : (
+              <button className="subtle" type="button" onClick={linkChub}>Link to chub.ai</button>
+            )}
           </div>
 
           <div className="avatar-block">
