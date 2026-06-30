@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import campaigns, entities
+from . import appearances, campaigns, entities
 from .config import read_config
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import now_iso, slugify, uniquify
@@ -99,6 +99,8 @@ def rename_scene(cid: str, sid: str, title: str) -> str:
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
     if new_sid != sid:
         p.rename(_scene_path(cid, new_sid))
+        # cast/appearances key scenes by id outside the scene file — carry them over
+        appearances.rename_scene(cid, sid, new_sid)
     return new_sid
 
 

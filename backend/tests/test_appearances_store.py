@@ -106,6 +106,33 @@ def test_sync_ignores_campaign_local_pc(monkeypatch, tmp_path):
     assert sync.incoming(cid) == []
 
 
+def test_rename_scene_migrates_cast_end_to_end(monkeypatch, tmp_path):
+    """The real bug: renaming a scene changes its id, but the cast lived under the
+    old id in appearances.json. scenes.rename_scene must carry the cast across."""
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Old Title")
+    ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")
+    new_sid = scenes.rename_scene(cid, sid, "Bright New Title")
+    assert new_sid != sid
+    assert ap.scene_cast(cid, new_sid) == [{"kind": "characters", "id": "seraphine", "role": "npc"}]
+    assert ap.scene_cast(cid, sid) == []
+
+
+def test_rename_scene_only_touches_matching_id(monkeypatch, tmp_path):
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    ap.appear(cid, "a", "characters", "seraphine", "corrupted", "npc")
+    ap.appear(cid, "b", "characters", "seraphine", "corrupted", "npc")
+    ap.rename_scene(cid, "a", "z")
+    assert ap.record(cid)["characters/seraphine"]["scenes"] == ["z", "b"]
+
+
+def test_rename_scene_noop_when_id_unchanged(monkeypatch, tmp_path):
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    ap.appear(cid, "a", "characters", "seraphine", "corrupted", "npc")
+    ap.rename_scene(cid, "a", "a")
+    assert ap.record(cid)["characters/seraphine"]["scenes"] == ["a"]
+
+
 def test_appear_copies_brief_into_campaign(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
