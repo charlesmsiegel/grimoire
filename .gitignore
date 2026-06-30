@@ -1,6 +1,9 @@
 # Local-only reference copies
 OLD/
 
+# Git worktrees
+.worktrees/
+
 # Brainstorming visual companion
 .superpowers/
 
