@@ -55,6 +55,13 @@ def test_fixed_of_ignores_time():
     assert fixed_of(p, "2026-06-29T14:30") == fixed_of(p, "2026-06-29")
 
 
+def test_normalize_zero_pads_time_for_stable_key():
+    # normalize output is used as the canonical equality/dedup key — must be stable.
+    p = get_provider(greg())
+    assert normalize(p, "2026-06-29T9:5") == "2026-06-29T09:05"
+    assert normalize(p, "2026-06-29T14:30") == "2026-06-29T14:30"
+
+
 from grimoire.store.calendars import today_facts
 
 
@@ -148,6 +155,12 @@ def test_read_fills_missing_keys(tmp_path):
     assert cfg["primary"]["region"] == "US"
     assert cfg["primary"]["custom_holidays"] == []
     assert cfg["secondary"] is None
+
+
+def test_read_calendar_tolerates_corrupt_json(tmp_path):
+    (tmp_path / "calendar.json").write_text("{ this is not json", encoding="utf-8")
+    cfg = read_calendar(tmp_path)  # must not raise JSONDecodeError
+    assert cfg == default_calendar()
 
 
 def test_copy_calendar_copies_world_file(tmp_path):

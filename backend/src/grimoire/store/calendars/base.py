@@ -94,8 +94,8 @@ def normalize(provider: CalendarProvider, native: str) -> str:
     date_str, time_str = split_native(native)
     canonical = provider.format(provider.parse(date_str))
     if time_str is not None:
-        minutes_of(native)  # validates range, raises CalendarError
-        return f"{canonical}T{time_str}"
+        m = minutes_of(native)  # validates range, raises CalendarError
+        return f"{canonical}T{m // 60:02d}:{m % 60:02d}"  # zero-pad for a stable key
     return canonical
 
 
