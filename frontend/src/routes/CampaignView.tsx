@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -9,6 +9,14 @@ import { CastPanel } from "../components/CastPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { SceneInspector } from "../components/SceneInspector";
 import { quotePlugin } from "../markdown/quotePlugin";
+
+// Memoized so typing in the input bar (which re-renders CampaignView on every
+// keystroke) doesn't re-parse the markdown of every unchanged message.
+const RenderedMarkdown = memo(function RenderedMarkdown({ content }: { content: string }) {
+  return (
+    <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[quotePlugin]}>{content}</Markdown>
+  );
+});
 
 export default function CampaignView({ keySet }: { keySet: boolean }) {
   const { cid = "" } = useParams();
@@ -192,14 +200,14 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                   </div>
                 </div>
               ) : (
-                <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[quotePlugin]}>{m.content}</Markdown>
+                <RenderedMarkdown content={m.content} />
               )}
             </div>
           ))}
           {streaming && (
             <div className="msg-card assistant">
               <div className="msg-card-head"><span className="role">Grimoire</span></div>
-              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[quotePlugin]}>{streaming}</Markdown>
+              <RenderedMarkdown content={streaming} />
               <span className="cursor" />
             </div>
           )}
