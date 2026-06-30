@@ -54,6 +54,12 @@ def test_config_system_prompt_and_quote_color_roundtrip(client):
     assert "openrouter_key" not in body
 
 
+def test_data_dir_reports_env_override(client, tmp_path):
+    body = client.get("/api/config/data-dir").json()
+    assert body["data_dir"] == str(tmp_path)
+    assert body["source"] == "env"
+
+
 def test_world_crud(client):
     wid = _world(client, "Drowned Realm")
     assert wid == "drowned-realm"

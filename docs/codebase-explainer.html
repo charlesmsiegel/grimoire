@@ -233,7 +233,7 @@ flowchart TB
 
 <section id="datamodel">
   <h2>On-Disk Data Model</h2>
-  <p>All state lives under <code>~/.grimoire/</code> (override with <code>$GRIMOIRE_HOME</code>). Two top-level trees: <code>worlds/</code> (the reusable library) and <code>campaigns/</code> (playable instances). Files are Markdown-with-frontmatter for human-editable content and JSON for structured graphs/state.</p>
+  <p>All state lives under <code>~/.grimoire/</code> by default — overridable with <code>$GRIMOIRE_HOME</code> or the user-chosen <em>Storage location</em> on the Configuration page (recorded in <code>~/.grimoire.json</code>), e.g. a Syncthing/Dropbox folder shared across devices. Two top-level trees: <code>worlds/</code> (the reusable library) and <code>campaigns/</code> (playable instances). Files are Markdown-with-frontmatter for human-editable content and JSON for structured graphs/state.</p>
 
   <div class="grid2">
   <div>
@@ -636,7 +636,7 @@ flowchart LR
   <p>Every file under <code>backend/src/grimoire/store/</code>. This is the layer to read first if you're learning the codebase.</p>
   <table>
     <tr><th>Module</th><th>Responsibility</th><th>Key exceptions</th></tr>
-    <tr><td><code>paths.py</code></td><td>Root resolution (<code>$GRIMOIRE_HOME</code>), slugify, uniquify, timestamps</td><td>—</td></tr>
+    <tr><td><code>paths.py</code></td><td>Root resolution (<code>$GRIMOIRE_HOME</code> → bootstrap pointer → default), <code>set_data_dir</code>/<code>data_dir_info</code>, slugify, uniquify, timestamps</td><td>—</td></tr>
     <tr><td><code>frontmatter.py</code></td><td>Tiny Markdown + frontmatter parse/dump (no YAML dep)</td><td>—</td></tr>
     <tr><td><code>config.py</code></td><td>Global <code>config.md</code>: model, theme, key, <code>context_scan_depth</code></td><td>—</td></tr>
     <tr><td><code>worlds.py</code></td><td>World CRUD + entity counts</td><td><code>WorldNotFound</code></td></tr>

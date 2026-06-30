@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Config } from "../api/client";
+import { ApiError, api, type Config, type DataDirInfo } from "../api/client";
 import { themeList } from "../theme/themes";
 import { useTheme } from "../theme/ThemeProvider";
 import ModelCombobox from "./ModelCombobox";
@@ -12,13 +12,34 @@ export default function ConfigView() {
   const [systemPrompt, setSystemPrompt] = useState("");
   const [saved, setSaved] = useState(false);
 
+  const [dataDir, setDataDir] = useState<DataDirInfo | null>(null);
+  const [dataDirInput, setDataDirInput] = useState("");
+  const [dataDirMsg, setDataDirMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
   useEffect(() => {
     api.getConfig().then((c) => {
       setConfig(c);
       setModel(c.model);
       setSystemPrompt(c.system_prompt);
     });
+    api.getDataDir().then((d) => {
+      setDataDir(d);
+      setDataDirInput(d.data_dir);
+    });
   }, []);
+
+  async function saveDataDir(value: string | null) {
+    setDataDirMsg(null);
+    try {
+      const next = await api.putDataDir(value);
+      setDataDir(next);
+      setDataDirInput(next.data_dir);
+      setDataDirMsg({ kind: "ok", text: `Storage now at ${next.data_dir}` });
+    } catch (e) {
+      const detail = e instanceof ApiError ? e.detail : "Could not update storage location";
+      setDataDirMsg({ kind: "err", text: detail });
+    }
+  }
 
   if (!config) return <div className="config">Loading…</div>;
 
@@ -34,6 +55,46 @@ export default function ConfigView() {
   return (
     <div className="config">
       <h2>Configuration</h2>
+
+      <label htmlFor="cfg-data-dir">Storage location</label>
+      <p className="field-hint" style={{ marginTop: 0 }}>
+        The folder where all worlds, campaigns, and settings live. Point it at a
+        synced folder (Syncthing, Dropbox/Drive desktop, iCloud…) to share the
+        same library across devices. Changes take effect immediately.
+      </p>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input
+          id="cfg-data-dir"
+          style={{ flex: 1 }}
+          placeholder={dataDir?.default ?? "~/.grimoire"}
+          value={dataDirInput}
+          disabled={dataDir?.source === "env"}
+          onChange={(e) => setDataDirInput(e.target.value)}
+        />
+        <button
+          onClick={() => saveDataDir(dataDirInput)}
+          disabled={dataDir?.source === "env" || dataDirInput.trim() === dataDir?.data_dir}
+        >
+          Move
+        </button>
+      </div>
+      {dataDir?.source === "env" && (
+        <p className="field-hint">
+          Set by the <code>GRIMOIRE_HOME</code> environment variable — unset it to edit here.
+        </p>
+      )}
+      {dataDir && dataDir.source !== "env" && !dataDir.is_default && (
+        <p className="field-hint">
+          <button className="link" onClick={() => saveDataDir(null)}>
+            Reset to default ({dataDir.default})
+          </button>
+        </p>
+      )}
+      {dataDirMsg && (
+        <p style={{ color: dataDirMsg.kind === "err" ? "var(--danger, crimson)" : "var(--accent)" }}>
+          {dataDirMsg.text}
+        </p>
+      )}
 
       <label>OpenRouter API key</label>
       <input

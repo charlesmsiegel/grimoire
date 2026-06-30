@@ -29,6 +29,13 @@ async function requestForm<T>(path: string, form: FormData, method = "POST"): Pr
 }
 
 export type Config = { model: string; theme: string; key_set: boolean; system_prompt: string; quote_color: string };
+export type DataDirInfo = {
+  data_dir: string;
+  default: string;
+  is_default: boolean;
+  source: "env" | "custom" | "default";
+  exists: boolean;
+};
 export type WorldMeta = {
   id: string;
   name: string;
@@ -165,6 +172,9 @@ export const api = {
   getConfig: () => request<Config>("GET", "/api/config"),
   putConfig: (body: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string }>) =>
     request<Config>("PUT", "/api/config", body),
+  getDataDir: () => request<DataDirInfo>("GET", "/api/config/data-dir"),
+  putDataDir: (data_dir: string | null) =>
+    request<DataDirInfo>("PUT", "/api/config/data-dir", { data_dir }),
 
   // worlds
   listWorlds: () => request<WorldMeta[]>("GET", "/api/worlds"),
