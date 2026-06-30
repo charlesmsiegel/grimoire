@@ -155,6 +155,72 @@ def test_character_import_garbage_400(client):
     assert r.status_code == 400
 
 
+def test_chub_import_route(client, monkeypatch):
+    from grimoire.store import cards, chub
+
+    wid = _world(client)
+    png = cards.dumps({"spec": "chara_card_v3", "spec_version": "3.0",
+                        "data": {"name": "Imp", "extensions": {}}}, "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/imp/chara_card_v2.png",
+    })
+    monkeypatch.setattr(store.fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    r = client.post(f"/api/worlds/{wid}/characters/import/chub",
+                     json={"url": "https://chub.ai/characters/creator/imp"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["character"] and body["version"]
+    assert body["gallery"] == {"attempted": 0, "stored": 0}
+    assert body["lore"] == {"lorebooks_found": 0, "created": []}
+
+
+def test_chub_import_route_bad_url(client):
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/characters/import/chub", json={"url": "not a url"})
+    assert r.status_code == 400
+
+
+def test_chub_import_route_unreachable(client, monkeypatch):
+    from grimoire.store import chub
+
+    wid = _world(client)
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: None)
+    r = client.post(f"/api/worlds/{wid}/characters/import/chub", json={"url": "creator/missing"})
+    assert r.status_code == 404
+
+
+def test_chub_source_routes(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}").json()["meta"]["chub_source"] == ""
+
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/chub-source", json={"url": "creator/slug"})
+    assert r.status_code == 200 and r.json() == {"chub_source": "creator/slug"}
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}").json()["meta"]["chub_source"] == "creator/slug"
+
+    r = client.delete(f"/api/worlds/{wid}/characters/{cid}/chub-source")
+    assert r.status_code == 200 and r.json() == {"chub_source": ""}
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}").json()["meta"]["chub_source"] == ""
+
+
+def test_chub_source_route_bad_url(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/chub-source", json={"url": "not a url"})
+    assert r.status_code == 400
+
+
+def test_chub_source_route_unknown_character(client):
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/characters/nobody/chub-source", json={"url": "creator/slug"})
+    assert r.status_code == 404
+    r = client.delete(f"/api/worlds/{wid}/characters/nobody/chub-source")
+    assert r.status_code == 404
+
+
 def test_character_book_import_route(client):
     wid = _world(client)
     card = {"spec": "chara_card_v3", "spec_version": "3.0", "data": {
