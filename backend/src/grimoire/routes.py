@@ -447,26 +447,30 @@ def put_world_character_birthdate(wid: str, cid: str, body: CharacterBirthdate):
     return {"ok": True}
 
 
-@router.post("/worlds/{wid}/characters/{cid}/chub-source")
-def post_world_character_chub_source(wid: str, cid: str, body: ChubSourceBody):
+@router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/chub-source")
+def post_world_character_chub_source(wid: str, cid: str, vid: str, body: ChubSourceBody):
     root = _world_root_or_404(wid)
     full_path = store.chub.parse_full_path(body.url)
     if full_path is None:
         raise HTTPException(status_code=400, detail="not a valid chub.ai character URL or path")
     try:
-        store.characters.set_chub_source(root, cid, full_path)
+        store.characters.set_chub_source(root, cid, vid, full_path)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
     return {"chub_source": full_path}
 
 
-@router.delete("/worlds/{wid}/characters/{cid}/chub-source")
-def delete_world_character_chub_source(wid: str, cid: str):
+@router.delete("/worlds/{wid}/characters/{cid}/versions/{vid}/chub-source")
+def delete_world_character_chub_source(wid: str, cid: str, vid: str):
     root = _world_root_or_404(wid)
     try:
-        store.characters.clear_chub_source(root, cid)
+        store.characters.clear_chub_source(root, cid, vid)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
     return {"chub_source": ""}
 
 

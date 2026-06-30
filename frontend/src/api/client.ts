@@ -81,8 +81,8 @@ export type Card = { spec: string; spec_version: string; data: CardData };
 export type VersionRef = { id: string; name: string };
 export type CharacterSummary = { id: string; name: string; default_version: string; has_avatar?: boolean; versions: VersionRef[] };
 export type CharacterDetail = {
-  meta: { id: string; name: string; default_version: string; birthdate?: string; chub_source?: string };
-  versions: { id: string; name: string; card: Card; images?: string[] }[];
+  meta: { id: string; name: string; default_version: string; birthdate?: string };
+  versions: { id: string; name: string; card: Card; images?: string[]; chub_source?: string }[];
 };
 export type ChubImportResult = {
   character: string;
@@ -286,10 +286,12 @@ export const api = {
     request<ChubImportResult>(
       "POST", `/api/worlds/${wid}/characters/import/chub`,
       into ? { url, into, into_version: intoVersion } : { url }),
-  setCharacterChubSource: (wid: string, cid: string, url: string) =>
-    request<{ chub_source: string }>("POST", `/api/worlds/${wid}/characters/${cid}/chub-source`, { url }),
-  clearCharacterChubSource: (wid: string, cid: string) =>
-    request<{ chub_source: string }>("DELETE", `/api/worlds/${wid}/characters/${cid}/chub-source`),
+  setCharacterChubSource: (wid: string, cid: string, vid: string, url: string) =>
+    request<{ chub_source: string }>(
+      "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-source`, { url }),
+  clearCharacterChubSource: (wid: string, cid: string, vid: string) =>
+    request<{ chub_source: string }>(
+      "DELETE", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-source`),
 
   // pcs
   listPCs: (wid: string) => request<PCSummary[]>("GET", `/api/worlds/${wid}/pcs`),

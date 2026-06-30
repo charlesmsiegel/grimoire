@@ -267,7 +267,10 @@ test("linking a character to chub.ai from the detail page shows a clickable link
   (api.clearCharacterChubSource as any).mockResolvedValue({ chub_source: "" });
   (api.readCharacter as any)
     .mockResolvedValueOnce(DETAIL) // initial detail open
-    .mockResolvedValueOnce({ ...DETAIL, meta: { ...DETAIL.meta, chub_source: "creator/imp" } }); // after linking
+    .mockResolvedValueOnce({
+      ...DETAIL,
+      versions: [{ ...DETAIL.versions[0], chub_source: "creator/imp" }],
+    }); // after linking
 
   render(<CharacterEditor wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine")); // card main -> detail (read-only)
@@ -275,13 +278,31 @@ test("linking a character to chub.ai from the detail page shows a clickable link
   expect(screen.queryByRole("link", { name: /creator\/imp/i })).toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: /^link to chub\.ai$/i }));
-  await waitFor(() => expect(api.setCharacterChubSource).toHaveBeenCalledWith("w", "seraphine", "creator/imp"));
+  await waitFor(() =>
+    expect(api.setCharacterChubSource).toHaveBeenCalledWith("w", "seraphine", "default", "creator/imp"));
   const link = await screen.findByRole("link", { name: /creator\/imp/i });
   expect(link).toHaveAttribute("href", "https://chub.ai/characters/creator/imp");
 
   (api.readCharacter as any).mockResolvedValueOnce(DETAIL); // after unlinking, reverts
   fireEvent.click(screen.getByRole("button", { name: /^unlink$/i }));
-  await waitFor(() => expect(api.clearCharacterChubSource).toHaveBeenCalledWith("w", "seraphine"));
+  await waitFor(() => expect(api.clearCharacterChubSource).toHaveBeenCalledWith("w", "seraphine", "default"));
+  await screen.findByRole("button", { name: /^link to chub\.ai$/i });
+});
+
+test("a sibling version doesn't show another version's chub.ai link", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [
+      { id: "default", name: "default", card: CARD, images: [], chub_source: "creator/main" },
+      { id: "variant", name: "variant", card: CARD, images: [] },
+    ],
+  });
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByRole("link", { name: /creator\/main/i });
+
+  fireEvent.change(screen.getByLabelText("Version"), { target: { value: "variant" } });
+  expect(screen.queryByRole("link", { name: /creator\/main/i })).toBeNull();
   await screen.findByRole("button", { name: /^link to chub\.ai$/i });
 });
 
