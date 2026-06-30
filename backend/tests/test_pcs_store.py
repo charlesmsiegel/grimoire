@@ -13,7 +13,8 @@ def test_create_read_single_version(tmp_path):
 
 
 def test_persona_fields_round_trip(tmp_path):
-    persona = {"name": "Elara", "pronouns": "she/her", "summary": "scholar", "description": "A wanderer."}
+    persona = {"name": "Elara", "pronouns": "she/her", "summary": "scholar",
+               "birthdate": "1990-06-29", "description": "A wanderer."}
     pid, vid = pcs.create_pc(tmp_path, "Elara", [], persona=persona)
     assert pcs.read_persona(tmp_path, pid, vid) == persona
 

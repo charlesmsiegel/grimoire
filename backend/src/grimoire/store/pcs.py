@@ -14,7 +14,7 @@ from pathlib import Path
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
-PERSONA_FIELDS = ("name", "pronouns", "summary")  # frontmatter scalars; description is the body
+PERSONA_FIELDS = ("name", "pronouns", "summary", "birthdate")  # frontmatter scalars; description is the body
 
 
 class PCNotFound(Exception):
@@ -46,7 +46,7 @@ def _version_path(root: Path, pid: str, vid: str) -> Path:
 
 
 def blank_persona(name: str) -> dict:
-    return {"name": name, "pronouns": "", "summary": "", "description": ""}
+    return {"name": name, "pronouns": "", "summary": "", "birthdate": "", "description": ""}
 
 
 def _dump_persona(persona: dict) -> str:
