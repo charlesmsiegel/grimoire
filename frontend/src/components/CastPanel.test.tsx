@@ -6,6 +6,7 @@ vi.mock("../api/client", () => ({
     getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
     listCampaignPCs: vi.fn(),
     listEntities: vi.fn(), getSceneLocation: vi.fn(), setSceneLocation: vi.fn(),
+    getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(),
     availableGreetings: vi.fn(), addToCast: vi.fn(), startFromGreeting: vi.fn(),
     opener: vi.fn(), createGreeting: vi.fn(), listAppearances: vi.fn(),
     campaignImageUrl: (c: string, ch: string, v: string, n: string) => `/cimg/${c}/${ch}/${v}/${n}`,
@@ -23,6 +24,8 @@ beforeEach(() => {
   (api.listEntities as any).mockResolvedValue([]);
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
   (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: false, name: "" });
+  (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
+  (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: true, friendly: "1 January 2027" });
   (api.availableGreetings as any).mockResolvedValue([
     { id: "open", name: "Open", available: true, reasons: [] },
     { id: "locked", name: "Locked", available: false, reasons: ["missing required tags"] },
@@ -126,5 +129,20 @@ test("changing the setting calls setSceneLocation and refreshes the stream", asy
   fireEvent.change(await screen.findByLabelText("Location"), { target: { value: "market" } });
   fireEvent.click(screen.getByRole("button", { name: /set location/i }));
   await waitFor(() => expect(api.setSceneLocation).toHaveBeenCalledWith("c", "s", "market"));
+  await waitFor(() => expect(onSeeded).toHaveBeenCalled());
+});
+
+test("When section shows the current date and advances", async () => {
+  (api.getSceneDatetime as any).mockResolvedValue({
+    current: { native: "2026-12-25", friendly: "25 December 2026", weekday: "Friday",
+               secondary_friendly: null, holidays_today: ["Christmas Day"], upcoming: null, cast: [] },
+    history: ["2026-12-25"],
+  });
+  const onSeeded = vi.fn();
+  renderPanel({ onSeeded });
+  expect(await screen.findByText(/25 December 2026/)).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Scene date"), { target: { value: "2027-01-01" } });
+  fireEvent.click(screen.getByRole("button", { name: /advance to|set date/i }));
+  await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s", "2027-01-01"));
   await waitFor(() => expect(onSeeded).toHaveBeenCalled());
 });
