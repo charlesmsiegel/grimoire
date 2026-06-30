@@ -74,12 +74,12 @@ export type Card = { spec: string; spec_version: string; data: CardData };
 export type VersionRef = { id: string; name: string };
 export type CharacterSummary = { id: string; name: string; default_version: string; has_avatar?: boolean; versions: VersionRef[] };
 export type CharacterDetail = {
-  meta: { id: string; name: string; default_version: string };
+  meta: { id: string; name: string; default_version: string; birthdate?: string };
   versions: { id: string; name: string; card: Card; images?: string[] }[];
 };
 
 // PCs
-export type Persona = { name: string; pronouns: string; summary: string; description: string };
+export type Persona = { name: string; pronouns: string; summary: string; description: string; birthdate?: string };
 export type PCSummary = { id: string; name: string; tags: string[]; default_version: string; versions: VersionRef[] };
 export type PCDetail = {
   meta: { id: string; name: string; tags: string[]; default_version: string };
@@ -224,6 +224,8 @@ export const api = {
     request<CharacterDetail>("GET", `/api/worlds/${wid}/characters/${cid}`),
   setDefaultVersion: (wid: string, cid: string, vid: string) =>
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}`, { default_version: vid }),
+  setCharacterBirthdate: (wid: string, cid: string, birthdate: string) =>
+    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}/birthdate`, { birthdate }),
   deleteCharacter: (wid: string, cid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/characters/${cid}`),
   createVersion: (wid: string, cid: string, body: { name: string; card: Card }) =>

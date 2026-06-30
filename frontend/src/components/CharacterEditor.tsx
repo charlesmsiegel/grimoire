@@ -33,6 +33,7 @@ export function CharacterEditor({ wid, resetSignal, focus }:
   const [localizeMsg, setLocalizeMsg] = useState<string | null>(null);
   const [bulkLocalize, setBulkLocalize] = useState<{ current: number; cards: number } | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [birthdate, setBirthdate] = useState("");
 
   const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
   useEffect(() => {
@@ -167,7 +168,18 @@ export function CharacterEditor({ wid, resetSignal, focus }:
     setError(null);
     const d = await api.readCharacter(wid, cid);
     setDetail(d);
+    setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.meta.default_version);
+  }
+
+  async function saveBirthdate(value: string) {
+    if (!detail) return;
+    setBirthdate(value);
+    try {
+      await api.setCharacterBirthdate(wid, detail.meta.id, value);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
   }
 
   async function openDetail(cid: string) {
@@ -179,6 +191,7 @@ export function CharacterEditor({ wid, resetSignal, focus }:
     setError(null);
     const d = await api.readCharacter(wid, cid);
     setDetail(d);
+    setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.versions.some((v) => v.id === vid) ? vid : d.meta.default_version);
     setMode("detail");
   }
@@ -474,6 +487,10 @@ export function CharacterEditor({ wid, resetSignal, focus }:
           </Field>
           <Field label="Creator">
             <input type="text" value={card.data.creator ?? ""} onChange={(e) => setField("creator", e.target.value)} />
+          </Field>
+          <Field label="Birthdate">
+            <input type="date" aria-label="Birthdate" value={birthdate}
+                   onChange={(e) => saveBirthdate(e.target.value)} />
           </Field>
           <Field label="Tags" hint="comma-separated">
             <input

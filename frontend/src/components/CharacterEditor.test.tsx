@@ -7,6 +7,7 @@ vi.mock("../api/client", () => ({
     updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
     deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
     putImage: vi.fn(), deleteImage: vi.fn(), importCharacterBook: vi.fn(),
+    setCharacterBirthdate: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
   },
 }));
@@ -39,6 +40,7 @@ beforeEach(() => {
   (api.deleteImage as any).mockResolvedValue({ ok: true });
   (api.deleteCharacter as any).mockResolvedValue({ ok: true });
   (api.importCharacterBook as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
+  (api.setCharacterBirthdate as any).mockResolvedValue({ ok: true });
 });
 
 // reach the edit form: grid -> click a card's Edit button -> form
@@ -53,6 +55,13 @@ test("imports an embedded character_book and shows the result", async () => {
   fireEvent.click(screen.getByRole("button", { name: /import .* lore/i }));
   await waitFor(() => expect(api.importCharacterBook).toHaveBeenCalledWith("w", "seraphine", "default"));
   await screen.findByText(/imported 1/i);
+});
+
+test("editing the birthdate persists it on the character", async () => {
+  render(<CharacterEditor wid="w" />);
+  await openEditForm();
+  fireEvent.change(screen.getByLabelText("Birthdate"), { target: { value: "1985-03-14" } });
+  await waitFor(() => expect(api.setCharacterBirthdate).toHaveBeenCalledWith("w", "seraphine", "1985-03-14"));
 });
 
 test("uploads an avatar for the selected version", async () => {

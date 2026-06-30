@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type PCDetail, type PCSummary, type Persona } from "../api/client";
 import { Field } from "./Field";
 
-const BLANK: Persona = { name: "", pronouns: "", summary: "", description: "" };
+const BLANK: Persona = { name: "", pronouns: "", summary: "", birthdate: "", description: "" };
 
 export function PCEditor({ wid }: { wid: string }) {
   const [pcs, setPCs] = useState<PCSummary[]>([]);
@@ -125,6 +125,10 @@ export function PCEditor({ wid }: { wid: string }) {
             </Field>
             <Field label="Summary">
               <input type="text" value={persona.summary} onChange={(e) => setPersona({ ...persona, summary: e.target.value })} />
+            </Field>
+            <Field label="Birthdate">
+              <input type="date" aria-label="Birthdate" value={persona.birthdate ?? ""}
+                     onChange={(e) => setPersona({ ...persona, birthdate: e.target.value })} />
             </Field>
             <Field label="Description">
               <textarea value={persona.description} rows={6} onChange={(e) => setPersona({ ...persona, description: e.target.value })} />
