@@ -124,6 +124,25 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
     campaigns.touch(cid)
 
 
+def rename_scene(cid: str, old_sid: str, new_sid: str) -> None:
+    """Repoint every appearance's scene reference from old_sid to new_sid.
+
+    Cast is keyed by actor here, not by scene, so a scene rename (which changes the
+    sid) would otherwise orphan its cast under the old id. Called by
+    scenes.rename_scene. No-op when the id is unchanged or nothing references it."""
+    if old_sid == new_sid:
+        return
+    data = record(cid)
+    changed = False
+    for rec in data.values():
+        scenes_list = rec.get("scenes", [])
+        if old_sid in scenes_list:
+            rec["scenes"] = [new_sid if s == old_sid else s for s in scenes_list]
+            changed = True
+    if changed:
+        _write(cid, data)
+
+
 def cast_detail(cid: str, sid: str, kind: str, actor_id: str) -> dict:
     """Read-only display info for an actor in a scene, from the campaign copy."""
     if not any(a["kind"] == kind and a["id"] == actor_id for a in scene_cast(cid, sid)):
