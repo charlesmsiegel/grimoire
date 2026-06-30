@@ -200,11 +200,13 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   }
 
   async function openDetail(cid: string) {
+    window.scrollTo(0, 0);
     await select(cid);
     setMode("detail");
   }
 
   async function focusCharacter(cid: string, vid: string) {
+    window.scrollTo(0, 0);
     setError(null);
     const d = await api.readCharacter(wid, cid);
     setDetail(d);
@@ -214,11 +216,13 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   }
 
   async function openEdit(cid: string) {
+    window.scrollTo(0, 0);
     await select(cid);
     setMode("edit");
   }
 
   function backToGrid() {
+    window.scrollTo(0, 0);
     setDetail(null);
     setCard(null);
     setMode("grid");
