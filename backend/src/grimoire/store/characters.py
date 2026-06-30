@@ -111,6 +111,13 @@ def set_default_version(root: Path, cid: str, vid: str) -> None:
     _meta_path(root, cid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
 
 
+def set_birthdate(root: Path, cid: str, birthdate: str) -> None:
+    _require_char(root, cid)
+    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+    meta["birthdate"] = birthdate
+    _meta_path(root, cid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+
+
 def _version_ids(root: Path, cid: str) -> list[str]:
     return sorted(p.stem for p in _char_dir(root, cid).glob("*.json"))
 
@@ -143,7 +150,9 @@ def read_character(root: Path, cid: str) -> dict:
             "images": [i["name"] for i in assets.list_images(root, cid, vid)],
         })
     return {
-        "meta": {"id": cid, "name": meta.get("name", cid), "default_version": meta.get("default_version", "")},
+        "meta": {"id": cid, "name": meta.get("name", cid),
+                 "default_version": meta.get("default_version", ""),
+                 "birthdate": meta.get("birthdate", "")},
         "versions": versions,
     }
 
