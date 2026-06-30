@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from . import entities, worlds
+from . import calendars, entities, worlds
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home, now_iso, slugify, uniquify
 
@@ -63,7 +63,7 @@ def list_campaigns() -> list[dict]:
     return out
 
 
-def create_campaign(name: str, world_id: str) -> str:
+def create_campaign(name: str, world_id: str, region: str | None = None) -> str:
     ensure_home()
     if not worlds.world_meta_path(world_id).exists():
         raise worlds.WorldNotFound(world_id)
@@ -86,6 +86,11 @@ def create_campaign(name: str, world_id: str) -> str:
         (dst_dir / f"{eid}.md").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
         manifest[f"{kind}/{eid}"] = entities.entity_hash(wroot, kind, eid) or ""
     write_manifest(cid, manifest)
+    calendars.copy_calendar(wroot, root)
+    if region is not None:
+        cfg = calendars.read_calendar(root)
+        cfg["primary"]["region"] = region
+        calendars.write_calendar(root, cfg)
     return cid
 
 

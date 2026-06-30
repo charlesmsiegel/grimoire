@@ -770,3 +770,18 @@ def test_post_brief_requires_key(client):
     # default fixture key is empty
     r = client.post(f"/api/worlds/{wid}/characters/{cid}/brief")
     assert r.status_code == 409
+
+
+# ---- scene calendar ----
+def test_campaign_create_writes_calendar_with_region(client):
+    from grimoire.store import campaigns, calendars
+    wid = _world(client)
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid, "region": "GB"}).json()["id"]
+    cfg = calendars.read_calendar(campaigns.campaign_root(cid))
+    assert cfg["primary"]["region"] == "GB"
+
+
+def test_campaign_create_defaults_region_us(client):
+    from grimoire.store import campaigns, calendars
+    _wid, cid = _campaign(client)
+    assert calendars.read_calendar(campaigns.campaign_root(cid))["primary"]["region"] == "US"
