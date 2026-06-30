@@ -115,3 +115,45 @@ def test_age_and_anniversary():
     assert is_anniversary(p, "1990-06-29", "2026-06-30") is False
     # time-of-day on either side does not change the result
     assert age(p, "1990-06-29", "2026-06-29T08:00") == 36
+
+
+from grimoire.store.calendars import default_calendar, read_calendar, write_calendar, copy_calendar
+
+
+def test_default_calendar_when_absent(tmp_path):
+    cfg = read_calendar(tmp_path)
+    assert cfg["primary"]["provider"] == "gregorian"
+    assert cfg["primary"]["region"] == "US"
+    assert cfg["primary"]["custom_holidays"] == []
+    assert cfg["primary"]["anchor"] is None
+    assert cfg["secondary"] is None
+
+
+def test_write_then_read_roundtrip(tmp_path):
+    cfg = default_calendar()
+    cfg["primary"]["region"] = "GB"
+    cfg["secondary"] = {"provider": "gregorian", "region": "IL", "custom_holidays": [],
+                        "anchor": {"native": "2026-06-29", "gregorian": "2026-06-29"}}
+    write_calendar(tmp_path, cfg)
+    got = read_calendar(tmp_path)
+    assert got["primary"]["region"] == "GB"
+    assert got["secondary"]["region"] == "IL"
+    assert got["secondary"]["anchor"]["gregorian"] == "2026-06-29"
+
+
+def test_read_fills_missing_keys(tmp_path):
+    # a hand-written partial file still normalizes to the full shape
+    (tmp_path / "calendar.json").write_text('{"primary": {"provider": "gregorian"}}', encoding="utf-8")
+    cfg = read_calendar(tmp_path)
+    assert cfg["primary"]["region"] == "US"
+    assert cfg["primary"]["custom_holidays"] == []
+    assert cfg["secondary"] is None
+
+
+def test_copy_calendar_copies_world_file(tmp_path):
+    wroot, croot = tmp_path / "w", tmp_path / "c"
+    wroot.mkdir(); croot.mkdir()
+    cfg = default_calendar(); cfg["primary"]["region"] = "FR"
+    write_calendar(wroot, cfg)
+    copy_calendar(wroot, croot)
+    assert read_calendar(croot)["primary"]["region"] == "FR"

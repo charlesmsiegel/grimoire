@@ -4,3 +4,6 @@ from .base import (  # noqa: F401
     split_native, minutes_of, fixed_of, normalize, friendly, today_facts,
     age, is_anniversary,
 )
+from .config import (  # noqa: F401
+    default_calendar, read_calendar, write_calendar, copy_calendar,
+)
