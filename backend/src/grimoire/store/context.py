@@ -11,10 +11,15 @@ import re
 from . import appearances, briefs, calendars, campaigns, characters, config, entities, pcs, scenes, worlds
 
 
-def activate(entries: list[dict], recent_text: str) -> list[dict]:
-    """Select world-info entries: keyless = always-on; else any key whole-word (ci) in recent_text."""
+def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
+    """Select world-info entries. Owned entries (owners non-empty) are silent unless one
+    owner ref is in `present`; then keyless = always-on, keyed = any key whole-word (ci) in
+    recent_text. Unowned entries behave as before."""
     out: list[dict] = []
     for e in entries:
+        owners = e.get("owners") or []
+        if owners and not any(o in present for o in owners):
+            continue  # owned but no owner in scene -> never leak
         keys = e.get("keys") or []
         if not keys:
             out.append(e)
@@ -69,7 +74,8 @@ def _char_player_block(data: dict) -> str:
     return "\n".join(x for x in (data.get("name", ""), body) if x).strip()
 
 
-def _world_info(croot, recent_text: str, exclude: frozenset = frozenset()) -> str:
+def _world_info(croot, recent_text: str, exclude: frozenset = frozenset(),
+                present: frozenset = frozenset()) -> str:
     entries = []
     for kind in ("lore", "locations"):
         for meta in entities.list_entities(croot, kind):
@@ -77,8 +83,10 @@ def _world_info(croot, recent_text: str, exclude: frozenset = frozenset()) -> st
                 continue
             e = entities.read_entity(croot, kind, meta["id"])
             keys = [k.strip() for k in e["meta"].get("keys", "").split(",") if k.strip()]
-            entries.append({"name": e["meta"].get("name", meta["id"]), "body": e["body"].strip(), "keys": keys})
-    selected = activate(entries, recent_text)
+            owners = [o.strip() for o in e["meta"].get("owners", "").split(",") if o.strip()]
+            entries.append({"name": e["meta"].get("name", meta["id"]),
+                            "body": e["body"].strip(), "keys": keys, "owners": owners})
+    selected = activate(entries, recent_text, present)
     return "\n\n".join(e["body"] for e in selected if e["body"])
 
 
@@ -285,7 +293,10 @@ def _assemble(cid: str, sid: str) -> dict:
             add("Current setting", "# Current setting\n" + loc_body if loc_body else "")
         except entities.EntityNotFound:
             pass  # referenced location was deleted — omit the setting block
-    add("World info", _world_info(croot, recent_text, exclude))
+    present = {f"{a['kind']}:{a['id']}" for a in cast}
+    if current_loc:
+        present |= {f"locations:{current_loc}"}
+    add("World info", _world_info(croot, recent_text, exclude, frozenset(present)))
     wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"].get("world", ""))
     add("Off-scene cast", _cast_directory(croot, wroot, cid, sid))
 
