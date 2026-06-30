@@ -1,10 +1,13 @@
 # Download from chub.ai — Design
 
-> Adds a one-click "Download from chub.ai" action to character creation: paste a chub.ai
-> character URL (or `creator/slug` path) and the app fetches the card PNG, any gallery images,
-> and any **linked** (non-embedded) lorebooks, importing all of it in one step. This also lays
-> the groundwork — a `chub_source` field on the character — for a later "re-sync all chub-sourced
-> cards" world action, which is **out of scope here** and will get its own spec.
+> Adds a one-click "Download from chub.ai" action: paste a chub.ai character URL (or
+> `creator/slug` path) and the app fetches the card PNG, any gallery images, and any **linked**
+> (non-embedded) lorebooks, importing all of it in one step — either as a brand-new character or,
+> for two chub cards that are variants of the same character, as a new version on an existing one.
+> A character that already exists in grimoire some other way can also be manually linked to a chub
+> URL with no download at all. All three actions write the same `chub_source` field, laying the
+> groundwork for a later "re-sync all chub-sourced cards" world action, which is **out of scope
+> here** and will get its own spec.
 
 **Status:** Design — not yet implemented
 **Date:** 2026-06-30
@@ -105,16 +108,21 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None) 
 ## API
 
 ```
-POST /worlds/{wid}/characters/import/chub
+POST   /worlds/{wid}/characters/import/chub
   body: {"url": str, "into"?: str}
   -> {character, version, gallery: {attempted, stored}, lore: {lorebooks_found, created}}
+
+POST   /worlds/{wid}/characters/{cid}/chub-source
+  body: {"url": str} -> {"chub_source": fullPath}
+DELETE /worlds/{wid}/characters/{cid}/chub-source -> {"chub_source": ""}
 ```
 
-- Unparseable `url` → `400`.
-- chub.ai unreachable / character not found → `404` with a clear detail message (e.g. "could not
-  fetch from chub.ai").
+- Unparseable `url` (either route) → `400`.
+- chub.ai unreachable / character not found (`import/chub` only — `chub-source` makes no network
+  call) → `404` with a clear detail message (e.g. "could not fetch from chub.ai").
 - `into` behaves exactly like the existing file-import `into` param (creates a new version on an
   existing character instead of a new character).
+- Unknown `cid` on the `chub-source` routes → `404` (existing `CharacterNotFound` mapping).
 
 ## Source tracking (for a future sync spec — not built here)
 
@@ -127,21 +135,66 @@ This spec **does not** build a sync/re-download UI or flow — only the field a 
 nothing extra now and means a future "re-sync" action can most likely call this same function
 per chub-sourced character.
 
+**Manual linking, for already-imported characters.** Most existing characters were imported from
+chub.ai *before* this feature existed (a manual PNG download, or imported some other way), so they
+have no `chub_source` and never went through `import_from_chub`. Without a way to attach a chub URL
+after the fact, none of those characters could ever benefit from a future sync — re-running the
+chub download flow on them would fork a duplicate character or a redundant version, not just
+record the link. So a character with no `chub_source` needs a lightweight way to *just record* the
+association, with no download/import/version side effects at all (routes in the API section above):
+
+- `POST` validates the URL/path shape via `chub.parse_full_path` (`400` if unparseable) and calls
+  `characters.set_chub_source(root, cid, full_path)` — the same setter `import_from_chub` uses
+  internally. **No network call to chub.ai** here; this is pure bookkeeping; a typo'd URL is only
+  caught later, when something tries to use it (e.g. the future sync feature).
+- `DELETE` calls a new `characters.clear_chub_source(root, cid)` (removes the frontmatter key) —
+  lets the user undo a mistaken link.
+
 ## Frontend (`CharacterEditor.tsx`)
 
-A third button next to the existing `+ New` / `Import card`: **"Download from chub.ai"**. Uses
-`window.prompt("chub.ai character URL or path?")` — the same pattern already used in this file
-for "New character name?" / "New version name?", so no new UI component is introduced. On a
-non-empty answer:
+Three entry points, all using `window.prompt("chub.ai character URL or path?")` — the same pattern
+already used in this file for "New character name?" / "New version name?", so no new UI component
+is introduced:
 
-- call `api.importCharacterFromChub(wid, urlOrPath)` (new typed client function in
-  `api/client.ts`, mirroring `importCharacter` / `importCharacterBook`)
-- on success: open the new character's detail (matching the existing single-PNG-import flow) and
-  show a result line via the existing `importMsg` state, composed from the response, e.g.
-  `"Imported Monika — avatar + 13 gallery images, 1 lorebook (42 entries) added to world lore"`
-  (each clause included only when applicable — no gallery clause when `gallery.attempted` is 0, no
-  lorebook clause when `lore.lorebooks_found` is 0)
+1. **New character.** A third button next to the existing `+ New` / `Import card`: **"Download
+   from chub.ai"**. Calls the chub endpoint with no `into`, creating a new character.
+2. **New version of the open character — variant support.** A second button next to the existing
+   **"Import version"** in the version-picker row (`CharacterEditor.tsx:471`): **"Download version
+   from chub.ai"**. Calls the chub endpoint with `into: detail.meta.id`, landing the result as a
+   new version on the *currently open* character — this is how two chub cards that are slightly
+   different takes on the same character (e.g. a creator's revision, or another creator's variant)
+   get attached together instead of becoming two separate characters. Matching is manual: the user
+   decides they're "the same character" by being in that character's editor when they paste the
+   URL, exactly like today's file-based "Import version" already works. No automatic
+   name/similarity matching is attempted.
+
+Both call the same new typed client function, `api.importCharacterFromChub(wid, urlOrPath, into?)`
+(mirroring `importCharacter` / `importCharacterBook`):
+
+- on success: for (1), open the new character's detail (matching the existing single-PNG-import
+  flow); for (2), reload the open character and select the new version. Both show a result line via
+  the existing `importMsg` state, composed from the response, e.g. `"Imported Monika — avatar + 13
+  gallery images, 1 lorebook (42 entries) added to world lore"` (each clause included only when
+  applicable — no gallery clause when `gallery.attempted` is 0, no lorebook clause when
+  `lore.lorebooks_found` is 0)
 - on failure: surface via the existing `setError` path, same as other import failures
+
+Gallery images attach to whichever version was just created (the existing per-version image store
+already scopes `assets/<vid>/` this way — no special-casing needed for the version-target case).
+Lorebook entries always commit to **world** lore regardless of which version triggered the
+download — lore is world-scoped, not version-scoped, so this needs no extra handling either.
+
+3. **Manual link, no download.** Next to the version-picker row, a small chub-source control keyed
+   off `detail.meta.chub_source`:
+   - **unset:** a `"Link to chub.ai"` button → `window.prompt` → `api.setCharacterChubSource(wid,
+     cid, url)` (`POST .../chub-source`) → reload the character so `chub_source` shows.
+   - **set:** a `field-hint`-style line showing the linked path (e.g. `Linked to chub.ai:
+     creator/slug`) with an `"Unlink"` button → `api.clearCharacterChubSource(wid, cid)` (`DELETE
+     .../chub-source`) → reload.
+   This makes **no** request to chub.ai and creates no version/images/lore — it only lets a
+   character that was imported some other way (the common case today, since this feature didn't
+   exist yet) carry the same `chub_source` bookkeeping a fresh chub download would set, so it isn't
+   permanently excluded from whatever the future sync feature ends up doing.
 
 Gallery images are stored (per the existing general per-version image store) but **not** given any
 viewer UI in this spec, consistent with the polish spec's existing non-goal ("no gallery UI for
@@ -171,11 +224,19 @@ non-avatar images" — the store already ships ready for this).
   `ChubParseError`; unreachable character raises `ChubFetchError`.
 - route — `POST .../characters/import/chub` happy path, `400` on bad URL, `404` on fetch failure,
   `into` creates a version on an existing character instead of a new one.
+- `set_chub_source` / `clear_chub_source` — round-trip through `character.md` frontmatter;
+  `clear_chub_source` on a character with no source is a no-op.
+- routes — `POST/DELETE .../chub-source` happy paths, `400` on unparseable `url`, `404` on unknown
+  `cid`; `POST` makes no outbound HTTP call (assert the mocked `httpx` client is never invoked).
 
 **Frontend (light):**
 - clicking "Download from chub.ai" prompts, calls `importCharacterFromChub`, opens the resulting
   character, and renders a result message built from the response's gallery/lore counts;
   a rejected/empty prompt makes no API call; an API error surfaces via the existing error display.
+- clicking "Download version from chub.ai" on an open character calls `importCharacterFromChub`
+  with `into` set and selects the new version afterward.
+- the chub-source control renders the "Link to chub.ai" button when `chub_source` is empty and the
+  linked-path + "Unlink" button when set; both call their respective endpoint and reload.
 
 ## Non-goals (this iteration)
 
