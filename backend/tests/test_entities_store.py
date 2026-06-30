@@ -72,6 +72,30 @@ def test_keys_round_trip(tmp_path: Path):
     assert entities.read_entity(tmp_path, "lore", e2)["meta"].get("keys", "") == ""
 
 
+def test_owners_round_trip(tmp_path: Path):
+    eid = entities.create_entity(
+        tmp_path, "lore", "Tanaka's exile", "He was cast out.",
+        keys="exile", owners="characters:master-tanaka, locations:old-dojo",
+    )
+    got = entities.read_entity(tmp_path, "lore", eid)
+    assert got["meta"]["owners"] == "characters:master-tanaka, locations:old-dojo"
+    assert got["meta"]["keys"] == "exile"
+
+
+def test_owners_absent_when_empty(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "World fact", "Always true.")
+    got = entities.read_entity(tmp_path, "lore", eid)
+    assert "owners" not in got["meta"]  # mirror keys: omit when empty
+
+
+def test_update_owners(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "lore", "Fact", "x")
+    entities.update_entity(tmp_path, "lore", eid, owners="pcs:hero")
+    assert entities.read_entity(tmp_path, "lore", eid)["meta"]["owners"] == "pcs:hero"
+    # body/name untouched
+    assert entities.read_entity(tmp_path, "lore", eid)["body"].strip() == "x"
+
+
 def test_all_refs_and_counts(tmp_path: Path):
     entities.create_entity(tmp_path, "lore", "A")
     entities.create_entity(tmp_path, "locations", "B")
