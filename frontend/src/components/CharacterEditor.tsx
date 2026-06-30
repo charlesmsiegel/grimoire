@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Card, type CharacterDetail, type CharacterSummary } from "../api/client";
+import { api, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult } from "../api/client";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 
@@ -13,6 +13,18 @@ const TEXT_FIELDS: { key: string; label: string; area?: boolean }[] = [
   { key: "post_history_instructions", label: "Post-history instructions", area: true },
   { key: "creator_notes", label: "Creator notes", area: true },
 ];
+
+function describeChubResult(result: ChubImportResult): string {
+  const parts: string[] = [];
+  if (result.gallery.attempted > 0) {
+    parts.push(`${result.gallery.stored}/${result.gallery.attempted} gallery image${result.gallery.attempted === 1 ? "" : "s"}`);
+  }
+  if (result.lore.lorebooks_found > 0) {
+    const n = result.lore.created.length;
+    parts.push(`${result.lore.lorebooks_found} lorebook${result.lore.lorebooks_found === 1 ? "" : "s"} (${n} ${n === 1 ? "entry" : "entries"}) added to world lore`);
+  }
+  return parts.length ? `Downloaded from chub.ai — ${parts.join(", ")}` : "Downloaded from chub.ai";
+}
 
 type Mode = "grid" | "detail" | "edit";
 
@@ -345,6 +357,22 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     }
   }
 
+  async function downloadFromChub() {
+    const url = window.prompt("chub.ai character URL or path?")?.trim();
+    if (!url) return;
+    setError(null);
+    setImportMsg(null);
+    try {
+      const result = await api.importCharacterFromChub(wid, url);
+      await reload();
+      await openDetail(result.character);
+      setImportMsg(describeChubResult(result));
+      await runLocalize(result.character, result.version);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
   const avatarSrc = (cid: string, version: string, bust = false) =>
     api.imageUrl(wid, cid, version, "avatar") + (bust ? `?v=${avatarBust}` : "");
 
@@ -355,6 +383,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
           <button className="primary" onClick={newCharacter}>+ New character</button>
           <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
           <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden aria-label="Import character card" onChange={onImport} />
+          <button className="subtle" onClick={downloadFromChub}>Download from chub.ai</button>
           {bulkLocalize && (
             <span className="field-hint">Localizing card {bulkLocalize.current}/{bulkLocalize.cards}…</span>
           )}
@@ -392,6 +421,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
         <div className="editor-body">
           <button className="subtle back" onClick={backToGrid}>‹ All characters</button>
           {error && <div className="banner">{error}</div>}
+          {importMsg && <span className="field-hint">{importMsg}</span>}
           <div className="detail">
             <div className="detail-head">
               {hasAvatar

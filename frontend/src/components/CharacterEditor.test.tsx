@@ -7,6 +7,7 @@ vi.mock("../api/client", () => ({
     updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
     deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
     putImage: vi.fn(), deleteImage: vi.fn(), importCharacterBook: vi.fn(),
+    importCharacterFromChub: vi.fn(),
     setCharacterBirthdate: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
   },
@@ -204,4 +205,27 @@ test("import version posts importCharacter into the current character", async ()
   fireEvent.change(input, { target: { files: [new File(["{}"], "v.json")] } });
   await waitFor(() =>
     expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "json", "seraphine"));
+});
+
+test("downloading from chub.ai creates a character and shows the result", async () => {
+  vi.spyOn(window, "prompt").mockReturnValue("https://chub.ai/characters/creator/imp");
+  (api.importCharacterFromChub as any).mockResolvedValue({
+    character: "imp", version: "default",
+    gallery: { attempted: 2, stored: 2 },
+    lore: { lorebooks_found: 1, created: [{ kind: "lore", id: "x" }] },
+  });
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  fireEvent.click(screen.getByRole("button", { name: /download from chub\.ai/i }));
+  await waitFor(() =>
+    expect(api.importCharacterFromChub).toHaveBeenCalledWith("w", "https://chub.ai/characters/creator/imp"));
+  await screen.findByText(/downloaded from chub\.ai.*2\/2 gallery images.*1 lorebook \(1 entry\) added to world lore/i);
+});
+
+test("an empty chub.ai prompt makes no API call", async () => {
+  vi.spyOn(window, "prompt").mockReturnValue(null);
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  fireEvent.click(screen.getByRole("button", { name: /download from chub\.ai/i }));
+  expect(api.importCharacterFromChub).not.toHaveBeenCalled();
 });
