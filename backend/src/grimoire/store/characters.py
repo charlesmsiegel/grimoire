@@ -342,25 +342,38 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
     }
 
 
-def _download_gallery(root: Path, cid: str, vid: str, node: dict) -> dict:
-    # Clear any previously downloaded gallery images first -- otherwise a
-    # gallery that shrank between downloads would leave orphaned gallery_N
-    # files past the new (smaller) count.
+def download_chub_gallery_stream(root: Path, cid: str, vid: str, node: dict):
+    """Generator: download every chub.ai gallery image for an already-resolved
+    node, yielding {"total": N}, then {"done": k, "total": N} per image, then
+    {"summary": {"attempted": N, "stored": M}}. Clears any previously
+    downloaded gallery images first -- otherwise a gallery that shrank between
+    downloads would leave orphaned gallery_N files past the new (smaller)
+    count."""
     for img in assets.list_images(root, cid, vid):
         if img["name"].startswith("gallery_"):
             assets.delete_image(root, cid, vid, img["name"])
 
-    attempted = 0
+    paths = chub.fetch_gallery_paths(node.get("id")) if node.get("hasGallery") else []
+    total = len(paths)
+    yield {"total": total}
+
     stored = 0
-    if node.get("hasGallery"):
-        paths = chub.fetch_gallery_paths(node.get("id"))
-        attempted = len(paths)
-        for i, path in enumerate(paths):
-            got = fetch.download_url(path)
-            if got:
-                assets.put_image(root, cid, vid, f"gallery_{i}", got[0], got[1])
-                stored += 1
-    return {"attempted": attempted, "stored": stored}
+    for i, path in enumerate(paths):
+        got = fetch.download_url(path)
+        if got:
+            assets.put_image(root, cid, vid, f"gallery_{i}", got[0], got[1])
+            stored += 1
+        yield {"done": i + 1, "total": total}
+
+    yield {"summary": {"attempted": total, "stored": stored}}
+
+
+def _download_gallery(root: Path, cid: str, vid: str, node: dict) -> dict:
+    summary = {"attempted": 0, "stored": 0}
+    for ev in download_chub_gallery_stream(root, cid, vid, node):
+        if "summary" in ev:
+            summary = ev["summary"]
+    return summary
 
 
 def _download_lorebooks(root: Path, node: dict) -> dict:
@@ -378,12 +391,14 @@ def _download_lorebooks(root: Path, node: dict) -> dict:
     return {"lorebooks_found": len(lorebook_ids), "created": created}
 
 
-def _node_for_linked_version(root: Path, cid: str, vid: str) -> dict:
+def resolve_chub_node(root: Path, cid: str, vid: str) -> dict:
     """Resolve the chub.ai node for a version that's already linked, or raise
     ChubFetchError if it has no link or chub.ai can't be reached. Goes through
     read_character so the legacy character.md-level fallback (applied there
     for the default version) is honored the same way it is for display --
-    not just shown as linked in the UI but actually usable here too."""
+    not just shown as linked in the UI but actually usable here too. Exposed
+    publicly so a route can resolve the link before streaming (clean 404 vs.
+    a mid-stream error event)."""
     detail = read_character(root, cid)
     target = next((v for v in detail["versions"] if v["id"] == vid), None)
     if target is None:
@@ -398,11 +413,11 @@ def _node_for_linked_version(root: Path, cid: str, vid: str) -> dict:
 
 
 def download_chub_gallery(root: Path, cid: str, vid: str) -> dict:
-    return _download_gallery(root, cid, vid, _node_for_linked_version(root, cid, vid))
+    return _download_gallery(root, cid, vid, resolve_chub_node(root, cid, vid))
 
 
 def download_chub_lorebooks(root: Path, cid: str, vid: str) -> dict:
-    return _download_lorebooks(root, _node_for_linked_version(root, cid, vid))
+    return _download_lorebooks(root, resolve_chub_node(root, cid, vid))
 
 
 def export_card(root: Path, cid: str, vid: str, fmt: str) -> bytes:

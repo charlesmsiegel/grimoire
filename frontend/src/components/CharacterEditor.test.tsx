@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { CharacterEditor } from "./CharacterEditor";
 
 vi.mock("../api/client", () => ({
@@ -315,18 +315,35 @@ test("download gallery/lorebooks buttons only appear once a version is linked", 
   expect(screen.queryByRole("button", { name: /download linked lorebooks/i })).toBeNull();
 });
 
-test("downloading the gallery for a linked version shows the result", async () => {
+test("downloading the gallery for a linked version shows per-image progress then the result", async () => {
   (api.readCharacter as any).mockResolvedValue({
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
     versions: [{ id: "default", name: "default", card: CARD, images: [], chub_source: "creator/imp" }],
   });
-  (api.downloadCharacterChubGallery as any).mockResolvedValue({ attempted: 3, stored: 2 });
+  let emit: (e: any) => void = () => {};
+  let resolveDownload: () => void = () => {};
+  (api.downloadCharacterChubGallery as any).mockImplementation(
+    (_w: string, _c: string, _v: string, cb: (e: any) => void) => {
+      emit = cb;
+      return new Promise<void>((resolve) => { resolveDownload = resolve; });
+    },
+  );
   render(<CharacterEditor wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   fireEvent.click(await screen.findByRole("button", { name: /download gallery/i }));
   await waitFor(() =>
-    expect(api.downloadCharacterChubGallery).toHaveBeenCalledWith("w", "seraphine", "default"));
+    expect(api.downloadCharacterChubGallery).toHaveBeenCalledWith("w", "seraphine", "default", expect.any(Function)));
+
+  act(() => emit({ total: 3 }));
+  act(() => emit({ done: 1, total: 3 }));
+  await screen.findByText("1/3");
+  act(() => emit({ done: 2, total: 3 }));
+  await screen.findByText("2/3");
+
+  act(() => emit({ summary: { attempted: 3, stored: 2 } }));
+  await act(async () => resolveDownload());
   await screen.findByText(/^2\/3 gallery images downloaded$/i);
+  expect(screen.queryByText("2/3")).toBeNull(); // progress bar gone once finished
 });
 
 test("downloading linked lorebooks for a version with none shows a clear empty result", async () => {

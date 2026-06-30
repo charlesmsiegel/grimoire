@@ -1,4 +1,4 @@
-import { parseSSEChunk, type ChatEvent, type LocalizeEvent } from "./stream";
+import { parseSSEChunk, type ChatEvent, type LocalizeEvent, type ChubGalleryEvent } from "./stream";
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: string, public kind?: string) {
@@ -292,9 +292,9 @@ export const api = {
   clearCharacterChubSource: (wid: string, cid: string, vid: string) =>
     request<{ chub_source: string }>(
       "DELETE", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-source`),
-  downloadCharacterChubGallery: (wid: string, cid: string, vid: string) =>
-    request<{ attempted: number; stored: number }>(
-      "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-gallery`),
+  downloadCharacterChubGallery: (wid: string, cid: string, vid: string, onEvent: (e: ChubGalleryEvent) => void) =>
+    streamPost<ChubGalleryEvent>(
+      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-gallery`, undefined, onEvent),
   downloadCharacterChubLorebooks: (wid: string, cid: string, vid: string) =>
     request<{ lorebooks_found: number; created: { kind: string; id: string }[] }>(
       "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-lorebooks`),
