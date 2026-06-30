@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   api, type Actor, type Availability, type CharacterSummary, type EntitySummary,
-  type PCSummary, type RosterEntry, type SceneLocation,
+  type PCSummary, type RosterEntry, type SceneLocation, type SceneDatetime,
 } from "../api/client";
 
 export function CastPanel({
@@ -21,6 +21,8 @@ export function CastPanel({
   const [locations, setLocations] = useState<EntitySummary[]>([]);
   const [setting, setSetting] = useState<SceneLocation | null>(null);
   const [locId, setLocId] = useState("");
+  const [when, setWhen] = useState<SceneDatetime | null>(null);
+  const [dateInput, setDateInput] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const [kind, setKind] = useState<"characters" | "pcs">("characters");
@@ -35,13 +37,17 @@ export function CastPanel({
   const reloadSetting = useCallback(
     () => api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null)),
     [cid, sid]);
+  const reloadWhen = useCallback(
+    () => api.getSceneDatetime(cid, sid).then(setWhen).catch(() => setWhen(null)),
+    [cid, sid]);
 
   useEffect(() => {
     reloadCast();
     api.availableGreetings(cid).then(setAvail).catch(() => setAvail([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
     reloadSetting();
-  }, [cid, sid, reloadCast, reloadSetting]);
+    reloadWhen();
+  }, [cid, sid, reloadCast, reloadSetting, reloadWhen]);
 
   // characters/pcs available to add: world assets plus the campaign's own PC overlays
   useEffect(() => {
@@ -78,6 +84,19 @@ export function CastPanel({
       setLocId("");
       await reloadSetting();
       onSeeded(); // refresh the stream so the transition line shows
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function applyDatetime() {
+    if (!dateInput) return;
+    setError(null);
+    try {
+      await api.setSceneDatetime(cid, sid, dateInput);
+      setDateInput("");
+      await reloadWhen();
+      onSeeded(); // surface the transition line in the stream
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -146,6 +165,25 @@ export function CastPanel({
             <button className="primary" onClick={setLocation}
                     disabled={!locId || locId === setting?.current?.id}>
               {setting?.current ? "Move here" : "Set location"}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <div className="role">When</div>
+          <div className="field-hint">
+            {when?.current
+              ? `${when.current.friendly} (${when.current.weekday})`
+              : "No date"}
+          </div>
+          {when?.current?.holidays_today?.length ? (
+            <div className="field-hint">Holidays: {when.current.holidays_today.join(", ")}</div>
+          ) : null}
+          <div className="picker">
+            <input type="date" aria-label="Scene date" value={dateInput}
+                   onChange={(e) => setDateInput(e.target.value)} />
+            <button className="primary" onClick={applyDatetime} disabled={!dateInput}>
+              {when?.current ? "Advance to" : "Set date"}
             </button>
           </div>
         </div>
