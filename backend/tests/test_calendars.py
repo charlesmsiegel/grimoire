@@ -53,3 +53,51 @@ def test_normalize_preserves_time_and_canonicalizes_date():
 def test_fixed_of_ignores_time():
     p = get_provider(greg())
     assert fixed_of(p, "2026-06-29T14:30") == fixed_of(p, "2026-06-29")
+
+
+from grimoire.store.calendars import today_facts
+
+
+def test_gregorian_library_holiday():
+    p = get_provider(greg(region="US"))
+    start = p.parse("2026-11-01")
+    end = p.parse("2026-11-30")
+    names = {h["name"] for h in p.holidays(start, end)}
+    assert any("Thanksgiving" in n for n in names)
+
+
+def test_custom_fixed_and_nth_weekday_holidays():
+    custom = [
+        {"name": "Founding Day", "month": 4, "day": 12},
+        {"name": "Harvest Moon", "month": 9, "nth": 3, "weekday": 6},  # 3rd Sunday of Sept
+    ]
+    p = get_provider(greg(region="", custom=custom))
+    founding = p.holidays(p.parse("2026-04-01"), p.parse("2026-04-30"))
+    assert [h["name"] for h in founding] == ["Founding Day"]
+    assert p.format(founding[0]["fixed"]) == "2026-04-12"
+    harvest = p.holidays(p.parse("2026-09-01"), p.parse("2026-09-30"))
+    assert [h["name"] for h in harvest] == ["Harvest Moon"]
+    assert p.format(harvest[0]["fixed"]) == "2026-09-20"  # 3rd Sunday of Sept 2026
+
+
+def test_today_facts_dateline_and_holiday():
+    cfg = {"primary": greg(region="US"), "secondary": None}
+    facts = today_facts(cfg, "2026-12-25")
+    assert facts["friendly"] == "25 December 2026"
+    assert facts["weekday"] == "Friday"
+    assert facts["secondary_friendly"] is None
+    assert "Christmas Day" in facts["holidays_today"]
+
+
+def test_today_facts_merges_secondary_holidays():
+    # Boxing Day (Dec 26) is a GB holiday, not US — proves the secondary merge.
+    cfg = {"primary": greg(region="US"), "secondary": greg(region="GB")}
+    facts = today_facts(cfg, "2026-12-26")
+    assert facts["secondary_friendly"] == "26 December 2026"
+    assert any("Boxing Day" in n for n in facts["holidays_today"])
+
+
+def test_today_facts_upcoming_within_30_days():
+    cfg = {"primary": greg(region="US"), "secondary": None}
+    facts = today_facts(cfg, "2026-12-20")
+    assert facts["upcoming"] == {"name": "Christmas Day", "in_days": 5}
