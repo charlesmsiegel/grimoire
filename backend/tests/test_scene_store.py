@@ -118,6 +118,37 @@ def test_traversal_sid_is_rejected(monkeypatch, tmp_path):
         scenes.read_scene(cid, "../../secret")
 
 
+def test_set_datetime_first_silent_then_advance(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    # first set: silent, no transcript line
+    assert scenes.set_datetime(cid, sid, "2026-06-29") == {"advanced": False, "friendly": "29 June 2026"}
+    assert scenes.get_time_history(cid, sid) == ["2026-06-29"]
+    assert scenes.read_scene(cid, sid)["messages"] == []
+    # change: appends an italic transition line
+    res = scenes.set_datetime(cid, sid, "2026-07-04T09:00")
+    assert res == {"advanced": True, "friendly": "4 July 2026"}
+    assert scenes.get_time_history(cid, sid) == ["2026-06-29", "2026-07-04T09:00"]
+    assert scenes.read_scene(cid, sid)["messages"] == [
+        {"role": "assistant", "content": "*Time passes. It is now 4 July 2026.*"}]
+    # re-set the same current: no-op
+    assert scenes.set_datetime(cid, sid, "2026-07-04T09:00") == {"advanced": False, "friendly": "4 July 2026"}
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 1
+
+
+def test_set_datetime_bad_input_raises(monkeypatch, tmp_path):
+    from grimoire.store import calendars
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    with pytest.raises(calendars.CalendarError):
+        scenes.set_datetime(cid, sid, "2026-13-40")
+
+
+def test_get_time_history_missing_scene_is_empty(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    assert scenes.get_time_history(cid, "nope") == []
+
+
 def test_delete_removes_scene(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Doomed")
