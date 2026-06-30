@@ -32,6 +32,10 @@ class CalendarProvider(ABC):
     def describe(self, fixed: int) -> dict:
         """{year, month, month_name, day, weekday_name, weekday_index, friendly}."""
 
+    @abstractmethod
+    def holidays(self, start_fixed: int, end_fixed: int) -> list[dict]:
+        """Observances landing in [start_fixed, end_fixed], each {name, fixed}."""
+
     # Age helpers default to fixed-day arithmetic via describe(); override if needed.
     def age(self, birth_fixed: int, asof_fixed: int) -> int:
         b, a = self.describe(birth_fixed), self.describe(asof_fixed)
@@ -97,3 +101,49 @@ def normalize(provider: CalendarProvider, native: str) -> str:
 
 def friendly(provider: CalendarProvider, native: str) -> str:
     return provider.describe(fixed_of(provider, native))["friendly"]
+
+
+UPCOMING_WINDOW_DAYS = 30
+
+
+def _configured(cfg: dict) -> list[CalendarProvider]:
+    out = [get_provider(cfg["primary"])]
+    if cfg.get("secondary"):
+        out.append(get_provider(cfg["secondary"]))
+    return out
+
+
+def today_facts(cfg: dict, native: str) -> dict:
+    """Computed date facts for a scene's current moment, merged across all
+    configured calendars. `cfg` is {primary, secondary|None}."""
+    providers = _configured(cfg)
+    primary = providers[0]
+    fixed = fixed_of(primary, native)
+    primary_desc = primary.describe(fixed)
+
+    secondary_friendly = None
+    if len(providers) > 1:
+        secondary_friendly = providers[1].describe(fixed)["friendly"]
+
+    holidays_today: list[str] = []
+    for p in providers:
+        for h in p.holidays(fixed, fixed):
+            if h["name"] not in holidays_today:
+                holidays_today.append(h["name"])
+
+    upcoming = None
+    soonest: dict | None = None
+    for p in providers:
+        for h in p.holidays(fixed + 1, fixed + UPCOMING_WINDOW_DAYS):
+            if soonest is None or h["fixed"] < soonest["fixed"]:
+                soonest = h
+    if soonest is not None:
+        upcoming = {"name": soonest["name"], "in_days": soonest["fixed"] - fixed}
+
+    return {
+        "friendly": primary_desc["friendly"],
+        "weekday": primary_desc["weekday_name"],
+        "secondary_friendly": secondary_friendly,
+        "holidays_today": holidays_today,
+        "upcoming": upcoming,
+    }
