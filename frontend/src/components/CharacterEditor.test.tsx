@@ -229,3 +229,18 @@ test("an empty chub.ai prompt makes no API call", async () => {
   fireEvent.click(screen.getByRole("button", { name: /download from chub\.ai/i }));
   expect(api.importCharacterFromChub).not.toHaveBeenCalled();
 });
+
+test("downloading a version from chub.ai targets the open character", async () => {
+  vi.spyOn(window, "prompt").mockReturnValue("creator/imp-variant");
+  (api.importCharacterFromChub as any).mockResolvedValue({
+    character: "seraphine", version: "variant",
+    gallery: { attempted: 0, stored: 0 },
+    lore: { lorebooks_found: 0, created: [] },
+  });
+  render(<CharacterEditor wid="w" />);
+  await openEditForm();
+  fireEvent.click(screen.getByRole("button", { name: /download version from chub\.ai/i }));
+  await waitFor(() =>
+    expect(api.importCharacterFromChub).toHaveBeenCalledWith("w", "creator/imp-variant", "seraphine"));
+  await screen.findByText(/^downloaded from chub\.ai$/i);
+});
