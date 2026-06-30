@@ -18,6 +18,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
   const [worlds, setWorlds] = useState<WorldMeta[]>([]);
   const [name, setName] = useState("");
   const [world, setWorld] = useState("");
+  const [region, setRegion] = useState("US");
 
   // step 2
   const [persona, setPersona] = useState<Persona>(blankPersona);
@@ -61,7 +62,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
     setError(null);
     setBusy(true);
     try {
-      const { id: cid } = await api.createCampaign(name.trim(), world);
+      const { id: cid } = await api.createCampaign(name.trim(), world, region || undefined);
       const { pc, version } = await api.createCampaignPC(cid, {
         name: persona.name.trim(), tags, persona: { ...persona, name: persona.name.trim() },
       });
@@ -146,6 +147,17 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
             <label htmlFor="wiz-world">World</label>
             <select id="wiz-world" value={world} onChange={(e) => setWorld(e.target.value)}>
               {worlds.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="wiz-region">Holidays region</label>
+            <select id="wiz-region" aria-label="Holidays region" value={region}
+                    onChange={(e) => setRegion(e.target.value)}>
+              <option value="US">United States</option>
+              <option value="GB">United Kingdom</option>
+              <option value="CA">Canada</option>
+              <option value="AU">Australia</option>
+              <option value="">None</option>
             </select>
           </div>
           <div className="wizard-footer">

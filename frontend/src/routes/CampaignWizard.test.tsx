@@ -69,7 +69,7 @@ test("Create campaign commits the full sequence in order", async () => {
   fireEvent.change(screen.getByLabelText(/location name/i), { target: { value: "The Tavern" } });
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
 
-  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1"));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "US"));
   expect(api.createCampaignPC).toHaveBeenCalledWith("run", expect.objectContaining({
     name: "Mara", tags: [], persona: expect.objectContaining({ name: "Mara" }),
   }));
@@ -79,6 +79,18 @@ test("Create campaign commits the full sequence in order", async () => {
     { kind: "campaign", id: "run" }, "locations", expect.objectContaining({ name: "The Tavern" }));
   // advanced to the opener step
   await screen.findByRole("heading", { name: /opening/i });
+});
+
+test("selecting a holidays region passes it to createCampaign", async () => {
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.change(screen.getByLabelText("Holidays region"), { target: { value: "GB" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "GB"));
 });
 
 test("Finish on the opener step navigates to the campaign", async () => {
