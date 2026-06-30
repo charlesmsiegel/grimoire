@@ -8,7 +8,7 @@ from __future__ import annotations
 import functools
 import re
 
-from . import appearances, briefs, campaigns, characters, config, entities, pcs, scenes, worlds
+from . import appearances, briefs, calendars, campaigns, characters, config, entities, pcs, scenes, worlds
 
 
 def activate(entries: list[dict], recent_text: str) -> list[dict]:
@@ -160,6 +160,26 @@ def _cast_directory(croot, wroot, cid: str, sid: str) -> str:
     return "\n\n".join(parts)
 
 
+def _today_block(cid: str, sid: str, croot) -> str:
+    history = scenes.get_time_history(cid, sid)
+    if not history:
+        return ""
+    cfg = calendars.read_calendar(croot)
+    try:
+        facts = calendars.today_facts(cfg, history[-1])
+    except calendars.CalendarError:
+        return ""  # garbled date — omit, don't crash
+    head = f"It is {facts['friendly']} ({facts['weekday']})"
+    head += f"; {facts['secondary_friendly']}." if facts["secondary_friendly"] else "."
+    lines = [head]
+    if facts["holidays_today"]:
+        lines.append("Holidays today: " + ", ".join(facts["holidays_today"]) + ".")
+    if facts["upcoming"]:
+        u = facts["upcoming"]
+        lines.append(f"Upcoming: {u['name']} in {u['in_days']} days.")
+    return "# Today\n" + "\n".join(lines)
+
+
 def _assemble(cid: str, sid: str) -> dict:
     """One pass producing substituted, labeled system sections + history + post-history.
     Shared by build_messages (joins sections into the system message) and
@@ -219,6 +239,8 @@ def _assemble(cid: str, sid: str) -> dict:
     add("Character descriptions", "\n\n".join(b for b in (_npc_block(d) for d in npc_cards) if b))
     add("Player personas", "\n\n".join(b for b in player_blocks if b))
     add("Message examples", "\n\n".join(d.get("mes_example", "").strip() for d in npc_cards if d.get("mes_example", "").strip()))
+
+    add("Today", _today_block(cid, sid, croot))
 
     history_ids = scenes.get_location_history(cid, sid)
     current_loc = history_ids[-1] if history_ids else None

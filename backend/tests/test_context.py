@@ -279,3 +279,18 @@ def test_count_tokens_positive_and_empty(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     assert context.count_tokens("") == 0
     assert context.count_tokens("the drowned king waits") > 0
+
+
+def test_today_block_present_when_dated(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)  # default region US
+    scenes.set_datetime(cid, sid, "2026-12-25")
+    sections = context.context_sections(cid, sid)
+    assert "Today" in [s["label"] for s in sections]
+    today = next(s["text"] for s in sections if s["label"] == "Today")
+    assert "It is 25 December 2026 (Friday)." in today
+    assert "Christmas Day" in today
+
+
+def test_no_today_block_when_undated(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    assert "Today" not in [s["label"] for s in context.context_sections(cid, sid)]
