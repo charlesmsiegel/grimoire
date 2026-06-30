@@ -50,8 +50,8 @@ export type Scene = { meta: { id: string; title: string }; messages: Message[] }
 // entities (locations | lore)
 export type EntityKind = "locations" | "lore";
 export type EntityScope = { kind: "world" | "campaign"; id: string };
-export type EntitySummary = { id: string; name: string; keys?: string };
-export type EntityDetail = { meta: { id: string; name: string; keys?: string }; body: string };
+export type EntitySummary = { id: string; name: string; keys?: string; owners?: string };
+export type EntityDetail = { meta: { id: string; name: string; keys?: string; owners?: string }; body: string };
 
 // characters (V3 cards)
 export type CardData = {
@@ -205,12 +205,12 @@ export const api = {
   // entities (locations | lore), world or campaign scope
   listEntities: (scope: EntityScope, kind: EntityKind) =>
     request<EntitySummary[]>("GET", `${entityBase(scope)}/${kind}`),
-  createEntity: (scope: EntityScope, kind: EntityKind, body: { name: string; body?: string; keys?: string }) =>
+  createEntity: (scope: EntityScope, kind: EntityKind, body: { name: string; body?: string; keys?: string; owners?: string }) =>
     request<{ id: string }>("POST", `${entityBase(scope)}/${kind}`, body),
   readEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<EntityDetail>("GET", `${entityBase(scope)}/${kind}/${id}`),
   updateEntity: (scope: EntityScope, kind: EntityKind, id: string,
-                 patch: { name?: string; body?: string; keys?: string }) =>
+                 patch: { name?: string; body?: string; keys?: string; owners?: string }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/${kind}/${id}`, patch),
   deleteEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/${kind}/${id}`),
