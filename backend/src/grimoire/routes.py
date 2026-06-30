@@ -35,6 +35,7 @@ class NameBody(BaseModel):
 class NewCampaign(BaseModel):
     name: str
     world: str
+    region: str | None = None
 
 
 class EntityCreate(BaseModel):
@@ -771,7 +772,7 @@ def get_campaigns():
 @router.post("/campaigns")
 def post_campaign(body: NewCampaign):
     try:
-        return {"id": store.campaigns.create_campaign(body.name, body.world)}
+        return {"id": store.campaigns.create_campaign(body.name, body.world, body.region)}
     except store.worlds.WorldNotFound:
         raise HTTPException(status_code=400, detail="world not found")
 
