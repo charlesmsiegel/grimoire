@@ -81,7 +81,8 @@ export default function WorldView() {
             <summary>Import lorebook / world-info</summary>
             <LorebookImport wid={wid} onImported={() => setLoreReset((n) => n + 1)} />
           </details>
-          <EntityEditor key={loreReset} wid={wid} kind="lore" nav={loreNav} onOpenOwner={openOwner} />
+          <EntityEditor key={loreReset} wid={wid} kind="lore" nav={loreNav}
+                        onNavConsumed={() => setLoreNav(null)} onOpenOwner={openOwner} />
         </>
       )}
       {tab === "greetings" && <GreetingEditor wid={wid} onOpenCharacter={openCharacter} />}
