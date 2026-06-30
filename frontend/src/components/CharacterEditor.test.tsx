@@ -10,6 +10,7 @@ vi.mock("../api/client", () => ({
     importCharacterFromChub: vi.fn(),
     setCharacterBirthdate: vi.fn(),
     setCharacterChubSource: vi.fn(), clearCharacterChubSource: vi.fn(),
+    downloadCharacterChubGallery: vi.fn(), downloadCharacterChubLorebooks: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
   },
 }));
@@ -304,6 +305,42 @@ test("a sibling version doesn't show another version's chub.ai link", async () =
   fireEvent.change(screen.getByLabelText("Version"), { target: { value: "variant" } });
   expect(screen.queryByRole("link", { name: /creator\/main/i })).toBeNull();
   await screen.findByRole("button", { name: /^link to chub\.ai$/i });
+});
+
+test("download gallery/lorebooks buttons only appear once a version is linked", async () => {
+  render(<CharacterEditor wid="w" />); // DETAIL's only version has no chub_source
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByRole("button", { name: /^link to chub\.ai$/i });
+  expect(screen.queryByRole("button", { name: /download gallery/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /download linked lorebooks/i })).toBeNull();
+});
+
+test("downloading the gallery for a linked version shows the result", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: [], chub_source: "creator/imp" }],
+  });
+  (api.downloadCharacterChubGallery as any).mockResolvedValue({ attempted: 3, stored: 2 });
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  fireEvent.click(await screen.findByRole("button", { name: /download gallery/i }));
+  await waitFor(() =>
+    expect(api.downloadCharacterChubGallery).toHaveBeenCalledWith("w", "seraphine", "default"));
+  await screen.findByText(/^2\/3 gallery images downloaded$/i);
+});
+
+test("downloading linked lorebooks for a version with none shows a clear empty result", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: [], chub_source: "creator/imp" }],
+  });
+  (api.downloadCharacterChubLorebooks as any).mockResolvedValue({ lorebooks_found: 0, created: [] });
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  fireEvent.click(await screen.findByRole("button", { name: /download linked lorebooks/i }));
+  await waitFor(() =>
+    expect(api.downloadCharacterChubLorebooks).toHaveBeenCalledWith("w", "seraphine", "default"));
+  await screen.findByText(/^no linked lorebooks found on chub\.ai$/i);
 });
 
 test("the edit form no longer shows a chub.ai link control (moved to the detail page)", async () => {

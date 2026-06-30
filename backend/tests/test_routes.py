@@ -283,6 +283,52 @@ def test_chub_source_route_unknown_character_or_version(client):
     assert r.status_code == 404
 
 
+def test_chub_gallery_and_lorebooks_routes(client, monkeypatch):
+    from grimoire.store import chub
+
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Abelha"}).json()["character"]
+    client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-source",
+                json={"url": "creator/abelha"})
+
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": True, "related_lorebooks": [7],
+    })
+    monkeypatch.setattr(chub, "fetch_gallery_paths", lambda pid: ["https://g/1.jpg"])
+    monkeypatch.setattr(store.fetch, "_http_get_bytes", lambda url: (b"\xff\xd8\xffJPEGDATA", "image/jpeg"))
+    monkeypatch.setattr(chub, "fetch_lorebook_node", lambda lid: {
+        "definition": {"embedded_lorebook": {"entries": [{"keys": ["k"], "content": "x"}]}},
+    })
+
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-gallery")
+    assert r.status_code == 200 and r.json() == {"attempted": 1, "stored": 1}
+
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-lorebooks")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["lorebooks_found"] == 1 and len(body["created"]) == 1
+
+
+def test_chub_gallery_and_lorebooks_routes_require_a_link(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Abelha"}).json()["character"]
+
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-gallery")
+    assert r.status_code == 404
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-lorebooks")
+    assert r.status_code == 404
+
+
+def test_chub_gallery_and_lorebooks_routes_unknown_character_or_version(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+
+    assert client.post(f"/api/worlds/{wid}/characters/nobody/versions/default/chub-gallery").status_code == 404
+    assert client.post(f"/api/worlds/{wid}/characters/nobody/versions/default/chub-lorebooks").status_code == 404
+    assert client.post(f"/api/worlds/{wid}/characters/{cid}/versions/ghost/chub-gallery").status_code == 404
+    assert client.post(f"/api/worlds/{wid}/characters/{cid}/versions/ghost/chub-lorebooks").status_code == 404
+
+
 def test_character_book_import_route(client):
     wid = _world(client)
     card = {"spec": "chara_card_v3", "spec_version": "3.0", "data": {

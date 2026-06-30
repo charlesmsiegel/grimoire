@@ -474,6 +474,32 @@ def delete_world_character_chub_source(wid: str, cid: str, vid: str):
     return {"chub_source": ""}
 
 
+@router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/chub-gallery")
+def post_world_character_chub_gallery(wid: str, cid: str, vid: str):
+    root = _world_root_or_404(wid)
+    try:
+        return store.characters.download_chub_gallery(root, cid, vid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    except store.chub.ChubFetchError:
+        raise HTTPException(status_code=404, detail="could not fetch from chub.ai")
+
+
+@router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/chub-lorebooks")
+def post_world_character_chub_lorebooks(wid: str, cid: str, vid: str):
+    root = _world_root_or_404(wid)
+    try:
+        return store.characters.download_chub_lorebooks(root, cid, vid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    except store.chub.ChubFetchError:
+        raise HTTPException(status_code=404, detail="could not fetch from chub.ai")
+
+
 @router.delete("/worlds/{wid}/characters/{cid}")
 def delete_world_character(wid: str, cid: str):
     try:
