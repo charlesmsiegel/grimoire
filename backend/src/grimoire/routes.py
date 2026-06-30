@@ -82,6 +82,7 @@ class CharacterBirthdate(BaseModel):
 class ChubImportBody(BaseModel):
     url: str
     into: str | None = None
+    into_version: str | None = None
 
 
 class ChubSourceBody(BaseModel):
@@ -575,7 +576,8 @@ async def post_character_import(wid: str, file: UploadFile = File(...),
 def post_character_import_chub(wid: str, body: ChubImportBody):
     root = _world_root_or_404(wid)
     try:
-        return store.characters.import_from_chub(root, body.url, into_cid=body.into)
+        return store.characters.import_from_chub(root, body.url, into_cid=body.into,
+                                                 into_vid=body.into_version)
     except store.chub.ChubParseError:
         raise HTTPException(status_code=400, detail="not a valid chub.ai character URL or path")
     except store.chub.ChubFetchError:

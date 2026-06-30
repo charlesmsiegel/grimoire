@@ -172,8 +172,38 @@ def test_chub_import_route(client, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["character"] and body["version"]
+    assert body["updated"] is False
     assert body["gallery"] == {"attempted": 0, "stored": 0}
     assert body["lore"] == {"lorebooks_found": 0, "created": []}
+
+
+def test_chub_import_route_updates_in_place_when_already_linked(client, monkeypatch):
+    from grimoire.store import cards, chub
+
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Abelha"}).json()["character"]
+    client.post(f"/api/worlds/{wid}/characters/{cid}/chub-source", json={"url": "creator/abelha"})
+
+    png = cards.dumps({"spec": "chara_card_v3", "spec_version": "3.0",
+                        "data": {"name": "Abelha Updated", "extensions": {}}}, "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/abelha/chara_card_v2.png",
+    })
+    monkeypatch.setattr(store.fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    r = client.post(f"/api/worlds/{wid}/characters/import/chub",
+                     json={"url": "creator/abelha", "into": cid, "into_version": "default"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {
+        "character": cid, "version": "default", "updated": True,
+        "gallery": {"attempted": 0, "stored": 0},
+        "lore": {"lorebooks_found": 0, "created": []},
+    }
+    detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
+    assert [v["id"] for v in detail["versions"]] == ["default"]  # no new version
+    assert detail["versions"][0]["card"]["data"]["name"] == "Abelha Updated"
 
 
 def test_chub_import_route_bad_url(client):

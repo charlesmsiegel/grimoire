@@ -23,7 +23,8 @@ function describeChubResult(result: ChubImportResult): string {
     const n = result.lore.created.length;
     parts.push(`${result.lore.lorebooks_found} lorebook${result.lore.lorebooks_found === 1 ? "" : "s"} (${n} ${n === 1 ? "entry" : "entries"}) added to world lore`);
   }
-  return parts.length ? `Downloaded from chub.ai — ${parts.join(", ")}` : "Downloaded from chub.ai";
+  const lead = result.updated ? "Updated this version from chub.ai" : "Downloaded from chub.ai";
+  return parts.length ? `${lead} — ${parts.join(", ")}` : lead;
 }
 
 type Mode = "grid" | "detail" | "edit";
@@ -380,7 +381,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     setError(null);
     setImportMsg(null);
     try {
-      const result = await api.importCharacterFromChub(wid, url, detail.meta.id);
+      const result = await api.importCharacterFromChub(wid, url, detail.meta.id, vid);
       const d = await api.readCharacter(wid, detail.meta.id);
       setDetail(d);
       loadVersion(d, result.version);
@@ -492,6 +493,20 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
               </div>
             </div>
 
+            <div className="chub-source-block">
+              {detail.meta.chub_source ? (
+                <>
+                  <a className="field-hint" href={`https://chub.ai/characters/${detail.meta.chub_source}`}
+                     target="_blank" rel="noreferrer">
+                    {detail.meta.chub_source}
+                  </a>
+                  <button className="subtle" type="button" onClick={unlinkChub}>Unlink</button>
+                </>
+              ) : (
+                <button className="subtle" type="button" onClick={linkChub}>Link to chub.ai</button>
+              )}
+            </div>
+
             {localizeControls(false)}
 
             {onOpenLore && (
@@ -548,17 +563,6 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
             <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>
             <button className="subtle" onClick={downloadVersionFromChub}>Download version from chub.ai</button>
             {importMsg && <span className="field-hint">{importMsg}</span>}
-          </div>
-
-          <div className="chub-source-block">
-            {detail.meta.chub_source ? (
-              <>
-                <span className="field-hint">Linked to chub.ai: {detail.meta.chub_source}</span>
-                <button className="subtle" type="button" onClick={unlinkChub}>Unlink</button>
-              </>
-            ) : (
-              <button className="subtle" type="button" onClick={linkChub}>Link to chub.ai</button>
-            )}
           </div>
 
           <div className="avatar-block">

@@ -87,6 +87,7 @@ export type CharacterDetail = {
 export type ChubImportResult = {
   character: string;
   version: string;
+  updated: boolean;
   gallery: { attempted: number; stored: number };
   lore: { lorebooks_found: number; created: { kind: string; id: string }[] };
 };
@@ -281,9 +282,10 @@ export const api = {
   importCharacterBook: (wid: string, cid: string, vid: string) =>
     request<{ created: { kind: string; id: string }[] }>(
       "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/lorebook/import`),
-  importCharacterFromChub: (wid: string, url: string, into?: string) =>
+  importCharacterFromChub: (wid: string, url: string, into?: string, intoVersion?: string) =>
     request<ChubImportResult>(
-      "POST", `/api/worlds/${wid}/characters/import/chub`, into ? { url, into } : { url }),
+      "POST", `/api/worlds/${wid}/characters/import/chub`,
+      into ? { url, into, into_version: intoVersion } : { url }),
   setCharacterChubSource: (wid: string, cid: string, url: string) =>
     request<{ chub_source: string }>("POST", `/api/worlds/${wid}/characters/${cid}/chub-source`, { url }),
   clearCharacterChubSource: (wid: string, cid: string) =>
