@@ -1100,8 +1100,11 @@ def get_scene_datetime(cid: str, sid: str):
     if history:
         cfg = store.calendars.read_calendar(store.campaigns.campaign_root(cid))
         native = history[-1]
-        current = {"native": native, **store.calendars.today_facts(cfg, native),
-                   "cast": store.context.cast_datetime_facts(cid, sid, native)}
+        try:
+            current = {"native": native, **store.calendars.today_facts(cfg, native),
+                       "cast": store.context.cast_datetime_facts(cid, sid, native)}
+        except store.calendars.CalendarError:
+            current = None  # misconfigured calendar — surface "no date" rather than 500
     return {"current": current, "history": history}
 
 

@@ -171,6 +171,10 @@ def test_validate_calendar_rejects_bad_custom_rules():
         {"name": "Founding Day", "month": 4, "day": 12},
         {"name": "Harvest", "month": 9, "nth": 3, "weekday": 6}]
     validate_calendar(good)  # both rule shapes valid
+    bad_provider = default_calendar()
+    bad_provider["primary"]["provider"] = "bogus"
+    with pytest.raises(CalendarError):
+        validate_calendar(bad_provider)
     for bad_rule in ({"name": "X", "month": 13},          # bad month
                      {"name": "X", "month": 4},            # neither day nor nth/weekday
                      {"month": 4, "day": 12},              # missing name

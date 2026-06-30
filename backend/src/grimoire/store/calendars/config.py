@@ -8,7 +8,7 @@ import json
 from datetime import date
 from pathlib import Path
 
-from .base import CalendarError
+from .base import CalendarError, get_provider
 
 
 def _blank(region: str = "US") -> dict:
@@ -79,5 +79,6 @@ def validate_calendar(cfg: dict) -> None:
     for block in (cfg.get("primary"), cfg.get("secondary")):
         if not block:
             continue
+        get_provider(block)  # raises CalendarError on an unknown provider
         for rule in block.get("custom_holidays", []) or []:
             _validate_rule(rule)

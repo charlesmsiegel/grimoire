@@ -157,6 +157,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
               <option value="GB">United Kingdom</option>
               <option value="CA">Canada</option>
               <option value="AU">Australia</option>
+              <option value="IL">Israel</option>
               <option value="">None</option>
             </select>
           </div>

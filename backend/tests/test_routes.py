@@ -849,3 +849,6 @@ def test_calendar_config_rejects_malformed_custom_holiday(client):
     nameless = {"primary": {"provider": "gregorian", "region": "US",
             "custom_holidays": [{"month": 4, "day": 12}], "anchor": None}, "secondary": None}
     assert client.put(f"/api/campaigns/{cid}/calendar", json=nameless).status_code == 400
+    bogus = {"primary": {"provider": "bogus", "region": "US", "custom_holidays": [], "anchor": None},
+             "secondary": None}
+    assert client.put(f"/api/campaigns/{cid}/calendar", json=bogus).status_code == 400
