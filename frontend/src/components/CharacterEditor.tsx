@@ -71,6 +71,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const hasAvatar = (detail && card)
     ? (detail.versions.find((v) => v.id === vid)?.images ?? []).includes("avatar")
     : false;
+  const chubSource = detail?.versions.find((v) => v.id === vid)?.chub_source ?? "";
 
   function loadVersion(d: CharacterDetail, id: string) {
     const v = d.versions.find((x) => x.id === id) ?? d.versions[0];
@@ -393,14 +394,19 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     }
   }
 
+  // Linking is per-version, and the detail view may be showing a
+  // non-default version -- reload via loadVersion(d, vid) rather than
+  // select() (which always snaps back to the default version).
   async function linkChub() {
     if (!detail) return;
     const url = window.prompt("chub.ai character URL or path?")?.trim();
     if (!url) return;
     setError(null);
     try {
-      await api.setCharacterChubSource(wid, detail.meta.id, url);
-      await select(detail.meta.id);
+      await api.setCharacterChubSource(wid, detail.meta.id, vid, url);
+      const d = await api.readCharacter(wid, detail.meta.id);
+      setDetail(d);
+      loadVersion(d, vid);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -410,8 +416,10 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     if (!detail) return;
     setError(null);
     try {
-      await api.clearCharacterChubSource(wid, detail.meta.id);
-      await select(detail.meta.id);
+      await api.clearCharacterChubSource(wid, detail.meta.id, vid);
+      const d = await api.readCharacter(wid, detail.meta.id);
+      setDetail(d);
+      loadVersion(d, vid);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -494,11 +502,11 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
             </div>
 
             <div className="chub-source-block">
-              {detail.meta.chub_source ? (
+              {chubSource ? (
                 <>
-                  <a className="field-hint" href={`https://chub.ai/characters/${detail.meta.chub_source}`}
+                  <a className="field-hint" href={`https://chub.ai/characters/${chubSource}`}
                      target="_blank" rel="noreferrer">
-                    {detail.meta.chub_source}
+                    {chubSource}
                   </a>
                   <button className="subtle" type="button" onClick={unlinkChub}>Unlink</button>
                 </>

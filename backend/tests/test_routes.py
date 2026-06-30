@@ -182,7 +182,7 @@ def test_chub_import_route_updates_in_place_when_already_linked(client, monkeypa
 
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Abelha"}).json()["character"]
-    client.post(f"/api/worlds/{wid}/characters/{cid}/chub-source", json={"url": "creator/abelha"})
+    client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-source", json={"url": "creator/abelha"})
 
     png = cards.dumps({"spec": "chara_card_v3", "spec_version": "3.0",
                         "data": {"name": "Abelha Updated", "extensions": {}}}, "png")
@@ -221,33 +221,65 @@ def test_chub_import_route_unreachable(client, monkeypatch):
     assert r.status_code == 404
 
 
+def _version_chub_source(detail, vid):
+    return next(v for v in detail["versions"] if v["id"] == vid)["chub_source"]
+
+
 def test_chub_source_routes(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
 
-    assert client.get(f"/api/worlds/{wid}/characters/{cid}").json()["meta"]["chub_source"] == ""
+    detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
+    assert _version_chub_source(detail, "default") == ""
 
-    r = client.post(f"/api/worlds/{wid}/characters/{cid}/chub-source", json={"url": "creator/slug"})
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-source",
+                     json={"url": "creator/slug"})
     assert r.status_code == 200 and r.json() == {"chub_source": "creator/slug"}
-    assert client.get(f"/api/worlds/{wid}/characters/{cid}").json()["meta"]["chub_source"] == "creator/slug"
+    detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
+    assert _version_chub_source(detail, "default") == "creator/slug"
 
-    r = client.delete(f"/api/worlds/{wid}/characters/{cid}/chub-source")
+    r = client.delete(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-source")
     assert r.status_code == 200 and r.json() == {"chub_source": ""}
-    assert client.get(f"/api/worlds/{wid}/characters/{cid}").json()["meta"]["chub_source"] == ""
+    detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
+    assert _version_chub_source(detail, "default") == ""
+
+
+def test_chub_source_is_per_version_route(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Abelha"}).json()["character"]
+    client.post(f"/api/worlds/{wid}/characters/{cid}/versions",
+                json={"name": "futa", "card": {"spec": "chara_card_v3", "spec_version": "3.0",
+                                               "data": {"name": "Abelha", "extensions": {}}}})
+    client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-source",
+                json={"url": "creator/abelha-main"})
+
+    detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
+    assert _version_chub_source(detail, "default") == "creator/abelha-main"
+    assert _version_chub_source(detail, "futa") == ""  # sibling version untouched
 
 
 def test_chub_source_route_bad_url(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
-    r = client.post(f"/api/worlds/{wid}/characters/{cid}/chub-source", json={"url": "not a url"})
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-source",
+                     json={"url": "not a url"})
     assert r.status_code == 400
 
 
-def test_chub_source_route_unknown_character(client):
+def test_chub_source_route_unknown_character_or_version(client):
     wid = _world(client)
-    r = client.post(f"/api/worlds/{wid}/characters/nobody/chub-source", json={"url": "creator/slug"})
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+
+    r = client.post(f"/api/worlds/{wid}/characters/nobody/versions/default/chub-source",
+                     json={"url": "creator/slug"})
     assert r.status_code == 404
-    r = client.delete(f"/api/worlds/{wid}/characters/nobody/chub-source")
+    r = client.delete(f"/api/worlds/{wid}/characters/nobody/versions/default/chub-source")
+    assert r.status_code == 404
+
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/ghost/chub-source",
+                     json={"url": "creator/slug"})
+    assert r.status_code == 404
+    r = client.delete(f"/api/worlds/{wid}/characters/{cid}/versions/ghost/chub-source")
     assert r.status_code == 404
 
 

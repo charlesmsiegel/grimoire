@@ -118,18 +118,21 @@ def set_birthdate(root: Path, cid: str, birthdate: str) -> None:
     _meta_path(root, cid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
 
 
-def set_chub_source(root: Path, cid: str, full_path: str) -> None:
-    _require_char(root, cid)
-    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
-    meta["chub_source"] = full_path
-    _meta_path(root, cid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+def set_chub_source(root: Path, cid: str, vid: str, full_path: str) -> None:
+    """Link one version to a chub.ai card. Stored in that version's own card
+    (extensions, same spot as grimoire_label) so each variant of a character
+    carries its own link rather than sharing one character-wide value."""
+    card = read_card(root, cid, vid)
+    card.setdefault("data", {}).setdefault("extensions", {})["chub_source"] = full_path
+    update_version(root, cid, vid, card)
 
 
-def clear_chub_source(root: Path, cid: str) -> None:
-    _require_char(root, cid)
-    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
-    meta.pop("chub_source", None)
-    _meta_path(root, cid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+def clear_chub_source(root: Path, cid: str, vid: str) -> None:
+    card = read_card(root, cid, vid)
+    ext = (card.get("data") or {}).get("extensions") or {}
+    if "chub_source" in ext:
+        del ext["chub_source"]
+        update_version(root, cid, vid, card)
 
 
 def _version_ids(root: Path, cid: str) -> list[str]:
@@ -151,23 +154,37 @@ def _version_label(card: dict, vid: str) -> str:
     return (data.get("extensions") or {}).get("grimoire_label") or data.get("name", vid)
 
 
+def _version_chub_source(card: dict) -> str:
+    return (card.get("data", {}).get("extensions") or {}).get("chub_source", "")
+
+
 def read_character(root: Path, cid: str) -> dict:
     _require_char(root, cid)
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+    default_version = meta.get("default_version", "")
+    # One-time fallback for data written before chub_source became
+    # per-version: a value still sitting in character.md frontmatter only
+    # ever applied to the default version, so that's the only place it
+    # surfaces now -- a sibling version with no per-version value of its own
+    # shows no link, prompting an explicit (and now easy) re-link.
+    legacy_chub_source = meta.get("chub_source", "")
     versions = []
     for vid in _version_ids(root, cid):
         card = read_card(root, cid, vid)
+        chub_source = _version_chub_source(card)
+        if not chub_source and vid == default_version:
+            chub_source = legacy_chub_source
         versions.append({
             "id": vid,
             "name": _version_label(card, vid),
             "card": card,
             "images": [i["name"] for i in assets.list_images(root, cid, vid)],
+            "chub_source": chub_source,
         })
     return {
         "meta": {"id": cid, "name": meta.get("name", cid),
-                 "default_version": meta.get("default_version", ""),
-                 "birthdate": meta.get("birthdate", ""),
-                 "chub_source": meta.get("chub_source", "")},
+                 "default_version": default_version,
+                 "birthdate": meta.get("birthdate", "")},
         "versions": versions,
     }
 
@@ -297,12 +314,17 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
 
     # Re-downloading into a version already linked to this same chub.ai card
     # overwrites that version in place rather than piling up near-duplicates.
-    # Without into_vid (which version is "open") there's nothing safe to
-    # overwrite, so that case always creates a version, same as a mismatch.
+    # The match is checked against that *specific* version's own link (each
+    # variant carries its own), not any sibling version's. Without into_vid
+    # (which version is "open") there's nothing safe to overwrite, so that
+    # case always creates a version, same as a mismatch.
     updated = False
     if into_cid and into_vid:
         existing = read_character(root, into_cid)
-        updated = existing["meta"].get("chub_source") == full_path
+        target = next((v for v in existing["versions"] if v["id"] == into_vid), None)
+        if target is None:
+            raise VersionNotFound(into_vid)
+        updated = target["chub_source"] == full_path
 
     if updated:
         from . import cards
@@ -311,7 +333,7 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
         cid, vid = into_cid, into_vid
     else:
         cid, vid = import_card(root, png[0], "png", into_cid)
-        set_chub_source(root, cid, full_path)
+        set_chub_source(root, cid, vid, full_path)
 
     gallery_attempted = 0
     gallery_stored = 0

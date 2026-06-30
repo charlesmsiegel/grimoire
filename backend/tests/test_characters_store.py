@@ -157,26 +157,64 @@ def test_json_import_no_url_makes_no_call(tmp_path, monkeypatch):
     assert assets.image_path(tmp_path, cid, vid, assets.AVATAR) is None
 
 
+def _chub_sources(tmp_path, cid):
+    return {v["id"]: v["chub_source"] for v in ch.read_character(tmp_path, cid)["versions"]}
+
+
 def test_set_and_clear_chub_source(tmp_path):
-    cid, _ = ch.create_character(tmp_path, "Seraphine")
-    assert ch.read_character(tmp_path, cid)["meta"]["chub_source"] == ""
-    ch.set_chub_source(tmp_path, cid, "creator/slug")
-    assert ch.read_character(tmp_path, cid)["meta"]["chub_source"] == "creator/slug"
-    ch.clear_chub_source(tmp_path, cid)
-    assert ch.read_character(tmp_path, cid)["meta"]["chub_source"] == ""
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    assert _chub_sources(tmp_path, cid)[vid] == ""
+    ch.set_chub_source(tmp_path, cid, vid, "creator/slug")
+    assert _chub_sources(tmp_path, cid)[vid] == "creator/slug"
+    ch.clear_chub_source(tmp_path, cid, vid)
+    assert _chub_sources(tmp_path, cid)[vid] == ""
 
 
 def test_clear_chub_source_when_absent_is_a_noop(tmp_path):
-    cid, _ = ch.create_character(tmp_path, "Seraphine")
-    ch.clear_chub_source(tmp_path, cid)  # must not raise
-    assert ch.read_character(tmp_path, cid)["meta"]["chub_source"] == ""
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    ch.clear_chub_source(tmp_path, cid, vid)  # must not raise
+    assert _chub_sources(tmp_path, cid)[vid] == ""
 
 
-def test_chub_source_setters_require_known_character(tmp_path):
+def test_chub_source_setters_require_known_character_and_version(tmp_path):
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
     with pytest.raises(ch.CharacterNotFound):
-        ch.set_chub_source(tmp_path, "nobody", "creator/slug")
+        ch.set_chub_source(tmp_path, "nobody", vid, "creator/slug")
     with pytest.raises(ch.CharacterNotFound):
-        ch.clear_chub_source(tmp_path, "nobody")
+        ch.clear_chub_source(tmp_path, "nobody", vid)
+    with pytest.raises(ch.VersionNotFound):
+        ch.set_chub_source(tmp_path, cid, "ghost", "creator/slug")
+    with pytest.raises(ch.VersionNotFound):
+        ch.clear_chub_source(tmp_path, cid, "ghost")
+
+
+def test_chub_source_is_per_version(tmp_path):
+    # each variant of a character gets its own link -- setting one version's
+    # chub_source must never leak onto a sibling version.
+    cid, v1 = ch.create_character(tmp_path, "Abelha", "main")
+    v2 = ch.create_version(tmp_path, cid, "futa", ch.blank_card("Abelha"))
+    ch.set_chub_source(tmp_path, cid, v1, "creator/abelha-main")
+    sources = _chub_sources(tmp_path, cid)
+    assert sources[v1] == "creator/abelha-main"
+    assert sources[v2] == ""
+
+
+def test_chub_source_legacy_character_level_value_falls_back_to_default_version(tmp_path):
+    # Simulates data written before chub_source became per-version: a value
+    # sitting in character.md frontmatter with no per-version value yet. It
+    # should surface only on the default version, never on a sibling.
+    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+
+    cid, default_vid = ch.create_character(tmp_path, "Abelha", "main")
+    extra_vid = ch.create_version(tmp_path, cid, "futa", ch.blank_card("Abelha"))
+    meta_path = tmp_path / "characters" / cid / "character.md"
+    meta, _ = parse_frontmatter(meta_path.read_text(encoding="utf-8"))
+    meta["chub_source"] = "creator/legacy-link"
+    meta_path.write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+
+    sources = _chub_sources(tmp_path, cid)
+    assert sources[default_vid] == "creator/legacy-link"
+    assert sources[extra_vid] == ""
 
 
 def test_import_from_chub_happy_path(tmp_path, monkeypatch):
@@ -204,7 +242,7 @@ def test_import_from_chub_happy_path(tmp_path, monkeypatch):
     result = ch.import_from_chub(tmp_path, "https://chub.ai/characters/creator/imp")
 
     cid, vid = result["character"], result["version"]
-    assert ch.read_character(tmp_path, cid)["meta"]["chub_source"] == "creator/imp"
+    assert _chub_sources(tmp_path, cid)[vid] == "creator/imp"
     assert assets.image_path(tmp_path, cid, vid, "avatar") is not None
     names = {i["name"] for i in assets.list_images(tmp_path, cid, vid)}
     assert names == {"avatar", "gallery_0", "gallery_1"}
@@ -302,7 +340,7 @@ def test_import_from_chub_into_matching_chub_source_updates_in_place(tmp_path, m
     from grimoire.store import assets, cards, chub
 
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
-    ch.set_chub_source(tmp_path, cid, "creator/abelha")
+    ch.set_chub_source(tmp_path, cid, vid, "creator/abelha")
     png = cards.dumps(ch.blank_card("Abelha Updated"), "png")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
         "id": 1, "hasGallery": False, "related_lorebooks": [],
@@ -327,7 +365,7 @@ def test_import_from_chub_into_mismatched_chub_source_creates_new_version(tmp_pa
     from grimoire.store import cards, chub
 
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
-    ch.set_chub_source(tmp_path, cid, "creator/a-different-card")
+    ch.set_chub_source(tmp_path, cid, vid, "creator/a-different-card")
     png = cards.dumps(ch.blank_card("Variant"), "png")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
         "id": 1, "hasGallery": False, "related_lorebooks": [],
@@ -347,7 +385,7 @@ def test_import_from_chub_into_without_version_creates_new_version(tmp_path, mon
     from grimoire.store import cards, chub
 
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
-    ch.set_chub_source(tmp_path, cid, "creator/abelha")
+    ch.set_chub_source(tmp_path, cid, vid, "creator/abelha")
     png = cards.dumps(ch.blank_card("Refreshed"), "png")
     monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
         "id": 1, "hasGallery": False, "related_lorebooks": [],
@@ -358,6 +396,41 @@ def test_import_from_chub_into_without_version_creates_new_version(tmp_path, mon
     result = ch.import_from_chub(tmp_path, "creator/abelha", into_cid=cid)
     assert result["updated"] is False
     assert result["version"] != vid
+
+
+def test_import_from_chub_matching_source_on_a_sibling_version_still_creates(tmp_path, monkeypatch):
+    # the character has two versions; only "main" is linked to this chub.ai
+    # card. Targeting the *other* version ("futa") must not be treated as a
+    # match just because some sibling version happens to share the link.
+    from grimoire.store import cards, chub
+
+    cid, main_vid = ch.create_character(tmp_path, "Abelha", "main")
+    futa_vid = ch.create_version(tmp_path, cid, "futa", ch.blank_card("Abelha"))
+    ch.set_chub_source(tmp_path, cid, main_vid, "creator/abelha")
+    png = cards.dumps(ch.blank_card("Refreshed"), "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/abelha/chara_card_v2.png",
+    })
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "creator/abelha", into_cid=cid, into_vid=futa_vid)
+    assert result["updated"] is False
+    assert result["version"] not in (main_vid, futa_vid)  # a third, new version
+
+
+def test_import_from_chub_into_unknown_version_raises(tmp_path, monkeypatch):
+    from grimoire.store import cards, chub
+
+    cid, _ = ch.create_character(tmp_path, "Abelha", "main")
+    png = cards.dumps(ch.blank_card("Imp"), "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/imp/chara_card_v2.png",
+    })
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+    with pytest.raises(ch.VersionNotFound):
+        ch.import_from_chub(tmp_path, "creator/imp", into_cid=cid, into_vid="ghost")
 
 
 def test_import_from_chub_into_unknown_character_raises(tmp_path, monkeypatch):
