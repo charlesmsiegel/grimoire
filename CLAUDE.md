@@ -40,5 +40,7 @@ directly. See `GreetingEditor.test.tsx` / `EntityEditor.test.tsx`.
 ## Working notes
 
 - Backend tests isolate the store via `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)`.
-- Run: `backend/.venv/Scripts/python.exe -m pytest backend -q`;
-  `npx --prefix frontend vitest run` and `tsc -b` in `frontend/`.
+- Run: `backend/.venv/Scripts/python.exe -m pytest backend -q`; from `frontend/`,
+  `npx vitest run` and `npx tsc -b`. (Run vitest **from** `frontend/` — `npx --prefix
+  frontend vitest run` executes from the repo root, which skips `frontend/vitest.config.ts`
+  and disables `globals`, failing every mock-based test.)
