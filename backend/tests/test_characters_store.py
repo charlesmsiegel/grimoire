@@ -155,3 +155,25 @@ def test_json_import_no_url_makes_no_call(tmp_path, monkeypatch):
     monkeypatch.setattr(fetch, "_http_get_bytes", boom)
     cid, vid = ch.import_card(tmp_path, _json.dumps(ch.blank_card("Imp")).encode(), "json")
     assert assets.image_path(tmp_path, cid, vid, assets.AVATAR) is None
+
+
+def test_set_and_clear_chub_source(tmp_path):
+    cid, _ = ch.create_character(tmp_path, "Seraphine")
+    assert ch.read_character(tmp_path, cid)["meta"]["chub_source"] == ""
+    ch.set_chub_source(tmp_path, cid, "creator/slug")
+    assert ch.read_character(tmp_path, cid)["meta"]["chub_source"] == "creator/slug"
+    ch.clear_chub_source(tmp_path, cid)
+    assert ch.read_character(tmp_path, cid)["meta"]["chub_source"] == ""
+
+
+def test_clear_chub_source_when_absent_is_a_noop(tmp_path):
+    cid, _ = ch.create_character(tmp_path, "Seraphine")
+    ch.clear_chub_source(tmp_path, cid)  # must not raise
+    assert ch.read_character(tmp_path, cid)["meta"]["chub_source"] == ""
+
+
+def test_chub_source_setters_require_known_character(tmp_path):
+    with pytest.raises(ch.CharacterNotFound):
+        ch.set_chub_source(tmp_path, "nobody", "creator/slug")
+    with pytest.raises(ch.CharacterNotFound):
+        ch.clear_chub_source(tmp_path, "nobody")

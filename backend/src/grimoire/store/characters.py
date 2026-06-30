@@ -118,6 +118,20 @@ def set_birthdate(root: Path, cid: str, birthdate: str) -> None:
     _meta_path(root, cid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
 
 
+def set_chub_source(root: Path, cid: str, full_path: str) -> None:
+    _require_char(root, cid)
+    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+    meta["chub_source"] = full_path
+    _meta_path(root, cid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+
+
+def clear_chub_source(root: Path, cid: str) -> None:
+    _require_char(root, cid)
+    meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+    meta.pop("chub_source", None)
+    _meta_path(root, cid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+
+
 def _version_ids(root: Path, cid: str) -> list[str]:
     return sorted(p.stem for p in _char_dir(root, cid).glob("*.json"))
 
@@ -152,7 +166,8 @@ def read_character(root: Path, cid: str) -> dict:
     return {
         "meta": {"id": cid, "name": meta.get("name", cid),
                  "default_version": meta.get("default_version", ""),
-                 "birthdate": meta.get("birthdate", "")},
+                 "birthdate": meta.get("birthdate", ""),
+                 "chub_source": meta.get("chub_source", "")},
         "versions": versions,
     }
 
