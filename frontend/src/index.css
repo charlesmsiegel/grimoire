@@ -146,6 +146,19 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .detail-sidebar .form-actions button { width: 100%; }
 .side-section h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 
+/* lore rail grouped by owner */
+.rail-group { margin-bottom: 8px; }
+.rail-group-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted); margin: 8px 0 4px; }
+
+/* owners multi-select in the lore form */
+.owner-picker { flex-direction: column; align-items: flex-start; gap: 4px; }
+.owner-option { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }
+
+/* owned-lore panel on character / PC / location editors */
+.owned-lore .chip { cursor: pointer; }
+.owned-lore button.subtle { margin-top: 8px; }
+
 .table { width: 100%; border-collapse: collapse; }
 .table th, .table td {
   text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--muted);
