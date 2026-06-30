@@ -2,15 +2,23 @@ import { useCallback, useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type EntityKind, type EntitySummary } from "../api/client";
+import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import { Field } from "./Field";
 
-export function EntityEditor({ wid, kind }: { wid: string; kind: EntityKind }) {
+export function EntityEditor({ wid, kind, nav, onOpenOwner }: {
+  wid: string;
+  kind: EntityKind;
+  nav?: { focusEntry?: string; newOwner?: string } | null;
+  onOpenOwner?: (ref: string) => void;
+}) {
   const scope = { kind: "world" as const, id: wid };
   const [items, setItems] = useState<EntitySummary[]>([]);
   const [editing, setEditing] = useState<string | null>(null); // entity id, or null = new
   const [name, setName] = useState("");
   const [body, setBody] = useState("");
   const [keys, setKeys] = useState("");
+  const [owners, setOwners] = useState<string[]>([]);          // selected owner refs (lore only)
+  const [ownerOpts, setOwnerOpts] = useState<LoreOwner[]>([]); // candidates for the picker
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing entries open read-only
   const [error, setError] = useState<string | null>(null);
   const label = kind === "lore" ? "lore entry" : "location";
@@ -22,11 +30,29 @@ export function EntityEditor({ wid, kind }: { wid: string; kind: EntityKind }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wid, kind]);
 
+  useEffect(() => {
+    if (kind === "lore") loreOwnerOptions(wid).then(setOwnerOpts);
+  }, [wid, kind]);
+
+  const ownerLabel = useCallback(
+    (ref: string) => ownerOpts.find((o) => o.ref === ref)?.label ?? ref,
+    [ownerOpts],
+  );
+
+  // inbound navigation from an owner editor: open an entry, or start a new pre-owned entry
+  useEffect(() => {
+    if (!nav) return;
+    if (nav.focusEntry) select(nav.focusEntry);
+    else resetForm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nav]);
+
   function resetForm() {
     setEditing(null);
     setName("");
     setBody("");
     setKeys("");
+    setOwners(nav?.newOwner ? [nav.newOwner] : []);
     setMode("edit"); // a brand-new entry goes straight to the form
   }
 
@@ -37,19 +63,21 @@ export function EntityEditor({ wid, kind }: { wid: string; kind: EntityKind }) {
     setName(e.meta.name);
     setBody(e.body);
     setKeys(e.meta.keys ?? "");
+    setOwners((e.meta.owners ?? "").split(",").map((o) => o.trim()).filter(Boolean));
     setMode("view");
   }
 
   async function save() {
     if (!name.trim()) return;
     setError(null);
+    const ownerStr = owners.join(", ");
     try {
       if (editing) {
-        await api.updateEntity(scope, kind, editing, { name, body, keys });
+        await api.updateEntity(scope, kind, editing, { name, body, keys, owners: ownerStr });
         await reload();
         await select(editing); // back to the read-only view
       } else {
-        await api.createEntity(scope, kind, { name, body, keys });
+        await api.createEntity(scope, kind, { name, body, keys, owners: ownerStr });
         await reload();
         resetForm();
       }
@@ -67,15 +95,40 @@ export function EntityEditor({ wid, kind }: { wid: string; kind: EntityKind }) {
 
   const keyList = keys.split(",").map((k) => k.trim()).filter(Boolean);
 
+  // Group lore rows: "Unowned (world)" first, then one group per distinct owner ref.
+  const ownersOf = (e: EntitySummary) => (e.owners ?? "").split(",").map((o) => o.trim()).filter(Boolean);
+  const groups: { key: string; label: string; rows: EntitySummary[] }[] = [];
+  if (kind === "lore") {
+    const unowned = items.filter((e) => ownersOf(e).length === 0);
+    if (unowned.length) groups.push({ key: "", label: "Unowned (world)", rows: unowned });
+    const seen = new Set<string>();
+    for (const e of items) {
+      for (const ref of ownersOf(e)) {
+        if (seen.has(ref)) continue;
+        seen.add(ref);
+        groups.push({ key: ref, label: ownerLabel(ref), rows: items.filter((x) => ownersOf(x).includes(ref)) });
+      }
+    }
+  }
+
+  const row = (e: EntitySummary) => (
+    <button key={e.id} className={"row" + (editing === e.id ? " active" : "")} onClick={() => select(e.id)}>
+      {e.name}
+    </button>
+  );
+
   return (
     <div className="editor">
       <div className="editor-list">
         <button className="primary new" onClick={resetForm}>+ New {label}</button>
-        {items.map((e) => (
-          <button key={e.id} className={"row" + (editing === e.id ? " active" : "")} onClick={() => select(e.id)}>
-            {e.name}
-          </button>
-        ))}
+        {kind === "lore"
+          ? groups.map((g) => (
+              <div key={g.key} className="rail-group">
+                <div className="rail-group-head">{g.label}</div>
+                {g.rows.map(row)}
+              </div>
+            ))
+          : items.map(row)}
         {items.length === 0 && <div className="editor-empty">No {kind} yet.</div>}
       </div>
 
@@ -99,6 +152,22 @@ export function EntityEditor({ wid, kind }: { wid: string; kind: EntityKind }) {
                   ? <div className="chips">{keyList.map((k) => <span key={k} className="chip on">{k}</span>)}</div>
                   : <div className="field-hint">always-on</div>}
               </div>
+              {kind === "lore" && (
+                <div className="side-section">
+                  <h4>Owners</h4>
+                  {owners.length > 0 ? (
+                    <div className="chips">
+                      {owners.map((ref) => (
+                        <button key={ref} className="chip" onClick={() => onOpenOwner?.(ref)}>
+                          {ownerLabel(ref)}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="field-hint">world-level</div>
+                  )}
+                </div>
+              )}
             </aside>
           </div>
         ) : (
@@ -113,6 +182,26 @@ export function EntityEditor({ wid, kind }: { wid: string; kind: EntityKind }) {
             <Field label="Keys" hint="comma-separated activation triggers; blank = always-on">
               <input type="text" value={keys} onChange={(e) => setKeys(e.target.value)} />
             </Field>
+            {kind === "lore" && (
+              <Field label="Owners" hint="lore activates only when an owner is in the scene; none = world-level">
+                <div className="chips owner-picker">
+                  {ownerOpts.map((o) => (
+                    <label key={o.ref} className="owner-option">
+                      <input
+                        type="checkbox"
+                        aria-label={o.label}
+                        checked={owners.includes(o.ref)}
+                        onChange={(e) =>
+                          setOwners(e.target.checked ? [...owners, o.ref] : owners.filter((r) => r !== o.ref))
+                        }
+                      />
+                      {o.label}
+                    </label>
+                  ))}
+                  {ownerOpts.length === 0 && <span className="field-hint">No characters, PCs, or locations yet.</span>}
+                </div>
+              </Field>
+            )}
             <div className="form-actions">
               {editing && <button className="subtle" onClick={() => remove(items.find((x) => x.id === editing)!)}>Delete</button>}
               {editing && <button className="subtle" onClick={() => select(editing)}>Cancel</button>}
