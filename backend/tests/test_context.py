@@ -20,6 +20,37 @@ def test_activate_whole_word_only():
     assert context.activate(entries, "the pact") == []
 
 
+def test_activate_owned_silent_when_owner_absent():
+    entries = [{"name": "Backstory", "body": "b", "keys": [], "owners": ["characters:tanaka"]}]
+    # keyless but owned -> NOT always-on; silent because owner not present
+    assert context.activate(entries, "anything", present=frozenset()) == []
+
+
+def test_activate_owned_on_when_owner_present_keyless():
+    entries = [{"name": "Backstory", "body": "b", "keys": [], "owners": ["characters:tanaka"]}]
+    out = context.activate(entries, "", present=frozenset({"characters:tanaka"}))
+    assert [e["name"] for e in out] == ["Backstory"]
+
+
+def test_activate_owned_present_still_needs_keyword():
+    entries = [{"name": "Secret", "body": "s", "keys": ["duel"], "owners": ["characters:tanaka"]}]
+    present = frozenset({"characters:tanaka"})
+    assert context.activate(entries, "they talked", present=present) == []          # present, no keyword
+    out = context.activate(entries, "the duel ended", present=present)              # present + keyword
+    assert [e["name"] for e in out] == ["Secret"]
+
+
+def test_activate_multi_owner_any_present():
+    entries = [{"name": "Feud", "body": "f", "keys": [], "owners": ["characters:a", "characters:b"]}]
+    out = context.activate(entries, "", present=frozenset({"characters:b"}))
+    assert [e["name"] for e in out] == ["Feud"]
+
+
+def test_activate_unowned_unchanged():
+    entries = [{"name": "World", "body": "w", "keys": []}]  # no owners key at all
+    assert [e["name"] for e in context.activate(entries, "x")] == ["World"]
+
+
 import pytest  # noqa: E402
 
 from grimoire.store import appearances as ap  # noqa: E402
@@ -38,6 +69,24 @@ def _npc_card(name, **fields):
     card = characters.blank_card(name)
     card["data"].update(fields)
     return card
+
+
+def test_owned_lore_only_shows_when_owner_in_scene(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    croot = campaigns.campaign_root(cid)
+    characters.create_character(wroot, "Tanaka", "default", _npc_card("Tanaka", description="sensei"))
+    # owned, keyless lore for the character (id is the slug "tanaka")
+    entities.create_entity(croot, "lore", "Tanaka secret", "He was exiled.",
+                           owners="characters:tanaka")
+    scenes.append_message(cid, sid, "user", "hello")
+
+    # owner NOT in scene -> lore absent
+    assert "He was exiled." not in context.build_messages(cid, sid)[0]["content"]
+
+    # bring the owner into the scene -> lore present
+    ap.appear(cid, sid, "characters", "tanaka", "default", "npc")
+    assert "He was exiled." in context.build_messages(cid, sid)[0]["content"]
 
 
 def test_single_npc_block_order(monkeypatch, tmp_path):
