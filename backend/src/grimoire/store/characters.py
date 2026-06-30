@@ -300,7 +300,7 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None) 
     gallery_attempted = 0
     gallery_stored = 0
     if node.get("hasGallery"):
-        paths = chub.fetch_gallery_paths(node["id"])
+        paths = chub.fetch_gallery_paths(node.get("id"))
         gallery_attempted = len(paths)
         for i, path in enumerate(paths):
             got = fetch.download_url(path)

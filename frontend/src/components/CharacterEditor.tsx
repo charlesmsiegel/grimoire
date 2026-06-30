@@ -407,8 +407,13 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
 
   async function unlinkChub() {
     if (!detail) return;
-    await api.clearCharacterChubSource(wid, detail.meta.id);
-    await select(detail.meta.id);
+    setError(null);
+    try {
+      await api.clearCharacterChubSource(wid, detail.meta.id);
+      await select(detail.meta.id);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
   }
 
   const avatarSrc = (cid: string, version: string, bust = false) =>
