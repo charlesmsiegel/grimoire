@@ -89,6 +89,22 @@ def test_owned_lore_only_shows_when_owner_in_scene(monkeypatch, tmp_path):
     assert "He was exiled." in context.build_messages(cid, sid)[0]["content"]
 
 
+def test_location_owned_lore_only_shows_at_that_location(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    loc = entities.create_entity(croot, "locations", "Old Dojo", "A worn training hall.")
+    entities.create_entity(croot, "lore", "Dojo secret", "A blade is hidden under the floor.",
+                           owners=f"locations:{loc}")
+    scenes.append_message(cid, sid, "user", "look around")
+
+    # not at the location -> owned lore absent
+    assert "hidden under the floor" not in context.build_messages(cid, sid)[0]["content"]
+
+    # set the current location to the owner -> owned lore present
+    scenes.set_location(cid, sid, loc)
+    assert "hidden under the floor" in context.build_messages(cid, sid)[0]["content"]
+
+
 def test_single_npc_block_order(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Seraphine", "default",
