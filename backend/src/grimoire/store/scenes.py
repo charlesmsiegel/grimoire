@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import appearances, campaigns, entities
+from . import appearances, calendars, campaigns, entities
 from .config import read_config
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import now_iso, slugify, uniquify
@@ -197,3 +197,35 @@ def set_location(cid: str, sid: str, eid: str) -> dict:
     meta["location_history"] = ",".join(history)
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
     return {"moved": moved, "name": name}
+
+
+def get_time_history(cid: str, sid: str) -> list[str]:
+    """Ordered scene moments (native datetime strings); last is current. Missing ⇒ []."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        return []
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    return [x for x in meta.get("time_history", "").split(",") if x]
+
+
+def set_datetime(cid: str, sid: str, native: str) -> dict:
+    """Set the scene's current moment (in the primary calendar). First set is silent;
+    a change appends an assistant transition line. Returns {"advanced", "friendly"}."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    cfg = calendars.read_calendar(campaigns.campaign_root(cid))
+    provider = calendars.get_provider(cfg["primary"])
+    canonical = calendars.normalize(provider, native)  # raises calendars.CalendarError
+    friendly = calendars.friendly(provider, canonical)
+    history = get_time_history(cid, sid)
+    if history and history[-1] == canonical:
+        return {"advanced": False, "friendly": friendly}
+    advanced = bool(history)
+    if advanced:
+        append_message(cid, sid, "assistant", f"*Time passes. It is now {friendly}.*")
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    history.append(canonical)
+    meta["time_history"] = ",".join(history)
+    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    return {"advanced": advanced, "friendly": friendly}
