@@ -69,6 +69,10 @@ class DefaultVersion(BaseModel):
     default_version: str
 
 
+class CharacterBirthdate(BaseModel):
+    birthdate: str = ""
+
+
 class BriefSave(BaseModel):
     tagline: str = ""
     body: str = ""
@@ -396,6 +400,15 @@ def put_world_character(wid: str, cid: str, body: DefaultVersion):
         raise HTTPException(status_code=404, detail="character not found")
     except store.characters.VersionNotFound:
         raise HTTPException(status_code=404, detail="version not found")
+    return {"ok": True}
+
+
+@router.put("/worlds/{wid}/characters/{cid}/birthdate")
+def put_world_character_birthdate(wid: str, cid: str, body: CharacterBirthdate):
+    try:
+        store.characters.set_birthdate(_world_root_or_404(wid), cid, body.birthdate)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
     return {"ok": True}
 
 
@@ -1062,7 +1075,8 @@ def get_scene_datetime(cid: str, sid: str):
     if history:
         cfg = store.calendars.read_calendar(store.campaigns.campaign_root(cid))
         native = history[-1]
-        current = {"native": native, **store.calendars.today_facts(cfg, native)}
+        current = {"native": native, **store.calendars.today_facts(cfg, native),
+                   "cast": store.context.cast_datetime_facts(cid, sid, native)}
     return {"current": current, "history": history}
 
 

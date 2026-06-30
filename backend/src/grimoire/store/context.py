@@ -160,6 +160,34 @@ def _cast_directory(croot, wroot, cid: str, sid: str) -> str:
     return "\n\n".join(parts)
 
 
+def cast_datetime_facts(cid: str, sid: str, native: str) -> list[dict]:
+    """Age / birthday-today for each in-scene actor that has a birthdate. Others skipped."""
+    croot = campaigns.campaign_root(cid)
+    cfg = calendars.read_calendar(croot)
+    provider = calendars.get_provider(cfg["primary"])
+    out: list[dict] = []
+    for a in appearances.scene_cast(cid, sid):
+        vid = appearances.locked_version(cid, a["kind"], a["id"])
+        try:
+            if a["kind"] == "pcs":
+                persona = pcs.read_persona(croot, a["id"], vid)
+                birth, name = persona.get("birthdate", ""), persona.get("name", a["id"])
+            else:
+                meta = characters.read_character(croot, a["id"])["meta"]
+                birth, name = meta.get("birthdate", ""), meta.get("name", a["id"])
+        except (pcs.PCNotFound, pcs.PCVersionNotFound, characters.CharacterNotFound):
+            continue
+        if not birth:
+            continue
+        try:
+            out.append({"kind": a["kind"], "id": a["id"], "name": name,
+                        "age": calendars.age(provider, birth, native),
+                        "birthday_today": calendars.is_anniversary(provider, birth, native)})
+        except calendars.CalendarError:
+            continue
+    return out
+
+
 def _today_block(cid: str, sid: str, croot) -> str:
     history = scenes.get_time_history(cid, sid)
     if not history:
@@ -177,6 +205,11 @@ def _today_block(cid: str, sid: str, croot) -> str:
     if facts["upcoming"]:
         u = facts["upcoming"]
         lines.append(f"Upcoming: {u['name']} in {u['in_days']} days.")
+    facts_cast = cast_datetime_facts(cid, sid, history[-1])
+    if facts_cast:
+        bits = [f"it is {c['name']}'s birthday (age {c['age']})" if c["birthday_today"]
+                else f"{c['name']} (age {c['age']})" for c in facts_cast]
+        lines.append("Present today: " + "; ".join(bits) + ".")
     return "# Today\n" + "\n".join(lines)
 
 
