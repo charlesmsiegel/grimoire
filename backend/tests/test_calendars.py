@@ -101,3 +101,17 @@ def test_today_facts_upcoming_within_30_days():
     cfg = {"primary": greg(region="US"), "secondary": None}
     facts = today_facts(cfg, "2026-12-20")
     assert facts["upcoming"] == {"name": "Christmas Day", "in_days": 5}
+
+
+from grimoire.store.calendars import age, is_anniversary
+
+
+def test_age_and_anniversary():
+    p = get_provider(greg())
+    # born 1990-06-29; as of 2026-06-28 still 35, on 2026-06-29 turns 36
+    assert age(p, "1990-06-29", "2026-06-28") == 35
+    assert age(p, "1990-06-29", "2026-06-29") == 36
+    assert is_anniversary(p, "1990-06-29", "2026-06-29") is True
+    assert is_anniversary(p, "1990-06-29", "2026-06-30") is False
+    # time-of-day on either side does not change the result
+    assert age(p, "1990-06-29", "2026-06-29T08:00") == 36
