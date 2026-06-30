@@ -42,12 +42,14 @@ class EntityCreate(BaseModel):
     name: str
     body: str = ""
     keys: str = ""
+    owners: str = ""
 
 
 class EntityUpdate(BaseModel):
     name: str | None = None
     body: str | None = None
     keys: str | None = None
+    owners: str | None = None
 
 
 class CharacterCreate(BaseModel):
@@ -726,7 +728,7 @@ def _entity_list(root, kind: str):
 
 def _entity_create(root, kind: str, body: EntityCreate):
     try:
-        return {"id": store.entities.create_entity(root, kind, body.name, body.body, body.keys)}
+        return {"id": store.entities.create_entity(root, kind, body.name, body.body, body.keys, body.owners)}
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
 
@@ -742,7 +744,8 @@ def _entity_read(root, kind: str, eid: str):
 
 def _entity_update(root, kind: str, eid: str, body: EntityUpdate):
     try:
-        store.entities.update_entity(root, kind, eid, name=body.name, body=body.body, keys=body.keys)
+        store.entities.update_entity(root, kind, eid, name=body.name, body=body.body,
+                                     keys=body.keys, owners=body.owners)
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
     except store.entities.EntityNotFound:
