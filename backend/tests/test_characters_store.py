@@ -294,7 +294,70 @@ def test_import_from_chub_into_existing_character_adds_a_version(tmp_path, monke
 
     result = ch.import_from_chub(tmp_path, "creator/variant", into_cid=cid)
     assert result["character"] == cid
+    assert result["updated"] is False
     assert {v["id"] for v in ch.read_character(tmp_path, cid)["versions"]} == {"default", result["version"]}
+
+
+def test_import_from_chub_into_matching_chub_source_updates_in_place(tmp_path, monkeypatch):
+    from grimoire.store import assets, cards, chub
+
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    ch.set_chub_source(tmp_path, cid, "creator/abelha")
+    png = cards.dumps(ch.blank_card("Abelha Updated"), "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/abelha/chara_card_v2.png",
+    })
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "creator/abelha", into_cid=cid, into_vid=vid)
+
+    assert result == {
+        "character": cid, "version": vid, "updated": True,
+        "gallery": {"attempted": 0, "stored": 0},
+        "lore": {"lorebooks_found": 0, "created": []},
+    }
+    detail = ch.read_character(tmp_path, cid)
+    assert {v["id"] for v in detail["versions"]} == {vid}  # no new version created
+    assert detail["versions"][0]["card"]["data"]["name"] == "Abelha Updated"
+    assert assets.image_path(tmp_path, cid, vid, assets.AVATAR) is not None  # avatar overwritten
+
+
+def test_import_from_chub_into_mismatched_chub_source_creates_new_version(tmp_path, monkeypatch):
+    from grimoire.store import cards, chub
+
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    ch.set_chub_source(tmp_path, cid, "creator/a-different-card")
+    png = cards.dumps(ch.blank_card("Variant"), "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/abelha/chara_card_v2.png",
+    })
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "creator/abelha", into_cid=cid, into_vid=vid)
+    assert result["updated"] is False
+    assert result["version"] != vid
+    assert {v["id"] for v in ch.read_character(tmp_path, cid)["versions"]} == {vid, result["version"]}
+
+
+def test_import_from_chub_into_without_version_creates_new_version(tmp_path, monkeypatch):
+    # chub_source matches, but the caller didn't say which version is "open" --
+    # without into_vid there's nothing to safely overwrite, so default to create.
+    from grimoire.store import cards, chub
+
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    ch.set_chub_source(tmp_path, cid, "creator/abelha")
+    png = cards.dumps(ch.blank_card("Refreshed"), "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/abelha/chara_card_v2.png",
+    })
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "creator/abelha", into_cid=cid)
+    assert result["updated"] is False
+    assert result["version"] != vid
 
 
 def test_import_from_chub_into_unknown_character_raises(tmp_path, monkeypatch):

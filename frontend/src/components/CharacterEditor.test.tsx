@@ -231,10 +231,10 @@ test("an empty chub.ai prompt makes no API call", async () => {
   expect(api.importCharacterFromChub).not.toHaveBeenCalled();
 });
 
-test("downloading a version from chub.ai targets the open character", async () => {
+test("downloading a version from chub.ai targets the open character and version", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("creator/imp-variant");
   (api.importCharacterFromChub as any).mockResolvedValue({
-    character: "seraphine", version: "variant",
+    character: "seraphine", version: "variant", updated: false,
     gallery: { attempted: 0, stored: 0 },
     lore: { lorebooks_found: 0, created: [] },
   });
@@ -242,28 +242,52 @@ test("downloading a version from chub.ai targets the open character", async () =
   await openEditForm();
   fireEvent.click(screen.getByRole("button", { name: /download version from chub\.ai/i }));
   await waitFor(() =>
-    expect(api.importCharacterFromChub).toHaveBeenCalledWith("w", "creator/imp-variant", "seraphine"));
+    expect(api.importCharacterFromChub).toHaveBeenCalledWith("w", "creator/imp-variant", "seraphine", "default"));
   await screen.findByText(/^downloaded from chub\.ai$/i);
 });
 
-test("linking a character to chub.ai shows the linked path and allows unlinking", async () => {
+test("re-downloading an already-linked version updates it in place instead of creating a new one", async () => {
+  vi.spyOn(window, "prompt").mockReturnValue("creator/imp");
+  (api.importCharacterFromChub as any).mockResolvedValue({
+    character: "seraphine", version: "default", updated: true,
+    gallery: { attempted: 0, stored: 0 },
+    lore: { lorebooks_found: 0, created: [] },
+  });
+  render(<CharacterEditor wid="w" />);
+  await openEditForm();
+  fireEvent.click(screen.getByRole("button", { name: /download version from chub\.ai/i }));
+  await waitFor(() =>
+    expect(api.importCharacterFromChub).toHaveBeenCalledWith("w", "creator/imp", "seraphine", "default"));
+  await screen.findByText(/^updated this version from chub\.ai$/i);
+});
+
+test("linking a character to chub.ai from the detail page shows a clickable link and allows unlinking", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("creator/imp");
   (api.setCharacterChubSource as any).mockResolvedValue({ chub_source: "creator/imp" });
   (api.clearCharacterChubSource as any).mockResolvedValue({ chub_source: "" });
   (api.readCharacter as any)
-    .mockResolvedValueOnce(DETAIL) // openEditForm's initial select()
+    .mockResolvedValueOnce(DETAIL) // initial detail open
     .mockResolvedValueOnce({ ...DETAIL, meta: { ...DETAIL.meta, chub_source: "creator/imp" } }); // after linking
 
   render(<CharacterEditor wid="w" />);
-  await openEditForm();
-  expect(screen.queryByText(/linked to chub\.ai/i)).toBeNull();
+  fireEvent.click(await screen.findByText("Seraphine")); // card main -> detail (read-only)
+  await screen.findByRole("heading", { name: "Seraphine" });
+  expect(screen.queryByRole("link", { name: /creator\/imp/i })).toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: /^link to chub\.ai$/i }));
   await waitFor(() => expect(api.setCharacterChubSource).toHaveBeenCalledWith("w", "seraphine", "creator/imp"));
-  await screen.findByText(/linked to chub\.ai: creator\/imp/i);
+  const link = await screen.findByRole("link", { name: /creator\/imp/i });
+  expect(link).toHaveAttribute("href", "https://chub.ai/characters/creator/imp");
 
   (api.readCharacter as any).mockResolvedValueOnce(DETAIL); // after unlinking, reverts
   fireEvent.click(screen.getByRole("button", { name: /^unlink$/i }));
   await waitFor(() => expect(api.clearCharacterChubSource).toHaveBeenCalledWith("w", "seraphine"));
   await screen.findByRole("button", { name: /^link to chub\.ai$/i });
+});
+
+test("the edit form no longer shows a chub.ai link control (moved to the detail page)", async () => {
+  render(<CharacterEditor wid="w" />);
+  await openEditForm();
+  expect(screen.queryByRole("button", { name: /link to chub\.ai/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^unlink$/i })).toBeNull();
 });

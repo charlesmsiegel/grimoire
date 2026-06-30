@@ -283,7 +283,8 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     return cid, vid
 
 
-def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None) -> dict:
+def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
+                      into_vid: str | None = None) -> dict:
     full_path = chub.parse_full_path(url_or_path)
     if full_path is None:
         raise chub.ChubParseError(url_or_path)
@@ -294,8 +295,23 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None) 
     if png is None:
         raise chub.ChubFetchError(full_path)
 
-    cid, vid = import_card(root, png[0], "png", into_cid)
-    set_chub_source(root, cid, full_path)
+    # Re-downloading into a version already linked to this same chub.ai card
+    # overwrites that version in place rather than piling up near-duplicates.
+    # Without into_vid (which version is "open") there's nothing safe to
+    # overwrite, so that case always creates a version, same as a mismatch.
+    updated = False
+    if into_cid and into_vid:
+        existing = read_character(root, into_cid)
+        updated = existing["meta"].get("chub_source") == full_path
+
+    if updated:
+        from . import cards
+        update_version(root, into_cid, into_vid, cards.loads(png[0], "png"))
+        assets.put_image(root, into_cid, into_vid, assets.AVATAR, png[0], "png")
+        cid, vid = into_cid, into_vid
+    else:
+        cid, vid = import_card(root, png[0], "png", into_cid)
+        set_chub_source(root, cid, full_path)
 
     gallery_attempted = 0
     gallery_stored = 0
@@ -321,7 +337,7 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None) 
         created.extend(lorebook.commit(root, lorebook.from_character_book(book)))
 
     return {
-        "character": cid, "version": vid,
+        "character": cid, "version": vid, "updated": updated,
         "gallery": {"attempted": gallery_attempted, "stored": gallery_stored},
         "lore": {"lorebooks_found": len(lorebook_ids), "created": created},
     }
