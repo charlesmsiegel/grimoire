@@ -13,7 +13,7 @@ import json
 import shutil
 from pathlib import Path
 
-from . import assets, fetch
+from . import assets, chub, fetch, lorebook
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
@@ -281,6 +281,50 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
         if dl:
             assets.put_image(root, cid, vid, assets.AVATAR, dl[0], dl[1])
     return cid, vid
+
+
+def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None) -> dict:
+    full_path = chub.parse_full_path(url_or_path)
+    if full_path is None:
+        raise chub.ChubParseError(url_or_path)
+    node = chub.fetch_character_node(full_path)
+    if node is None:
+        raise chub.ChubFetchError(full_path)
+    png = fetch.download_url(node.get("max_res_url") or "")
+    if png is None:
+        raise chub.ChubFetchError(full_path)
+
+    cid, vid = import_card(root, png[0], "png", into_cid)
+    set_chub_source(root, cid, full_path)
+
+    gallery_attempted = 0
+    gallery_stored = 0
+    if node.get("hasGallery"):
+        paths = chub.fetch_gallery_paths(node["id"])
+        gallery_attempted = len(paths)
+        for i, path in enumerate(paths):
+            got = fetch.download_url(path)
+            if got:
+                assets.put_image(root, cid, vid, f"gallery_{i}", got[0], got[1])
+                gallery_stored += 1
+
+    lorebook_ids = [i for i in dict.fromkeys(node.get("related_lorebooks") or [])
+                    if isinstance(i, int) and i > 0]
+    created: list[dict] = []
+    for lid in lorebook_ids:
+        lb_node = chub.fetch_lorebook_node(lid)
+        if not lb_node:
+            continue
+        book = (lb_node.get("definition") or {}).get("embedded_lorebook")
+        if not book:
+            continue
+        created.extend(lorebook.commit(root, lorebook.from_character_book(book)))
+
+    return {
+        "character": cid, "version": vid,
+        "gallery": {"attempted": gallery_attempted, "stored": gallery_stored},
+        "lore": {"lorebooks_found": len(lorebook_ids), "created": created},
+    }
 
 
 def export_card(root: Path, cid: str, vid: str, fmt: str) -> bytes:

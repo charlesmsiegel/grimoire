@@ -177,3 +177,134 @@ def test_chub_source_setters_require_known_character(tmp_path):
         ch.set_chub_source(tmp_path, "nobody", "creator/slug")
     with pytest.raises(ch.CharacterNotFound):
         ch.clear_chub_source(tmp_path, "nobody")
+
+
+def test_import_from_chub_happy_path(tmp_path, monkeypatch):
+    from grimoire.store import assets, cards, chub
+
+    png = cards.dumps(ch.blank_card("Imp"), "png")
+    node = {
+        "id": 42, "fullPath": "creator/imp", "hasGallery": True,
+        "related_lorebooks": [7, 7, -1],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/imp/chara_card_v2.png",
+    }
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: node)
+    monkeypatch.setattr(chub, "fetch_gallery_paths", lambda pid: ["https://g/1.jpg", "https://g/2.jpg"])
+    monkeypatch.setattr(chub, "fetch_lorebook_node", lambda lid: {
+        "definition": {"embedded_lorebook": {"entries": [{"keys": ["k"], "content": "lore body"}]}},
+    })
+
+    def fake_get_bytes(url):
+        if "/g/" in url:
+            return (b"\xff\xd8\xffJPEGDATA", "image/jpeg")
+        return (png, "image/png")
+
+    monkeypatch.setattr(fetch, "_http_get_bytes", fake_get_bytes)
+
+    result = ch.import_from_chub(tmp_path, "https://chub.ai/characters/creator/imp")
+
+    cid, vid = result["character"], result["version"]
+    assert ch.read_character(tmp_path, cid)["meta"]["chub_source"] == "creator/imp"
+    assert assets.image_path(tmp_path, cid, vid, "avatar") is not None
+    names = {i["name"] for i in assets.list_images(tmp_path, cid, vid)}
+    assert names == {"avatar", "gallery_0", "gallery_1"}
+    assert result["gallery"] == {"attempted": 2, "stored": 2}
+    assert result["lore"]["lorebooks_found"] == 1  # [7, 7, -1] -> dedup'd to one positive id
+    assert len(result["lore"]["created"]) == 1
+
+
+def test_import_from_chub_bad_url_raises_parse_error(tmp_path):
+    from grimoire.store import chub
+    with pytest.raises(chub.ChubParseError):
+        ch.import_from_chub(tmp_path, "not a url")
+
+
+def test_import_from_chub_unreachable_character_raises_fetch_error(tmp_path, monkeypatch):
+    from grimoire.store import chub
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: None)
+    with pytest.raises(chub.ChubFetchError):
+        ch.import_from_chub(tmp_path, "creator/missing")
+
+
+def test_import_from_chub_png_download_failure_raises_fetch_error(tmp_path, monkeypatch):
+    from grimoire.store import chub
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/imp/chara_card_v2.png",
+    })
+
+    def boom(url):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(fetch, "_http_get_bytes", boom)
+    with pytest.raises(chub.ChubFetchError):
+        ch.import_from_chub(tmp_path, "creator/imp")
+    assert ch.character_count(tmp_path) == 0  # nothing partially created
+
+
+def test_import_from_chub_gallery_failure_is_best_effort(tmp_path, monkeypatch):
+    from grimoire.store import cards, chub
+
+    png = cards.dumps(ch.blank_card("Imp"), "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": True, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/imp/chara_card_v2.png",
+    })
+    monkeypatch.setattr(chub, "fetch_gallery_paths", lambda pid: ["https://g/1.jpg", "https://g/2.jpg"])
+
+    def fake_get_bytes(url):
+        if url == "https://g/1.jpg":
+            raise RuntimeError("one image failed")
+        if "/g/" in url:
+            return (b"\xff\xd8\xffJPEGDATA", "image/jpeg")
+        return (png, "image/png")
+
+    monkeypatch.setattr(fetch, "_http_get_bytes", fake_get_bytes)
+    result = ch.import_from_chub(tmp_path, "creator/imp")  # must not raise
+    assert result["gallery"] == {"attempted": 2, "stored": 1}
+
+
+def test_import_from_chub_lorebook_failure_is_best_effort(tmp_path, monkeypatch):
+    from grimoire.store import cards, chub
+
+    png = cards.dumps(ch.blank_card("Imp"), "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [7, 8],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/imp/chara_card_v2.png",
+    })
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+    monkeypatch.setattr(chub, "fetch_lorebook_node", lambda lid: None if lid == 7 else {
+        "definition": {"embedded_lorebook": {"entries": [{"keys": ["k"], "content": "x"}]}},
+    })
+    result = ch.import_from_chub(tmp_path, "creator/imp")  # must not raise
+    assert result["lore"]["lorebooks_found"] == 2
+    assert len(result["lore"]["created"]) == 1  # only id 8 resolved
+
+
+def test_import_from_chub_into_existing_character_adds_a_version(tmp_path, monkeypatch):
+    from grimoire.store import cards, chub
+
+    cid, _ = ch.create_character(tmp_path, "Seraphine")
+    png = cards.dumps(ch.blank_card("Variant"), "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/variant/chara_card_v2.png",
+    })
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "creator/variant", into_cid=cid)
+    assert result["character"] == cid
+    assert {v["id"] for v in ch.read_character(tmp_path, cid)["versions"]} == {"default", result["version"]}
+
+
+def test_import_from_chub_into_unknown_character_raises(tmp_path, monkeypatch):
+    from grimoire.store import cards, chub
+
+    png = cards.dumps(ch.blank_card("Imp"), "png")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/imp/chara_card_v2.png",
+    })
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+    with pytest.raises(ch.CharacterNotFound):
+        ch.import_from_chub(tmp_path, "creator/imp", into_cid="nobody")
