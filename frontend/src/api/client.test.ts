@@ -35,6 +35,26 @@ test("createCampaign POSTs name + world", async () => {
   );
 });
 
+test("setSceneDatetime PUTs the datetime under its scene", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true, advanced: true, friendly: "4 July 2026" }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.setSceneDatetime("run", "s1", "2026-07-04");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/campaigns/run/scenes/s1/datetime",
+    expect.objectContaining({ method: "PUT", body: JSON.stringify({ datetime: "2026-07-04" }) }),
+  );
+});
+
+test("getSceneDatetime GETs the scene datetime", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ current: null, history: [] }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.getSceneDatetime("run", "s1");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/campaigns/run/scenes/s1/datetime",
+    expect.objectContaining({ method: "GET" }),
+  );
+});
+
 test("createWorld POSTs the name", async () => {
   const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "w" }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;

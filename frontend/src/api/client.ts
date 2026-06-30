@@ -114,6 +114,12 @@ export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "
 export type RosterEntry = { kind: string; id: string; version: string; role: string; scenes: string[] };
 export type SceneLocationRef = { id: string; name: string };
 export type SceneLocation = { current: SceneLocationRef | null; visited: SceneLocationRef[] };
+export type SceneDatetimeCast = { kind: string; id: string; name: string; age: number | null; birthday_today: boolean };
+export type SceneDatetimeFacts = {
+  native: string; friendly: string; weekday: string; secondary_friendly: string | null;
+  holidays_today: string[]; upcoming: { name: string; in_days: number } | null; cast: SceneDatetimeCast[];
+};
+export type SceneDatetime = { current: SceneDatetimeFacts | null; history: string[] };
 export type ContextSection = { label: string; text: string; tokens: number };
 export type SceneContext = { model: string; total_tokens: number; sections: ContextSection[] };
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
@@ -301,6 +307,11 @@ export const api = {
   setSceneLocation: (cid: string, sid: string, location: string) =>
     request<{ ok: boolean; moved: boolean; name: string }>(
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/location`, { location }),
+  getSceneDatetime: (cid: string, sid: string) =>
+    request<SceneDatetime>("GET", `/api/campaigns/${cid}/scenes/${sid}/datetime`),
+  setSceneDatetime: (cid: string, sid: string, datetime: string) =>
+    request<{ ok: boolean; advanced: boolean; friendly: string }>(
+      "PUT", `/api/campaigns/${cid}/scenes/${sid}/datetime`, { datetime }),
   getSceneContext: (cid: string, sid: string) =>
     request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
   getCastDetail: (cid: string, sid: string, kind: string, id: string) =>
