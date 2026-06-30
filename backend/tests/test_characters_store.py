@@ -444,3 +444,107 @@ def test_import_from_chub_into_unknown_character_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
     with pytest.raises(ch.CharacterNotFound):
         ch.import_from_chub(tmp_path, "creator/imp", into_cid="nobody")
+
+
+def test_download_chub_gallery_for_linked_version(tmp_path, monkeypatch):
+    from grimoire.store import assets, chub
+
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    ch.set_chub_source(tmp_path, cid, vid, "creator/abelha")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "hasGallery": True,
+    })
+    monkeypatch.setattr(chub, "fetch_gallery_paths", lambda pid: ["https://g/1.jpg", "https://g/2.jpg"])
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"\xff\xd8\xffJPEGDATA", "image/jpeg"))
+
+    result = ch.download_chub_gallery(tmp_path, cid, vid)
+    assert result == {"attempted": 2, "stored": 2}
+    assert {i["name"] for i in assets.list_images(tmp_path, cid, vid)} == {"gallery_0", "gallery_1"}
+
+
+def test_download_chub_gallery_clears_stale_images_from_a_shrinking_gallery(tmp_path, monkeypatch):
+    from grimoire.store import assets, chub
+
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    ch.set_chub_source(tmp_path, cid, vid, "creator/abelha")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {"id": 1, "hasGallery": True})
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"\xff\xd8\xffJPEGDATA", "image/jpeg"))
+
+    monkeypatch.setattr(chub, "fetch_gallery_paths",
+                        lambda pid: ["https://g/1.jpg", "https://g/2.jpg", "https://g/3.jpg"])
+    ch.download_chub_gallery(tmp_path, cid, vid)
+    assert {i["name"] for i in assets.list_images(tmp_path, cid, vid)} == {
+        "gallery_0", "gallery_1", "gallery_2"}
+
+    monkeypatch.setattr(chub, "fetch_gallery_paths", lambda pid: ["https://g/1.jpg"])
+    ch.download_chub_gallery(tmp_path, cid, vid)
+    # gallery_1 and gallery_2 from the larger first run must not linger
+    assert {i["name"] for i in assets.list_images(tmp_path, cid, vid)} == {"gallery_0"}
+
+
+def test_download_chub_gallery_no_gallery_on_chub(tmp_path, monkeypatch):
+    from grimoire.store import chub
+
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    ch.set_chub_source(tmp_path, cid, vid, "creator/abelha")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {"id": 1, "hasGallery": False})
+
+    assert ch.download_chub_gallery(tmp_path, cid, vid) == {"attempted": 0, "stored": 0}
+
+
+def test_download_chub_gallery_unlinked_version_raises(tmp_path):
+    from grimoire.store import chub
+
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    with pytest.raises(chub.ChubFetchError):
+        ch.download_chub_gallery(tmp_path, cid, vid)
+
+
+def test_download_chub_gallery_unknown_character_or_version_raises(tmp_path):
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    with pytest.raises(ch.CharacterNotFound):
+        ch.download_chub_gallery(tmp_path, "nobody", vid)
+    with pytest.raises(ch.VersionNotFound):
+        ch.download_chub_gallery(tmp_path, cid, "ghost")
+
+
+def test_download_chub_gallery_honors_legacy_character_level_link(tmp_path, monkeypatch):
+    # A version whose link only exists via the legacy character.md fallback
+    # (read_character's display path) must still work for an explicit
+    # gallery/lorebook download -- not just for showing the link in the UI.
+    from grimoire.store import chub
+    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+
+    cid, default_vid = ch.create_character(tmp_path, "Abelha", "main")
+    meta_path = tmp_path / "characters" / cid / "character.md"
+    meta, _ = parse_frontmatter(meta_path.read_text(encoding="utf-8"))
+    meta["chub_source"] = "creator/legacy-link"
+    meta_path.write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {"id": 1, "hasGallery": False})
+    assert ch.download_chub_gallery(tmp_path, cid, default_vid) == {"attempted": 0, "stored": 0}
+
+
+def test_download_chub_lorebooks_for_linked_version(tmp_path, monkeypatch):
+    from grimoire.store import chub
+
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    ch.set_chub_source(tmp_path, cid, vid, "creator/abelha")
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: {
+        "id": 1, "related_lorebooks": [7, 7, -1],
+    })
+    monkeypatch.setattr(chub, "fetch_lorebook_node", lambda lid: {
+        "definition": {"embedded_lorebook": {"entries": [{"keys": ["k"], "content": "lore body"}]}},
+    })
+
+    result = ch.download_chub_lorebooks(tmp_path, cid, vid)
+    assert result["lorebooks_found"] == 1  # [7, 7, -1] dedup'd to one positive id
+    assert len(result["created"]) == 1
+
+
+def test_download_chub_lorebooks_unlinked_version_raises(tmp_path):
+    from grimoire.store import chub
+
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    with pytest.raises(chub.ChubFetchError):
+        ch.download_chub_lorebooks(tmp_path, cid, vid)

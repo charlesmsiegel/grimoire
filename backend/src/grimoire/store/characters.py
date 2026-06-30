@@ -335,17 +335,35 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
         cid, vid = import_card(root, png[0], "png", into_cid)
         set_chub_source(root, cid, vid, full_path)
 
-    gallery_attempted = 0
-    gallery_stored = 0
+    return {
+        "character": cid, "version": vid, "updated": updated,
+        "gallery": _download_gallery(root, cid, vid, node),
+        "lore": _download_lorebooks(root, node),
+    }
+
+
+def _download_gallery(root: Path, cid: str, vid: str, node: dict) -> dict:
+    # Clear any previously downloaded gallery images first -- otherwise a
+    # gallery that shrank between downloads would leave orphaned gallery_N
+    # files past the new (smaller) count.
+    for img in assets.list_images(root, cid, vid):
+        if img["name"].startswith("gallery_"):
+            assets.delete_image(root, cid, vid, img["name"])
+
+    attempted = 0
+    stored = 0
     if node.get("hasGallery"):
         paths = chub.fetch_gallery_paths(node.get("id"))
-        gallery_attempted = len(paths)
+        attempted = len(paths)
         for i, path in enumerate(paths):
             got = fetch.download_url(path)
             if got:
                 assets.put_image(root, cid, vid, f"gallery_{i}", got[0], got[1])
-                gallery_stored += 1
+                stored += 1
+    return {"attempted": attempted, "stored": stored}
 
+
+def _download_lorebooks(root: Path, node: dict) -> dict:
     lorebook_ids = [i for i in dict.fromkeys(node.get("related_lorebooks") or [])
                     if isinstance(i, int) and i > 0]
     created: list[dict] = []
@@ -357,12 +375,34 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
         if not book:
             continue
         created.extend(lorebook.commit(root, lorebook.from_character_book(book)))
+    return {"lorebooks_found": len(lorebook_ids), "created": created}
 
-    return {
-        "character": cid, "version": vid, "updated": updated,
-        "gallery": {"attempted": gallery_attempted, "stored": gallery_stored},
-        "lore": {"lorebooks_found": len(lorebook_ids), "created": created},
-    }
+
+def _node_for_linked_version(root: Path, cid: str, vid: str) -> dict:
+    """Resolve the chub.ai node for a version that's already linked, or raise
+    ChubFetchError if it has no link or chub.ai can't be reached. Goes through
+    read_character so the legacy character.md-level fallback (applied there
+    for the default version) is honored the same way it is for display --
+    not just shown as linked in the UI but actually usable here too."""
+    detail = read_character(root, cid)
+    target = next((v for v in detail["versions"] if v["id"] == vid), None)
+    if target is None:
+        raise VersionNotFound(vid)
+    full_path = target["chub_source"]
+    if not full_path:
+        raise chub.ChubFetchError("version is not linked to a chub.ai card")
+    node = chub.fetch_character_node(full_path)
+    if node is None:
+        raise chub.ChubFetchError(full_path)
+    return node
+
+
+def download_chub_gallery(root: Path, cid: str, vid: str) -> dict:
+    return _download_gallery(root, cid, vid, _node_for_linked_version(root, cid, vid))
+
+
+def download_chub_lorebooks(root: Path, cid: str, vid: str) -> dict:
+    return _download_lorebooks(root, _node_for_linked_version(root, cid, vid))
 
 
 def export_card(root: Path, cid: str, vid: str, fmt: str) -> bytes:

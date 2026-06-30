@@ -425,6 +425,39 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     }
   }
 
+  async function downloadChubGallery() {
+    if (!detail) return;
+    setError(null);
+    setImportMsg(null);
+    try {
+      const result = await api.downloadCharacterChubGallery(wid, detail.meta.id, vid);
+      setImportMsg(
+        result.attempted === 0
+          ? "No gallery images found on chub.ai"
+          : `${result.stored}/${result.attempted} gallery image${result.attempted === 1 ? "" : "s"} downloaded`,
+      );
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function downloadChubLorebooks() {
+    if (!detail) return;
+    setError(null);
+    setImportMsg(null);
+    try {
+      const result = await api.downloadCharacterChubLorebooks(wid, detail.meta.id, vid);
+      const n = result.created.length;
+      setImportMsg(
+        result.lorebooks_found === 0
+          ? "No linked lorebooks found on chub.ai"
+          : `${result.lorebooks_found} lorebook${result.lorebooks_found === 1 ? "" : "s"} (${n} ${n === 1 ? "entry" : "entries"}) added to world lore`,
+      );
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
   const avatarSrc = (cid: string, version: string, bust = false) =>
     api.imageUrl(wid, cid, version, "avatar") + (bust ? `?v=${avatarBust}` : "");
 
@@ -509,6 +542,8 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                     {chubSource}
                   </a>
                   <button className="subtle" type="button" onClick={unlinkChub}>Unlink</button>
+                  <button className="subtle" type="button" onClick={downloadChubGallery}>Download gallery</button>
+                  <button className="subtle" type="button" onClick={downloadChubLorebooks}>Download linked lorebooks</button>
                 </>
               ) : (
                 <button className="subtle" type="button" onClick={linkChub}>Link to chub.ai</button>

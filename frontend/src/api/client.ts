@@ -292,6 +292,12 @@ export const api = {
   clearCharacterChubSource: (wid: string, cid: string, vid: string) =>
     request<{ chub_source: string }>(
       "DELETE", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-source`),
+  downloadCharacterChubGallery: (wid: string, cid: string, vid: string) =>
+    request<{ attempted: number; stored: number }>(
+      "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-gallery`),
+  downloadCharacterChubLorebooks: (wid: string, cid: string, vid: string) =>
+    request<{ lorebooks_found: number; created: { kind: string; id: string }[] }>(
+      "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-lorebooks`),
 
   // pcs
   listPCs: (wid: string) => request<PCSummary[]>("GET", `/api/worlds/${wid}/pcs`),
