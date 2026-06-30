@@ -103,6 +103,14 @@ def friendly(provider: CalendarProvider, native: str) -> str:
     return provider.describe(fixed_of(provider, native))["friendly"]
 
 
+def age(provider: CalendarProvider, birth_native: str, asof_native: str) -> int:
+    return provider.age(fixed_of(provider, birth_native), fixed_of(provider, asof_native))
+
+
+def is_anniversary(provider: CalendarProvider, birth_native: str, asof_native: str) -> bool:
+    return provider.is_anniversary(fixed_of(provider, birth_native), fixed_of(provider, asof_native))
+
+
 UPCOMING_WINDOW_DAYS = 30
 
 
