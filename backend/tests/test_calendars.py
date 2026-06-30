@@ -163,6 +163,24 @@ def test_read_calendar_tolerates_corrupt_json(tmp_path):
     assert cfg == default_calendar()
 
 
+def test_validate_calendar_rejects_bad_custom_rules():
+    from grimoire.store.calendars import validate_calendar
+    validate_calendar(default_calendar())  # clean default is fine
+    good = default_calendar()
+    good["primary"]["custom_holidays"] = [
+        {"name": "Founding Day", "month": 4, "day": 12},
+        {"name": "Harvest", "month": 9, "nth": 3, "weekday": 6}]
+    validate_calendar(good)  # both rule shapes valid
+    for bad_rule in ({"name": "X", "month": 13},          # bad month
+                     {"name": "X", "month": 4},            # neither day nor nth/weekday
+                     {"month": 4, "day": 12},              # missing name
+                     {"name": "X", "month": 2, "day": 30}):  # impossible day
+        cfg = default_calendar()
+        cfg["primary"]["custom_holidays"] = [bad_rule]
+        with pytest.raises(CalendarError):
+            validate_calendar(cfg)
+
+
 def test_copy_calendar_copies_world_file(tmp_path):
     wroot, croot = tmp_path / "w", tmp_path / "c"
     wroot.mkdir(); croot.mkdir()

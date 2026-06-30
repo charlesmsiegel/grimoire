@@ -827,3 +827,25 @@ def test_datetime_get_includes_cast_age(client):
     cast = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()["current"]["cast"]
     assert cast == [{"kind": "characters", "id": chid, "name": "Seraphine",
                      "age": 36, "birthday_today": True}]
+
+
+def test_calendar_config_get_put(client):
+    _wid, cid = _campaign(client)
+    assert client.get(f"/api/campaigns/{cid}/calendar").json()["primary"]["region"] == "US"
+    cfg = {"primary": {"provider": "gregorian", "region": "GB",
+            "custom_holidays": [{"name": "Founding Day", "month": 4, "day": 12}], "anchor": None},
+           "secondary": None}
+    assert client.put(f"/api/campaigns/{cid}/calendar", json=cfg).json() == {"ok": True}
+    got = client.get(f"/api/campaigns/{cid}/calendar").json()
+    assert got["primary"]["region"] == "GB"
+    assert got["primary"]["custom_holidays"][0]["name"] == "Founding Day"
+
+
+def test_calendar_config_rejects_malformed_custom_holiday(client):
+    _wid, cid = _campaign(client)
+    bad = {"primary": {"provider": "gregorian", "region": "US",
+            "custom_holidays": [{"name": "Oops", "month": 13}], "anchor": None}, "secondary": None}
+    assert client.put(f"/api/campaigns/{cid}/calendar", json=bad).status_code == 400
+    nameless = {"primary": {"provider": "gregorian", "region": "US",
+            "custom_holidays": [{"month": 4, "day": 12}], "anchor": None}, "secondary": None}
+    assert client.put(f"/api/campaigns/{cid}/calendar", json=nameless).status_code == 400
