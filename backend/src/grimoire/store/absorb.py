@@ -141,7 +141,9 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
     out: list[dict] = []
 
     for e in parsed.get("character_state_edits", []):
-        char_id, after = e.get("id", ""), (e.get("current_state", "") or "").strip()
+        char_id = e.get("id", "")
+        after = playstate.compose_body(e.get("current_state", ""), e.get("knows", ""),
+                                       e.get("suspects", ""))
         if not char_id or not after:
             continue
         try:
@@ -149,12 +151,14 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         except characters.CharacterNotFound:
             continue
         st = playstate.read_state(croot, char_id)
+        before = playstate.compose_body(st["current_state"], st["knows"], st["suspects"]) if st else ""
+        if before == after:
+            continue
         out.append({"id": f"character_state:{char_id}", "kind": "character_state",
                     "target": {"kind": "characters", "id": char_id},
                     "label": f"{_char_name(croot, char_id)} — current state",
                     "field": "current_state",
-                    "before": st["current_state"] if st else "", "after": after,
-                    "authored": False})
+                    "before": before, "after": after, "authored": False})
 
     for e in parsed.get("lore_edits", []):
         eid, append = e.get("id", ""), (e.get("append", "") or "").strip()
