@@ -29,3 +29,29 @@ def line_diff(before: str, after: str) -> list[dict]:
             out += [{"op": "delete", "text": t} for t in a[i1:i2]]
             out += [{"op": "insert", "text": t} for t in b[j1:j2]]
     return out
+
+
+def _path(cid: str) -> Path:
+    return campaigns.campaign_root(cid) / "changes.json"
+
+
+def read(cid: str) -> dict:
+    p = _path(cid)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def record(cid: str, sid: str, changes: dict[str, list[dict]]) -> None:
+    """Upsert the touched records, replacing any prior entry (rolling: only the latest
+    write-back per record is kept). No-op when nothing was recorded."""
+    if not changes:
+        return
+    data = read(cid)
+    for ref, fields in changes.items():
+        data[ref] = {"scene": sid, "fields": fields}
+    _path(cid).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
