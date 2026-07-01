@@ -298,6 +298,27 @@ def test_materialize_relationship_and_bond(monkeypatch, tmp_path):
     assert bond["kind"] == "bond" and bond["after"] == "allies" and bond["payload"]["type"] == "allies"
 
 
+def test_materialize_plot_new_and_advance(monkeypatch, tmp_path):
+    from grimoire.store import plot, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    plot.set_movement(cid, "the-map", "The map", "open", "Elara got it.", "s10")
+    parsed = {"plot_movements": [
+        {"id": "the-map", "title": "The map", "status": "advanced", "beat": "It is a forgery."},
+        {"id": "", "title": "The Duke's debt", "status": "open", "beat": "A creditor asked after Doran."},
+        {"id": "", "title": "", "status": "open", "beat": "no id no title"},   # dropped
+        {"id": "x", "title": "X", "status": "open", "beat": ""}]}               # empty beat dropped
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    adv = edits["plot:the-map"]
+    assert adv["kind"] == "plot" and adv["field"] == "beat" and adv["authored"] is False
+    assert adv["before"].startswith("open — Elara got it.")
+    assert adv["after"] == "It is a forgery."
+    assert adv["payload"] == {"id": "the-map", "title": "The map", "status": "advanced", "scene": sid}
+    new = edits["plot:the-duke-s-debt"]  # slugified from the title
+    assert new["before"] == "" and new["payload"]["title"] == "The Duke's debt"
+    assert "plot:x" not in edits and not any(k == "plot:" for k in edits)  # both dropped
+
+
 def test_apply_edits_writes_relationships(monkeypatch, tmp_path):
     from grimoire.store import relationships
     cid = _campaign(monkeypatch, tmp_path)
