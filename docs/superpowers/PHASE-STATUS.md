@@ -1,7 +1,7 @@
 # Scene Lifecycle & Continuity — phase status / handoff
 
 Umbrella design: `specs/2026-06-30-scene-lifecycle-continuity-design.md`.
-All merged work is on `main`. Suites: **backend 458, frontend 159, tsc clean.**
+All merged work is on `main`. Suites: **backend 468, frontend 160, tsc clean.**
 
 ## Done (merged to main)
 
@@ -32,6 +32,16 @@ All merged work is on `main`. Suites: **backend 458, frontend 159, tsc clean.**
   merge honestly; movements deduped; tolerant reads. `plot.render_open` is shared by the
   prompt snapshot and the context block. Spec `specs/2026-07-01-scene-plot-threads-design.md`,
   plan `plans/2026-07-01-scene-plot-threads.md`.
+- **Phase 5b — Suggested next scenes.** Ephemeral read-forward helper at scene creation:
+  `store/suggest.py` assembles a deterministic snapshot (open threads, "now" = latest
+  chronicled scene's date + calendar holidays/upcoming/roster **birthdays**, long-absent
+  cast, seedable ids = world characters + roster players + campaign locations), builds a
+  one-shot prompt, and parses id-validated openings (tolerant of a bare-array reply).
+  `POST /campaigns/{cid}/scene-suggestions` (campaign-level, key-gated, non-streaming,
+  world-first name resolution). The empty-scene `CastPanel` gains a **Suggest scenes**
+  button; picking a card auto-seeds cast + location via existing endpoints and prefills the
+  opener prompt. Read-only (persists nothing). Spec
+  `specs/2026-07-01-scene-suggestions-design.md`, plan `plans/2026-07-01-scene-suggestions.md`.
 
 ## The established pipeline (every continuity axis follows this)
 
@@ -44,24 +54,17 @@ injects a labeled, always-on, **tolerant** (omit-never-crash) section.
 `StagedEdit` shape (backend↔TS, fixed): `{id, kind, target:{kind,id}, label, field,
 before, after, authored, payload?}`.
 
-## Next: Phase 5b — Suggested next scenes
+## Next: Phase 6 — Campaign-vs-base world view (final umbrella phase)
 
-The read-forward companion to 5a (Phase 5 was split; plot threads shipped first). An
-**ephemeral one-call helper** at scene creation (like `build_opener_messages`/
-`post_opener`): reads open threads (`plot.open_threads`) + long-absent cast + upcoming
-calendar events and proposes 3–4 scene openings; the user picks one (seeds cast/location)
-or ignores it. Nothing persisted by the call itself. **Open design decisions for the
-brainstorm:** where it triggers (a distinct endpoint — mind the existing
-`/scenes/{sid}/suggestions` cast-suggestion route name), how "long-absent cast" is
-computed (from `chronicle`/roster), how much of each open thread to feed, and the
-scene-creation UI surface.
+Browse the campaign's copies of world records (characters/lore/locations) with divergence
+from the base world highlighted, via the `sync.md` hashes already maintained by `sync.py`
+(the write-back phases mutate campaign copies; this surfaces *what* diverged). **Open design
+decisions for the brainstorm:** read model (a per-record diff endpoint vs. a campaign-wide
+divergence list), what "divergence" shows (hash-mismatch flag only, or a field/body diff),
+and the UI surface (a new page vs. badges on the existing campaign record lists). This is
+read-only reporting — no new write path.
 
-## Then (umbrella phase 5)
-
-- **Campaign-vs-base world view** — browse the campaign's copies of world records with
-  divergence from the base highlighted (via `sync.md` hashes).
-
-## Working cadence (used for Phases 1–4)
+## Working cadence (used for Phases 1–5)
 
 spec (`specs/…-design.md`) → plan (`plans/…md`) → **inline TDD** per task (red→green→commit;
 subagents can't Edit/Write here, so implement inline) → one **whole-branch review on the

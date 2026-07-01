@@ -69,7 +69,9 @@ infer (each piece tolerant — a missing/garbled source contributes nothing, nev
   `{name, tagline}` from `briefs.read_brief`.
 - **`available_cast`** — every world character (`characters.list_characters(wroot)`) as a
   seedable NPC token `characters:<id>` + name, plus the campaign roster's players
-  (`pcs:<id>`/`characters:<id>` + name). Feeds the model the ids to reference.
+  (`pcs:<id>`/`characters:<id>` + name), **de-duplicated by token** (a world character
+  that is also a roster player appears once). Feeds the model the ids to reference. The
+  campaign's `roster` is read once and shared across the snapshot's loops.
 - **`available_locations`** — `entities.list_entities(croot, "locations")` (id + name).
 
 `build_prompt(snapshot) -> list[dict]` renders these into an instruction + a user block.
@@ -93,7 +95,9 @@ is in the route (the `absorb`/`briefs` split).
 Each suggestion is kept only with a non-empty `title` and `premise`. `cast` tokens are
 validated (character exists in the world; pc/player exists in the roster) and unknowns
 dropped; `location` is kept only if it names a campaign location (else `""`). Returns `[]`
-on garble or an empty list. The route resolves ids → display names before returning.
+on garble or an empty list. Extraction is tolerant of the model wrapping JSON in prose and
+of a **bare top-level array** (a common LLM deviation from the requested
+`{"suggestions": [...]}` object). The route resolves ids → display names before returning.
 
 ## Route (`routes.py`)
 
