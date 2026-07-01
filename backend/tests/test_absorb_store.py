@@ -190,3 +190,11 @@ def test_apply_edits_writes_relationships(monkeypatch, tmp_path):
     assert set(applied) == {"feeling:characters:a->characters:b", "bond:characters:a|characters:b"}
     assert relationships.get_feeling(cid, "characters:a", "characters:b")["trust"] == 4
     assert relationships.get_bond(cid, "characters:a", "characters:b")["type"] == "allies"
+
+
+def test_relationships_snapshot_tolerates_garbled(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    (campaigns.campaign_root(cid) / "relationships.json").write_text("{ not json", encoding="utf-8")
+    assert absorb.relationships_snapshot(cid, sid) == ""  # must not raise

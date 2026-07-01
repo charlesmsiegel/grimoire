@@ -64,7 +64,7 @@ def actor_name(croot, token: str) -> str:
     kind, _, aid = token.partition(":")
     try:
         if kind == "pcs":
-            return pcs.read_pc(croot, aid)["meta"]["name"]
+            return pcs.read_pc(croot, aid)["meta"].get("name", aid)
         return characters.read_character(croot, aid)["meta"].get("name", aid)
     except (characters.CharacterNotFound, pcs.PCNotFound):
         return aid
@@ -85,16 +85,11 @@ def render_present(cid: str, tokens: list[str], name_of) -> list[str]:
             f = data["feelings"].get(feeling_key(a, b))
             if f:
                 lines.append(f"{name_of(a)} → {name_of(b)}: {_render_feeling(f)}")
-    seen: set[str] = set()
     for a in tokens:
         for b in tokens:
-            if a >= b:
+            if a >= b:  # each unordered pair once (tokens are unique)
                 continue
-            key = bond_key(a, b)
-            if key in seen:
-                continue
-            bd = data["bonds"].get(key)
+            bd = data["bonds"].get(bond_key(a, b))
             if bd:
-                seen.add(key)
                 lines.append(f"{name_of(a)} & {name_of(b)}: {bd['type']}")
     return lines
