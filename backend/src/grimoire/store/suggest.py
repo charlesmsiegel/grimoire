@@ -27,7 +27,11 @@ def _char_name(croot, aid: str) -> str:
 
 def _recent_char_ids(cid: str) -> set[str]:
     ids: set[str] = set()
-    for r in chronicle.recent(cid, RECENT_WINDOW):
+    try:
+        recent = chronicle.recent(cid, RECENT_WINDOW)
+    except Exception:  # noqa: BLE001 — garbled chronicle.json
+        return ids
+    for r in recent:
         for ref in r.get("cast", []) or []:
             kind, _, aid = str(ref).partition("/")
             if kind == "characters" and aid:
@@ -35,7 +39,7 @@ def _recent_char_ids(cid: str) -> set[str]:
     return ids
 
 
-def _birthdays(cid: str, croot, now: str) -> list[dict]:
+def _birthdays(croot, now: str, roster: list[dict]) -> list[dict]:
     if not now:
         return []
     try:
@@ -45,7 +49,7 @@ def _birthdays(cid: str, croot, now: str) -> list[dict]:
     except (calendars.CalendarError, KeyError):
         return []
     out: list[dict] = []
-    for a in appearances.roster(cid):
+    for a in roster:
         try:
             if a["kind"] == "pcs":
                 birth = pcs.read_persona(croot, a["id"], a["version"]).get("birthdate", "")
@@ -74,13 +78,17 @@ def _birthdays(cid: str, croot, now: str) -> list[dict]:
 def build_snapshot(cid: str) -> dict:
     croot = campaigns.campaign_root(cid)
     wroot = _world_root(cid)
+    roster = appearances.roster(cid)
 
     try:
         open_threads = plot.open_threads(cid)
     except Exception:  # noqa: BLE001 — garbled plot.json
         open_threads = []
 
-    recent = chronicle.recent(cid, 1)
+    try:
+        recent = chronicle.recent(cid, 1)
+    except Exception:  # noqa: BLE001 — garbled chronicle.json
+        recent = []
     now = recent[-1].get("date", "") if recent else ""
 
     friendly, holidays_today, upcoming = "", [], None
@@ -93,30 +101,37 @@ def build_snapshot(cid: str) -> dict:
 
     recent_ids = _recent_char_ids(cid)
     absent_cast = []
-    for a in appearances.roster(cid):
+    for a in roster:
         if a["kind"] != "characters" or a["role"] != "npc" or a["id"] in recent_ids:
             continue
         b = briefs.read_brief(croot, a["id"])
         absent_cast.append({"name": _char_name(croot, a["id"]),
                             "tagline": (b["tagline"] if b else "") or ""})
 
-    available_cast = [{"token": f"characters:{c['id']}", "name": c.get("name", c["id"])}
-                      for c in characters.list_characters(wroot)]
-    for a in appearances.roster(cid):
+    available_cast, seen = [], set()
+    for c in characters.list_characters(wroot):
+        tok = f"characters:{c['id']}"
+        seen.add(tok)
+        available_cast.append({"token": tok, "name": c.get("name", c["id"])})
+    for a in roster:
         if a["role"] != "player":
             continue
+        tok = f"{a['kind']}:{a['id']}"
+        if tok in seen:
+            continue
+        seen.add(tok)
         try:
             name = (pcs.read_pc(croot, a["id"])["meta"].get("name", a["id"])
                     if a["kind"] == "pcs" else _char_name(croot, a["id"]))
         except pcs.PCNotFound:
             name = a["id"]
-        available_cast.append({"token": f"{a['kind']}:{a['id']}", "name": name})
+        available_cast.append({"token": tok, "name": name})
 
     available_locations = [{"id": e["id"], "name": e.get("name", e["id"])}
                            for e in entities.list_entities(croot, "locations")]
 
     return {"now": now, "friendly": friendly, "holidays_today": holidays_today,
-            "upcoming": upcoming, "birthdays": _birthdays(cid, croot, now),
+            "upcoming": upcoming, "birthdays": _birthdays(croot, now, roster),
             "open_threads": open_threads, "absent_cast": absent_cast,
             "available_cast": available_cast, "available_locations": available_locations}
 
@@ -174,13 +189,32 @@ def _valid_ids(cid: str):
     return char_ids, player_tokens, loc_ids
 
 
+def _extract_json(text: str):
+    """Tolerant of the model wrapping JSON in prose and of a bare top-level array
+    (a common LLM deviation from the requested {"suggestions": [...]} object). Tries the
+    whole reply first (clean object or array), then a brace slice, then a bracket slice."""
+    candidates = [text.strip()]
+    for lo, hi in (("{", "}"), ("[", "]")):
+        s, e = text.find(lo), text.rfind(hi)
+        if s != -1 and e > s:
+            candidates.append(text[s:e + 1])
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return None
+
+
 def parse_output(text: str, cid: str) -> list[dict]:
-    start, end = text.find("{"), text.rfind("}")
-    try:
-        obj = json.loads(text[start:end + 1]) if start != -1 and end > start else {}
-    except (json.JSONDecodeError, TypeError):
-        obj = {}
-    if not isinstance(obj, dict):
+    parsed = _extract_json(text)
+    if isinstance(parsed, dict):
+        suggestions = parsed.get("suggestions", [])
+    elif isinstance(parsed, list):
+        suggestions = parsed
+    else:
+        suggestions = []
+    if not isinstance(suggestions, list):
         return []
     char_ids, player_tokens, loc_ids = _valid_ids(cid)
 
@@ -189,7 +223,7 @@ def parse_output(text: str, cid: str) -> list[dict]:
         return (kind == "characters" and aid in char_ids) or tok in player_tokens
 
     out: list[dict] = []
-    for e in obj.get("suggestions", []):
+    for e in suggestions:
         if not isinstance(e, dict):
             continue
         title, premise = str(e.get("title", "")).strip(), str(e.get("premise", "")).strip()

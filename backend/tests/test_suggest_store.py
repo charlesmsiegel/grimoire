@@ -74,3 +74,27 @@ def test_parse_output_validates_ids(monkeypatch, tmp_path):
 def test_parse_output_tolerates_garbage(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     assert suggest.parse_output("not json", cid) == []
+
+
+def test_parse_output_accepts_bare_array(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    # a common LLM deviation: a top-level array instead of {"suggestions": [...]}
+    out = suggest.parse_output('[{"title": "T", "premise": "P", "cast": [], "location": ""}]', cid)
+    assert [s["title"] for s in out] == ["T"]
+
+
+def test_build_snapshot_tolerates_garbled_chronicle(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "chronicle.json").write_text("{ not json", encoding="utf-8")
+    snap = suggest.build_snapshot(cid)  # must not raise
+    assert snap["now"] == ""
+
+
+def test_build_snapshot_dedupes_available_cast(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    hero = _char(wroot, "Hero")
+    s1 = scenes.create_scene(cid, "One")
+    appearances.appear(cid, s1, "characters", hero, "main", "player")  # world char AND roster player
+    tokens = [c["token"] for c in suggest.build_snapshot(cid)["available_cast"]]
+    assert tokens.count(f"characters:{hero}") == 1  # listed once, not duplicated
