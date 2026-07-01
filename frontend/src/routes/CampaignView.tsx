@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, type SceneMeta, type Message } from "../api/client";
+import { api, type SceneMeta, type Message, type SceneAbsorb } from "../api/client";
 import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
 import { CastPanel } from "../components/CastPanel";
@@ -31,6 +31,8 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [ctxKey, setCtxKey] = useState(0);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const [colorQuotes, setColorQuotes] = useState(false);
+  const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
+  const [absorbing, setAbsorbing] = useState(false);
   const streamRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -130,6 +132,28 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     await runStream((onEvent) => api.retry(cid, activeId, onEvent));
   }
 
+  async function endScene() {
+    if (!activeId || absorbing) return;
+    setAbsorbing(true);
+    setError(null);
+    try {
+      setAbsorb(await api.absorbScene(cid, activeId));
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    } finally {
+      setAbsorbing(false);
+    }
+  }
+
+  async function saveAbsorb() {
+    if (!absorb || !activeId) return;
+    await api.saveChronicle(cid, activeId, {
+      one_line: absorb.one_line, summary: absorb.summary,
+      keywords: absorb.keywords, timeline_events: absorb.timeline_events });
+    setAbsorb(null);
+    setCtxKey((n) => n + 1);
+  }
+
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -158,7 +182,35 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
         </details>
       </aside>
       <section className="main">
-        <div className="campaign-header">{name}</div>
+        <div className="campaign-header">
+          <span>{name}</span>
+          <button className="end-scene" onClick={endScene}
+                  disabled={!activeId || absorbing || busy}>
+            {absorbing ? "Ending…" : "End scene"}
+          </button>
+        </div>
+        {absorb && (
+          <div className="absorb-panel">
+            <h4>Review scene summary</h4>
+            <label className="field-hint" htmlFor="absorb-oneline">One line</label>
+            <input id="absorb-oneline" aria-label="Scene one-line" value={absorb.one_line}
+                   onChange={(e) => setAbsorb({ ...absorb, one_line: e.target.value })} />
+            <label className="field-hint" htmlFor="absorb-summary">Summary</label>
+            <textarea id="absorb-summary" aria-label="Scene summary" rows={5} value={absorb.summary}
+                      onChange={(e) => setAbsorb({ ...absorb, summary: e.target.value })} />
+            {absorb.timeline_events.length > 0 && (
+              <ul className="absorb-timeline">
+                {absorb.timeline_events.map((t, i) => (
+                  <li key={i}><strong>{t.date}</strong> {t.text}</li>
+                ))}
+              </ul>
+            )}
+            <div className="form-actions">
+              <button className="subtle" onClick={() => setAbsorb(null)}>Cancel</button>
+              <button className="primary" onClick={saveAbsorb}>Save summary</button>
+            </div>
+          </div>
+        )}
         {!keySet && (
           <div className="banner">
             No OpenRouter key set. <Link to="/config">Set your key in Config</Link>.

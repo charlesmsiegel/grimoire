@@ -18,6 +18,7 @@ vi.mock("../api/client", () => ({
     retry: vi.fn(),
     getConfig: vi.fn(),
     editMessage: vi.fn(),
+    absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(),
     // consumed by the embedded SceneInspector
     getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
     getCastDetail: vi.fn(), readEntity: vi.fn(),
@@ -50,6 +51,12 @@ beforeEach(() => {
   (api.listPCs as any).mockResolvedValue([]);
   (api.listCampaignPCs as any).mockResolvedValue([]);
   (fetchModels as any).mockResolvedValue([]);
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "They met.", summary: "A met B.", keywords: ["salt"],
+    timeline_events: [], cast: [], location: "", date: "" });
+  (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "They met.",
+    summary: "A met B.", keywords: ["salt"], cast: [], location: "", date: "", absorbed: "t" });
+  (api.getChronicle as any).mockResolvedValue([]);
 });
 
 function renderCampaign() {
@@ -178,4 +185,18 @@ test("an error shows a Retry button that retries the scene", async () => {
   fireEvent.click(retryBtn);
   await waitFor(() => expect(api.retry).toHaveBeenCalledWith("run", "s1", expect.any(Function)));
   expect(screen.getAllByText("hello")).toHaveLength(1);
+});
+
+test("End scene fetches a preview, edits, and saves the chronicle", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  renderCampaign();
+  await screen.findByText("hi"); // scene loaded → activeId set → button enabled
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  const summary = await screen.findByLabelText("Scene summary");
+  expect((summary as HTMLTextAreaElement).value).toContain("A met B.");
+  fireEvent.change(summary, { target: { value: "Edited summary." } });
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
+    expect.objectContaining({ summary: "Edited summary.", one_line: "They met." })));
 });
