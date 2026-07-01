@@ -132,6 +132,13 @@ class RenameScene(BaseModel):
     title: str
 
 
+class ChronicleSave(BaseModel):
+    one_line: str = ""
+    summary: str = ""
+    keywords: list[str] = []
+    timeline_events: list[dict] = []
+
+
 class ChatTurn(BaseModel):
     content: str
 
@@ -1099,6 +1106,42 @@ def post_retry(cid: str, sid: str, client: OpenRouterClient = Depends(get_openro
         raise HTTPException(status_code=400, detail="nothing to retry")
     messages = store.context.build_messages(cid, sid)
     return _chat_stream(cid, sid, messages, cfg, client)
+
+
+@router.get("/campaigns/{cid}/chronicle")
+def get_chronicle(cid: str):
+    _campaign_root_or_404(cid)
+    return store.chronicle.recent(cid, 50)
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/absorb")
+async def post_absorb(cid: str, sid: str,
+                      client: OpenRouterClient = Depends(get_openrouter)):
+    scene = _require_scene(cid, sid)
+    cfg = store.read_config()
+    _require_key(cfg)
+    if not scene["messages"]:
+        raise HTTPException(status_code=400, detail="nothing to absorb")
+    facts = store.chronicle.scene_facts(cid, sid)
+    messages = store.chronicle.build_prompt(
+        store.chronicle.transcript_text(scene["messages"]), facts)
+    try:
+        text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
+    except OpenRouterError as exc:
+        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+    return {**store.chronicle.parse_output(text), **facts}
+
+
+@router.put("/campaigns/{cid}/scenes/{sid}/chronicle")
+def put_chronicle(cid: str, sid: str, body: ChronicleSave):
+    _require_scene(cid, sid)
+    facts = store.chronicle.scene_facts(cid, sid)
+    record = store.chronicle.absorb(cid, {
+        "id": sid, "one_line": body.one_line, "summary": body.summary,
+        "keywords": body.keywords, **facts})
+    store.chronicle.append_timeline(cid, body.timeline_events)
+    store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
+    return record
 
 
 # ---- campaign cast & suggestions (declared before the generic /{kind} routes) ----
