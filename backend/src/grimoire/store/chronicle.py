@@ -19,6 +19,52 @@ from . import campaigns
 from .paths import now_iso
 
 
+EXTRACT_INSTRUCTION = (
+    "You are absorbing a completed role-play scene into a campaign chronicle. "
+    "Read the transcript and reply with ONLY a JSON object, no prose around it, with keys: "
+    '"one_line" (a single-sentence summary of the scene), '
+    '"summary" (one self-contained paragraph, readable without the transcript), '
+    '"keywords" (a list of significant nouns/concepts, lowercase), and '
+    '"timeline_events" (a list of {"date","text"} for concrete datable happenings; '
+    "empty list if none). Write in third person, past tense."
+)
+
+
+def build_prompt(transcript: str, facts: dict) -> list[dict]:
+    head = []
+    if facts.get("location"):
+        head.append(f"Location: {facts['location']}")
+    if facts.get("date"):
+        head.append(f"Date: {facts['date']}")
+    if facts.get("cast"):
+        head.append("Present: " + ", ".join(facts["cast"]))
+    prefix = ("\n".join(head) + "\n\n") if head else ""
+    return [{"role": "system", "content": EXTRACT_INSTRUCTION},
+            {"role": "user", "content": prefix + transcript}]
+
+
+def parse_output(text: str) -> dict:
+    """Pull the JSON object out of a model reply (tolerant of code fences / prose)."""
+    start, end = text.find("{"), text.rfind("}")
+    raw = text[start:end + 1] if start != -1 and end > start else ""
+    try:
+        obj = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        obj = {}
+    if not isinstance(obj, dict):
+        obj = {}
+    events = [
+        {"date": str(e.get("date", "")).strip(), "text": str(e.get("text", "")).strip()}
+        for e in obj.get("timeline_events", []) if isinstance(e, dict)
+    ]
+    return {
+        "one_line": str(obj.get("one_line", "")).strip(),
+        "summary": str(obj.get("summary", "")).strip(),
+        "keywords": [str(k).strip() for k in obj.get("keywords", []) if str(k).strip()],
+        "timeline_events": events,
+    }
+
+
 def _chronicle_path(cid: str) -> Path:
     return campaigns.campaign_root(cid) / "chronicle.json"
 

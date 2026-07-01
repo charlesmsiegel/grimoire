@@ -53,3 +53,25 @@ def test_transcript_text_labels_roles():
     text = chronicle.transcript_text([{"role": "user", "content": "hi"},
                                       {"role": "assistant", "content": "hello"}])
     assert "**You:** hi" in text and "**Grimoire:** hello" in text
+
+
+def test_build_prompt_includes_facts_and_transcript():
+    msgs = chronicle.build_prompt("**You:** hi", {"location": "The Crypt",
+                                                  "date": "2026-01-01", "cast": ["characters/seraphine"]})
+    assert msgs[0]["role"] == "system"
+    user = msgs[1]["content"]
+    assert "The Crypt" in user and "2026-01-01" in user and "seraphine" in user and "**You:** hi" in user
+
+
+def test_parse_output_extracts_json():
+    text = ('Sure!\n```json\n{"one_line": "They met.", "summary": "A met B by the sea.",'
+            ' "keywords": ["sea", ""], "timeline_events": [{"date": "2026-01-01", "text": "Met."}]}\n```')
+    out = chronicle.parse_output(text)
+    assert out == {"one_line": "They met.", "summary": "A met B by the sea.",
+                   "keywords": ["sea"],
+                   "timeline_events": [{"date": "2026-01-01", "text": "Met."}]}
+
+
+def test_parse_output_tolerates_garbage():
+    assert chronicle.parse_output("no json here") == {
+        "one_line": "", "summary": "", "keywords": [], "timeline_events": []}
