@@ -206,6 +206,28 @@ def test_chub_import_route_updates_in_place_when_already_linked(client, monkeypa
     assert detail["versions"][0]["card"]["data"]["name"] == "Abelha Updated"
 
 
+def test_chub_import_route_direct_url_not_chub(client, monkeypatch):
+    from grimoire.store import cards
+
+    wid = _world(client)
+    png = cards.dumps({"spec": "chara_card_v3", "spec_version": "3.0",
+                        "data": {"name": "Direct", "extensions": {}}}, "png")
+    monkeypatch.setattr(store.fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    r = client.post(f"/api/worlds/{wid}/characters/import/chub",
+                     json={"url": "https://example.com/card.png"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["updated"] is False
+    assert body["gallery"] == {"attempted": 0, "stored": 0}
+    assert body["lore"] == {"lorebooks_found": 0, "created": []}
+
+    detail = client.get(f"/api/worlds/{wid}/characters/{body['character']}").json()
+    assert detail["versions"][0]["card"]["data"]["name"] == "Direct"
+    assert detail["versions"][0]["chub_source"] == "https://example.com/card.png"
+    assert detail["versions"][0]["is_chub"] is False
+
+
 def test_chub_import_route_bad_url(client):
     wid = _world(client)
     r = client.post(f"/api/worlds/{wid}/characters/import/chub", json={"url": "not a url"})
@@ -234,9 +256,9 @@ def test_chub_source_routes(client):
 
     r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-source",
                      json={"url": "creator/slug"})
-    assert r.status_code == 200 and r.json() == {"chub_source": "creator/slug"}
+    assert r.status_code == 200 and r.json() == {"chub_source": "https://chub.ai/characters/creator/slug"}
     detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
-    assert _version_chub_source(detail, "default") == "creator/slug"
+    assert _version_chub_source(detail, "default") == "https://chub.ai/characters/creator/slug"
 
     r = client.delete(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-source")
     assert r.status_code == 200 and r.json() == {"chub_source": ""}
@@ -254,8 +276,22 @@ def test_chub_source_is_per_version_route(client):
                 json={"url": "creator/abelha-main"})
 
     detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
-    assert _version_chub_source(detail, "default") == "creator/abelha-main"
+    assert _version_chub_source(detail, "default") == "https://chub.ai/characters/creator/abelha-main"
     assert _version_chub_source(detail, "futa") == ""  # sibling version untouched
+
+
+def test_chub_source_route_accepts_an_arbitrary_url(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Direct"}).json()["character"]
+
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/chub-source",
+                     json={"url": "https://example.com/cards/direct.png"})
+    assert r.status_code == 200
+    assert r.json() == {"chub_source": "https://example.com/cards/direct.png"}
+    detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
+    version = next(v for v in detail["versions"] if v["id"] == "default")
+    assert version["chub_source"] == "https://example.com/cards/direct.png"
+    assert version["is_chub"] is False
 
 
 def test_chub_source_route_bad_url(client):

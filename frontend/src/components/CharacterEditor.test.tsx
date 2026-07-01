@@ -229,7 +229,7 @@ test("import version posts importCharacter into the current character", async ()
     expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "json", "seraphine"));
 });
 
-test("downloading from chub.ai creates a character and shows the result", async () => {
+test("downloading from a URL creates a character and shows the result", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("https://chub.ai/characters/creator/imp");
   (api.importCharacterFromChub as any).mockResolvedValue({
     character: "imp", version: "default",
@@ -238,17 +238,17 @@ test("downloading from chub.ai creates a character and shows the result", async 
   });
   render(<CharacterEditor wid="w" />);
   await screen.findByText("Seraphine");
-  fireEvent.click(screen.getByRole("button", { name: /download from chub\.ai/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
   await waitFor(() =>
     expect(api.importCharacterFromChub).toHaveBeenCalledWith("w", "https://chub.ai/characters/creator/imp"));
-  await screen.findByText(/downloaded from chub\.ai.*2\/2 gallery images.*1 lorebook \(1 entry\) added to world lore/i);
+  await screen.findByText(/downloaded from url.*2\/2 gallery images.*1 lorebook \(1 entry\) added to world lore/i);
 });
 
-test("an empty chub.ai prompt makes no API call", async () => {
+test("an empty URL prompt makes no API call", async () => {
   vi.spyOn(window, "prompt").mockReturnValue(null);
   render(<CharacterEditor wid="w" />);
   await screen.findByText("Seraphine");
-  fireEvent.click(screen.getByRole("button", { name: /download from chub\.ai/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
   expect(api.importCharacterFromChub).not.toHaveBeenCalled();
 });
 
@@ -277,7 +277,7 @@ test("checking chub.ai links with none unlinked says so", async () => {
   await screen.findByText(/^all versions are linked to chub\.ai$/i);
 });
 
-test("downloading a version from chub.ai targets the open character and version", async () => {
+test("downloading a version from a URL targets the open character and version", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("creator/imp-variant");
   (api.importCharacterFromChub as any).mockResolvedValue({
     character: "seraphine", version: "variant", updated: false,
@@ -286,10 +286,10 @@ test("downloading a version from chub.ai targets the open character and version"
   });
   render(<CharacterEditor wid="w" />);
   await openEditForm();
-  fireEvent.click(screen.getByRole("button", { name: /download version from chub\.ai/i }));
+  fireEvent.click(screen.getByRole("button", { name: /download version from url/i }));
   await waitFor(() =>
     expect(api.importCharacterFromChub).toHaveBeenCalledWith("w", "creator/imp-variant", "seraphine", "default"));
-  await screen.findByText(/^downloaded from chub\.ai$/i);
+  await screen.findByText(/^downloaded from url$/i);
 });
 
 test("re-downloading an already-linked version updates it in place instead of creating a new one", async () => {
@@ -301,13 +301,13 @@ test("re-downloading an already-linked version updates it in place instead of cr
   });
   render(<CharacterEditor wid="w" />);
   await openEditForm();
-  fireEvent.click(screen.getByRole("button", { name: /download version from chub\.ai/i }));
+  fireEvent.click(screen.getByRole("button", { name: /download version from url/i }));
   await waitFor(() =>
     expect(api.importCharacterFromChub).toHaveBeenCalledWith("w", "creator/imp", "seraphine", "default"));
-  await screen.findByText(/^updated this version from chub\.ai$/i);
+  await screen.findByText(/^updated this version from url$/i);
 });
 
-test("linking a character to chub.ai from the detail page shows a clickable link and allows unlinking", async () => {
+test("linking a character to a URL from the detail page shows a clickable link and allows unlinking", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("creator/imp");
   (api.setCharacterChubSource as any).mockResolvedValue({ chub_source: "creator/imp" });
   (api.clearCharacterChubSource as any).mockResolvedValue({ chub_source: "" });
@@ -323,7 +323,7 @@ test("linking a character to chub.ai from the detail page shows a clickable link
   await screen.findByRole("heading", { name: "Seraphine" });
   expect(screen.queryByRole("link", { name: /creator\/imp/i })).toBeNull();
 
-  fireEvent.click(screen.getByRole("button", { name: /^link to chub\.ai$/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^link to url$/i }));
   await waitFor(() =>
     expect(api.setCharacterChubSource).toHaveBeenCalledWith("w", "seraphine", "default", "creator/imp"));
   const link = await screen.findByRole("link", { name: /creator\/imp/i });
@@ -332,7 +332,27 @@ test("linking a character to chub.ai from the detail page shows a clickable link
   (api.readCharacter as any).mockResolvedValueOnce(DETAIL); // after unlinking, reverts
   fireEvent.click(screen.getByRole("button", { name: /^unlink$/i }));
   await waitFor(() => expect(api.clearCharacterChubSource).toHaveBeenCalledWith("w", "seraphine", "default"));
-  await screen.findByRole("button", { name: /^link to chub\.ai$/i });
+  await screen.findByRole("button", { name: /^link to url$/i });
+});
+
+test("linking to a direct (non-chub) URL uses it as the href directly", async () => {
+  (api.setCharacterChubSource as any).mockResolvedValue({ chub_source: "https://example.com/card.png" });
+  vi.spyOn(window, "prompt").mockReturnValue("https://example.com/card.png");
+  (api.readCharacter as any)
+    .mockResolvedValueOnce(DETAIL)
+    .mockResolvedValueOnce({
+      ...DETAIL,
+      versions: [{ ...DETAIL.versions[0], chub_source: "https://example.com/card.png", is_chub: false }],
+    });
+
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  fireEvent.click(await screen.findByRole("button", { name: /^link to url$/i }));
+  const link = await screen.findByRole("link", { name: /example\.com\/card\.png/i });
+  expect(link).toHaveAttribute("href", "https://example.com/card.png"); // used as-is, not prefixed with chub.ai
+  // not a chub.ai link, so the chub-only actions don't show
+  expect(screen.queryByRole("button", { name: /download gallery/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /download linked lorebooks/i })).toBeNull();
 });
 
 test("a sibling version doesn't show another version's chub.ai link", async () => {
@@ -349,13 +369,13 @@ test("a sibling version doesn't show another version's chub.ai link", async () =
 
   fireEvent.change(screen.getByLabelText("Version"), { target: { value: "variant" } });
   expect(screen.queryByRole("link", { name: /creator\/main/i })).toBeNull();
-  await screen.findByRole("button", { name: /^link to chub\.ai$/i });
+  await screen.findByRole("button", { name: /^link to url$/i });
 });
 
 test("download gallery/lorebooks buttons only appear once a version is linked", async () => {
   render(<CharacterEditor wid="w" />); // DETAIL's only version has no chub_source
   fireEvent.click(await screen.findByText("Seraphine"));
-  await screen.findByRole("button", { name: /^link to chub\.ai$/i });
+  await screen.findByRole("button", { name: /^link to url$/i });
   expect(screen.queryByRole("button", { name: /download gallery/i })).toBeNull();
   expect(screen.queryByRole("button", { name: /download linked lorebooks/i })).toBeNull();
 });
@@ -363,7 +383,7 @@ test("download gallery/lorebooks buttons only appear once a version is linked", 
 test("downloading the gallery for a linked version shows per-image progress then the result", async () => {
   (api.readCharacter as any).mockResolvedValue({
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
-    versions: [{ id: "default", name: "default", card: CARD, images: [], chub_source: "creator/imp" }],
+    versions: [{ id: "default", name: "default", card: CARD, images: [], chub_source: "creator/imp", is_chub: true }],
   });
   let emit: (e: any) => void = () => {};
   let resolveDownload: () => void = () => {};
@@ -425,10 +445,12 @@ test("no gallery section when a version has no gallery images", async () => {
 
 test("gallery images downloaded while viewing a character appear without navigating away", async () => {
   (api.readCharacter as any)
-    .mockResolvedValueOnce({ ...DETAIL, versions: [{ ...DETAIL.versions[0], chub_source: "creator/imp" }] })
+    .mockResolvedValueOnce({
+      ...DETAIL, versions: [{ ...DETAIL.versions[0], chub_source: "creator/imp", is_chub: true }],
+    })
     .mockResolvedValueOnce({
       ...DETAIL,
-      versions: [{ ...DETAIL.versions[0], chub_source: "creator/imp", images: ["gallery_0"] }],
+      versions: [{ ...DETAIL.versions[0], chub_source: "creator/imp", is_chub: true, images: ["gallery_0"] }],
     });
   (api.downloadCharacterChubGallery as any).mockImplementation(
     (_w: string, _c: string, _v: string, cb: (e: any) => void) => {
@@ -447,7 +469,7 @@ test("gallery images downloaded while viewing a character appear without navigat
 test("downloading linked lorebooks for a version with none shows a clear empty result", async () => {
   (api.readCharacter as any).mockResolvedValue({
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
-    versions: [{ id: "default", name: "default", card: CARD, images: [], chub_source: "creator/imp" }],
+    versions: [{ id: "default", name: "default", card: CARD, images: [], chub_source: "creator/imp", is_chub: true }],
   });
   (api.downloadCharacterChubLorebooks as any).mockResolvedValue({ lorebooks_found: 0, created: [] });
   render(<CharacterEditor wid="w" />);
@@ -458,9 +480,9 @@ test("downloading linked lorebooks for a version with none shows a clear empty r
   await screen.findByText(/^no linked lorebooks found on chub\.ai$/i);
 });
 
-test("the edit form no longer shows a chub.ai link control (moved to the detail page)", async () => {
+test("the edit form no longer shows a link control (moved to the detail page)", async () => {
   render(<CharacterEditor wid="w" />);
   await openEditForm();
-  expect(screen.queryByRole("button", { name: /link to chub\.ai/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^link to url$/i })).toBeNull();
   expect(screen.queryByRole("button", { name: /^unlink$/i })).toBeNull();
 });

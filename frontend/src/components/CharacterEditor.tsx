@@ -23,7 +23,7 @@ function describeChubResult(result: ChubImportResult): string {
     const n = result.lore.created.length;
     parts.push(`${result.lore.lorebooks_found} lorebook${result.lore.lorebooks_found === 1 ? "" : "s"} (${n} ${n === 1 ? "entry" : "entries"}) added to world lore`);
   }
-  const lead = result.updated ? "Updated this version from chub.ai" : "Downloaded from chub.ai";
+  const lead = result.updated ? "Updated this version from URL" : "Downloaded from URL";
   return parts.length ? `${lead} — ${parts.join(", ")}` : lead;
 }
 
@@ -74,6 +74,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     ? (detail.versions.find((v) => v.id === vid)?.images ?? []).includes("avatar")
     : false;
   const chubSource = detail?.versions.find((v) => v.id === vid)?.chub_source ?? "";
+  const isChub = detail?.versions.find((v) => v.id === vid)?.is_chub ?? false;
   const galleryImages = (detail?.versions.find((v) => v.id === vid)?.images ?? [])
     .filter((n) => n.startsWith("gallery_"))
     .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
@@ -369,7 +370,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   }
 
   async function downloadFromChub() {
-    const url = window.prompt("chub.ai character URL or path?")?.trim();
+    const url = window.prompt("Card URL (chub.ai link or a direct URL)?")?.trim();
     if (!url) return;
     setError(null);
     setImportMsg(null);
@@ -386,7 +387,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
 
   async function downloadVersionFromChub() {
     if (!detail) return;
-    const url = window.prompt("chub.ai character URL or path?")?.trim();
+    const url = window.prompt("Card URL (chub.ai link or a direct URL)?")?.trim();
     if (!url) return;
     setError(null);
     setImportMsg(null);
@@ -408,7 +409,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   // select() (which always snaps back to the default version).
   async function linkChub() {
     if (!detail) return;
-    const url = window.prompt("chub.ai character URL or path?")?.trim();
+    const url = window.prompt("Card URL (chub.ai link or a direct URL)?")?.trim();
     if (!url) return;
     setError(null);
     try {
@@ -506,7 +507,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
           <button className="primary" onClick={newCharacter}>+ New character</button>
           <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
           <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden aria-label="Import character card" onChange={onImport} />
-          <button className="subtle" onClick={downloadFromChub}>Download from chub.ai</button>
+          <button className="subtle" onClick={downloadFromChub}>Download from URL</button>
           <button className="subtle" onClick={checkChubLinks}>Check chub.ai links</button>
           {bulkLocalize && (
             <span className="field-hint">Localizing card {bulkLocalize.current}/{bulkLocalize.cards}…</span>
@@ -597,24 +598,29 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
             <div className="chub-source-block">
               {chubSource ? (
                 <>
-                  <a className="field-hint" href={`https://chub.ai/characters/${chubSource}`}
+                  <a className="field-hint"
+                     href={chubSource.startsWith("http") ? chubSource : `https://chub.ai/characters/${chubSource}`}
                      target="_blank" rel="noreferrer">
                     {chubSource}
                   </a>
                   <button className="subtle" type="button" onClick={unlinkChub}>Unlink</button>
-                  <button className="subtle" type="button" disabled={!!galleryProg} onClick={downloadChubGallery}>
-                    {galleryProg ? "Downloading…" : "Download gallery"}
-                  </button>
-                  <button className="subtle" type="button" onClick={downloadChubLorebooks}>Download linked lorebooks</button>
-                  {galleryProg && (
-                    <div className="localize-progress">
-                      <progress value={galleryProg.done} max={galleryProg.total || 1} />
-                      <span className="field-hint">{galleryProg.done}/{galleryProg.total}</span>
-                    </div>
+                  {isChub && (
+                    <>
+                      <button className="subtle" type="button" disabled={!!galleryProg} onClick={downloadChubGallery}>
+                        {galleryProg ? "Downloading…" : "Download gallery"}
+                      </button>
+                      <button className="subtle" type="button" onClick={downloadChubLorebooks}>Download linked lorebooks</button>
+                      {galleryProg && (
+                        <div className="localize-progress">
+                          <progress value={galleryProg.done} max={galleryProg.total || 1} />
+                          <span className="field-hint">{galleryProg.done}/{galleryProg.total}</span>
+                        </div>
+                      )}
+                    </>
                   )}
                 </>
               ) : (
-                <button className="subtle" type="button" onClick={linkChub}>Link to chub.ai</button>
+                <button className="subtle" type="button" onClick={linkChub}>Link to URL</button>
               )}
             </div>
 
@@ -688,7 +694,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                    aria-label="Import version" onChange={onImportVersion} />
             <button className="subtle" onClick={setDefault}>Set default</button>
             <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>
-            <button className="subtle" onClick={downloadVersionFromChub}>Download version from chub.ai</button>
+            <button className="subtle" onClick={downloadVersionFromChub}>Download version from URL</button>
             {importMsg && <span className="field-hint">{importMsg}</span>}
           </div>
 

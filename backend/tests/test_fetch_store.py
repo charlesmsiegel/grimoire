@@ -45,3 +45,22 @@ def test_download_url_swallows_errors(monkeypatch):
 
     monkeypatch.setattr(fetch, "_http_get_bytes", boom)
     assert fetch.download_url("https://h/x") is None
+
+
+def test_download_bytes_returns_raw_content_regardless_of_type(monkeypatch):
+    # unlike download_url, no image-type requirement -- a JSON card must pass through
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b'{"a": 1}', "application/json"))
+    assert fetch.download_bytes("https://h/card.json") == b'{"a": 1}'
+
+
+def test_download_bytes_rejects_oversize(monkeypatch):
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"x" * (fetch.MAX_BYTES + 1), None))
+    assert fetch.download_bytes("https://h/x") is None
+
+
+def test_download_bytes_swallows_errors(monkeypatch):
+    def boom(url):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(fetch, "_http_get_bytes", boom)
+    assert fetch.download_bytes("https://h/x") is None

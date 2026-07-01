@@ -82,7 +82,7 @@ export type VersionRef = { id: string; name: string };
 export type CharacterSummary = { id: string; name: string; default_version: string; has_avatar?: boolean; versions: VersionRef[] };
 export type CharacterDetail = {
   meta: { id: string; name: string; default_version: string; birthdate?: string };
-  versions: { id: string; name: string; card: Card; images?: string[]; chub_source?: string }[];
+  versions: { id: string; name: string; card: Card; images?: string[]; chub_source?: string; is_chub?: boolean }[];
 };
 export type ChubImportResult = {
   character: string;

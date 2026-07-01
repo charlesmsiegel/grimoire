@@ -180,6 +180,7 @@ def read_character(root: Path, cid: str) -> dict:
             "card": card,
             "images": [i["name"] for i in assets.list_images(root, cid, vid)],
             "chub_source": chub_source,
+            "is_chub": bool(chub_source) and chub.parse_full_path(chub_source) is not None,
         })
     return {
         "meta": {"id": cid, "name": meta.get("name", cid),
@@ -297,15 +298,19 @@ def _download_avatar(card: dict) -> tuple[bytes, str] | None:
 
 
 def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
-                name: str | None = None) -> tuple[str, str]:
+                name: str | None = None, update_vid: str | None = None) -> tuple[str, str]:
     from . import cards
     card = cards.loads(data, fmt)  # raises cards.CardParseError on bad input
-    cname = name or card["data"].get("name", "Imported")
-    if into_cid is None:
-        cid, vid = create_character(root, cname, "default", card)
+    if update_vid is not None:
+        cid, vid = into_cid, update_vid
+        update_version(root, cid, vid, card)
     else:
-        cid = into_cid
-        vid = create_version(root, into_cid, card.get("data", {}).get("character_version") or cname, card)
+        cname = name or card["data"].get("name", "Imported")
+        if into_cid is None:
+            cid, vid = create_character(root, cname, "default", card)
+        else:
+            cid = into_cid
+            vid = create_version(root, into_cid, card.get("data", {}).get("character_version") or cname, card)
     if fmt == "png":
         assets.put_image(root, cid, vid, assets.AVATAR, data, "png")  # the PNG is the avatar
     else:
@@ -315,46 +320,84 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     return cid, vid
 
 
+def _sniff_card_format(data: bytes) -> str | None:
+    """Best-effort card-format detection for an arbitrary downloaded file: a
+    PNG (embedded card metadata) or a JSON object. None if neither -- in
+    particular, valid-but-non-object JSON (an array, string, number...) is
+    rejected here rather than reaching cards.loads, which assumes a dict."""
+    if fetch.sniff_ext(data) == "png":
+        return "png"
+    try:
+        parsed = json.loads(data)
+    except ValueError:
+        return None
+    return "json" if isinstance(parsed, dict) else None
+
+
 def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
                       into_vid: str | None = None) -> dict:
-    full_path = chub.parse_full_path(url_or_path)
-    if full_path is None:
-        raise chub.ChubParseError(url_or_path)
-    node = chub.fetch_character_node(full_path)
-    if node is None:
-        raise chub.ChubFetchError(full_path)
-    png = fetch.download_url(node.get("max_res_url") or "")
-    if png is None:
-        raise chub.ChubFetchError(full_path)
+    """Download a character card from a URL and import/update it. A chub.ai
+    URL or "creator/slug" shorthand gets the full chub.ai treatment (avatar,
+    gallery, linked lorebooks); any other URL is fetched directly and parsed
+    as a PNG or JSON card -- gallery/lorebooks stay empty there, since that
+    metadata only exists on chub.ai."""
+    from . import cards
 
-    # Re-downloading into a version already linked to this same chub.ai card
-    # overwrites that version in place rather than piling up near-duplicates.
-    # The match is checked against that *specific* version's own link (each
-    # variant carries its own), not any sibling version's. Without into_vid
-    # (which version is "open") there's nothing safe to overwrite, so that
-    # case always creates a version, same as a mismatch.
+    stored_url = chub.normalize_link(url_or_path)
+    if stored_url is None:
+        raise chub.ChubParseError(url_or_path)
+    chub_path = chub.parse_full_path(stored_url)
+
+    node = None
+    if chub_path is not None:
+        node = chub.fetch_character_node(chub_path)
+        if node is None:
+            raise chub.ChubFetchError(chub_path)
+        png = fetch.download_url(node.get("max_res_url") or "")
+        if png is None:
+            raise chub.ChubFetchError(chub_path)
+        data, fmt = png[0], "png"
+    else:
+        raw = fetch.download_bytes(stored_url)
+        if raw is None:
+            raise chub.ChubFetchError(stored_url)
+        fmt = _sniff_card_format(raw)
+        if fmt is None:
+            raise chub.ChubFetchError(stored_url)
+        data = raw
+
+    # Re-downloading into a version already linked to this same URL overwrites
+    # that version in place rather than piling up near-duplicates. The match
+    # is checked against that *specific* version's own link (each variant
+    # carries its own), not any sibling version's. Without into_vid (which
+    # version is "open") there's nothing safe to overwrite, so that case
+    # always creates a version, same as a mismatch.
     updated = False
     if into_cid and into_vid:
         existing = read_character(root, into_cid)
         target = next((v for v in existing["versions"] if v["id"] == into_vid), None)
         if target is None:
             raise VersionNotFound(into_vid)
-        updated = target["chub_source"] == full_path
+        # Compare against the *normalized* stored value, not the raw one --
+        # legacy data still stores chub.ai's bare "creator/slug" shorthand
+        # rather than a full URL, and would never match otherwise.
+        existing_source = target["chub_source"]
+        updated = bool(existing_source) and chub.normalize_link(existing_source) == stored_url
 
-    if updated:
-        from . import cards
-        update_version(root, into_cid, into_vid, cards.loads(png[0], "png"))
-        assets.put_image(root, into_cid, into_vid, assets.AVATAR, png[0], "png")
-        cid, vid = into_cid, into_vid
-    else:
-        cid, vid = import_card(root, png[0], "png", into_cid)
-        set_chub_source(root, cid, vid, full_path)
+    try:
+        if updated:
+            cid, vid = import_card(root, data, fmt, into_cid, update_vid=into_vid)
+        else:
+            cid, vid = import_card(root, data, fmt, into_cid)
+    except cards.CardParseError as exc:
+        raise chub.ChubFetchError(str(exc)) from exc
+    if not updated:
+        set_chub_source(root, cid, vid, stored_url)
 
-    return {
-        "character": cid, "version": vid, "updated": updated,
-        "gallery": _download_gallery(root, cid, vid, node),
-        "lore": _download_lorebooks(root, node),
-    }
+    gallery = _download_gallery(root, cid, vid, node) if node else {"attempted": 0, "stored": 0}
+    lore = _download_lorebooks(root, node) if node else {"lorebooks_found": 0, "created": []}
+
+    return {"character": cid, "version": vid, "updated": updated, "gallery": gallery, "lore": lore}
 
 
 def download_chub_gallery_stream(root: Path, cid: str, vid: str, node: dict):
@@ -418,9 +461,9 @@ def resolve_chub_node(root: Path, cid: str, vid: str) -> dict:
     target = next((v for v in detail["versions"] if v["id"] == vid), None)
     if target is None:
         raise VersionNotFound(vid)
-    full_path = target["chub_source"]
-    if not full_path:
+    if not target["is_chub"]:
         raise chub.ChubFetchError("version is not linked to a chub.ai card")
+    full_path = chub.parse_full_path(target["chub_source"])
     node = chub.fetch_character_node(full_path)
     if node is None:
         raise chub.ChubFetchError(full_path)
