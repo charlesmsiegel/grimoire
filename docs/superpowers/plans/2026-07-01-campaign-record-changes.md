@@ -260,7 +260,7 @@ def _lore_edit(before, after):
 def test_apply_records_lore_edit(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
-    entities.create_entity(croot, "lore", "The Pact", body="old body")
+    entities.create_entity(croot, "lore", "Pact", body="old body")
     absorb.apply_edits(cid, [_lore_edit("old body", "old body\n\nnew line")], "s1")
     entry = changes.read(cid)["lore/pact"]
     assert entry["scene"] == "s1"
@@ -303,7 +303,7 @@ def test_apply_skips_non_browsable_kinds(monkeypatch, tmp_path):
 def test_apply_without_sid_records_nothing(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
-    entities.create_entity(croot, "lore", "The Pact", body="old body")
+    entities.create_entity(croot, "lore", "Pact", body="old body")
     absorb.apply_edits(cid, [_lore_edit("old body", "old body\n\nx")])
     assert changes.read(cid) == {}
 ```
@@ -414,7 +414,7 @@ git commit -m "feat(changes): capture applied browsable edits in apply_edits"
 # append to backend/tests/test_routes.py
 def _apply_lore_change(client, cid):
     croot = store.campaigns.campaign_root(cid)
-    store.entities.create_entity(croot, "lore", "The Pact", body="old body")
+    store.entities.create_entity(croot, "lore", "Pact", body="old body")
     edit = {"id": "lore:pact", "kind": "lore", "target": {"kind": "lore", "id": "pact"},
             "label": "The Pact — lore", "field": "body", "before": "old body",
             "after": "old body\nnew line", "authored": False}

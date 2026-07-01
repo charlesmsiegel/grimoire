@@ -62,3 +62,62 @@ def test_read_tolerates_garbage(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     (campaigns.campaign_root(cid) / "changes.json").write_text("{not json", encoding="utf-8")
     assert changes.read(cid) == {}
+
+
+from grimoire.store import absorb, entities, scenes
+
+
+def _lore_edit(before, after):
+    return {"id": "lore:pact", "kind": "lore", "target": {"kind": "lore", "id": "pact"},
+            "label": "The Pact — lore", "field": "body", "before": before, "after": after,
+            "authored": False}
+
+
+def test_apply_records_lore_edit(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "Pact", body="old body")
+    absorb.apply_edits(cid, [_lore_edit("old body", "old body\n\nnew line")], "s1")
+    entry = changes.read(cid)["lore/pact"]
+    assert entry["scene"] == "s1"
+    assert entry["fields"] == [{"field": "body", "label": "The Pact — lore",
+                                "before": "old body", "after": "old body\n\nnew line"}]
+
+
+def test_apply_accumulates_multiple_fields_per_record(monkeypatch, tmp_path):
+    from grimoire.store import characters, playstate, appearances
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    card = characters.blank_card("Mara")
+    card["data"]["personality"] = "aloof"
+    ch = characters.create_character(croot, "Mara", "main", card)[0]
+    playstate.write_state(croot, ch, "calm")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    cs = {"id": f"character_state:{ch}", "kind": "character_state",
+          "target": {"kind": "characters", "id": ch}, "label": "Mara — current state",
+          "field": "current_state", "before": "calm", "after": "shaken", "authored": False}
+    au = {"id": f"authored:{ch}:personality", "kind": "authored",
+          "target": {"kind": "characters", "id": ch}, "label": "Mara — personality (card edit)",
+          "field": "personality", "before": "aloof", "after": "warmer", "authored": True}
+    absorb.apply_edits(cid, [cs, au], sid)
+    fields = changes.read(cid)[f"characters/{ch}"]["fields"]
+    assert {f["field"] for f in fields} == {"current_state", "personality"}
+
+
+def test_apply_skips_non_browsable_kinds(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    plot_edit = {"id": "plot:the-map", "kind": "plot", "target": {"kind": "plot", "id": "the-map"},
+                 "label": "The map — advanced", "field": "beat", "before": "", "after": "It moved.",
+                 "authored": False,
+                 "payload": {"id": "the-map", "title": "The map", "status": "advanced", "scene": "s1"}}
+    absorb.apply_edits(cid, [plot_edit], "s1")
+    assert changes.read(cid) == {}
+
+
+def test_apply_without_sid_records_nothing(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "Pact", body="old body")
+    absorb.apply_edits(cid, [_lore_edit("old body", "old body\n\nx")])
+    assert changes.read(cid) == {}

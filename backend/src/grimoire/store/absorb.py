@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import json
 
-from . import (appearances, campaigns, characters, chronicle, entities, pcs, playstate,
-               plot, relationships)
+from . import (appearances, campaigns, changes, characters, chronicle, entities, pcs,
+               playstate, plot, relationships)
 from .paths import slugify
 
 EXTRACT_INSTRUCTION = (
@@ -298,11 +298,17 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
     return out
 
 
-def apply_edits(cid: str, edits: list[dict]) -> list[str]:
+_BROWSABLE_KINDS = ("character_state", "lore", "authored")
+
+
+def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str]:
     """Apply each approved StagedEdit to the campaign copies. Best-effort: a missing or
-    broken target is skipped. Returns the ids actually applied."""
+    broken target is skipped. Returns the ids actually applied. When `sid` is given, the
+    before/after of each applied *browsable* edit (characters/lore/locations) is captured
+    into changes.json (the latest write-back delta per record)."""
     croot = campaigns.campaign_root(cid)
     applied: list[str] = []
+    recorded: dict[str, list[dict]] = {}
     for e in edits:
         try:
             kind, target, after = e["kind"], e["target"], e.get("after", "")
@@ -330,8 +336,15 @@ def apply_edits(cid: str, edits: list[dict]) -> list[str]:
             else:
                 continue
             applied.append(e["id"])
+            if sid and kind in _BROWSABLE_KINDS:
+                ref = f"{target['kind']}/{target['id']}"
+                recorded.setdefault(ref, []).append(
+                    {"field": e.get("field", ""), "label": e.get("label", ""),
+                     "before": e.get("before", ""), "after": after})
         except Exception:  # noqa: BLE001 — best-effort per edit
             continue
+    if sid:
+        changes.record(cid, sid, recorded)
     return applied
 
 
