@@ -145,9 +145,15 @@ export type ContextSection = { label: string; text: string; tokens: number };
 export type SceneContext = { model: string; total_tokens: number; sections: ContextSection[] };
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
 export type TimelineEvent = { date: string; text: string };
+export type StagedEdit = {
+  id: string; kind: "character_state" | "lore" | "authored";
+  target: { kind: string; id: string }; label: string; field: string;
+  before: string; after: string; authored: boolean;
+};
 export type SceneAbsorb = {
   one_line: string; summary: string; keywords: string[];
   timeline_events: TimelineEvent[]; cast: string[]; location: string; date: string;
+  edits: StagedEdit[];
 };
 export type ChronicleEntry = {
   id: string; one_line: string; summary: string; keywords: string[];
@@ -378,8 +384,9 @@ export const api = {
   absorbScene: (cid: string, sid: string) =>
     request<SceneAbsorb>("POST", `/api/campaigns/${cid}/scenes/${sid}/absorb`),
   saveChronicle: (cid: string, sid: string,
-                  body: { one_line: string; summary: string; keywords: string[]; timeline_events: TimelineEvent[] }) =>
-    request<ChronicleEntry>("PUT", `/api/campaigns/${cid}/scenes/${sid}/chronicle`, body),
+                  body: { one_line: string; summary: string; keywords: string[];
+                          timeline_events: TimelineEvent[]; edits: StagedEdit[] }) =>
+    request<ChronicleEntry & { applied: string[] }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/chronicle`, body),
   getChronicle: (cid: string) =>
     request<ChronicleEntry[]>("GET", `/api/campaigns/${cid}/chronicle`),
   opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void) =>

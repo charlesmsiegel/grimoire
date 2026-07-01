@@ -317,3 +317,11 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .absorb-panel h4 { margin: 0 0 8px; }
 .absorb-panel input, .absorb-panel textarea { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; margin-bottom: 8px; font-family: var(--font-body); resize: vertical; }
 .absorb-timeline { margin: 4px 0 8px; padding-left: 16px; font-size: 13px; color: var(--muted); }
+
+.absorb-edits { margin-top: 8px; border-top: 1px solid var(--muted); padding-top: 8px; }
+.absorb-edits h5 { margin: 0 0 6px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.absorb-edit { margin-bottom: 8px; }
+.absorb-edit.authored { border-left: 2px solid var(--accent); padding-left: 8px; }
+.absorb-edit label { display: flex; align-items: center; gap: 6px; }
+.absorb-before { color: var(--muted); font-size: 13px; text-decoration: line-through; margin: 2px 0; }
+.absorb-edit textarea { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 6px; font-family: var(--font-body); }

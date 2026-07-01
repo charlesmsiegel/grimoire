@@ -53,7 +53,10 @@ beforeEach(() => {
   (fetchModels as any).mockResolvedValue([]);
   (api.absorbScene as any).mockResolvedValue({
     one_line: "They met.", summary: "A met B.", keywords: ["salt"],
-    timeline_events: [], cast: [], location: "", date: "" });
+    timeline_events: [], cast: [], location: "", date: "",
+    edits: [{ id: "character_state:seraphine", kind: "character_state",
+      target: { kind: "characters", id: "seraphine" }, label: "Seraphine — current state",
+      field: "current_state", before: "Wary.", after: "Loyal now.", authored: false }] });
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "They met.",
     summary: "A met B.", keywords: ["salt"], cast: [], location: "", date: "", absorbed: "t" });
   (api.getChronicle as any).mockResolvedValue([]);
@@ -199,4 +202,29 @@ test("End scene fetches a preview, edits, and saves the chronicle", async () => 
   fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ summary: "Edited summary.", one_line: "They met." })));
+});
+
+test("End scene review sends approved edits with the summary", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Seraphine — current state");
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
+    expect.objectContaining({
+      edits: [expect.objectContaining({ id: "character_state:seraphine", after: "Loyal now." })] })));
+});
+
+test("unchecking an edit excludes it from the save", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  fireEvent.click(await screen.findByLabelText("Approve Seraphine — current state"));
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
+    expect.objectContaining({ edits: [] })));
 });
