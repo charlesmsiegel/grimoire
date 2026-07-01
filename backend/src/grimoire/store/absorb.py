@@ -17,9 +17,11 @@ EXTRACT_INSTRUCTION = (
     '"one_line" (a one-sentence summary), "summary" (one self-contained paragraph), '
     '"keywords" (list of significant nouns/concepts, lowercase), '
     '"timeline_events" (list of {"date","text"} for concrete datable HAPPENINGS; [] if none), '
-    '"character_state_edits" (list of {"id","current_state"} — for each present character '
-    "whose standing condition changed, the FULL rewritten snapshot of who they are now, "
-    "dropping what is no longer true; standing conditions only, not events), "
+    '"character_state_edits" (list of {"id","current_state","knows","suspects"} — for each '
+    "present character whose standing snapshot changed, the FULL rewritten snapshot: "
+    '"current_state" is their standing condition, "knows" is what they now hold as certain, '
+    '"suspects" is what they believe but have not confirmed; drop what is no longer true, '
+    'standing facts only (not a running log). Use "" for a field that does not apply), '
     '"lore_edits" (list of {"id","append"} — a paragraph to add to a lore/location entry), '
     '"authored_edits" (list of {"id","field","text"} — ONLY when a character\'s core '
     "card field (description/personality/scenario) fundamentally and durably changed; rare), "
@@ -271,10 +273,19 @@ def state_snapshot(cid: str, sid: str) -> dict:
         if a["role"] != "npc" or a["kind"] != "characters":
             continue
         st = playstate.read_state(croot, a["id"])
-        if st and st["current_state"]:
+        if st and (st["current_state"] or st["knows"] or st["suspects"]):
             try:
                 name = characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
             except characters.CharacterNotFound:
                 name = a["id"]
-            out[name] = st["current_state"]
+            out[name] = _snapshot_line(st)
     return out
+
+
+def _snapshot_line(st: dict) -> str:
+    parts = [st["current_state"].strip()]
+    if st["knows"].strip():
+        parts.append(f"Knows: {st['knows'].strip()}")
+    if st["suspects"].strip():
+        parts.append(f"Suspects: {st['suspects'].strip()}")
+    return " ".join(p for p in parts if p)

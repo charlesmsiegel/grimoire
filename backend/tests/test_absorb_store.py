@@ -159,6 +159,20 @@ def test_relationships_snapshot_renders_present(monkeypatch, tmp_path):
     assert "Ann → Bo: trust 4" in snap
 
 
+def test_state_snapshot_includes_knowledge(monkeypatch, tmp_path):
+    from grimoire.store import appearances, playstate, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    playstate.write_state(croot, ch, playstate.compose_body("Hurt.", "map is fake", "elara lies"))
+    snap = absorb.state_snapshot(cid, sid)
+    assert "Hurt." in snap["Seraphine"]
+    assert "Knows: map is fake" in snap["Seraphine"]
+    assert "Suspects: elara lies" in snap["Seraphine"]
+
+
 def test_materialize_relationship_and_bond(monkeypatch, tmp_path):
     from grimoire.store import appearances, relationships, scenes
     cid = _campaign(monkeypatch, tmp_path)
