@@ -221,10 +221,19 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                                j === i ? { ...r, approved: !r.approved } : r))} />
                       {e.label}{e.authored ? " · card edit" : ""}
                     </label>
-                    {e.before && <div className="absorb-before">{e.before}</div>}
-                    <textarea aria-label={`After ${e.label}`} rows={2} value={e.after}
-                              onChange={(ev) => setEditRows((rows) => rows.map((r, j) =>
-                                j === i ? { ...r, after: ev.target.value } : r))} />
+                    {e.kind === "relationship" || e.kind === "bond" ? (
+                      <div className="absorb-diff">
+                        {e.before && <span className="absorb-before">{e.before}</span>}
+                        <span className="absorb-after">{e.after}</span>
+                      </div>
+                    ) : (
+                      <>
+                        {e.before && <div className="absorb-before">{e.before}</div>}
+                        <textarea aria-label={`After ${e.label}`} rows={2} value={e.after}
+                                  onChange={(ev) => setEditRows((rows) => rows.map((r, j) =>
+                                    j === i ? { ...r, after: ev.target.value } : r))} />
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
