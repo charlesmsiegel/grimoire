@@ -9,7 +9,7 @@ import functools
 import re
 
 from . import (appearances, briefs, calendars, campaigns, characters, chronicle,
-               config, entities, pcs, playstate, relationships, scenes, worlds)
+               config, entities, pcs, playstate, plot, relationships, scenes, worlds)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -265,6 +265,17 @@ def _relationships(cid: str, croot, cast) -> str:
         return ""
 
 
+def _plot_threads(cid: str) -> str:
+    try:
+        lines = []
+        for t in plot.open_threads(cid):
+            head = f"{t['title']} ({t['status']})"
+            lines.append(f"{head}: {t['latest_beat']}" if t["latest_beat"] else head)
+        return "# Plot threads\n" + "\n".join(lines) if lines else ""
+    except Exception:  # noqa: BLE001 — garbled plot.json: omit, don't crash the context build
+        return ""
+
+
 def _story_so_far(cid: str) -> str:
     # Always-on, non-critical: a garbled chronicle/config must omit the block, never
     # crash the context build (the store may live in a synced folder). Mirrors the
@@ -344,6 +355,7 @@ def _assemble(cid: str, sid: str) -> dict:
     add("Message examples", "\n\n".join(d.get("mes_example", "").strip() for d in npc_cards if d.get("mes_example", "").strip()))
 
     add("Story so far", _story_so_far(cid))
+    add("Plot threads", _plot_threads(cid))
     add("Today", _today_block(cid, sid, croot))
 
     history_ids = scenes.get_location_history(cid, sid)

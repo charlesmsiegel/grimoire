@@ -488,6 +488,35 @@ def test_character_state_multiline_knowledge_stays_indented(monkeypatch, tmp_pat
     assert "\n    line two" in section  # continuation re-indented, not flush-left
 
 
+def test_plot_threads_section_injected(monkeypatch, tmp_path):
+    from grimoire.store import campaigns, context, plot, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    sid = scenes.create_scene(cid, "Now")
+    plot.set_movement(cid, "the-map", "The map", "advanced", "It is a forgery.", "s12")
+    plot.set_movement(cid, "done", "Done", "closed", "resolved", "s5")
+    section = dict(context._assemble(cid, sid)["system"])["Plot threads"]
+    assert "The map (advanced): It is a forgery." in section
+    assert "Done" not in section  # closed excluded
+
+
+def test_plot_threads_absent_when_none(monkeypatch, tmp_path):
+    from grimoire.store import campaigns, context, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    sid = scenes.create_scene(cid, "Now")
+    assert "Plot threads" not in [l for l, _ in context._assemble(cid, sid)["system"]]
+
+
+def test_plot_threads_tolerates_garbled(monkeypatch, tmp_path):
+    from grimoire.store import campaigns, context, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    sid = scenes.create_scene(cid, "Now")
+    (campaigns.campaign_root(cid) / "plot.json").write_text("{ not json", encoding="utf-8")
+    context._assemble(cid, sid)  # must not raise
+
+
 def test_character_state_absent_when_none(monkeypatch, tmp_path):
     from grimoire.store import campaigns, context, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
