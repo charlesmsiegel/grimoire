@@ -1,7 +1,7 @@
 # Scene Lifecycle & Continuity — phase status / handoff
 
 Umbrella design: `specs/2026-06-30-scene-lifecycle-continuity-design.md`.
-All merged work is on `main`. Suites: **backend 426, frontend 157, tsc clean.**
+All merged work is on `main`. Suites: **backend 441, frontend 158, tsc clean.**
 
 ## Done (merged to main)
 
@@ -16,6 +16,14 @@ All merged work is on `main`. Suites: **backend 426, frontend 157, tsc clean.**
   extraction `relationship_deltas`/`bond_changes`, `materialize` relationship/bond StagedEdits
   (structured `payload`, approve-only rows), `apply_edits`, `# Relationships` injection.
   Spec `specs/2026-07-01-scene-relationships-design.md`, plan `plans/2026-07-01-scene-relationships.md`.
+- **Phase 4 — Knowledge (who-knows-what).** Per-NPC `knows`/`suspects` prose as optional
+  `## `-headed sections on `state.md` (back-compatible: a headerless body is `current_state`;
+  a body is only parsed as structured when its first non-empty line is a recognized header).
+  Rides the existing `character_state` StagedEdit (one editable blob, no new kind/`payload`)
+  and the `# Character state` injection. **Keep-on-omit**: an omitted `knows`/`suspects`
+  preserves the stored value, an explicit `""` clears it — so a current_state-only absorb
+  never erases accreted knowledge. NPC-only. Spec `specs/2026-07-01-scene-knowledge-design.md`,
+  plan `plans/2026-07-01-scene-knowledge.md`.
 
 ## The established pipeline (every continuity axis follows this)
 
@@ -28,28 +36,24 @@ injects a labeled, always-on, **tolerant** (omit-never-crash) section.
 `StagedEdit` shape (backend↔TS, fixed): `{id, kind, target:{kind,id}, label, field,
 before, after, authored, payload?}`.
 
-## Next: Phase 4 — Knowledge (who-knows-what)
+## Next: Phase 5 — Plot threads + suggested next scenes
 
-Umbrella bundled knowledge with relationships; it was split out. Build it as the next
-continuity axis on the pipeline above. **Open design decision to resolve in brainstorm:**
-how to store knowledge — the leading options are (a) extend `state.md`/`playstate` to
-carry structured `knows`/`suspects` prose fields alongside `current_state` (state.md
-currently holds only `current_state` as its body, so this needs a small structure
-change), (b) a separate per-character/campaign knowledge store, or (c) fold knowledge
-into the `current_state` prose (simplest, least explicit). Snapshot semantics (fed
-current, rewritten, fed into the prompt) should match Phase 2/3. Then: extraction field(s),
-materialize (likely new kind(s) or extra character_state rows), apply, and a
-`# Knowledge` (or merged into `# Character state`) injection, plus review rows.
+Build it as the next axis on the pipeline above. `plot.json` (open/advanced/closed
+threads), extraction `plot_movements` (see the umbrella schema), `materialize` a plot
+StagedEdit kind, `apply_edits`, and an open-threads injection (likely folded into
+`# Story so far`). Plus an **ephemeral one-call scene-suggestion helper** at scene
+creation (reads open threads + long-absent cast + upcoming calendar), and the
+scene-creation UI to surface the proposed openings. **Open design decisions for the
+brainstorm:** the `plot.json` shape (per the umbrella: `{id: {title, status, beats,
+last_scene}}`), whether threads are approve-only rows or editable, and whether the
+suggestion helper is a new endpoint or rides scene creation.
 
-## Then (umbrella phases 4–5)
+## Then (umbrella phase 5)
 
-- **Plot threads + suggested next scenes** — `plot.json` (open/advanced/closed threads);
-  an ephemeral one-call scene-suggestion helper at scene creation (reads open threads +
-  long-absent cast + upcoming calendar).
 - **Campaign-vs-base world view** — browse the campaign's copies of world records with
   divergence from the base highlighted (via `sync.md` hashes).
 
-## Working cadence (used for Phases 1–3)
+## Working cadence (used for Phases 1–4)
 
 spec (`specs/…-design.md`) → plan (`plans/…md`) → **inline TDD** per task (red→green→commit;
 subagents can't Edit/Write here, so implement inline) → one **whole-branch review on the
@@ -65,6 +69,10 @@ worktree — the editable `backend/.venv` is pinned to this checkout). Progress 
 - Phase-1 Minor: re-absorbing a scene re-appends `timeline.md` lines (no timeline reader
   yet; fix when one lands).
 - Relationship metrics are approve/reject only in review (no inline number editing yet).
+- Phase-4 knowledge is edited as one prose blob in the existing `character_state` textarea
+  (no per-field/structured editing). Residual parse edge: a `current_state` whose *first*
+  non-empty line is literally a recognized header (`## Knows` etc.) would be misread as
+  structured — vanishingly unlikely for standing-condition prose; not guarded.
 
 ## Commands
 
