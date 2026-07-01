@@ -107,6 +107,20 @@ def _char_name(croot, cid: str) -> str:
         return cid
 
 
+def _actor_exists(croot, token: str) -> bool:
+    kind, _, aid = token.partition(":")
+    try:
+        if kind == "pcs":
+            pcs.read_pc(croot, aid)
+        elif kind == "characters":
+            characters.read_character(croot, aid)
+        else:
+            return False
+        return True
+    except (characters.CharacterNotFound, pcs.PCNotFound):
+        return False
+
+
 def _entity_kind(croot, eid: str) -> str | None:
     for kind in ("lore", "locations"):
         try:
@@ -168,6 +182,37 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                     "target": {"kind": "characters", "id": char_id},
                     "label": f"{_char_name(croot, char_id)} — {field} (card edit)",
                     "field": field, "before": before, "after": text, "authored": True})
+
+    for e in parsed.get("relationship_deltas", []):
+        frm, to = e.get("from", ""), e.get("to", "")
+        if not _actor_exists(croot, frm) or not _actor_exists(croot, to):
+            continue
+        payload = {"from": frm, "to": to, "trust": e.get("trust", 0), "affection": e.get("affection", 0),
+                   "tension": e.get("tension", 0), "note": e.get("note", "")}
+        after = relationships._render_feeling(payload)
+        cur = relationships.get_feeling(cid, frm, to)
+        before = relationships._render_feeling(cur) if cur else ""
+        if before == after:
+            continue
+        out.append({"id": f"feeling:{relationships.feeling_key(frm, to)}", "kind": "relationship",
+                    "target": {"kind": "relationships", "id": relationships.feeling_key(frm, to)},
+                    "label": f"{relationships.actor_name(croot, frm)} → {relationships.actor_name(croot, to)}",
+                    "field": "feeling", "before": before, "after": after, "authored": False,
+                    "payload": payload})
+
+    for e in parsed.get("bond_changes", []):
+        a_tok, b_tok, typ = e.get("a", ""), e.get("b", ""), (e.get("type", "") or "").strip()
+        if not typ or not _actor_exists(croot, a_tok) or not _actor_exists(croot, b_tok):
+            continue
+        cur = relationships.get_bond(cid, a_tok, b_tok)
+        before = cur["type"] if cur else ""
+        if before == typ:
+            continue
+        out.append({"id": f"bond:{relationships.bond_key(a_tok, b_tok)}", "kind": "bond",
+                    "target": {"kind": "relationships", "id": relationships.bond_key(a_tok, b_tok)},
+                    "label": f"{relationships.actor_name(croot, a_tok)} & {relationships.actor_name(croot, b_tok)}",
+                    "field": "bond", "before": before, "after": typ, "authored": False,
+                    "payload": {"a": a_tok, "b": b_tok, "type": typ}})
 
     return out
 

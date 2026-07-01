@@ -146,3 +146,31 @@ def test_relationships_snapshot_renders_present(monkeypatch, tmp_path):
     relationships.set_feeling(cid, f"characters:{a}", f"characters:{b}", 4, 3, 1, "warm")
     snap = absorb.relationships_snapshot(cid, sid)
     assert "Ann → Bo: trust 4" in snap
+
+
+def test_materialize_relationship_and_bond(monkeypatch, tmp_path):
+    from grimoire.store import appearances, relationships, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    a = _char(croot, "Ann")
+    b = _char(croot, "Bo")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", a, "main", "npc")
+    appearances.appear(cid, sid, "characters", b, "main", "npc")
+    relationships.set_feeling(cid, f"characters:{a}", f"characters:{b}", 1, 1, 3, "wary")
+    relationships.set_feeling(cid, f"characters:{b}", f"characters:{a}", 2, 2, 2, "keep")
+    parsed = {
+        "relationship_deltas": [
+            {"from": f"characters:{a}", "to": f"characters:{b}", "trust": 4, "affection": 3, "tension": 1, "note": "warm"},
+            {"from": f"characters:{b}", "to": f"characters:{a}", "trust": 2, "affection": 2, "tension": 2, "note": "keep"},
+            {"from": "characters:ghost", "to": f"characters:{b}", "trust": 5, "affection": 0, "tension": 0, "note": ""}],
+        "bond_changes": [{"a": f"characters:{a}", "b": f"characters:{b}", "type": "allies"}],
+    }
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    rel = edits[f"feeling:characters:{a}->characters:{b}"]
+    assert rel["kind"] == "relationship" and rel["before"].startswith("trust 1, affection 1, tension 3") \
+        and rel["after"].startswith("trust 4, affection 3, tension 1") and rel["payload"]["trust"] == 4
+    assert f"feeling:characters:{b}->characters:{a}" not in edits  # no-op dropped
+    assert not any(k.startswith("feeling:characters:ghost") for k in edits)  # unknown dropped
+    bond = edits[f"bond:characters:{a}|characters:{b}"]
+    assert bond["kind"] == "bond" and bond["after"] == "allies" and bond["payload"]["type"] == "allies"
