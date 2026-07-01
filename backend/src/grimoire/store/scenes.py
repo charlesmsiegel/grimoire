@@ -164,6 +164,19 @@ def edit_message(cid: str, sid: str, index: int, content: str) -> None:
     p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")
 
 
+def mark_absorbed(cid: str, sid: str, one_line: str, summary: str) -> None:
+    """Record a scene's absorbed summary into its frontmatter and flag it done."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["one_line"] = one_line
+    meta["summary"] = summary
+    meta["done"] = "true"
+    meta["updated"] = now_iso()
+    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
 def get_location_history(cid: str, sid: str) -> list[str]:
     """Ordered campaign-location ids this scene has been at; last is current. Missing ⇒ []."""
     p = _scene_path(cid, sid)
