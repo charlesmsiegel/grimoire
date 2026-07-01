@@ -408,6 +408,8 @@ export const api = {
     request<ChronicleEntry[]>("GET", `/api/campaigns/${cid}/chronicle`),
   opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/opener`, { prompt }, onEvent),
+  firstPost: (cid: string, sid: string, text: string) =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/first-post`, { text }),
 
   // lorebook import
   lorebookParse: (wid: string, file: File, format: string) => {

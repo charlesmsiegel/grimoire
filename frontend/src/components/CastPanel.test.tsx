@@ -8,7 +8,7 @@ vi.mock("../api/client", () => ({
     listEntities: vi.fn(), getSceneLocation: vi.fn(), setSceneLocation: vi.fn(),
     getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(),
     availableGreetings: vi.fn(), addToCast: vi.fn(), startFromGreeting: vi.fn(),
-    opener: vi.fn(), createGreeting: vi.fn(), listAppearances: vi.fn(),
+    opener: vi.fn(), firstPost: vi.fn(), createGreeting: vi.fn(), listAppearances: vi.fn(),
     sceneSuggestions: vi.fn(),
     campaignImageUrl: (c: string, ch: string, v: string, n: string) => `/cimg/${c}/${ch}/${v}/${n}`,
   },
@@ -129,6 +129,21 @@ test("generating an opener streams into the preview and can be saved as a greeti
       character: "seraphine", version: "default", body: "Mist rolls in.",
     })),
   );
+});
+
+test("Use adopts the generated opener as the scene's first post", async () => {
+  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+    onEvent({ delta: "Mist rolls in." });
+  });
+  (api.firstPost as any).mockResolvedValue({ ok: true });
+  const onSeeded = vi.fn();
+  renderPanel({ onSeeded });
+  fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "A foggy harbor" } });
+  fireEvent.click(screen.getByRole("button", { name: /generate/i }));
+  await screen.findByText("Mist rolls in.");
+  fireEvent.click(screen.getByRole("button", { name: /^Use$/ }));
+  await waitFor(() => expect(api.firstPost).toHaveBeenCalledWith("c", "s", "Mist rolls in."));
+  expect(onSeeded).toHaveBeenCalled();
 });
 
 test("shows the current setting and lists campaign locations", async () => {

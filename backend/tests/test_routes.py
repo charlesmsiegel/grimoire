@@ -795,6 +795,22 @@ def test_opener_requires_key(client):
                        json={"prompt": "x"}).status_code == 409
 
 
+def test_first_post_adopts_opener_onto_empty_scene(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/first-post",
+                       json={"text": "  Mist rolls in.  "}).status_code == 200
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs == [{"role": "assistant", "content": "Mist rolls in."}]
+    # a second first-post is refused once the scene has messages
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/first-post",
+                       json={"text": "again"}).status_code == 409
+    # empty text is rejected on a fresh scene
+    sid2 = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid2}/first-post",
+                       json={"text": "   "}).status_code == 400
+
+
 # ---- lorebook / world-info import (2c) ----
 def test_lorebook_parse_then_import(client):
     wid = _world(client)
