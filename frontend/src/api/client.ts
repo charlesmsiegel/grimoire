@@ -144,6 +144,15 @@ export type CalendarConfig = { primary: CalendarBlock; secondary: CalendarBlock 
 export type ContextSection = { label: string; text: string; tokens: number };
 export type SceneContext = { model: string; total_tokens: number; sections: ContextSection[] };
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
+export type TimelineEvent = { date: string; text: string };
+export type SceneAbsorb = {
+  one_line: string; summary: string; keywords: string[];
+  timeline_events: TimelineEvent[]; cast: string[]; location: string; date: string;
+};
+export type ChronicleEntry = {
+  id: string; one_line: string; summary: string; keywords: string[];
+  cast: string[]; location: string; date: string; absorbed: string;
+};
 
 // lorebook import
 export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKind };
@@ -366,6 +375,13 @@ export const api = {
     request<CastDetail>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}`),
   editMessage: (cid: string, sid: string, index: number, content: string) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}`, { content }),
+  absorbScene: (cid: string, sid: string) =>
+    request<SceneAbsorb>("POST", `/api/campaigns/${cid}/scenes/${sid}/absorb`),
+  saveChronicle: (cid: string, sid: string,
+                  body: { one_line: string; summary: string; keywords: string[]; timeline_events: TimelineEvent[] }) =>
+    request<ChronicleEntry>("PUT", `/api/campaigns/${cid}/scenes/${sid}/chronicle`, body),
+  getChronicle: (cid: string) =>
+    request<ChronicleEntry[]>("GET", `/api/campaigns/${cid}/chronicle`),
   opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/opener`, { prompt }, onEvent),
 
