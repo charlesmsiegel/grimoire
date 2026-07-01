@@ -252,10 +252,14 @@ def apply_edits(cid: str, edits: list[dict]) -> list[str]:
 
 
 def relationships_snapshot(cid: str, sid: str) -> str:
-    """Rendered present-cast feelings/bonds block (feeds the prompt)."""
-    croot = campaigns.campaign_root(cid)
-    tokens = [f"{a['kind']}:{a['id']}" for a in appearances.scene_cast(cid, sid)]
-    return "\n".join(relationships.render_present(cid, tokens, lambda t: relationships.actor_name(croot, t)))
+    """Rendered present-cast feelings/bonds block (feeds the prompt). Tolerant of a
+    garbled relationships.json (returns "" rather than failing the extraction)."""
+    try:
+        croot = campaigns.campaign_root(cid)
+        tokens = [f"{a['kind']}:{a['id']}" for a in appearances.scene_cast(cid, sid)]
+        return "\n".join(relationships.render_present(cid, tokens, lambda t: relationships.actor_name(croot, t)))
+    except Exception:  # noqa: BLE001 — garbled relationships.json: omit, don't crash
+        return ""
 
 
 def state_snapshot(cid: str, sid: str) -> dict:
