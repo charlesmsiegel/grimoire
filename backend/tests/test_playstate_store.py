@@ -24,3 +24,32 @@ def test_write_replaces_snapshot(monkeypatch, tmp_path):
     playstate.write_state(root, "seraphine", "v1")
     playstate.write_state(root, "seraphine", "v2")
     assert playstate.read_state(root, "seraphine")["current_state"] == "v2"
+
+
+def test_compose_body_bare_when_no_knowledge():
+    assert playstate.compose_body("Just hurt.", "", "") == "Just hurt."
+
+
+def test_compose_body_headed_when_knowledge_present():
+    body = playstate.compose_body("Hurt.", "The map is fake.", "")
+    assert "## Current state\nHurt." in body
+    assert "## Knows\nThe map is fake." in body
+    assert "## Suspects" not in body  # empty section omitted
+
+
+def test_read_parses_three_sections(monkeypatch, tmp_path):
+    root = _root(monkeypatch, tmp_path)
+    playstate.write_state(root, "seraphine",
+                          "## Current state\nHurt.\n\n## Knows\nThe map is fake.\n\n## Suspects\nElara lies.")
+    st = playstate.read_state(root, "seraphine")
+    assert st["current_state"] == "Hurt."
+    assert st["knows"] == "The map is fake."
+    assert st["suspects"] == "Elara lies."
+
+
+def test_read_unheaded_body_is_current_state(monkeypatch, tmp_path):
+    root = _root(monkeypatch, tmp_path)
+    playstate.write_state(root, "seraphine", "Wounded; travels with the party.")
+    st = playstate.read_state(root, "seraphine")
+    assert st["current_state"] == "Wounded; travels with the party."
+    assert st["knows"] == "" and st["suspects"] == ""
