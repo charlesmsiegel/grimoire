@@ -105,3 +105,17 @@ def test_apply_edits_skips_missing_target(monkeypatch, tmp_path):
         {"id": "lore:nope", "kind": "lore",
          "target": {"kind": "lore", "id": "nope"}, "field": "body", "after": "x"}])
     assert applied == []
+
+
+def test_apply_edits_authored_rejects_non_card_field(monkeypatch, tmp_path):
+    from grimoire.store import appearances, characters, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    applied = absorb.apply_edits(cid, [
+        {"id": f"authored:{ch}:name", "kind": "authored",
+         "target": {"kind": "characters", "id": ch}, "field": "name", "after": "Hacked"}])
+    assert applied == []
+    assert characters.read_card(croot, ch, "main")["data"]["name"] == "Seraphine"
