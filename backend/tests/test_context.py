@@ -386,3 +386,26 @@ def test_today_block_includes_present_cast_age(monkeypatch, tmp_path):
     scenes.set_datetime(cid, sid, "2026-12-25")
     today = next(s["text"] for s in context.context_sections(cid, sid) if s["label"] == "Today")
     assert "Seraphine" in today and "36" in today and "birthday" in today.lower()
+
+
+def test_story_so_far_section_is_injected(monkeypatch, tmp_path):
+    from grimoire.store import campaigns, chronicle, context, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "Now")
+    chronicle.absorb(cid, {"id": "2026-01-01-past", "one_line": "They first met.",
+                           "summary": "A met B.", "keywords": []})
+    system = context._assemble(cid, sid)["system"]
+    assert "Story so far" in [label for label, _ in system]
+    text = dict(system)["Story so far"]
+    assert "They first met." in text and text.startswith("# Story so far")
+
+
+def test_story_so_far_absent_when_empty(monkeypatch, tmp_path):
+    from grimoire.store import campaigns, context, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "Now")
+    assert "Story so far" not in [label for label, _ in context._assemble(cid, sid)["system"]]
