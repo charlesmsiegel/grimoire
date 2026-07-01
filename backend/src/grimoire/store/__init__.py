@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from . import (
-    appearances, assets, briefs, campaigns, cards, characters, chronicle, chub,
+    absorb, appearances, assets, briefs, campaigns, cards, characters, chronicle, chub,
     context, entities, fetch, greetings, localize, lorebook, pcs, playing, playstate,
     scenes, sync, tags, worlds,
 )
@@ -27,6 +27,7 @@ from .scenes import SceneNotFound
 from .worlds import WorldNotFound
 
 __all__ = [
+    "absorb",
     "parse_frontmatter",
     "dump_frontmatter",
     "home",
