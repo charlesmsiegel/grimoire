@@ -140,7 +140,7 @@ export type CalendarBlock = {
   custom_holidays: Array<{ name: string; month: number; day?: number; nth?: number; weekday?: number }>;
   anchor: { native: string; gregorian: string } | null;
 };
-export type CalendarConfig = { primary: CalendarBlock; secondary: CalendarBlock | null };
+export type CalendarConfig = { primary: CalendarBlock; secondary: CalendarBlock | null; confirmed: boolean };
 export type ContextSection = { label: string; text: string; tokens: number };
 export type SceneContext = { model: string; total_tokens: number; sections: ContextSection[] };
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };

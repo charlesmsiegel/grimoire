@@ -1,9 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
-import { api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry } from "../api/client";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
+  type CalendarConfig, type SceneDatetime,
+} from "../api/client";
 import { fetchModels, type Model } from "../api/models";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 
-export function SceneInspector({ cid, sid, refreshKey }: { cid: string; sid: string; refreshKey: number }) {
+// The calendars a campaign can select. Only Gregorian ships today; this list
+// grows as providers are added.
+const CALENDARS = [{ id: "gregorian", name: "Gregorian" }];
+
+export function SceneInspector({ cid, sid, refreshKey, onSceneChanged }:
+  { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void }) {
   const [cast, setCast] = useState<Actor[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [setting, setSetting] = useState<SceneLocation | null>(null);
@@ -11,6 +19,11 @@ export function SceneInspector({ cid, sid, refreshKey }: { cid: string; sid: str
   const [recap, setRecap] = useState<ChronicleEntry[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
+  const [cfg, setCfg] = useState<CalendarConfig | null>(null);
+  const [when, setWhen] = useState<SceneDatetime | null>(null);
+  const [provider, setProvider] = useState("gregorian");
+  const [dateInput, setDateInput] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.getCampaign(cid).then((c) => {
@@ -25,12 +38,46 @@ export function SceneInspector({ cid, sid, refreshKey }: { cid: string; sid: str
     fetchModels().then(setModels).catch(() => setModels([]));
   }, [cid]);
 
+  const reloadWhen = useCallback(
+    () => api.getSceneDatetime(cid, sid).then(setWhen).catch(() => setWhen(null)),
+    [cid, sid]);
+  const reloadCfg = useCallback(
+    () => api.getCalendarConfig(cid).then(setCfg).catch(() => setCfg(null)),
+    [cid]);
+
   useEffect(() => {
     api.getCast(cid, sid).then(setCast).catch(() => setCast([]));
     api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null));
     api.getSceneContext(cid, sid).then(setCtx).catch(() => setCtx(null));
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
-  }, [cid, sid, refreshKey]);
+    reloadWhen();
+    reloadCfg();
+  }, [cid, sid, refreshKey, reloadWhen, reloadCfg]);
+
+  async function chooseCalendar() {
+    if (!cfg) return;
+    setError(null);
+    try {
+      await api.setCalendarConfig(cid, {
+        ...cfg, primary: { ...cfg.primary, provider }, confirmed: true });
+      await reloadCfg();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function applyDatetime() {
+    if (!dateInput) return;
+    setError(null);
+    try {
+      await api.setSceneDatetime(cid, sid, dateInput);
+      setDateInput("");
+      await reloadWhen();
+      onSceneChanged();  // surface the "Time passes…" transition line in the stream
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
 
   const ctxLen = useMemo(
     () => models.find((m) => m.id === ctx?.model)?.context ?? 0,
@@ -67,6 +114,43 @@ export function SceneInspector({ cid, sid, refreshKey }: { cid: string; sid: str
               {setting.current.name}
             </button>
           : <div className="field-hint">No setting</div>}
+      </div>
+
+      <div className="side-section">
+        <h4>When</h4>
+        {error && <div className="banner">{error}</div>}
+        {when?.current ? (
+          <>
+            <div className="field-hint">{when.current.friendly} ({when.current.weekday})</div>
+            {when.current.holidays_today.length > 0 && (
+              <div className="field-hint">Holidays: {when.current.holidays_today.join(", ")}</div>
+            )}
+            <div className="picker">
+              <input type="date" aria-label="Scene date" value={dateInput}
+                     onChange={(e) => setDateInput(e.target.value)} />
+              <button className="primary" onClick={applyDatetime} disabled={!dateInput}>Advance to</button>
+            </div>
+          </>
+        ) : cfg && !cfg.confirmed ? (
+          <>
+            <div className="field-hint">Select a calendar to track dates.</div>
+            <div className="picker">
+              <select aria-label="Calendar" value={provider} onChange={(e) => setProvider(e.target.value)}>
+                {CALENDARS.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <button className="primary" onClick={chooseCalendar}>Use this calendar</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="field-hint">No date</div>
+            <div className="picker">
+              <input type="date" aria-label="Scene date" value={dateInput}
+                     onChange={(e) => setDateInput(e.target.value)} />
+              <button className="primary" onClick={applyDatetime} disabled={!dateInput}>Set date</button>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="side-section">

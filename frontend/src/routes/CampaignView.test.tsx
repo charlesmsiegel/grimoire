@@ -22,6 +22,8 @@ vi.mock("../api/client", () => ({
     // consumed by the embedded SceneInspector
     getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
     getCastDetail: vi.fn(), readEntity: vi.fn(),
+    getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(),
+    getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(),
     listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
     campaignChanges: vi.fn(),
     campaignImageUrl: () => "/img",
@@ -48,6 +50,10 @@ beforeEach(() => {
   (api.getCast as any).mockResolvedValue([]);
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
   (api.getSceneContext as any).mockResolvedValue({ model: "m", total_tokens: 0, sections: [] });
+  (api.getCalendarConfig as any).mockResolvedValue({
+    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: true });
+  (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
   (api.listCharacters as any).mockResolvedValue([]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listCampaignPCs as any).mockResolvedValue([]);

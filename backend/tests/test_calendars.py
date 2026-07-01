@@ -192,3 +192,20 @@ def test_copy_calendar_copies_world_file(tmp_path):
     write_calendar(wroot, cfg)
     copy_calendar(wroot, croot)
     assert read_calendar(croot)["primary"]["region"] == "FR"
+
+
+def test_confirmed_defaults_false_and_roundtrips(tmp_path):
+    assert default_calendar()["confirmed"] is False
+    assert read_calendar(tmp_path)["confirmed"] is False  # no file yet
+    cfg = default_calendar(); cfg["confirmed"] = True
+    write_calendar(tmp_path, cfg)
+    assert read_calendar(tmp_path)["confirmed"] is True
+
+
+def test_copy_calendar_preserves_confirmed(tmp_path):
+    wroot, croot = tmp_path / "w", tmp_path / "c"
+    wroot.mkdir(); croot.mkdir()
+    cfg = default_calendar(); cfg["confirmed"] = True
+    write_calendar(wroot, cfg)
+    copy_calendar(wroot, croot)
+    assert read_calendar(croot)["confirmed"] is True

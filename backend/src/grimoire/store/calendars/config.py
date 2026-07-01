@@ -16,7 +16,7 @@ def _blank(region: str = "US") -> dict:
 
 
 def default_calendar() -> dict:
-    return {"primary": _blank(), "secondary": None}
+    return {"primary": _blank(), "secondary": None, "confirmed": False}
 
 
 def _normalize_block(block: dict | None) -> dict | None:
@@ -41,12 +41,14 @@ def read_calendar(root: Path) -> dict:
     except json.JSONDecodeError:
         return default_calendar()  # corrupt file — fall back rather than crash a render
     primary = _normalize_block(raw.get("primary")) or _blank()
-    return {"primary": primary, "secondary": _normalize_block(raw.get("secondary"))}
+    return {"primary": primary, "secondary": _normalize_block(raw.get("secondary")),
+            "confirmed": bool(raw.get("confirmed", False))}
 
 
 def write_calendar(root: Path, cfg: dict) -> None:
     out = {"primary": _normalize_block(cfg.get("primary")) or _blank(),
-           "secondary": _normalize_block(cfg.get("secondary"))}
+           "secondary": _normalize_block(cfg.get("secondary")),
+           "confirmed": bool(cfg.get("confirmed", False))}
     _path(root).write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
 
 

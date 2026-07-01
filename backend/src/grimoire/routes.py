@@ -162,6 +162,7 @@ class SceneDatetime(BaseModel):
 class CalendarConfig(BaseModel):
     primary: dict
     secondary: dict | None = None
+    confirmed: bool = False
 
 
 class EditMessage(BaseModel):
@@ -919,7 +920,7 @@ def get_calendar_config(cid: str):
 def put_calendar_config(cid: str, body: CalendarConfig):
     if not store.campaigns.campaign_meta_path(cid).exists():
         raise HTTPException(status_code=404, detail="campaign not found")
-    cfg = {"primary": body.primary, "secondary": body.secondary}
+    cfg = {"primary": body.primary, "secondary": body.secondary, "confirmed": body.confirmed}
     try:
         store.calendars.validate_calendar(cfg)
     except store.calendars.CalendarError as e:
