@@ -120,3 +120,16 @@ def download_url(url: str) -> tuple[bytes, str] | None:
     if ext not in IMG_EXTS:
         ext = "png"
     return content, ext
+
+
+def download_bytes(url: str) -> bytes | None:
+    """Download raw bytes with the same SSRF guard and size cap as
+    download_url, but no image-type requirement -- for fetching arbitrary
+    files (e.g. a JSON character card) that aren't images."""
+    try:
+        content, _ctype = _http_get_bytes(url)
+    except Exception:  # noqa: BLE001 — best-effort; callers never fail on a miss
+        return None
+    if not content or len(content) > MAX_BYTES:
+        return None
+    return content

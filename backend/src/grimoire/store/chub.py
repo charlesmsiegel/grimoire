@@ -36,6 +36,18 @@ def parse_full_path(url_or_path: str) -> str | None:
     return s if _PATH_RE.match(s) else None
 
 
+def normalize_link(raw: str) -> str | None:
+    """Accept any http(s) URL as-is (chub.ai or otherwise), or chub.ai's bare
+    "creator/slug" shorthand -- expanded to a full chub.ai character URL so a
+    linked/downloaded reference is always stored as one canonical URL shape.
+    None if raw is neither a URL nor a recognized chub.ai shorthand."""
+    s = raw.strip()
+    if s.lower().startswith(("http://", "https://")):
+        return s
+    full_path = parse_full_path(s)
+    return f"https://chub.ai/characters/{full_path}" if full_path else None
+
+
 def _get_json(url: str) -> dict | None:
     headers = {"User-Agent": _UA, "Accept": "application/json"}
     try:

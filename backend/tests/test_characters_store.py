@@ -103,6 +103,34 @@ def test_json_import_downloads_avatar_url(tmp_path, monkeypatch):
     assert p is not None and p.read_bytes() == b"DOWNLOADED" and p.suffix == ".png"
 
 
+def test_import_card_update_vid_overwrites_in_place(tmp_path):
+    from grimoire.store import assets, cards
+    cid, vid = ch.create_character(tmp_path, "Imp")
+    new_png = cards.dumps(ch.blank_card("Imp Updated"), "png")
+
+    got_cid, got_vid = ch.import_card(tmp_path, new_png, "png", into_cid=cid, update_vid=vid)
+
+    assert (got_cid, got_vid) == (cid, vid)
+    assert {v["id"] for v in ch.read_character(tmp_path, cid)["versions"]} == {vid}  # no new version
+    assert ch.read_card(tmp_path, cid, vid)["data"]["name"] == "Imp Updated"
+    p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
+    assert p is not None and p.read_bytes() == new_png
+
+
+def test_import_card_update_vid_downloads_avatar_for_json(tmp_path, monkeypatch):
+    import json as _json
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Imp")
+    card = ch.blank_card("Imp Updated")
+    card["data"]["assets"] = [{"type": "icon", "uri": "https://x/pic.png", "name": "main", "ext": "png"}]
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"DOWNLOADED", "image/png"))
+
+    ch.import_card(tmp_path, _json.dumps(card).encode(), "json", into_cid=cid, update_vid=vid)
+
+    p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
+    assert p is not None and p.read_bytes() == b"DOWNLOADED"
+
+
 def test_json_import_download_failure_is_swallowed(tmp_path, monkeypatch):
     import json as _json
     from grimoire.store import assets
@@ -199,6 +227,19 @@ def test_chub_source_is_per_version(tmp_path):
     assert sources[v2] == ""
 
 
+def test_is_chub_flag_distinguishes_chub_links_from_arbitrary_urls(tmp_path):
+    cid, chub_vid = ch.create_character(tmp_path, "Abelha", "main")
+    ch.set_chub_source(tmp_path, cid, chub_vid, "creator/abelha")
+    direct_vid = ch.create_version(tmp_path, cid, "direct", ch.blank_card("Abelha"))
+    ch.set_chub_source(tmp_path, cid, direct_vid, "https://example.com/card.png")
+    unlinked_vid = ch.create_version(tmp_path, cid, "unlinked", ch.blank_card("Abelha"))
+
+    by_id = {v["id"]: v for v in ch.read_character(tmp_path, cid)["versions"]}
+    assert by_id[chub_vid]["is_chub"] is True
+    assert by_id[direct_vid]["is_chub"] is False
+    assert by_id[unlinked_vid]["is_chub"] is False
+
+
 def test_chub_source_legacy_character_level_value_falls_back_to_default_version(tmp_path):
     # Simulates data written before chub_source became per-version: a value
     # sitting in character.md frontmatter with no per-version value yet. It
@@ -269,7 +310,7 @@ def test_import_from_chub_happy_path(tmp_path, monkeypatch):
     result = ch.import_from_chub(tmp_path, "https://chub.ai/characters/creator/imp")
 
     cid, vid = result["character"], result["version"]
-    assert _chub_sources(tmp_path, cid)[vid] == "creator/imp"
+    assert _chub_sources(tmp_path, cid)[vid] == "https://chub.ai/characters/creator/imp"
     assert assets.image_path(tmp_path, cid, vid, "avatar") is not None
     names = {i["name"] for i in assets.list_images(tmp_path, cid, vid)}
     assert names == {"avatar", "gallery_0", "gallery_1"}
@@ -473,6 +514,77 @@ def test_import_from_chub_into_unknown_character_raises(tmp_path, monkeypatch):
         ch.import_from_chub(tmp_path, "creator/imp", into_cid="nobody")
 
 
+def test_import_from_chub_direct_url_png_creates_character_with_no_gallery_or_lore(tmp_path, monkeypatch):
+    from grimoire.store import assets, cards
+
+    png = cards.dumps(ch.blank_card("Direct"), "png")
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "https://example.com/card.png")
+
+    assert result["updated"] is False
+    assert result["gallery"] == {"attempted": 0, "stored": 0}
+    assert result["lore"] == {"lorebooks_found": 0, "created": []}
+    cid, vid = result["character"], result["version"]
+    assert ch.read_card(tmp_path, cid, vid)["data"]["name"] == "Direct"
+    assert assets.image_path(tmp_path, cid, vid, assets.AVATAR) is not None
+    sources = _chub_sources(tmp_path, cid)
+    assert sources[vid] == "https://example.com/card.png"
+
+
+def test_import_from_chub_direct_url_json_creates_character(tmp_path, monkeypatch):
+    import json as _json
+
+    card = ch.blank_card("Direct JSON")
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (_json.dumps(card).encode(), "application/json"))
+
+    result = ch.import_from_chub(tmp_path, "https://example.com/card.json")
+    assert ch.read_card(tmp_path, result["character"], result["version"])["data"]["name"] == "Direct JSON"
+
+
+def test_import_from_chub_direct_url_unparseable_content_raises(tmp_path, monkeypatch):
+    from grimoire.store import chub
+
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"just some text", "text/plain"))
+    with pytest.raises(chub.ChubFetchError):
+        ch.import_from_chub(tmp_path, "https://example.com/nope")
+
+
+def test_import_from_chub_direct_url_non_dict_json_raises(tmp_path, monkeypatch):
+    from grimoire.store import chub
+
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (b"[1, 2, 3]", "application/json"))
+    with pytest.raises(chub.ChubFetchError):
+        ch.import_from_chub(tmp_path, "https://example.com/nope.json")
+
+
+def test_import_from_chub_direct_url_fetch_failure_raises(tmp_path, monkeypatch):
+    from grimoire.store import chub
+
+    def boom(url):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(fetch, "_http_get_bytes", boom)
+    with pytest.raises(chub.ChubFetchError):
+        ch.import_from_chub(tmp_path, "https://example.com/card.png")
+
+
+def test_import_from_chub_direct_url_updates_in_place_when_already_linked(tmp_path, monkeypatch):
+    from grimoire.store import cards
+
+    cid, vid = ch.create_character(tmp_path, "Direct", "main")
+    ch.set_chub_source(tmp_path, cid, vid, "https://example.com/card.png")
+    png = cards.dumps(ch.blank_card("Direct Updated"), "png")
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "https://example.com/card.png", into_cid=cid, into_vid=vid)
+
+    assert result["updated"] is True
+    assert result["version"] == vid
+    assert {v["id"] for v in ch.read_character(tmp_path, cid)["versions"]} == {vid}  # no new version
+    assert ch.read_card(tmp_path, cid, vid)["data"]["name"] == "Direct Updated"
+
+
 def test_download_chub_gallery_for_linked_version(tmp_path, monkeypatch):
     from grimoire.store import assets, chub
 
@@ -525,6 +637,19 @@ def test_download_chub_gallery_unlinked_version_raises(tmp_path):
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
     with pytest.raises(chub.ChubFetchError):
         ch.download_chub_gallery(tmp_path, cid, vid)
+
+
+def test_download_chub_gallery_linked_to_a_non_chub_url_raises(tmp_path):
+    # gallery/lorebook downloads only make sense for a chub.ai-recognized
+    # link -- a version linked to some other site's URL has neither.
+    from grimoire.store import chub
+
+    cid, vid = ch.create_character(tmp_path, "Direct", "main")
+    ch.set_chub_source(tmp_path, cid, vid, "https://example.com/card.png")
+    with pytest.raises(chub.ChubFetchError):
+        ch.download_chub_gallery(tmp_path, cid, vid)
+    with pytest.raises(chub.ChubFetchError):
+        ch.download_chub_lorebooks(tmp_path, cid, vid)
 
 
 def test_download_chub_gallery_unknown_character_or_version_raises(tmp_path):

@@ -21,6 +21,23 @@ def test_parse_full_path_rejects_garbage():
     assert chub.parse_full_path("") is None
 
 
+def test_normalize_link_passes_any_url_through_unchanged():
+    assert chub.normalize_link("https://example.com/card.png") == "https://example.com/card.png"
+    assert chub.normalize_link("http://other-site.example/a/b?x=1") == "http://other-site.example/a/b?x=1"
+
+
+def test_normalize_link_expands_chub_shorthand_to_a_full_url():
+    assert chub.normalize_link("creator/slug") == "https://chub.ai/characters/creator/slug"
+    assert (chub.normalize_link("https://chub.ai/characters/creator/slug?ref=x")
+            == "https://chub.ai/characters/creator/slug?ref=x")  # already a full URL: untouched, not re-derived
+
+
+def test_normalize_link_rejects_non_url_non_chub_garbage():
+    assert chub.normalize_link("not a url") is None
+    assert chub.normalize_link("a/b/c") is None
+    assert chub.normalize_link("") is None
+
+
 def test_fetch_character_node_returns_node(monkeypatch):
     monkeypatch.setattr(chub, "_get_json", lambda url: {"node": {"id": 1, "hasGallery": False}})
     assert chub.fetch_character_node("a/b") == {"id": 1, "hasGallery": False}
