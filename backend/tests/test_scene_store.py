@@ -156,3 +156,19 @@ def test_delete_removes_scene(monkeypatch, tmp_path):
     assert scenes.list_scenes(cid) == []
     with pytest.raises(scenes.SceneNotFound):
         scenes.delete_scene(cid, sid)
+
+
+def test_mark_absorbed_writes_frontmatter(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Ending")
+    scenes.mark_absorbed(cid, sid, "They parted.", "A and B parted at dawn.")
+    meta = scenes.read_scene(cid, sid)["meta"]
+    assert meta["one_line"] == "They parted."
+    assert meta["summary"] == "A and B parted at dawn."
+    assert meta["done"] == "true"
+
+
+def test_mark_absorbed_missing_scene_raises(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    with pytest.raises(scenes.SceneNotFound):
+        scenes.mark_absorbed(cid, "nope", "x", "y")
