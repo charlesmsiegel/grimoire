@@ -137,6 +137,7 @@ class ChronicleSave(BaseModel):
     summary: str = ""
     keywords: list[str] = []
     timeline_events: list[dict] = []
+    edits: list[dict] = []
 
 
 class ChatTurn(BaseModel):
@@ -1146,7 +1147,8 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
         "keywords": body.keywords, **facts})
     store.chronicle.append_timeline(cid, body.timeline_events)
     store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
-    return record
+    applied = store.absorb.apply_edits(cid, body.edits)
+    return {**record, "applied": applied}
 
 
 # ---- campaign cast & suggestions (declared before the generic /{kind} routes) ----
