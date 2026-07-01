@@ -228,3 +228,25 @@ test("unchecking an edit excludes it from the save", async () => {
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ edits: [] })));
 });
+
+test("relationship rows are read-only and sent with payload on save", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    edits: [{ id: "feeling:characters:a->characters:b", kind: "relationship",
+      target: { kind: "relationships", id: "characters:a->characters:b" }, label: "Ann → Bo",
+      field: "feeling", before: "trust 1, affection 1, tension 3", after: "trust 4, affection 3, tension 1",
+      authored: false, payload: { from: "characters:a", to: "characters:b", trust: 4, affection: 3, tension: 1, note: "" } }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Ann → Bo");
+  expect(screen.queryByLabelText("After Ann → Bo")).toBeNull();
+  expect(screen.getByText(/trust 4, affection 3, tension 1/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
+    expect.objectContaining({ edits: expect.arrayContaining([
+      expect.objectContaining({ id: "feeling:characters:a->characters:b",
+        payload: expect.objectContaining({ trust: 4 }) })]) })));
+});

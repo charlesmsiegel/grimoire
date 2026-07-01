@@ -146,9 +146,10 @@ export type SceneContext = { model: string; total_tokens: number; sections: Cont
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
 export type TimelineEvent = { date: string; text: string };
 export type StagedEdit = {
-  id: string; kind: "character_state" | "lore" | "authored";
+  id: string; kind: "character_state" | "lore" | "authored" | "relationship" | "bond";
   target: { kind: string; id: string }; label: string; field: string;
   before: string; after: string; authored: boolean;
+  payload?: Record<string, unknown>;
 };
 export type SceneAbsorb = {
   one_line: string; summary: string; keywords: string[];
