@@ -5,6 +5,13 @@ import {
   type SceneSuggestion,
 } from "../api/client";
 
+// Most endpoints return a string `detail`; the LLM-backed ones return a 502 with an
+// object `{detail, kind}`. Coerce to a string so it never renders as a React child.
+function errMsg(err: any): string {
+  const d = err?.detail;
+  return typeof d === "string" ? d : (d?.detail ?? String(err));
+}
+
 export function CastPanel({
   cid, sid, sceneEmpty, keySet, onSeeded,
 }: {
@@ -49,6 +56,7 @@ export function CastPanel({
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
     reloadSetting();
     reloadWhen();
+    setSuggestions([]);  // don't carry a prior scene's suggestions across a switch
   }, [cid, sid, reloadCast, reloadSetting, reloadWhen]);
 
   // characters/pcs available to add: world assets plus the campaign's own PC overlays
@@ -122,22 +130,27 @@ export function CastPanel({
       const r = await api.sceneSuggestions(cid);
       setSuggestions(r.suggestions);
     } catch (err: any) {
-      setError(err.detail ?? String(err));
+      setError(errMsg(err));
     } finally {
       setBusy(false);
     }
   }
 
   async function useSuggestion(s: SceneSuggestion) {
+    setError(null);
     setBusy(true);
     try {
       for (const c of s.cast) {
-        try { await api.addToCast(cid, sid, { kind: c.kind, id: c.id }); } catch { /* already present */ }
+        await api.addToCast(cid, sid, { kind: c.kind, id: c.id });
       }
       if (s.location) await api.setSceneLocation(cid, sid, s.location.id);
       setPrompt(s.premise);
       setSuggestions([]);
+      await reloadCast();
+      await reloadSetting();
       onSeeded();
+    } catch (err: any) {
+      setError(errMsg(err));
     } finally {
       setBusy(false);
     }
