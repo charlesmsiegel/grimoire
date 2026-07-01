@@ -23,6 +23,7 @@ vi.mock("../api/client", () => ({
     getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
     getCastDetail: vi.fn(), readEntity: vi.fn(),
     listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
+    campaignChanges: vi.fn(),
     campaignImageUrl: () => "/img",
   },
 }));
@@ -60,6 +61,7 @@ beforeEach(() => {
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "They met.",
     summary: "A met B.", keywords: ["salt"], cast: [], location: "", date: "", absorbed: "t" });
   (api.getChronicle as any).mockResolvedValue([]);
+  (api.campaignChanges as any).mockResolvedValue([]);
 });
 
 function renderCampaign() {
@@ -292,4 +294,10 @@ test("relationship rows are read-only and sent with payload on save", async () =
     expect.objectContaining({ edits: expect.arrayContaining([
       expect.objectContaining({ id: "feeling:characters:a->characters:b",
         payload: expect.objectContaining({ trust: 4 }) })]) })));
+});
+
+test("Changes tab reveals the changes panel", async () => {
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: /^Changes$/ }));
+  expect(await screen.findByText(/No record changes yet/)).toBeInTheDocument();
 });
