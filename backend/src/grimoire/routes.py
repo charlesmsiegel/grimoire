@@ -1123,13 +1123,16 @@ async def post_absorb(cid: str, sid: str,
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to absorb")
     facts = store.chronicle.scene_facts(cid, sid)
-    messages = store.chronicle.build_prompt(
-        store.chronicle.transcript_text(scene["messages"]), facts)
+    messages = store.absorb.build_prompt(
+        store.chronicle.transcript_text(scene["messages"]), facts,
+        store.absorb.state_snapshot(cid, sid))
     try:
         text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
     except OpenRouterError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
-    return {**store.chronicle.parse_output(text), **facts}
+    parsed = store.absorb.parse_output(text)
+    return {"one_line": parsed["one_line"], "summary": parsed["summary"],
+            "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"], **facts}
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")
