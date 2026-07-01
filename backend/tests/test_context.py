@@ -327,8 +327,40 @@ def test_current_setting_injected_once(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "user", "look around")
     sys = context.build_messages(cid, sid)[0]["content"]
     assert "# Current setting" in sys
-    # keyless location would otherwise be always-on in world-info too; exclude prevents a double-inject
+    # the current location is shown once as the setting; exclude keeps a keyed current
+    # location from also re-injecting via world-info
     assert sys.count("A drowned basilica of black salt.") == 1
+
+
+def test_keyless_noncurrent_location_stays_silent(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    here = entities.create_entity(croot, "locations", "Cohen House", "A quiet suburban home.")
+    entities.create_entity(croot, "locations", "The Ascend Institute",
+                           "A gleaming laboratory of demi-human genesis.")  # keyless, not current
+    scenes.set_location(cid, sid, here)
+    scenes.append_message(cid, sid, "user", "look around")
+    sys = context.build_messages(cid, sid)[0]["content"]
+    # a keyless location that isn't the current setting must not leak into the scene
+    assert "gleaming laboratory of demi-human genesis" not in sys
+
+
+def test_keyed_location_activates_on_keyword_when_not_current(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    here = entities.create_entity(croot, "locations", "Cohen House", "A quiet suburban home.")
+    entities.create_entity(croot, "locations", "The Ascend Institute",
+                           "A gleaming laboratory of demi-human genesis.",
+                           keys="Ascend Institute")
+    scenes.set_location(cid, sid, here)
+
+    # keyword absent -> silent
+    scenes.append_message(cid, sid, "user", "look around")
+    assert "gleaming laboratory" not in context.build_messages(cid, sid)[0]["content"]
+
+    # keyword present in recent chat -> the keyed location activates even though it isn't current
+    scenes.append_message(cid, sid, "user", "tell me about the Ascend Institute")
+    assert "gleaming laboratory" in context.build_messages(cid, sid)[0]["content"]
 
 
 def test_no_setting_block_when_unset(monkeypatch, tmp_path):
