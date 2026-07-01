@@ -6,6 +6,8 @@ vi.mock("../api/client", () => ({
     getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
     listCampaignPCs: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
     getCastDetail: vi.fn(), readEntity: vi.fn(), getChronicle: vi.fn(),
+    getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(),
+    getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(),
     campaignImageUrl: () => "/img",
   },
 }));
@@ -30,10 +32,16 @@ beforeEach(() => {
   (api.getChronicle as any).mockResolvedValue([
     { id: "s0", one_line: "They first met.", summary: "", keywords: [],
       cast: [], location: "", date: "", absorbed: "t" }]);
+  (api.getCalendarConfig as any).mockResolvedValue({
+    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: true });
+  (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
+  (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
+  (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: false, friendly: "" });
 });
 
-function renderInspector() {
-  render(<SceneInspector cid="c" sid="s" refreshKey={0} />);
+function renderInspector(onSceneChanged: () => void = () => {}) {
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={onSceneChanged} />);
 }
 
 test("lists cast names and the location and a context section", async () => {
@@ -61,4 +69,33 @@ test("shows the story-so-far recap", async () => {
   renderInspector();
   await screen.findByText("Story so far");
   await screen.findByText("They first met.");
+});
+
+test("no calendar selected: choosing one confirms the calendar", async () => {
+  (api.getCalendarConfig as any).mockResolvedValue({
+    primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
+    secondary: null, confirmed: false });
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /use this calendar/i }));
+  await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith(
+    "c", expect.objectContaining({ confirmed: true })));
+});
+
+test("calendar but no date: setting a date calls setSceneDatetime and notifies", async () => {
+  const onChanged = vi.fn();
+  renderInspector(onChanged);
+  const input = await screen.findByLabelText("Scene date");
+  fireEvent.change(input, { target: { value: "2026-07-04" } });
+  fireEvent.click(screen.getByRole("button", { name: /set date/i }));
+  await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s", "2026-07-04"));
+  await waitFor(() => expect(onChanged).toHaveBeenCalled());
+});
+
+test("shows the current date when one is set", async () => {
+  (api.getSceneDatetime as any).mockResolvedValue({
+    current: { native: "2026-07-04", friendly: "4 July 2026", weekday: "Saturday",
+               secondary_friendly: null, holidays_today: [], upcoming: null, cast: [] },
+    history: ["2026-07-04"] });
+  renderInspector();
+  await screen.findByText(/4 July 2026/);
 });

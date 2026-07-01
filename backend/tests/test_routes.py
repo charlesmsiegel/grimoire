@@ -1078,6 +1078,15 @@ def test_calendar_config_get_put(client):
     assert got["primary"]["custom_holidays"][0]["name"] == "Founding Day"
 
 
+def test_calendar_config_confirmed_flag(client):
+    _wid, cid = _campaign(client)
+    assert client.get(f"/api/campaigns/{cid}/calendar").json()["confirmed"] is False
+    cfg = {"primary": {"provider": "gregorian", "region": "US", "custom_holidays": [], "anchor": None},
+           "secondary": None, "confirmed": True}
+    assert client.put(f"/api/campaigns/{cid}/calendar", json=cfg).json() == {"ok": True}
+    assert client.get(f"/api/campaigns/{cid}/calendar").json()["confirmed"] is True
+
+
 def test_calendar_config_rejects_malformed_custom_holiday(client):
     _wid, cid = _campaign(client)
     bad = {"primary": {"provider": "gregorian", "region": "US",

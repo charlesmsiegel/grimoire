@@ -316,7 +316,10 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           </button>
         </div>
       </section>
-      {activeId && <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey} />}
+      {activeId && (
+        <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
+                        onSceneChanged={() => selectScene(activeId)} />
+      )}
     </div>
   );
 }
