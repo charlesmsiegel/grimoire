@@ -1,7 +1,7 @@
 # Scene Lifecycle & Continuity — phase status / handoff
 
 Umbrella design: `specs/2026-06-30-scene-lifecycle-continuity-design.md`.
-All merged work is on `main`. Suites: **backend 441, frontend 158, tsc clean.**
+All merged work is on `main`. Suites: **backend 458, frontend 159, tsc clean.**
 
 ## Done (merged to main)
 
@@ -24,6 +24,14 @@ All merged work is on `main`. Suites: **backend 441, frontend 158, tsc clean.**
   preserves the stored value, an explicit `""` clears it — so a current_state-only absorb
   never erases accreted knowledge. NPC-only. Spec `specs/2026-07-01-scene-knowledge-design.md`,
   plan `plans/2026-07-01-scene-knowledge.md`.
+- **Phase 5a — Plot threads.** `plot.json` (open/advanced/closed threads, each with dated
+  `beats` + `last_scene`), extraction `plot_movements`, `materialize` a new `plot`
+  StagedEdit (editable beat `after` + structured `{id,title,status,scene}` payload),
+  `apply_edits` via `plot.set_movement`, and a `# Plot threads` injection (open/advanced
+  only). New-thread ids `slugify(title)`; pid resolved-then-looked-up so colliding titles
+  merge honestly; movements deduped; tolerant reads. `plot.render_open` is shared by the
+  prompt snapshot and the context block. Spec `specs/2026-07-01-scene-plot-threads-design.md`,
+  plan `plans/2026-07-01-scene-plot-threads.md`.
 
 ## The established pipeline (every continuity axis follows this)
 
@@ -36,17 +44,17 @@ injects a labeled, always-on, **tolerant** (omit-never-crash) section.
 `StagedEdit` shape (backend↔TS, fixed): `{id, kind, target:{kind,id}, label, field,
 before, after, authored, payload?}`.
 
-## Next: Phase 5 — Plot threads + suggested next scenes
+## Next: Phase 5b — Suggested next scenes
 
-Build it as the next axis on the pipeline above. `plot.json` (open/advanced/closed
-threads), extraction `plot_movements` (see the umbrella schema), `materialize` a plot
-StagedEdit kind, `apply_edits`, and an open-threads injection (likely folded into
-`# Story so far`). Plus an **ephemeral one-call scene-suggestion helper** at scene
-creation (reads open threads + long-absent cast + upcoming calendar), and the
-scene-creation UI to surface the proposed openings. **Open design decisions for the
-brainstorm:** the `plot.json` shape (per the umbrella: `{id: {title, status, beats,
-last_scene}}`), whether threads are approve-only rows or editable, and whether the
-suggestion helper is a new endpoint or rides scene creation.
+The read-forward companion to 5a (Phase 5 was split; plot threads shipped first). An
+**ephemeral one-call helper** at scene creation (like `build_opener_messages`/
+`post_opener`): reads open threads (`plot.open_threads`) + long-absent cast + upcoming
+calendar events and proposes 3–4 scene openings; the user picks one (seeds cast/location)
+or ignores it. Nothing persisted by the call itself. **Open design decisions for the
+brainstorm:** where it triggers (a distinct endpoint — mind the existing
+`/scenes/{sid}/suggestions` cast-suggestion route name), how "long-absent cast" is
+computed (from `chronicle`/roster), how much of each open thread to feed, and the
+scene-creation UI surface.
 
 ## Then (umbrella phase 5)
 
