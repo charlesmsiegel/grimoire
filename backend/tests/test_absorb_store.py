@@ -32,8 +32,8 @@ def test_parse_output_extracts_summary_and_edit_lists():
             ' "authored_edits": [{"id": "seraphine", "field": "personality", "text": "colder"}]}\n```')
     out = absorb.parse_output(text)
     assert out["one_line"] == "x" and out["timeline_events"] == [{"date": "d", "text": "t"}]
-    assert out["character_state_edits"] == [
-        {"id": "seraphine", "current_state": "hurt", "knows": "", "suspects": ""}]
+    # Omitted knows/suspects keys stay ABSENT (presence preserved for keep-on-omit).
+    assert out["character_state_edits"] == [{"id": "seraphine", "current_state": "hurt"}]
     assert out["lore_edits"] == [{"id": "salt-cathedral", "append": "now flooded"}]
     assert out["authored_edits"] == [{"id": "seraphine", "field": "personality", "text": "colder"}]
 
@@ -96,6 +96,40 @@ def test_materialize_composes_knowledge_blob(monkeypatch, tmp_path):
     assert "## Current state\nTravels with them." in cs["after"]
     assert "## Knows\nmap is fake" in cs["after"]
     assert "## Suspects" not in cs["after"]
+
+
+def test_materialize_preserves_omitted_knowledge(monkeypatch, tmp_path):
+    # An absorb that re-emits only current_state must NOT wipe stored knows/suspects.
+    from grimoire.store import appearances, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    playstate.write_state(croot, ch, playstate.compose_body("Old mood.", "the map is fake", "elara lies"))
+    parsed = {"character_state_edits": [{"id": ch, "current_state": "New mood."}]}  # no knowledge keys
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    cs = edits[f"character_state:{ch}"]
+    assert "New mood." in cs["after"]
+    assert "## Knows\nthe map is fake" in cs["after"]      # preserved
+    assert "## Suspects\nelara lies" in cs["after"]        # preserved
+
+
+def test_materialize_explicit_empty_clears_knowledge(monkeypatch, tmp_path):
+    # An explicit "" for suspects DOES clear it (e.g. a suspicion resolved into knows).
+    from grimoire.store import appearances, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    playstate.write_state(croot, ch, playstate.compose_body("Mood.", "old", "a hunch"))
+    parsed = {"character_state_edits": [
+        {"id": ch, "current_state": "Mood.", "knows": "confirmed", "suspects": ""}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    cs = edits[f"character_state:{ch}"]
+    assert "## Knows\nconfirmed" in cs["after"]
+    assert "## Suspects" not in cs["after"]  # explicitly cleared
 
 
 def test_materialize_drops_noop_state(monkeypatch, tmp_path):

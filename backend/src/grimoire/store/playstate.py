@@ -21,25 +21,38 @@ def state_path(root: Path, cid: str) -> Path:
     return root / "characters" / cid / "state.md"
 
 
+def _is_header(line: str) -> str | None:
+    stripped = line.strip()
+    if stripped.startswith("## ") and stripped[3:].strip().lower() in _HEADERS:
+        return _HEADERS[stripped[3:].strip().lower()]
+    return None
+
+
 def _parse_body(body: str) -> dict:
     fields = {"current_state": "", "knows": "", "suspects": ""}
+    lines = body.splitlines()
+    # Structured only when the FIRST non-empty line is a recognized header. Otherwise the
+    # body is a legacy / current_state-only snapshot and is taken wholesale — so prose that
+    # merely contains a "## Knows"-looking line mid-text is never split or lost.
+    first = next((ln for ln in lines if ln.strip()), "")
+    if _is_header(first) is None:
+        fields["current_state"] = body.strip()
+        return fields
+
     cur, buf = None, []
-    saw_header = False
 
     def flush():
-        if cur and buf:
+        if cur is not None:
             fields[cur] = "\n".join(buf).strip()
 
-    for line in body.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("## ") and stripped[3:].strip().lower() in _HEADERS:
+    for line in lines:
+        head = _is_header(line)
+        if head is not None:
             flush()
-            cur, buf, saw_header = _HEADERS[stripped[3:].strip().lower()], [], True
+            cur, buf = head, []
             continue
         buf.append(line)
     flush()
-    if not saw_header:  # legacy Phase-2 body: whole thing is current_state
-        fields["current_state"] = body.strip()
     return fields
 
 

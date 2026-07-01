@@ -222,6 +222,22 @@ def _today_block(cid: str, sid: str, croot) -> str:
     return "# Today\n" + "\n".join(lines)
 
 
+def _state_block(name: str, st: dict) -> list[str]:
+    """Lines for one NPC in the # Character state block: 'Name: <current_state>' then any
+    indented Knows:/Suspects: (continuation lines re-indented so multi-line prose stays
+    attached). When current_state is empty the first knowledge label rides the name line,
+    so there is never a dangling 'Name:'."""
+    cs = st["current_state"].strip()
+    knowledge = [(label, st[field].strip().replace("\n", "\n    "))
+                 for label, field in (("Knows", "knows"), ("Suspects", "suspects")) if st[field].strip()]
+    if cs:
+        return [f"{name}: {cs}"] + [f"  {label}: {v}" for label, v in knowledge]
+    if not knowledge:
+        return []
+    (first_label, first_v), *rest = knowledge
+    return [f"{name}: {first_label}: {first_v}"] + [f"  {label}: {v}" for label, v in rest]
+
+
 def _character_state(croot, cast) -> str:
     try:
         lines = []
@@ -234,11 +250,7 @@ def _character_state(croot, cast) -> str:
                     name = characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
                 except characters.CharacterNotFound:
                     name = a["id"]
-                lines.append(f"{name}: {st['current_state']}".rstrip())
-                if st["knows"].strip():
-                    lines.append(f"  Knows: {st['knows'].strip()}")
-                if st["suspects"].strip():
-                    lines.append(f"  Suspects: {st['suspects'].strip()}")
+                lines.extend(_state_block(name, st))
         return "# Character state\n" + "\n".join(lines) if lines else ""
     except Exception:  # noqa: BLE001 — garbled state: omit, don't crash the context build
         return ""

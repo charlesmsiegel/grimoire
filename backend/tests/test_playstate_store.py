@@ -53,3 +53,24 @@ def test_read_unheaded_body_is_current_state(monkeypatch, tmp_path):
     st = playstate.read_state(root, "seraphine")
     assert st["current_state"] == "Wounded; travels with the party."
     assert st["knows"] == "" and st["suspects"] == ""
+
+
+def test_read_does_not_split_prose_with_fake_header(monkeypatch, tmp_path):
+    # A current_state-only body whose prose contains a header-looking line must NOT be
+    # split (round-trip corruption): it isn't structured because it doesn't START with one.
+    root = _root(monkeypatch, tmp_path)
+    body = playstate.compose_body("He lectured: ## Knows nothing of value.\n## Suspects everyone.", "", "")
+    playstate.write_state(root, "seraphine", body)
+    st = playstate.read_state(root, "seraphine")
+    assert "## Knows nothing of value." in st["current_state"]
+    assert st["knows"] == "" and st["suspects"] == ""
+
+
+def test_read_keeps_leading_prose_before_a_header(monkeypatch, tmp_path):
+    # A hand-edited/synced body with leading prose then a header: nothing is dropped.
+    root = _root(monkeypatch, tmp_path)
+    playstate.write_state(root, "seraphine", "He is the duke.\n\n## Knows\nthe password")
+    st = playstate.read_state(root, "seraphine")
+    assert "He is the duke." in st["current_state"]
+    assert "## Knows" in st["current_state"]  # taken wholesale, not split
+    assert st["knows"] == ""
