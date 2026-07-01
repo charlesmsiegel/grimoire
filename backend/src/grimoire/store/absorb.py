@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 
-from . import appearances, campaigns, characters, chronicle, entities, pcs, playstate, relationships
+from . import (appearances, campaigns, characters, chronicle, entities, pcs, playstate,
+               plot, relationships)
+from .paths import slugify
 
 EXTRACT_INSTRUCTION = (
     "You are absorbing a completed role-play scene into a campaign chronicle and "
@@ -28,7 +30,11 @@ EXTRACT_INSTRUCTION = (
     '"relationship_deltas" (list of {"from","to","trust","affection","tension","note"} — '
     "for each directed pair whose feelings changed, the FULL updated values; use the "
     '"<kind>:<id>" tokens from the context block; trust/affection/tension are 0-5), '
-    'and "bond_changes" (list of {"a","b","type"} — a shared relationship type for a pair). '
+    '"bond_changes" (list of {"a","b","type"} — a shared relationship type for a pair), '
+    'and "plot_movements" (list of {"id","title","status","beat"} — for each plot thread '
+    "this scene moved: the thread id from the context block to advance or close it, or a "
+    'NEW thread (omit "id", give a "title"); "status" is one of open/advanced/closed; '
+    '"beat" is one sentence on how this scene moved it; only threads that actually moved). '
     "Write in third person, past tense. Use the ids given in the context block."
 )
 
@@ -41,7 +47,7 @@ def _int05(v) -> int:
 
 
 def build_prompt(transcript: str, facts: dict, state_snapshot: dict | None = None,
-                 rel_snapshot: str | None = None) -> list[dict]:
+                 rel_snapshot: str | None = None, plot_snapshot: str | None = None) -> list[dict]:
     head = []
     if facts.get("location"):
         head.append(f"Location: {facts['location']}")
@@ -54,6 +60,8 @@ def build_prompt(transcript: str, facts: dict, state_snapshot: dict | None = Non
                     "\n".join(f"- {name}: {s}" for name, s in state_snapshot.items()))
     if rel_snapshot:
         head.append("Current relationships:\n" + rel_snapshot)
+    if plot_snapshot:
+        head.append("Current plot threads:\n" + plot_snapshot)
     prefix = ("\n".join(head) + "\n\n") if head else ""
     return [{"role": "system", "content": EXTRACT_INSTRUCTION},
             {"role": "user", "content": prefix + transcript}]
@@ -100,6 +108,15 @@ def parse_output(text: str) -> dict:
                                "trust": _int05(e.get("trust")), "affection": _int05(e.get("affection")),
                                "tension": _int05(e.get("tension")), "note": str(e.get("note", "")).strip()})
 
+    plot_moves = []
+    for e in obj.get("plot_movements", []):
+        if isinstance(e, dict):
+            status = str(e.get("status", "")).strip().lower()
+            plot_moves.append({"id": str(e.get("id", "")).strip(),
+                               "title": str(e.get("title", "")).strip(),
+                               "status": status if status in plot.STATUSES else "open",
+                               "beat": str(e.get("beat", "")).strip()})
+
     return {
         "one_line": str(obj.get("one_line", "")).strip(),
         "summary": str(obj.get("summary", "")).strip(),
@@ -110,6 +127,7 @@ def parse_output(text: str) -> dict:
         "authored_edits": _list("authored_edits", ("id", "field", "text")),
         "relationship_deltas": rel_deltas,
         "bond_changes": _list("bond_changes", ("a", "b", "type")),
+        "plot_movements": plot_moves,
     }
 
 
@@ -287,6 +305,19 @@ def relationships_snapshot(cid: str, sid: str) -> str:
         tokens = [f"{a['kind']}:{a['id']}" for a in appearances.scene_cast(cid, sid)]
         return "\n".join(relationships.render_present(cid, tokens, lambda t: relationships.actor_name(croot, t)))
     except Exception:  # noqa: BLE001 — garbled relationships.json: omit, don't crash
+        return ""
+
+
+def plot_snapshot(cid: str, sid: str) -> str:
+    """Rendered open/advanced plot threads (id + title + status + latest beat) — feeds the
+    prompt so the model advances the right thread. Tolerant of a garbled plot.json."""
+    try:
+        lines = []
+        for t in plot.open_threads(cid):
+            head = f"{t['id']}: {t['title']} ({t['status']})"
+            lines.append(f"{head} — {t['latest_beat']}" if t["latest_beat"] else head)
+        return "\n".join(lines)
+    except Exception:  # noqa: BLE001 — garbled plot.json: omit, don't crash the extraction
         return ""
 
 
