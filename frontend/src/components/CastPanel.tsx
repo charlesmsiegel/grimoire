@@ -178,6 +178,18 @@ export function CastPanel({
     }
   }
 
+  async function useOpener() {
+    if (!opener.trim() || busy) return;
+    setError(null);
+    try {
+      await api.firstPost(cid, sid, opener);
+      setOpener("");
+      onSeeded(); // the adopted opener now shows as the scene's first post
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
   async function saveOpenerAsGreeting() {
     if (!opener.trim() || kind !== "characters" || !actorId) return;
     const character = chars.find((c) => c.id === actorId);
@@ -322,7 +334,7 @@ export function CastPanel({
             <>
               <div className="opener-preview">{opener}</div>
               <div className="form-actions">
-                <button className="subtle" onClick={() => navigator.clipboard?.writeText(opener)}>Copy</button>
+                <button className="primary" onClick={useOpener} disabled={busy}>Use</button>
                 <button className="subtle" onClick={saveOpenerAsGreeting}
                         disabled={kind !== "characters" || !actorId}
                         title={kind !== "characters" || !actorId ? "Pick a character above to attach the saved greeting" : ""}>

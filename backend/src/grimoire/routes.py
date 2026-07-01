@@ -209,6 +209,10 @@ class Opener(BaseModel):
     prompt: str
 
 
+class FirstPost(BaseModel):
+    text: str
+
+
 class LoreEntry(BaseModel):
     name: str
     keys: list[str] = []
@@ -1421,6 +1425,19 @@ def post_opener(cid: str, sid: str, body: Opener, client: OpenRouterClient = Dep
     _require_key(cfg)
     messages = store.context.build_opener_messages(cid, sid, body.prompt)
     return _ephemeral_stream(messages, cfg, client)
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/first-post")
+def post_first_post(cid: str, sid: str, body: FirstPost):
+    """Adopt a generated opener as the scene's first (assistant) message. The cast is
+    already set up in the panel, so this just persists the text onto an empty scene."""
+    _require_scene(cid, sid)
+    if store.scenes.read_scene(cid, sid)["messages"]:
+        raise HTTPException(status_code=409, detail="scene already has messages")
+    if not body.text.strip():
+        raise HTTPException(status_code=400, detail="empty first post")
+    store.scenes.append_message(cid, sid, "assistant", body.text.strip())
+    return {"ok": True}
 
 
 # ---- campaign entity CRUD (generic; declared last so literal sub-paths win) ----
