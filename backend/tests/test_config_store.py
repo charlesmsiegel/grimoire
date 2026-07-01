@@ -33,3 +33,10 @@ def test_write_merges_without_clearing(monkeypatch, tmp_path):
     assert cfg["openrouter_key"] == "sk-or-secret"
     assert cfg["model"] == "anthropic/claude-x"
     assert cfg["theme"] == "occult"
+
+
+def test_recap_depth_default_and_write(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    assert s.read_config()["recap_depth"] == "5"
+    s.write_config(recap_depth="3")
+    assert s.read_config()["recap_depth"] == "3"
