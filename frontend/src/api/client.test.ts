@@ -208,3 +208,18 @@ test("lorebookParse posts multipart form data", async () => {
   expect(opts.method).toBe("POST");
   expect(opts.body).toBeInstanceOf(FormData);
 });
+
+test("campaignChanges GETs the campaign changes endpoint", async () => {
+  const rows = [{ ref: { kind: "lore", id: "pact" }, name: "The Pact",
+    scene: { id: "s1", title: "S", date: "" },
+    fields: [{ field: "body", label: "The Pact — lore",
+      diff: [{ op: "insert", text: "new" }] }] }];
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk(rows));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const out = await api.campaignChanges("c1");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/campaigns/c1/changes",
+    expect.objectContaining({ method: "GET" }),
+  );
+  expect(out).toEqual(rows);
+});
