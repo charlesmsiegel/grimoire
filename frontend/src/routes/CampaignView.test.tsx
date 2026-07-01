@@ -229,6 +229,27 @@ test("unchecking an edit excludes it from the save", async () => {
     expect.objectContaining({ edits: [] })));
 });
 
+test("character_state row renders a multi-section knowledge body in its textarea", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    edits: [{ id: "character_state:seraphine", kind: "character_state",
+      target: { kind: "characters", id: "seraphine" }, label: "Seraphine — current state",
+      field: "current_state", authored: false,
+      before: "Wary.", after: "## Current state\nHurt.\n\n## Knows\nmap is fake" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  const ta = await screen.findByLabelText("After Seraphine — current state");
+  expect((ta as HTMLTextAreaElement).value).toContain("## Knows");
+  expect((ta as HTMLTextAreaElement).value).toContain("map is fake");
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
+    expect.objectContaining({ edits: [expect.objectContaining({
+      id: "character_state:seraphine", after: "## Current state\nHurt.\n\n## Knows\nmap is fake" })] })));
+});
+
 test("relationship rows are read-only and sent with payload on save", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
