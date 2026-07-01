@@ -6,6 +6,7 @@ import { api, type SceneMeta, type Message, type SceneAbsorb, type StagedEdit } 
 import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
 import { CastPanel } from "../components/CastPanel";
+import { ChangesPanel } from "../components/ChangesPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { SceneInspector } from "../components/SceneInspector";
 import { quotePlugin } from "../markdown/quotePlugin";
@@ -31,6 +32,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [ctxKey, setCtxKey] = useState(0);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const [colorQuotes, setColorQuotes] = useState(false);
+  const [showChanges, setShowChanges] = useState(false);
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
   const [absorbing, setAbsorbing] = useState(false);
   const [editRows, setEditRows] = useState<(StagedEdit & { approved: boolean })[]>([]);
@@ -189,11 +191,15 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
       <section className="main">
         <div className="campaign-header">
           <span>{name}</span>
+          <button className="subtle" onClick={() => setShowChanges((v) => !v)}>
+            {showChanges ? "Close" : "Changes"}
+          </button>
           <button className="end-scene" onClick={endScene}
                   disabled={!activeId || absorbing || busy}>
             {absorbing ? "Ending…" : "End scene"}
           </button>
         </div>
+        {showChanges && <ChangesPanel cid={cid} />}
         {absorb && (
           <div className="absorb-panel">
             <h4>Review scene summary</h4>
