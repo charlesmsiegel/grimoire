@@ -230,7 +230,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
               </div>
             )}
             <div className="form-actions">
-              <button className="subtle" onClick={() => setAbsorb(null)}>Cancel</button>
+              <button className="subtle" onClick={() => { setAbsorb(null); setEditRows([]); }}>Cancel</button>
               <button className="primary" onClick={saveAbsorb}>Save summary</button>
             </div>
           </div>

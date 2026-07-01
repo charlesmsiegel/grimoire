@@ -162,6 +162,8 @@ def apply_edits(cid: str, edits: list[dict]) -> list[str]:
             elif kind == "lore":
                 entities.update_entity(croot, target["kind"], target["id"], body=after)
             elif kind == "authored":
+                if e["field"] not in _CARD_FIELDS:
+                    continue  # re-guard: PUT edits are client-supplied, not re-materialized
                 vid = appearances.locked_version(cid, "characters", target["id"])
                 card = characters.read_card(croot, target["id"], vid)
                 card["data"][e["field"]] = after
