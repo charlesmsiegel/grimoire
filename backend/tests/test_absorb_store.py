@@ -32,9 +32,20 @@ def test_parse_output_extracts_summary_and_edit_lists():
             ' "authored_edits": [{"id": "seraphine", "field": "personality", "text": "colder"}]}\n```')
     out = absorb.parse_output(text)
     assert out["one_line"] == "x" and out["timeline_events"] == [{"date": "d", "text": "t"}]
-    assert out["character_state_edits"] == [{"id": "seraphine", "current_state": "hurt"}]
+    assert out["character_state_edits"] == [
+        {"id": "seraphine", "current_state": "hurt", "knows": "", "suspects": ""}]
     assert out["lore_edits"] == [{"id": "salt-cathedral", "append": "now flooded"}]
     assert out["authored_edits"] == [{"id": "seraphine", "field": "personality", "text": "colder"}]
+
+
+def test_parse_output_extracts_knowledge_fields():
+    text = ('{"one_line": "", "summary": "", "keywords": [], "timeline_events": [],'
+            ' "character_state_edits": [{"id": "seraphine", "current_state": "hurt",'
+            '   "knows": "map is fake", "suspects": "elara lies"}],'
+            ' "lore_edits": [], "authored_edits": []}')
+    out = absorb.parse_output(text)
+    assert out["character_state_edits"] == [
+        {"id": "seraphine", "current_state": "hurt", "knows": "map is fake", "suspects": "elara lies"}]
 
 
 def test_parse_output_tolerates_garbage():
