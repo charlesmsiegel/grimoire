@@ -1149,3 +1149,20 @@ def test_absorb_upstream_error_returns_502(client):
     client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeRaises()
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
     assert resp.status_code == 502 and resp.json()["kind"] == "bad_response"
+
+
+def test_absorb_returns_edits_without_persisting(client):
+    _, cid = _campaign(client)
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    croot = store.campaigns.campaign_root(cid)
+    ch = store.characters.create_character(croot, "Seraphine", "main", store.characters.blank_card("Seraphine"))[0]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    store.scenes.append_message(cid, sid, "user", "We fought.")
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],'
+        f' "character_state_edits": [{{"id": "{ch}", "current_state": "hurt"}}],'
+        ' "lore_edits": [], "authored_edits": []}')
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert body["edits"][0]["kind"] == "character_state" and body["edits"][0]["after"] == "hurt"
+    assert store.playstate.read_state(croot, ch) is None  # not persisted
