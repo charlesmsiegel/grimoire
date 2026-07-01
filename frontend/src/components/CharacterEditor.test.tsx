@@ -365,6 +365,59 @@ test("downloading the gallery for a linked version shows per-image progress then
   expect(screen.queryByText("2/3")).toBeNull(); // progress bar gone once finished
 });
 
+test("gallery images render as thumbnails, sorted numerically, opening full-size in a new tab", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{
+      id: "default", name: "default", card: CARD,
+      images: ["avatar", "gallery_10", "gallery_2", "gallery_0"], chub_source: "creator/imp",
+    }],
+  });
+  const { container } = render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByText("Gallery");
+
+  const thumbs = Array.from(container.querySelectorAll<HTMLImageElement>(".gallery-thumb"));
+  expect(thumbs).toHaveLength(3);
+  // numeric order, not lexicographic ("gallery_10" must not sort before "gallery_2")
+  expect(thumbs.map((t) => t.src)).toEqual([
+    "http://localhost:3000/img/w/seraphine/default/gallery_0?v=0",
+    "http://localhost:3000/img/w/seraphine/default/gallery_2?v=0",
+    "http://localhost:3000/img/w/seraphine/default/gallery_10?v=0",
+  ]);
+  const links = thumbs.map((t) => t.closest("a"));
+  expect(links.every((a) => a?.getAttribute("target") === "_blank")).toBe(true);
+  expect(links[0]).toHaveAttribute("href", "/img/w/seraphine/default/gallery_0?v=0");
+});
+
+test("no gallery section when a version has no gallery images", async () => {
+  render(<CharacterEditor wid="w" />); // DETAIL's only version has images: ["avatar"]
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByRole("heading", { name: "Seraphine" });
+  expect(screen.queryByText("Gallery")).toBeNull();
+});
+
+test("gallery images downloaded while viewing a character appear without navigating away", async () => {
+  (api.readCharacter as any)
+    .mockResolvedValueOnce({ ...DETAIL, versions: [{ ...DETAIL.versions[0], chub_source: "creator/imp" }] })
+    .mockResolvedValueOnce({
+      ...DETAIL,
+      versions: [{ ...DETAIL.versions[0], chub_source: "creator/imp", images: ["gallery_0"] }],
+    });
+  (api.downloadCharacterChubGallery as any).mockImplementation(
+    (_w: string, _c: string, _v: string, cb: (e: any) => void) => {
+      cb({ summary: { attempted: 1, stored: 1 } });
+      return Promise.resolve();
+    },
+  );
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  expect(screen.queryByText("Gallery")).toBeNull();
+
+  fireEvent.click(await screen.findByRole("button", { name: /^download gallery$/i }));
+  await screen.findByText("Gallery");
+});
+
 test("downloading linked lorebooks for a version with none shows a clear empty result", async () => {
   (api.readCharacter as any).mockResolvedValue({
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },

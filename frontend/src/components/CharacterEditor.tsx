@@ -73,6 +73,9 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     ? (detail.versions.find((v) => v.id === vid)?.images ?? []).includes("avatar")
     : false;
   const chubSource = detail?.versions.find((v) => v.id === vid)?.chub_source ?? "";
+  const galleryImages = (detail?.versions.find((v) => v.id === vid)?.images ?? [])
+    .filter((n) => n.startsWith("gallery_"))
+    .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
 
   function loadVersion(d: CharacterDetail, id: string) {
     const v = d.versions.find((x) => x.id === id) ?? d.versions[0];
@@ -452,6 +455,11 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
           setGalleryProg({ done: 0, total: e.total });
         }
       });
+      // refresh so newly downloaded images show without navigating away and back
+      const d = await api.readCharacter(wid, detail.meta.id);
+      setDetail(d);
+      loadVersion(d, vid);
+      setAvatarBust((n) => n + 1); // bust the cache in case a re-download overwrote images in place
     } catch (err: any) {
       finalMsg = `Gallery download failed: ${err.detail ?? String(err)}`;
     } finally {
@@ -576,6 +584,22 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                 <button className="subtle" type="button" onClick={linkChub}>Link to chub.ai</button>
               )}
             </div>
+
+            {galleryImages.length > 0 && (
+              <div className="detail-field">
+                <div className="role">Gallery</div>
+                <div className="gallery-grid">
+                  {galleryImages.map((name) => {
+                    const src = `${api.imageUrl(wid, detail.meta.id, vid, name)}?v=${avatarBust}`;
+                    return (
+                      <a key={name} href={src} target="_blank" rel="noreferrer">
+                        <img className="gallery-thumb" alt="" src={src} />
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {localizeControls(false)}
 

@@ -220,6 +220,8 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .detail-actions { display: flex; gap: 6px; flex: none; }
 .detail-field .role { margin-bottom: 4px; }
 .detail-text { white-space: pre-wrap; }
+.gallery-grid { display: flex; gap: 8px; flex-wrap: wrap; }
+.gallery-thumb { width: 110px; height: 110px; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--muted); display: block; }
 .detail-greeting { padding: 8px 12px; background: var(--surface); border-left: 2px solid var(--muted); border-radius: var(--radius); margin-bottom: 6px; }
 
 /* ---- campaign creation wizard ---- */
