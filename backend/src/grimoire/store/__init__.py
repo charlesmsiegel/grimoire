@@ -5,7 +5,7 @@ from __future__ import annotations
 from . import (
     absorb, appearances, assets, briefs, campaigns, cards, characters, chronicle, chub,
     context, entities, fetch, greetings, localize, lorebook, pcs, playing, playstate,
-    relationships, scenes, sync, tags, worlds,
+    plot, relationships, scenes, suggest, sync, tags, worlds,
 )
 from .appearances import AppearError
 from .campaigns import CampaignNotFound
@@ -76,7 +76,9 @@ __all__ = [
     "playing",
     "PlayError",
     "playstate",
+    "plot",
     "relationships",
+    "suggest",
     "lorebook",
     "LorebookError",
 ]

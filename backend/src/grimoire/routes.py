@@ -1052,6 +1052,49 @@ def post_scene(cid: str, body: NewScene):
         raise HTTPException(status_code=404, detail="campaign not found")
 
 
+def _resolve_cast(cid: str, tokens: list[str]) -> list[dict]:
+    croot = store.campaigns.campaign_root(cid)
+    wroot = store.worlds.world_root(store.campaigns.read_campaign(cid)["meta"].get("world", ""))
+    out = []
+    for tok in tokens:
+        kind, _, aid = tok.partition(":")
+        try:
+            if kind == "pcs":
+                name = store.pcs.read_pc(croot, aid)["meta"].get("name", aid)
+            else:
+                try:
+                    name = store.characters.read_character(wroot, aid)["meta"].get("name", aid)
+                except store.characters.CharacterNotFound:
+                    name = store.characters.read_character(croot, aid)["meta"].get("name", aid)
+        except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
+            name = aid
+        out.append({"kind": kind, "id": aid, "name": name})
+    return out
+
+
+@router.post("/campaigns/{cid}/scene-suggestions")
+async def post_scene_suggestions(cid: str, client: OpenRouterClient = Depends(get_openrouter)):
+    try:
+        store.campaigns.read_campaign(cid)
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    cfg = store.read_config()
+    _require_key(cfg)
+    messages = store.suggest.build_prompt(store.suggest.build_snapshot(cid))
+    try:
+        text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
+    except OpenRouterError as exc:
+        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+    croot = store.campaigns.campaign_root(cid)
+    loc_names = {e["id"]: e.get("name", e["id"]) for e in store.entities.list_entities(croot, "locations")}
+    out = []
+    for s in store.suggest.parse_output(text, cid):
+        loc = {"id": s["location"], "name": loc_names.get(s["location"], s["location"])} if s["location"] else None
+        out.append({"title": s["title"], "premise": s["premise"],
+                    "cast": _resolve_cast(cid, s["cast"]), "location": loc})
+    return {"suggestions": out}
+
+
 @router.get("/campaigns/{cid}/scenes/{sid}")
 def get_scene(cid: str, sid: str):
     try:
