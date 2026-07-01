@@ -1202,3 +1202,34 @@ def test_put_chronicle_applies_approved_edits(client):
                    "target": {"kind": "characters", "id": ch}, "field": "current_state", "after": "Loyal."}]})
     assert r.json()["applied"] == [f"character_state:{ch}"]
     assert store.playstate.read_state(croot, ch)["current_state"] == "Loyal."
+
+
+def _apply_lore_change(client, cid):
+    croot = store.campaigns.campaign_root(cid)
+    store.entities.create_entity(croot, "lore", "Pact", body="old body")
+    edit = {"id": "lore:pact", "kind": "lore", "target": {"kind": "lore", "id": "pact"},
+            "label": "The Pact — lore", "field": "body", "before": "old body",
+            "after": "old body\nnew line", "authored": False}
+    store.absorb.apply_edits(cid, [edit], "s1")
+
+
+def test_get_changes_returns_name_scene_and_diff(client):
+    _, cid = _campaign(client)
+    _apply_lore_change(client, cid)  # records under scene "s1" (never created -> title falls back)
+    out = client.get(f"/api/campaigns/{cid}/changes").json()
+    assert len(out) == 1
+    rec = out[0]
+    assert rec["ref"] == {"kind": "lore", "id": "pact"} and rec["name"] == "Pact"
+    assert rec["scene"]["id"] == "s1"  # deleted/unknown scene -> title falls back to id
+    ops = [d["op"] for d in rec["fields"][0]["diff"]]
+    assert "insert" in ops
+
+
+def test_get_changes_empty_and_not_shadowed_by_kind_route(client):
+    _, cid = _campaign(client)
+    res = client.get(f"/api/campaigns/{cid}/changes")
+    assert res.status_code == 200 and res.json() == []  # not routed to the generic /{kind}
+
+
+def test_get_changes_unknown_campaign_404(client):
+    assert client.get("/api/campaigns/nope/changes").status_code == 404

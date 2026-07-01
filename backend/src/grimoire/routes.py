@@ -1195,6 +1195,45 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
     return {**record, "applied": applied}
 
 
+def _record_name(croot, kind: str, eid: str) -> str | None:
+    """Display name for a campaign record, or None if it no longer exists."""
+    try:
+        if kind == "characters":
+            return store.characters.read_character(croot, eid)["meta"].get("name", eid)
+        if kind in store.entities.ENTITY_KINDS:
+            return store.entities.read_entity(croot, kind, eid)["meta"].get("name", eid)
+    except (store.characters.CharacterNotFound, store.entities.EntityNotFound):
+        return None
+    return None
+
+
+@router.get("/campaigns/{cid}/changes")
+def get_changes(cid: str):
+    croot = _campaign_root_or_404(cid)
+    data = store.changes.read(cid)
+    scenes_by_id = {s["id"]: s for s in store.scenes.list_scenes(cid)}
+    try:
+        chron = store.chronicle.read_chronicle(cid)
+    except Exception:  # noqa: BLE001 — garbled chronicle.json: labels degrade, no 500
+        chron = {}
+    out: list[dict] = []
+    for ref, entry in data.items():
+        kind, _, eid = ref.partition("/")
+        name = _record_name(croot, kind, eid)
+        if name is None:
+            continue  # record deleted since the change was captured
+        sid = entry.get("scene", "")
+        s, c = scenes_by_id.get(sid, {}), chron.get(sid, {})
+        fields = [{"field": f.get("field", ""), "label": f.get("label", ""),
+                   "diff": store.changes.line_diff(f.get("before", ""), f.get("after", ""))}
+                  for f in entry.get("fields", [])]
+        out.append({"ref": {"kind": kind, "id": eid}, "name": name,
+                    "scene": {"id": sid, "title": s.get("title", sid), "date": c.get("date", "")},
+                    "fields": fields})
+    out.sort(key=lambda r: (r["ref"]["kind"], r["name"]))
+    return out
+
+
 # ---- campaign cast & suggestions (declared before the generic /{kind} routes) ----
 @router.get("/campaigns/{cid}/appearances")
 def get_appearances(cid: str):
