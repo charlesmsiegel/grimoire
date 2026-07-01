@@ -446,3 +446,28 @@ def test_character_state_absent_when_none(monkeypatch, tmp_path):
     cid = campaigns.create_campaign("Run", wid)
     sid = scenes.create_scene(cid, "Now")
     assert "Character state" not in [l for l, _ in context._assemble(cid, sid)["system"]]
+
+
+def test_relationships_section_injected(monkeypatch, tmp_path):
+    from grimoire.store import (appearances, campaigns, characters, context,
+                                relationships, scenes, worlds)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    a = characters.create_character(croot, "Ann", "main", characters.blank_card("Ann"))[0]
+    b = characters.create_character(croot, "Bo", "main", characters.blank_card("Bo"))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", a, "main", "npc")
+    appearances.appear(cid, sid, "characters", b, "main", "npc")
+    relationships.set_feeling(cid, f"characters:{a}", f"characters:{b}", 4, 3, 1, "warm")
+    system = dict(context._assemble(cid, sid)["system"])
+    assert "Relationships" in system
+    assert "Ann → Bo: trust 4, affection 3, tension 1 (warm)" in system["Relationships"]
+
+
+def test_relationships_absent_when_none(monkeypatch, tmp_path):
+    from grimoire.store import campaigns, context, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    sid = scenes.create_scene(cid, "Now")
+    assert "Relationships" not in [l for l, _ in context._assemble(cid, sid)["system"]]

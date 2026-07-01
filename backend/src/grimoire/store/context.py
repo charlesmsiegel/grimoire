@@ -9,7 +9,7 @@ import functools
 import re
 
 from . import (appearances, briefs, calendars, campaigns, characters, chronicle,
-               config, entities, pcs, playstate, scenes, worlds)
+               config, entities, pcs, playstate, relationships, scenes, worlds)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -240,6 +240,15 @@ def _character_state(croot, cast) -> str:
         return ""
 
 
+def _relationships(cid: str, croot, cast) -> str:
+    try:
+        tokens = [f"{a['kind']}:{a['id']}" for a in cast]
+        lines = relationships.render_present(cid, tokens, lambda t: relationships.actor_name(croot, t))
+        return "# Relationships\n" + "\n".join(lines) if lines else ""
+    except Exception:  # noqa: BLE001 — garbled relationships.json: omit, don't crash
+        return ""
+
+
 def _story_so_far(cid: str) -> str:
     # Always-on, non-critical: a garbled chronicle/config must omit the block, never
     # crash the context build (the store may live in a synced folder). Mirrors the
@@ -314,6 +323,7 @@ def _assemble(cid: str, sid: str) -> dict:
     add("System prompt", "\n\n".join(d.get("system_prompt", "").strip() for d in npc_cards if d.get("system_prompt", "").strip()))
     add("Character descriptions", "\n\n".join(b for b in (_npc_block(d) for d in npc_cards) if b))
     add("Character state", _character_state(croot, cast))
+    add("Relationships", _relationships(cid, croot, cast))
     add("Player personas", "\n\n".join(b for b in player_blocks if b))
     add("Message examples", "\n\n".join(d.get("mes_example", "").strip() for d in npc_cards if d.get("mes_example", "").strip()))
 
