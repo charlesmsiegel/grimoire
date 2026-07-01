@@ -165,6 +165,13 @@ export type ChronicleEntry = {
   id: string; one_line: string; summary: string; keywords: string[];
   cast: string[]; location: string; date: string; absorbed: string;
 };
+export type DiffLine = { op: "equal" | "insert" | "delete"; text: string };
+export type FieldDiff = { field: string; label: string; diff: DiffLine[] };
+export type RecordChange = {
+  ref: { kind: string; id: string }; name: string;
+  scene: { id: string; title: string; date: string };
+  fields: FieldDiff[];
+};
 
 // lorebook import
 export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKind };
@@ -221,6 +228,8 @@ export const api = {
   renameCampaign: (cid: string, name: string) =>
     request<{ id: string; name: string }>("PUT", `/api/campaigns/${cid}`, { name }),
   deleteCampaign: (cid: string) => request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}`),
+  campaignChanges: (cid: string) =>
+    request<RecordChange[]>("GET", `/api/campaigns/${cid}/changes`),
 
   // scenes
   listScenes: (cid: string) => request<SceneMeta[]>("GET", `/api/campaigns/${cid}/scenes`),
