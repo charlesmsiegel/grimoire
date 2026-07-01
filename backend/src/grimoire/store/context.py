@@ -98,32 +98,23 @@ OPENER_INSTRUCTION = (
     "Set the scene vividly in the second person. Do not speak or act for the player."
 )
 
+OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
+
 
 def build_opener_messages(cid: str, sid: str, prompt: str) -> list[dict]:
-    """A world-informed, character-less opener: instruction + player personas + activated
-    world-info (driven by the prompt). Ephemeral — the caller does not persist the result."""
-    croot = campaigns.campaign_root(cid)
-    subs = scene_substitutions(cid, sid)
-    player_blocks: list[str] = []
-    for a in appearances.scene_cast(cid, sid):
-        if a["role"] != "player":
-            continue
-        vid = appearances.locked_version(cid, a["kind"], a["id"])
-        try:
-            if a["kind"] == "pcs":
-                player_blocks.append(_pc_persona_block(pcs.read_persona(croot, a["id"], vid)))
-            else:
-                player_blocks.append(_char_player_block(characters.read_card(croot, a["id"], vid)["data"]))
-        except (pcs.PCNotFound, pcs.PCVersionNotFound,
-                characters.CharacterNotFound, characters.VersionNotFound):
-            continue
-    parts = [OPENER_INSTRUCTION] + [b for b in player_blocks if b]
-    wi = _world_info(croot, prompt)
-    if wi:
-        parts.append(wi)
-    system_text = _substitute("\n\n".join(parts), subs)
-    return [{"role": "system", "content": system_text},
-            {"role": "user", "content": _substitute(prompt, subs)}]
+    """A full-turn-context opener: the instruction plus every assembled system section
+    (cast, plot threads, date, current setting, world-info, a full 5-scene recap, …),
+    then the prompt as the user turn. The prompt seeds world-info activation, since a new
+    scene has no history. No conversation history is included — the opener is for a scene
+    with no messages. Ephemeral: the caller does not persist the result."""
+    a = _assemble(cid, sid, wi_seed=prompt, full_recap=OPENER_RECAP_DEPTH)
+    sections = "\n\n".join(t for _, t in a["system"]).strip()
+    system_text = (OPENER_INSTRUCTION + "\n\n" + sections).strip() if sections else OPENER_INSTRUCTION
+    messages = [{"role": "system", "content": system_text},
+                {"role": "user", "content": _substitute(prompt, scene_substitutions(cid, sid))}]
+    if a["post_history"]:  # kept last, right before generation (mirrors build_messages)
+        messages.append({"role": "system", "content": a["post_history"]})
+    return messages
 
 
 def _char_name(root, cid: str) -> str:
@@ -272,26 +263,37 @@ def _plot_threads(cid: str) -> str:
     return "# Plot threads\n" + "\n".join(lines) if lines else ""
 
 
-def _story_so_far(cid: str) -> str:
+def _story_so_far(cid: str, depth: int | None = None, full: bool = False) -> str:
     # Always-on, non-critical: a garbled chronicle/config must omit the block, never
     # crash the context build (the store may live in a synced folder). Mirrors the
-    # tolerance of _today_block / the current-setting block.
+    # tolerance of _today_block / the current-setting block. `depth=None` reads the
+    # configured recap_depth (compact one-liners); the opener passes an explicit depth
+    # with full=True to render each scene's full summary as a paragraph.
     try:
-        depth = max(int(config.read_config().get("recap_depth", "5")), 0)
-        if not depth:
+        if depth is None:
+            depth = max(int(config.read_config().get("recap_depth", "5")), 0)
+        if depth <= 0:
             return ""
-        lines = [f"- {s}" for s in
-                 ((r.get("one_line") or r.get("summary") or "").strip()
-                  for r in chronicle.recent(cid, depth)) if s]
-        return "# Story so far\n" + "\n".join(lines) if lines else ""
+        records = chronicle.recent(cid, depth)
+        if full:
+            body = "\n\n".join(s for s in
+                               ((r.get("summary") or r.get("one_line") or "").strip()
+                                for r in records) if s)
+        else:
+            body = "\n".join(f"- {s}" for s in
+                             ((r.get("one_line") or r.get("summary") or "").strip()
+                              for r in records) if s)
+        return "# Story so far\n" + body if body else ""
     except Exception:  # noqa: BLE001 — corrupt chronicle.json / config: omit, don't crash
         return ""
 
 
-def _assemble(cid: str, sid: str) -> dict:
+def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dict:
     """One pass producing substituted, labeled system sections + history + post-history.
     Shared by build_messages (joins sections into the system message) and
-    context_sections (exposes them for the token breakdown)."""
+    context_sections (exposes them for the token breakdown). `wi_seed` folds extra text
+    (the opener prompt) into the world-info activation window; `full_recap` (> 0) renders
+    the last N scenes' full summaries in Story so far instead of the compact recap."""
     scene = scenes.read_scene(cid, sid)
     history = [{"role": m["role"], "content": m["content"]} for m in scene["messages"]]
     croot = campaigns.campaign_root(cid)
@@ -334,6 +336,8 @@ def _assemble(cid: str, sid: str) -> dict:
         depth = 8
     # depth 0 => no scan window (history[-0:] would be the WHOLE list, so guard it)
     recent_text = "\n".join(m["content"] for m in history[-depth:]) if depth else ""
+    if wi_seed:  # opener: the prompt stands in for the (absent) recent history
+        recent_text = (recent_text + "\n" + wi_seed).strip()
 
     sys: list[tuple[str, str]] = []
 
@@ -350,7 +354,7 @@ def _assemble(cid: str, sid: str) -> dict:
     add("Player personas", "\n\n".join(b for b in player_blocks if b))
     add("Message examples", "\n\n".join(d.get("mes_example", "").strip() for d in npc_cards if d.get("mes_example", "").strip()))
 
-    add("Story so far", _story_so_far(cid))
+    add("Story so far", _story_so_far(cid, depth=full_recap or None, full=bool(full_recap)))
     add("Plot threads", _plot_threads(cid))
     add("Today", _today_block(cid, sid, croot))
 
