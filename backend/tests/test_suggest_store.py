@@ -39,3 +39,38 @@ def test_build_snapshot_tolerates_empty_campaign(monkeypatch, tmp_path):
     snap = suggest.build_snapshot(cid)  # no scenes/chronicle/plot/calendar
     assert snap["open_threads"] == [] and snap["absent_cast"] == []
     assert snap["now"] == "" and snap["birthdays"] == []
+
+
+def test_build_prompt_includes_signals():
+    snap = {"now": "2026-01-01", "friendly": "Jan 1", "holidays_today": ["New Year"],
+            "upcoming": {"name": "Festival", "in_days": 5}, "birthdays": [{"name": "Ann", "age": 30, "when": "today"}],
+            "open_threads": [{"id": "the-map", "title": "The map", "status": "open", "latest_beat": "found it"}],
+            "absent_cast": [{"name": "Doran", "tagline": "a sellsword"}],
+            "available_cast": [{"token": "characters:ann", "name": "Ann"}],
+            "available_locations": [{"id": "keep", "name": "The Keep"}]}
+    msgs = suggest.build_prompt(snap)
+    assert msgs[0]["role"] == "system"
+    user = msgs[1]["content"]
+    assert "The map" in user and "Doran" in user and "Ann" in user and "The Keep" in user
+    assert "New Year" in user and "today" in user
+
+
+def test_parse_output_validates_ids(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    ann = characters.create_character(wroot, "Ann", "main", characters.blank_card("Ann"))[0]
+    entities.create_entity(croot, "locations", "The Keep")
+    text = ('{"suggestions": ['
+            f'{{"title": "T", "premise": "P", "cast": ["characters:{ann}", "characters:ghost"], "location": "the-keep"}},'
+            '{"title": "", "premise": "no title", "cast": [], "location": ""},'
+            '{"title": "Bad loc", "premise": "P2", "cast": [], "location": "nowhere"}]}')
+    out = suggest.parse_output(text, cid)
+    assert [s["title"] for s in out] == ["T", "Bad loc"]          # title-less dropped
+    assert out[0]["cast"] == [f"characters:{ann}"]                # ghost dropped
+    assert out[0]["location"] == "the-keep" and out[1]["location"] == ""  # unknown loc -> ""
+
+
+def test_parse_output_tolerates_garbage(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    assert suggest.parse_output("not json", cid) == []

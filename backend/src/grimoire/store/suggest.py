@@ -119,3 +119,86 @@ def build_snapshot(cid: str) -> dict:
             "upcoming": upcoming, "birthdays": _birthdays(cid, croot, now),
             "open_threads": open_threads, "absent_cast": absent_cast,
             "available_cast": available_cast, "available_locations": available_locations}
+
+
+INSTRUCTION = (
+    "You help a game master start the next scene of a role-play campaign. Given the "
+    "current situation below, propose 3-4 DISTINCT scene openings that each advance an "
+    "open plot thread, revisit a long-absent character, or land on an upcoming date or "
+    "birthday. Reply with ONLY a JSON object with key \"suggestions\": a list of "
+    '{"title" (a short label), "premise" (2-3 sentences the GM can open on), '
+    '"cast" (list of "<kind>:<id>" tokens chosen ONLY from the available cast below), '
+    '"location" (one location id from the available locations, or "")}. Use only the ids '
+    "given; do not invent ids."
+)
+
+
+def _render_snapshot(s: dict) -> str:
+    parts: list[str] = []
+    if s["now"]:
+        line = f"Current date: {s['friendly'] or s['now']}."
+        if s["holidays_today"]:
+            line += " Today: " + ", ".join(s["holidays_today"]) + "."
+        if s["upcoming"]:
+            line += f" Upcoming: {s['upcoming']['name']} in {s['upcoming']['in_days']} days."
+        parts.append(line)
+    if s["birthdays"]:
+        parts.append("Birthdays: " + "; ".join(
+            f"{b['name']} (age {b['age']}) {b['when']}" for b in s["birthdays"]))
+    if s["open_threads"]:
+        parts.append("Open plot threads:\n" + "\n".join(
+            f"- {t['title']} ({t['status']}): {t['latest_beat']}".rstrip(": ") for t in s["open_threads"]))
+    if s["absent_cast"]:
+        parts.append("Long-absent characters:\n" + "\n".join(
+            f"- {a['name']}: {a['tagline']}".rstrip(": ") for a in s["absent_cast"]))
+    if s["available_cast"]:
+        parts.append("Available cast (use these tokens):\n" + "\n".join(
+            f"- {c['token']} = {c['name']}" for c in s["available_cast"]))
+    if s["available_locations"]:
+        parts.append("Available locations (use these ids):\n" + "\n".join(
+            f"- {loc['id']} = {loc['name']}" for loc in s["available_locations"]))
+    return "\n\n".join(parts) if parts else "No campaign history yet; propose fresh openings."
+
+
+def build_prompt(snapshot: dict) -> list[dict]:
+    return [{"role": "system", "content": INSTRUCTION},
+            {"role": "user", "content": _render_snapshot(snapshot)}]
+
+
+def _valid_ids(cid: str):
+    croot = campaigns.campaign_root(cid)
+    wroot = _world_root(cid)
+    char_ids = {c["id"] for c in characters.list_characters(wroot)}
+    player_tokens = {f"{a['kind']}:{a['id']}" for a in appearances.roster(cid) if a["role"] == "player"}
+    loc_ids = {e["id"] for e in entities.list_entities(croot, "locations")}
+    return char_ids, player_tokens, loc_ids
+
+
+def parse_output(text: str, cid: str) -> list[dict]:
+    start, end = text.find("{"), text.rfind("}")
+    try:
+        obj = json.loads(text[start:end + 1]) if start != -1 and end > start else {}
+    except (json.JSONDecodeError, TypeError):
+        obj = {}
+    if not isinstance(obj, dict):
+        return []
+    char_ids, player_tokens, loc_ids = _valid_ids(cid)
+
+    def _valid_token(tok: str) -> bool:
+        kind, _, aid = tok.partition(":")
+        return (kind == "characters" and aid in char_ids) or tok in player_tokens
+
+    out: list[dict] = []
+    for e in obj.get("suggestions", []):
+        if not isinstance(e, dict):
+            continue
+        title, premise = str(e.get("title", "")).strip(), str(e.get("premise", "")).strip()
+        if not title or not premise:
+            continue
+        raw_cast = e.get("cast", [])
+        cast = ([t for t in (str(x).strip() for x in raw_cast) if _valid_token(t)]
+                if isinstance(raw_cast, list) else [])
+        loc = str(e.get("location", "")).strip()
+        out.append({"title": title, "premise": premise, "cast": cast,
+                    "location": loc if loc in loc_ids else ""})
+    return out
