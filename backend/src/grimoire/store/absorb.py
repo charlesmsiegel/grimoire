@@ -314,6 +314,9 @@ def apply_edits(cid: str, edits: list[dict]) -> list[str]:
             elif kind == "bond":
                 p = e["payload"]
                 relationships.set_bond(cid, p["a"], p["b"], p["type"])
+            elif kind == "plot":
+                p = e["payload"]
+                plot.set_movement(cid, p["id"], p["title"], p["status"], after, p["scene"])
             else:
                 continue
             applied.append(e["id"])

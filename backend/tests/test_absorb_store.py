@@ -335,6 +335,20 @@ def test_apply_edits_writes_relationships(monkeypatch, tmp_path):
     assert relationships.get_bond(cid, "characters:a", "characters:b")["type"] == "allies"
 
 
+def test_apply_edits_writes_plot(monkeypatch, tmp_path):
+    from grimoire.store import plot
+    cid = _campaign(monkeypatch, tmp_path)
+    applied = absorb.apply_edits(cid, [
+        {"id": "plot:the-map", "kind": "plot",
+         "target": {"kind": "plot", "id": "the-map"}, "field": "beat",
+         "after": "It is a forgery.",
+         "payload": {"id": "the-map", "title": "The map", "status": "advanced", "scene": "s12"}}])
+    assert applied == ["plot:the-map"]
+    t = plot.get(cid, "the-map")
+    assert t["status"] == "advanced" and t["last_scene"] == "s12"
+    assert t["beats"][-1] == {"scene": "s12", "text": "It is a forgery."}
+
+
 def test_relationships_snapshot_tolerates_garbled(monkeypatch, tmp_path):
     from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
