@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   api, type Actor, type Availability, type CharacterSummary, type EntitySummary,
   type PCSummary, type RosterEntry, type SceneLocation, type SceneDatetime,
+  type SceneSuggestion,
 } from "../api/client";
 
 export function CastPanel({
@@ -31,6 +32,7 @@ export function CastPanel({
 
   const [prompt, setPrompt] = useState("");
   const [opener, setOpener] = useState("");
+  const [suggestions, setSuggestions] = useState<SceneSuggestion[]>([]);
   const [busy, setBusy] = useState(false);
 
   const reloadCast = useCallback(() => api.getCast(cid, sid).then(setCast), [cid, sid]);
@@ -110,6 +112,34 @@ export function CastPanel({
       await reloadCast();
     } catch (err: any) {
       setError(err.detail ?? String(err));
+    }
+  }
+
+  async function suggestScenes() {
+    setError(null);
+    setBusy(true);
+    try {
+      const r = await api.sceneSuggestions(cid);
+      setSuggestions(r.suggestions);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function useSuggestion(s: SceneSuggestion) {
+    setBusy(true);
+    try {
+      for (const c of s.cast) {
+        try { await api.addToCast(cid, sid, { kind: c.kind, id: c.id }); } catch { /* already present */ }
+      }
+      if (s.location) await api.setSceneLocation(cid, sid, s.location.id);
+      setPrompt(s.premise);
+      setSuggestions([]);
+      onSeeded();
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -248,6 +278,21 @@ export function CastPanel({
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="suggest-scenes">
+          <button className="subtle" onClick={suggestScenes} disabled={!keySet || busy}>Suggest scenes</button>
+          {suggestions.map((s, i) => (
+            <div className="suggestion" key={i}>
+              <div className="suggestion-title">{s.title}</div>
+              <div className="suggestion-premise">{s.premise}</div>
+              <div className="field-hint">
+                {s.cast.map((c) => c.name).join(", ")}
+                {s.location ? ` · ${s.location.name}` : ""}
+              </div>
+              <button className="primary" onClick={() => useSuggestion(s)} disabled={busy}>Use this scene</button>
+            </div>
+          ))}
         </div>
 
         <div>
