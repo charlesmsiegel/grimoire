@@ -334,6 +334,22 @@ def test_chub_gallery_and_lorebooks_routes_unknown_character_or_version(client):
     assert client.post(f"/api/worlds/{wid}/characters/{cid}/versions/ghost/chub-lorebooks").status_code == 404
 
 
+def test_chub_unlinked_route(client):
+    wid = _world(client)
+    assert client.get(f"/api/worlds/{wid}/characters/chub-unlinked").json() == {"versions": []}
+
+    linked = client.post(f"/api/worlds/{wid}/characters", json={"name": "Abelha"}).json()["character"]
+    client.post(f"/api/worlds/{wid}/characters/{linked}/versions/default/chub-source",
+                json={"url": "creator/abelha"})
+    unlinked = client.post(f"/api/worlds/{wid}/characters", json={"name": "Loose End"}).json()["character"]
+
+    r = client.get(f"/api/worlds/{wid}/characters/chub-unlinked")
+    assert r.status_code == 200
+    assert r.json() == {"versions": [
+        {"character": unlinked, "character_name": "Loose End", "version": "default", "version_name": "Loose End"},
+    ]}
+
+
 def test_character_book_import_route(client):
     wid = _world(client)
     card = {"spec": "chara_card_v3", "spec_version": "3.0", "data": {

@@ -246,6 +246,21 @@ def character_refs(root: Path) -> list[str]:
     return sorted(p.name for p in d.iterdir() if p.is_dir() and (p / "character.md").exists())
 
 
+def find_unlinked_versions(root: Path) -> list[dict]:
+    """Every (character, version) pair with no chub.ai link, across every
+    character in root -- for surfacing versions worth linking."""
+    out: list[dict] = []
+    for cid in character_refs(root):
+        detail = read_character(root, cid)
+        for v in detail["versions"]:
+            if not v["chub_source"]:
+                out.append({
+                    "character": cid, "character_name": detail["meta"]["name"],
+                    "version": v["id"], "version_name": v["name"],
+                })
+    return out
+
+
 def _avatar_candidates(card: dict) -> list[str]:
     """Every place a card might carry an avatar: V3 `assets`, a top-level `avatar`
     string, and either relocated into `extensions` by the V2->V3 upconvert."""
