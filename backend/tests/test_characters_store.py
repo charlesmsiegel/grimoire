@@ -217,6 +217,33 @@ def test_chub_source_legacy_character_level_value_falls_back_to_default_version(
     assert sources[extra_vid] == ""
 
 
+def test_find_unlinked_versions_lists_only_versions_with_no_chub_source(tmp_path):
+    linked_cid, linked_vid = ch.create_character(tmp_path, "Abelha", "main")
+    ch.set_chub_source(tmp_path, linked_cid, linked_vid, "creator/abelha")
+
+    partial_cid, main_vid = ch.create_character(tmp_path, "Kalinci", "main")
+    ch.set_chub_source(tmp_path, partial_cid, main_vid, "creator/kalinci")
+    futa_vid = ch.create_version(tmp_path, partial_cid, "futa", ch.blank_card("Kalinci (futa)"))
+
+    unlinked_cid, unlinked_vid = ch.create_character(tmp_path, "Loose End")
+
+    result = ch.find_unlinked_versions(tmp_path)
+    assert result == [
+        {"character": partial_cid, "character_name": "Kalinci", "version": futa_vid, "version_name": "Kalinci (futa)"},
+        {"character": unlinked_cid, "character_name": "Loose End", "version": unlinked_vid, "version_name": "Loose End"},
+    ]
+
+
+def test_find_unlinked_versions_empty_world(tmp_path):
+    assert ch.find_unlinked_versions(tmp_path) == []
+
+
+def test_find_unlinked_versions_all_linked(tmp_path):
+    cid, vid = ch.create_character(tmp_path, "Abelha", "main")
+    ch.set_chub_source(tmp_path, cid, vid, "creator/abelha")
+    assert ch.find_unlinked_versions(tmp_path) == []
+
+
 def test_import_from_chub_happy_path(tmp_path, monkeypatch):
     from grimoire.store import assets, cards, chub
 

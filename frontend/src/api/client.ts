@@ -91,6 +91,7 @@ export type ChubImportResult = {
   gallery: { attempted: number; stored: number };
   lore: { lorebooks_found: number; created: { kind: string; id: string }[] };
 };
+export type ChubUnlinkedVersion = { character: string; character_name: string; version: string; version_name: string };
 
 // PCs
 export type Persona = { name: string; pronouns: string; summary: string; description: string; birthdate?: string };
@@ -298,6 +299,8 @@ export const api = {
   downloadCharacterChubLorebooks: (wid: string, cid: string, vid: string) =>
     request<{ lorebooks_found: number; created: { kind: string; id: string }[] }>(
       "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/chub-lorebooks`),
+  findChubUnlinked: (wid: string) =>
+    request<{ versions: ChubUnlinkedVersion[] }>("GET", `/api/worlds/${wid}/characters/chub-unlinked`),
 
   // pcs
   listPCs: (wid: string) => request<PCSummary[]>("GET", `/api/worlds/${wid}/pcs`),

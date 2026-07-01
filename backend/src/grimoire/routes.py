@@ -419,6 +419,11 @@ def post_world_character(wid: str, body: CharacterCreate):
     return {"character": cid, "version": vid}
 
 
+@router.get("/worlds/{wid}/characters/chub-unlinked")
+def get_world_characters_chub_unlinked(wid: str):
+    return {"versions": store.characters.find_unlinked_versions(_world_root_or_404(wid))}
+
+
 @router.get("/worlds/{wid}/characters/{cid}")
 def get_world_character(wid: str, cid: str):
     try:

@@ -11,6 +11,7 @@ vi.mock("../api/client", () => ({
     setCharacterBirthdate: vi.fn(),
     setCharacterChubSource: vi.fn(), clearCharacterChubSource: vi.fn(),
     downloadCharacterChubGallery: vi.fn(), downloadCharacterChubLorebooks: vi.fn(),
+    findChubUnlinked: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
   },
 }));
@@ -249,6 +250,31 @@ test("an empty chub.ai prompt makes no API call", async () => {
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /download from chub\.ai/i }));
   expect(api.importCharacterFromChub).not.toHaveBeenCalled();
+});
+
+test("checking chub.ai links lists unlinked versions and jumps to one on click", async () => {
+  (api.findChubUnlinked as any).mockResolvedValue({
+    versions: [
+      { character: "seraphine", character_name: "Seraphine", version: "futa", version_name: "Seraphine (futa)" },
+    ],
+  });
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  fireEvent.click(screen.getByRole("button", { name: /check chub\.ai links/i }));
+  await waitFor(() => expect(api.findChubUnlinked).toHaveBeenCalledWith("w"));
+  await screen.findByText(/1 version not linked to chub\.ai/i);
+
+  fireEvent.click(screen.getByRole("button", { name: /seraphine \(futa\)/i }));
+  await waitFor(() => expect(api.readCharacter).toHaveBeenCalledWith("w", "seraphine"));
+  await screen.findByRole("heading", { name: "Seraphine" }); // jumped to detail
+});
+
+test("checking chub.ai links with none unlinked says so", async () => {
+  (api.findChubUnlinked as any).mockResolvedValue({ versions: [] });
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  fireEvent.click(screen.getByRole("button", { name: /check chub\.ai links/i }));
+  await screen.findByText(/^all versions are linked to chub\.ai$/i);
 });
 
 test("downloading a version from chub.ai targets the open character and version", async () => {

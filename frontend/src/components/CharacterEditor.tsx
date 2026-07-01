@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult } from "../api/client";
+import { api, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion } from "../api/client";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 
@@ -47,6 +47,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const [localizeProg, setLocalizeProg] = useState<{ done: number; total: number } | null>(null);
   const [localizeMsg, setLocalizeMsg] = useState<string | null>(null);
   const [galleryProg, setGalleryProg] = useState<{ done: number; total: number } | null>(null);
+  const [unlinkedVersions, setUnlinkedVersions] = useState<ChubUnlinkedVersion[] | null>(null);
   const [bulkLocalize, setBulkLocalize] = useState<{ current: number; cards: number } | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [birthdate, setBirthdate] = useState("");
@@ -485,6 +486,16 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     }
   }
 
+  async function checkChubLinks() {
+    setError(null);
+    try {
+      const { versions } = await api.findChubUnlinked(wid);
+      setUnlinkedVersions(versions);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
   const avatarSrc = (cid: string, version: string, bust = false) =>
     api.imageUrl(wid, cid, version, "avatar") + (bust ? `?v=${avatarBust}` : "");
 
@@ -496,11 +507,33 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
           <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
           <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden aria-label="Import character card" onChange={onImport} />
           <button className="subtle" onClick={downloadFromChub}>Download from chub.ai</button>
+          <button className="subtle" onClick={checkChubLinks}>Check chub.ai links</button>
           {bulkLocalize && (
             <span className="field-hint">Localizing card {bulkLocalize.current}/{bulkLocalize.cards}…</span>
           )}
           {!bulkLocalize && importMsg && <span className="field-hint">{importMsg}</span>}
         </div>
+        {unlinkedVersions !== null && (
+          <div className="chub-unlinked-list">
+            {unlinkedVersions.length === 0 ? (
+              <div className="field-hint">All versions are linked to chub.ai</div>
+            ) : (
+              <>
+                <div className="field-hint">
+                  {unlinkedVersions.length} version{unlinkedVersions.length === 1 ? "" : "s"} not linked to chub.ai:
+                </div>
+                <div className="chips">
+                  {unlinkedVersions.map((u) => (
+                    <button key={`${u.character}:${u.version}`} className="chip"
+                            onClick={() => focusCharacter(u.character, u.version)}>
+                      {u.character_name} ({u.version_name})
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
         {error && <div className="banner">{error}</div>}
         {chars.length === 0 ? (
           <div className="editor-empty">No characters yet. Create one or import a card.</div>
