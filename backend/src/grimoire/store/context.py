@@ -85,6 +85,8 @@ def _world_info(croot, recent_text: str, exclude: frozenset = frozenset(),
             e = entities.read_entity(croot, kind, meta["id"])
             keys = [k.strip() for k in e["meta"].get("keys", "").split(",") if k.strip()]
             owners = [o.strip() for o in e["meta"].get("owners", "").split(",") if o.strip()]
+            if kind == "locations" and not keys:
+                continue  # a keyless location surfaces only as the current setting, never always-on
             entries.append({"name": e["meta"].get("name", meta["id"]),
                             "body": e["body"].strip(), "keys": keys, "owners": owners})
     selected = activate(entries, recent_text, present)
