@@ -1,110 +1,72 @@
-# Scene Date in the Inspector (confirm-gated) — Design
+# Scene Date in the Inspector — Design
 
 **Date:** 2026-07-01
 **Status:** Design — approved, ready for implementation plan
 
 ## Problem
 
-You can set a scene's date only *before* the scene starts. The date control (the
-"When" block: current date + a date input + Set/Advance button) lives in
-`CastPanel`, which `CampaignView` renders **only when the scene is empty**
-(`messages.length === 0`, `CampaignView.tsx:266`). Once a scene is *in progress*
-(has messages), `CastPanel` disappears; the only right-hand panel is
-`SceneInspector`, which shows Active characters, Location, and Context — but **no
-date and no way to set it**. Yet the backend is built for mid-scene changes:
-`scenes.set_datetime` appends a *"Time passes. It is now …"* transition line when
-the date advances.
-
-A second gap surfaced while scoping: the date should be entered in **the
-campaign's calendar**, and there must be a way to establish that calendar when it
-isn't set up. Today only the Gregorian provider exists and `read_calendar` always
-returns a default (`gregorian`/`US`), so a campaign's calendar is *never truly
-unset* — it defaults silently. We want an explicit "the user has set up this
-campaign's calendar" state that **gates** date entry.
+You can set a scene's date only *before* the scene starts — the date control lives
+in `CastPanel`, which renders only for an empty scene. Once a scene is in progress,
+the only right-hand panel is `SceneInspector`, which shows cast, location, and
+context but **no date and no way to set one**.
 
 ## What we're building
 
-1. A **shared `SceneWhen` component** that renders the "When" block, used by both
-   `SceneInspector` (the in-progress case — the core ask) and `CastPanel`
-   (replacing its current *ungated* duplicate). This makes the date control
-   available during play and keeps the gate consistent everywhere a date can be set.
-2. A real **`confirmed` flag** on the campaign calendar. Until the calendar is
-   confirmed, `SceneWhen` shows a **setup prompt** instead of the date input; once
-   confirmed, it shows the date control.
+Two small widgets in **`SceneInspector` only**, in a new "When" section:
 
-Out of scope (deferred): editable location in the inspector; non-Gregorian
-calendars; **epoch/anchor UI** (the `anchor` field is ignored by the Gregorian
-provider, so epoch entry would be non-functional today).
+1. **No calendar selected → a calendar picker.** A `<select>` of the available
+   calendars (only "Gregorian" today) + a button to choose it. Choosing sets the
+   campaign's calendar.
+2. **Calendar selected, no date → a date picker.** An `<input type="date">` + a
+   button to set the scene's date.
+3. **Date set → show it** (`friendly (weekday)`, plus a holidays line if any).
 
-## Backend — the `confirmed` flag
+That's the whole feature. No shared component, no changes to `CastPanel`, no
+region/epoch setup UI.
 
-A top-level boolean on `calendar.json`: `{primary, secondary, confirmed}`.
+## The one new state: "no calendar selected"
 
-- `store/calendars/config.py`
-  - `default_calendar()` returns `confirmed: False`.
-  - `read_calendar` reads `confirmed = bool(raw.get("confirmed", False))` and
-    includes it in the returned dict.
-  - `write_calendar` persists `confirmed = bool(cfg.get("confirmed", False))`.
-  - `copy_calendar` (world→campaign on create) already round-trips read→write, so
-    an unconfirmed world yields an unconfirmed campaign — the desired default.
+Today `read_calendar` always returns a default (`gregorian`), so "no calendar
+selected" doesn't exist in the data. We add a single boolean `confirmed` to
+`calendar.json`, set to `true` when the user picks a calendar in the widget.
+
+- `store/calendars/config.py`: `default_calendar()` → `confirmed: False`;
+  `read_calendar` reads `bool(raw.get("confirmed", False))`; `write_calendar`
+  persists it; `copy_calendar` round-trips it (unconfirmed world → unconfirmed
+  campaign).
 - `routes.py`: the `CalendarConfig` pydantic model gains `confirmed: bool = False`.
-  The existing `PUT /campaigns/{cid}/calendar` writes the body verbatim, so the
-  frontend confirms by PUTting the config with `confirmed: true`.
-- **Frontend-only gate.** `set_datetime` stays permissive (no server-side block).
-  This is a single-user local app; the gate is a UX guardrail, and enforcing it in
-  the backend buys nothing while adding an error path.
-- **Backward-compat.** Existing campaigns have a `calendar.json` (written by
-  `copy_calendar` at creation) with no `confirmed` field, so they read as
-  `confirmed: false` and will see the one-time setup prompt. Acceptable for the
-  attempt-2 rebuild.
+  The existing `PUT /campaigns/{cid}/calendar` writes the body, so the widget
+  confirms by PUTting `{...cfg, confirmed: true}`.
+- Frontend-only gate — `set_datetime` stays permissive.
+- Backward-compat: existing campaigns read as `confirmed: false` and show the
+  picker once. Fine for the attempt-2 rebuild.
 
-## Frontend — `components/SceneWhen.tsx`
+## Frontend — `SceneInspector.tsx`
 
-Props: `{ cid: string; sid: string; refreshKey?: number; onChanged: () => void }`.
+Fetch the calendar config (`api.getCalendarConfig`) and scene datetime
+(`api.getSceneDatetime`) in the effect already keyed on `[cid, sid, refreshKey]`.
+Render the "When" section (after Location) by state:
 
-On mount / when `cid`, `sid`, or `refreshKey` change, it fetches the calendar
-config (`api.getCalendarConfig`) and the scene datetime (`api.getSceneDatetime`).
-It renders one of three states:
+- `!when?.current && !cfg?.confirmed` → **calendar picker**. Options come from a
+  small hardcoded `CALENDARS` list (`[{ id: "gregorian", name: "Gregorian" }]`,
+  which grows when providers are added). The button calls
+  `api.setCalendarConfig(cid, { ...cfg, primary: { ...cfg.primary, provider },
+  confirmed: true })`, then re-fetches.
+- `!when?.current` (confirmed) → **date picker**: `<input type="date"
+  aria-label="Scene date">` + "Set date". The button calls
+  `api.setSceneDatetime(cid, sid, dateInput)`, then re-fetches and calls
+  `onSceneChanged()`.
+- otherwise → the current date as a `field-hint`
+  (`${when.current.friendly} (${when.current.weekday})`) + a holidays line when
+  `holidays_today` is non-empty. Keep the same input + an "Advance to" button so a
+  set date can still be changed (same code path; `set_datetime` appends the
+  "Time passes…" line on a real change).
 
-1. **Not confirmed** (`!cfg.confirmed`) — a `field-hint` *"Set up the campaign
-   calendar to track dates."* followed by the setup UI (see below). No date input.
-2. **Confirmed, no date** (`when.current == null`) — *"No date"* + `<input
-   type="date" aria-label="Scene date">` + a **Set date** button (disabled when
-   empty).
-3. **Confirmed, date set** — the current date as `field-hint`
-   (`${when.current.friendly} (${when.current.weekday})`), a holidays line when
-   `holidays_today` is non-empty, then the input + an **Advance to** button.
+Errors set a local `error` rendered as a `.banner`.
 
-`applyDatetime()`: `await api.setSceneDatetime(cid, sid, dateInput)`, clear the
-input, re-fetch the datetime, then call `onChanged()`. Errors set a local `error`
-rendered as a `.banner`, mirroring `CastPanel` (`set_datetime` can 400 on a date
-the calendar can't parse). Formatting (friendly/weekday/holidays, button labels)
-matches the current `CastPanel` "When" block exactly, so nothing regresses.
-
-### Setup UI — reuse `CalendarConfig`
-
-The not-confirmed state embeds the existing `CalendarConfig` (region dropdown), so
-we don't duplicate region-selection logic. Two small changes to `CalendarConfig`:
-
-- **Save sends `confirmed: true`** (an explicit save from either place = the user
-  has set up the calendar).
-- It takes an optional `onSaved?: () => void` callback so `SceneWhen` can re-fetch
-  and swap from the setup prompt to the date control.
-
-The sidebar's Calendar `<details>` (which already renders `CalendarConfig`) keeps
-working; its Save now also confirms — which is correct.
-
-## Wiring — `CampaignView.tsx`
-
-- `SceneInspector` gains an `onSceneChanged: () => void` prop, wired to
-  `() => activeId && selectScene(activeId)`. `selectScene` reloads messages (so the
-  *"Time passes…"* line appears) and bumps `ctxKey`, which re-triggers the
-  inspector's own reload — the same mechanism `CastPanel`'s `onSeeded` uses.
-- `SceneInspector` renders `<SceneWhen cid sid refreshKey={refreshKey}
-  onChanged={onSceneChanged} />` as a new side-section after Location.
-- `CastPanel` drops its inline "When" block (and its `when`, `dateInput`,
-  `reloadWhen`, `applyDatetime`) and renders `<SceneWhen cid sid
-  onChanged={onSeeded} />` in its place.
+`SceneInspector` gains an `onSceneChanged: () => void` prop; `CampaignView` passes
+`() => activeId && selectScene(activeId)` (reloads messages so the "Time passes…"
+line appears — the same mechanism `CastPanel`'s `onSeeded` uses).
 
 ## Types
 
@@ -112,29 +74,21 @@ working; its Save now also confirms — which is correct.
 
 ## Tests
 
-- **`SceneWhen.test.tsx`** (new): renders the setup prompt when
-  `confirmed: false`; renders "No date" + input when confirmed with no current;
-  renders the friendly date when a current exists; saving the setup
-  (`setCalendarConfig` with `confirmed: true`) then re-fetch reveals the input;
-  entering a date and clicking the button calls
-  `api.setSceneDatetime("c","s",<value>)` and fires `onChanged`.
-- **`SceneInspector.test.tsx`**: extend the mock with `getCalendarConfig` /
-  `getSceneDatetime`; assert the confirmed date renders and the "No date"/setup
-  paths behave. Existing cast/location/context assertions stay.
-- **`CastPanel.test.tsx`**: update for the extracted component (the date
-  assertions move to `SceneWhen`; CastPanel keeps its cast/location/greeting tests).
+- **`SceneInspector.test.tsx`**: extend the mock with `getCalendarConfig`,
+  `getSceneDatetime`, `setCalendarConfig`, `setSceneDatetime`. Assert: unconfirmed
+  + no date → the calendar picker shows and choosing calls `setCalendarConfig` with
+  `confirmed: true`; confirmed + no date → the date input shows and setting a date
+  calls `setSceneDatetime("c","s",<value>)` and fires `onSceneChanged`; a current
+  date renders its `friendly` text. Existing cast/location/context tests stay.
 - **Backend** (`test_*calendar*`): `write_calendar` → `read_calendar` round-trips
-  `confirmed`; a fresh `read_calendar` (no file) returns `confirmed: false`;
-  `copy_calendar` preserves it.
+  `confirmed`; a fresh `read_calendar` returns `confirmed: false`; `copy_calendar`
+  preserves it.
 
 ## Files touched
 
 - `backend/src/grimoire/store/calendars/config.py` — `confirmed` field.
 - `backend/src/grimoire/routes.py` — `CalendarConfig.confirmed`.
-- `frontend/src/components/SceneWhen.tsx` — new shared component.
-- `frontend/src/components/CalendarConfig.tsx` — confirm-on-save + `onSaved`.
-- `frontend/src/components/SceneInspector.tsx` — render `SceneWhen`, `onSceneChanged`.
-- `frontend/src/components/CastPanel.tsx` — replace inline "When" with `SceneWhen`.
+- `frontend/src/components/SceneInspector.tsx` — the "When" section + `onSceneChanged`.
 - `frontend/src/routes/CampaignView.tsx` — pass `onSceneChanged`.
 - `frontend/src/api/client.ts` — `CalendarConfig.confirmed` type.
 - Tests as above.
