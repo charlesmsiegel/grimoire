@@ -79,6 +79,38 @@ def test_materialize_builds_before_after(monkeypatch, tmp_path):
     assert auth["authored"] is True and auth["before"] == "aloof" and auth["after"] == "guardedly loyal"
 
 
+def test_materialize_composes_knowledge_blob(monkeypatch, tmp_path):
+    from grimoire.store import appearances, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    playstate.write_state(croot, ch, "Wary of the party.")
+    parsed = {"character_state_edits": [
+        {"id": ch, "current_state": "Travels with them.", "knows": "map is fake", "suspects": ""}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    cs = edits[f"character_state:{ch}"]
+    assert cs["kind"] == "character_state" and cs["authored"] is False and "payload" not in cs
+    assert cs["before"] == "Wary of the party."  # bare (no prior knowledge)
+    assert "## Current state\nTravels with them." in cs["after"]
+    assert "## Knows\nmap is fake" in cs["after"]
+    assert "## Suspects" not in cs["after"]
+
+
+def test_materialize_drops_noop_state(monkeypatch, tmp_path):
+    from grimoire.store import appearances, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    playstate.write_state(croot, ch, "Unchanged.")
+    parsed = {"character_state_edits": [
+        {"id": ch, "current_state": "Unchanged.", "knows": "", "suspects": ""}]}
+    assert absorb.materialize(cid, sid, parsed) == []
+
+
 def test_materialize_skips_unknown_targets(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import scenes
