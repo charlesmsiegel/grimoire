@@ -8,7 +8,8 @@ from __future__ import annotations
 import functools
 import re
 
-from . import appearances, briefs, calendars, campaigns, characters, config, entities, pcs, scenes, worlds
+from . import (appearances, briefs, calendars, campaigns, characters, chronicle,
+               config, entities, pcs, scenes, worlds)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -221,6 +222,19 @@ def _today_block(cid: str, sid: str, croot) -> str:
     return "# Today\n" + "\n".join(lines)
 
 
+def _story_so_far(cid: str) -> str:
+    try:
+        depth = max(int(config.read_config().get("recap_depth", "5")), 0)
+    except (ValueError, TypeError):
+        depth = 5
+    lines = []
+    for r in chronicle.recent(cid, depth):
+        s = (r.get("one_line") or r.get("summary") or "").strip()
+        if s:
+            lines.append(f"- {s}")
+    return "# Story so far\n" + "\n".join(lines) if lines else ""
+
+
 def _assemble(cid: str, sid: str) -> dict:
     """One pass producing substituted, labeled system sections + history + post-history.
     Shared by build_messages (joins sections into the system message) and
@@ -281,6 +295,7 @@ def _assemble(cid: str, sid: str) -> dict:
     add("Player personas", "\n\n".join(b for b in player_blocks if b))
     add("Message examples", "\n\n".join(d.get("mes_example", "").strip() for d in npc_cards if d.get("mes_example", "").strip()))
 
+    add("Story so far", _story_so_far(cid))
     add("Today", _today_block(cid, sid, croot))
 
     history_ids = scenes.get_location_history(cid, sid)
