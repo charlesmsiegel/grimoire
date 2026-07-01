@@ -54,7 +54,7 @@ def test_activate_unowned_unchanged():
 import pytest  # noqa: E402
 
 from grimoire.store import appearances as ap  # noqa: E402
-from grimoire.store import campaigns, characters, entities, pcs, scenes, worlds  # noqa: E402
+from grimoire.store import campaigns, characters, chronicle, entities, plot, pcs, scenes, worlds  # noqa: E402
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -252,16 +252,34 @@ def test_build_opener_messages(monkeypatch, tmp_path):
     pcs.create_pc(worlds.world_root(wid), "Elara", [],
                   persona={"name": "Elara", "pronouns": "", "summary": "", "description": "a scholar"})
     ap.appear(cid, sid, "pcs", "elara", "default", "player")
+    # an in-scene NPC — the opener now sees the cast, not just the players
+    characters.create_character(worlds.world_root(wid), "Seraphine", "default",
+                                _npc_card("Seraphine", description="a harbor keeper"))
+    ap.appear(cid, sid, "characters", "seraphine", "default", "npc")
     entities.create_entity(croot, "lore", "Always", "ambient lore", keys="")
     entities.create_entity(croot, "lore", "Salt", "salt lore", keys="salt")
+    loc = entities.create_entity(croot, "locations", "The Docks", "Rotting piers and grey water.")
+    scenes.set_location(cid, sid, loc)
+    scenes.set_datetime(cid, sid, "2026-12-25")
+    plot.set_movement(cid, "the-map", "The map", "open", "A clue surfaces.", sid)
+    chronicle.absorb(cid, {"id": "s00", "one_line": "They fled the city.",
+                           "summary": "The party escaped the burning capital by river."})
+
     msgs = context.build_opener_messages(cid, sid, "A storm over the salt marshes for {{user}}.")
-    assert msgs[0]["role"] == "system" and msgs[-1]["role"] == "user"
+    assert msgs[0]["role"] == "system"
     sys = msgs[0]["content"]
-    assert "a scholar" in sys          # player persona present
-    assert "ambient lore" in sys       # always-on lore present
-    assert "salt lore" in sys          # 'salt' activated by the prompt text
-    assert "{{user}}" not in sys       # substituted
-    assert msgs[-1]["content"] == "A storm over the salt marshes for Elara."
+    assert "a scholar" in sys                       # player persona present
+    assert "a harbor keeper" in sys                 # in-scene NPC description present
+    assert "ambient lore" in sys                    # always-on lore present
+    assert "salt lore" in sys                        # 'salt' activated by the prompt text
+    assert "Rotting piers and grey water." in sys   # current setting (location)
+    assert "It is 25 December 2026 (Friday)." in sys # date
+    assert "The map (open): A clue surfaces." in sys  # plot thread
+    assert "The party escaped the burning capital by river." in sys  # full recap summary...
+    assert "They fled the city." not in sys          # ...not the compact one-liner
+    assert "{{user}}" not in sys                     # substituted
+    user_msg = next(m for m in msgs if m["role"] == "user")
+    assert user_msg["content"] == "A storm over the salt marshes for Elara."
 
 
 def test_depth_zero_and_unparseable_fallback(monkeypatch, tmp_path):
