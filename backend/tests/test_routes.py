@@ -1089,3 +1089,39 @@ def test_calendar_config_rejects_malformed_custom_holiday(client):
     bogus = {"primary": {"provider": "bogus", "region": "US", "custom_holidays": [], "anchor": None},
              "secondary": None}
     assert client.put(f"/api/campaigns/{cid}/calendar", json=bogus).status_code == 400
+
+
+def test_absorb_returns_preview_without_persisting(client):
+    _, cid = _campaign(client)
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We entered the crypt.")
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "They entered.", "summary": "The party entered the crypt.",'
+        ' "keywords": ["crypt"], "timeline_events": []}')
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["one_line"] == "They entered." and body["keywords"] == ["crypt"]
+    assert client.get(f"/api/campaigns/{cid}/chronicle").json() == []  # not persisted yet
+
+
+def test_absorb_empty_scene_is_400(client):
+    _, cid = _campaign(client)
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert r.status_code == 400
+
+
+def test_save_chronicle_persists_and_lists(client):
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "They entered.", "summary": "In the crypt.",
+                         "keywords": ["crypt"],
+                         "timeline_events": [{"date": "2026-01-01", "text": "Entered."}]})
+    assert r.status_code == 200 and r.json()["one_line"] == "They entered."
+    listed = client.get(f"/api/campaigns/{cid}/chronicle").json()
+    assert len(listed) == 1 and listed[0]["summary"] == "In the crypt."
+    assert store.scenes.read_scene(cid, sid)["meta"]["done"] == "true"  # scene marked done
