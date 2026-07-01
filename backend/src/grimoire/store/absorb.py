@@ -74,6 +74,81 @@ def parse_output(text: str) -> dict:
     }
 
 
+_CARD_FIELDS = ("description", "personality", "scenario")
+
+
+def _char_name(croot, cid: str) -> str:
+    try:
+        return characters.read_character(croot, cid)["meta"].get("name", cid)
+    except characters.CharacterNotFound:
+        return cid
+
+
+def _entity_kind(croot, eid: str) -> str | None:
+    for kind in ("lore", "locations"):
+        try:
+            entities.read_entity(croot, kind, eid)
+            return kind
+        except entities.EntityNotFound:
+            continue
+    return None
+
+
+def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
+    """Turn the parsed edit lists into before/after StagedEdits against the campaign
+    copies. Targets that don't exist are dropped (tolerated, not an error)."""
+    croot = campaigns.campaign_root(cid)
+    out: list[dict] = []
+
+    for e in parsed.get("character_state_edits", []):
+        char_id, after = e.get("id", ""), (e.get("current_state", "") or "").strip()
+        if not char_id or not after:
+            continue
+        try:
+            characters.read_character(croot, char_id)
+        except characters.CharacterNotFound:
+            continue
+        st = playstate.read_state(croot, char_id)
+        out.append({"id": f"character_state:{char_id}", "kind": "character_state",
+                    "target": {"kind": "characters", "id": char_id},
+                    "label": f"{_char_name(croot, char_id)} — current state",
+                    "field": "current_state",
+                    "before": st["current_state"] if st else "", "after": after,
+                    "authored": False})
+
+    for e in parsed.get("lore_edits", []):
+        eid, append = e.get("id", ""), (e.get("append", "") or "").strip()
+        if not eid or not append:
+            continue
+        kind = _entity_kind(croot, eid)
+        if not kind:
+            continue
+        ent = entities.read_entity(croot, kind, eid)
+        before = ent["body"].strip()
+        after = (before + "\n\n" + append).strip()
+        out.append({"id": f"lore:{eid}", "kind": "lore", "target": {"kind": kind, "id": eid},
+                    "label": f"{ent['meta'].get('name', eid)} — {kind}", "field": "body",
+                    "before": before, "after": after, "authored": False})
+
+    for e in parsed.get("authored_edits", []):
+        char_id, field, text = e.get("id", ""), e.get("field", ""), (e.get("text", "") or "").strip()
+        if not char_id or field not in _CARD_FIELDS or not text:
+            continue
+        vid = appearances.locked_version(cid, "characters", char_id)
+        if not vid:
+            continue
+        try:
+            before = characters.read_card(croot, char_id, vid)["data"].get(field, "").strip()
+        except (characters.CharacterNotFound, characters.VersionNotFound):
+            continue
+        out.append({"id": f"authored:{char_id}:{field}", "kind": "authored",
+                    "target": {"kind": "characters", "id": char_id},
+                    "label": f"{_char_name(croot, char_id)} — {field} (card edit)",
+                    "field": field, "before": before, "after": text, "authored": True})
+
+    return out
+
+
 def state_snapshot(cid: str, sid: str) -> dict:
     """Present NPCs' existing current_state, keyed by display name (feeds the prompt)."""
     croot = campaigns.campaign_root(cid)

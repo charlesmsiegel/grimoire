@@ -41,3 +41,37 @@ def test_parse_output_tolerates_garbage():
     assert absorb.parse_output("no json") == {
         "one_line": "", "summary": "", "keywords": [], "timeline_events": [],
         "character_state_edits": [], "lore_edits": [], "authored_edits": []}
+
+
+def test_materialize_builds_before_after(monkeypatch, tmp_path):
+    from grimoire.store import appearances, characters, entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    entities.create_entity(croot, "lore", "Salt Cathedral", body="A ruined cathedral.")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    playstate.write_state(croot, ch, "Wary of the party.")
+    parsed = {
+        "character_state_edits": [{"id": ch, "current_state": "Now travels with them."}],
+        "lore_edits": [{"id": "salt-cathedral", "append": "Now flooded."}],
+        "authored_edits": [{"id": ch, "field": "personality", "text": "guardedly loyal"}],
+    }
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    cs = edits[f"character_state:{ch}"]
+    assert cs["kind"] == "character_state" and cs["before"] == "Wary of the party." \
+        and cs["after"] == "Now travels with them." and cs["authored"] is False
+    lore = edits["lore:salt-cathedral"]
+    assert lore["before"] == "A ruined cathedral." and lore["after"].endswith("Now flooded.")
+    auth = edits[f"authored:{ch}:personality"]
+    assert auth["authored"] is True and auth["before"] == "aloof" and auth["after"] == "guardedly loyal"
+
+
+def test_materialize_skips_unknown_targets(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import scenes
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"character_state_edits": [{"id": "ghost", "current_state": "x"}],
+              "lore_edits": [{"id": "nope", "append": "y"}],
+              "authored_edits": [{"id": "ghost", "field": "personality", "text": "z"}]}
+    assert absorb.materialize(cid, sid, parsed) == []

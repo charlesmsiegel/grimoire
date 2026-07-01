@@ -1131,8 +1131,10 @@ async def post_absorb(cid: str, sid: str,
     except OpenRouterError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     parsed = store.absorb.parse_output(text)
+    edits = store.absorb.materialize(cid, sid, parsed)
     return {"one_line": parsed["one_line"], "summary": parsed["summary"],
-            "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"], **facts}
+            "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
+            **facts, "edits": edits}
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")
