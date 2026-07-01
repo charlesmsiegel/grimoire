@@ -456,6 +456,38 @@ def test_character_state_renders_knowledge(monkeypatch, tmp_path):
     assert "Suspects: elara lies" in section
 
 
+def test_character_state_no_dangling_name_when_current_state_empty(monkeypatch, tmp_path):
+    from grimoire.store import (appearances, campaigns, characters, context,
+                                playstate, scenes, worlds)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid)
+    croot = campaigns.campaign_root(cid)
+    ch = characters.create_character(croot, "Alice", "main", characters.blank_card("Alice"))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    playstate.write_state(croot, ch, playstate.compose_body("", "the password", ""))
+    section = dict(context._assemble(cid, sid)["system"])["Character state"]
+    assert "Alice:\n" not in section and not section.endswith("Alice:")  # no dangling colon
+    assert "Alice: Knows: the password" in section
+
+
+def test_character_state_multiline_knowledge_stays_indented(monkeypatch, tmp_path):
+    from grimoire.store import (appearances, campaigns, characters, context,
+                                playstate, scenes, worlds)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid)
+    croot = campaigns.campaign_root(cid)
+    ch = characters.create_character(croot, "Seraphine", "main", characters.blank_card("Seraphine"))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    playstate.write_state(croot, ch, playstate.compose_body("Hurt.", "line one\nline two", ""))
+    section = dict(context._assemble(cid, sid)["system"])["Character state"]
+    assert "  Knows: line one" in section
+    assert "\n    line two" in section  # continuation re-indented, not flush-left
+
+
 def test_character_state_absent_when_none(monkeypatch, tmp_path):
     from grimoire.store import campaigns, context, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))

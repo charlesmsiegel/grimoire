@@ -79,6 +79,20 @@ def parse_output(text: str) -> dict:
                 out.append({f: str(e.get(f, "")).strip() for f in fields})
         return out
 
+    # Preserve key PRESENCE for knowledge: a field the model omitted must be left
+    # untouched at materialize time (keep-on-omit), while an explicit "" clears it. So we
+    # only carry knows/suspects into the row when the model actually returned them.
+    cs_edits = []
+    for e in obj.get("character_state_edits", []):
+        if not isinstance(e, dict):
+            continue
+        row = {"id": str(e.get("id", "")).strip(),
+               "current_state": str(e.get("current_state", "") or "").strip()}
+        for k in ("knows", "suspects"):
+            if k in e:
+                row[k] = str(e.get(k) or "").strip()
+        cs_edits.append(row)
+
     rel_deltas = []
     for e in obj.get("relationship_deltas", []):
         if isinstance(e, dict):
@@ -91,8 +105,7 @@ def parse_output(text: str) -> dict:
         "summary": str(obj.get("summary", "")).strip(),
         "keywords": [str(k).strip() for k in obj.get("keywords", []) if str(k).strip()],
         "timeline_events": _list("timeline_events", ("date", "text")),
-        "character_state_edits": _list("character_state_edits",
-                                       ("id", "current_state", "knows", "suspects")),
+        "character_state_edits": cs_edits,
         "lore_edits": _list("lore_edits", ("id", "append")),
         "authored_edits": _list("authored_edits", ("id", "field", "text")),
         "relationship_deltas": rel_deltas,
@@ -142,16 +155,24 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
 
     for e in parsed.get("character_state_edits", []):
         char_id = e.get("id", "")
-        after = playstate.compose_body(e.get("current_state", ""), e.get("knows", ""),
-                                       e.get("suspects", ""))
-        if not char_id or not after:
+        if not char_id:
             continue
         try:
             characters.read_character(croot, char_id)
         except characters.CharacterNotFound:
             continue
         st = playstate.read_state(croot, char_id)
-        before = playstate.compose_body(st["current_state"], st["knows"], st["suspects"]) if st else ""
+        cur_knows = st["knows"] if st else ""
+        cur_suspects = st["suspects"] if st else ""
+        # Keep-on-omit: an omitted knows/suspects preserves the stored value; an explicit
+        # "" clears it. Prevents an absorb that only touches current_state from silently
+        # erasing established knowledge.
+        knows = e["knows"] if "knows" in e else cur_knows
+        suspects = e["suspects"] if "suspects" in e else cur_suspects
+        after = playstate.compose_body(e.get("current_state", ""), knows, suspects)
+        if not after:
+            continue
+        before = playstate.compose_body(st["current_state"], cur_knows, cur_suspects) if st else ""
         if before == after:
             continue
         out.append({"id": f"character_state:{char_id}", "kind": "character_state",
@@ -270,7 +291,8 @@ def relationships_snapshot(cid: str, sid: str) -> str:
 
 
 def state_snapshot(cid: str, sid: str) -> dict:
-    """Present NPCs' existing current_state, keyed by display name (feeds the prompt)."""
+    """Present NPCs' existing standing snapshot — current_state with any Knows/Suspects
+    folded in (via _snapshot_line) — keyed by display name (feeds the prompt)."""
     croot = campaigns.campaign_root(cid)
     out: dict[str, str] = {}
     for a in appearances.scene_cast(cid, sid):

@@ -37,9 +37,12 @@ StagedEdit kind.
 2. **Snapshot semantics, fed current values** (matching Phase 2 `current_state` and
    Phase 3 metrics). The extraction is fed each present NPC's current
    `current_state`/`knows`/`suspects` and returns the **full rewritten** snapshot of all
-   three (dropping what is stale). A diff is `before → after` of the composed blob. This
-   preserves accreted knowledge only because the current values are fed back in; the
-   review gate is the backstop against an accidental wipe.
+   three (dropping what is stale). A diff is `before → after` of the composed blob.
+   **Keep-on-omit:** a knowledge field the model *omits* preserves the stored value; only
+   an *explicitly-empty* field clears it. So an absorb that touches only `current_state`
+   can never silently erase accreted `knows`/`suspects`, while a resolved suspicion can
+   still be cleared by sending `"suspects": ""`. This requires preserving key **presence**
+   through `parse_output` (see Extraction).
 3. **NPC-only** (mirror Phase 2). Only present NPC characters (`role == "npc"`,
    `kind == "characters"`) get knowledge. PCs and player-role characters are skipped.
 4. **Backward compatible.** Existing Phase-2 `state.md` files hold a bare `current_state`
@@ -67,11 +70,12 @@ That Elara is working for the Salt Duke.
 
 `playstate.py` changes:
 - `read_state(root, cid) -> {"current_state", "knows", "suspects", "updated"} | None`.
-  Parses the body by the recognized headers `## Current state`, `## Knows`,
-  `## Suspects` (case-insensitive match on the header line). **A body with no recognized
-  header is treated wholesale as `current_state`** (knows/suspects `""`) — Phase-2
-  back-compat. Text before the first recognized header, if any, is folded into
-  `current_state`.
+  The body is parsed as structured **only when its first non-empty line is a recognized
+  header** (`## Current state`, `## Knows`, `## Suspects`, case-insensitive). Otherwise it
+  is taken **wholesale as `current_state`** (knows/suspects `""`). This is the Phase-2
+  back-compat path and also makes parsing robust: `current_state` prose that merely
+  *contains* a header-looking line mid-text is never split or truncated, since it doesn't
+  *start* with one.
 - `compose_body(current_state, knows, suspects) -> str` — builds the headed blob,
   **omitting any section whose field is empty** (stripped). Section order is fixed:
   Current state, Knows, Suspects. **When both `knows` and `suspects` are empty it returns
@@ -92,9 +96,10 @@ Pure IO, mirrors `briefs.py`. No import-cycle change.
   **known** (`knows`) and **suspected-but-unconfirmed** (`suspects`), dropping what is no
   longer true. Standing knowledge only, not a running log. Empty string for a field that
   does not apply.
-- **`parse_output`** — `character_state_edits` field list extends to
-  `("id", "current_state", "knows", "suspects")` (already coerced to stripped strings;
-  missing ⇒ `""`).
+- **`parse_output`** — `character_state_edits` carry `current_state` (always, coerced to a
+  stripped string) plus `knows`/`suspects` **only when the model actually returned those
+  keys** (presence preserved, so `materialize` can distinguish keep-on-omit from an
+  explicit clear).
 - **`state_snapshot(cid, sid)`** — still returns `dict[name -> str]`, but the string now
   carries the NPC's knowledge inline: `current_state` with ` Knows: … Suspects: …`
   appended when those fields are non-empty. This feeds the model the current values so it
@@ -109,9 +114,10 @@ Pure IO, mirrors `briefs.py`. No import-cycle change.
 paragraph. Still one editable-textarea row per NPC, `kind: "character_state"`,
 `field: "current_state"`, `authored: false`, **no `payload`**. `before` is recomposed
 from the current `read_state` fields (`""` when no state file); `after` is composed from
-the parsed `current_state`/`knows`/`suspects`. **No-op guard:** the row is skipped when
-`before == after` (new — avoids emitting an unchanged snapshot; Phase 2 emitted
-unconditionally).
+the parsed `current_state` plus the **keep-on-omit-resolved** `knows`/`suspects` (an
+omitted field falls back to the stored value, an explicit `""` clears it). **No-op guard:**
+the row is skipped when `before == after` (new — avoids emitting an unchanged snapshot;
+Phase 2 emitted unconditionally).
 
 ```jsonc
 { "id": "character_state:seraphine",
