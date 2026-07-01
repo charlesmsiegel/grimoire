@@ -409,3 +409,15 @@ def test_story_so_far_absent_when_empty(monkeypatch, tmp_path):
     cid = campaigns.create_campaign("Run", wid)
     sid = scenes.create_scene(cid, "Now")
     assert "Story so far" not in [label for label, _ in context._assemble(cid, sid)["system"]]
+
+
+def test_story_so_far_tolerates_garbled_chronicle(monkeypatch, tmp_path):
+    from grimoire.store import campaigns, context, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "Now")
+    (campaigns.campaign_root(cid) / "chronicle.json").write_text("{ not valid json", encoding="utf-8")
+    labels = [label for label, _ in context._assemble(cid, sid)["system"]]  # must not raise
+    assert "Story so far" not in labels
+    context.build_messages(cid, sid)  # the real consumer must not crash either

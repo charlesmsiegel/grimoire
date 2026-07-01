@@ -223,16 +223,19 @@ def _today_block(cid: str, sid: str, croot) -> str:
 
 
 def _story_so_far(cid: str) -> str:
+    # Always-on, non-critical: a garbled chronicle/config must omit the block, never
+    # crash the context build (the store may live in a synced folder). Mirrors the
+    # tolerance of _today_block / the current-setting block.
     try:
         depth = max(int(config.read_config().get("recap_depth", "5")), 0)
-    except (ValueError, TypeError):
-        depth = 5
-    lines = []
-    for r in chronicle.recent(cid, depth):
-        s = (r.get("one_line") or r.get("summary") or "").strip()
-        if s:
-            lines.append(f"- {s}")
-    return "# Story so far\n" + "\n".join(lines) if lines else ""
+        if not depth:
+            return ""
+        lines = [f"- {s}" for s in
+                 ((r.get("one_line") or r.get("summary") or "").strip()
+                  for r in chronicle.recent(cid, depth)) if s]
+        return "# Story so far\n" + "\n".join(lines) if lines else ""
+    except Exception:  # noqa: BLE001 — corrupt chronicle.json / config: omit, don't crash
+        return ""
 
 
 def _assemble(cid: str, sid: str) -> dict:
