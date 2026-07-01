@@ -52,7 +52,38 @@ def test_parse_output_tolerates_garbage():
     assert absorb.parse_output("no json") == {
         "one_line": "", "summary": "", "keywords": [], "timeline_events": [],
         "character_state_edits": [], "lore_edits": [], "authored_edits": [],
-        "relationship_deltas": [], "bond_changes": []}
+        "relationship_deltas": [], "bond_changes": [], "plot_movements": []}
+
+
+def test_parse_output_plot_movements():
+    text = ('{"one_line": "", "summary": "", "keywords": [], "timeline_events": [],'
+            ' "character_state_edits": [], "lore_edits": [], "authored_edits": [],'
+            ' "plot_movements": [{"id": "the-map", "title": "The map", "status": "advanced",'
+            '   "beat": "It is a forgery."},'
+            '  {"title": "New thread", "status": "bogus", "beat": "starts"}]}')
+    out = absorb.parse_output(text)
+    assert out["plot_movements"] == [
+        {"id": "the-map", "title": "The map", "status": "advanced", "beat": "It is a forgery."},
+        {"id": "", "title": "New thread", "status": "open", "beat": "starts"}]  # bad status -> open
+
+
+def test_plot_snapshot_renders_open_threads(monkeypatch, tmp_path):
+    from grimoire.store import plot, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    plot.set_movement(cid, "the-map", "The map", "advanced", "It is a forgery.", "s12")
+    plot.set_movement(cid, "done", "Done thread", "closed", "resolved", "s5")
+    snap = absorb.plot_snapshot(cid, sid)
+    assert "the-map" in snap and "The map" in snap and "It is a forgery." in snap
+    assert "Done thread" not in snap  # closed excluded
+
+
+def test_plot_snapshot_tolerates_garbled(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    (campaigns.campaign_root(cid) / "plot.json").write_text("{ not json", encoding="utf-8")
+    assert absorb.plot_snapshot(cid, sid) == ""
 
 
 def test_materialize_builds_before_after(monkeypatch, tmp_path):
