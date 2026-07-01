@@ -41,8 +41,13 @@ and the context injects as a dedicated section — reusing the Phase 2–4 machi
    **absolute** new status plus the beat describing this scene's contribution. Beats
    **accrete** (append-only per thread); status is replaced.
 3. **New-thread ids are slugified from the title** (`paths.slugify`, as entities/
-   characters do). An existing `id` from the context block advances/closes that thread;
-   a movement whose id is absent or unknown opens a new thread keyed by `slugify(title)`.
+   characters do). `materialize` **resolves the pid first** (the given `id`, else
+   `slugify(title)` only when the title has real content — a titleless or
+   punctuation-only movement is dropped, since `slugify` would otherwise fall back to
+   `"untitled"`), **then looks up the existing thread by that pid**. So a new-title
+   movement whose slug collides with an existing thread merges into it honestly (the diff
+   shows the existing `before` and keeps the stored title), rather than masquerading as
+   new. Movements resolving to the same pid within one scene are de-duplicated to one edit.
 4. **Own `# Plot threads` context section**, listing open/advanced threads (closed drop
    out), tolerant (omit-never-crash) like every continuity block.
 
@@ -75,6 +80,11 @@ New module **`store/plot.py`** (pure JSON IO, mirrors `relationships.py`):
 - `open_threads(cid) -> list[dict]` — threads with `status != "closed"`, each
   `{"id", "title", "status", "latest_beat"}` (`latest_beat` = last beat's text, `""` if
   none), sorted by `last_scene` then `id`.
+- `render_open(cid, with_id) -> list[str]` — formatted open/advanced lines shared by the
+  prompt snapshot (`with_id=True` → `"id: Title (status) — beat"`) and the `# Plot threads`
+  context block (`with_id=False` → `"Title (status): beat"`). **Tolerant** (returns `[]`
+  on a garbled `plot.json`) so both callers stay omit-never-crash. Mirrors the render
+  helpers on `relationships.py`.
 - Pure JSON IO (`indent=2, sort_keys=True`). Imports only `campaigns`/`paths`.
 
 ## Extraction (grows again, still one call)
@@ -97,12 +107,14 @@ New module **`store/plot.py`** (pure JSON IO, mirrors `relationships.py`):
 
 ## StagedEdit — the new `plot` kind
 
-`materialize(cid, sid, parsed)` gains a `plot_movements` loop. For each movement:
-- **Resolve the thread:** if the movement's `id` names an existing thread → advance/close
-  it (`before` = readable prior `status` + latest beat); otherwise **new**, `pid =
-  slugify(title)` (`before = ""`). A movement with an empty resolved `pid` (no id, no
-  title) is dropped. A movement with an **empty `beat`** is dropped (a movement always
-  records a beat).
+`materialize(cid, sid, parsed)` gains a `plot_movements` loop. It reads `plot.json`
+**once, tolerantly** (a garbled store ⇒ treat as empty rather than 500 after the paid
+completion). For each movement:
+- **Resolve the pid** (id → else `slugify(title)` when the title has real content → else
+  drop), skip if already seen this scene, then **look up the existing thread by pid**: if
+  found, `before` = readable prior `status` + latest beat and the payload keeps the stored
+  title; otherwise it's new (`before = ""`). A movement with an **empty `beat`** is dropped
+  (a movement always records a beat).
 - **Status:** taken from the parsed movement (already enum-coerced).
 - `scene = sid` is folded into the `payload` so `apply_edits` (which has no `sid`) can
   set `last_scene`.
@@ -148,7 +160,8 @@ Each line is `"{title} ({status}): {latest_beat}"`; a thread with no beats yet s
 - **`store/plot.py`** (new) — the JSON store + `set_movement`/`open_threads` above.
 - **`store/absorb.py`** — `EXTRACT_INSTRUCTION` `plot_movements`; `parse_output`
   `plot_movements`; `build_prompt` `plot_snapshot` param; `materialize` the `plot` kind;
-  `apply_edits` the `plot` branch; a `plot_snapshot(cid, sid)` helper.
+  `apply_edits` the `plot` branch; a `plot_snapshot(cid)` helper (campaign-wide — no
+  `sid`; delegates to `plot.render_open`).
 - **`store/context.py`** — the `# Plot threads` section (a `_plot_threads` helper).
 - **`routes.py`** — no new endpoints (rides `POST /absorb` + `PUT /chronicle`). The
   extraction call site in `post_absorb` passes the new `plot_snapshot` to `build_prompt`.
