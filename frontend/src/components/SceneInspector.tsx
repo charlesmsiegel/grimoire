@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, type Actor, type SceneContext, type SceneLocation } from "../api/client";
+import { api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry } from "../api/client";
 import { fetchModels, type Model } from "../api/models";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 
@@ -8,6 +8,7 @@ export function SceneInspector({ cid, sid, refreshKey }: { cid: string; sid: str
   const [names, setNames] = useState<Record<string, string>>({});
   const [setting, setSetting] = useState<SceneLocation | null>(null);
   const [ctx, setCtx] = useState<SceneContext | null>(null);
+  const [recap, setRecap] = useState<ChronicleEntry[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
 
@@ -28,6 +29,7 @@ export function SceneInspector({ cid, sid, refreshKey }: { cid: string; sid: str
     api.getCast(cid, sid).then(setCast).catch(() => setCast([]));
     api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null));
     api.getSceneContext(cid, sid).then(setCtx).catch(() => setCtx(null));
+    api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
   }, [cid, sid, refreshKey]);
 
   const ctxLen = useMemo(
@@ -39,6 +41,14 @@ export function SceneInspector({ cid, sid, refreshKey }: { cid: string; sid: str
 
   return (
     <aside className="inspector">
+      {recap.length > 0 && (
+        <div className="side-section">
+          <h4>Story so far</h4>
+          {[...recap].reverse().map((r) => (
+            <div className="field-hint" key={r.id}>{r.one_line || r.summary}</div>
+          ))}
+        </div>
+      )}
       <div className="side-section">
         <h4>Active characters</h4>
         {cast.length === 0 && <div className="field-hint">No one cast yet.</div>}
