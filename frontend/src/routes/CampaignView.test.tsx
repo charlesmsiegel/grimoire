@@ -250,6 +250,28 @@ test("character_state row renders a multi-section knowledge body in its textarea
       id: "character_state:seraphine", after: "## Current state\nHurt.\n\n## Knows\nmap is fake" })] })));
 });
 
+test("plot rows are editable and sent with payload on save", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    edits: [{ id: "plot:the-map", kind: "plot",
+      target: { kind: "plot", id: "the-map" }, label: "The map — advanced",
+      field: "beat", before: "open — Elara got it.", after: "It is a forgery.",
+      authored: false, payload: { id: "the-map", title: "The map", status: "advanced", scene: "s1" } }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  const ta = await screen.findByLabelText("After The map — advanced");
+  expect((ta as HTMLTextAreaElement).value).toBe("It is a forgery.");
+  fireEvent.change(ta, { target: { value: "It is a clever forgery." } });
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
+    expect.objectContaining({ edits: expect.arrayContaining([
+      expect.objectContaining({ id: "plot:the-map", after: "It is a clever forgery.",
+        payload: expect.objectContaining({ status: "advanced" }) })]) })));
+});
+
 test("relationship rows are read-only and sent with payload on save", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
