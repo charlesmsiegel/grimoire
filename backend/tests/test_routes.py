@@ -1168,6 +1168,28 @@ def test_absorb_returns_edits_without_persisting(client):
     assert store.playstate.read_state(croot, ch) is None  # not persisted
 
 
+def test_scene_suggestions_returns_resolved(client):
+    wid, cid = _campaign(client)
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    ann = client.post(f"/api/worlds/{wid}/characters",
+                      json={"name": "Ann", "version_name": "main"}).json()["character"]
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
+        '{"suggestions": [{"title": "T", "premise": "P",'
+        f' "cast": ["characters:{ann}"], "location": ""}}]}}')
+    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    assert r.status_code == 200
+    s = r.json()["suggestions"][0]
+    assert s["title"] == "T" and s["premise"] == "P"
+    assert s["cast"][0] == {"kind": "characters", "id": ann, "name": "Ann"}
+    assert s["location"] is None
+
+
+def test_scene_suggestions_missing_key_returns_409(client):
+    _, cid = _campaign(client)
+    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    assert r.status_code == 409 and r.json()["kind"] == "missing_key"
+
+
 def test_put_chronicle_applies_approved_edits(client):
     _, cid = _campaign(client)
     croot = store.campaigns.campaign_root(cid)
