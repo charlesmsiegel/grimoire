@@ -95,7 +95,7 @@ def recent(cid: str, n: int) -> list[dict]:
     if n <= 0:
         return []
     data = read_chronicle(cid)
-    return sorted(data.values(), key=lambda r: r["id"])[-n:]
+    return sorted(data.values(), key=lambda r: r.get("id", ""))[-n:]
 
 
 def append_timeline(cid: str, events: list[dict]) -> None:
