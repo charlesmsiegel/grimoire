@@ -260,6 +260,11 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                     "field": "bond", "before": before, "after": typ, "authored": False,
                     "payload": {"a": a_tok, "b": b_tok, "type": typ}})
 
+    try:
+        threads = plot.read(cid)
+    except Exception:  # noqa: BLE001 — garbled plot.json: skip plot movements, don't 500
+        threads = {}
+    seen_pids: set[str] = set()
     for e in parsed.get("plot_movements", []):
         beat = (e.get("beat", "") or "").strip()
         if not beat:
@@ -267,18 +272,23 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         mid = (e.get("id", "") or "").strip()
         title = (e.get("title", "") or "").strip()
         status = e.get("status", "open")
-        cur = plot.get(cid, mid) if mid else None
-        if cur:
+        if mid:
             pid = mid
+        elif any(c.isalnum() for c in title):
+            pid = slugify(title)  # new thread — needs a title with real content
+        else:
+            continue  # no id and no usable title -> drop
+        if pid in seen_pids:
+            continue  # one edit per thread per scene (avoids duplicate ids / double-apply)
+        seen_pids.add(pid)
+        cur = threads.get(pid)
+        if isinstance(cur, dict):  # existing thread (by id, or a new title that collides)
             beats = cur.get("beats") or []
             before = (f"{cur.get('status', 'open')} — {beats[-1]['text']}"
                       if beats else cur.get("status", "open"))
+            disp_title = cur.get("title") or title or pid  # keep the stored title
         else:
-            pid = mid or slugify(title)
-            before = ""
-        if not pid:
-            continue
-        disp_title = title or (cur.get("title") if cur else pid)
+            before, disp_title = "", title or pid
         out.append({"id": f"plot:{pid}", "kind": "plot",
                     "target": {"kind": "plot", "id": pid},
                     "label": f"{disp_title} — {status}",
@@ -336,17 +346,11 @@ def relationships_snapshot(cid: str, sid: str) -> str:
         return ""
 
 
-def plot_snapshot(cid: str, sid: str) -> str:
+def plot_snapshot(cid: str) -> str:
     """Rendered open/advanced plot threads (id + title + status + latest beat) — feeds the
-    prompt so the model advances the right thread. Tolerant of a garbled plot.json."""
-    try:
-        lines = []
-        for t in plot.open_threads(cid):
-            head = f"{t['id']}: {t['title']} ({t['status']})"
-            lines.append(f"{head} — {t['latest_beat']}" if t["latest_beat"] else head)
-        return "\n".join(lines)
-    except Exception:  # noqa: BLE001 — garbled plot.json: omit, don't crash the extraction
-        return ""
+    prompt so the model advances the right thread. Campaign-wide (not scene-scoped);
+    tolerant of a garbled plot.json."""
+    return "\n".join(plot.render_open(cid, with_id=True))
 
 
 def state_snapshot(cid: str, sid: str) -> dict:

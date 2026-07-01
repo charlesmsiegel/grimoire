@@ -73,17 +73,15 @@ def test_plot_snapshot_renders_open_threads(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "S")
     plot.set_movement(cid, "the-map", "The map", "advanced", "It is a forgery.", "s12")
     plot.set_movement(cid, "done", "Done thread", "closed", "resolved", "s5")
-    snap = absorb.plot_snapshot(cid, sid)
+    snap = absorb.plot_snapshot(cid)
     assert "the-map" in snap and "The map" in snap and "It is a forgery." in snap
     assert "Done thread" not in snap  # closed excluded
 
 
 def test_plot_snapshot_tolerates_garbled(monkeypatch, tmp_path):
-    from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
-    sid = scenes.create_scene(cid, "S")
     (campaigns.campaign_root(cid) / "plot.json").write_text("{ not json", encoding="utf-8")
-    assert absorb.plot_snapshot(cid, sid) == ""
+    assert absorb.plot_snapshot(cid) == ""
 
 
 def test_materialize_builds_before_after(monkeypatch, tmp_path):
@@ -316,7 +314,45 @@ def test_materialize_plot_new_and_advance(monkeypatch, tmp_path):
     assert adv["payload"] == {"id": "the-map", "title": "The map", "status": "advanced", "scene": sid}
     new = edits["plot:the-duke-s-debt"]  # slugified from the title
     assert new["before"] == "" and new["payload"]["title"] == "The Duke's debt"
-    assert "plot:x" not in edits and not any(k == "plot:" for k in edits)  # both dropped
+    assert "plot:x" not in edits              # empty beat dropped
+    assert "plot:untitled" not in edits       # no-id no-usable-title dropped (not "untitled")
+
+
+def test_materialize_plot_new_title_colliding_existing_id_merges(monkeypatch, tmp_path):
+    from grimoire.store import plot, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    plot.set_movement(cid, "the-map", "The map", "open", "Elara got it.", "s10")
+    # New thread (no id) whose title slugifies to the existing "the-map": must resolve to
+    # the existing thread and honestly show its `before` (not masquerade as new).
+    parsed = {"plot_movements": [
+        {"id": "", "title": "The Map!", "status": "advanced", "beat": "It is a forgery."}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    row = edits["plot:the-map"]
+    assert row["before"].startswith("open — Elara got it.")   # resolved to existing
+    assert row["payload"]["title"] == "The map"               # keeps the stored title
+
+
+def test_materialize_plot_dedupes_same_pid(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"plot_movements": [
+        {"id": "", "title": "The map", "status": "open", "beat": "first"},
+        {"id": "", "title": "The map", "status": "advanced", "beat": "second"}]}
+    plot_edits = [e for e in absorb.materialize(cid, sid, parsed) if e["kind"] == "plot"]
+    assert len(plot_edits) == 1  # one edit per thread per scene (no duplicate ids)
+
+
+def test_materialize_tolerates_garbled_plot(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    (campaigns.campaign_root(cid) / "plot.json").write_text("{ not json", encoding="utf-8")
+    parsed = {"plot_movements": [
+        {"id": "the-map", "title": "The map", "status": "advanced", "beat": "moved"}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}  # must not raise
+    assert edits["plot:the-map"]["before"] == ""  # garbled store treated as empty
 
 
 def test_apply_edits_writes_relationships(monkeypatch, tmp_path):
