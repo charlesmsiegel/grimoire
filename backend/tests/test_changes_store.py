@@ -27,3 +27,38 @@ def test_line_diff_empty_sides():
     assert changes.line_diff("", "") == []
     assert changes.line_diff("", "x") == [{"op": "insert", "text": "x"}]
     assert changes.line_diff("x", "") == [{"op": "delete", "text": "x"}]
+
+
+from grimoire.store import worlds, campaigns
+
+
+def _campaign(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    return campaigns.create_campaign("Run", worlds.create_world("W"))
+
+
+def test_record_and_read_roundtrip(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    fields = [{"field": "body", "label": "Harbor — locations", "before": "old", "after": "new"}]
+    changes.record(cid, "s1", {"locations/harbor": fields})
+    assert changes.read(cid) == {"locations/harbor": {"scene": "s1", "fields": fields}}
+
+
+def test_record_replaces_prior_entry(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    changes.record(cid, "s1", {"lore/pact": [{"field": "body", "label": "L", "before": "a", "after": "b"}]})
+    changes.record(cid, "s2", {"lore/pact": [{"field": "body", "label": "L", "before": "b", "after": "c"}]})
+    entry = changes.read(cid)["lore/pact"]
+    assert entry["scene"] == "s2" and entry["fields"][0]["before"] == "b"
+
+
+def test_record_empty_is_noop(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    changes.record(cid, "s1", {})
+    assert changes.read(cid) == {}
+
+
+def test_read_tolerates_garbage(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "changes.json").write_text("{not json", encoding="utf-8")
+    assert changes.read(cid) == {}
