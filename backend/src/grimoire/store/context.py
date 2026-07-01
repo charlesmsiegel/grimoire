@@ -9,7 +9,7 @@ import functools
 import re
 
 from . import (appearances, briefs, calendars, campaigns, characters, chronicle,
-               config, entities, pcs, scenes, worlds)
+               config, entities, pcs, playstate, scenes, worlds)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -222,6 +222,24 @@ def _today_block(cid: str, sid: str, croot) -> str:
     return "# Today\n" + "\n".join(lines)
 
 
+def _character_state(croot, cast) -> str:
+    try:
+        lines = []
+        for a in cast:
+            if a["role"] != "npc" or a["kind"] != "characters":
+                continue
+            st = playstate.read_state(croot, a["id"])
+            if st and st["current_state"]:
+                try:
+                    name = characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
+                except characters.CharacterNotFound:
+                    name = a["id"]
+                lines.append(f"{name}: {st['current_state']}")
+        return "# Character state\n" + "\n".join(lines) if lines else ""
+    except Exception:  # noqa: BLE001 — garbled state: omit, don't crash the context build
+        return ""
+
+
 def _story_so_far(cid: str) -> str:
     # Always-on, non-critical: a garbled chronicle/config must omit the block, never
     # crash the context build (the store may live in a synced folder). Mirrors the
@@ -295,6 +313,7 @@ def _assemble(cid: str, sid: str) -> dict:
     add("Global system prompt", config.read_config().get("system_prompt", ""))
     add("System prompt", "\n\n".join(d.get("system_prompt", "").strip() for d in npc_cards if d.get("system_prompt", "").strip()))
     add("Character descriptions", "\n\n".join(b for b in (_npc_block(d) for d in npc_cards) if b))
+    add("Character state", _character_state(croot, cast))
     add("Player personas", "\n\n".join(b for b in player_blocks if b))
     add("Message examples", "\n\n".join(d.get("mes_example", "").strip() for d in npc_cards if d.get("mes_example", "").strip()))
 
