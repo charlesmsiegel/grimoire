@@ -74,7 +74,9 @@ That Elara is working for the Salt Duke.
   `current_state`.
 - `compose_body(current_state, knows, suspects) -> str` — builds the headed blob,
   **omitting any section whose field is empty** (stripped). Section order is fixed:
-  Current state, Knows, Suspects.
+  Current state, Knows, Suspects. **When both `knows` and `suspects` are empty it returns
+  the bare `current_state` prose with no header** — so a knowledge-less NPC's `state.md`
+  body and its `character_state` diff stay byte-identical to Phase 2 (back-compat).
 - `write_state(root, cid, body)` — writes the given body verbatim under fresh
   `updated` frontmatter. (Renamed parameter from `current_state`; apply hands it the
   already-composed blob. The only production caller is `absorb.apply_edits`.)
@@ -93,12 +95,12 @@ Pure IO, mirrors `briefs.py`. No import-cycle change.
 - **`parse_output`** — `character_state_edits` field list extends to
   `("id", "current_state", "knows", "suspects")` (already coerced to stripped strings;
   missing ⇒ `""`).
-- **`state_snapshot(cid, sid)`** — returns each present NPC's current three fields (keyed
-  by display name) so the model rewrites rather than invents and does not silently wipe
-  knowledge. `build_prompt` renders the "Current character state" block to include
-  `Knows:`/`Suspects:` lines when present. (Signature shape widens from
-  `name -> current_state` to `name -> {current_state, knows, suspects}`; `build_prompt`
-  updated in lockstep.)
+- **`state_snapshot(cid, sid)`** — still returns `dict[name -> str]`, but the string now
+  carries the NPC's knowledge inline: `current_state` with ` Knows: … Suspects: …`
+  appended when those fields are non-empty. This feeds the model the current values so it
+  rewrites rather than invents and does not silently wipe knowledge. **`build_prompt` is
+  unchanged** (it still renders `- {name}: {snapshot}` per NPC) — keeping the
+  `name -> str` shape avoids churning `build_prompt` and its test.
 
 ## StagedEdit — unchanged shape
 
