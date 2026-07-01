@@ -75,3 +75,33 @@ def test_materialize_skips_unknown_targets(monkeypatch, tmp_path):
               "lore_edits": [{"id": "nope", "append": "y"}],
               "authored_edits": [{"id": "ghost", "field": "personality", "text": "z"}]}
     assert absorb.materialize(cid, sid, parsed) == []
+
+
+def test_apply_edits_writes_each_kind(monkeypatch, tmp_path):
+    from grimoire.store import appearances, characters, entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    entities.create_entity(croot, "lore", "Salt Cathedral", body="Ruined.")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    applied = absorb.apply_edits(cid, [
+        {"id": f"character_state:{ch}", "kind": "character_state",
+         "target": {"kind": "characters", "id": ch}, "field": "current_state", "after": "Loyal now."},
+        {"id": "lore:salt-cathedral", "kind": "lore",
+         "target": {"kind": "lore", "id": "salt-cathedral"}, "field": "body", "after": "Flooded."},
+        {"id": f"authored:{ch}:personality", "kind": "authored",
+         "target": {"kind": "characters", "id": ch}, "field": "personality", "after": "guarded"},
+    ])
+    assert set(applied) == {f"character_state:{ch}", "lore:salt-cathedral", f"authored:{ch}:personality"}
+    assert playstate.read_state(croot, ch)["current_state"] == "Loyal now."
+    assert entities.read_entity(croot, "lore", "salt-cathedral")["body"].strip() == "Flooded."
+    assert characters.read_card(croot, ch, "main")["data"]["personality"] == "guarded"
+
+
+def test_apply_edits_skips_missing_target(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    applied = absorb.apply_edits(cid, [
+        {"id": "lore:nope", "kind": "lore",
+         "target": {"kind": "lore", "id": "nope"}, "field": "body", "after": "x"}])
+    assert applied == []

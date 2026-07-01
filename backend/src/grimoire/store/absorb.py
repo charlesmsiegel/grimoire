@@ -149,6 +149,31 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
     return out
 
 
+def apply_edits(cid: str, edits: list[dict]) -> list[str]:
+    """Apply each approved StagedEdit to the campaign copies. Best-effort: a missing or
+    broken target is skipped. Returns the ids actually applied."""
+    croot = campaigns.campaign_root(cid)
+    applied: list[str] = []
+    for e in edits:
+        try:
+            kind, target, after = e["kind"], e["target"], e.get("after", "")
+            if kind == "character_state":
+                playstate.write_state(croot, target["id"], after)
+            elif kind == "lore":
+                entities.update_entity(croot, target["kind"], target["id"], body=after)
+            elif kind == "authored":
+                vid = appearances.locked_version(cid, "characters", target["id"])
+                card = characters.read_card(croot, target["id"], vid)
+                card["data"][e["field"]] = after
+                characters.update_version(croot, target["id"], vid, card)
+            else:
+                continue
+            applied.append(e["id"])
+        except Exception:  # noqa: BLE001 — best-effort per edit
+            continue
+    return applied
+
+
 def state_snapshot(cid: str, sid: str) -> dict:
     """Present NPCs' existing current_state, keyed by display name (feeds the prompt)."""
     croot = campaigns.campaign_root(cid)

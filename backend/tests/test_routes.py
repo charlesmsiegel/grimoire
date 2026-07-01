@@ -1166,3 +1166,17 @@ def test_absorb_returns_edits_without_persisting(client):
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert body["edits"][0]["kind"] == "character_state" and body["edits"][0]["after"] == "hurt"
     assert store.playstate.read_state(croot, ch) is None  # not persisted
+
+
+def test_put_chronicle_applies_approved_edits(client):
+    _, cid = _campaign(client)
+    croot = store.campaigns.campaign_root(cid)
+    ch = store.characters.create_character(croot, "Seraphine", "main", store.characters.blank_card("Seraphine"))[0]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json={
+        "one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+        "edits": [{"id": f"character_state:{ch}", "kind": "character_state",
+                   "target": {"kind": "characters", "id": ch}, "field": "current_state", "after": "Loyal."}]})
+    assert r.json()["applied"] == [f"character_state:{ch}"]
+    assert store.playstate.read_state(croot, ch)["current_state"] == "Loyal."
