@@ -174,3 +174,19 @@ def test_materialize_relationship_and_bond(monkeypatch, tmp_path):
     assert not any(k.startswith("feeling:characters:ghost") for k in edits)  # unknown dropped
     bond = edits[f"bond:characters:{a}|characters:{b}"]
     assert bond["kind"] == "bond" and bond["after"] == "allies" and bond["payload"]["type"] == "allies"
+
+
+def test_apply_edits_writes_relationships(monkeypatch, tmp_path):
+    from grimoire.store import relationships
+    cid = _campaign(monkeypatch, tmp_path)
+    applied = absorb.apply_edits(cid, [
+        {"id": "feeling:characters:a->characters:b", "kind": "relationship",
+         "target": {"kind": "relationships", "id": "characters:a->characters:b"}, "field": "feeling",
+         "after": "…", "payload": {"from": "characters:a", "to": "characters:b",
+                                    "trust": 4, "affection": 3, "tension": 1, "note": "warm"}},
+        {"id": "bond:characters:a|characters:b", "kind": "bond",
+         "target": {"kind": "relationships", "id": "characters:a|characters:b"}, "field": "bond",
+         "after": "allies", "payload": {"a": "characters:a", "b": "characters:b", "type": "allies"}}])
+    assert set(applied) == {"feeling:characters:a->characters:b", "bond:characters:a|characters:b"}
+    assert relationships.get_feeling(cid, "characters:a", "characters:b")["trust"] == 4
+    assert relationships.get_bond(cid, "characters:a", "characters:b")["type"] == "allies"
