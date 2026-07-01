@@ -236,6 +236,13 @@ def apply_edits(cid: str, edits: list[dict]) -> list[str]:
                 card = characters.read_card(croot, target["id"], vid)
                 card["data"][e["field"]] = after
                 characters.update_version(croot, target["id"], vid, card)
+            elif kind == "relationship":
+                p = e["payload"]
+                relationships.set_feeling(cid, p["from"], p["to"], p["trust"], p["affection"],
+                                          p["tension"], p.get("note", ""))
+            elif kind == "bond":
+                p = e["payload"]
+                relationships.set_bond(cid, p["a"], p["b"], p["type"])
             else:
                 continue
             applied.append(e["id"])
