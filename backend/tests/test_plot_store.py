@@ -40,3 +40,16 @@ def test_open_threads_excludes_closed_and_sorts(monkeypatch, tmp_path):
     got = plot.open_threads(cid)
     assert [t["id"] for t in got] == ["a", "b"]  # closed 'z' gone; sorted by last_scene
     assert got[0] == {"id": "a", "title": "Ay", "status": "advanced", "latest_beat": "beat a"}
+
+
+def test_render_open_forms(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    plot.set_movement(cid, "the-map", "The map", "advanced", "It is a forgery.", "s1")
+    assert plot.render_open(cid, with_id=True) == ["the-map: The map (advanced) — It is a forgery."]
+    assert plot.render_open(cid, with_id=False) == ["The map (advanced): It is a forgery."]
+
+
+def test_render_open_tolerates_garbled(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "plot.json").write_text("{ not json", encoding="utf-8")
+    assert plot.render_open(cid, with_id=False) == []  # must not raise

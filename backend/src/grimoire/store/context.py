@@ -266,14 +266,8 @@ def _relationships(cid: str, croot, cast) -> str:
 
 
 def _plot_threads(cid: str) -> str:
-    try:
-        lines = []
-        for t in plot.open_threads(cid):
-            head = f"{t['title']} ({t['status']})"
-            lines.append(f"{head}: {t['latest_beat']}" if t["latest_beat"] else head)
-        return "# Plot threads\n" + "\n".join(lines) if lines else ""
-    except Exception:  # noqa: BLE001 — garbled plot.json: omit, don't crash the context build
-        return ""
+    lines = plot.render_open(cid, with_id=False)  # tolerant of a garbled plot.json
+    return "# Plot threads\n" + "\n".join(lines) if lines else ""
 
 
 def _story_so_far(cid: str) -> str:
