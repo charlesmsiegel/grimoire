@@ -5,7 +5,7 @@ vi.mock("../api/client", () => ({
   api: {
     getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
     listCampaignPCs: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
-    getCastDetail: vi.fn(), readEntity: vi.fn(),
+    getCastDetail: vi.fn(), readEntity: vi.fn(), getChronicle: vi.fn(),
     campaignImageUrl: () => "/img",
   },
 }));
@@ -27,6 +27,9 @@ beforeEach(() => {
   });
   (api.getCastDetail as any).mockResolvedValue({ kind: "characters", id: "seraphine", name: "Seraphine", version: "default", body: "keeper" });
   (fetchModels as any).mockResolvedValue([{ id: "m", name: "M", context: 1000, prompt: "0", completion: "0" }]);
+  (api.getChronicle as any).mockResolvedValue([
+    { id: "s0", one_line: "They first met.", summary: "", keywords: [],
+      cast: [], location: "", date: "", absorbed: "t" }]);
 });
 
 function renderInspector() {
@@ -52,4 +55,10 @@ test("context section expands to show the text", async () => {
   const summary = await screen.findByText(/World info/);
   fireEvent.click(summary);
   await screen.findByText("lore text");
+});
+
+test("shows the story-so-far recap", async () => {
+  renderInspector();
+  await screen.findByText("Story so far");
+  await screen.findByText("They first met.");
 });
