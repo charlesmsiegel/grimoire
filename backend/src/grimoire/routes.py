@@ -1126,7 +1126,7 @@ async def post_absorb(cid: str, sid: str,
     facts = store.chronicle.scene_facts(cid, sid)
     messages = store.absorb.build_prompt(
         store.chronicle.transcript_text(scene["messages"]), facts,
-        store.absorb.state_snapshot(cid, sid))
+        store.absorb.state_snapshot(cid, sid), store.absorb.relationships_snapshot(cid, sid))
     try:
         text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
     except OpenRouterError as exc:

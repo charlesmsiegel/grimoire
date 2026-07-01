@@ -40,7 +40,8 @@ def test_parse_output_extracts_summary_and_edit_lists():
 def test_parse_output_tolerates_garbage():
     assert absorb.parse_output("no json") == {
         "one_line": "", "summary": "", "keywords": [], "timeline_events": [],
-        "character_state_edits": [], "lore_edits": [], "authored_edits": []}
+        "character_state_edits": [], "lore_edits": [], "authored_edits": [],
+        "relationship_deltas": [], "bond_changes": []}
 
 
 def test_materialize_builds_before_after(monkeypatch, tmp_path):
@@ -119,3 +120,29 @@ def test_apply_edits_authored_rejects_non_card_field(monkeypatch, tmp_path):
          "target": {"kind": "characters", "id": ch}, "field": "name", "after": "Hacked"}])
     assert applied == []
     assert characters.read_card(croot, ch, "main")["data"]["name"] == "Seraphine"
+
+
+def test_parse_output_relationship_and_bond_lists():
+    text = ('{"one_line": "", "summary": "", "keywords": [], "timeline_events": [],'
+            ' "character_state_edits": [], "lore_edits": [], "authored_edits": [],'
+            ' "relationship_deltas": [{"from": "characters:a", "to": "characters:b",'
+            '   "trust": 9, "affection": 2, "tension": 1, "note": "warm"}],'
+            ' "bond_changes": [{"a": "characters:a", "b": "characters:b", "type": "allies"}]}')
+    out = absorb.parse_output(text)
+    assert out["relationship_deltas"] == [{"from": "characters:a", "to": "characters:b",
+                                           "trust": 5, "affection": 2, "tension": 1, "note": "warm"}]  # 9 clamped
+    assert out["bond_changes"] == [{"a": "characters:a", "b": "characters:b", "type": "allies"}]
+
+
+def test_relationships_snapshot_renders_present(monkeypatch, tmp_path):
+    from grimoire.store import appearances, relationships, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    a = _char(croot, "Ann")
+    b = _char(croot, "Bo")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", a, "main", "npc")
+    appearances.appear(cid, sid, "characters", b, "main", "npc")
+    relationships.set_feeling(cid, f"characters:{a}", f"characters:{b}", 4, 3, 1, "warm")
+    snap = absorb.relationships_snapshot(cid, sid)
+    assert "Ann → Bo: trust 4" in snap
