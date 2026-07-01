@@ -229,12 +229,16 @@ def _character_state(croot, cast) -> str:
             if a["role"] != "npc" or a["kind"] != "characters":
                 continue
             st = playstate.read_state(croot, a["id"])
-            if st and st["current_state"]:
+            if st and (st["current_state"] or st["knows"] or st["suspects"]):
                 try:
                     name = characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
                 except characters.CharacterNotFound:
                     name = a["id"]
-                lines.append(f"{name}: {st['current_state']}")
+                lines.append(f"{name}: {st['current_state']}".rstrip())
+                if st["knows"].strip():
+                    lines.append(f"  Knows: {st['knows'].strip()}")
+                if st["suspects"].strip():
+                    lines.append(f"  Suspects: {st['suspects'].strip()}")
         return "# Character state\n" + "\n".join(lines) if lines else ""
     except Exception:  # noqa: BLE001 — garbled state: omit, don't crash the context build
         return ""
