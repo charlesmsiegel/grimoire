@@ -329,3 +329,9 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .absorb-diff { font-size: 13px; margin: 2px 0; }
 .absorb-diff .absorb-after { color: var(--fg); }
 .absorb-diff .absorb-before { margin-right: 6px; }
+
+.record-diff { white-space: pre-wrap; font-family: var(--mono, monospace); margin: 0; }
+.diff-line { padding: 0 0.35rem; }
+.diff-insert { background: rgba(60, 160, 90, 0.18); }
+.diff-delete { background: rgba(200, 70, 70, 0.18); text-decoration: line-through; }
+.diff-equal { opacity: 0.7; }
