@@ -260,6 +260,31 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                     "field": "bond", "before": before, "after": typ, "authored": False,
                     "payload": {"a": a_tok, "b": b_tok, "type": typ}})
 
+    for e in parsed.get("plot_movements", []):
+        beat = (e.get("beat", "") or "").strip()
+        if not beat:
+            continue
+        mid = (e.get("id", "") or "").strip()
+        title = (e.get("title", "") or "").strip()
+        status = e.get("status", "open")
+        cur = plot.get(cid, mid) if mid else None
+        if cur:
+            pid = mid
+            beats = cur.get("beats") or []
+            before = (f"{cur.get('status', 'open')} — {beats[-1]['text']}"
+                      if beats else cur.get("status", "open"))
+        else:
+            pid = mid or slugify(title)
+            before = ""
+        if not pid:
+            continue
+        disp_title = title or (cur.get("title") if cur else pid)
+        out.append({"id": f"plot:{pid}", "kind": "plot",
+                    "target": {"kind": "plot", "id": pid},
+                    "label": f"{disp_title} — {status}",
+                    "field": "beat", "before": before, "after": beat, "authored": False,
+                    "payload": {"id": pid, "title": disp_title, "status": status, "scene": sid}})
+
     return out
 
 
