@@ -1,7 +1,9 @@
 # Scene Lifecycle & Continuity — phase status / handoff
 
 Umbrella design: `specs/2026-06-30-scene-lifecycle-continuity-design.md`.
-All merged work is on `main`. Suites: **backend 468, frontend 160, tsc clean.**
+All merged work is on `main`. Suites: **backend 486, frontend 164, tsc clean.**
+
+**All six umbrella phases are complete.**
 
 ## Done (merged to main)
 
@@ -42,6 +44,19 @@ All merged work is on `main`. Suites: **backend 468, frontend 160, tsc clean.**
   button; picking a card auto-seeds cast + location via existing endpoints and prefills the
   opener prompt. Read-only (persists nothing). Spec
   `specs/2026-07-01-scene-suggestions-design.md`, plan `plans/2026-07-01-scene-suggestions.md`.
+- **Phase 6 — Campaign record changes.** `store/changes.py` (rolling `changes.json`,
+  keyed `"<kind>/<id>"` → the latest write-back delta `{scene, fields:[{field,label,
+  before,after}]}`) plus `line_diff` (stdlib `difflib` → tagged `{op,text}` lines).
+  `absorb.apply_edits(cid, edits, sid=None)` captures the before/after of each **applied
+  browsable** edit (`character_state`/`authored` → `characters/{id}`, `lore` →
+  `{lore|locations}/{id}`; relationship/bond/plot never recorded; `sid=None` skips).
+  `GET /campaigns/{cid}/changes` resolves record name + scene label and returns a
+  per-field server-side line diff (tolerant; deleted records dropped). A read-only
+  **ChangesPanel** (records grouped Characters/Lore/Locations, each field a highlighted
+  add/remove line diff) revealed by a **Changes** toggle in `CampaignView`. The
+  "previous version → current version" delta (last write-back), not a base-world compare.
+  Spec `specs/2026-07-01-campaign-record-changes-design.md`,
+  plan `plans/2026-07-01-campaign-record-changes.md`.
 
 ## The established pipeline (every continuity axis follows this)
 
@@ -54,15 +69,13 @@ injects a labeled, always-on, **tolerant** (omit-never-crash) section.
 `StagedEdit` shape (backend↔TS, fixed): `{id, kind, target:{kind,id}, label, field,
 before, after, authored, payload?}`.
 
-## Next: Phase 6 — Campaign-vs-base world view (final umbrella phase)
+## Next: none — umbrella complete
 
-Browse the campaign's copies of world records (characters/lore/locations) with divergence
-from the base world highlighted, via the `sync.md` hashes already maintained by `sync.py`
-(the write-back phases mutate campaign copies; this surfaces *what* diverged). **Open design
-decisions for the brainstorm:** read model (a per-record diff endpoint vs. a campaign-wide
-divergence list), what "divergence" shows (hash-mismatch flag only, or a field/body diff),
-and the UI surface (a new page vs. badges on the existing campaign record lists). This is
-read-only reporting — no new write path.
+Phase 6 shipped as **campaign record changes** (a last-write-back "previous → current"
+diff per record), not the originally-sketched campaign-vs-base-**world** compare: the
+fork-point content is not recoverable (`sync.md` stores only hashes) and, per the user, the
+useful view is how the campaign's own copy evolved through play, not how it differs from the
+world. See the deferrals below for follow-on ideas.
 
 ## Working cadence (used for Phases 1–5)
 
@@ -84,6 +97,9 @@ worktree — the editable `backend/.venv` is pinned to this checkout). Progress 
   (no per-field/structured editing). Residual parse edge: a `current_state` whose *first*
   non-empty line is literally a recognized header (`## Knows` etc.) would be misread as
   structured — vanishingly unlikely for standing-condition prose; not guarded.
+- Phase-6 changes shows only the **last** write-back delta per record (rolling). Not modeled:
+  a cumulative fork-point diff, full per-scene history/timeline stepping, or a campaign-vs-
+  current-world compare (all deliberately out of scope). ChangesPanel is read-only.
 
 ## Commands
 
