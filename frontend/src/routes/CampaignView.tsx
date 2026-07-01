@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, type SceneMeta, type Message, type SceneAbsorb } from "../api/client";
+import { api, type SceneMeta, type Message, type SceneAbsorb, type StagedEdit } from "../api/client";
 import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
 import { CastPanel } from "../components/CastPanel";
@@ -33,6 +33,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [colorQuotes, setColorQuotes] = useState(false);
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
   const [absorbing, setAbsorbing] = useState(false);
+  const [editRows, setEditRows] = useState<(StagedEdit & { approved: boolean })[]>([]);
   const streamRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -137,7 +138,9 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     setAbsorbing(true);
     setError(null);
     try {
-      setAbsorb(await api.absorbScene(cid, activeId));
+      const a = await api.absorbScene(cid, activeId);
+      setAbsorb(a);
+      setEditRows(a.edits.map((e) => ({ ...e, approved: true })));
     } catch (err: any) {
       setError(err.detail ?? String(err));
     } finally {
@@ -148,9 +151,11 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   async function saveAbsorb() {
     if (!absorb || !activeId) return;
     await api.saveChronicle(cid, activeId, {
-      one_line: absorb.one_line, summary: absorb.summary,
-      keywords: absorb.keywords, timeline_events: absorb.timeline_events });
+      one_line: absorb.one_line, summary: absorb.summary, keywords: absorb.keywords,
+      timeline_events: absorb.timeline_events,
+      edits: editRows.filter((e) => e.approved).map(({ approved, ...e }) => e) });
     setAbsorb(null);
+    setEditRows([]);
     setCtxKey((n) => n + 1);
   }
 
@@ -204,6 +209,25 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                   <li key={i}><strong>{t.date}</strong> {t.text}</li>
                 ))}
               </ul>
+            )}
+            {editRows.length > 0 && (
+              <div className="absorb-edits">
+                <h5>Proposed changes</h5>
+                {editRows.map((e, i) => (
+                  <div className={"absorb-edit" + (e.authored ? " authored" : "")} key={e.id}>
+                    <label>
+                      <input type="checkbox" aria-label={`Approve ${e.label}`} checked={e.approved}
+                             onChange={() => setEditRows((rows) => rows.map((r, j) =>
+                               j === i ? { ...r, approved: !r.approved } : r))} />
+                      {e.label}{e.authored ? " · card edit" : ""}
+                    </label>
+                    {e.before && <div className="absorb-before">{e.before}</div>}
+                    <textarea aria-label={`After ${e.label}`} rows={2} value={e.after}
+                              onChange={(ev) => setEditRows((rows) => rows.map((r, j) =>
+                                j === i ? { ...r, after: ev.target.value } : r))} />
+                  </div>
+                ))}
+              </div>
             )}
             <div className="form-actions">
               <button className="subtle" onClick={() => setAbsorb(null)}>Cancel</button>
