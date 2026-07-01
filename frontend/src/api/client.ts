@@ -156,6 +156,11 @@ export type SceneAbsorb = {
   timeline_events: TimelineEvent[]; cast: string[]; location: string; date: string;
   edits: StagedEdit[];
 };
+export type SceneSuggestion = {
+  title: string; premise: string;
+  cast: { kind: string; id: string; name: string }[];
+  location: { id: string; name: string } | null;
+};
 export type ChronicleEntry = {
   id: string; one_line: string; summary: string; keywords: string[];
   cast: string[]; location: string; date: string; absorbed: string;
@@ -378,6 +383,8 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/calendar`, cfg),
   getSceneContext: (cid: string, sid: string) =>
     request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
+  sceneSuggestions: (cid: string) =>
+    request<{ suggestions: SceneSuggestion[] }>("POST", `/api/campaigns/${cid}/scene-suggestions`),
   getCastDetail: (cid: string, sid: string, kind: string, id: string) =>
     request<CastDetail>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}`),
   editMessage: (cid: string, sid: string, index: number, content: string) =>
