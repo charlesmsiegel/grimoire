@@ -1233,3 +1233,19 @@ def test_get_changes_empty_and_not_shadowed_by_kind_route(client):
 
 def test_get_changes_unknown_campaign_404(client):
     assert client.get("/api/campaigns/nope/changes").status_code == 404
+
+
+def test_get_changes_drops_deleted_record(client):
+    _, cid = _campaign(client)
+    _apply_lore_change(client, cid)
+    assert client.delete(f"/api/campaigns/{cid}/lore/pact").status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/changes").json() == []  # entity gone -> row dropped
+
+
+def test_get_changes_tolerates_garbled_chronicle(client):
+    _, cid = _campaign(client)
+    _apply_lore_change(client, cid)
+    (store.campaigns.campaign_root(cid) / "chronicle.json").write_text("{bad json", encoding="utf-8")
+    out = client.get(f"/api/campaigns/{cid}/changes")
+    assert out.status_code == 200 and len(out.json()) == 1
+    assert out.json()[0]["scene"]["date"] == ""  # date degrades, no 500
