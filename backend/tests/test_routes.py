@@ -1125,3 +1125,27 @@ def test_save_chronicle_persists_and_lists(client):
     listed = client.get(f"/api/campaigns/{cid}/chronicle").json()
     assert len(listed) == 1 and listed[0]["summary"] == "In the crypt."
     assert store.scenes.read_scene(cid, sid)["meta"]["done"] == "true"  # scene marked done
+
+
+def test_absorb_missing_key_returns_409(client):
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We entered.")
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
+
+
+def test_absorb_upstream_error_returns_502(client):
+    from grimoire.openrouter import OpenRouterError
+
+    class FakeRaises:
+        async def complete(self, messages, model, key):
+            raise OpenRouterError("bad_response", "boom")
+
+    _, cid = _campaign(client)
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We entered.")
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeRaises()
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert resp.status_code == 502 and resp.json()["kind"] == "bad_response"
