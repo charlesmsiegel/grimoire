@@ -36,7 +36,9 @@ export function ChangesPanel({ cid }: { cid: string }) {
                   <button key={key} className={"row" + (key === sel ? " active" : "")}
                           onClick={() => setSel(key)}>
                     {r.name}
-                    <span className="field-hint"> · changed in {r.scene.title}</span>
+                    <span className="field-hint">
+                      {" · changed in " + r.scene.title + (r.scene.date ? ` (${r.scene.date})` : "")}
+                    </span>
                   </button>
                 );
               })}
@@ -48,14 +50,14 @@ export function ChangesPanel({ cid }: { cid: string }) {
         {active ? (
           <div className="detail-view">
             <h3>{active.name}</h3>
-            {active.fields.map((f) => (
-              <div key={f.field} className="side-section">
+            {active.fields.map((f, fi) => (
+              <div key={`${f.field}-${fi}`} className="side-section">
                 <h4>{f.label}</h4>
-                <pre className="record-diff">
+                <div className="record-diff">
                   {f.diff.map((d, i) => (
                     <div key={i} className={"diff-line diff-" + d.op}>{d.text}</div>
                   ))}
-                </pre>
+                </div>
               </div>
             ))}
           </div>
