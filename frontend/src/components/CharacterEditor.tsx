@@ -53,6 +53,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [birthdate, setBirthdate] = useState("");
   const [tagline, setTagline] = useState("");
+  const [taglineBusy, setTaglineBusy] = useState(false);
   const [taglinePrompt, setTaglinePrompt] = useState<{ cid: string; name: string } | null>(null);
 
   const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
@@ -194,8 +195,15 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     const d = await api.readCharacter(wid, cid);
     setDetail(d);
     setBirthdate(d.meta.birthdate ?? "");
-    setTagline((await api.getCharacterTagline(wid, cid).catch(() => ({ tagline: "" }))).tagline);
     loadVersion(d, d.meta.default_version);
+    loadTagline(cid);
+  }
+
+  // Fetch the tagline independently of the (synchronous) card load so a slow GET
+  // never wedges stale card data next to fresh meta during navigation.
+  function loadTagline(cid: string) {
+    setTagline("");
+    api.getCharacterTagline(wid, cid).then((r) => setTagline(r.tagline)).catch(() => setTagline(""));
   }
 
   async function saveTagline() {
@@ -209,11 +217,14 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
 
   async function regenerateTagline() {
     if (!detail) return;
+    setTaglineBusy(true);
     try {
       const r = await api.generateCharacterTagline(wid, detail.meta.id);
       setTagline(r.tagline);
     } catch (err: any) {
       setError(err.detail ?? String(err));
+    } finally {
+      setTaglineBusy(false);
     }
   }
 
@@ -239,8 +250,8 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     const d = await api.readCharacter(wid, cid);
     setDetail(d);
     setBirthdate(d.meta.birthdate ?? "");
-    setTagline((await api.getCharacterTagline(wid, cid).catch(() => ({ tagline: "" }))).tagline);
     loadVersion(d, d.versions.some((v) => v.id === vid) ? vid : d.meta.default_version);
+    loadTagline(cid);
     setMode("detail");
   }
 
@@ -769,11 +780,13 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
           <Field label="Tagline" hint="one-line identity for the off-scene cast">
             <textarea aria-label="Tagline" value={tagline} rows={2}
                       onChange={(e) => setTagline(e.target.value)} />
-            <div className="form-actions">
-              <button className="subtle" type="button" onClick={regenerateTagline}>Generate</button>
-              <button className="subtle" type="button" onClick={saveTagline}>Save tagline</button>
-            </div>
           </Field>
+          <div className="form-actions">
+            <button className="subtle" type="button" disabled={taglineBusy} onClick={regenerateTagline}>
+              {taglineBusy ? "Generating…" : "Generate"}
+            </button>
+            <button className="subtle" type="button" onClick={saveTagline}>Save tagline</button>
+          </div>
           <Field label="Tags" hint="comma-separated">
             <input
               type="text"
