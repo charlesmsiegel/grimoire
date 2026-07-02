@@ -10,15 +10,36 @@ from .config import read_config
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import now_iso, slugify, uniquify
 
+# The body is a script: every message is `**<Speaker>:** content`. Role is not
+# stored — a message is user-side iff its speaker is "You" or a role=player
+# cast member's name (derived in read_scene). Reserved labels keep legacy
+# files working; their parens sub-speaker form is read but never written.
+RESERVED_LABELS = {"You": "user", "Grimoire": "assistant"}
 ROLE_TO_LABEL = {"user": "You", "assistant": "Grimoire"}
-LABEL_TO_ROLE = {"You": "user", "Grimoire": "assistant"}
-# optional speaker rides in the marker label: **Grimoire (Seraphine Vale):**
-_MARKER = re.compile(r"^\*\*(You|Grimoire)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MULTILINE)
+_MARKER = re.compile(r"^\*\*([^*\n]{1,64}?)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MULTILINE)
+_SAFE_LABEL = re.compile(r"^[^*\n]{1,64}$")
 
 
 def _label(role: str, speaker: str | None) -> str:
-    base = ROLE_TO_LABEL[role]
-    return f"{base} ({speaker})" if speaker else base
+    if speaker and _SAFE_LABEL.match(speaker) and speaker not in RESERVED_LABELS:
+        return speaker
+    return ROLE_TO_LABEL[role]
+
+
+def _markers(body: str) -> list[re.Match]:
+    """Marker matches that actually start a message: at the top of the body or
+    after a blank line (the serializer always writes blank lines between
+    messages; this keeps bold-label lines inside a paragraph as content)."""
+    return [m for m in _MARKER.finditer(body)
+            if m.start() == 0 or body[max(0, m.start() - 2):m.start()] == "\n\n"]
+
+
+def _speaker_and_role(m: re.Match, players: frozenset[str]) -> tuple[str | None, str]:
+    base, sub = m.group(1), m.group(2)
+    if base in RESERVED_LABELS:
+        return sub, RESERVED_LABELS[base]
+    speaker = f"{base} ({sub})" if sub else base
+    return speaker, "user" if speaker in players else "assistant"
 
 
 class SceneNotFound(Exception):
@@ -106,15 +127,16 @@ def list_scenes(cid: str) -> list[dict]:
     return out
 
 
-def _parse_messages(body: str) -> list[dict]:
-    matches = list(_MARKER.finditer(body))
+def _parse_messages(body: str, players: frozenset[str]) -> list[dict]:
+    matches = _markers(body)
     messages = []
     for i, m in enumerate(matches):
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-        msg = {"role": LABEL_TO_ROLE[m.group(1)], "content": body[start:end].strip()}
-        if m.group(2):
-            msg["speaker"] = m.group(2)
+        speaker, role = _speaker_and_role(m, players)
+        msg = {"role": role, "content": body[start:end].strip()}
+        if speaker:
+            msg["speaker"] = speaker
         messages.append(msg)
     return messages
 
@@ -123,8 +145,10 @@ def read_scene(cid: str, sid: str) -> dict:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
+    from . import appearances  # lazy: appearances lazily imports scenes too
+    players = frozenset(appearances.player_names(cid, sid))
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
-    return {"meta": {"id": sid, **meta}, "messages": _parse_messages(body)}
+    return {"meta": {"id": sid, **meta}, "messages": _parse_messages(body, players)}
 
 
 def rename_scene(cid: str, sid: str, title: str) -> str:

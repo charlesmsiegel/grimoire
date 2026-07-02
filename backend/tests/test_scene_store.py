@@ -1,6 +1,6 @@
 import pytest
 
-from grimoire.store import campaigns, scenes, worlds
+from grimoire.store import appearances, campaigns, pcs, scenes, worlds
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -280,3 +280,63 @@ def test_message_speaker_round_trip(monkeypatch, tmp_path):
     msgs = scenes.read_scene(cid, sid)["messages"]
     assert msgs[1]["speaker"] == "Seraphine Vale"
     assert msgs[1]["content"] == "Edited."
+
+
+def _campaign_with_pc(monkeypatch, tmp_path, pc_name="Elara Vane"):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    pid, pvid = pcs.create_pc(worlds.world_root(wid), pc_name, [])
+    appearances.appear(cid, sid, "pcs", pid, pvid, "player")
+    return cid, sid
+
+
+def test_script_labels_store_and_derive_roles(monkeypatch, tmp_path):
+    cid, sid = _campaign_with_pc(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "I draw my blade.", speaker="Elara Vane")
+    scenes.append_message(cid, sid, "assistant", '"You dare?"', speaker="Seraphine Vale")
+    scenes.append_message(cid, sid, "assistant", "The hall falls silent.")
+    raw = (campaigns.campaign_root(cid) / "scenes" / f"{sid}.md").read_text(encoding="utf-8")
+    assert "**Elara Vane:** I draw my blade." in raw
+    assert "**Seraphine Vale:**" in raw and "(Seraphine Vale)" not in raw
+    msgs = scenes.read_scene(cid, sid)["messages"]
+    assert [(m["role"], m.get("speaker")) for m in msgs] == [
+        ("user", "Elara Vane"),
+        ("assistant", "Seraphine Vale"),
+        ("assistant", None),
+    ]
+
+
+def test_legacy_labels_and_parens_still_parse(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    p = campaigns.campaign_root(cid) / "scenes" / f"{sid}.md"
+    meta_text = p.read_text(encoding="utf-8").split("---")[1]
+    p.write_text("---" + meta_text + "---\n\n"
+                 "**You:** hello\n\n"
+                 "**Grimoire (Seraphine Vale):** she nods\n\n"
+                 "**Grimoire:** rain falls\n", encoding="utf-8")
+    msgs = scenes.read_scene(cid, sid)["messages"]
+    assert [(m["role"], m.get("speaker")) for m in msgs] == [
+        ("user", None),
+        ("assistant", "Seraphine Vale"),
+        ("assistant", None),
+    ]
+
+
+def test_marker_requires_blank_line(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "user", "line one\n**Aside:** same message")
+    msgs = scenes.read_scene(cid, sid)["messages"]
+    assert len(msgs) == 1
+    assert msgs[0]["content"] == "line one\n**Aside:** same message"
+
+
+def test_unsafe_speaker_falls_back_to_reserved_label(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "user", "hi", speaker="x" * 65)
+    raw = (campaigns.campaign_root(cid) / "scenes" / f"{sid}.md").read_text(encoding="utf-8")
+    assert "**You:** hi" in raw
