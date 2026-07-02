@@ -28,19 +28,22 @@ function renderView() {
   );
 }
 
-test("lists worlds", async () => {
+test("lists worlds as cards with count footers", async () => {
   (api.listWorlds as any).mockResolvedValue([
-    { id: "w1", name: "Realm", created: "", updated: "", counts: { characters: 2, locations: 0, lore: 1 } },
+    { id: "w1", name: "Saltmarch", created: "", updated: "",
+      counts: { locations: 3, lore: 12, characters: 5, pcs: 1 } },
   ]);
   renderView();
-  await screen.findByText("Realm");
+  await screen.findByText("Saltmarch");
+  expect(screen.getByText(/3 LOCATIONS · 6 CHARACTERS · 12 LORE/i)).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: /worlds/i })).toBeInTheDocument();
 });
 
 test("creating a world posts the name and refreshes the list", async () => {
   renderView();
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalled());
   fireEvent.change(screen.getByPlaceholderText(/world name/i), { target: { value: "Realm" } });
-  fireEvent.click(screen.getByRole("button", { name: /create world/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
   await waitFor(() => expect(api.createWorld).toHaveBeenCalledWith("Realm"));
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalledTimes(2));
 });
@@ -48,7 +51,7 @@ test("creating a world posts the name and refreshes the list", async () => {
 test("create is disabled with no name", async () => {
   renderView();
   await waitFor(() => expect(api.listWorlds).toHaveBeenCalled());
-  expect(screen.getByRole("button", { name: /create world/i })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /^create$/i })).toBeDisabled();
 });
 
 test("renames a world", async () => {
