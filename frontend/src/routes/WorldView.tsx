@@ -55,9 +55,9 @@ export default function WorldView() {
   }
 
   return (
-    <div className="view" style={{ maxWidth: 920 }}>
-      <Link to="/worlds" className="back-link">‹ Worlds</Link>
-      <h2>{name}</h2>
+    <div className="page view-anim" style={{ maxWidth: 1080 }}>
+      <Link to="/worlds" className="back-link">‹ All Worlds</Link>
+      <h1 className="page-h1">{name}</h1>
 
       <div className="tabs">
         {TABS.map((t) => (
