@@ -632,7 +632,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
               <div key={c.id} className="char-card">
                 <button className="char-card-main" onClick={() => openDetail(c.id)}>
                   {c.has_avatar
-                    ? <img className="char-card-avatar" alt="" src={avatarSrc(c.id, c.default_version)} />
+                    ? <img className="char-card-avatar" alt="" src={avatarSrc(c.id, c.default_version, true)} />
                     : <div className="initials-avatar" aria-hidden>
                         {c.name.split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("")}
                       </div>}

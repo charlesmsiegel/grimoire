@@ -185,7 +185,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
             className={"row" + (kind === "locations" ? " loc-row" : "") + (editing === e.id ? " active" : "")}
             onClick={() => select(e.id)}>
       {kind === "locations" && e.has_image && (
-        <img className="loc-row-img" alt="" src={api.entityImageUrl(scope, kind, e.id, "avatar")}
+        <img className="loc-row-img" alt=""
+             src={`${api.entityImageUrl(scope, kind, e.id, "avatar")}?v=${imgBust}`}
              onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
       )}
       <span className="row-name">{e.name}</span>
