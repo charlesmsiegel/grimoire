@@ -81,6 +81,15 @@ test("Create campaign commits the full sequence in order", async () => {
   await screen.findByRole("heading", { name: /opening/i });
 });
 
+test("step 1 shows the calendar select alongside holidays", async () => {
+  renderWizard();
+  await screen.findByText("Realm");
+  const calendar = screen.getByLabelText(/^calendar$/i) as HTMLSelectElement;
+  expect(calendar.value).toBe("gregorian");
+  expect(screen.getByText(/more providers to come/i)).toBeInTheDocument();
+  expect(screen.getByText(/regional holiday set/i)).toBeInTheDocument();
+});
+
 test("selecting a holidays region passes it to createCampaign", async () => {
   renderWizard();
   await screen.findByText("Realm");
