@@ -259,8 +259,8 @@ test("focus prop opens that character at the given version", async () => {
   });
   render(<CharacterEditor wid="w" focus={{ cid: "rook", vid: "v2" }} />);
   await waitFor(() => expect(api.readCharacter).toHaveBeenCalledWith("w", "rook"));
-  const version = await screen.findByLabelText("Version") as HTMLSelectElement;
-  expect(version.value).toBe("v2");
+  const active = await screen.findByRole("button", { name: "v2", pressed: true });
+  expect(active).toBeInTheDocument();
 });
 
 test("import version posts importCharacter into the current character", async () => {
@@ -410,8 +410,8 @@ test("a sibling version doesn't show another version's chub.ai link", async () =
   fireEvent.click(await screen.findByText("Seraphine"));
   await screen.findByRole("link", { name: /creator\/main/i });
 
-  fireEvent.change(screen.getByLabelText("Version"), { target: { value: "variant" } });
-  expect(screen.queryByRole("link", { name: /creator\/main/i })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "variant" }));
+  await waitFor(() => expect(screen.queryByRole("link", { name: /creator\/main/i })).toBeNull());
   await screen.findByRole("button", { name: /^link to url$/i });
 });
 

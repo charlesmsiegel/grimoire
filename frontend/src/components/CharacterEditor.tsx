@@ -628,25 +628,32 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
             <div className="detail-head">
               {hasAvatar
                 ? <img className="detail-avatar" alt="" src={avatarSrc(detail.meta.id, vid, true)} />
-                : <div className="detail-avatar avatar-empty">no avatar</div>}
+                : <div className="initials-avatar detail" aria-hidden>
+                    {(card.data.name || detail.meta.name).split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("")}
+                  </div>}
               <div className="detail-meta">
-                <h3>{card.data.name || detail.meta.name}</h3>
+                <h3 className="detail-name">{card.data.name || detail.meta.name}</h3>
                 {tagline && <div className="detail-text tagline">{tagline}</div>}
-                {card.data.creator ? <div className="field-hint">by {card.data.creator}</div> : null}
+                {card.data.creator ? <div className="detail-byline">by {card.data.creator}</div> : null}
                 {tags.length > 0 && (
                   <div className="chips">{tags.map((t) => <span className="chip" key={t}>{t}</span>)}</div>
                 )}
-                {detail.versions.length > 1 && (
-                  <select value={vid} onChange={(e) => loadVersion(detail, e.target.value)} aria-label="Version">
-                    {detail.versions.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
               </div>
               <div className="detail-actions">
+                {detail.versions.length > 1 && (
+                  <div>
+                    <span className="segmented-caption">Version</span>
+                    <div className="segmented" role="group" aria-label="Version">
+                      {detail.versions.map((v) => (
+                        <button key={v.id} aria-pressed={v.id === vid}
+                                className={v.id === vid ? "active" : ""}
+                                onClick={() => loadVersion(detail, v.id)}>
+                          {v.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <button className="primary" onClick={() => setMode("edit")}>Edit</button>
                 <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>
               </div>
@@ -712,7 +719,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
               const val = (card.data[f.key] as string) ?? "";
               return val.trim() ? (
                 <div className="detail-field" key={f.key}>
-                  <div className="role">{f.label}</div>
+                  <div className="section-label">{f.label}</div>
                   <div className="detail-text">{val}</div>
                 </div>
               ) : null;
@@ -720,8 +727,8 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
 
             {greetings.length > 0 && (
               <div className="detail-field">
-                <div className="role">Alternate greetings</div>
-                {greetings.map((g, i) => <div className="detail-text detail-greeting" key={i}>{g}</div>)}
+                <div className="section-label">Alternate greetings</div>
+                {greetings.map((g, i) => <blockquote className="greeting-quote" key={i}>{g}</blockquote>)}
               </div>
             )}
           </div>
