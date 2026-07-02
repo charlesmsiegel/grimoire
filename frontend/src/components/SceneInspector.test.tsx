@@ -8,7 +8,9 @@ vi.mock("../api/client", () => ({
     getCastDetail: vi.fn(), readEntity: vi.fn(), getChronicle: vi.fn(),
     getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(),
     getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(),
+    listAppearances: vi.fn(), listEntityImages: vi.fn(),
     campaignImageUrl: () => "/img",
+    entityImageUrl: () => "/loc-img",
   },
 }));
 vi.mock("../api/models", () => ({ fetchModels: vi.fn() }));
@@ -38,6 +40,8 @@ beforeEach(() => {
   (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
   (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: false, friendly: "", id: "s" });
+  (api.listAppearances as any).mockResolvedValue([]);
+  (api.listEntityImages as any).mockResolvedValue([]);
 });
 
 function renderInspector(onSceneChanged: () => void = () => {}) {
@@ -56,6 +60,39 @@ test("clicking a cast row opens the drawer", async () => {
   fireEvent.click(await screen.findByRole("button", { name: /Seraphine/ }));
   await waitFor(() => expect(api.getCastDetail).toHaveBeenCalledWith("c", "s", "characters", "seraphine"));
   await screen.findByText("keeper");
+});
+
+test("cast rows show portraits with roster versions and role chips", async () => {
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", role: "npc", name: "Seraphine" },
+    { kind: "pcs", id: "yara", role: "player", name: "Yara" },
+  ]);
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", version: "v2", role: "npc", scenes: ["s"] },
+  ]);
+  (api.listPCs as any).mockResolvedValue([
+    { id: "yara", name: "Yara", tags: [], default_version: "default", versions: [] }]);
+  renderInspector();
+  await screen.findByText("Seraphine");
+  expect(screen.getByAltText("Seraphine portrait")).toBeInTheDocument(); // roster version found
+  expect(screen.getByText("Y")).toBeInTheDocument();                     // PC initials fallback
+  expect(screen.getByText("player")).toBeInTheDocument();
+  expect(screen.getByText("npc")).toBeInTheDocument();
+});
+
+test("location with a primary image renders a clickable thumbnail", async () => {
+  (api.listEntityImages as any).mockResolvedValue([{ name: "avatar", ext: "png" }]);
+  renderInspector();
+  const thumb = await screen.findByAltText("The Crypt");
+  expect(thumb.closest("button")).not.toBeNull();
+  await waitFor(() => expect(api.listEntityImages).toHaveBeenCalledWith(
+    { kind: "campaign", id: "c" }, "locations", "crypt"));
+});
+
+test("location without an image keeps the text row", async () => {
+  renderInspector();
+  const row = await screen.findByRole("button", { name: "The Crypt" });
+  expect(row.querySelector("img")).toBeNull();
 });
 
 test("context section expands to show the text", async () => {

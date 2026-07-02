@@ -561,9 +561,19 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
   border-bottom: 1px solid var(--rule-soft); padding: 8px 0; margin: 0; cursor: pointer;
 }
 .inspector-row:hover { color: var(--accent); }
-.inspector-row .role {
-  font-family: var(--fm); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--muted); border: var(--rw2) solid var(--rule); padding: 2px 7px; flex: none;
+.inspector-row { gap: 10px; padding: 8px 0; }
+.inspector-row .portrait, .inspector-row .portrait-initials {
+  width: 34px; height: 34px; border: var(--rw2) solid var(--rule);
+}
+.inspector-row.pc .portrait, .inspector-row.pc .portrait-initials { border-color: var(--accent); }
+.inspector-row .portrait-initials { font-size: 15px; }
+.inspector-name { flex: 1; font-family: var(--fb); font-size: 15px; color: var(--ink); }
+.inspector .role-chip { color: var(--muted); border-color: var(--rule); }
+.inspector .inspector-row.pc .role-chip { background: var(--quote); color: var(--on-quote); border: none; }
+.inspector-loc { flex-direction: column; align-items: stretch; gap: 6px; }
+.inspector-loc-thumb {
+  width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block;
+  border: var(--rw2) solid var(--rule); box-shadow: var(--sh2);
 }
 .ctx-head { display: flex; justify-content: space-between; align-items: baseline; }
 .ctx-pct { font-family: var(--fm); font-size: 12px; font-weight: 700; color: var(--accent); }
@@ -589,7 +599,7 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .drawer { width: 360px; max-width: 90vw; background: var(--bg); border-left: 1px solid var(--muted); padding: 16px; overflow-y: auto; }
 .drawer-close { float: right; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 16px; }
 .drawer-close:hover { color: var(--accent); }
-.drawer-avatar { max-width: 160px; height: auto; display: block; border: 1px solid var(--muted); margin: 8px 0; }
+.drawer-avatar { max-width: 180px; height: auto; display: block; border: 1px solid var(--muted); margin: 8px 0; }
 @media (max-width: 1100px) { .layout { grid-template-columns: 236px 1fr; } .inspector { display: none; } }
 
 /* collapsible lorebook import inside the Lore tab */

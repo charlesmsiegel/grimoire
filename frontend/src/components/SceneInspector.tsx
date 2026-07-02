@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
-  type CalendarConfig, type SceneDatetime,
+  type CalendarConfig, type RosterEntry, type SceneDatetime,
 } from "../api/client";
 import { fetchModels, type Model } from "../api/models";
+import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 
 // The calendars a campaign can select. Only Gregorian ships today; this list
@@ -14,8 +15,10 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void;
     onSceneRenamed?: (id: string) => void }) {
   const [cast, setCast] = useState<Actor[]>([]);
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [setting, setSetting] = useState<SceneLocation | null>(null);
+  const [locImages, setLocImages] = useState<string[]>([]);
   const [ctx, setCtx] = useState<SceneContext | null>(null);
   const [recap, setRecap] = useState<ChronicleEntry[]>([]);
   const [models, setModels] = useState<Model[]>([]);
@@ -48,12 +51,22 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
 
   useEffect(() => {
     api.getCast(cid, sid).then(setCast).catch(() => setCast([]));
+    api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
     api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null));
     api.getSceneContext(cid, sid).then(setCtx).catch(() => setCtx(null));
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
     reloadWhen();
     reloadCfg();
   }, [cid, sid, refreshKey, reloadWhen, reloadCfg]);
+
+  // the location section shows the primary image when the store has one
+  useEffect(() => {
+    const loc = setting?.current;
+    if (!loc) { setLocImages([]); return; }
+    api.listEntityImages({ kind: "campaign", id: cid }, "locations", loc.id)
+      .then((imgs) => setLocImages(imgs.map((i) => i.name)))
+      .catch(() => setLocImages([]));
+  }, [cid, setting]);
 
   async function chooseCalendar() {
     if (!cfg) return;
@@ -107,19 +120,34 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       <div className="side-section">
         <h4>Active characters</h4>
         {cast.length === 0 && <div className="field-hint">No one cast yet.</div>}
-        {cast.map((a) => (
-          <button key={`${a.kind}/${a.id}`} className="inspector-row"
-                  onClick={() => setDrawer({ type: "actor", kind: a.kind, id: a.id })}>
-            {nameOf(a)} <span className="role">{a.role}</span>
-          </button>
-        ))}
+        {cast.map((a) => {
+          const ver = a.kind === "characters"
+            ? roster.find((r) => r.kind === "characters" && r.id === a.id)?.version
+            : undefined;
+          const pc = a.role === "player";
+          return (
+            <button key={`${a.kind}/${a.id}`} className={"inspector-row" + (pc ? " pc" : "")}
+                    onClick={() => setDrawer({ type: "actor", kind: a.kind, id: a.id })}>
+              <Portrait src={ver ? api.campaignImageUrl(cid, a.id, ver, "avatar") : null}
+                        name={nameOf(a)} />
+              <span className="inspector-name">{nameOf(a)}</span>
+              <span className="role-chip">{pc ? "player" : "npc"}</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="side-section">
         <h4>Location</h4>
         {setting?.current
-          ? <button className="inspector-row" onClick={() => setDrawer({ type: "location", id: setting.current!.id })}>
-              {setting.current.name}
+          ? <button className={"inspector-row" + (locImages.includes("avatar") ? " inspector-loc" : "")}
+                    onClick={() => setDrawer({ type: "location", id: setting.current!.id })}>
+              {locImages.includes("avatar") && (
+                <img className="inspector-loc-thumb" alt={setting.current.name}
+                     src={api.entityImageUrl({ kind: "campaign", id: cid }, "locations", setting.current.id, "avatar")}
+                     onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+              )}
+              <span>{setting.current.name}</span>
             </button>
           : <div className="field-hint">No setting</div>}
       </div>
