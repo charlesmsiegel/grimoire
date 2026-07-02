@@ -247,10 +247,39 @@ test("Reroll on the last assistant post replaces it with a fresh reply", async (
   });
   renderCampaign();
   await screen.findByText("old reply");
-  fireEvent.click(screen.getByRole("button", { name: /reroll/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^reroll$/i }));
+  // clicking Reroll opens the popover instead of firing immediately
+  expect(api.regenerate).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty = plain reroll
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith("run", "s1", expect.any(Function)));
   await screen.findByText("fresh reply");
   expect(screen.queryByText("old reply")).toBeNull();
+});
+
+test("typed guidance is passed to regenerate", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
+  renderCampaign();
+  await screen.findByText("old reply");
+  fireEvent.click(screen.getByRole("button", { name: /^reroll$/i }));
+  const input = screen.getByPlaceholderText(/guide the reroll/i);
+  fireEvent.change(input, { target: { value: "make her angrier" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
+    "run", "s1", expect.any(Function), "make her angrier"));
+});
+
+test("Escape closes the reroll popover without firing", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
+  renderCampaign();
+  await screen.findByText("old reply");
+  fireEvent.click(screen.getByRole("button", { name: /^reroll$/i }));
+  fireEvent.keyDown(screen.getByPlaceholderText(/guide the reroll/i), { key: "Escape" });
+  expect(screen.queryByPlaceholderText(/guide the reroll/i)).toBeNull();
+  expect(api.regenerate).not.toHaveBeenCalled();
 });
 
 test("no Reroll when the last post is the user's", async () => {

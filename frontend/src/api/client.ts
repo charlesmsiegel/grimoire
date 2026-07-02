@@ -251,8 +251,9 @@ export const api = {
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/chat`, { content }, onEvent),
   retry: (cid: string, sid: string, onEvent: (e: ChatEvent) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/retry`, undefined, onEvent),
-  regenerate: (cid: string, sid: string, onEvent: (e: ChatEvent) => void) =>
-    streamPost(`/api/campaigns/${cid}/scenes/${sid}/regenerate`, undefined, onEvent),
+  regenerate: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, guidance?: string) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/regenerate`,
+               guidance ? { guidance } : undefined, onEvent),
 
   getWorld: (wid: string) =>
     request<{ meta: WorldMeta; body: string; counts: Record<string, number> }>("GET", `/api/worlds/${wid}`),
