@@ -219,6 +219,58 @@ def _serialize_messages(messages: list[dict]) -> str:
     return body
 
 
+def stamp_user_speaker(cid: str, sid: str, name: str) -> None:
+    """Backfill: give every speakerless user message the (sole) player's name."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    messages = read_scene(cid, sid)["messages"]
+    stamped = False
+    for m in messages:
+        if m["role"] == "user" and not m.get("speaker"):
+            m["speaker"] = name
+            stamped = True
+    if not stamped:
+        return
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")
+
+
+def split_reply(text: str, players: frozenset[str]) -> list[dict]:
+    """Split one model reply into per-speaker segments on the marker grammar.
+    Unlabeled leading text, reserved labels, and player-named blocks (never
+    store a forged player line) all go to the narrator (speaker None)."""
+    text = text.strip()
+    matches = _markers(text)
+    segments: list[dict] = []
+
+    def add(speaker: str | None, content: str) -> None:
+        if content.strip():
+            segments.append({"speaker": speaker, "content": content.strip()})
+
+    add(None, text[:matches[0].start()] if matches else text)
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        speaker, role = _speaker_and_role(m, players)
+        add(None if role == "user" else speaker, text[m.end():end])
+    return segments
+
+
+def remove_trailing_assistant_run(cid: str, sid: str) -> None:
+    """Drop the trailing run of assistant-side messages (one turn's output)."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    messages = read_scene(cid, sid)["messages"]
+    if not messages or messages[-1]["role"] != "assistant":
+        raise IndexError("no trailing assistant reply")
+    while messages and messages[-1]["role"] == "assistant":
+        messages.pop()
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["updated"] = now_iso()
+    p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")
+
+
 def edit_message(cid: str, sid: str, index: int, content: str) -> None:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
