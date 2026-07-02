@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -10,12 +11,19 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .routes import router
+from .store import migrations
 
 DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    migrations.migrate_scene_ids()
+    yield
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="grimoire")
+    app = FastAPI(title="grimoire", lifespan=_lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
