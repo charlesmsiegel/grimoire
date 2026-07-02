@@ -135,6 +135,12 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     await runStream((onEvent) => api.retry(cid, activeId, onEvent));
   }
 
+  async function reroll() {
+    if (!activeId || busy) return;
+    setMessages((m) => m.slice(0, -1));
+    await runStream((onEvent) => api.regenerate(cid, activeId, onEvent));
+  }
+
   async function endScene() {
     if (!activeId || absorbing) return;
     setAbsorbing(true);
@@ -278,7 +284,12 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
               <div className="msg-card-head">
                 <span className="role">{m.role === "user" ? "You" : "Grimoire"}</span>
                 {editing?.index !== i && !busy && (
-                  <button className="msg-edit" onClick={() => setEditing({ index: i, text: m.content })}>Edit</button>
+                  <span className="msg-actions">
+                    {m.role === "assistant" && i === messages.length - 1 && i > 0 && (
+                      <button className="msg-edit" onClick={reroll}>Reroll</button>
+                    )}
+                    <button className="msg-edit" onClick={() => setEditing({ index: i, text: m.content })}>Edit</button>
+                  </span>
                 )}
               </div>
               {editing?.index === i ? (

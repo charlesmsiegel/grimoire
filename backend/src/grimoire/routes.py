@@ -1156,6 +1156,23 @@ def post_retry(cid: str, sid: str, client: OpenRouterClient = Depends(get_openro
     return _chat_stream(cid, sid, messages, cfg, client)
 
 
+@router.post("/campaigns/{cid}/scenes/{sid}/regenerate")
+def post_regenerate(cid: str, sid: str, client: OpenRouterClient = Depends(get_openrouter)):
+    """Redo the most recent post: drop a trailing assistant reply, stream a fresh one."""
+    scene = _require_scene(cid, sid)
+    cfg = store.read_config()
+    _require_key(cfg)
+    msgs = scene["messages"]
+    if not msgs:
+        raise HTTPException(status_code=400, detail="nothing to regenerate")
+    if msgs[-1]["role"] == "assistant":
+        if len(msgs) == 1:
+            raise HTTPException(status_code=400, detail="cannot regenerate the opening post")
+        store.scenes.remove_last_message(cid, sid)
+    messages = store.context.build_messages(cid, sid)
+    return _chat_stream(cid, sid, messages, cfg, client)
+
+
 @router.get("/campaigns/{cid}/chronicle")
 def get_chronicle(cid: str):
     _campaign_root_or_404(cid)

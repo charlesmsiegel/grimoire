@@ -285,6 +285,7 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .msg-card.assistant { background: var(--surface); border-left: 2px solid var(--accent); }
 .msg-card.user { background: transparent; }
 .msg-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.msg-actions { display: flex; gap: 8px; }
 .msg-edit { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; }
 .msg-edit:hover { color: var(--accent); }
 .msg-edit-form textarea { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px; font-family: var(--font-body); resize: vertical; }

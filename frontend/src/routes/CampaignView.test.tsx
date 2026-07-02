@@ -16,6 +16,7 @@ vi.mock("../api/client", () => ({
     deleteScene: vi.fn(),
     chat: vi.fn(),
     retry: vi.fn(),
+    regenerate: vi.fn(),
     getConfig: vi.fn(),
     editMessage: vi.fn(),
     absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(),
@@ -45,6 +46,7 @@ beforeEach(() => {
   (api.deleteScene as any).mockResolvedValue({ ok: true });
   (api.chat as any).mockResolvedValue(undefined);
   (api.retry as any).mockResolvedValue(undefined);
+  (api.regenerate as any).mockResolvedValue(undefined);
   (api.getConfig as any).mockResolvedValue({ model: "m", theme: "occult", key_set: true, system_prompt: "", quote_color: "off" });
   (api.editMessage as any).mockResolvedValue({ ok: true });
   (api.getCast as any).mockResolvedValue([]);
@@ -196,6 +198,49 @@ test("an error shows a Retry button that retries the scene", async () => {
   fireEvent.click(retryBtn);
   await waitFor(() => expect(api.retry).toHaveBeenCalledWith("run", "s1", expect.any(Function)));
   expect(screen.getAllByText("hello")).toHaveLength(1);
+});
+
+test("Reroll on the last assistant post replaces it with a fresh reply", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
+  (api.regenerate as any).mockImplementation(async (_c: string, _s: string, onEvent: any) => {
+    onEvent({ delta: "fresh reply" });
+  });
+  renderCampaign();
+  await screen.findByText("old reply");
+  fireEvent.click(screen.getByRole("button", { name: /reroll/i }));
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith("run", "s1", expect.any(Function)));
+  await screen.findByText("fresh reply");
+  expect(screen.queryByText("old reply")).toBeNull();
+});
+
+test("no Reroll when the last post is the user's", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "assistant", content: "a reply" }, { role: "user", content: "hi" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  expect(screen.queryByRole("button", { name: /reroll/i })).toBeNull();
+});
+
+test("no Reroll on a sole opening post", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "assistant", content: "the greeting" }] });
+  renderCampaign();
+  await screen.findByText("the greeting");
+  expect(screen.queryByRole("button", { name: /reroll/i })).toBeNull();
+});
+
+test("only the last assistant post shows Reroll", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "one" }, { role: "assistant", content: "first reply" },
+    { role: "user", content: "two" }, { role: "assistant", content: "second reply" }] });
+  renderCampaign();
+  await screen.findByText("second reply");
+  expect(screen.getAllByRole("button", { name: /reroll/i })).toHaveLength(1);
 });
 
 test("End scene fetches a preview, edits, and saves the chronicle", async () => {
