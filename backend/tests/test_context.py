@@ -260,7 +260,7 @@ def test_build_opener_messages(monkeypatch, tmp_path):
     entities.create_entity(croot, "lore", "Salt", "salt lore", keys="salt")
     loc = entities.create_entity(croot, "locations", "The Docks", "Rotting piers and grey water.")
     scenes.set_location(cid, sid, loc)
-    scenes.set_datetime(cid, sid, "2026-12-25")
+    sid = scenes.set_datetime(cid, sid, "2026-12-25")["id"]  # first date set renames the scene
     plot.set_movement(cid, "the-map", "The map", "open", "A clue surfaces.", sid)
     chronicle.absorb(cid, {"id": "s00", "one_line": "They fled the city.",
                            "summary": "The party escaped the burning capital by river."})
@@ -413,7 +413,7 @@ def test_count_tokens_positive_and_empty(monkeypatch, tmp_path):
 
 def test_today_block_present_when_dated(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)  # default region US
-    scenes.set_datetime(cid, sid, "2026-12-25")
+    sid = scenes.set_datetime(cid, sid, "2026-12-25")["id"]  # first date set renames the scene
     sections = context.context_sections(cid, sid)
     assert "Today" in [s["label"] for s in sections]
     today = next(s["text"] for s in sections if s["label"] == "Today")
@@ -432,7 +432,7 @@ def test_today_block_includes_present_cast_age(monkeypatch, tmp_path):
     characters.create_character(croot, "Seraphine", "default", characters.blank_card("Seraphine"))
     characters.set_birthdate(croot, "seraphine", "1990-12-25")
     ap.appear(cid, sid, "characters", "seraphine", "default", "npc")
-    scenes.set_datetime(cid, sid, "2026-12-25")
+    sid = scenes.set_datetime(cid, sid, "2026-12-25")["id"]  # first date set renames the scene
     today = next(s["text"] for s in context.context_sections(cid, sid) if s["label"] == "Today")
     assert "Seraphine" in today and "36" in today and "birthday" in today.lower()
 
