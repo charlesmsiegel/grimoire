@@ -40,6 +40,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [rerollPrompt, setRerollPrompt] = useState<string | null>(null); // null = popover closed
   const [colorQuotes, setColorQuotes] = useState(false);
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
+  const [playerName, setPlayerName] = useState<string | null>(null);
   const [showChanges, setShowChanges] = useState(false);
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
   const [absorbing, setAbsorbing] = useState(false);
@@ -69,6 +70,11 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   async function selectScene(id: string) {
     setActiveId(id);
     api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
+    // unstamped user lines fall back to the sole player's name in the spine
+    api.getCast(cid, id).then((cast) => {
+      const players = cast.filter((a) => a.role === "player");
+      setPlayerName(players.length === 1 ? players[0].name : null);
+    }).catch(() => setPlayerName(null));
     const scene = await api.getScene(cid, id);
     setMessages(scene.messages);
     setStreaming("");
@@ -107,7 +113,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     }
   }
 
-  async function runStream(start: (onEvent: (e: ChatEvent) => void) => Promise<void>) {
+  async function runStream(id: string, start: (onEvent: (e: ChatEvent) => void) => Promise<void>) {
     setBusy(true);
     setError(null);
     let acc = "";
@@ -120,13 +126,14 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           setError(e.error.detail);
         }
       });
-      if (acc) setMessages((m) => [...m, { role: "assistant", content: acc }]);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     } finally {
       setStreaming("");
       setBusy(false);
-      setCtxKey((n) => n + 1);
+      // the reply is persisted as per-speaker posts — re-fetch to show them
+      // (selectScene also bumps ctxKey and refreshes the player name)
+      await selectScene(id);
     }
   }
 
@@ -141,7 +148,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     const content = input.trim();
     setInput("");
     setMessages((m) => [...m, { role: "user", content }]);
-    await runStream((onEvent) => api.chat(cid, id!, content, onEvent));
+    await runStream(id, (onEvent) => api.chat(cid, id!, content, onEvent));
   }
 
   async function saveEdit() {
@@ -153,17 +160,22 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
 
   async function retry() {
     if (!activeId || busy) return;
-    await runStream((onEvent) => api.retry(cid, activeId, onEvent));
+    await runStream(activeId, (onEvent) => api.retry(cid, activeId, onEvent));
   }
 
   async function reroll() {
     if (!activeId || busy) return;
     const guidance = (rerollPrompt ?? "").trim();
     setRerollPrompt(null);
-    setMessages((m) => m.slice(0, -1));
+    // one turn is a run of assistant posts — drop the whole trailing run
+    setMessages((m) => {
+      let end = m.length;
+      while (end > 0 && m[end - 1].role === "assistant") end--;
+      return m.slice(0, end);
+    });
     // omit the 4th argument entirely for a plain reroll (an explicit
     // undefined would change the call shape)
-    await runStream((onEvent) => guidance
+    await runStream(activeId, (onEvent) => guidance
       ? api.regenerate(cid, activeId!, onEvent, guidance)
       : api.regenerate(cid, activeId!, onEvent));
   }
@@ -200,6 +212,12 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
       send();
     }
   }
+
+  // rerolling regenerates the trailing assistant run; a run that reaches the
+  // first message is the opener and is not rerollable
+  const canReroll = messages.length > 0 &&
+    messages[messages.length - 1].role === "assistant" &&
+    messages.some((x) => x.role === "user");
 
   return (
     <div className="workspace">
@@ -339,10 +357,12 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           {messages.map((m, i) => (
             <div className={`msg ${m.role}`} key={i}>
               <span className="spine-col">
-                <span className="spine">{m.speaker ?? labels[m.role]}</span>
+                <span className="spine">
+                  {m.speaker ?? (m.role === "user" ? playerName ?? labels.user : labels.assistant)}
+                </span>
                 {editing?.index !== i && !busy && (
                   <span className="spine-icons">
-                    {m.role === "assistant" && i === messages.length - 1 && i > 0 && (
+                    {i === messages.length - 1 && canReroll && (
                       <button className="msg-edit" title="Reroll" aria-label="Reroll"
                               onClick={() => setRerollPrompt("")}>↻</button>
                     )}
@@ -351,7 +371,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                   </span>
                 )}
                 {rerollPrompt !== null && !busy &&
-                 m.role === "assistant" && i === messages.length - 1 && i > 0 && (
+                 i === messages.length - 1 && canReroll && (
                   <span className="reroll-pop">
                     <input
                       autoFocus

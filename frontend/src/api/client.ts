@@ -130,7 +130,7 @@ export type GreetingDraft = {
 export type Availability = { id: string; name: string; available: boolean; reasons: string[] };
 
 // cast
-export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "npc" };
+export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "npc"; name: string };
 export type RosterEntry = { kind: string; id: string; version: string; role: string; scenes: string[] };
 export type SceneLocationRef = { id: string; name: string };
 export type SceneLocation = { current: SceneLocationRef | null; visited: SceneLocationRef[] };
