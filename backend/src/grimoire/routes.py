@@ -1171,8 +1171,9 @@ async def post_absorb(cid: str, sid: str,
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to absorb")
     facts = store.chronicle.scene_facts(cid, sid)
+    transcript = store.chronicle.transcript_text(scene["messages"])
     messages = store.absorb.build_prompt(
-        store.chronicle.transcript_text(scene["messages"]), facts,
+        transcript, facts,
         store.absorb.state_snapshot(cid, sid), store.absorb.relationships_snapshot(cid, sid),
         store.absorb.plot_snapshot(cid))
     try:
@@ -1183,7 +1184,6 @@ async def post_absorb(cid: str, sid: str,
     edits = store.absorb.materialize(cid, sid, parsed)
     # Phase 2: refresh each present character's campaign dossier from this scene.
     croot = store.campaigns.campaign_root(cid)
-    transcript = store.chronicle.transcript_text(scene["messages"])
     for a in store.appearances.scene_cast(cid, sid):
         if a["kind"] != "characters":
             continue
