@@ -148,6 +148,29 @@ def test_campaign_image_route_serves_copied_avatar(client):
     assert got.status_code == 200 and got.content == b"PNGBYTES"
 
 
+def test_character_image_promote_swaps_avatar(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images"
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(b"old"), "image/png")})
+    client.put(f"{base}/gallery_1", files={"file": ("g.png", io.BytesIO(b"new"), "image/png")})
+
+    r = client.post(f"{base}/gallery_1/promote")
+    assert r.status_code == 200
+
+    got = client.get(f"{base}/avatar")
+    assert got.content == b"new"
+    assert got.headers["cache-control"] == "no-cache"
+    assert client.get(f"{base}/gallery_1").content == b"old"
+
+
+def test_character_image_promote_missing_404(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/gallery_9/promote")
+    assert r.status_code == 404
+
+
 def test_character_import_garbage_400(client):
     wid = _world(client)
     files = {"file": ("c.json", io.BytesIO(b"nonsense"), "application/json")}
