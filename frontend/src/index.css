@@ -495,6 +495,17 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .images-shelf.wide .shelf-tile img { height: auto; aspect-ratio: 16 / 10; }
 .images-shelf.wide .shelf-empty, .images-shelf.wide .shelf-add { height: 96px; }
 
+/* location rail cards + detail header image */
+.row.loc-row { flex-direction: column; align-items: stretch; gap: 6px; padding: 0 0 8px; }
+.loc-row-img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; }
+.row.loc-row .row-name { font-family: var(--fd); font-weight: 700; font-size: 24px; padding: 6px 10px 0; }
+.loc-head { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 12px; }
+.loc-head-img {
+  width: 340px; max-width: 55%; aspect-ratio: 16 / 10; object-fit: cover; display: block;
+  border: var(--rw) solid var(--rule); box-shadow: var(--sh5); flex: none;
+}
+.loc-head h3 { margin: 4px 0 0; }
+
 .char-card-tagline {
   font-family: var(--fb); font-style: italic; font-size: 12.5px; color: var(--muted);
   padding: 0 14px 12px; text-align: left; white-space: nowrap; overflow: hidden;
