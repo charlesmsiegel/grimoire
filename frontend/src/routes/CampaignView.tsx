@@ -338,7 +338,36 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
         <div className={"stream" + (colorQuotes ? " color-quotes" : "")} ref={streamRef}>
           {messages.map((m, i) => (
             <div className={`msg ${m.role}`} key={i}>
-              <span className="spine">{m.speaker ?? labels[m.role]}</span>
+              <span className="spine-col">
+                <span className="spine">{m.speaker ?? labels[m.role]}</span>
+                {editing?.index !== i && !busy && (
+                  <span className="spine-icons">
+                    {m.role === "assistant" && i === messages.length - 1 && i > 0 && (
+                      <button className="msg-edit" title="Reroll" aria-label="Reroll"
+                              onClick={() => setRerollPrompt("")}>↻</button>
+                    )}
+                    <button className="msg-edit" title="Edit message" aria-label={`Edit message ${i + 1}`}
+                            onClick={() => setEditing({ index: i, text: m.content })}>✎</button>
+                  </span>
+                )}
+                {rerollPrompt !== null && !busy &&
+                 m.role === "assistant" && i === messages.length - 1 && i > 0 && (
+                  <span className="reroll-pop">
+                    <input
+                      autoFocus
+                      placeholder="Guide the reroll (optional)…"
+                      aria-label="Reroll guidance"
+                      value={rerollPrompt}
+                      onChange={(e) => setRerollPrompt(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") reroll();
+                        if (e.key === "Escape") setRerollPrompt(null);
+                      }}
+                    />
+                    <button className="btn-chrome" onClick={reroll}>Reroll ▸</button>
+                  </span>
+                )}
+              </span>
               <div className="msg-body">
                 {editing?.index === i ? (
                   <div className="msg-edit-form">
@@ -353,32 +382,6 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                   <RenderedMarkdown content={m.content} />
                 )}
               </div>
-              {editing?.index !== i && !busy && (
-                <span className="msg-actions">
-                  {m.role === "assistant" && i === messages.length - 1 && i > 0 && (
-                    rerollPrompt !== null ? (
-                      <span className="reroll-pop">
-                        <input
-                          autoFocus
-                          placeholder="Guide the reroll (optional)…"
-                          aria-label="Reroll guidance"
-                          value={rerollPrompt}
-                          onChange={(e) => setRerollPrompt(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") reroll();
-                            if (e.key === "Escape") setRerollPrompt(null);
-                          }}
-                        />
-                        <button className="btn-chrome" onClick={reroll}>Reroll ▸</button>
-                      </span>
-                    ) : (
-                      <button className="msg-edit" onClick={() => setRerollPrompt("")}>Reroll</button>
-                    )
-                  )}
-                  <button className="msg-edit" aria-label={`Edit message ${i + 1}`} title="Edit"
-                          onClick={() => setEditing({ index: i, text: m.content })}>✎</button>
-                </span>
-              )}
             </div>
           ))}
           {streaming && (

@@ -153,7 +153,7 @@ test("editing a message saves and reloads", async () => {
   (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [{ role: "assistant", content: "hi" }] });
   renderCampaign();
   await screen.findByText("hi");
-  fireEvent.click(screen.getAllByRole("button", { name: /edit/i })[0]);
+  fireEvent.click(screen.getAllByTitle("Edit message")[0]);
   const ta = await screen.findByLabelText(/edit message/i);
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
@@ -247,9 +247,10 @@ test("Reroll on the last assistant post replaces it with a fresh reply", async (
   });
   renderCampaign();
   await screen.findByText("old reply");
-  fireEvent.click(screen.getByRole("button", { name: /^reroll$/i }));
+  fireEvent.click(screen.getByTitle("Reroll"));
   // clicking Reroll opens the popover instead of firing immediately
   expect(api.regenerate).not.toHaveBeenCalled();
+  expect(screen.getByTitle("Reroll")).toBeInTheDocument(); // hovertext present
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty = plain reroll
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith("run", "s1", expect.any(Function)));
   await screen.findByText("fresh reply");
@@ -262,7 +263,7 @@ test("typed guidance is passed to regenerate", async () => {
     { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
   renderCampaign();
   await screen.findByText("old reply");
-  fireEvent.click(screen.getByRole("button", { name: /^reroll$/i }));
+  fireEvent.click(screen.getByTitle("Reroll"));
   const input = screen.getByPlaceholderText(/guide the reroll/i);
   fireEvent.change(input, { target: { value: "make her angrier" } });
   fireEvent.keyDown(input, { key: "Enter" });
@@ -276,7 +277,7 @@ test("Escape closes the reroll popover without firing", async () => {
     { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
   renderCampaign();
   await screen.findByText("old reply");
-  fireEvent.click(screen.getByRole("button", { name: /^reroll$/i }));
+  fireEvent.click(screen.getByTitle("Reroll"));
   fireEvent.keyDown(screen.getByPlaceholderText(/guide the reroll/i), { key: "Escape" });
   expect(screen.queryByPlaceholderText(/guide the reroll/i)).toBeNull();
   expect(api.regenerate).not.toHaveBeenCalled();
