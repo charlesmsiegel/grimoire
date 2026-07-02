@@ -189,6 +189,16 @@ test("importing a .json posts multipart with json format", async () => {
   await waitFor(() => expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "json"));
 });
 
+test("single import shows the tagline popup with the character's real name", async () => {
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  const input = screen.getByLabelText("Import character card");
+  fireEvent.change(input, { target: { files: [new File(["{}"], "c.json")] } });
+  // openDetail refetches the detail (name "Seraphine"), so the popup uses the real
+  // name — not the slugified id returned by the import ("imp").
+  await screen.findByText("Tagline for Seraphine");
+});
+
 test("importing a .png posts multipart with png format", async () => {
   render(<CharacterEditor wid="w" />);
   await screen.findByText("Seraphine");
