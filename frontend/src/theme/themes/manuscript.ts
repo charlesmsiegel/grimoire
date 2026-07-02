@@ -10,7 +10,7 @@ const manuscript: Theme = {
     "--rule-soft": "rgba(200,164,77,.28)", "--track": "rgba(200,164,77,.16)",
     "--chrome": "#0f0b07", "--chrome-text": "#c8a44d", "--chrome-muted": "#8a7a5c",
     "--chrome-rule": "rgba(200,164,77,.35)", "--accent": "#c8a44d",
-    "--on-accent": "#1a1206", "--quote": "#a8342a",
+    "--on-accent": "#1a1206", "--quote": "#a8342a", "--on-quote": "#efe4c9",
     "--page": "linear-gradient(180deg,#efe4c9,#e8dcc0)", "--page-ink": "#2c2318",
     "--page-muted": "#9a7d3f", "--banner-bg": "#2a1712", "--banner-ink": "#e0a494",
     "--disabled": "#57503f",
