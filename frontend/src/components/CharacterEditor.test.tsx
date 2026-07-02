@@ -12,6 +12,7 @@ vi.mock("../api/client", () => ({
     setCharacterChubSource: vi.fn(), clearCharacterChubSource: vi.fn(),
     downloadCharacterChubGallery: vi.fn(), downloadCharacterChubLorebooks: vi.fn(),
     findChubUnlinked: vi.fn(),
+    getCharacterTagline: vi.fn(), setCharacterTagline: vi.fn(), generateCharacterTagline: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
   },
 }));
@@ -45,6 +46,7 @@ beforeEach(() => {
   (api.deleteCharacter as any).mockResolvedValue({ ok: true });
   (api.importCharacterBook as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
   (api.setCharacterBirthdate as any).mockResolvedValue({ ok: true });
+  (api.getCharacterTagline as any).mockResolvedValue({ tagline: "" });
 });
 
 // reach the edit form: grid -> click a card's Edit button -> form
@@ -52,6 +54,24 @@ async function openEditForm() {
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   await screen.findByLabelText("Description");
 }
+
+test("detail view shows the character tagline", async () => {
+  (api.getCharacterTagline as any).mockResolvedValue({ tagline: "A silent snowleopardgirl." });
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByText("A silent snowleopardgirl.");
+});
+
+test("edit view saves an edited tagline via PUT", async () => {
+  (api.getCharacterTagline as any).mockResolvedValue({ tagline: "old" });
+  (api.setCharacterTagline as any).mockResolvedValue({ ok: true });
+  render(<CharacterEditor wid="w" />);
+  await openEditForm();
+  const box = await screen.findByLabelText("Tagline");
+  fireEvent.change(box, { target: { value: "A new tagline." } });
+  fireEvent.click(screen.getByText("Save tagline"));
+  await waitFor(() => expect(api.setCharacterTagline).toHaveBeenCalledWith("w", "seraphine", "A new tagline."));
+});
 
 test("imports an embedded character_book and shows the result", async () => {
   render(<CharacterEditor wid="w" />);

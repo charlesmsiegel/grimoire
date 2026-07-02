@@ -51,6 +51,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const [bulkLocalize, setBulkLocalize] = useState<{ current: number; cards: number } | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [birthdate, setBirthdate] = useState("");
+  const [tagline, setTagline] = useState("");
 
   const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
   useEffect(() => {
@@ -191,7 +192,27 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     const d = await api.readCharacter(wid, cid);
     setDetail(d);
     setBirthdate(d.meta.birthdate ?? "");
+    setTagline((await api.getCharacterTagline(wid, cid).catch(() => ({ tagline: "" }))).tagline);
     loadVersion(d, d.meta.default_version);
+  }
+
+  async function saveTagline() {
+    if (!detail) return;
+    try {
+      await api.setCharacterTagline(wid, detail.meta.id, tagline.trim());
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function regenerateTagline() {
+    if (!detail) return;
+    try {
+      const r = await api.generateCharacterTagline(wid, detail.meta.id);
+      setTagline(r.tagline);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
   }
 
   async function saveBirthdate(value: string) {
@@ -216,6 +237,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     const d = await api.readCharacter(wid, cid);
     setDetail(d);
     setBirthdate(d.meta.birthdate ?? "");
+    setTagline((await api.getCharacterTagline(wid, cid).catch(() => ({ tagline: "" }))).tagline);
     loadVersion(d, d.versions.some((v) => v.id === vid) ? vid : d.meta.default_version);
     setMode("detail");
   }
@@ -575,6 +597,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                 : <div className="detail-avatar avatar-empty">no avatar</div>}
               <div className="detail-meta">
                 <h3>{card.data.name || detail.meta.name}</h3>
+                {tagline && <div className="detail-text tagline">{tagline}</div>}
                 {card.data.creator ? <div className="field-hint">by {card.data.creator}</div> : null}
                 {tags.length > 0 && (
                   <div className="chips">{tags.map((t) => <span className="chip" key={t}>{t}</span>)}</div>
@@ -725,6 +748,14 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
           <Field label="Birthdate">
             <input type="date" aria-label="Birthdate" value={birthdate}
                    onChange={(e) => saveBirthdate(e.target.value)} />
+          </Field>
+          <Field label="Tagline" hint="one-line identity for the off-scene cast">
+            <textarea aria-label="Tagline" value={tagline} rows={2}
+                      onChange={(e) => setTagline(e.target.value)} />
+            <div className="form-actions">
+              <button className="subtle" type="button" onClick={regenerateTagline}>Generate</button>
+              <button className="subtle" type="button" onClick={saveTagline}>Save tagline</button>
+            </div>
           </Field>
           <Field label="Tags" hint="comma-separated">
             <input
