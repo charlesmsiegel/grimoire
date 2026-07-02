@@ -988,40 +988,33 @@ def _world_char(client):
     return wid, cid
 
 
-def test_get_brief_absent_is_stale(client):
+def test_get_tagline_absent_is_empty(client):
     wid, cid = _world_char(client)
-    body = client.get(f"/api/worlds/{wid}/characters/{cid}/brief").json()
-    assert body == {"brief": None, "stale": True}
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}/tagline").json() == {"tagline": ""}
 
 
-def test_put_brief_saves_and_is_fresh(client):
+def test_put_tagline_saves(client):
     wid, cid = _world_char(client)
-    r = client.put(f"/api/worlds/{wid}/characters/{cid}/brief",
-                   json={"tagline": "A snowleopardgirl.", "body": "She keeps house."})
+    r = client.put(f"/api/worlds/{wid}/characters/{cid}/tagline",
+                   json={"tagline": "A snowleopardgirl."})
     assert r.json() == {"ok": True}
-    got = client.get(f"/api/worlds/{wid}/characters/{cid}/brief").json()
-    assert got["stale"] is False
-    assert got["brief"]["tagline"] == "A snowleopardgirl."
-    assert got["brief"]["body"] == "She keeps house."
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}/tagline").json() == {"tagline": "A snowleopardgirl."}
 
 
-def test_post_brief_derives_from_model(client):
+def test_post_tagline_generate_from_model(client):
     wid, cid = _world_char(client)
     client.put("/api/config", json={"openrouter_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_openrouter] = \
-        lambda: FakeOpenRouterComplete("A silent snowleopardgirl.\n\nShe keeps house and is shy.")
-    r = client.post(f"/api/worlds/{wid}/characters/{cid}/brief")
+        lambda: FakeOpenRouterComplete("A silent snowleopardgirl.\nignored second line")
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/tagline/generate")
     assert r.status_code == 200
-    brief = r.json()["brief"]
-    assert brief["tagline"] == "A silent snowleopardgirl."
-    assert brief["body"] == "She keeps house and is shy."
-    assert r.json()["stale"] is False
+    assert r.json() == {"tagline": "A silent snowleopardgirl."}
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}/tagline").json() == {"tagline": "A silent snowleopardgirl."}
 
 
-def test_post_brief_requires_key(client):
+def test_post_tagline_generate_requires_key(client):
     wid, cid = _world_char(client)
-    # default fixture key is empty
-    r = client.post(f"/api/worlds/{wid}/characters/{cid}/brief")
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/tagline/generate")
     assert r.status_code == 409
 
 

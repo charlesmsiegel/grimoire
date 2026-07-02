@@ -1,5 +1,5 @@
 from grimoire.store import (appearances, campaigns, characters, chronicle, entities,
-                            plot, scenes, suggest, worlds)
+                            plot, scenes, suggest, taglines, worlds)
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -22,14 +22,16 @@ def test_build_snapshot_gathers_signals(monkeypatch, tmp_path):
     s1 = scenes.create_scene(cid, "One")
     appearances.appear(cid, s1, "characters", absent, "main", "npc")
     appearances.appear(cid, s1, "characters", present, "main", "npc")
+    taglines.write(wroot, absent, "a quiet sellsword")   # absent cast carries its world tagline
     chronicle.absorb(cid, {"id": s1, "one_line": "x", "summary": "y", "keywords": [],
                            "cast": [f"characters/{present}"], "location": "", "date": ""})
     plot.set_movement(cid, "the-map", "The map", "advanced", "It is a forgery.", s1)
 
     snap = suggest.build_snapshot(cid)
     assert [t["title"] for t in snap["open_threads"]] == ["The map"]
-    absent_names = [a["name"] for a in snap["absent_cast"]]
-    assert "Doran" in absent_names and "Seraphine" not in absent_names   # present is not absent
+    absent_by_name = {a["name"]: a["tagline"] for a in snap["absent_cast"]}
+    assert absent_by_name.get("Doran") == "a quiet sellsword"   # absent cast carries its world tagline
+    assert "Seraphine" not in absent_by_name                    # present is not absent
     tokens = [c["token"] for c in snap["available_cast"]]
     assert f"characters:{absent}" in tokens and f"characters:{present}" in tokens
 

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import json
 
-from . import (appearances, briefs, calendars, campaigns, characters, chronicle,
-               entities, pcs, plot, worlds)
+from . import (appearances, calendars, campaigns, characters, chronicle,
+               entities, pcs, plot, taglines, worlds)
 
 RECENT_WINDOW = 5
 
@@ -104,9 +104,8 @@ def build_snapshot(cid: str) -> dict:
     for a in roster:
         if a["kind"] != "characters" or a["role"] != "npc" or a["id"] in recent_ids:
             continue
-        b = briefs.read_brief(croot, a["id"])
         absent_cast.append({"name": _char_name(croot, a["id"]),
-                            "tagline": (b["tagline"] if b else "") or ""})
+                            "tagline": taglines.read(wroot, a["id"])})
 
     available_cast, seen = [], set()
     for c in characters.list_characters(wroot):
