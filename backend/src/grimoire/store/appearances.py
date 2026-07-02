@@ -88,9 +88,6 @@ def _copy_actor(wroot: Path, croot: Path, kind: str, actor_id: str, vid: str) ->
     if kind == "characters":
         if (src_dir / "assets").exists():
             shutil.copytree(src_dir / "assets", dst_dir / "assets", dirs_exist_ok=True)
-        if (src_dir / "brief.md").exists():
-            (dst_dir / "brief.md").write_text(
-                (src_dir / "brief.md").read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, role: str) -> None:

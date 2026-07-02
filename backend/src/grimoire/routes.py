@@ -89,9 +89,8 @@ class ChubSourceBody(BaseModel):
     url: str
 
 
-class BriefSave(BaseModel):
+class TaglineSave(BaseModel):
     tagline: str = ""
-    body: str = ""
 
 
 class PCCreate(BaseModel):
@@ -566,29 +565,30 @@ def delete_world_version(wid: str, cid: str, vid: str):
     return {"ok": True}
 
 
-@router.get("/worlds/{wid}/characters/{cid}/brief")
-def get_character_brief(wid: str, cid: str):
+@router.get("/worlds/{wid}/characters/{cid}/tagline")
+def get_character_tagline(wid: str, cid: str):
     root = _world_root_or_404(wid)
     try:
         store.characters.read_character(root, cid)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
-    return {"brief": store.briefs.read_brief(root, cid), "stale": store.briefs.is_stale(root, cid)}
+    return {"tagline": store.taglines.read(root, cid)}
 
 
-@router.put("/worlds/{wid}/characters/{cid}/brief")
-def put_character_brief(wid: str, cid: str, body: BriefSave):
+@router.put("/worlds/{wid}/characters/{cid}/tagline")
+def put_character_tagline(wid: str, cid: str, body: TaglineSave):
     root = _world_root_or_404(wid)
-    base = store.briefs.default_card_hash(root, cid)
-    if base is None:
+    try:
+        store.characters.read_character(root, cid)
+    except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
-    store.briefs.write_brief(root, cid, body.tagline, body.body, base)
+    store.taglines.write(root, cid, body.tagline)
     return {"ok": True}
 
 
-@router.post("/worlds/{wid}/characters/{cid}/brief")
-async def post_character_brief(wid: str, cid: str,
-                               client: OpenRouterClient = Depends(get_openrouter)):
+@router.post("/worlds/{wid}/characters/{cid}/tagline/generate")
+async def post_character_tagline_generate(wid: str, cid: str,
+                                          client: OpenRouterClient = Depends(get_openrouter)):
     root = _world_root_or_404(wid)
     cfg = store.read_config()
     _require_key(cfg)
@@ -597,15 +597,14 @@ async def post_character_brief(wid: str, cid: str,
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
     card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
-    messages = store.briefs.build_prompt(card["data"])
+    messages = store.taglines.build_prompt(card["data"])
     try:
         text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
     except OpenRouterError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
-    tagline, paragraph = store.briefs.parse_output(text)
-    store.briefs.write_brief(root, cid, tagline, paragraph,
-                             store.briefs.default_card_hash(root, cid) or "")
-    return {"brief": store.briefs.read_brief(root, cid), "stale": False}
+    tagline = store.taglines.parse_output(text)
+    store.taglines.write(root, cid, tagline)
+    return {"tagline": tagline}
 
 
 _EXPORT_MEDIA = {"json": "application/json", "png": "image/png", "charx": "application/zip"}
