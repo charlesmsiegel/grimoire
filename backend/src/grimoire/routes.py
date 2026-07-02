@@ -704,12 +704,15 @@ _IMAGE_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                 "gif": "image/gif", "webp": "image/webp"}
 
 
-def _serve_image(root, cid: str, vid: str, name: str):
-    p = store.assets.image_path(root, cid, vid, name)
+def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters"):
+    p = store.assets.image_path(root, cid, vid, name, base)
     if p is None:
         raise HTTPException(status_code=404, detail="image not found")
     ext = p.suffix.lstrip(".").lower()
-    return Response(content=p.read_bytes(), media_type=_IMAGE_MEDIA.get(ext, "application/octet-stream"))
+    # no-cache: promotions swap file contents under stable URLs
+    return Response(content=p.read_bytes(),
+                    media_type=_IMAGE_MEDIA.get(ext, "application/octet-stream"),
+                    headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/worlds/{wid}/characters/{cid}/versions/{vid}/images")
@@ -738,6 +741,15 @@ async def put_world_image(wid: str, cid: str, vid: str, name: str, file: UploadF
 @router.delete("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}")
 def delete_world_image(wid: str, cid: str, vid: str, name: str):
     store.assets.delete_image(_world_root_or_404(wid), cid, vid, name)
+    return {"ok": True}
+
+
+@router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}/promote")
+def promote_world_image(wid: str, cid: str, vid: str, name: str):
+    try:
+        store.assets.promote_image(_world_root_or_404(wid), cid, vid, name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="image not found")
     return {"ok": True}
 
 
