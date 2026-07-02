@@ -72,6 +72,14 @@ def test_counts_and_refs(tmp_path):
     assert set(ch.character_refs(tmp_path)) == {"a", "b"}
 
 
+def test_list_characters_includes_tagline(tmp_path):
+    from grimoire.store import taglines
+    cid, _ = ch.create_character(tmp_path, "Sera")
+    assert ch.list_characters(tmp_path)[0]["tagline"] == ""
+    taglines.write(tmp_path, cid, "Keeper of the salt ledgers.")
+    assert ch.list_characters(tmp_path)[0]["tagline"] == "Keeper of the salt ledgers."
+
+
 def test_read_exposes_images_and_list_has_avatar(tmp_path):
     from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Seraphine")

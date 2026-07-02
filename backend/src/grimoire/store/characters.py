@@ -13,7 +13,7 @@ import json
 import shutil
 from pathlib import Path
 
-from . import assets, chub, fetch, lorebook
+from . import assets, chub, fetch, lorebook, taglines
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
@@ -203,6 +203,7 @@ def list_characters(root: Path) -> list[dict]:
                 "name": meta.get("name", cid),
                 "default_version": default,
                 "has_avatar": assets.image_path(root, cid, default, assets.AVATAR) is not None,
+                "tagline": taglines.read(root, cid),
                 "versions": [{"id": v, "name": _version_label(read_card(root, cid, v), v)}
                              for v in _version_ids(root, cid)],
             })
