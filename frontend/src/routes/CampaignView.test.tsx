@@ -28,7 +28,9 @@ vi.mock("../api/client", () => ({
     getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(),
     listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
     campaignChanges: vi.fn(),
-    campaignImageUrl: () => "/img",
+    listAppearances: vi.fn(), listEntityImages: vi.fn(),
+    campaignImageUrl: (_c: string, char: string, v: string, n: string) => `/img/${char}/${v}/${n}`,
+    entityImageUrl: () => "/loc-img",
   },
 }));
 vi.mock("../api/models", () => ({ fetchModels: vi.fn() }));
@@ -61,6 +63,8 @@ beforeEach(() => {
   (api.listCharacters as any).mockResolvedValue([]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listCampaignPCs as any).mockResolvedValue([]);
+  (api.listAppearances as any).mockResolvedValue([]);
+  (api.listEntityImages as any).mockResolvedValue([]);
   (fetchModels as any).mockResolvedValue([]);
   (api.absorbScene as any).mockResolvedValue({
     one_line: "They met.", summary: "A met B.", keywords: ["salt"],
@@ -100,7 +104,7 @@ test("shows the sub-header with world-copy link, scene counter, and rail date", 
   expect(screen.getByRole("button", { name: /campaign world/i })).toBeInTheDocument();
 });
 
-test("renders vertical speaker spines with configured labels and message speakers", async () => {
+test("groups consecutive posts under one speaker plate", async () => {
   (api.getConfig as any).mockResolvedValue({
     model: "m", theme: "codex", key_set: true, system_prompt: "", quote_color: "off",
     user_label: "Kestrel", assistant_label: "Grimoire",
@@ -111,13 +115,58 @@ test("renders vertical speaker spines with configured labels and message speaker
     messages: [
       { role: "user", content: "I open the door." },
       { role: "assistant", content: "She waits.", speaker: "Seraphine Vale" },
+      { role: "assistant", content: "She smiles.", speaker: "Seraphine Vale" },
     ],
   });
   renderCampaign();
   await screen.findByText("Kestrel");
-  expect(screen.getByText("Seraphine Vale")).toBeInTheDocument();
-  expect(document.querySelector(".msg-card")).toBeNull();
+  // one plate for the two-message Seraphine run
+  expect(screen.getAllByText("Seraphine Vale")).toHaveLength(1);
+  expect(document.querySelectorAll(".plate")).toHaveLength(2);
+  expect(document.querySelector(".spine")).toBeNull();
+  // initials fallback (no cast/roster mocked): first letters of first two words
+  expect(screen.getByText("SV")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Old" })).toBeInTheDocument();
+});
+
+test("plates mark PC speakers and show avatars from the roster", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", role: "npc", name: "Seraphine Vale" },
+    { kind: "pcs", id: "yara", role: "player", name: "Yara" },
+  ]);
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", version: "v1", role: "npc", scenes: ["s1"] },
+  ]);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old" },
+    messages: [
+      { role: "user", content: "Hello.", speaker: "Yara" },
+      { role: "assistant", content: "She waits.", speaker: "Seraphine Vale" },
+    ],
+  });
+  renderCampaign();
+  await screen.findByText("Seraphine Vale");
+  expect(document.querySelector(".plate.pc")).not.toBeNull();          // Yara run
+  expect(screen.getByText("pc")).toBeInTheDocument();
+  expect(screen.getAllByText("npc").length).toBeGreaterThan(0);
+  expect(screen.getByAltText("Seraphine Vale portrait")).toBeInTheDocument();
+});
+
+test("clicking a plate name opens the record drawer", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "seraphine", role: "npc", name: "Seraphine Vale" },
+  ]);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old" },
+    messages: [{ role: "assistant", content: "She waits.", speaker: "Seraphine Vale" }],
+  });
+  (api.getCastDetail as any).mockResolvedValue({
+    kind: "characters", id: "seraphine", name: "Seraphine Vale", version: "v1", body: "keeper" });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Seraphine Vale" }));
+  await screen.findByText("keeper");
 });
 
 test("shows the campaign name and loads its scenes", async () => {

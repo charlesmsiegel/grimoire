@@ -190,14 +190,36 @@ body::before {
   text-shadow: var(--glow); line-height: 0.95; flex: none;
 }
 .stream { flex: 1; overflow-y: auto; padding: 24px 26px; }
-.msg { display: flex; gap: 14px; margin-bottom: 26px; position: relative; }
-.spine {
-  writing-mode: vertical-rl; transform: rotate(180deg); align-self: flex-start;
-  flex: none; font-family: var(--fm); font-size: 10px; letter-spacing: 0.14em;
-  text-transform: uppercase; color: var(--page-muted);
+.msg { display: flex; margin: 0 0 14px; position: relative; }
+.msg-body { flex: 1; min-width: 0; font-family: var(--fb); font-size: 16px; line-height: 1.62; color: var(--page-ink); }
+
+/* ---- speaker plates + post gutter ---- */
+.run { margin-bottom: 12px; }
+.plate { display: flex; align-items: center; gap: 12px; margin: 0 0 8px; }
+.plate-avatar { flex: none; padding: 0; background: none; border: none; }
+button.plate-avatar, button.plate-name { cursor: pointer; }
+.plate-avatar .portrait, .plate-avatar .portrait-initials {
+  width: 44px; height: 44px; border: var(--rw) solid var(--rule); box-shadow: var(--sh2);
 }
-.msg.user .spine { color: var(--quote); }
-.msg-body { flex: 1; min-width: 0; font-size: 16.5px; line-height: 1.62; }
+.plate.pc .plate-avatar .portrait, .plate.pc .plate-avatar .portrait-initials { border-color: var(--accent); }
+.plate-avatar .portrait-initials { font-size: 19px; }
+.plate-name {
+  background: none; border: none; padding: 0;
+  font-family: var(--fd); font-weight: 800; font-size: 19px;
+  text-transform: uppercase; color: var(--page-ink); text-align: left;
+}
+.plate.pc .plate-name { color: var(--quote); }
+.role-chip {
+  font-family: var(--fm); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 2px 7px; color: var(--page-muted); border: var(--rw2) solid var(--rule-soft); flex: none;
+}
+.plate.pc .role-chip, .role-chip.pc { background: var(--quote); color: var(--on-quote); border: none; }
+.msg-gutter {
+  width: 44px; flex: none; margin-right: 12px; position: relative;
+  display: flex; flex-direction: column; align-items: center;
+}
+.gutter-icons { display: flex; flex-direction: column; gap: 4px; opacity: 0; transition: opacity .15s; }
+.msg:hover .gutter-icons, .msg:focus-within .gutter-icons { opacity: 1; }
 .msg-body p:first-child { margin-top: 0; }
 .msg-body p:last-child { margin-bottom: 0; }
 .inputbar { display: flex; gap: 0; padding: 0; border-top: var(--rw) solid var(--rule); background: var(--page); flex: none; }
@@ -514,10 +536,7 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 
 .color-quotes .quoted { color: var(--quote); font-weight: 500; }
 
-/* ---- spine column: vertical label + hover action icons ---- */
-.spine-col { position: relative; display: flex; flex-direction: column; align-items: center; gap: 10px; flex: none; }
-.spine-icons { display: flex; flex-direction: column; gap: 4px; opacity: 0; }
-.msg:hover .spine-icons, .msg:focus-within .spine-icons { opacity: 1; }
+/* ---- reroll guidance popover (anchored to the post gutter) ---- */
 .reroll-pop { position: absolute; left: 100%; bottom: 0; margin-left: 10px; z-index: 5;
   display: flex; background: var(--surface); border: var(--rw) solid var(--rule); box-shadow: var(--sh3); }
 .reroll-pop input {

@@ -1,15 +1,18 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  api, type SceneMeta, type Message, type SceneAbsorb, type SceneDatetime, type StagedEdit,
+  api, type Actor, type SceneMeta, type Message, type RosterEntry, type SceneAbsorb,
+  type SceneDatetime, type StagedEdit,
 } from "../api/client";
 import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
 import { CastPanel } from "../components/CastPanel";
 import { ChangesPanel } from "../components/ChangesPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
+import { Portrait } from "../components/Portrait";
+import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { SceneInspector } from "../components/SceneInspector";
 import { quotePlugin } from "../markdown/quotePlugin";
 
@@ -40,7 +43,9 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [rerollPrompt, setRerollPrompt] = useState<string | null>(null); // null = popover closed
   const [colorQuotes, setColorQuotes] = useState(false);
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
-  const [playerName, setPlayerName] = useState<string | null>(null);
+  const [cast, setCast] = useState<Actor[]>([]);
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
   const [showChanges, setShowChanges] = useState(false);
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
   const [absorbing, setAbsorbing] = useState(false);
@@ -67,14 +72,17 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight });
   }, [messages, streaming]);
 
+  // unstamped user lines fall back to the sole player's name on their plate
+  const playerName = useMemo(() => {
+    const players = cast.filter((a) => a.role === "player");
+    return players.length === 1 ? players[0].name : null;
+  }, [cast]);
+
   async function selectScene(id: string) {
     setActiveId(id);
     api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
-    // unstamped user lines fall back to the sole player's name in the spine
-    api.getCast(cid, id).then((cast) => {
-      const players = cast.filter((a) => a.role === "player");
-      setPlayerName(players.length === 1 ? players[0].name : null);
-    }).catch(() => setPlayerName(null));
+    api.getCast(cid, id).then(setCast).catch(() => setCast([]));
+    api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
     const scene = await api.getScene(cid, id);
     setMessages(scene.messages);
     setStreaming("");
@@ -219,6 +227,31 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     messages[messages.length - 1].role === "assistant" &&
     messages.some((x) => x.role === "user");
 
+  const speakerOf = (m: Message) =>
+    m.speaker ?? (m.role === "user" ? playerName ?? labels.user : labels.assistant);
+
+  // consecutive messages by the same speaker form one run under a single plate
+  type Run = { speaker: string; pc: boolean; actor: Actor | undefined;
+               posts: { m: Message; index: number }[] };
+  const runs: Run[] = [];
+  messages.forEach((m, index) => {
+    const speaker = speakerOf(m);
+    const last = runs[runs.length - 1];
+    if (last && last.speaker === speaker) {
+      last.posts.push({ m, index });
+      return;
+    }
+    const actor = cast.find((a) => a.name === speaker);
+    runs.push({ speaker, pc: actor ? actor.role === "player" : m.role === "user",
+                actor, posts: [{ m, index }] });
+  });
+
+  function plateAvatar(run: Run): string | null {
+    if (!run.actor || run.actor.kind !== "characters") return null;
+    const ver = roster.find((r) => r.kind === "characters" && r.id === run.actor!.id)?.version;
+    return ver ? api.campaignImageUrl(cid, run.actor.id, ver, "avatar") : null;
+  }
+
   return (
     <div className="workspace">
       <div className="subheader">
@@ -354,62 +387,93 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           <h2 className="scene-title">{scenes.find((s) => s.id === activeId)?.title ?? ""}</h2>
         )}
         <div className={"stream" + (colorQuotes ? " color-quotes" : "")} ref={streamRef}>
-          {messages.map((m, i) => (
-            <div className={`msg ${m.role}`} key={i}>
-              <span className="spine-col">
-                <span className="spine">
-                  {m.speaker ?? (m.role === "user" ? playerName ?? labels.user : labels.assistant)}
-                </span>
-                {editing?.index !== i && !busy && (
-                  <span className="spine-icons">
-                    {i === messages.length - 1 && canReroll && (
-                      <button className="msg-edit" title="Reroll" aria-label="Reroll"
-                              onClick={() => setRerollPrompt("")}>↻</button>
-                    )}
-                    <button className="msg-edit" title="Edit message" aria-label={`Edit message ${i + 1}`}
-                            onClick={() => setEditing({ index: i, text: m.content })}>✎</button>
-                  </span>
-                )}
-                {rerollPrompt !== null && !busy &&
-                 i === messages.length - 1 && canReroll && (
-                  <span className="reroll-pop">
-                    <input
-                      autoFocus
-                      placeholder="Guide the reroll (optional)…"
-                      aria-label="Reroll guidance"
-                      value={rerollPrompt}
-                      onChange={(e) => setRerollPrompt(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") reroll();
-                        if (e.key === "Escape") setRerollPrompt(null);
-                      }}
-                    />
-                    <button className="btn-chrome" onClick={reroll}>Reroll ▸</button>
-                  </span>
-                )}
-              </span>
-              <div className="msg-body">
-                {editing?.index === i ? (
-                  <div className="msg-edit-form">
-                    <textarea aria-label="Edit message" rows={4} value={editing.text}
-                              onChange={(e) => setEditing({ index: i, text: e.target.value })} />
-                    <div className="form-actions">
-                      <button className="subtle" onClick={() => setEditing(null)}>Cancel</button>
-                      <button className="primary" onClick={saveEdit}>Save</button>
-                    </div>
-                  </div>
+          {runs.map((run) => (
+            <div className={"run" + (run.pc ? " pc" : "")} key={run.posts[0].index}>
+              <div className={"plate" + (run.pc ? " pc" : "")}>
+                {run.actor ? (
+                  <>
+                    <button className="plate-avatar" aria-label={`Open ${run.speaker} record`}
+                            onClick={() => setDrawer({ type: "actor", kind: run.actor!.kind, id: run.actor!.id })}>
+                      <Portrait src={plateAvatar(run)} name={run.speaker} />
+                    </button>
+                    <button className="plate-name"
+                            onClick={() => setDrawer({ type: "actor", kind: run.actor!.kind, id: run.actor!.id })}>
+                      {run.speaker}
+                    </button>
+                  </>
                 ) : (
-                  <RenderedMarkdown content={m.content} />
+                  <>
+                    <span className="plate-avatar"><Portrait src={null} name={run.speaker} /></span>
+                    <span className="plate-name">{run.speaker}</span>
+                  </>
                 )}
+                <span className="role-chip">{run.pc ? "pc" : "npc"}</span>
               </div>
+              {run.posts.map(({ m, index }) => (
+                <div className={`msg ${m.role}`} key={index}>
+                  <span className="msg-gutter">
+                    {editing?.index !== index && !busy && (
+                      <span className="gutter-icons">
+                        {index === messages.length - 1 && canReroll && (
+                          <button className="msg-edit" title="Reroll" aria-label="Reroll"
+                                  onClick={() => setRerollPrompt("")}>↻</button>
+                        )}
+                        <button className="msg-edit" title="Edit message" aria-label={`Edit message ${index + 1}`}
+                                onClick={() => setEditing({ index, text: m.content })}>✎</button>
+                      </span>
+                    )}
+                    {rerollPrompt !== null && !busy &&
+                     index === messages.length - 1 && canReroll && (
+                      <span className="reroll-pop">
+                        <input
+                          autoFocus
+                          placeholder="Guide the reroll (optional)…"
+                          aria-label="Reroll guidance"
+                          value={rerollPrompt}
+                          onChange={(e) => setRerollPrompt(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") reroll();
+                            if (e.key === "Escape") setRerollPrompt(null);
+                          }}
+                        />
+                        <button className="btn-chrome" onClick={reroll}>Reroll ▸</button>
+                      </span>
+                    )}
+                  </span>
+                  <div className="msg-body">
+                    {editing?.index === index ? (
+                      <div className="msg-edit-form">
+                        <textarea aria-label="Edit message" rows={4} value={editing.text}
+                                  onChange={(e) => setEditing({ index, text: e.target.value })} />
+                        <div className="form-actions">
+                          <button className="subtle" onClick={() => setEditing(null)}>Cancel</button>
+                          <button className="primary" onClick={saveEdit}>Save</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <RenderedMarkdown content={m.content} />
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           ))}
           {streaming && (
-            <div className="msg assistant">
-              <span className="spine">{labels.assistant}</span>
-              <div className="msg-body">
-                <RenderedMarkdown content={streaming} />
-                <span className="cursor" />
+            <div className="run">
+              {(messages.length === 0 ||
+                speakerOf(messages[messages.length - 1]) !== labels.assistant) && (
+                <div className="plate">
+                  <span className="plate-avatar"><Portrait src={null} name={labels.assistant} /></span>
+                  <span className="plate-name">{labels.assistant}</span>
+                  <span className="role-chip">npc</span>
+                </div>
+              )}
+              <div className="msg assistant">
+                <span className="msg-gutter" />
+                <div className="msg-body">
+                  <RenderedMarkdown content={streaming} />
+                  <span className="cursor" />
+                </div>
               </div>
             </div>
           )}
@@ -431,6 +495,9 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
         <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
                         onSceneChanged={() => selectScene(activeId)}
                         onSceneRenamed={sceneRenamed} />
+      )}
+      {drawer && activeId && (
+        <RecordDrawer cid={cid} sid={activeId} target={drawer} onClose={() => setDrawer(null)} />
       )}
       </div>
     </div>
