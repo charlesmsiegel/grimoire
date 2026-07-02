@@ -60,6 +60,30 @@ def scene_substitutions(cid: str, sid: str) -> dict[str, str]:
             "{{char}}": ", ".join(n for n in npc_names if n)}
 
 
+def _script_line(m: dict) -> str:
+    """A message as a script line. Assistant lines always carry their speaker
+    label (Grimoire when unnamed) so attribution survives the round trip;
+    user lines only when stamped (legacy bare lines stay bare)."""
+    if m["role"] == "assistant":
+        return f"**{m.get('speaker') or 'Grimoire'}:** {m['content']}"
+    if m.get("speaker"):
+        return f"**{m['speaker']}:** {m['content']}"
+    return m["content"]
+
+
+def _project_history(messages: list[dict]) -> list[dict]:
+    """Script -> conversation roles; merge consecutive same-role messages so
+    providers that expect strict alternation are happy."""
+    out: list[dict] = []
+    for m in messages:
+        line = _script_line(m)
+        if out and out[-1]["role"] == m["role"]:
+            out[-1]["content"] += "\n\n" + line
+        else:
+            out.append({"role": m["role"], "content": line})
+    return out
+
+
 def _npc_block(data: dict) -> str:
     parts = [data.get(f, "").strip() for f in ("description", "personality", "scenario")]
     return "\n".join(p for p in parts if p)
@@ -296,7 +320,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
     (the opener prompt) into the world-info activation window; `full_recap` (> 0) renders
     the last N scenes' full summaries in Story so far instead of the compact recap."""
     scene = scenes.read_scene(cid, sid)
-    history = [{"role": m["role"], "content": m["content"]} for m in scene["messages"]]
+    history = [dict(m) for m in scene["messages"]]
     croot = campaigns.campaign_root(cid)
     cast = appearances.scene_cast(cid, sid)
 
@@ -376,13 +400,22 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
     wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"].get("world", ""))
     add("Off-scene cast", _cast_directory(croot, wroot, cid, sid))
 
+    fmt = ("Write your reply as a script. Each character who acts or speaks gets "
+           "their own block starting with **<Name>:** on its own line, e.g. "
+           "**Seraphine Vale:**. Use **Grimoire:** for narration, scene "
+           "description, and any voice that isn't a named character.")
+    if player_names:
+        fmt += " Never write dialogue or actions for: " + ", ".join(player_names) + "."
+    add("Response format", fmt)
+
     post_history = "\n\n".join(
         d.get("post_history_instructions", "").strip() for d in npc_cards
         if d.get("post_history_instructions", "").strip()
     ).strip()
     post_history = _substitute(post_history, subs) if post_history else ""
 
-    sub_history = [{"role": m["role"], "content": _substitute(m["content"], subs)} for m in history]
+    sub_history = [{"role": m["role"], "content": _substitute(m["content"], subs)}
+                   for m in _project_history(history)]
     return {"system": sys, "history": sub_history, "post_history": post_history}
 
 
