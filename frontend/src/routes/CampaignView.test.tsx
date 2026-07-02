@@ -100,6 +100,26 @@ test("shows the sub-header with world-copy link, scene counter, and rail date", 
   expect(screen.getByRole("button", { name: /campaign world/i })).toBeInTheDocument();
 });
 
+test("renders vertical speaker spines with configured labels and message speakers", async () => {
+  (api.getConfig as any).mockResolvedValue({
+    model: "m", theme: "codex", key_set: true, system_prompt: "", quote_color: "off",
+    user_label: "Kestrel", assistant_label: "Grimoire",
+  });
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old" },
+    messages: [
+      { role: "user", content: "I open the door." },
+      { role: "assistant", content: "She waits.", speaker: "Seraphine Vale" },
+    ],
+  });
+  renderCampaign();
+  await screen.findByText("Kestrel");
+  expect(screen.getByText("Seraphine Vale")).toBeInTheDocument();
+  expect(document.querySelector(".msg-card")).toBeNull();
+  expect(screen.getByRole("heading", { name: "Old" })).toBeInTheDocument();
+});
+
 test("shows the campaign name and loads its scenes", async () => {
   renderCampaign();
   await screen.findByText("Run One");
