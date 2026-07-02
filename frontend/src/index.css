@@ -403,6 +403,14 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
   background: var(--subtle); color: var(--on-accent); text-transform: uppercase;
 }
 .initials-avatar.pc { background: var(--chrome); color: var(--chrome-text); }
+
+/* ---- shared portrait (img + initials fallback); sized by context ---- */
+.portrait { object-fit: cover; object-position: top; display: block; flex: none; }
+.portrait-initials {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  background: var(--subtle); color: var(--on-accent);
+  font-family: var(--fd); font-weight: 900; text-transform: uppercase;
+}
 .char-card-name {
   font-family: var(--fd); font-weight: 700; font-size: 21px;
   padding: 12px 14px 4px; text-align: left; white-space: nowrap;
