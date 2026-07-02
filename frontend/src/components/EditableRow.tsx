@@ -2,6 +2,7 @@ import { useState } from "react";
 
 export function EditableRow({
   label,
+  prefix,
   subtitle,
   active,
   onSelect,
@@ -9,6 +10,8 @@ export function EditableRow({
   onDelete,
 }: {
   label: string;
+  /** display-only ordinal shown before the name; excluded from rename */
+  prefix?: string;
   subtitle?: string;
   active?: boolean;
   onSelect?: () => void;
@@ -46,7 +49,7 @@ export function EditableRow({
       ) : (
         <>
           <span className="row-label" onClick={onSelect}>
-            <span className="row-name">{label}</span>
+            <span className="row-name">{prefix ? `${prefix} · ${label}` : label}</span>
             {subtitle && <span className="row-subtitle">{subtitle}</span>}
           </span>
           <span className="row-actions">
