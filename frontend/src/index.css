@@ -335,3 +335,8 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .diff-insert { background: rgba(60, 160, 90, 0.18); }
 .diff-delete { background: rgba(200, 70, 70, 0.18); text-decoration: line-through; }
 .diff-equal { opacity: 0.7; }
+
+.tagline-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 30; }
+.tagline-modal { background: var(--panel, #1b1b1b); border: 1px solid var(--muted); border-radius: 8px; padding: 20px; width: min(520px, 92vw); }
+.tagline-modal h3 { font-family: var(--font-display); margin: 0 0 6px; }
+.tagline-modal textarea { width: 100%; }

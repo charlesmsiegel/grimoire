@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion } from "../api/client";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
+import { TaglinePrompt } from "./TaglinePrompt";
 
 const TEXT_FIELDS: { key: string; label: string; area?: boolean }[] = [
   { key: "description", label: "Description", area: true },
@@ -52,6 +53,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [birthdate, setBirthdate] = useState("");
   const [tagline, setTagline] = useState("");
+  const [taglinePrompt, setTaglinePrompt] = useState<{ cid: string; name: string } | null>(null);
 
   const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
   useEffect(() => {
@@ -385,6 +387,8 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     else if (imported.length === 1) {
       // single import: open the card so its localize progress shows inline
       await openDetail(imported[0].cid);
+      const c = chars.find((x) => x.id === imported[0].cid);
+      setTaglinePrompt({ cid: imported[0].cid, name: c?.name ?? imported[0].cid });
       await runLocalize(imported[0].cid, imported[0].version);
     } else if (imported.length > 1) {
       await runBulkLocalize(imported);
@@ -400,6 +404,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
       const result = await api.importCharacterFromChub(wid, url);
       await reload();
       await openDetail(result.character);
+      setTaglinePrompt({ cid: result.character, name: result.character });
       setImportMsg(describeChubResult(result));
       await runLocalize(result.character, result.version);
     } catch (err: any) {
@@ -525,6 +530,10 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   if (mode === "grid" || !detail || !card) {
     return (
       <div className="character-editor">
+        {taglinePrompt && (
+          <TaglinePrompt wid={wid} cid={taglinePrompt.cid} name={taglinePrompt.name}
+                         onClose={() => setTaglinePrompt(null)} />
+        )}
         <div className="grid-toolbar">
           <button className="primary" onClick={newCharacter}>+ New character</button>
           <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
@@ -586,6 +595,10 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     const tags = card.data.tags ?? [];
     return (
       <div className="character-editor">
+        {taglinePrompt && (
+          <TaglinePrompt wid={wid} cid={taglinePrompt.cid} name={taglinePrompt.name}
+                         onClose={() => setTaglinePrompt(null)} />
+        )}
         <div className="editor-body">
           <button className="subtle back" onClick={backToGrid}>‹ All characters</button>
           {error && <div className="banner">{error}</div>}
@@ -699,6 +712,10 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   // mode === "edit"
   return (
     <div className="character-editor">
+      {taglinePrompt && (
+        <TaglinePrompt wid={wid} cid={taglinePrompt.cid} name={taglinePrompt.name}
+                       onClose={() => setTaglinePrompt(null)} />
+      )}
       <div className="editor-body">
         <button className="subtle back" onClick={backToGrid}>‹ All characters</button>
         <div className="form">
