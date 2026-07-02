@@ -187,17 +187,17 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 @keyframes blink { 50% { opacity: 0; } }
 .row {
   display: flex; align-items: center; gap: 6px; width: 100%;
-  border: 1px solid var(--muted); border-radius: var(--radius);
-  padding: 6px 8px; margin-bottom: 6px;
+  border: var(--rw2) solid var(--rule-soft); padding: 8px 10px; margin-bottom: 6px;
+  background: var(--surface); color: var(--ink);
 }
-.row.active { border-color: var(--accent); color: var(--accent); }
+.row.active { border-color: var(--accent); border-left: 4px solid var(--accent); }
 .row-label { flex: 1; cursor: pointer; overflow: hidden; }
 .row-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row-subtitle { display: block; font-size: 11px; color: var(--muted); }
+.row-subtitle { display: block; font-family: var(--fm); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .row-actions { display: flex; gap: 2px; flex: none; }
 .row-actions button { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }
 .row-actions button:hover { color: var(--accent); }
-.row-rename { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--accent); border-radius: var(--radius); padding: 3px 6px; font-family: var(--fb); }
+.row-rename { width: 100%; background: var(--bg); color: var(--ink); border: var(--rw2) solid var(--accent); padding: 3px 6px; font-family: var(--fb); }
 .campaign-header { padding: 10px 16px; border-bottom: 1px solid var(--muted); font-family: var(--fd); color: var(--accent); }
 .back-link { display: block; margin-bottom: 8px; color: var(--muted); text-decoration: none; font-size: 13px; }
 .back-link:hover { color: var(--accent); }
@@ -211,17 +211,15 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .list { display: flex; flex-direction: column; }
 
 /* ---- world authoring (deferred-UI) — tokens only ---- */
-.tabs {
-  display: flex; gap: 4px; flex-wrap: wrap;
-  border-bottom: 1px solid var(--muted); margin: 12px 0 20px;
-}
+.tabs { display: flex; border-bottom: var(--rw) solid var(--rule); margin: 22px 0 24px; }
 .tab {
-  background: transparent; border: none; border-bottom: 2px solid transparent;
-  color: var(--muted); font-family: var(--fd); font-size: 14px;
-  padding: 8px 12px; cursor: pointer;
+  background: transparent; border: none; border-bottom: 3px solid transparent;
+  margin-bottom: -2px; padding: 10px 16px; cursor: pointer;
+  font-family: var(--fm); font-size: 11px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--muted);
 }
 .tab:hover { color: var(--ink); }
-.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab.active { color: var(--ink); border-bottom-color: var(--accent); }
 
 .field { margin: 12px 0; }
 .field label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px; }
@@ -263,7 +261,10 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .detail-sidebar { width: 240px; flex: none; display: flex; flex-direction: column; gap: 16px; }
 .detail-sidebar .form-actions { margin-top: 0; }
 .detail-sidebar .form-actions button { width: 100%; }
-.side-section h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.side-section h4 {
+  margin: 0 0 6px; font-family: var(--fm); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.16em; color: var(--muted);
+}
 
 /* lore rail grouped by owner */
 .rail-group { margin-bottom: 8px; }
@@ -316,15 +317,27 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 
 /* character grid (cards with avatars) */
 .grid-toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
-.char-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.char-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; background: var(--surface); border: 1px solid var(--muted); border-radius: var(--radius); }
-.char-card:hover { border-color: var(--accent); }
-.char-card-main { display: flex; flex-direction: column; gap: 8px; padding: 0; width: 100%; background: transparent; border: none; cursor: pointer; color: var(--ink); font-family: var(--fb); }
+.char-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.char-card {
+  display: flex; flex-direction: column; gap: 0; padding: 0;
+  background: var(--surface); border: var(--rw) solid var(--rule); box-shadow: var(--sh4);
+}
+.char-card:hover { box-shadow: var(--sh5); }
+.char-card-main { display: flex; flex-direction: column; gap: 0; padding: 0; width: 100%; background: transparent; border: none; cursor: pointer; color: var(--ink); font-family: var(--fb); }
 .char-card-main:hover .char-card-name { color: var(--accent); }
-.char-card-avatar { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; display: block; border-radius: var(--radius); background: var(--bg); }
-.char-card-avatar-empty { display: flex; align-items: center; justify-content: center; aspect-ratio: 1 / 1; color: var(--muted); font-size: 11px; background: var(--bg); border: 1px solid var(--muted); }
-.char-card-name { font-weight: bold; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.char-card-actions { display: flex; gap: 6px; }
+.char-card-avatar { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; background: var(--panel); }
+.initials-avatar {
+  display: flex; align-items: center; justify-content: center;
+  height: 96px; font-family: var(--fd); font-weight: 900; font-size: 40px;
+  background: var(--subtle); color: var(--on-accent); text-transform: uppercase;
+}
+.initials-avatar.pc { background: var(--chrome); color: var(--chrome-text); }
+.char-card-name {
+  font-family: var(--fd); font-weight: 700; font-size: 21px;
+  padding: 12px 14px 4px; text-align: left; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.char-card-actions { display: flex; gap: 6px; padding: 0 14px 12px; }
 .char-card-actions button { flex: 1; }
 .editor-body .back { margin-bottom: 12px; }
 
