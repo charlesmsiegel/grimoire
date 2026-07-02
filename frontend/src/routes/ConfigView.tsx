@@ -117,7 +117,7 @@ export default function ConfigView() {
       <ModelCombobox value={model} onChange={setModel} />
 
       <div className="section-label">System prompt</div>
-      <label className="field-hint" htmlFor="cfg-system-prompt" style={{ display: "block", marginTop: 0 }}>
+      <label className="sr-only" htmlFor="cfg-system-prompt">
         System prompt (sent with every scene)
       </label>
       <textarea

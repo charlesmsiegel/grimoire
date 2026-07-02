@@ -22,9 +22,6 @@ const manuscript: Theme = {
     "--fm": "'EB Garamond',serif",
     "--fx": "radial-gradient(120% 90% at 50% -10%,rgba(200,164,77,.10),transparent 60%)",
     "--glow": "none",
-    // compat aliases — removed in the cleanup task once no CSS references them
-    "--fg": "var(--ink)", "--font-display": "var(--fd)",
-    "--font-body": "var(--fb)", "--mono": "var(--fm)", "--radius": "0px",
   },
 };
 export default manuscript;
