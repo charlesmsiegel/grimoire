@@ -1,20 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, type EntityKind, type EntitySummary } from "../api/client";
+import { api, type EntityKind, type EntityScope, type EntitySummary } from "../api/client";
 import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 
-export function EntityEditor({ wid, kind, nav, onNavConsumed, onOpenOwner, onOpenLore }: {
+export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore }: {
   wid: string;
   kind: EntityKind;
+  scope?: EntityScope;
   nav?: { focusEntry?: string; newOwner?: string } | null;
   onNavConsumed?: () => void;
   onOpenOwner?: (ref: string) => void;
   onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
 }) {
-  const scope = { kind: "world" as const, id: wid };
+  const scope: EntityScope = scopeProp ?? { kind: "world", id: wid };
   const [items, setItems] = useState<EntitySummary[]>([]);
   const [editing, setEditing] = useState<string | null>(null); // entity id, or null = new
   const [name, setName] = useState("");
@@ -26,12 +27,14 @@ export function EntityEditor({ wid, kind, nav, onNavConsumed, onOpenOwner, onOpe
   const [error, setError] = useState<string | null>(null);
   const label = kind === "lore" ? "lore entry" : "location";
 
-  const reload = useCallback(() => api.listEntities(scope, kind).then(setItems), [wid, kind]);
+  const reload = useCallback(() => api.listEntities(scope, kind).then(setItems),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [wid, kind, scope.kind, scope.id]);
   useEffect(() => {
     reload();
     resetForm();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wid, kind]);
+  }, [wid, kind, scope.kind, scope.id]);
 
   useEffect(() => {
     if (kind === "lore") loreOwnerOptions(wid).then(setOwnerOpts);

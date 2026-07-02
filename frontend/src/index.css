@@ -106,6 +106,13 @@ body::before {
 .world-card:hover .row-actions, .world-card:focus-within .row-actions { opacity: 1; }
 .world-card .row-rename { margin: 20px; width: calc(100% - 40px); }
 
+/* ---- campaign world-copy banner ---- */
+.fork-banner {
+  border: var(--rw) solid var(--accent); background: var(--banner-bg); color: var(--banner-ink);
+  font-family: var(--fm); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 10px 14px; margin-bottom: 18px;
+}
+
 /* ---- section label (character detail, config) ---- */
 .section-label {
   font-family: var(--fm); font-size: 10px; color: var(--accent);

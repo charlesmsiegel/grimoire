@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { api } from "../api/client";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { api, type EntityScope } from "../api/client";
 import { CharacterEditor } from "../components/CharacterEditor";
 import { PCEditor } from "../components/PCEditor";
 import { TagEditor } from "../components/TagEditor";
@@ -19,8 +19,11 @@ const TABS = [
 
 type TabKey = (typeof TABS)[number]["key"];
 
-export default function WorldView() {
-  const { wid = "" } = useParams();
+export default function WorldView({ campaign = false }: { campaign?: boolean }) {
+  const { wid: widParam = "", cid = "" } = useParams();
+  const navigate = useNavigate();
+  const [wid, setWid] = useState(campaign ? "" : widParam);
+  const [campaignName, setCampaignName] = useState("");
   const [name, setName] = useState("");
   const [tab, setTab] = useState<TabKey>("characters");
   const [charReset, setCharReset] = useState(0);
@@ -29,8 +32,21 @@ export default function WorldView() {
   const [loreNav, setLoreNav] = useState<{ focusEntry?: string; newOwner?: string } | null>(null);
 
   useEffect(() => {
-    api.getWorld(wid).then((w) => setName(w.meta.name)).catch(() => setName(wid));
-  }, [wid]);
+    if (campaign) {
+      api.getCampaign(cid).then((c) => {
+        setCampaignName(c.meta.name);
+        setWid(c.meta.world);
+        api.getWorld(c.meta.world)
+          .then((w) => setName(w.meta.name))
+          .catch(() => setName(c.meta.world));
+      });
+    } else {
+      setWid(widParam);
+      api.getWorld(widParam).then((w) => setName(w.meta.name)).catch(() => setName(widParam));
+    }
+  }, [campaign, cid, widParam]);
+
+  const scope: EntityScope = campaign ? { kind: "campaign", id: cid } : { kind: "world", id: wid };
 
   // a present-character link from the greeting view jumps to that character
   function openCharacter(cid: string, vid: string) {
@@ -54,9 +70,23 @@ export default function WorldView() {
     else if (kind === "locations") setTab("locations");
   }
 
+  if (campaign && !wid) return null;
+
   return (
     <div className="page view-anim" style={{ maxWidth: 1080 }}>
-      <Link to="/worlds" className="back-link">‹ All Worlds</Link>
+      {campaign ? (
+        <>
+          <button className="back-link" onClick={() => navigate(`/campaigns/${cid}`)}>
+            ‹ {campaignName} / World Copy
+          </button>
+          <div className="fork-banner">
+            ⌦ Campaign copy — this world was forked when the campaign began.
+            Changes here belong to the campaign; the original world is untouched.
+          </div>
+        </>
+      ) : (
+        <Link to="/worlds" className="back-link">‹ All Worlds</Link>
+      )}
       <h1 className="page-h1">{name}</h1>
 
       <div className="tabs">
@@ -74,14 +104,14 @@ export default function WorldView() {
       {tab === "characters" && <CharacterEditor wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} />}
       {tab === "pcs" && <PCEditor wid={wid} onOpenLore={openLore} />}
       {tab === "tags" && <TagEditor wid={wid} />}
-      {tab === "locations" && <EntityEditor wid={wid} kind="locations" onOpenLore={openLore} />}
+      {tab === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" onOpenLore={openLore} />}
       {tab === "lore" && (
         <>
           <details className="import-section">
             <summary>Import lorebook / world-info</summary>
             <LorebookImport wid={wid} onImported={() => setLoreReset((n) => n + 1)} />
           </details>
-          <EntityEditor key={loreReset} wid={wid} kind="lore" nav={loreNav}
+          <EntityEditor key={loreReset} wid={wid} scope={scope} kind="lore" nav={loreNav}
                         onNavConsumed={() => setLoreNav(null)} onOpenOwner={openOwner} />
         </>
       )}
