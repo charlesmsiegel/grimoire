@@ -178,9 +178,9 @@ def test_worldinfo_keyword_depth(monkeypatch, tmp_path):
     from grimoire.store import config
     config.write_config(context_scan_depth="3")
     # the only 'pact' is message 0; with depth 3 the scan sees only the last 3 fillers.
-    # no cast, no always-on entry, key outside depth -> empty context -> no system message.
+    # no cast, no always-on entry, key outside depth -> only the Response format section.
     sys_msgs = [m for m in context.build_messages(cid, sid) if m["role"] == "system"]
-    assert sys_msgs == []
+    assert len(sys_msgs) == 1 and "the pact lore" not in sys_msgs[0]["content"]
 
 
 def test_worldinfo_always_on_and_in_depth(monkeypatch, tmp_path):
@@ -196,7 +196,10 @@ def test_worldinfo_always_on_and_in_depth(monkeypatch, tmp_path):
 def test_empty_context_is_raw_history(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.append_message(cid, sid, "user", "plain message")
-    assert context.build_messages(cid, sid) == [{"role": "user", "content": "plain message"}]
+    msgs = context.build_messages(cid, sid)
+    # an empty store still gets the Response format section; the history stays raw
+    assert msgs[0]["role"] == "system" and "Write your reply as a script" in msgs[0]["content"]
+    assert msgs[1:] == [{"role": "user", "content": "plain message"}]
 
 
 def test_character_cast_as_player_uses_persona_not_char(monkeypatch, tmp_path):
@@ -289,7 +292,8 @@ def test_depth_zero_and_unparseable_fallback(monkeypatch, tmp_path):
     entities.create_entity(croot, "lore", "Salt", "pact lore", keys="pact")
     scenes.append_message(cid, sid, "user", "the pact matters")
     config.write_config(context_scan_depth="0")  # no scan window -> keyword entry not activated
-    assert [m for m in context.build_messages(cid, sid) if m["role"] == "system"] == []
+    sys_msgs = [m for m in context.build_messages(cid, sid) if m["role"] == "system"]
+    assert len(sys_msgs) == 1 and "pact lore" not in sys_msgs[0]["content"]
     config.write_config(context_scan_depth="abc")  # unparseable -> fallback 8 -> 'pact' activates
     assert "pact lore" in context.build_messages(cid, sid)[0]["content"]
 
@@ -598,3 +602,34 @@ def test_relationships_absent_when_none(monkeypatch, tmp_path):
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     sid = scenes.create_scene(cid, "Now")
     assert "Relationships" not in [l for l, _ in context._assemble(cid, sid)["system"]]
+
+
+def test_history_projection_labels_and_merges(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    pid, pvid = pcs.create_pc(worlds.world_root(wid), "Elara Vane", [])
+    ap.appear(cid, sid, "pcs", pid, pvid, "player")
+    scenes.append_message(cid, sid, "user", "I enter.", speaker="Elara Vane")
+    scenes.append_message(cid, sid, "assistant", '"You dare?"', speaker="Seraphine Vale")
+    scenes.append_message(cid, sid, "assistant", "Thunder rolls.")
+    hist = [m for m in context.build_messages(cid, sid) if m["role"] != "system"]
+    assert hist == [
+        {"role": "user", "content": "**Elara Vane:** I enter."},
+        {"role": "assistant",
+         "content": '**Seraphine Vale:** "You dare?"\n\n**Grimoire:** Thunder rolls.'},
+    ]
+
+
+def test_unstamped_user_lines_stay_bare(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "plain message")
+    hist = [m for m in context.build_messages(cid, sid) if m["role"] != "system"]
+    assert hist == [{"role": "user", "content": "plain message"}]
+
+
+def test_response_format_section_lists_players(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    pid, pvid = pcs.create_pc(worlds.world_root(wid), "Elara Vane", [])
+    ap.appear(cid, sid, "pcs", pid, pvid, "player")
+    sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
+    assert "Write your reply as a script" in sections["Response format"]
+    assert "Elara Vane" in sections["Response format"]

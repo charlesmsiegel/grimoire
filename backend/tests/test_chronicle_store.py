@@ -53,3 +53,10 @@ def test_transcript_text_labels_roles():
     text = chronicle.transcript_text([{"role": "user", "content": "hi"},
                                       {"role": "assistant", "content": "hello"}])
     assert "**You:** hi" in text and "**Grimoire:** hello" in text
+
+
+def test_transcript_text_prefers_speakers():
+    text = chronicle.transcript_text([
+        {"role": "user", "content": "hi", "speaker": "Elara Vane"},
+        {"role": "assistant", "content": "yo"}])
+    assert "**Elara Vane:** hi" in text and "**Grimoire:** yo" in text
