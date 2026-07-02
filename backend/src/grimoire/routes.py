@@ -859,9 +859,13 @@ def _campaign_root_or_404(cid: str):
 
 def _entity_list(root, kind: str):
     try:
-        return store.entities.list_entities(root, kind)
+        items = store.entities.list_entities(root, kind)
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
+    for it in items:
+        it["has_image"] = store.assets.image_path(
+            root, it["id"], "default", store.assets.AVATAR, base=kind) is not None
+    return items
 
 
 def _entity_create(root, kind: str, body: EntityCreate):
@@ -924,6 +928,66 @@ def put_world_entity(wid: str, kind: str, eid: str, body: EntityUpdate):
 @router.delete("/worlds/{wid}/{kind}/{eid}")
 def delete_world_entity(wid: str, kind: str, eid: str):
     return _entity_delete(_world_root_or_404(wid), kind, eid)
+
+
+# ---- entity images (locations/lore) — assets keyed <kind>/<eid>/assets/default ----
+def _entity_kind_or_404(kind: str) -> None:
+    if kind not in store.entities.ENTITY_KINDS:
+        raise HTTPException(status_code=404, detail="unknown kind")
+
+
+def _entity_images_list(root, kind: str, eid: str):
+    _entity_kind_or_404(kind)
+    return store.assets.list_images(root, eid, "default", base=kind)
+
+
+async def _entity_image_put(root, kind: str, eid: str, name: str, file: UploadFile):
+    _entity_kind_or_404(kind)
+    data = await file.read()
+    fn = file.filename or ""
+    ext = fn.rsplit(".", 1)[-1] if "." in fn else ""
+    try:
+        stored = store.assets.put_image(root, eid, "default", name, data, ext, base=kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"name": name, "ext": stored}
+
+
+def _entity_image_promote(root, kind: str, eid: str, name: str):
+    _entity_kind_or_404(kind)
+    try:
+        store.assets.promote_image(root, eid, "default", name, base=kind)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="image not found")
+    return {"ok": True}
+
+
+@router.get("/worlds/{wid}/{kind}/{eid}/images")
+def list_world_entity_images(wid: str, kind: str, eid: str):
+    return _entity_images_list(_world_root_or_404(wid), kind, eid)
+
+
+@router.get("/worlds/{wid}/{kind}/{eid}/images/{name}")
+def get_world_entity_image(wid: str, kind: str, eid: str, name: str):
+    _entity_kind_or_404(kind)
+    return _serve_image(_world_root_or_404(wid), eid, "default", name, base=kind)
+
+
+@router.put("/worlds/{wid}/{kind}/{eid}/images/{name}")
+async def put_world_entity_image(wid: str, kind: str, eid: str, name: str, file: UploadFile = File(...)):
+    return await _entity_image_put(_world_root_or_404(wid), kind, eid, name, file)
+
+
+@router.delete("/worlds/{wid}/{kind}/{eid}/images/{name}")
+def delete_world_entity_image(wid: str, kind: str, eid: str, name: str):
+    _entity_kind_or_404(kind)
+    store.assets.delete_image(_world_root_or_404(wid), eid, "default", name, base=kind)
+    return {"ok": True}
+
+
+@router.post("/worlds/{wid}/{kind}/{eid}/images/{name}/promote")
+def promote_world_entity_image(wid: str, kind: str, eid: str, name: str):
+    return _entity_image_promote(_world_root_or_404(wid), kind, eid, name)
 
 
 # ---- campaigns ----
@@ -1536,3 +1600,31 @@ def put_campaign_entity(cid: str, kind: str, eid: str, body: EntityUpdate):
 @router.delete("/campaigns/{cid}/{kind}/{eid}")
 def delete_campaign_entity(cid: str, kind: str, eid: str):
     return _entity_delete(_campaign_root_or_404(cid), kind, eid)
+
+
+@router.get("/campaigns/{cid}/{kind}/{eid}/images")
+def list_campaign_entity_images(cid: str, kind: str, eid: str):
+    return _entity_images_list(_campaign_root_or_404(cid), kind, eid)
+
+
+@router.get("/campaigns/{cid}/{kind}/{eid}/images/{name}")
+def get_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
+    _entity_kind_or_404(kind)
+    return _serve_image(_campaign_root_or_404(cid), eid, "default", name, base=kind)
+
+
+@router.put("/campaigns/{cid}/{kind}/{eid}/images/{name}")
+async def put_campaign_entity_image(cid: str, kind: str, eid: str, name: str, file: UploadFile = File(...)):
+    return await _entity_image_put(_campaign_root_or_404(cid), kind, eid, name, file)
+
+
+@router.delete("/campaigns/{cid}/{kind}/{eid}/images/{name}")
+def delete_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
+    _entity_kind_or_404(kind)
+    store.assets.delete_image(_campaign_root_or_404(cid), eid, "default", name, base=kind)
+    return {"ok": True}
+
+
+@router.post("/campaigns/{cid}/{kind}/{eid}/images/{name}/promote")
+def promote_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
+    return _entity_image_promote(_campaign_root_or_404(cid), kind, eid, name)

@@ -171,6 +171,46 @@ def test_character_image_promote_missing_404(client):
     assert r.status_code == 404
 
 
+def test_entity_images_crud_promote_and_has_image(client):
+    wid = _world(client)
+    eid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Warehouse Nine"}).json()["id"]
+    base = f"/api/worlds/{wid}/locations/{eid}/images"
+
+    assert client.get(f"/api/worlds/{wid}/locations").json()[0]["has_image"] is False
+    assert client.get(base).json() == []
+
+    r = client.put(f"{base}/avatar", files={"file": ("w.png", io.BytesIO(b"day"), "image/png")})
+    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    client.put(f"{base}/gallery_1", files={"file": ("n.png", io.BytesIO(b"night"), "image/png")})
+
+    assert client.get(f"/api/worlds/{wid}/locations").json()[0]["has_image"] is True
+    assert {i["name"] for i in client.get(base).json()} == {"avatar", "gallery_1"}
+    assert client.get(f"{base}/avatar").content == b"day"
+
+    assert client.post(f"{base}/gallery_1/promote").status_code == 200
+    assert client.get(f"{base}/avatar").content == b"night"
+    assert client.get(f"{base}/gallery_1").content == b"day"
+
+    assert client.delete(f"{base}/gallery_1").status_code == 200
+    assert client.get(f"{base}/gallery_1").status_code == 404
+
+
+def test_entity_images_unknown_kind_404(client):
+    wid = _world(client)
+    assert client.get(f"/api/worlds/{wid}/potions/x/images").status_code == 404
+    assert client.put(f"/api/worlds/{wid}/potions/x/images/avatar",
+                      files={"file": ("a.png", io.BytesIO(b"x"), "image/png")}).status_code == 404
+
+
+def test_campaign_entity_images_served(client):
+    _, cid = _campaign(client)
+    eid = client.post(f"/api/campaigns/{cid}/locations", json={"name": "Crypt"}).json()["id"]
+    base = f"/api/campaigns/{cid}/locations/{eid}/images"
+    client.put(f"{base}/avatar", files={"file": ("c.png", io.BytesIO(b"img"), "image/png")})
+    assert client.get(f"{base}/avatar").content == b"img"
+    assert client.get(f"/api/campaigns/{cid}/locations").json()[0]["has_image"] is True
+
+
 def test_character_import_garbage_400(client):
     wid = _world(client)
     files = {"file": ("c.json", io.BytesIO(b"nonsense"), "application/json")}
