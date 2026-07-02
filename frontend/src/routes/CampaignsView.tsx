@@ -1,20 +1,24 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type CampaignMeta, type WorldMeta } from "../api/client";
-import { EditableRow } from "../components/EditableRow";
 
 export default function CampaignsView() {
   const navigate = useNavigate();
   const [campaigns, setCampaigns] = useState<CampaignMeta[]>([]);
   const [worlds, setWorlds] = useState<WorldMeta[]>([]);
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     api.listCampaigns().then(setCampaigns);
     api.listWorlds().then(setWorlds);
   }, []);
 
-  async function rename(id: string, next: string) {
-    await api.renameCampaign(id, next);
+  const worldName = (id: string) => worlds.find((w) => w.id === id)?.name ?? id;
+
+  async function rename() {
+    if (!renaming) return;
+    await api.renameCampaign(renaming.id, renaming.name);
+    setRenaming(null);
     setCampaigns(await api.listCampaigns());
   }
 
@@ -25,30 +29,45 @@ export default function CampaignsView() {
   }
 
   return (
-    <div className="view">
-      <h2>Campaigns</h2>
-
-      <div className="picker">
-        <button className="primary" onClick={() => navigate("/campaigns/new")} disabled={worlds.length === 0}>
-          + New campaign
+    <div className="page view-anim">
+      <div className="page-head">
+        <h1 className="page-h1">Campaigns</h1>
+        <button className="btn-accent" onClick={() => navigate("/campaigns/new")} disabled={worlds.length === 0}>
+          + New Campaign
         </button>
       </div>
+      <div className="count-label">
+        {campaigns.length} {campaigns.length === 1 ? "campaign" : "campaigns"}
+      </div>
       {worlds.length === 0 && (
-        <p className="muted">
+        <p className="page-note">
           Create a world first in <Link to="/worlds">Worlds</Link>, then start a campaign from it.
         </p>
       )}
-
-      <div className="list">
+      <div className="list-block">
         {campaigns.map((c) => (
-          <EditableRow
-            key={c.id}
-            label={c.name}
-            subtitle={c.world}
-            onSelect={() => navigate(`/campaigns/${c.id}`)}
-            onRename={(next) => rename(c.id, next)}
-            onDelete={() => remove(c)}
-          />
+          <div className="list-row" key={c.id}>
+            {renaming?.id === c.id ? (
+              <input
+                className="row-rename" aria-label="Rename campaign" autoFocus
+                value={renaming.name}
+                onChange={(e) => setRenaming({ id: c.id, name: e.target.value })}
+                onKeyDown={(e) => { if (e.key === "Enter") rename(); if (e.key === "Escape") setRenaming(null); }}
+              />
+            ) : (
+              <button className="list-row-main" onClick={() => navigate(`/campaigns/${c.id}`)}>
+                <span className="list-row-name">{c.name}</span>
+                <span className="list-row-meta">
+                  WORLD ▸ {worldName(c.world)} · {c.scenes} SCENES{c.last_scene ? ` · LAST: ${c.last_scene}` : ""}
+                </span>
+              </button>
+            )}
+            <div className="row-actions">
+              <button aria-label={`Rename ${c.name}`} onClick={() => setRenaming({ id: c.id, name: c.name })}>✎</button>
+              <button aria-label={`Delete ${c.name}`} onClick={() => remove(c)}>✕</button>
+            </div>
+            <span className="list-row-arrow" aria-hidden>→</span>
+          </div>
         ))}
       </div>
     </div>
