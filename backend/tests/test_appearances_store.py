@@ -118,18 +118,18 @@ def test_rename_scene_migrates_cast_end_to_end(monkeypatch, tmp_path):
     assert ap.scene_cast(cid, sid) == []
 
 
-def test_rename_scene_only_touches_matching_id(monkeypatch, tmp_path):
+def test_repoint_scenes_only_touches_matching_id(monkeypatch, tmp_path):
     _wid, cid = _world_with_char(monkeypatch, tmp_path)
     ap.appear(cid, "a", "characters", "seraphine", "corrupted", "npc")
     ap.appear(cid, "b", "characters", "seraphine", "corrupted", "npc")
-    ap.rename_scene(cid, "a", "z")
+    ap.repoint_scenes(cid, {"a": "z"})
     assert ap.record(cid)["characters/seraphine"]["scenes"] == ["z", "b"]
 
 
-def test_rename_scene_noop_when_id_unchanged(monkeypatch, tmp_path):
+def test_repoint_scenes_noop_when_id_unchanged(monkeypatch, tmp_path):
     _wid, cid = _world_with_char(monkeypatch, tmp_path)
     ap.appear(cid, "a", "characters", "seraphine", "corrupted", "npc")
-    ap.rename_scene(cid, "a", "a")
+    ap.repoint_scenes(cid, {"a": "a"})
     assert ap.record(cid)["characters/seraphine"]["scenes"] == ["a"]
 
 
