@@ -282,6 +282,12 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}/birthdate`, { birthdate }),
   deleteCharacter: (wid: string, cid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/characters/${cid}`),
+  getCharacterTagline: (wid: string, cid: string) =>
+    request<{ tagline: string }>("GET", `/api/worlds/${wid}/characters/${cid}/tagline`),
+  setCharacterTagline: (wid: string, cid: string, tagline: string) =>
+    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}/tagline`, { tagline }),
+  generateCharacterTagline: (wid: string, cid: string) =>
+    request<{ tagline: string }>("POST", `/api/worlds/${wid}/characters/${cid}/tagline/generate`),
   createVersion: (wid: string, cid: string, body: { name: string; card: Card }) =>
     request<{ version: string }>("POST", `/api/worlds/${wid}/characters/${cid}/versions`, body),
   updateVersion: (wid: string, cid: string, vid: string, card: Card) =>
