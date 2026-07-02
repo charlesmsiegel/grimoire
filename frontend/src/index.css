@@ -1,26 +1,82 @@
-:root {
-  --bg: #15110e;
-  --surface: #0d0a08;
-  --fg: #e8dcc6;
-  --muted: #8a7a5c;
-  --accent: #caa45a;
-  --quote: #7fc8b0;
-  --font-display: Georgia, "Times New Roman", serif;
-  --font-body: Georgia, "Times New Roman", serif;
-  --radius: 3px;
-}
+/* Tokens are applied to :root by ThemeProvider — no hardcoded :root values.
+   Fallbacks below match the codex theme for the pre-hydration frame. */
 * { box-sizing: border-box; }
+html, body, #root { height: 100%; }
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font-family: var(--font-body);
+  background: var(--bg, #e7e1d4);
+  color: var(--ink, #1a1712);
+  font-family: var(--fb, Georgia, serif);
+}
+/* per-theme background overlay (Manuscript wash / Astral starfield) */
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: 0;
+  pointer-events: none; background: var(--fx, none);
+}
+#root { position: relative; z-index: 1; display: flex; flex-direction: column; }
+
+/* ---- view transition (never animate opacity from 0) ---- */
+@keyframes view-in { from { transform: translateY(6px); } to { transform: translateY(0); } }
+.view-anim { animation: view-in 0.3s ease; }
+
+/* ---- page scaffold ---- */
+.page { width: 100%; max-width: 940px; margin: 0 auto; padding: 44px 56px; }
+.page-narrow { max-width: 680px; }
+.page-head {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
+  border-bottom: var(--rw3) solid var(--rule); padding-bottom: 14px;
+}
+.page-h1 {
+  font-family: var(--fd); font-weight: 900; font-size: 64px; line-height: 0.86;
+  margin: 0; text-transform: uppercase; letter-spacing: 0.01em;
+  text-shadow: var(--glow);
+}
+.page-narrow .page-h1 { font-size: 52px; }
+.count-label {
+  font-family: var(--fm); font-size: 11px; color: var(--muted);
+  letter-spacing: 0.1em; text-transform: uppercase; margin: 10px 0 0;
+}
+.back-link {
+  display: inline-block; margin-bottom: 14px; font-family: var(--fm);
+  font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--muted); text-decoration: none; background: none; border: none;
+  padding: 0; cursor: pointer;
+}
+.back-link:hover { color: var(--accent); }
+
+/* ---- buttons ---- */
+.btn-accent, .btn-chrome, .btn-outline {
+  font-family: var(--fm); font-weight: 700; font-size: 12px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 11px 20px; cursor: pointer; border: var(--rw) solid var(--rule);
+}
+.btn-accent { background: var(--accent); color: var(--on-accent); box-shadow: var(--sh4); }
+.btn-accent:disabled { background: var(--disabled); color: var(--bg); box-shadow: none; cursor: default; }
+.btn-chrome { background: var(--chrome); color: var(--chrome-text); }
+.btn-outline { background: transparent; color: var(--ink); }
+.btn-outline:hover, .btn-chrome:hover { box-shadow: var(--sh2); }
+
+/* ---- joined control (input + button sharing one shadow) ---- */
+.joined { display: flex; box-shadow: var(--sh3); }
+.joined > input, .joined > textarea {
+  flex: 1; min-width: 0; background: var(--surface); color: var(--ink);
+  border: var(--rw) solid var(--rule); border-right: none; padding: 10px 12px;
+  font-family: var(--fb); font-size: 15px;
+}
+.joined > button { flex: none; box-shadow: none; }
+
+/* ---- section label (character detail, config) ---- */
+.section-label {
+  font-family: var(--fm); font-size: 10px; color: var(--accent);
+  letter-spacing: 0.16em; text-transform: uppercase;
+  border-bottom: var(--rw2) solid var(--rule); padding-bottom: 6px;
+  margin: 26px 0 10px;
 }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 16px; background: var(--surface);
   border-bottom: 1px solid var(--muted);
-  font-family: var(--font-display);
+  font-family: var(--fd);
 }
 .topbar a { color: var(--accent); text-decoration: none; }
 .topbar nav { display: flex; gap: 16px; }
@@ -28,7 +84,7 @@ body {
 .sidebar { width: 240px; border-right: 1px solid var(--muted); padding: 12px; overflow-y: auto; }
 .sidebar button {
   display: block; width: 100%; text-align: left; margin-bottom: 6px;
-  background: transparent; color: var(--fg); border: 1px solid var(--muted);
+  background: transparent; color: var(--ink); border: 1px solid var(--muted);
   border-radius: var(--radius); padding: 6px 8px; cursor: pointer;
 }
 .main { flex: 1; display: flex; flex-direction: column; }
@@ -36,7 +92,7 @@ body {
 .msg { margin-bottom: 16px; }
 .role { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
 .inputbar { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--muted); }
-.inputbar textarea { flex: 1; background: var(--surface); color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; font-family: var(--font-body); resize: none; }
+.inputbar textarea { flex: 1; background: var(--surface); color: var(--ink); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; font-family: var(--fb); resize: none; }
 button.send, button.primary { background: var(--accent); color: var(--bg); border: none; border-radius: var(--radius); padding: 8px 14px; cursor: pointer; }
 .banner { background: var(--surface); border: 1px solid var(--accent); color: var(--accent); padding: 10px 16px; margin: 12px 16px; border-radius: var(--radius); }
 .banner.error-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -44,10 +100,10 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .banner .retry:disabled { opacity: 0.5; cursor: default; }
 .config { padding: 24px; max-width: 560px; }
 .config label { display: block; margin: 16px 0 4px; color: var(--muted); }
-.config input[type="text"], .config input[type="password"] { width: 100%; background: var(--surface); color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; }
-.config textarea { width: 100%; background: var(--surface); color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; font-family: var(--font-body); resize: vertical; }
+.config input[type="text"], .config input[type="password"] { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; }
+.config textarea { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; font-family: var(--fb); resize: vertical; }
 .combobox { position: relative; }
-.combobox input[type="text"] { width: 100%; background: var(--surface); color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; }
+.combobox input[type="text"] { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; }
 .combobox-note { margin-top: 4px; font-size: 12px; color: var(--muted); }
 .combobox-list {
   position: absolute; z-index: 10; left: 0; right: 0; margin: 4px 0 0; padding: 0;
@@ -59,7 +115,7 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .combobox-row:hover { background: var(--bg); }
 .combobox-row-top { display: flex; justify-content: space-between; gap: 12px; }
 .combobox-row-bottom { display: flex; justify-content: space-between; gap: 12px; }
-.combobox-name { color: var(--fg); }
+.combobox-name { color: var(--ink); }
 .combobox-price { color: var(--accent); font-size: 12px; white-space: nowrap; }
 .combobox-id { color: var(--muted); font-size: 12px; }
 .combobox-ctx { color: var(--muted); font-size: 12px; white-space: nowrap; }
@@ -80,16 +136,16 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .row-actions { display: flex; gap: 2px; flex: none; }
 .row-actions button { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }
 .row-actions button:hover { color: var(--accent); }
-.row-rename { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); border-radius: var(--radius); padding: 3px 6px; font-family: var(--font-body); }
-.campaign-header { padding: 10px 16px; border-bottom: 1px solid var(--muted); font-family: var(--font-display); color: var(--accent); }
+.row-rename { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--accent); border-radius: var(--radius); padding: 3px 6px; font-family: var(--fb); }
+.campaign-header { padding: 10px 16px; border-bottom: 1px solid var(--muted); font-family: var(--fd); color: var(--accent); }
 .back-link { display: block; margin-bottom: 8px; color: var(--muted); text-decoration: none; font-size: 13px; }
 .back-link:hover { color: var(--accent); }
 .view { padding: 24px; max-width: 720px; }
-.view h2 { font-family: var(--font-display); }
+.view h2 { font-family: var(--fd); }
 .view .muted { color: var(--muted); }
 .view .muted a { color: var(--accent); }
 .picker { display: flex; gap: 8px; margin: 12px 0 20px; }
-.picker input, .picker select { background: var(--surface); color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; }
+.picker input, .picker select { background: var(--surface); color: var(--ink); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; }
 .picker input { flex: 1; }
 .list { display: flex; flex-direction: column; }
 
@@ -100,18 +156,18 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 }
 .tab {
   background: transparent; border: none; border-bottom: 2px solid transparent;
-  color: var(--muted); font-family: var(--font-display); font-size: 14px;
+  color: var(--muted); font-family: var(--fd); font-size: 14px;
   padding: 8px 12px; cursor: pointer;
 }
-.tab:hover { color: var(--fg); }
+.tab:hover { color: var(--ink); }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 
 .field { margin: 12px 0; }
 .field label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 13px; }
 .field input[type="text"], .field textarea, .field select {
-  width: 100%; background: var(--surface); color: var(--fg);
-  border: 1px solid var(--muted); border-radius: var(--radius);
-  padding: 8px; font-family: var(--font-body);
+  width: 100%; background: var(--surface); color: var(--ink);
+  border: var(--rw) solid var(--rule);
+  padding: 8px; font-family: var(--fb); font-size: 17px;
 }
 .field textarea { resize: vertical; min-height: 80px; }
 .field-hint { margin-top: 4px; font-size: 12px; color: var(--muted); }
@@ -121,11 +177,12 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {
-  background: transparent; color: var(--muted);
-  border: 1px solid var(--muted); border-radius: var(--radius);
-  padding: 4px 10px; cursor: pointer; font-size: 13px;
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.08em;
+  text-transform: uppercase; background: transparent; color: var(--ink);
+  border: var(--rw2) solid var(--rule); padding: 4px 10px; cursor: pointer;
 }
-.chip.on { color: var(--accent); border-color: var(--accent); }
+.chip.on { background: var(--accent); color: var(--on-accent); border-color: var(--rule); }
+.chip.solid { background: var(--chrome); color: var(--chrome-text); border-color: var(--chrome); }
 
 .editor { display: flex; gap: 16px; align-items: flex-start; }
 /* the rail scrolls on its own so a long greeting list doesn't drag the page */
@@ -165,9 +222,9 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
   text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--muted);
   vertical-align: top; font-size: 13px;
 }
-.table th { color: var(--muted); font-weight: normal; font-family: var(--font-display); }
+.table th { color: var(--muted); font-weight: normal; font-family: var(--fd); }
 .table input[type="text"], .table select {
-  width: 100%; background: var(--surface); color: var(--fg);
+  width: 100%; background: var(--surface); color: var(--ink);
   border: 1px solid var(--muted); border-radius: var(--radius); padding: 4px 6px;
 }
 
@@ -175,7 +232,7 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
   border-radius: var(--radius); padding: 6px 12px; cursor: pointer; }
 .subtle:hover { color: var(--accent); border-color: var(--accent); }
 .cast-panel { border: 1px solid var(--muted); border-radius: var(--radius); margin: 12px 16px; }
-.cast-panel summary { cursor: pointer; padding: 8px 12px; color: var(--accent); font-family: var(--font-display); }
+.cast-panel summary { cursor: pointer; padding: 8px 12px; color: var(--accent); font-family: var(--fd); }
 .cast-panel .panel-body { padding: 12px; border-top: 1px solid var(--muted); display: flex; flex-direction: column; gap: 16px; }
 .cast-row { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
 .cast-row .role { color: var(--muted); }
@@ -201,7 +258,7 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .char-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .char-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; background: var(--surface); border: 1px solid var(--muted); border-radius: var(--radius); }
 .char-card:hover { border-color: var(--accent); }
-.char-card-main { display: flex; flex-direction: column; gap: 8px; padding: 0; width: 100%; background: transparent; border: none; cursor: pointer; color: var(--fg); font-family: var(--font-body); }
+.char-card-main { display: flex; flex-direction: column; gap: 8px; padding: 0; width: 100%; background: transparent; border: none; cursor: pointer; color: var(--ink); font-family: var(--fb); }
 .char-card-main:hover .char-card-name { color: var(--accent); }
 .char-card-avatar { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; display: block; border-radius: var(--radius); background: var(--bg); }
 .char-card-avatar-empty { display: flex; align-items: center; justify-content: center; aspect-ratio: 1 / 1; color: var(--muted); font-size: 11px; background: var(--bg); border: 1px solid var(--muted); }
@@ -236,18 +293,18 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .wizard-step .num {
   display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; flex: none; border-radius: 50%;
-  border: 1px solid var(--muted); font-size: 12px; font-family: var(--font-display);
+  border: 1px solid var(--muted); font-size: 12px; font-family: var(--fd);
 }
 .wizard-step .label {
   margin-left: 8px; font-size: 11px; letter-spacing: 0.14em;
-  text-transform: uppercase; font-family: var(--font-display); white-space: nowrap;
+  text-transform: uppercase; font-family: var(--fd); white-space: nowrap;
 }
 .wizard-step .bar { width: 28px; height: 1px; background: var(--muted); margin: 0 10px; flex: none; }
 .wizard-step.on { color: var(--accent); }
 .wizard-step.on .num { border-color: var(--accent); color: var(--accent); }
 .wizard-step.done .num { border-color: var(--accent); color: var(--accent); }
 
-.wizard-body h3 { font-family: var(--font-display); margin: 0 0 4px; }
+.wizard-body h3 { font-family: var(--fd); margin: 0 0 4px; }
 .wizard-intro { color: var(--muted); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
 .wizard .field { margin: 14px 0; }
 .wizard .field .role { margin-bottom: 6px; }
@@ -260,9 +317,9 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
   padding: 12px; margin-bottom: 10px;
 }
 .wizard-location input[type="text"], .wizard-location textarea {
-  width: 100%; background: var(--surface); color: var(--fg);
+  width: 100%; background: var(--surface); color: var(--ink);
   border: 1px solid var(--muted); border-radius: var(--radius);
-  padding: 8px; font-family: var(--font-body);
+  padding: 8px; font-family: var(--fb);
 }
 .wizard-location textarea { resize: vertical; min-height: 56px; }
 .wizard-location .remove { align-self: flex-end; }
@@ -288,11 +345,11 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .msg-actions { display: flex; gap: 8px; }
 .msg-edit { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; }
 .msg-edit:hover { color: var(--accent); }
-.msg-edit-form textarea { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px; font-family: var(--font-body); resize: vertical; }
+.msg-edit-form textarea { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px; font-family: var(--fb); resize: vertical; }
 
 /* ---- scene inspector + record drawer ---- */
 .inspector { width: 300px; flex: none; border-left: 1px solid var(--muted); padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
-.inspector-row { display: block; width: 100%; text-align: left; background: transparent; color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 6px 8px; margin-bottom: 6px; cursor: pointer; }
+.inspector-row { display: block; width: 100%; text-align: left; background: transparent; color: var(--ink); border: 1px solid var(--muted); border-radius: var(--radius); padding: 6px 8px; margin-bottom: 6px; cursor: pointer; }
 .inspector-row:hover { border-color: var(--accent); color: var(--accent); }
 .inspector-row .role { float: right; color: var(--muted); }
 .ctx-section { border: 1px solid var(--muted); border-radius: var(--radius); margin-bottom: 6px; }
@@ -316,7 +373,7 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .campaign-header .end-scene:disabled { opacity: 0.5; cursor: default; }
 .absorb-panel { background: var(--surface); border: 1px solid var(--muted); border-radius: var(--radius); padding: 12px 16px; margin: 12px 16px; }
 .absorb-panel h4 { margin: 0 0 8px; }
-.absorb-panel input, .absorb-panel textarea { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; margin-bottom: 8px; font-family: var(--font-body); resize: vertical; }
+.absorb-panel input, .absorb-panel textarea { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; margin-bottom: 8px; font-family: var(--fb); resize: vertical; }
 .absorb-timeline { margin: 4px 0 8px; padding-left: 16px; font-size: 13px; color: var(--muted); }
 
 .absorb-edits { margin-top: 8px; border-top: 1px solid var(--muted); padding-top: 8px; }
@@ -325,10 +382,10 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .absorb-edit.authored { border-left: 2px solid var(--accent); padding-left: 8px; }
 .absorb-edit label { display: flex; align-items: center; gap: 6px; }
 .absorb-before { color: var(--muted); font-size: 13px; text-decoration: line-through; margin: 2px 0; }
-.absorb-edit textarea { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--muted); border-radius: var(--radius); padding: 6px; font-family: var(--font-body); }
+.absorb-edit textarea { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--muted); border-radius: var(--radius); padding: 6px; font-family: var(--fb); }
 
 .absorb-diff { font-size: 13px; margin: 2px 0; }
-.absorb-diff .absorb-after { color: var(--fg); }
+.absorb-diff .absorb-after { color: var(--ink); }
 .absorb-diff .absorb-before { margin-right: 6px; }
 
 .record-diff { white-space: pre-wrap; font-family: var(--mono, monospace); margin: 0; }
@@ -339,5 +396,5 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 
 .tagline-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 30; }
 .tagline-modal { background: var(--panel, #1b1b1b); border: 1px solid var(--muted); border-radius: 8px; padding: 20px; width: min(520px, 92vw); }
-.tagline-modal h3 { font-family: var(--font-display); margin: 0 0 6px; }
+.tagline-modal h3 { font-family: var(--fd); margin: 0 0 6px; }
 .tagline-modal textarea { width: 100%; }

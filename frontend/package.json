@@ -9,15 +9,23 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fontsource-variable/newsreader": "^5.2.10",
+    "@fontsource/big-shoulders-display": "^5.2.5",
+    "@fontsource/cinzel": "^5.2.8",
+    "@fontsource/cormorant-garamond": "^5.2.11",
+    "@fontsource/eb-garamond": "^5.2.7",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/space-mono": "^5.2.9",
+    "@fontsource/spectral": "^5.2.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.26.0",
     "react-markdown": "^9.0.1",
+    "react-router-dom": "^6.26.0",
     "remark-gfm": "^4.0.0"
   },
   "devDependencies": {
-    "@testing-library/react": "^16.0.0",
     "@testing-library/jest-dom": "^6.4.0",
+    "@testing-library/react": "^16.0.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
