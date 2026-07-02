@@ -5,6 +5,7 @@ import { api, type EntityKind, type EntityScope, type EntitySummary } from "../a
 import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
+import { Portrait } from "./Portrait";
 
 export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore }: {
   wid: string;
@@ -188,6 +189,17 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
              onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
       )}
       <span className="row-name">{e.name}</span>
+      {kind === "lore" && (
+        <span className="owner-stack">
+          {ownersOf(e).map((ref) => {
+            const o = ownerOpts.find((x) => x.ref === ref);
+            return o?.avatar ? (
+              <img key={ref} className="owner-stack-img" alt="" title={o.label} src={o.avatar}
+                   onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
+            ) : null;
+          })}
+        </span>
+      )}
     </button>
   );
 
@@ -266,7 +278,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                   {owners.length > 0 ? (
                     <div className="chips">
                       {owners.map((ref) => (
-                        <button key={ref} className="chip" onClick={() => onOpenOwner?.(ref)}>
+                        <button key={ref} className="chip owner-chip" onClick={() => onOpenOwner?.(ref)}>
+                          <Portrait src={ownerOpts.find((x) => x.ref === ref)?.avatar ?? null}
+                                    name={ownerLabel(ref)} />
                           {ownerLabel(ref)}
                         </button>
                       ))}

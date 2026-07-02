@@ -1,6 +1,6 @@
 import { api } from "./client";
 
-export type LoreOwner = { ref: string; label: string; kind: "characters" | "pcs" | "locations" };
+export type LoreOwner = { ref: string; label: string; kind: "characters" | "pcs" | "locations"; avatar?: string };
 
 /** All records in a world that can own lore, as selectable owner refs. */
 export async function loreOwnerOptions(wid: string): Promise<LoreOwner[]> {
@@ -10,7 +10,10 @@ export async function loreOwnerOptions(wid: string): Promise<LoreOwner[]> {
     api.listEntities({ kind: "world", id: wid }, "locations"),
   ]);
   return [
-    ...chars.map((c) => ({ ref: `characters:${c.id}`, label: c.name, kind: "characters" as const })),
+    ...chars.map((c) => ({
+      ref: `characters:${c.id}`, label: c.name, kind: "characters" as const,
+      ...(c.has_avatar ? { avatar: api.imageUrl(wid, c.id, c.default_version, "avatar") } : {}),
+    })),
     ...pcs.map((p) => ({ ref: `pcs:${p.id}`, label: p.name, kind: "pcs" as const })),
     ...locs.map((l) => ({ ref: `locations:${l.id}`, label: l.name, kind: "locations" as const })),
   ];
