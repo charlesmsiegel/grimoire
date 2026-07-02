@@ -6,7 +6,7 @@ vi.mock("../api/client", () => ({
     listCharacters: vi.fn(), readCharacter: vi.fn(), createCharacter: vi.fn(),
     updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
     deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
-    putImage: vi.fn(), deleteImage: vi.fn(), importCharacterBook: vi.fn(),
+    putImage: vi.fn(), deleteImage: vi.fn(), promoteImage: vi.fn(), importCharacterBook: vi.fn(),
     importCharacterFromChub: vi.fn(),
     setCharacterBirthdate: vi.fn(),
     setCharacterChubSource: vi.fn(), clearCharacterChubSource: vi.fn(),
@@ -43,6 +43,7 @@ beforeEach(() => {
   });
   (api.putImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.deleteImage as any).mockResolvedValue({ ok: true });
+  (api.promoteImage as any).mockResolvedValue({ ok: true });
   (api.deleteCharacter as any).mockResolvedValue({ ok: true });
   (api.importCharacterBook as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
   (api.setCharacterBirthdate as any).mockResolvedValue({ ok: true });
@@ -54,6 +55,40 @@ async function openEditForm() {
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   await screen.findByLabelText("Description");
 }
+
+test("grid cards show the tagline under the name", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: false,
+      tagline: "Keeper of the salt ledgers.", versions: [] },
+  ]);
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Keeper of the salt ledgers.");
+});
+
+test("detail shows the Images shelf with avatar tile, gallery promote, and add tile", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: ["avatar", "gallery_1"] }],
+  });
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByText("Images");
+  expect(screen.getByText("avatar")).toBeInTheDocument();               // shelf caption
+  fireEvent.click(screen.getByRole("button", { name: /set as avatar/i }));
+  await waitFor(() => expect(api.promoteImage).toHaveBeenCalledWith("w", "seraphine", "default", "gallery_1"));
+  expect(screen.getByRole("button", { name: /\+ add/i })).toBeInTheDocument();
+});
+
+test("detail without avatar shows the dashed placeholder tile", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: [] }],
+  });
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByText("no avatar");
+  expect(screen.getByRole("button", { name: /\+ add/i })).toBeInTheDocument();
+});
 
 test("detail view shows the character tagline", async () => {
   (api.getCharacterTagline as any).mockResolvedValue({ tagline: "A silent snowleopardgirl." });
@@ -464,9 +499,10 @@ test("gallery images render as thumbnails, sorted numerically, opening full-size
   });
   const { container } = render(<CharacterEditor wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
-  await screen.findByText("Gallery");
+  await screen.findByText("Images");
 
-  const thumbs = Array.from(container.querySelectorAll<HTMLImageElement>(".gallery-thumb"));
+  const thumbs = Array.from(
+    container.querySelectorAll<HTMLImageElement>(".images-shelf .shelf-tile:not(.avatar-tile) img"));
   expect(thumbs).toHaveLength(3);
   // numeric order, not lexicographic ("gallery_10" must not sort before "gallery_2")
   expect(thumbs.map((t) => t.src)).toEqual([
@@ -503,10 +539,11 @@ test("gallery images downloaded while viewing a character appear without navigat
   );
   render(<CharacterEditor wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
-  expect(screen.queryByText("Gallery")).toBeNull();
+  await screen.findByText("Images");
+  expect(screen.queryByRole("button", { name: /set as avatar/i })).toBeNull();
 
   fireEvent.click(await screen.findByRole("button", { name: /^download gallery$/i }));
-  await screen.findByText("Gallery");
+  await screen.findByRole("button", { name: /set as avatar/i }); // gallery_0 tile appeared
 });
 
 test("downloading linked lorebooks for a version with none shows a clear empty result", async () => {

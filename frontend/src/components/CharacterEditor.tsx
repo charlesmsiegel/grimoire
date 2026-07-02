@@ -43,6 +43,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const fileRef = useRef<HTMLInputElement>(null);
   const versionFileRef = useRef<HTMLInputElement>(null);
   const avatarRef = useRef<HTMLInputElement>(null);
+  const shelfFileRef = useRef<HTMLInputElement>(null);
   const [avatarBust, setAvatarBust] = useState(0);
   const [bookMsg, setBookMsg] = useState<string | null>(null);
   const [localizeProg, setLocalizeProg] = useState<{ done: number; total: number } | null>(null);
@@ -379,6 +380,44 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     setAvatarBust((n) => n + 1);
   }
 
+  // Reload the open version in place (select() would snap back to the default version).
+  async function refreshVersion() {
+    if (!detail) return;
+    const d = await api.readCharacter(wid, detail.meta.id);
+    setDetail(d);
+    loadVersion(d, vid);
+    await reload();
+    setAvatarBust((n) => n + 1);
+  }
+
+  async function promote(name: string) {
+    if (!detail) return;
+    setError(null);
+    try {
+      await api.promoteImage(wid, detail.meta.id, vid, name);
+      await refreshVersion();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function onShelfAdd(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !detail) return;
+    setError(null);
+    const next = hasAvatar
+      ? `gallery_${galleryImages.reduce((m, n) => Math.max(m, Number(n.slice("gallery_".length))), 0) + 1}`
+      : "avatar";
+    try {
+      await api.putImage(wid, detail.meta.id, vid, next, file);
+      await refreshVersion();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    } finally {
+      e.target.value = "";
+    }
+  }
+
   function formatOf(file: File): string {
     const ext = file.name.split(".").pop()?.toLowerCase();
     return ext === "png" ? "png" : ext === "charx" ? "charx" : "json";
@@ -598,6 +637,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                         {c.name.split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("")}
                       </div>}
                   <span className="char-card-name">{c.name}</span>
+                  {c.tagline ? <span className="char-card-tagline">{c.tagline}</span> : null}
                 </button>
                 <div className="char-card-actions">
                   <button className="subtle" onClick={() => openEdit(c.id)}>Edit</button>
@@ -688,21 +728,33 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
               )}
             </div>
 
-            {galleryImages.length > 0 && (
-              <div className="detail-field">
-                <div className="role">Gallery</div>
-                <div className="gallery-grid">
-                  {galleryImages.map((name) => {
-                    const src = `${api.imageUrl(wid, detail.meta.id, vid, name)}?v=${avatarBust}`;
-                    return (
-                      <a key={name} href={src} target="_blank" rel="noreferrer">
-                        <img className="gallery-thumb" alt="" src={src} />
-                      </a>
-                    );
-                  })}
-                </div>
+            <div className="detail-field">
+              <div className="section-label">Images</div>
+              <div className="images-shelf">
+                {hasAvatar ? (
+                  <figure className="shelf-tile avatar-tile">
+                    <a href={avatarSrc(detail.meta.id, vid, true)} target="_blank" rel="noreferrer">
+                      <img alt="avatar image" src={avatarSrc(detail.meta.id, vid, true)} />
+                    </a>
+                    <figcaption>avatar</figcaption>
+                  </figure>
+                ) : (
+                  <div className="shelf-tile shelf-empty">no avatar</div>
+                )}
+                {galleryImages.map((name) => {
+                  const src = `${api.imageUrl(wid, detail.meta.id, vid, name)}?v=${avatarBust}`;
+                  return (
+                    <div className="shelf-tile" key={name}>
+                      <a href={src} target="_blank" rel="noreferrer"><img alt={name} src={src} /></a>
+                      <button className="shelf-promote" onClick={() => promote(name)}>Set as avatar</button>
+                    </div>
+                  );
+                })}
+                <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
+                <input ref={shelfFileRef} type="file" accept="image/*" hidden
+                       aria-label="Add image" onChange={onShelfAdd} />
               </div>
-            )}
+            </div>
 
             {localizeControls(false)}
 
