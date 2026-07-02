@@ -29,7 +29,8 @@ def test_second_scene_appends_only(monkeypatch, tmp_path):
     ap.appear(cid, "s1", "characters", "seraphine", "corrupted", "npc")
     ap.appear(cid, "s2", "characters", "seraphine", "corrupted", "npc")
     assert ap.record(cid)["characters/seraphine"]["scenes"] == ["s1", "s2"]
-    assert ap.scene_cast(cid, "s2") == [{"kind": "characters", "id": "seraphine", "role": "npc"}]
+    assert ap.scene_cast(cid, "s2") == [
+        {"kind": "characters", "id": "seraphine", "role": "npc", "name": "Seraphine"}]
 
 
 def test_version_or_role_mismatch_rejected(monkeypatch, tmp_path):
@@ -114,7 +115,8 @@ def test_rename_scene_migrates_cast_end_to_end(monkeypatch, tmp_path):
     ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")
     new_sid = scenes.rename_scene(cid, sid, "Bright New Title")
     assert new_sid != sid
-    assert ap.scene_cast(cid, new_sid) == [{"kind": "characters", "id": "seraphine", "role": "npc"}]
+    assert ap.scene_cast(cid, new_sid) == [
+        {"kind": "characters", "id": "seraphine", "role": "npc", "name": "Seraphine"}]
     assert ap.scene_cast(cid, sid) == []
 
 
@@ -145,3 +147,26 @@ def test_appear_does_not_copy_dossier_into_campaign(monkeypatch, tmp_path):
 
     # Dossiers are born campaign-side at absorb, not copied on appearance.
     assert dossiers.read(campaigns.campaign_root(cid), "aese") == ""
+
+
+def test_player_names_and_scene_cast_names(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    pid, pvid = pcs.create_pc(wroot, "Elara Vane", [])
+    char_id, cvid = characters.create_character(wroot, "Seraphine Vale")
+    ap.appear(cid, sid, "pcs", pid, pvid, "player")
+    ap.appear(cid, sid, "characters", char_id, cvid, "npc")
+    assert ap.player_names(cid, sid) == ["Elara Vane"]
+    cast = ap.scene_cast(cid, sid)
+    assert {a["id"]: a["name"] for a in cast} == {pid: "Elara Vane", char_id: "Seraphine Vale"}
+
+
+def test_player_names_empty_when_no_players(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    assert ap.player_names(cid, sid) == []
