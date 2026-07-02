@@ -269,8 +269,10 @@ def get_time_history(cid: str, sid: str) -> list[str]:
 
 
 def set_datetime(cid: str, sid: str, native: str) -> dict:
-    """Set the scene's current moment (in the primary calendar). First set is silent;
-    a change appends an assistant transition line. Returns {"advanced", "friendly"}."""
+    """Set the scene's current moment (in the primary calendar). The first set is
+    silent and stamps the start date into the filename (the id changes); later
+    changes append an assistant transition line. Returns {"advanced", "friendly",
+    "id"} where id is the possibly-renamed scene id."""
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
@@ -280,7 +282,7 @@ def set_datetime(cid: str, sid: str, native: str) -> dict:
     friendly = calendars.friendly(provider, canonical)
     history = get_time_history(cid, sid)
     if history and history[-1] == canonical:
-        return {"advanced": False, "friendly": friendly}
+        return {"advanced": False, "friendly": friendly, "id": sid}
     advanced = bool(history)
     if advanced:
         append_message(cid, sid, "assistant", f"*Time passes. It is now {friendly}.*")
@@ -288,4 +290,20 @@ def set_datetime(cid: str, sid: str, native: str) -> dict:
     history.append(canonical)
     meta["time_history"] = ",".join(history)
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
-    return {"advanced": advanced, "friendly": friendly}
+    if not advanced:
+        sid = _stamp_start_date(cid, sid, canonical)
+    return {"advanced": advanced, "friendly": friendly, "id": sid}
+
+
+def _stamp_start_date(cid: str, sid: str, canonical: str) -> str:
+    """First date set: insert the date section into the filename. The start date
+    is fixed — later advances never touch the name. Legacy ids are left alone."""
+    parsed = scene_ids.parse_sid(sid)
+    if parsed is None or parsed["date_slug"] is not None:
+        return sid
+    base = scene_ids.format_sid(parsed["number"], parsed["width"],
+                                scene_ids.date_slug_of(canonical), parsed["title_slug"])
+    new_sid = uniquify(base, lambda c: c != sid and _scene_path(cid, c).exists())
+    _scene_path(cid, sid).rename(_scene_path(cid, new_sid))
+    scene_refs.repoint(cid, {sid: new_sid})
+    return new_sid

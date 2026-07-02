@@ -1102,7 +1102,9 @@ def test_datetime_get_put_roundtrip(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()["current"] is None
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime", json={"datetime": "2026-12-25"})
-    assert r.json() == {"ok": True, "advanced": False, "friendly": "25 December 2026"}
+    assert r.json() == {"ok": True, "advanced": False, "friendly": "25 December 2026",
+                        "id": "001--2026-12-25--s"}
+    sid = r.json()["id"]  # first date set renames the scene
     got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()
     assert got["current"]["native"] == "2026-12-25"
     assert got["current"]["weekday"] == "Friday"
@@ -1133,7 +1135,8 @@ def test_datetime_get_includes_cast_age(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                 json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
-    client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime", json={"datetime": "2026-12-25"})
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime", json={"datetime": "2026-12-25"})
+    sid = r.json()["id"]  # first date set renames the scene
     cast = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()["current"]["cast"]
     assert cast == [{"kind": "characters", "id": chid, "name": "Seraphine",
                      "age": 36, "birthday_today": True}]

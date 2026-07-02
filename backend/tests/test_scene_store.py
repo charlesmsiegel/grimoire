@@ -140,19 +140,44 @@ def test_traversal_sid_is_rejected(monkeypatch, tmp_path):
 def test_set_datetime_first_silent_then_advance(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
-    # first set: silent, no transcript line
-    assert scenes.set_datetime(cid, sid, "2026-06-29") == {"advanced": False, "friendly": "29 June 2026"}
+    # first set: silent, no transcript line — and the start date enters the filename
+    res = scenes.set_datetime(cid, sid, "2026-06-29")
+    assert res == {"advanced": False, "friendly": "29 June 2026", "id": "001--2026-06-29--s"}
+    sid = res["id"]
     assert scenes.get_time_history(cid, sid) == ["2026-06-29"]
     assert scenes.read_scene(cid, sid)["messages"] == []
-    # change: appends an italic transition line
+    # change: appends an italic transition line; filename keeps the start date
     res = scenes.set_datetime(cid, sid, "2026-07-04T09:00")
-    assert res == {"advanced": True, "friendly": "4 July 2026"}
+    assert res == {"advanced": True, "friendly": "4 July 2026", "id": sid}
     assert scenes.get_time_history(cid, sid) == ["2026-06-29", "2026-07-04T09:00"]
     assert scenes.read_scene(cid, sid)["messages"] == [
         {"role": "assistant", "content": "*Time passes. It is now 4 July 2026.*"}]
     # re-set the same current: no-op
-    assert scenes.set_datetime(cid, sid, "2026-07-04T09:00") == {"advanced": False, "friendly": "4 July 2026"}
+    assert scenes.set_datetime(cid, sid, "2026-07-04T09:00") == {
+        "advanced": False, "friendly": "4 July 2026", "id": sid}
     assert len(scenes.read_scene(cid, sid)["messages"]) == 1
+
+
+def test_first_datetime_rename_carries_references(monkeypatch, tmp_path):
+    import json
+    from grimoire.store import appearances
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    (campaigns.campaign_root(cid) / "appearances.json").write_text(json.dumps(
+        {"characters/a": {"version": "default", "base": "", "scenes": [sid], "role": "npc"}}),
+        encoding="utf-8")
+    new_sid = scenes.set_datetime(cid, sid, "2026-06-29")["id"]
+    assert new_sid != sid
+    assert appearances.record(cid)["characters/a"]["scenes"] == [new_sid]
+    with pytest.raises(scenes.SceneNotFound):
+        scenes.read_scene(cid, sid)
+
+
+def test_first_datetime_with_time_of_day_keeps_filename_windows_safe(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    new_sid = scenes.set_datetime(cid, sid, "2026-06-29T14:30")["id"]
+    assert new_sid == "001--2026-06-29--s"  # time part (with its colon) never reaches the filename
 
 
 def test_set_datetime_bad_input_raises(monkeypatch, tmp_path):
