@@ -55,3 +55,15 @@ def record(cid: str, sid: str, changes: dict[str, list[dict]]) -> None:
     for ref, fields in changes.items():
         data[ref] = {"scene": sid, "fields": fields}
     _path(cid).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
+    """Follow renamed scene ids in each record's scene field."""
+    data = read(cid)
+    hit = False
+    for rec in data.values():
+        if rec.get("scene") in mapping:
+            rec["scene"] = mapping[rec["scene"]]
+            hit = True
+    if hit:
+        _path(cid).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")

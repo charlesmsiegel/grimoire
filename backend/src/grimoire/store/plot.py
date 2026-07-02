@@ -48,6 +48,22 @@ def set_movement(cid: str, pid: str, title: str, status: str, beat_text: str, sc
     _write(cid, data)
 
 
+def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
+    """Follow renamed scene ids in beats and last_scene markers."""
+    data = read(cid)
+    hit = False
+    for thread in data.values():
+        if thread.get("last_scene") in mapping:
+            thread["last_scene"] = mapping[thread["last_scene"]]
+            hit = True
+        for beat in thread.get("beats", []):
+            if beat.get("scene") in mapping:
+                beat["scene"] = mapping[beat["scene"]]
+                hit = True
+    if hit:
+        _write(cid, data)
+
+
 def open_threads(cid: str) -> list[dict]:
     items = [(pid, t) for pid, t in read(cid).items() if t.get("status") != "closed"]
     items.sort(key=lambda kt: (kt[1].get("last_scene", ""), kt[0]))

@@ -45,6 +45,20 @@ def absorb(cid: str, record: dict) -> dict:
     return stored
 
 
+def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
+    """Follow renamed scene ids: rewrite record keys and their id fields."""
+    data = read_chronicle(cid)
+    if not any(k in mapping for k in data):
+        return
+    out = {}
+    for k, rec in data.items():
+        if rec.get("id") in mapping:
+            rec = {**rec, "id": mapping[rec["id"]]}
+        out[mapping.get(k, k)] = rec
+    _chronicle_path(cid).write_text(
+        json.dumps(out, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def recent(cid: str, n: int) -> list[dict]:
     """The n highest-id (chronological-ish) records, ascending. n <= 0 -> []."""
     if n <= 0:
