@@ -10,7 +10,7 @@ const astral: Theme = {
     "--rule-soft": "rgba(120,190,220,.22)", "--track": "rgba(120,190,220,.12)",
     "--chrome": "#0a0912", "--chrome-text": "#6fe0da", "--chrome-muted": "#5b5e82",
     "--chrome-rule": "rgba(120,190,220,.28)", "--accent": "#6fe0da",
-    "--on-accent": "#041014", "--quote": "#e77fce", "--page": "#0b0a15",
+    "--on-accent": "#041014", "--quote": "#e77fce", "--on-quote": "#041014", "--page": "#0b0a15",
     "--page-ink": "#d7d9ee", "--page-muted": "#7d80a8", "--banner-bg": "#241021",
     "--banner-ink": "#e77fce", "--disabled": "#3a3d5c",
     "--rw": "1px", "--rw2": "1px", "--rw3": "1px",

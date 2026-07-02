@@ -4,7 +4,7 @@ import { DEFAULT_THEME, themeList, resolveTheme } from "./index";
 const REQUIRED = [
   "--bg", "--surface", "--panel", "--panel2", "--ink", "--subtle", "--muted",
   "--rule", "--rule-soft", "--track", "--chrome", "--chrome-text",
-  "--chrome-muted", "--chrome-rule", "--accent", "--on-accent", "--quote",
+  "--chrome-muted", "--chrome-rule", "--accent", "--on-accent", "--quote", "--on-quote",
   "--page", "--page-ink", "--page-muted", "--banner-bg", "--banner-ink",
   "--disabled", "--rw", "--rw2", "--rw3", "--sh2", "--sh3", "--sh4", "--sh5",
   "--fd", "--fb", "--fm", "--fx", "--glow",
