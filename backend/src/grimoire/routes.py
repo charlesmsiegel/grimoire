@@ -26,6 +26,8 @@ class ConfigUpdate(BaseModel):
     openrouter_key: str | None = None
     system_prompt: str | None = None
     quote_color: str | None = None
+    user_label: str | None = None
+    assistant_label: str | None = None
 
 
 class DataDirUpdate(BaseModel):
@@ -226,7 +228,9 @@ class LorebookCommit(BaseModel):
 # ---- config ----
 def _public_config(cfg: dict[str, str]) -> dict:
     return {"model": cfg["model"], "theme": cfg["theme"], "key_set": bool(cfg["openrouter_key"]),
-            "system_prompt": cfg.get("system_prompt", ""), "quote_color": cfg.get("quote_color", "off")}
+            "system_prompt": cfg.get("system_prompt", ""), "quote_color": cfg.get("quote_color", "off"),
+            "user_label": cfg.get("user_label", "You"),
+            "assistant_label": cfg.get("assistant_label", "Grimoire")}
 
 
 @router.get("/config")
@@ -909,7 +913,12 @@ def delete_world_entity(wid: str, kind: str, eid: str):
 # ---- campaigns ----
 @router.get("/campaigns")
 def get_campaigns():
-    return store.campaigns.list_campaigns()
+    out = []
+    for c in store.campaigns.list_campaigns():
+        scene_list = store.scenes.list_scenes(c["id"])
+        out.append({**c, "scenes": len(scene_list),
+                    "last_scene": scene_list[0]["title"] if scene_list else ""})
+    return out
 
 
 @router.get("/campaigns/{cid}/calendar")

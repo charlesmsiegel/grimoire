@@ -6,11 +6,13 @@ from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home
 
 DEFAULT_MODEL = "anthropic/claude-opus-4.1"
-DEFAULT_THEME = "occult"
+DEFAULT_THEME = "codex"
 DEFAULT_SCAN_DEPTH = "8"
 DEFAULT_RECAP_DEPTH = "5"
+DEFAULT_USER_LABEL = "You"
+DEFAULT_ASSISTANT_LABEL = "Grimoire"
 _CONFIG_KEYS = ("openrouter_key", "model", "theme", "context_scan_depth", "system_prompt",
-                "quote_color", "recap_depth")
+                "quote_color", "recap_depth", "user_label", "assistant_label")
 
 
 def _config_path():
@@ -22,7 +24,8 @@ def read_config() -> dict[str, str]:
     path = _config_path()
     defaults = {"openrouter_key": "", "model": DEFAULT_MODEL, "theme": DEFAULT_THEME,
                 "context_scan_depth": DEFAULT_SCAN_DEPTH, "system_prompt": "", "quote_color": "off",
-                "recap_depth": DEFAULT_RECAP_DEPTH}
+                "recap_depth": DEFAULT_RECAP_DEPTH,
+                "user_label": DEFAULT_USER_LABEL, "assistant_label": DEFAULT_ASSISTANT_LABEL}
     if not path.exists():
         path.write_text(dump_frontmatter(defaults, ""), encoding="utf-8")
         return defaults

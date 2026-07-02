@@ -28,7 +28,10 @@ async function requestForm<T>(path: string, form: FormData, method = "POST"): Pr
   return res.json() as Promise<T>;
 }
 
-export type Config = { model: string; theme: string; key_set: boolean; system_prompt: string; quote_color: string };
+export type Config = {
+  model: string; theme: string; key_set: boolean; system_prompt: string;
+  quote_color: string; user_label: string; assistant_label: string;
+};
 export type DataDirInfo = {
   data_dir: string;
   default: string;
@@ -49,9 +52,11 @@ export type CampaignMeta = {
   world: string;
   created: string;
   updated: string;
+  scenes: number;
+  last_scene: string;
 };
 export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string };
-export type Message = { role: "user" | "assistant"; content: string };
+export type Message = { role: "user" | "assistant"; content: string; speaker?: string };
 export type Scene = { meta: { id: string; title: string }; messages: Message[] };
 
 // entities (locations | lore)
@@ -206,7 +211,7 @@ async function streamPost<T = ChatEvent>(
 
 export const api = {
   getConfig: () => request<Config>("GET", "/api/config"),
-  putConfig: (body: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string }>) =>
+  putConfig: (body: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string }>) =>
     request<Config>("PUT", "/api/config", body),
   getDataDir: () => request<DataDirInfo>("GET", "/api/config/data-dir"),
   putDataDir: (data_dir: string | null) =>

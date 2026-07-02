@@ -1379,3 +1379,12 @@ def test_get_changes_tolerates_garbled_chronicle(client):
     out = client.get(f"/api/campaigns/{cid}/changes")
     assert out.status_code == 200 and len(out.json()) == 1
     assert out.json()[0]["scene"]["date"] == ""  # date degrades, no 500
+
+
+def test_list_campaigns_scene_counts(client):
+    _, cid = _campaign(client)
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "First Light"})
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "The Salt Road"})
+    listing = [c for c in client.get("/api/campaigns").json() if c["id"] == cid]
+    assert listing[0]["scenes"] == 2
+    assert listing[0]["last_scene"] in ("First Light", "The Salt Road")
