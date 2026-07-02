@@ -3,7 +3,7 @@
 a hand-written tagline must not silently expire when a card changes.
 
 Stored at <root>/characters/<cid>/tagline.md as the trimmed sentence. Pure file IO +
-prompt/parse; the LLM call lives in the route layer (mirrors the old briefs.py).
+prompt/parse only; the LLM call lives in the route layer.
 """
 
 from __future__ import annotations

@@ -602,9 +602,9 @@ async def post_character_tagline_generate(wid: str, cid: str,
         text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
     except OpenRouterError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
-    tagline = store.taglines.parse_output(text)
-    store.taglines.write(root, cid, tagline)
-    return {"tagline": tagline}
+    # Preview only — the caller persists via PUT on Save, so Generate-then-cancel
+    # (e.g. the import popup's Skip) leaves nothing written.
+    return {"tagline": store.taglines.parse_output(text)}
 
 
 _EXPORT_MEDIA = {"json": "application/json", "png": "image/png", "charx": "application/zip"}
@@ -1185,8 +1185,8 @@ async def post_absorb(cid: str, sid: str,
     # Phase 2: refresh each present character's campaign dossier from this scene.
     croot = store.campaigns.campaign_root(cid)
     for a in store.appearances.scene_cast(cid, sid):
-        if a["kind"] != "characters":
-            continue
+        if a["kind"] != "characters" or a["role"] != "npc":
+            continue  # dossiers feed the npc-only "Active elsewhere" tier; skip player cards
         try:
             name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
             msgs = store.dossiers.build_prompt(name, store.dossiers.read(croot, a["id"]), transcript)

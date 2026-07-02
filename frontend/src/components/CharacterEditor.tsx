@@ -54,6 +54,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const [birthdate, setBirthdate] = useState("");
   const [tagline, setTagline] = useState("");
   const [taglineBusy, setTaglineBusy] = useState(false);
+  const taglineReq = useRef(0);
   const [taglinePrompt, setTaglinePrompt] = useState<{ cid: string; name: string } | null>(null);
 
   const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
@@ -201,10 +202,14 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   }
 
   // Fetch the tagline independently of the (synchronous) card load so a slow GET
-  // never wedges stale card data next to fresh meta during navigation.
+  // never wedges stale card data next to fresh meta during navigation. The req token
+  // drops a slow earlier response so selecting A then B can't leave A's tagline on B.
   function loadTagline(cid: string) {
+    const req = ++taglineReq.current;
     setTagline("");
-    api.getCharacterTagline(wid, cid).then((r) => setTagline(r.tagline)).catch(() => setTagline(""));
+    api.getCharacterTagline(wid, cid)
+      .then((r) => { if (taglineReq.current === req) setTagline(r.tagline); })
+      .catch(() => { if (taglineReq.current === req) setTagline(""); });
   }
 
   async function saveTagline() {
@@ -544,6 +549,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
       <div className="character-editor">
         {taglinePrompt && (
           <TaglinePrompt wid={wid} cid={taglinePrompt.cid} name={taglinePrompt.name}
+                         onSaved={(t) => setTagline(t)}
                          onClose={() => setTaglinePrompt(null)} />
         )}
         <div className="grid-toolbar">
@@ -609,6 +615,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
       <div className="character-editor">
         {taglinePrompt && (
           <TaglinePrompt wid={wid} cid={taglinePrompt.cid} name={taglinePrompt.name}
+                         onSaved={(t) => setTagline(t)}
                          onClose={() => setTaglinePrompt(null)} />
         )}
         <div className="editor-body">
@@ -726,6 +733,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     <div className="character-editor">
       {taglinePrompt && (
         <TaglinePrompt wid={wid} cid={taglinePrompt.cid} name={taglinePrompt.name}
+                       onSaved={(t) => setTagline(t)}
                        onClose={() => setTaglinePrompt(null)} />
       )}
       <div className="editor-body">

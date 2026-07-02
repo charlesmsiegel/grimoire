@@ -1,8 +1,8 @@
 """Per-character campaign "dossier" — a short standing paragraph (who they are + their
 current status in this campaign) feeding the off-scene cast's "Active in this campaign,
 elsewhere" tier. Campaign-level; written at absorb. Plain text at
-<croot>/characters/<cid>/dossier.md. Pure file IO + prompt/parse; the LLM call lives in
-the route layer (mirrors the old briefs.py).
+<croot>/characters/<cid>/dossier.md. Pure file IO + prompt/parse only; the LLM call
+lives in the route layer.
 """
 
 from __future__ import annotations

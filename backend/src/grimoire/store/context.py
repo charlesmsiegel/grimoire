@@ -126,9 +126,9 @@ def _char_name(root, cid: str) -> str:
 
 
 def _cast_directory(croot, wroot, cid: str, sid: str) -> str:
-    """Off-scene cast as two tiers: campaign-active characters (paragraph) and every
-    other world character (tagline + available versions). Empty string if neither tier
-    has any briefed members."""
+    """Off-scene cast as two tiers: campaign-active characters (dossier paragraph) and
+    every other world character (tagline + available versions). Empty string if neither
+    tier has any described members."""
     present = {a["id"] for a in appearances.scene_cast(cid, sid) if a["kind"] == "characters"}
     roster = appearances.roster(cid)
     roster_ids = {a["id"] for a in roster if a["kind"] == "characters"}
