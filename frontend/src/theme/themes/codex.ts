@@ -17,7 +17,7 @@ const codex: Theme = {
     "--sh2": "2px 2px 0 #1a1712", "--sh3": "3px 3px 0 #1a1712",
     "--sh4": "4px 4px 0 rgba(26,23,18,.9)", "--sh5": "5px 5px 0 rgba(26,23,18,.85)",
     "--fd": "'Big Shoulders Display',sans-serif",
-    "--fb": "'Newsreader',Georgia,serif",
+    "--fb": "'Newsreader Variable','Newsreader',Georgia,serif",
     "--fm": "'JetBrains Mono',monospace",
     "--fx": "none", "--glow": "none",
     // compat aliases — removed in the cleanup task once no CSS references them
