@@ -47,7 +47,7 @@ beforeEach(() => {
   (api.chat as any).mockResolvedValue(undefined);
   (api.retry as any).mockResolvedValue(undefined);
   (api.regenerate as any).mockResolvedValue(undefined);
-  (api.getConfig as any).mockResolvedValue({ model: "m", theme: "occult", key_set: true, system_prompt: "", quote_color: "off" });
+  (api.getConfig as any).mockResolvedValue({ model: "m", theme: "codex", key_set: true, system_prompt: "", quote_color: "off" });
   (api.editMessage as any).mockResolvedValue({ ok: true });
   (api.getCast as any).mockResolvedValue([]);
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });

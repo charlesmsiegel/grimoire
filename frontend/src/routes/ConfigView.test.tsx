@@ -9,7 +9,7 @@ vi.mock("../theme/ThemeProvider", () => ({ useTheme: () => ({ setTheme: vi.fn() 
 vi.mock("./ModelCombobox", () => ({ default: () => <div /> }));
 import { api } from "../api/client";
 
-const cfg = { model: "m", theme: "occult", key_set: false, system_prompt: "", quote_color: "off" };
+const cfg = { model: "m", theme: "codex", key_set: false, system_prompt: "", quote_color: "off" };
 const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
   is_default: true, source: "default" as const, exists: true,
