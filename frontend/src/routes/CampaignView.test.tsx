@@ -9,6 +9,7 @@ vi.mock("../components/CalendarConfig", () => ({ CalendarConfig: () => <div data
 vi.mock("../api/client", () => ({
   api: {
     getCampaign: vi.fn(),
+    getWorld: vi.fn(),
     listScenes: vi.fn(),
     getScene: vi.fn(),
     createScene: vi.fn(),
@@ -39,6 +40,7 @@ const ONE_SCENE = [{ id: "s1", title: "Old", model: "", created: "", updated: ""
 beforeEach(() => {
   vi.clearAllMocks();
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Run One", world: "w" }, body: "" });
+  (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Saltmarch" }, body: "", counts: {} });
   (api.listScenes as any).mockResolvedValue([]);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [] });
   (api.createScene as any).mockResolvedValue({ id: "s1" });
@@ -81,6 +83,22 @@ function renderCampaign() {
     </MemoryRouter>,
   );
 }
+
+test("shows the sub-header with world-copy link, scene counter, and rail date", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getSceneDatetime as any).mockResolvedValue({
+    current: { native: "2026-07-03", friendly: "3 July 2026", weekday: "Friday",
+               secondary_friendly: null, holidays_today: ["Independence Day"], upcoming: null, cast: [] },
+    history: [],
+  });
+  renderCampaign();
+  await screen.findByText(/‹ Campaigns/i);
+  expect(screen.getByRole("link", { name: /world ▸ saltmarch/i })).toHaveAttribute("href", "/campaigns/run/world");
+  expect(screen.getByText(/scenes \/ 01/i)).toBeInTheDocument();
+  await screen.findByText(/Friday 3 July 2026/i);
+  expect(screen.getByText(/✦ Independence Day/i)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /campaign world/i })).toBeInTheDocument();
+});
 
 test("shows the campaign name and loads its scenes", async () => {
   renderCampaign();
@@ -125,7 +143,7 @@ test("editing a message saves and reloads", async () => {
 test("Enter sends a message in the active scene", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
-  await screen.findByText("Old");
+  await screen.findByText(/01 · Old/);
   const ta = screen.getByRole("textbox");
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.keyDown(ta, { key: "Enter" });
@@ -137,7 +155,7 @@ test("Enter sends a message in the active scene", async () => {
 test("Shift+Enter does not send", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
-  await screen.findByText("Old");
+  await screen.findByText(/01 · Old/);
   const ta = screen.getByRole("textbox");
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.keyDown(ta, { key: "Enter", shiftKey: true });
@@ -158,7 +176,7 @@ test("sending with no scene creates one first", async () => {
 test("the edit button renames a scene", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
-  await screen.findByText("Old");
+  await screen.findByText(/01 · Old/);
   fireEvent.click(screen.getByRole("button", { name: /rename/i }));
   const input = screen.getByDisplayValue("Old");
   fireEvent.change(input, { target: { value: "New" } });
@@ -170,7 +188,7 @@ test("the delete button deletes a scene after confirm", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   renderCampaign();
-  await screen.findByText("Old");
+  await screen.findByText(/01 · Old/);
   fireEvent.click(screen.getByRole("button", { name: /delete/i }));
   await waitFor(() => expect(api.deleteScene).toHaveBeenCalledWith("run", "s1"));
 });
@@ -179,7 +197,7 @@ test("declining the delete confirm does nothing", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   vi.spyOn(window, "confirm").mockReturnValue(false);
   renderCampaign();
-  await screen.findByText("Old");
+  await screen.findByText(/01 · Old/);
   fireEvent.click(screen.getByRole("button", { name: /delete/i }));
   expect(api.deleteScene).not.toHaveBeenCalled();
 });
@@ -190,7 +208,7 @@ test("an error shows a Retry button that retries the scene", async () => {
     onEvent({ error: { detail: "boom" } });
   });
   renderCampaign();
-  await screen.findByText("Old");
+  await screen.findByText(/01 · Old/);
   const ta = screen.getByRole("textbox");
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.keyDown(ta, { key: "Enter" });

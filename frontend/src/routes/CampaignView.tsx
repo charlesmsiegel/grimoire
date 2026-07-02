@@ -1,8 +1,10 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, type SceneMeta, type Message, type SceneAbsorb, type StagedEdit } from "../api/client";
+import {
+  api, type SceneMeta, type Message, type SceneAbsorb, type SceneDatetime, type StagedEdit,
+} from "../api/client";
 import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
 import { CastPanel } from "../components/CastPanel";
@@ -21,7 +23,11 @@ const RenderedMarkdown = memo(function RenderedMarkdown({ content }: { content: 
 
 export default function CampaignView({ keySet }: { keySet: boolean }) {
   const { cid = "" } = useParams();
+  const navigate = useNavigate();
   const [name, setName] = useState("");
+  const [worldName, setWorldName] = useState("");
+  const [dt, setDt] = useState<SceneDatetime | null>(null);
+  const [showCalendar, setShowCalendar] = useState(false);
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -39,7 +45,10 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const streamRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    api.getCampaign(cid).then((c) => setName(c.meta.name));
+    api.getCampaign(cid).then((c) => {
+      setName(c.meta.name);
+      api.getWorld(c.meta.world).then((w) => setWorldName(w.meta.name)).catch(() => setWorldName(""));
+    });
     api.listScenes(cid).then((list) => {
       setScenes(list);
       if (list.length) selectScene(list[0].id);
@@ -54,6 +63,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
 
   async function selectScene(id: string) {
     setActiveId(id);
+    api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
     const scene = await api.getScene(cid, id);
     setMessages(scene.messages);
     setStreaming("");
@@ -181,36 +191,62 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   }
 
   return (
-    <div className="layout">
-      <aside className="sidebar">
-        <Link to="/" className="back-link">‹ Campaigns</Link>
-        <button onClick={newScene}>+ New scene</button>
-        {scenes.map((s) => (
-          <EditableRow
-            key={s.id}
-            label={s.title}
-            active={s.id === activeId}
-            onSelect={() => selectScene(s.id)}
-            onRename={(title) => renameScene(s.id, title)}
-            onDelete={() => deleteScene(s)}
-          />
-        ))}
-        <details className="calendar-config-wrap">
-          <summary>Calendar</summary>
-          <CalendarConfig cid={cid} />
-        </details>
-      </aside>
-      <section className="main">
-        <div className="campaign-header">
-          <span>{name}</span>
-          <button className="subtle" onClick={() => setShowChanges((v) => !v)}>
+    <div className="workspace">
+      <div className="subheader">
+        <Link to="/" className="sub-back">‹ Campaigns</Link>
+        <span className="sub-divider" />
+        <span className="sub-name">{name}</span>
+        {worldName && (
+          <Link to={`/campaigns/${cid}/world`} className="sub-world">World ▸ {worldName} ↗</Link>
+        )}
+        <div className="sub-actions">
+          <button className="sub-changes" onClick={() => setShowChanges((v) => !v)}>
             {showChanges ? "Close" : "Changes"}
           </button>
-          <button className="end-scene" onClick={endScene}
+          <button className="sub-end" onClick={endScene}
                   disabled={!activeId || absorbing || busy}>
             {absorbing ? "Ending…" : "End scene"}
           </button>
         </div>
+      </div>
+      <div className="layout">
+      <aside className="scene-rail">
+        <div className="rail-counter">Scenes / {String(scenes.length).padStart(2, "0")}</div>
+        <button className="btn-chrome rail-new" onClick={newScene}>+ New Scene</button>
+        <div className="rail-scenes">
+          {scenes.map((s, i) => (
+            <EditableRow
+              key={s.id}
+              label={s.title}
+              prefix={String(scenes.length - i).padStart(2, "0")}
+              active={s.id === activeId}
+              onSelect={() => selectScene(s.id)}
+              onRename={(title) => renameScene(s.id, title)}
+              onDelete={() => deleteScene(s)}
+            />
+          ))}
+        </div>
+        <div className="rail-foot">
+          <button className="btn-outline rail-world" onClick={() => navigate(`/campaigns/${cid}/world`)}>
+            Campaign World ↗
+          </button>
+          {dt?.current && (
+            <button className="rail-date" onClick={() => setShowCalendar((v) => !v)}
+                    title="Calendar settings">
+              {dt.current.weekday} {dt.current.friendly}
+              {dt.current.holidays_today.length > 0 && (
+                <span className="rail-holiday">✦ {dt.current.holidays_today[0]}</span>
+              )}
+            </button>
+          )}
+        </div>
+      </aside>
+      <section className="main">
+        {showCalendar && (
+          <div className="panel-slot">
+            <CalendarConfig cid={cid} />
+          </div>
+        )}
         {showChanges && <ChangesPanel cid={cid} />}
         {absorb && (
           <div className="absorb-panel">
@@ -339,6 +375,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                         onSceneChanged={() => selectScene(activeId)}
                         onSceneRenamed={sceneRenamed} />
       )}
+      </div>
     </div>
   );
 }
