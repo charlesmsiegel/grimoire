@@ -20,6 +20,18 @@ def test_copy_on_create_copies_entities_and_writes_manifest(monkeypatch, tmp_pat
     assert manifest["locations/seraphine"] == entities.entity_hash(worlds.world_root(wid), "locations", eid)
 
 
+def test_copy_on_create_copies_entity_assets(monkeypatch, tmp_path):
+    from grimoire.store import assets
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    eid = entities.create_entity(wroot, "locations", "Warehouse Nine", "Docks.")
+    assets.put_image(wroot, eid, "default", assets.AVATAR, b"img", "png", base="locations")
+    cid = campaigns.create_campaign("Run One", wid)
+    p = assets.image_path(campaigns.campaign_root(cid), eid, "default", assets.AVATAR, base="locations")
+    assert p is not None and p.read_bytes() == b"img"
+
+
 def test_create_against_missing_world_raises(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
     with pytest.raises(worlds.WorldNotFound):
