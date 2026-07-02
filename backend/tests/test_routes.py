@@ -1411,3 +1411,99 @@ def test_list_campaigns_scene_counts(client):
     listing = [c for c in client.get("/api/campaigns").json() if c["id"] == cid]
     assert listing[0]["scenes"] == 2
     assert listing[0]["last_scene"] in ("First Light", "The Salt Road")
+
+
+# ---- script scenes: PC speakers & per-speaker posts (#744) ----
+def _empty_scene(client, cid):
+    return client.post(f"/api/campaigns/{cid}/scenes", json={}).json()["id"]
+
+
+def _cast_pc(client, wid, cid, sid, name="Elara Vane"):
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": name}).json()["pc"]
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                    json={"kind": "pcs", "id": pid, "role": "player"})
+    assert r.status_code == 200
+    return pid
+
+
+def test_chat_with_sole_pc_stamps_speaker_and_backfills(client):
+    wid, cid = _campaign(client)
+    sid = _empty_scene(client, cid)
+    client.put("/api/config", json={"openrouter_key": "k"})
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "sent before the PC joined"}) as r:
+        r.read()
+    _cast_pc(client, wid, cid, sid)
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "I draw my blade."}) as r:
+        r.read()
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    users = [m for m in msgs if m["role"] == "user"]
+    assert len(users) == 2 and all(m["speaker"] == "Elara Vane" for m in users)
+
+
+def test_chat_without_pc_stays_unstamped(client):
+    _, cid = _campaign(client)
+    sid = _empty_scene(client, cid)
+    client.put("/api/config", json={"openrouter_key": "k"})
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "hello"}) as r:
+        r.read()
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs[0] == {"role": "user", "content": "hello"}
+
+
+def test_reply_is_split_into_per_speaker_posts(client):
+    wid, cid = _campaign(client)
+    sid = _empty_scene(client, cid)
+    client.put("/api/config", json={"openrouter_key": "k"})
+    _cast_pc(client, wid, cid, sid)
+    reply = ('**Seraphine Vale:** "You dare?"\n\n'
+             "**Grimoire:** Thunder rolls.\n\n"
+             "**Elara Vane:** forged player line")
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouter([reply])
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "hi"}) as r:
+        r.read()
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs[1:] == [
+        {"role": "assistant", "content": '"You dare?"', "speaker": "Seraphine Vale"},
+        {"role": "assistant", "content": "Thunder rolls."},
+        {"role": "assistant", "content": "forged player line"},
+    ]
+
+
+def test_regenerate_drops_the_whole_trailing_run(client):
+    _, cid = _campaign(client)
+    sid = _empty_scene(client, cid)
+    client.put("/api/config", json={"openrouter_key": "k"})
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_message(cid, sid, "assistant", "one", speaker="Seraphine Vale")
+    store.scenes.append_message(cid, sid, "assistant", "two")
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    assert resp.status_code == 200
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs == [{"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "Hello"}]
+
+
+def test_regenerate_multi_post_opening_returns_400(client):
+    _, cid = _campaign(client)
+    sid = _empty_scene(client, cid)
+    client.put("/api/config", json={"openrouter_key": "k"})
+    store.scenes.append_message(cid, sid, "assistant", "opener part one")
+    store.scenes.append_message(cid, sid, "assistant", "opener part two", speaker="Seraphine Vale")
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 400
+
+
+def test_first_post_splits_speakers(client):
+    _, cid = _campaign(client)
+    sid = _empty_scene(client, cid)
+    text = "Mist rolls in.\n\n**Seraphine Vale:** Who goes there?"
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/first-post",
+                       json={"text": text}).status_code == 200
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs == [
+        {"role": "assistant", "content": "Mist rolls in."},
+        {"role": "assistant", "content": "Who goes there?", "speaker": "Seraphine Vale"},
+    ]

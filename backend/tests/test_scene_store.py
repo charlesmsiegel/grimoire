@@ -89,23 +89,10 @@ def test_edit_message_roundtrip_and_bounds(monkeypatch, tmp_path):
         scenes.edit_message(cid, sid, 5, "x")
 
 
-def test_remove_last_message(monkeypatch, tmp_path):
-    cid = _campaign(monkeypatch, tmp_path)
-    sid = scenes.create_scene(cid, "S")
-    scenes.append_message(cid, sid, "user", "hi")
-    scenes.append_message(cid, sid, "assistant", "She nods.")
-    scenes.remove_last_message(cid, sid)
-    assert scenes.read_scene(cid, sid)["messages"] == [{"role": "user", "content": "hi"}]
-    scenes.remove_last_message(cid, sid)
-    assert scenes.read_scene(cid, sid)["messages"] == []
-    with pytest.raises(IndexError):
-        scenes.remove_last_message(cid, sid)
-
-
-def test_remove_last_message_missing_scene_raises(monkeypatch, tmp_path):
+def test_remove_trailing_run_missing_scene_raises(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(scenes.SceneNotFound):
-        scenes.remove_last_message(cid, "nope")
+        scenes.remove_trailing_assistant_run(cid, "nope")
 
 
 def test_rename_changes_id_keeps_order(monkeypatch, tmp_path):

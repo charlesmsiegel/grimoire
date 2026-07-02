@@ -1022,6 +1022,13 @@ def _require_key(cfg: dict[str, str]) -> None:
         )
 
 
+def _persist_reply(cid: str, sid: str, text: str) -> None:
+    """Split one model reply into per-speaker posts and append them (#744)."""
+    players = frozenset(store.appearances.player_names(cid, sid))
+    for seg in store.scenes.split_reply(text, players):
+        store.scenes.append_message(cid, sid, "assistant", seg["content"], speaker=seg["speaker"])
+
+
 def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: OpenRouterClient):
     async def event_stream():
         parts: list[str] = []
@@ -1029,11 +1036,11 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: Op
             async for delta in client.stream(messages, cfg["model"], cfg["openrouter_key"]):
                 parts.append(delta)
                 yield f"data: {json.dumps({'delta': delta})}\n\n"
-            store.scenes.append_message(cid, sid, "assistant", "".join(parts))
+            _persist_reply(cid, sid, "".join(parts))
             yield f"data: {json.dumps({'done': True})}\n\n"
         except OpenRouterError as exc:
             if parts:
-                store.scenes.append_message(cid, sid, "assistant", "".join(parts))
+                _persist_reply(cid, sid, "".join(parts))
             yield f"data: {json.dumps({'error': {'detail': exc.detail, 'kind': exc.kind}})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -1153,7 +1160,11 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: OpenRouterClient = Dep
     _require_scene(cid, sid)
     cfg = store.read_config()
     _require_key(cfg)
-    store.scenes.append_message(cid, sid, "user", turn.content)
+    names = store.appearances.player_names(cid, sid)
+    speaker = names[0] if len(names) == 1 else None
+    if speaker:
+        store.scenes.stamp_user_speaker(cid, sid, speaker)
+    store.scenes.append_message(cid, sid, "user", turn.content, speaker=speaker)
     messages = store.context.build_messages(cid, sid)
     return _chat_stream(cid, sid, messages, cfg, client)
 
@@ -1180,9 +1191,9 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     if not msgs:
         raise HTTPException(status_code=400, detail="nothing to regenerate")
     if msgs[-1]["role"] == "assistant":
-        if len(msgs) == 1:
+        if all(m["role"] == "assistant" for m in msgs):
             raise HTTPException(status_code=400, detail="cannot regenerate the opening post")
-        store.scenes.remove_last_message(cid, sid)
+        store.scenes.remove_trailing_assistant_run(cid, sid)
     messages = store.context.build_messages(cid, sid)
     guidance = (body.guidance or "").strip() if body else ""
     if guidance:
@@ -1485,7 +1496,7 @@ def post_first_post(cid: str, sid: str, body: FirstPost):
         raise HTTPException(status_code=409, detail="scene already has messages")
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="empty first post")
-    store.scenes.append_message(cid, sid, "assistant", body.text.strip())
+    _persist_reply(cid, sid, body.text)
     return {"ok": True}
 
 
