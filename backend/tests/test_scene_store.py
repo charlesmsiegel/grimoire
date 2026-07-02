@@ -264,3 +264,19 @@ def test_repad_widens_every_scene_and_repoints(monkeypatch, tmp_path):
     assert new == "1000--two"
     assert sorted(p.stem for p in d.glob("*.md")) == ["0999--one", "1000--two"]
     assert "0999--one" in chronicle.read_chronicle(cid)
+
+
+def test_message_speaker_round_trip(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Speakers")
+    scenes.append_message(cid, sid, "user", "I open the door.")
+    scenes.append_message(cid, sid, "assistant", "“At last,” she says.", speaker="Seraphine Vale")
+    msgs = scenes.read_scene(cid, sid)["messages"]
+    assert "speaker" not in msgs[0]
+    assert msgs[1]["speaker"] == "Seraphine Vale"
+    assert msgs[1]["content"] == "“At last,” she says."
+    # edit_message must preserve the speaker
+    scenes.edit_message(cid, sid, 1, "Edited.")
+    msgs = scenes.read_scene(cid, sid)["messages"]
+    assert msgs[1]["speaker"] == "Seraphine Vale"
+    assert msgs[1]["content"] == "Edited."

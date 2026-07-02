@@ -12,7 +12,13 @@ from .paths import now_iso, slugify, uniquify
 
 ROLE_TO_LABEL = {"user": "You", "assistant": "Grimoire"}
 LABEL_TO_ROLE = {"You": "user", "Grimoire": "assistant"}
-_MARKER = re.compile(r"^\*\*(You|Grimoire):\*\*[ ]?", re.MULTILINE)
+# optional speaker rides in the marker label: **Grimoire (Seraphine Vale):**
+_MARKER = re.compile(r"^\*\*(You|Grimoire)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MULTILINE)
+
+
+def _label(role: str, speaker: str | None) -> str:
+    base = ROLE_TO_LABEL[role]
+    return f"{base} ({speaker})" if speaker else base
 
 
 class SceneNotFound(Exception):
@@ -106,7 +112,10 @@ def _parse_messages(body: str) -> list[dict]:
     for i, m in enumerate(matches):
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-        messages.append({"role": LABEL_TO_ROLE[m.group(1)], "content": body[start:end].strip()})
+        msg = {"role": LABEL_TO_ROLE[m.group(1)], "content": body[start:end].strip()}
+        if m.group(2):
+            msg["speaker"] = m.group(2)
+        messages.append(msg)
     return messages
 
 
@@ -167,12 +176,12 @@ def add_dismissed(cid: str, sid: str, char_id: str) -> None:
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
-def append_message(cid: str, sid: str, role: str, content: str) -> None:
+def append_message(cid: str, sid: str, role: str, content: str, speaker: str | None = None) -> None:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
-    block = f"**{ROLE_TO_LABEL[role]}:** {content.strip()}\n"
+    block = f"**{_label(role, speaker)}:** {content.strip()}\n"
     body = (body.rstrip() + "\n\n" + block) if body.strip() else block
     meta["updated"] = now_iso()
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
@@ -181,7 +190,7 @@ def append_message(cid: str, sid: str, role: str, content: str) -> None:
 def _serialize_messages(messages: list[dict]) -> str:
     body = ""
     for m in messages:
-        block = f"**{ROLE_TO_LABEL[m['role']]}:** {m['content'].strip()}\n"
+        block = f"**{_label(m['role'], m.get('speaker'))}:** {m['content'].strip()}\n"
         body = (body.rstrip() + "\n\n" + block) if body.strip() else block
     return body
 
