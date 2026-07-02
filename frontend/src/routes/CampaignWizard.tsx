@@ -116,8 +116,8 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
   const who = persona.name.trim() || "your character";
 
   return (
-    <div className="view wizard">
-      <h2>New campaign</h2>
+    <div className="page page-narrow view-anim wizard">
+      <h1 className="page-h1">New Campaign</h1>
 
       <ol className="wizard-steps">
         {STEPS.map((label, i) => {
@@ -127,7 +127,6 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
             <li key={label} className={`wizard-step ${state}`}>
               <span className="num">{step > n ? "✓" : n}</span>
               {step === n && <span className="label">{label}</span>}
-              {i < STEPS.length - 1 && <span className="bar" />}
             </li>
           );
         })}
@@ -149,21 +148,31 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
               {worlds.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
           </div>
-          <div className="field">
-            <label htmlFor="wiz-region">Holidays region</label>
-            <select id="wiz-region" aria-label="Holidays region" value={region}
-                    onChange={(e) => setRegion(e.target.value)}>
-              <option value="US">United States</option>
-              <option value="GB">United Kingdom</option>
-              <option value="CA">Canada</option>
-              <option value="AU">Australia</option>
-              <option value="IL">Israel</option>
-              <option value="">None</option>
-            </select>
+          <div className="field-row">
+            <div className="field">
+              <label htmlFor="wiz-calendar">Calendar</label>
+              <select id="wiz-calendar" aria-label="Calendar" value="gregorian" onChange={() => {}}>
+                <option value="gregorian">Gregorian</option>
+              </select>
+              <div className="field-caption">More providers to come</div>
+            </div>
+            <div className="field">
+              <label htmlFor="wiz-region">Holidays</label>
+              <select id="wiz-region" aria-label="Holidays region" value={region}
+                      onChange={(e) => setRegion(e.target.value)}>
+                <option value="US">United States</option>
+                <option value="GB">United Kingdom</option>
+                <option value="CA">Canada</option>
+                <option value="AU">Australia</option>
+                <option value="IL">Israel</option>
+                <option value="">None</option>
+              </select>
+              <div className="field-caption">Regional holiday set</div>
+            </div>
           </div>
           <div className="wizard-footer">
             <span />
-            <button className="primary" disabled={!canNext1} onClick={() => setStep(2)}>Next</button>
+            <button className="btn-accent" disabled={!canNext1} onClick={() => setStep(2)}>Next ▸</button>
           </div>
         </div>
       )}
@@ -216,7 +225,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
           </div>
           <div className="wizard-footer">
             <button className="subtle" onClick={() => setStep(1)}>Back</button>
-            <button className="primary" disabled={!canNext2} onClick={() => setStep(3)}>Next</button>
+            <button className="btn-accent" disabled={!canNext2} onClick={() => setStep(3)}>Next ▸</button>
           </div>
         </div>
       )}
@@ -246,7 +255,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
           </button>
           <div className="wizard-footer">
             <button className="subtle" onClick={() => setStep(2)} disabled={busy}>Back</button>
-            <button className="primary" onClick={commit} disabled={busy}>
+            <button className="btn-accent" onClick={commit} disabled={busy}>
               {busy ? "Creating…" : "Create campaign"}
             </button>
           </div>
@@ -288,7 +297,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
           </div>
           <div className="wizard-footer">
             <span />
-            <button className="primary" onClick={() => navigate(`/campaigns/${committed.cid}`)}>Finish</button>
+            <button className="btn-chrome" style={{ boxShadow: "var(--sh4)" }} onClick={() => navigate(`/campaigns/${committed.cid}`)}>Finish ▸</button>
           </div>
         </div>
       )}

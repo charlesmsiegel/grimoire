@@ -379,25 +379,29 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 /* ---- campaign creation wizard ---- */
 .wizard { max-width: 600px; }
 
-/* stepper: numbered sigils joined by hairlines; only the active step is named */
+/* stepper: single bordered row of equal cells; only the active step is named */
 .wizard-steps {
-  display: flex; align-items: center; list-style: none;
-  margin: 18px 0 26px; padding: 0;
+  display: flex; list-style: none; margin: 18px 0 26px; padding: 0;
+  border: var(--rw) solid var(--rule); background: var(--surface);
 }
-.wizard-step { display: flex; align-items: center; color: var(--muted); }
+.wizard-step {
+  flex: 1; display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  color: var(--muted); border-right: var(--rw) solid var(--rule);
+}
+.wizard-step:last-child { border-right: none; }
 .wizard-step .num {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; flex: none; border-radius: 50%;
-  border: 1px solid var(--muted); font-size: 12px; font-family: var(--fd);
+  width: 26px; height: 26px; flex: none; border: var(--rw2) solid currentColor;
+  font-size: 12px; font-family: var(--fm);
 }
 .wizard-step .label {
-  margin-left: 8px; font-size: 11px; letter-spacing: 0.14em;
-  text-transform: uppercase; font-family: var(--fd); white-space: nowrap;
+  font-size: 11px; letter-spacing: 0.14em;
+  text-transform: uppercase; font-family: var(--fm); white-space: nowrap;
 }
-.wizard-step .bar { width: 28px; height: 1px; background: var(--muted); margin: 0 10px; flex: none; }
-.wizard-step.on { color: var(--accent); }
-.wizard-step.on .num { border-color: var(--accent); color: var(--accent); }
-.wizard-step.done .num { border-color: var(--accent); color: var(--accent); }
+.wizard-step.on { background: var(--accent); color: var(--on-accent); }
+.wizard-step.done { background: var(--panel); color: var(--ink); }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.field-caption { font-family: var(--fm); font-size: 9.5px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; margin-top: 4px; }
 
 .wizard-body h3 { font-family: var(--fd); margin: 0 0 4px; }
 .wizard-intro { color: var(--muted); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
@@ -408,17 +412,23 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 /* repeatable starting-location cards */
 .wizard-location {
   display: flex; flex-direction: column; gap: 8px;
-  border: 1px solid var(--muted); border-radius: var(--radius);
+  border: var(--rw) solid var(--rule); background: var(--surface);
   padding: 12px; margin-bottom: 10px;
 }
 .wizard-location input[type="text"], .wizard-location textarea {
-  width: 100%; background: var(--surface); color: var(--ink);
-  border: 1px solid var(--muted); border-radius: var(--radius);
+  width: 100%; background: var(--bg); color: var(--ink);
+  border: var(--rw2) solid var(--rule);
   padding: 8px; font-family: var(--fb);
 }
+.wizard-location input[type="text"]:first-child { font-family: var(--fd); font-weight: 700; font-size: 18px; }
+.wizard-location input[aria-label="Location keys"] { font-family: var(--fm); font-size: 12px; }
 .wizard-location textarea { resize: vertical; min-height: 56px; }
 .wizard-location .remove { align-self: flex-end; }
-.wizard-add { margin-top: 2px; }
+.subtle.wizard-add {
+  width: 100%; margin-top: 2px; border: var(--rw2) dashed var(--rule); background: none;
+  color: var(--ink); font-family: var(--fm); font-size: 11px; letter-spacing: 0.1em;
+  text-transform: uppercase; padding: 12px; cursor: pointer;
+}
 
 /* footer: Back on the left, primary on the right, parted by a hairline */
 .wizard-footer {
