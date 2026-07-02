@@ -37,6 +37,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [ctxKey, setCtxKey] = useState(0);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
+  const [rerollPrompt, setRerollPrompt] = useState<string | null>(null); // null = popover closed
   const [colorQuotes, setColorQuotes] = useState(false);
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
   const [showChanges, setShowChanges] = useState(false);
@@ -157,8 +158,14 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
 
   async function reroll() {
     if (!activeId || busy) return;
+    const guidance = (rerollPrompt ?? "").trim();
+    setRerollPrompt(null);
     setMessages((m) => m.slice(0, -1));
-    await runStream((onEvent) => api.regenerate(cid, activeId, onEvent));
+    // omit the 4th argument entirely for a plain reroll (an explicit
+    // undefined would change the call shape)
+    await runStream((onEvent) => guidance
+      ? api.regenerate(cid, activeId!, onEvent, guidance)
+      : api.regenerate(cid, activeId!, onEvent));
   }
 
   async function endScene() {
@@ -349,7 +356,24 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
               {editing?.index !== i && !busy && (
                 <span className="msg-actions">
                   {m.role === "assistant" && i === messages.length - 1 && i > 0 && (
-                    <button className="msg-edit" onClick={reroll}>Reroll</button>
+                    rerollPrompt !== null ? (
+                      <span className="reroll-pop">
+                        <input
+                          autoFocus
+                          placeholder="Guide the reroll (optional)…"
+                          aria-label="Reroll guidance"
+                          value={rerollPrompt}
+                          onChange={(e) => setRerollPrompt(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") reroll();
+                            if (e.key === "Escape") setRerollPrompt(null);
+                          }}
+                        />
+                        <button className="btn-chrome" onClick={reroll}>Reroll ▸</button>
+                      </span>
+                    ) : (
+                      <button className="msg-edit" onClick={() => setRerollPrompt("")}>Reroll</button>
+                    )
                   )}
                   <button className="msg-edit" aria-label={`Edit message ${i + 1}`} title="Edit"
                           onClick={() => setEditing({ index: i, text: m.content })}>✎</button>
