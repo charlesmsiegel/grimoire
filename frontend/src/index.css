@@ -65,6 +65,27 @@ body::before {
 }
 .joined > button { flex: none; box-shadow: none; }
 
+/* ---- dashboard list block ---- */
+.list-block { border: var(--rw) solid var(--rule); background: var(--surface); margin-top: 22px; }
+.list-block:empty { display: none; }
+.list-row { display: flex; align-items: center; border-bottom: var(--rw2) solid var(--rule-soft); }
+.list-row:last-child { border-bottom: none; }
+.list-row-main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px;
+  text-align: left; background: none; border: none; cursor: pointer;
+  padding: 16px 20px; color: var(--ink);
+}
+.list-row-name { font-family: var(--fd); font-weight: 700; font-size: 26px; line-height: 1; }
+.list-row-meta {
+  font-family: var(--fm); font-size: 10.5px; color: var(--muted);
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.list-row-arrow { font-family: var(--fd); font-weight: 900; font-size: 22px; color: var(--accent); padding: 0 20px; }
+.list-row .row-actions { opacity: 0; }
+.list-row:hover .row-actions, .list-row:focus-within .row-actions { opacity: 1; }
+.page-note { color: var(--subtle); font-style: italic; }
+.page-note a { color: var(--accent); }
+
 /* ---- section label (character detail, config) ---- */
 .section-label {
   font-family: var(--fm); font-size: 10px; color: var(--accent);

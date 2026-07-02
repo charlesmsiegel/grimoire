@@ -36,12 +36,15 @@ function renderView() {
   );
 }
 
-test("lists campaigns", async () => {
+test("lists campaigns with world/scene metadata rows", async () => {
   (api.listCampaigns as any).mockResolvedValue([
-    { id: "c1", name: "Run One", world: "w1", created: "", updated: "" },
+    { id: "c1", name: "Ashes of the Verdigris Crown", world: "w1", created: "", updated: "",
+      scenes: 4, last_scene: "Verdigris & Ash" },
   ]);
   renderView();
-  await screen.findByText("Run One");
+  await screen.findByText("Ashes of the Verdigris Crown");
+  expect(screen.getByText(/WORLD ▸ Realm · 4 SCENES · LAST: Verdigris & Ash/i)).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: /campaigns/i })).toBeInTheDocument();
 });
 
 test("New campaign button navigates to the wizard", async () => {
@@ -60,7 +63,7 @@ test("New campaign is disabled with guidance when there are no worlds", async ()
 
 test("deletes a campaign after confirm", async () => {
   (api.listCampaigns as any).mockResolvedValue([
-    { id: "c1", name: "Doomed", world: "w1", created: "", updated: "" },
+    { id: "c1", name: "Doomed", world: "w1", created: "", updated: "", scenes: 0, last_scene: "" },
   ]);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   renderView();
