@@ -340,3 +340,48 @@ def test_unsafe_speaker_falls_back_to_reserved_label(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "user", "hi", speaker="x" * 65)
     raw = (campaigns.campaign_root(cid) / "scenes" / f"{sid}.md").read_text(encoding="utf-8")
     assert "**You:** hi" in raw
+
+
+def test_stamp_user_speaker_backfills_only_bare_user_lines(monkeypatch, tmp_path):
+    cid, sid = _campaign_with_pc(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "first, before the PC joined")
+    scenes.append_message(cid, sid, "assistant", "noted")
+    scenes.stamp_user_speaker(cid, sid, "Elara Vane")
+    msgs = scenes.read_scene(cid, sid)["messages"]
+    assert [(m["role"], m.get("speaker")) for m in msgs] == [
+        ("user", "Elara Vane"), ("assistant", None)]
+    raw = (campaigns.campaign_root(cid) / "scenes" / f"{sid}.md").read_text(encoding="utf-8")
+    assert "**Elara Vane:** first, before the PC joined" in raw
+
+
+def test_split_reply_segments_and_guards():
+    players = frozenset({"Elara Vane"})
+    text = ("The rain hammers the roof.\n\n"
+            '**Seraphine Vale:** "You dare?"\n\n'
+            "**Grimoire:** Thunder rolls.\n\n"
+            "**Elara Vane:** I would never—")
+    assert scenes.split_reply(text, players) == [
+        {"speaker": None, "content": "The rain hammers the roof."},
+        {"speaker": "Seraphine Vale", "content": '"You dare?"'},
+        {"speaker": None, "content": "Thunder rolls."},
+        # a player-named block is never stored as the player: reassigned to the narrator
+        {"speaker": None, "content": "I would never—"},
+    ]
+
+
+def test_split_reply_without_markers_is_one_narrator_post():
+    assert scenes.split_reply("Just prose.", frozenset()) == [
+        {"speaker": None, "content": "Just prose."}]
+    assert scenes.split_reply("   ", frozenset()) == []
+
+
+def test_remove_trailing_assistant_run(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "user", "hi")
+    scenes.append_message(cid, sid, "assistant", "one", speaker="Seraphine Vale")
+    scenes.append_message(cid, sid, "assistant", "two")
+    scenes.remove_trailing_assistant_run(cid, sid)
+    assert scenes.read_scene(cid, sid)["messages"] == [{"role": "user", "content": "hi"}]
+    with pytest.raises(IndexError):
+        scenes.remove_trailing_assistant_run(cid, sid)
