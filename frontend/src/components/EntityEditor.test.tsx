@@ -10,6 +10,11 @@ vi.mock("../api/client", () => ({
     deleteEntity: vi.fn(),
     listCharacters: vi.fn(),
     listPCs: vi.fn(),
+    listEntityImages: vi.fn(),
+    putEntityImage: vi.fn(),
+    promoteEntityImage: vi.fn(),
+    imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
+    entityImageUrl: (_s: any, k: string, e: string, n: string) => `/img/${k}/${e}/${n}`,
   },
 }));
 import { api } from "../api/client";
@@ -23,6 +28,9 @@ beforeEach(() => {
   (api.readEntity as any).mockResolvedValue({ meta: { id: "salt", name: "Salt", keys: "pact" }, body: "x" });
   (api.listCharacters as any).mockResolvedValue([{ id: "tanaka", name: "Tanaka" }]);
   (api.listPCs as any).mockResolvedValue([]);
+  (api.listEntityImages as any).mockResolvedValue([]);
+  (api.putEntityImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
+  (api.promoteEntityImage as any).mockResolvedValue({ ok: true });
 });
 
 test("lists entities and creates one with keys", async () => {
@@ -130,6 +138,41 @@ test("owner chip in the read-only view calls onOpenOwner", async () => {
   // the only button labelled exactly "Tanaka" is the owner chip in the sidebar
   fireEvent.click(await screen.findByRole("button", { name: "Tanaka" }));
   expect(onOpenOwner).toHaveBeenCalledWith("characters:tanaka");
+});
+
+test("location rail rows show the primary image when one exists", async () => {
+  (api.listEntities as any).mockResolvedValue([
+    { id: "warehouse", name: "Warehouse Nine", has_image: true },
+    { id: "reeds", name: "The Reeds", has_image: false },
+  ]);
+  const { container } = render(<EntityEditor wid="w" kind="locations" />);
+  await screen.findByText("Warehouse Nine");
+  expect(container.querySelectorAll(".loc-row-img")).toHaveLength(1);
+});
+
+test("location detail shows the primary image header and Images shelf with promote", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "warehouse", name: "Warehouse Nine", has_image: true }]);
+  (api.readEntity as any).mockResolvedValue({ meta: { id: "warehouse", name: "Warehouse Nine" }, body: "docks" });
+  (api.listEntityImages as any).mockResolvedValue([
+    { name: "avatar", ext: "png" }, { name: "gallery_1", ext: "png" },
+  ]);
+  render(<EntityEditor wid="w" kind="locations" />);
+  fireEvent.click(await screen.findByText("Warehouse Nine"));
+  await screen.findByText("Images");
+  expect(await screen.findByText("primary")).toBeInTheDocument();           // shelf caption
+  expect(screen.getByAltText("Warehouse Nine primary")).toBeInTheDocument(); // header image
+  fireEvent.click(screen.getByRole("button", { name: /set as primary/i }));
+  await waitFor(() => expect(api.promoteEntityImage).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "locations", "warehouse", "gallery_1"));
+});
+
+test("location detail without images shows the add tile only", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "reeds", name: "The Reeds", has_image: false }]);
+  (api.readEntity as any).mockResolvedValue({ meta: { id: "reeds", name: "The Reeds" }, body: "marsh" });
+  render(<EntityEditor wid="w" kind="locations" />);
+  fireEvent.click(await screen.findByText("The Reeds"));
+  await screen.findByText("no image");
+  expect(screen.getByRole("button", { name: /\+ add/i })).toBeInTheDocument();
 });
 
 test("deletes after confirm", async () => {

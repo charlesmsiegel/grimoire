@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type EntityKind, type EntityScope, type EntitySummary } from "../api/client";
@@ -25,6 +25,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const [ownerOpts, setOwnerOpts] = useState<LoreOwner[]>([]); // candidates for the picker
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing entries open read-only
   const [error, setError] = useState<string | null>(null);
+  const [images, setImages] = useState<string[]>([]);        // selected location's asset names
+  const [imgBust, setImgBust] = useState(0);
+  const shelfFileRef = useRef<HTMLInputElement>(null);
   const label = kind === "lore" ? "lore entry" : "location";
 
   const reload = useCallback(() => api.listEntities(scope, kind).then(setItems),
@@ -63,12 +66,21 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nav]);
 
+  const reloadImages = useCallback((id: string) => {
+    if (kind !== "locations") { setImages([]); return; }
+    api.listEntityImages(scope, kind, id)
+      .then((imgs) => setImages(imgs.map((i) => i.name)))
+      .catch(() => setImages([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, scope.kind, scope.id]);
+
   function resetForm() {
     setEditing(null);
     setName("");
     setBody("");
     setKeys("");
     setOwners([]); // manual "+ New" / post-save: always world-level, never a stale nav owner
+    setImages([]);
     setMode("edit"); // a brand-new entry goes straight to the form
   }
 
@@ -81,6 +93,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setKeys(e.meta.keys ?? "");
     setOwners((e.meta.owners ?? "").split(",").map((o) => o.trim()).filter(Boolean));
     setMode("view");
+    reloadImages(id);
   }
 
   async function save() {
@@ -109,6 +122,45 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     await reload();
   }
 
+  // ---- location images shelf (the primary image is the asset named "avatar") ----
+  const hasPrimary = images.includes("avatar");
+  const galleryNames = images
+    .filter((n) => n.startsWith("gallery_"))
+    .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
+  const imgSrc = (n: string) => `${api.entityImageUrl(scope, kind, editing ?? "", n)}?v=${imgBust}`;
+
+  async function promoteImage(name: string) {
+    if (!editing) return;
+    setError(null);
+    try {
+      await api.promoteEntityImage(scope, kind, editing, name);
+      reloadImages(editing);
+      await reload();
+      setImgBust((n) => n + 1);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function onShelfAdd(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !editing) return;
+    setError(null);
+    const next = hasPrimary
+      ? `gallery_${galleryNames.reduce((m, n) => Math.max(m, Number(n.slice("gallery_".length))), 0) + 1}`
+      : "avatar";
+    try {
+      await api.putEntityImage(scope, kind, editing, next, file);
+      reloadImages(editing);
+      await reload();
+      setImgBust((n) => n + 1);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    } finally {
+      e.target.value = "";
+    }
+  }
+
   const keyList = keys.split(",").map((k) => k.trim()).filter(Boolean);
 
   // Group lore rows: "Unowned (world)" first, then one group per distinct owner ref.
@@ -128,8 +180,14 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   }
 
   const row = (e: EntitySummary) => (
-    <button key={e.id} className={"row" + (editing === e.id ? " active" : "")} onClick={() => select(e.id)}>
-      {e.name}
+    <button key={e.id}
+            className={"row" + (kind === "locations" ? " loc-row" : "") + (editing === e.id ? " active" : "")}
+            onClick={() => select(e.id)}>
+      {kind === "locations" && e.has_image && (
+        <img className="loc-row-img" alt="" src={api.entityImageUrl(scope, kind, e.id, "avatar")}
+             onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
+      )}
+      <span className="row-name">{e.name}</span>
     </button>
   );
 
@@ -153,7 +211,41 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
         {mode === "view" && editing ? (
           <div className="detail-view">
             <div className="detail-main">
-              <h3>{name}</h3>
+              {kind === "locations" && editing && hasPrimary ? (
+                <div className="loc-head">
+                  <img className="loc-head-img" alt={`${name} primary`} src={imgSrc("avatar")}
+                       onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                  <h3>{name}</h3>
+                </div>
+              ) : (
+                <h3>{name}</h3>
+              )}
+              {kind === "locations" && editing && (
+                <>
+                  <div className="section-label">Images</div>
+                  <div className="images-shelf wide">
+                    {hasPrimary ? (
+                      <figure className="shelf-tile avatar-tile">
+                        <a href={imgSrc("avatar")} target="_blank" rel="noreferrer">
+                          <img alt="primary image" src={imgSrc("avatar")} />
+                        </a>
+                        <figcaption>primary</figcaption>
+                      </figure>
+                    ) : (
+                      <div className="shelf-tile shelf-empty">no image</div>
+                    )}
+                    {galleryNames.map((n) => (
+                      <div className="shelf-tile" key={n}>
+                        <a href={imgSrc(n)} target="_blank" rel="noreferrer"><img alt={n} src={imgSrc(n)} /></a>
+                        <button className="shelf-promote" onClick={() => promoteImage(n)}>Set as primary</button>
+                      </div>
+                    ))}
+                    <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
+                    <input ref={shelfFileRef} type="file" accept="image/*" hidden
+                           aria-label="Add image" onChange={onShelfAdd} />
+                  </div>
+                </>
+              )}
               <div className="detail-rendered">
                 <Markdown remarkPlugins={[remarkGfm]}>{body}</Markdown>
               </div>
