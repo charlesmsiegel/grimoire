@@ -13,13 +13,14 @@ function errMsg(err: any): string {
 }
 
 export function CastPanel({
-  cid, sid, sceneEmpty, keySet, onSeeded,
+  cid, sid, sceneEmpty, keySet, onSeeded, onSceneRenamed,
 }: {
   cid: string;
   sid: string;
   sceneEmpty: boolean;
   keySet: boolean;
   onSeeded: () => void;
+  onSceneRenamed?: (id: string) => void;
 }) {
   const [cast, setCast] = useState<Actor[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
@@ -103,8 +104,14 @@ export function CastPanel({
     if (!dateInput) return;
     setError(null);
     try {
-      await api.setSceneDatetime(cid, sid, dateInput);
+      const res = await api.setSceneDatetime(cid, sid, dateInput);
       setDateInput("");
+      if (res.id !== sid) {
+        // first date set renames the scene file — adopt the new id; the sid
+        // prop change re-runs every load effect, so skip the stale reload
+        onSceneRenamed?.(res.id);
+        return;
+      }
       await reloadWhen();
       onSeeded(); // surface the transition line in the stream
     } catch (err: any) {

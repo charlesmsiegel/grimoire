@@ -37,7 +37,7 @@ beforeEach(() => {
     secondary: null, confirmed: true });
   (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
-  (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: false, friendly: "" });
+  (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: false, friendly: "", id: "s" });
 });
 
 function renderInspector(onSceneChanged: () => void = () => {}) {
@@ -89,6 +89,18 @@ test("calendar but no date: setting a date calls setSceneDatetime and notifies",
   fireEvent.click(screen.getByRole("button", { name: /set date/i }));
   await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s", "2026-07-04"));
   await waitFor(() => expect(onChanged).toHaveBeenCalled());
+});
+
+test("first date set renames the scene: adopts the new id via onSceneRenamed", async () => {
+  (api.setSceneDatetime as any).mockResolvedValue(
+    { ok: true, advanced: false, friendly: "4 July 2026", id: "001--2026-07-04--s" });
+  const onRenamed = vi.fn();
+  render(<SceneInspector cid="c" sid="s" refreshKey={0}
+                         onSceneChanged={() => {}} onSceneRenamed={onRenamed} />);
+  const input = await screen.findByLabelText("Scene date");
+  fireEvent.change(input, { target: { value: "2026-07-04" } });
+  fireEvent.click(screen.getByRole("button", { name: /set date/i }));
+  await waitFor(() => expect(onRenamed).toHaveBeenCalledWith("001--2026-07-04--s"));
 });
 
 test("shows the current date when one is set", async () => {
