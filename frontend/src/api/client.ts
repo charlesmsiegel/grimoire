@@ -62,7 +62,7 @@ export type Scene = { meta: { id: string; title: string }; messages: Message[] }
 // entities (locations | lore)
 export type EntityKind = "locations" | "lore";
 export type EntityScope = { kind: "world" | "campaign"; id: string };
-export type EntitySummary = { id: string; name: string; keys?: string; owners?: string };
+export type EntitySummary = { id: string; name: string; keys?: string; owners?: string; has_image?: boolean };
 export type EntityDetail = { meta: { id: string; name: string; keys?: string; owners?: string }; body: string };
 
 // characters (V3 cards)
@@ -84,7 +84,7 @@ export type CardData = {
 };
 export type Card = { spec: string; spec_version: string; data: CardData };
 export type VersionRef = { id: string; name: string };
-export type CharacterSummary = { id: string; name: string; default_version: string; has_avatar?: boolean; versions: VersionRef[] };
+export type CharacterSummary = { id: string; name: string; default_version: string; has_avatar?: boolean; tagline?: string; versions: VersionRef[] };
 export type CharacterDetail = {
   meta: { id: string; name: string; default_version: string; birthdate?: string };
   versions: { id: string; name: string; card: Card; images?: string[]; chub_source?: string; is_chub?: boolean }[];
@@ -324,6 +324,22 @@ export const api = {
   },
   deleteImage: (wid: string, cid: string, vid: string, name: string) =>
     request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}`),
+  promoteImage: (wid: string, cid: string, vid: string, name: string) =>
+    request<{ ok: boolean }>("POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}/promote`),
+  entityImageUrl: (scope: EntityScope, kind: EntityKind, eid: string, name: string) =>
+    `${entityBase(scope)}/${kind}/${eid}/images/${name}`,
+  listEntityImages: (scope: EntityScope, kind: EntityKind, eid: string) =>
+    request<{ name: string; ext: string }[]>("GET", `${entityBase(scope)}/${kind}/${eid}/images`),
+  putEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<{ name: string; ext: string }>(
+      `${entityBase(scope)}/${kind}/${eid}/images/${name}`, form, "PUT");
+  },
+  deleteEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string) =>
+    request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/${kind}/${eid}/images/${name}`),
+  promoteEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string) =>
+    request<{ ok: boolean }>("POST", `${entityBase(scope)}/${kind}/${eid}/images/${name}/promote`),
   importCharacterBook: (wid: string, cid: string, vid: string) =>
     request<{ created: { kind: string; id: string }[] }>(
       "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/lorebook/import`),
