@@ -37,12 +37,45 @@ def _require_campaign(cid: str) -> None:
         raise campaigns.CampaignNotFound(cid)
 
 
+def _numbering(cid: str) -> tuple[int, int]:
+    """(next number, current pad width) from the files on disk — no stored
+    counter. Width starts at MIN_WIDTH and follows the widest number present;
+    legacy (unmigrated) stems don't parse and are ignored."""
+    top, width = 0, scene_ids.MIN_WIDTH
+    d = _scenes_dir(cid)
+    if d.exists():
+        for p in d.glob("*.md"):
+            parsed = scene_ids.parse_sid(p.stem)
+            if parsed:
+                top = max(top, parsed["number"])
+                width = max(width, parsed["width"])
+    return top + 1, width
+
+
+def repad(cid: str, width: int) -> None:
+    """Re-pad every scene number to `width` digits (renames files, repoints all
+    referencing stores). Keeps widths uniform so lexicographic order stays exact."""
+    mapping = {}
+    for p in _scenes_dir(cid).glob("*.md"):
+        parsed = scene_ids.parse_sid(p.stem)
+        if parsed and parsed["width"] != width:
+            mapping[p.stem] = scene_ids.format_sid(
+                parsed["number"], width, parsed["date_slug"], parsed["title_slug"])
+    for old, new in mapping.items():
+        _scene_path(cid, old).rename(_scene_path(cid, new))
+    scene_refs.repoint(cid, mapping)
+
+
 def create_scene(cid: str, title: str) -> str:
     _require_campaign(cid)
     d = _scenes_dir(cid)
     d.mkdir(parents=True, exist_ok=True)
+    number, width = _numbering(cid)
+    if len(str(number)) > width:  # 999 -> 1000: widen the whole campaign first
+        width = len(str(number))
+        repad(cid, width)
     now = now_iso()
-    base = f"{now[:10]}-{slugify(title)}"
+    base = scene_ids.format_sid(number, width, None, slugify(title))
     sid = uniquify(base, lambda c: _scene_path(cid, c).exists())
     meta = {"title": title, "model": read_config()["model"], "created": now, "updated": now}
     _scene_path(cid, sid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
@@ -91,11 +124,13 @@ def rename_scene(cid: str, sid: str, title: str) -> str:
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["title"] = title
-    prefix = meta.get("created", now_iso())[:10]
-    new_sid = uniquify(
-        f"{prefix}-{slugify(title)}",
-        lambda c: c != sid and _scene_path(cid, c).exists(),
-    )
+    parsed = scene_ids.parse_sid(sid)
+    if parsed:  # keep number and date sections verbatim; only the title re-slugs
+        base = scene_ids.format_sid(
+            parsed["number"], parsed["width"], parsed["date_slug"], slugify(title))
+    else:  # legacy (pre-migration) id: keep the old created-date prefix scheme
+        base = f"{meta.get('created', now_iso())[:10]}-{slugify(title)}"
+    new_sid = uniquify(base, lambda c: c != sid and _scene_path(cid, c).exists())
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
     if new_sid != sid:
         p.rename(_scene_path(cid, new_sid))

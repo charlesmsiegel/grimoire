@@ -191,3 +191,30 @@ def test_mark_absorbed_missing_scene_raises(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(scenes.SceneNotFound):
         scenes.mark_absorbed(cid, "nope", "x", "y")
+
+
+def test_create_assigns_padded_sequence_numbers(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    assert scenes.create_scene(cid, "Alpha") == "001--alpha"
+    assert scenes.create_scene(cid, "Beta") == "002--beta"
+
+
+def test_numbering_skips_gaps_left_by_deletes(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    s1 = scenes.create_scene(cid, "Alpha")
+    scenes.create_scene(cid, "Beta")
+    scenes.delete_scene(cid, s1)
+    assert scenes.create_scene(cid, "Gamma") == "003--gamma"  # 001 is never reused
+
+
+def test_repad_widens_every_scene_and_repoints(monkeypatch, tmp_path):
+    from grimoire.store import chronicle
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "One")           # 001--one
+    d = campaigns.campaign_root(cid) / "scenes"
+    (d / f"{sid}.md").rename(d / "999--one.md")     # simulate a campaign at the width limit
+    chronicle.absorb(cid, {"id": "999--one", "one_line": "x", "summary": "", "keywords": []})
+    new = scenes.create_scene(cid, "Two")
+    assert new == "1000--two"
+    assert sorted(p.stem for p in d.glob("*.md")) == ["0999--one", "1000--two"]
+    assert "0999--one" in chronicle.read_chronicle(cid)
