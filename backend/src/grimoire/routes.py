@@ -34,6 +34,10 @@ class DataDirUpdate(BaseModel):
     data_dir: str | None = None
 
 
+class RegenerateBody(BaseModel):
+    guidance: str | None = None
+
+
 class NameBody(BaseModel):
     name: str
 
@@ -1166,7 +1170,8 @@ def post_retry(cid: str, sid: str, client: OpenRouterClient = Depends(get_openro
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/regenerate")
-def post_regenerate(cid: str, sid: str, client: OpenRouterClient = Depends(get_openrouter)):
+def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
+                    client: OpenRouterClient = Depends(get_openrouter)):
     """Redo the most recent post: drop a trailing assistant reply, stream a fresh one."""
     scene = _require_scene(cid, sid)
     cfg = store.read_config()
@@ -1179,6 +1184,12 @@ def post_regenerate(cid: str, sid: str, client: OpenRouterClient = Depends(get_o
             raise HTTPException(status_code=400, detail="cannot regenerate the opening post")
         store.scenes.remove_last_message(cid, sid)
     messages = store.context.build_messages(cid, sid)
+    guidance = (body.guidance or "").strip() if body else ""
+    if guidance:
+        messages.append({
+            "role": "system",
+            "content": f"Regenerate your previous reply. Guidance from the player: {guidance}",
+        })
     return _chat_stream(cid, sid, messages, cfg, client)
 
 
