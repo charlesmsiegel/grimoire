@@ -37,3 +37,43 @@ def test_unsafe_and_unsupported_rejected(tmp_path):
     with pytest.raises(ValueError):
         assets.put_image(tmp_path, "sera", "default", "avatar", b"a", "svg")  # not allowlisted
     assert assets.image_path(tmp_path, "..", "default", "avatar") is None  # unsafe cid
+
+
+def test_promote_swaps_gallery_with_avatar(tmp_path):
+    assets.put_image(tmp_path, "sera", "default", "avatar", b"old", "png")
+    assets.put_image(tmp_path, "sera", "default", "gallery_2", b"new", "webp")
+    assets.promote_image(tmp_path, "sera", "default", "gallery_2")
+    av = assets.image_path(tmp_path, "sera", "default", "avatar")
+    gal = assets.image_path(tmp_path, "sera", "default", "gallery_2")
+    assert av.read_bytes() == b"new" and av.suffix == ".webp"
+    assert gal.read_bytes() == b"old" and gal.suffix == ".png"
+
+
+def test_promote_without_existing_avatar_renames(tmp_path):
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", b"n", "png")
+    assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    assert assets.image_path(tmp_path, "sera", "default", "avatar").read_bytes() == b"n"
+    assert assets.image_path(tmp_path, "sera", "default", "gallery_1") is None
+
+
+def test_promote_missing_image_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_9")
+
+
+def test_promote_avatar_itself_is_a_noop(tmp_path):
+    assets.put_image(tmp_path, "sera", "default", "avatar", b"a", "png")
+    assets.promote_image(tmp_path, "sera", "default", "avatar")
+    assert assets.image_path(tmp_path, "sera", "default", "avatar").read_bytes() == b"a"
+
+
+def test_base_param_roots_other_kinds(tmp_path):
+    assets.put_image(tmp_path, "docks", "default", "avatar", b"i", "png", base="locations")
+    p = assets.image_path(tmp_path, "docks", "default", "avatar", base="locations")
+    assert p is not None and "locations" in p.parts
+    # not visible under the default characters/ base
+    assert assets.image_path(tmp_path, "docks", "default", "avatar") is None
+    assert assets.list_images(tmp_path, "docks", "default", base="locations") == [
+        {"name": "avatar", "ext": "png"}]
+    assets.delete_image(tmp_path, "docks", "default", "avatar", base="locations")
+    assert assets.image_path(tmp_path, "docks", "default", "avatar", base="locations") is None
