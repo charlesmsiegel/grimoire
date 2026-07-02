@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, Route, Routes } from "react-router-dom";
+import { NavLink, Route, Routes } from "react-router-dom";
 import { api } from "./api/client";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { DEFAULT_THEME } from "./theme/themes";
@@ -28,16 +28,29 @@ export default function App() {
 
   return (
     <ThemeProvider initial={theme}>
-      <div className="topbar">
-        <Link to="/" style={{ fontWeight: 600 }}>
-          ✦ grimoire
-        </Link>
+      <header className="topbar">
+        <NavLink to="/" className="brand">
+          <img src="/grimoire-128.png" alt="" width={30} height={30} />
+          <span>✦ GRIMOIRE</span>
+        </NavLink>
         <nav>
-          <Link to="/">Campaigns</Link>
-          <Link to="/worlds">Worlds</Link>
-          <Link to="/config">Config</Link>
+          <NavLink to="/" end className={({ isActive }) => "nav-btn" + (isActive ? " active" : "")}>
+            Campaigns
+          </NavLink>
+          <NavLink to="/worlds" className={({ isActive }) => "nav-btn" + (isActive ? " active" : "")}>
+            Worlds
+          </NavLink>
         </nav>
-      </div>
+        <div className="topbar-right">
+          <span className="status">
+            <span className="dot">●</span> OPENROUTER · {keySet ? "CONNECTED" : "NO KEY"}
+          </span>
+          <span className="divider" />
+          <NavLink to="/config" className={({ isActive }) => "config-link" + (isActive ? " active" : "")}>
+            Config
+          </NavLink>
+        </div>
+      </header>
       <Routes>
         <Route path="/" element={<CampaignsView />} />
         <Route path="/campaigns/new" element={<CampaignWizard keySet={keySet} />} />
