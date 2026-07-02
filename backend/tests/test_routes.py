@@ -733,6 +733,29 @@ def test_regenerate_excludes_the_dropped_post_from_the_prompt(client):
     assert cap.messages[-1] == {"role": "user", "content": "hi"}
 
 
+def test_regenerate_with_guidance_appends_a_system_steer(client):
+    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_message(cid, sid, "assistant", "old reply")
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                       json={"guidance": "make her angrier"}) as r:
+        for _ in r.iter_lines():
+            pass
+    assert cap.messages[-1] == {
+        "role": "system",
+        "content": "Regenerate your previous reply. Guidance from the player: make her angrier",
+    }
+    # the dropped assistant reply still isn't in the prompt
+    assert {"role": "assistant", "content": "old reply"} not in cap.messages
+    # and the guidance is transient — not in the stored transcript
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert all("make her angrier" not in m["content"] for m in msgs)
+
+
 def test_regenerate_after_a_failed_turn_behaves_like_retry(client):
     client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
