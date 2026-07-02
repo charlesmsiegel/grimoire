@@ -175,6 +175,37 @@ test("location detail without images shows the add tile only", async () => {
   expect(screen.getByRole("button", { name: /\+ add/i })).toBeInTheDocument();
 });
 
+test("lore rows stack owner avatars; owners without avatars are omitted", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "maren", name: "Maren", default_version: "v1", has_avatar: true, versions: [] },
+    { id: "hedde", name: "Hedde", default_version: "v1", has_avatar: false, versions: [] },
+  ]);
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "locations" ? [] : [
+      { id: "smuggling", name: "Smuggling", owners: "characters:maren, characters:hedde" },
+    ]));
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  await screen.findAllByText("Smuggling");
+  await waitFor(() => expect(container.querySelectorAll(".owner-stack-img")).toHaveLength(2));
+  expect(container.querySelector(".owner-stack-img")).toHaveAttribute("title", "Maren");
+});
+
+test("lore detail owner chips include an avatar or initials", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "maren", name: "Maren Voss", default_version: "v1", has_avatar: false, versions: [] },
+  ]);
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(kind === "locations" ? [] : [
+      { id: "smuggling", name: "Smuggling", owners: "characters:maren" },
+    ]));
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "smuggling", name: "Smuggling", owners: "characters:maren" }, body: "quiet boats" });
+  render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click((await screen.findAllByText("Smuggling"))[0]);
+  await screen.findByText("quiet boats");
+  expect(await screen.findByText("MV")).toBeInTheDocument(); // initials inside the owner chip
+});
+
 test("deletes after confirm", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
   vi.spyOn(window, "confirm").mockReturnValue(true);

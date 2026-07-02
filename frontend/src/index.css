@@ -495,6 +495,13 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .images-shelf.wide .shelf-tile img { height: auto; aspect-ratio: 16 / 10; }
 .images-shelf.wide .shelf-empty, .images-shelf.wide .shelf-add { height: 96px; }
 
+/* lore owner avatar stacks + owner chips */
+.owner-stack { display: flex; margin-left: auto; flex: none; }
+.owner-stack-img { width: 26px; height: 26px; object-fit: cover; border: var(--rw2) solid var(--rule); }
+.owner-stack-img + .owner-stack-img { margin-left: -6px; }
+.chip.owner-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; }
+.owner-chip .portrait, .owner-chip .portrait-initials { width: 22px; height: 22px; font-size: 10px; }
+
 /* location rail cards + detail header image */
 .row.loc-row { flex-direction: column; align-items: stretch; gap: 6px; padding: 0 0 8px; }
 .loc-row-img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; }
