@@ -224,6 +224,11 @@ test("declining the delete confirm does nothing", async () => {
 
 test("an error shows a Retry button that retries the scene", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  // the server persisted the user turn even though the stream errored —
+  // the post-stream re-fetch returns it
+  (api.getScene as any)
+    .mockResolvedValueOnce({ meta: {}, messages: [] })
+    .mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hello" }] });
   (api.chat as any).mockImplementation(async (_c: string, _s: string, _t: string, onEvent: any) => {
     onEvent({ error: { detail: "boom" } });
   });
@@ -240,8 +245,11 @@ test("an error shows a Retry button that retries the scene", async () => {
 
 test("Reroll on the last assistant post replaces it with a fresh reply", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
-    { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] });
+  (api.getScene as any)
+    .mockResolvedValueOnce({ meta: {}, messages: [
+      { role: "user", content: "hi" }, { role: "assistant", content: "old reply" }] })
+    .mockResolvedValue({ meta: {}, messages: [
+      { role: "user", content: "hi" }, { role: "assistant", content: "fresh reply" }] });
   (api.regenerate as any).mockImplementation(async (_c: string, _s: string, onEvent: any) => {
     onEvent({ delta: "fresh reply" });
   });
@@ -419,4 +427,61 @@ test("Changes tab reveals the changes panel", async () => {
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: /^Changes$/ }));
   expect(await screen.findByText(/No record changes yet/)).toBeInTheDocument();
+});
+
+test("an unstamped user line renders the sole player's name", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "pcs", id: "elara-vane", role: "player", name: "Elara Vane" },
+    { kind: "characters", id: "seraphine", role: "npc", name: "Seraphine Vale" },
+  ]);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "I open the door." },
+    { role: "assistant", content: "She waits.", speaker: "Seraphine Vale" },
+  ] });
+  renderCampaign();
+  await screen.findByText("Elara Vane");
+  expect(screen.getByText("Seraphine Vale")).toBeInTheDocument();
+});
+
+test("a stored speaker beats the player-name fallback", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "pcs", id: "elara-vane", role: "player", name: "Elara Vane" }]);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "spoken as someone else", speaker: "Old Name" }] });
+  renderCampaign();
+  await screen.findByText("Old Name");
+  expect(screen.queryByText("Elara Vane")).toBeNull();
+});
+
+test("after a stream completes the scene is re-fetched", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any)
+    .mockResolvedValueOnce({ meta: {}, messages: [] })
+    .mockResolvedValue({ meta: {}, messages: [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "Thunder rolls." },
+      { role: "assistant", content: "Who goes there?", speaker: "Seraphine Vale" },
+    ] });
+  (api.chat as any).mockImplementation(async (_c: string, _s: string, _t: string, onEvent: any) => {
+    onEvent({ delta: "**Grimoire:** Thunder rolls." });
+  });
+  renderCampaign();
+  await screen.findByText(/01 · Old/);
+  const ta = screen.getByRole("textbox");
+  fireEvent.change(ta, { target: { value: "hello" } });
+  fireEvent.keyDown(ta, { key: "Enter" });
+  await screen.findByText("Who goes there?");
+  expect(api.getScene).toHaveBeenCalledTimes(2);
+});
+
+test("no Reroll when every message is assistant-side (multi-post opener)", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "assistant", content: "opener one" },
+    { role: "assistant", content: "opener two", speaker: "Seraphine Vale" }] });
+  renderCampaign();
+  await screen.findByText("opener two");
+  expect(screen.queryByRole("button", { name: /reroll/i })).toBeNull();
 });
