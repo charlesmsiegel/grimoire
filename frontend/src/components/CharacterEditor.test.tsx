@@ -199,6 +199,19 @@ test("single import shows the tagline popup with the character's real name", asy
   await screen.findByText("Tagline for Seraphine");
 });
 
+test("saving the import popup refreshes the detail-view tagline", async () => {
+  (api.setCharacterTagline as any).mockResolvedValue({ ok: true });
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  fireEvent.change(screen.getByLabelText("Import character card"),
+    { target: { files: [new File(["{}"], "c.json")] } });
+  const box = await screen.findByLabelText("Tagline"); // the popup textarea
+  fireEvent.change(box, { target: { value: "A fresh tagline." } });
+  fireEvent.click(screen.getByText("Save"));
+  // popup closes and the detail view shows the saved tagline (onSaved -> parent state)
+  await screen.findByText("A fresh tagline.");
+});
+
 test("importing a .png posts multipart with png format", async () => {
   render(<CharacterEditor wid="w" />);
   await screen.findByText("Seraphine");

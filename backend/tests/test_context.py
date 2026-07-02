@@ -327,7 +327,7 @@ def test_cast_directory_tiers(monkeypatch, tmp_path):
     assert "Myval" not in sys.split("## Known to exist")[1]              # roster char not in tier 3
 
 
-def test_cast_directory_absent_when_no_briefs(monkeypatch, tmp_path):
+def test_cast_directory_absent_when_no_artifacts(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Aese", "main", _npc_card("Aese", description="d"))
     ap.appear(cid, sid, "characters", "aese", "main", "npc")

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { api } from "../api/client";
 
-export function TaglinePrompt({ wid, cid, name, onClose }:
-  { wid: string; cid: string; name: string; onClose: () => void }) {
+export function TaglinePrompt({ wid, cid, name, onClose, onSaved }:
+  { wid: string; cid: string; name: string; onClose: () => void; onSaved?: (text: string) => void }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +28,7 @@ export function TaglinePrompt({ wid, cid, name, onClose }:
         setError(err.detail ?? String(err));
         return;
       }
+      onSaved?.(text.trim());
     }
     onClose();
   }

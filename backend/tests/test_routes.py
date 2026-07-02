@@ -1009,7 +1009,8 @@ def test_post_tagline_generate_from_model(client):
     r = client.post(f"/api/worlds/{wid}/characters/{cid}/tagline/generate")
     assert r.status_code == 200
     assert r.json() == {"tagline": "A silent snowleopardgirl."}
-    assert client.get(f"/api/worlds/{wid}/characters/{cid}/tagline").json() == {"tagline": "A silent snowleopardgirl."}
+    # preview only: generate does not persist until the caller saves via PUT
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}/tagline").json() == {"tagline": ""}
 
 
 def test_post_tagline_generate_requires_key(client):
@@ -1138,6 +1139,35 @@ def test_absorb_writes_dossier_for_present_character(client):
     assert r.status_code == 200
     croot = store.campaigns.campaign_root(cid)
     assert "Aese is a shy snowleopardgirl" in store.dossiers.read(croot, "aese")
+
+
+def test_absorb_survives_dossier_failure(client):
+    # A dossier generation error must not fail the absorb (the loop swallows per character).
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Aese", "version_name": "main"})
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "aese", "version": "main", "role": "npc"})
+    store.scenes.append_message(cid, sid, "user", "hi")
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+
+    class Fake:  # 1st complete() = extraction (ok); later complete() = dossier (boom)
+        def __init__(self):
+            self.calls = 0
+
+        async def stream(self, m, mo, k):
+            yield "{}"
+
+        async def complete(self, m, mo, k):
+            self.calls += 1
+            if self.calls == 1:
+                return '{"one_line": "ok", "summary": "s", "keywords": [], "timeline_events": []}'
+            raise RuntimeError("dossier boom")
+
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: Fake()
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert r.status_code == 200 and r.json()["one_line"] == "ok"
+    assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""  # failed write skipped
 
 
 def test_absorb_empty_scene_is_400(client):
