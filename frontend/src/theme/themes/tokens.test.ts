@@ -40,6 +40,14 @@ describe("theme tokens", () => {
     }
   });
 
+
+  it("quote color is distinct from the accent in every theme", () => {
+    for (const t of themeList) {
+      expect(t.tokens["--quote"], `${t.name} quote must differ from accent`)
+        .not.toBe(t.tokens["--accent"]);
+    }
+  });
+
   it("codex is the hard-edged reference", () => {
     const codex = resolveTheme("codex").tokens;
     expect(codex["--accent"]).toBe("#c0392b");

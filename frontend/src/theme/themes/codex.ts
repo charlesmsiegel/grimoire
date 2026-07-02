@@ -10,7 +10,7 @@ const codex: Theme = {
     "--track": "rgba(26,23,18,.13)", "--chrome": "#1a1712",
     "--chrome-text": "#e7e1d4", "--chrome-muted": "#8f8674",
     "--chrome-rule": "#4b4335", "--accent": "#c0392b", "--on-accent": "#ffffff",
-    "--quote": "#c0392b", "--page": "#efe9dc", "--page-ink": "#1a1712",
+    "--quote": "#1f6f78", "--page": "#efe9dc", "--page-ink": "#1a1712",
     "--page-muted": "#7c7361", "--banner-bg": "#f2e2dd", "--banner-ink": "#8a2a20",
     "--disabled": "#b8b0a0",
     "--rw": "2px", "--rw2": "1.5px", "--rw3": "3px",

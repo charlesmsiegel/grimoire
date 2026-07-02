@@ -19,7 +19,7 @@ test("applies theme tokens and data-theme, and switches", () => {
   );
   expect(document.documentElement.dataset.theme).toBe("codex");
   expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#c0392b");
-  expect(document.documentElement.style.getPropertyValue("--quote")).toBe("#c0392b");
+  expect(document.documentElement.style.getPropertyValue("--quote")).toBe("#1f6f78");
 
   fireEvent.click(screen.getByText("switch"));
   expect(screen.getByTestId("name").textContent).toBe("manuscript");
