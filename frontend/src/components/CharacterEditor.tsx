@@ -197,6 +197,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.meta.default_version);
     loadTagline(cid);
+    return d;
   }
 
   // Fetch the tagline independently of the (synchronous) card load so a slow GET
@@ -240,8 +241,9 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
 
   async function openDetail(cid: string) {
     window.scrollTo(0, 0);
-    await select(cid);
+    const d = await select(cid);
     setMode("detail");
+    return d;
   }
 
   async function focusCharacter(cid: string, vid: string) {
@@ -397,9 +399,8 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     if (failures.length) setError(`Could not import — ${failures.join("; ")}`);
     else if (imported.length === 1) {
       // single import: open the card so its localize progress shows inline
-      await openDetail(imported[0].cid);
-      const c = chars.find((x) => x.id === imported[0].cid);
-      setTaglinePrompt({ cid: imported[0].cid, name: c?.name ?? imported[0].cid });
+      const d = await openDetail(imported[0].cid);
+      setTaglinePrompt({ cid: imported[0].cid, name: d.meta.name });
       await runLocalize(imported[0].cid, imported[0].version);
     } else if (imported.length > 1) {
       await runBulkLocalize(imported);
@@ -414,8 +415,8 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     try {
       const result = await api.importCharacterFromChub(wid, url);
       await reload();
-      await openDetail(result.character);
-      setTaglinePrompt({ cid: result.character, name: result.character });
+      const d = await openDetail(result.character);
+      setTaglinePrompt({ cid: result.character, name: d.meta.name });
       setImportMsg(describeChubResult(result));
       await runLocalize(result.character, result.version);
     } catch (err: any) {
