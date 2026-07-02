@@ -38,6 +38,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [ctxKey, setCtxKey] = useState(0);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const [colorQuotes, setColorQuotes] = useState(false);
+  const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
   const [showChanges, setShowChanges] = useState(false);
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
   const [absorbing, setAbsorbing] = useState(false);
@@ -53,7 +54,10 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
       setScenes(list);
       if (list.length) selectScene(list[0].id);
     });
-    api.getConfig().then((c) => setColorQuotes(c.quote_color === "on")).catch(() => {});
+    api.getConfig().then((c) => {
+      setColorQuotes(c.quote_color === "on");
+      setLabels({ user: c.user_label || "You", assistant: c.assistant_label || "Grimoire" });
+    }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid]);
 
@@ -321,52 +325,58 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
             onSceneRenamed={sceneRenamed}
           />
         )}
+        {activeId && (
+          <h2 className="scene-title">{scenes.find((s) => s.id === activeId)?.title ?? ""}</h2>
+        )}
         <div className={"stream" + (colorQuotes ? " color-quotes" : "")} ref={streamRef}>
           {messages.map((m, i) => (
-            <div className={`msg-card ${m.role}`} key={i}>
-              <div className="msg-card-head">
-                <span className="role">{m.role === "user" ? "You" : "Grimoire"}</span>
-                {editing?.index !== i && !busy && (
-                  <span className="msg-actions">
-                    {m.role === "assistant" && i === messages.length - 1 && i > 0 && (
-                      <button className="msg-edit" onClick={reroll}>Reroll</button>
-                    )}
-                    <button className="msg-edit" onClick={() => setEditing({ index: i, text: m.content })}>Edit</button>
-                  </span>
+            <div className={`msg ${m.role}`} key={i}>
+              <span className="spine">{m.speaker ?? labels[m.role]}</span>
+              <div className="msg-body">
+                {editing?.index === i ? (
+                  <div className="msg-edit-form">
+                    <textarea aria-label="Edit message" rows={4} value={editing.text}
+                              onChange={(e) => setEditing({ index: i, text: e.target.value })} />
+                    <div className="form-actions">
+                      <button className="subtle" onClick={() => setEditing(null)}>Cancel</button>
+                      <button className="primary" onClick={saveEdit}>Save</button>
+                    </div>
+                  </div>
+                ) : (
+                  <RenderedMarkdown content={m.content} />
                 )}
               </div>
-              {editing?.index === i ? (
-                <div className="msg-edit-form">
-                  <textarea aria-label="Edit message" rows={4} value={editing.text}
-                            onChange={(e) => setEditing({ index: i, text: e.target.value })} />
-                  <div className="form-actions">
-                    <button className="subtle" onClick={() => setEditing(null)}>Cancel</button>
-                    <button className="primary" onClick={saveEdit}>Save</button>
-                  </div>
-                </div>
-              ) : (
-                <RenderedMarkdown content={m.content} />
+              {editing?.index !== i && !busy && (
+                <span className="msg-actions">
+                  {m.role === "assistant" && i === messages.length - 1 && i > 0 && (
+                    <button className="msg-edit" onClick={reroll}>Reroll</button>
+                  )}
+                  <button className="msg-edit" aria-label={`Edit message ${i + 1}`} title="Edit"
+                          onClick={() => setEditing({ index: i, text: m.content })}>✎</button>
+                </span>
               )}
             </div>
           ))}
           {streaming && (
-            <div className="msg-card assistant">
-              <div className="msg-card-head"><span className="role">Grimoire</span></div>
-              <RenderedMarkdown content={streaming} />
-              <span className="cursor" />
+            <div className="msg assistant">
+              <span className="spine">{labels.assistant}</span>
+              <div className="msg-body">
+                <RenderedMarkdown content={streaming} />
+                <span className="cursor" />
+              </div>
             </div>
           )}
         </div>
         <div className="inputbar">
           <textarea
             rows={3}
-            placeholder="Speak your intent…  (Enter to send, Shift+Enter for newline)"
+            placeholder="Speak your intent…"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
           />
           <button className="send" onClick={send} disabled={busy}>
-            {busy ? "…" : "Send"}
+            {busy ? "…" : "Send ▸"}
           </button>
         </div>
       </section>
