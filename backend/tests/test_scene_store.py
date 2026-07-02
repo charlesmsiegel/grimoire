@@ -218,6 +218,27 @@ def test_mark_absorbed_missing_scene_raises(monkeypatch, tmp_path):
         scenes.mark_absorbed(cid, "nope", "x", "y")
 
 
+def test_rename_preserves_number_and_date_sections(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Old")                      # 001--old
+    assert scenes.rename_scene(cid, sid, "New Name") == "001--new-name"
+    sid = scenes.set_datetime(cid, "001--new-name", "2026-06-29")["id"]  # 001--2026-06-29--new-name
+    assert scenes.rename_scene(cid, sid, "Final") == "001--2026-06-29--final"
+
+
+def test_rename_repoints_chronicle_changes_and_plot(monkeypatch, tmp_path):
+    from grimoire.store import changes, chronicle, plot
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    chronicle.absorb(cid, {"id": sid, "one_line": "x", "summary": "", "keywords": []})
+    changes.record(cid, sid, {"characters/a": [{"op": "equal", "text": "hi"}]})
+    plot.set_movement(cid, "heist", "The Heist", "open", "beat", sid)
+    new_sid = scenes.rename_scene(cid, sid, "Renamed")
+    assert new_sid in chronicle.read_chronicle(cid)
+    assert changes.read(cid)["characters/a"]["scene"] == new_sid
+    assert plot.read(cid)["heist"]["last_scene"] == new_sid
+
+
 def test_create_assigns_padded_sequence_numbers(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     assert scenes.create_scene(cid, "Alpha") == "001--alpha"
