@@ -223,3 +223,31 @@ test("campaignChanges GETs the campaign changes endpoint", async () => {
   );
   expect(out).toEqual(rows);
 });
+
+test("promoteImage POSTs the promote route", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.promoteImage("w", "sera", "v1", "gallery_2");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/w/characters/sera/versions/v1/images/gallery_2/promote",
+    expect.objectContaining({ method: "POST" }),
+  );
+});
+
+test("entity image helpers hit the scope-aware routes", async () => {
+  const scope = { kind: "campaign", id: "run" } as const;
+  expect(api.entityImageUrl(scope, "locations", "crypt", "avatar"))
+    .toBe("/api/campaigns/run/locations/crypt/images/avatar");
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk([]));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.listEntityImages({ kind: "world", id: "w" }, "locations", "crypt");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/w/locations/crypt/images",
+    expect.objectContaining({ method: "GET" }),
+  );
+  await api.promoteEntityImage({ kind: "world", id: "w" }, "locations", "crypt", "gallery_1");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/worlds/w/locations/crypt/images/gallery_1/promote",
+    expect.objectContaining({ method: "POST" }),
+  );
+});
