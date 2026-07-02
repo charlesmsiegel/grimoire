@@ -706,6 +706,69 @@ def test_retry_regenerates_without_adding_a_user_turn(client):
     assert [m["role"] for m in msgs] == ["user", "assistant"]
 
 
+def test_regenerate_replaces_the_last_assistant_post(client):
+    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_message(cid, sid, "assistant", "old reply")
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    assert resp.status_code == 200
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs == [{"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "Hello"}]
+
+
+def test_regenerate_excludes_the_dropped_post_from_the_prompt(client):
+    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_message(cid, sid, "assistant", "old reply")
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/regenerate") as r:
+        for _ in r.iter_lines():
+            pass
+    assert cap.messages[-1] == {"role": "user", "content": "hi"}
+
+
+def test_regenerate_after_a_failed_turn_behaves_like_retry(client):
+    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    assert resp.status_code == 200
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+
+
+def test_regenerate_empty_scene_returns_400(client):
+    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 400
+
+
+def test_regenerate_sole_opening_post_returns_400(client):
+    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "assistant", "the greeting")
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 400
+    # the opening post is untouched
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs == [{"role": "assistant", "content": "the greeting"}]
+
+
+def test_regenerate_missing_key_returns_409(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
+
+
 def test_scene_rename_and_delete(client):
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Old"}).json()["id"]
