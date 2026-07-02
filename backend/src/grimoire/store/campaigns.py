@@ -84,6 +84,9 @@ def create_campaign(name: str, world_id: str, region: str | None = None) -> str:
         dst_dir = root / kind
         dst_dir.mkdir(parents=True, exist_ok=True)
         (dst_dir / f"{eid}.md").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        assets_dir = wroot / kind / eid / "assets"
+        if assets_dir.exists():  # entity images (primary/gallery) travel with the copy
+            shutil.copytree(assets_dir, root / kind / eid / "assets", dirs_exist_ok=True)
         manifest[f"{kind}/{eid}"] = entities.entity_hash(wroot, kind, eid) or ""
     write_manifest(cid, manifest)
     calendars.copy_calendar(wroot, root)
