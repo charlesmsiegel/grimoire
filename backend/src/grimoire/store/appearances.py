@@ -164,12 +164,36 @@ def roster(cid: str) -> list[dict]:
     return out
 
 
+def _actor_name(croot: Path, kind: str, actor_id: str, vid: str | None) -> str | None:
+    """Display name from the campaign copy at the locked version; None if unreadable."""
+    try:
+        if kind == "pcs":
+            return pcs.read_persona(croot, actor_id, vid).get("name") or actor_id
+        return characters.read_card(croot, actor_id, vid)["data"].get("name") or actor_id
+    except (pcs.PCNotFound, pcs.PCVersionNotFound,
+            characters.CharacterNotFound, characters.VersionNotFound):
+        return None
+
+
+def player_names(cid: str, scene_id: str) -> list[str]:
+    """Display names of the scene's role=player cast (PCs or characters cast as players)."""
+    croot = campaigns.campaign_root(cid)
+    out = []
+    for a in players_in_scene(cid, scene_id):
+        name = _actor_name(croot, a["kind"], a["id"], a["version"])
+        if name:
+            out.append(name)
+    return out
+
+
 def scene_cast(cid: str, scene_id: str) -> list[dict]:
+    croot = campaigns.campaign_root(cid)
     out = []
     for ref, r in record(cid).items():
         if scene_id in r["scenes"]:
             kind, actor_id = _split(ref)
-            out.append({"kind": kind, "id": actor_id, "role": r["role"]})
+            out.append({"kind": kind, "id": actor_id, "role": r["role"],
+                        "name": _actor_name(croot, kind, actor_id, r["version"]) or actor_id})
     return sorted(out, key=lambda a: (a["kind"], a["id"]))
 
 

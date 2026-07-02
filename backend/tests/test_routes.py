@@ -436,7 +436,7 @@ def test_campaign_local_pc_create_seat_and_sync(client):
     # seat as player with explicit version
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                        json={"kind": "pcs", "id": "mara", "version": "default"}).status_code == 200
-    assert {"kind": "pcs", "id": "mara", "role": "player"} in \
+    assert {"kind": "pcs", "id": "mara", "role": "player", "name": "Mara"} in \
         client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json()
     # re-seat in a second scene with version omitted -> resolved from the campaign
     sid2 = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S2"}).json()["id"]
@@ -598,7 +598,7 @@ def test_cast_and_suggestions_flow(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                        json={"kind": "characters", "id": "seraphine", "version": "default"}).status_code == 200
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json() == [
-        {"kind": "characters", "id": "seraphine", "role": "npc"}]
+        {"kind": "characters", "id": "seraphine", "role": "npc", "name": "Seraphine"}]
     # suggestion surfaces drowned-king, then dismiss hides it
     sugg = client.get(f"/api/campaigns/{cid}/scenes/{sid}/suggestions").json()
     assert [s["character"] for s in sugg] == ["drowned-king"]
@@ -619,8 +619,8 @@ def test_cast_pc_and_character_as_player(client):
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                        json={"kind": "characters", "id": "desmond", "role": "player"}).status_code == 200
     cast = client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json()
-    assert {"kind": "pcs", "id": "elara", "role": "player"} in cast
-    assert {"kind": "characters", "id": "desmond", "role": "player"} in cast
+    assert {"kind": "pcs", "id": "elara", "role": "player", "name": "Elara"} in cast
+    assert {"kind": "characters", "id": "desmond", "role": "player", "name": "desmond"} in cast
     roster = client.get(f"/api/campaigns/{cid}/appearances").json()
     assert {r["kind"] for r in roster} == {"pcs", "characters"}
 
