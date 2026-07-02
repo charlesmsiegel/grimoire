@@ -1124,6 +1124,22 @@ def test_absorb_returns_preview_without_persisting(client):
     assert client.get(f"/api/campaigns/{cid}/chronicle").json() == []  # not persisted yet
 
 
+def test_absorb_writes_dossier_for_present_character(client):
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Aese", "version_name": "main"})
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "aese", "version": "main", "role": "npc"})
+    store.scenes.append_message(cid, sid, "user", "Aese served tea.")
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.app.dependency_overrides[routes.get_openrouter] = \
+        lambda: FakeOpenRouterComplete("Aese is a shy snowleopardgirl who now trusts the owner.")
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert r.status_code == 200
+    croot = store.campaigns.campaign_root(cid)
+    assert "Aese is a shy snowleopardgirl" in store.dossiers.read(croot, "aese")
+
+
 def test_absorb_empty_scene_is_400(client):
     _, cid = _campaign(client)
     client.put("/api/config", json={"openrouter_key": "sk-or-x"})

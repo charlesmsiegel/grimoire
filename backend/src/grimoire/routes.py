@@ -1181,6 +1181,19 @@ async def post_absorb(cid: str, sid: str,
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     parsed = store.absorb.parse_output(text)
     edits = store.absorb.materialize(cid, sid, parsed)
+    # Phase 2: refresh each present character's campaign dossier from this scene.
+    croot = store.campaigns.campaign_root(cid)
+    transcript = store.chronicle.transcript_text(scene["messages"])
+    for a in store.appearances.scene_cast(cid, sid):
+        if a["kind"] != "characters":
+            continue
+        try:
+            name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
+            msgs = store.dossiers.build_prompt(name, store.dossiers.read(croot, a["id"]), transcript)
+            d_text = await client.complete(msgs, cfg["model"], cfg["openrouter_key"])
+            store.dossiers.write(croot, a["id"], store.dossiers.parse_output(d_text))
+        except Exception:  # noqa: BLE001 — a dossier failure must not fail absorb
+            continue
     return {"one_line": parsed["one_line"], "summary": parsed["summary"],
             "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
             **facts, "edits": edits}
