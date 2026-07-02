@@ -86,6 +86,26 @@ body::before {
 .page-note { color: var(--subtle); font-style: italic; }
 .page-note a { color: var(--accent); }
 
+/* ---- world cards ---- */
+.world-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 22px; }
+.world-card {
+  position: relative; background: var(--surface);
+  border: var(--rw) solid var(--rule); box-shadow: var(--sh5);
+}
+.world-card-main {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  cursor: pointer; padding: 20px 20px 16px; color: var(--ink);
+}
+.world-card h3 { font-family: var(--fd); font-weight: 800; font-size: 30px; margin: 0 0 14px; line-height: 1; }
+.world-card footer {
+  border-top: 1px solid var(--rule-soft); padding-top: 8px;
+  font-family: var(--fm); font-size: 10px; color: var(--muted);
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.world-card .row-actions { position: absolute; top: 10px; right: 10px; opacity: 0; }
+.world-card:hover .row-actions, .world-card:focus-within .row-actions { opacity: 1; }
+.world-card .row-rename { margin: 20px; width: calc(100% - 40px); }
+
 /* ---- section label (character detail, config) ---- */
 .section-label {
   font-family: var(--fm); font-size: 10px; color: var(--accent);
