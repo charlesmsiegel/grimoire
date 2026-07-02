@@ -295,22 +295,20 @@ def test_depth_zero_and_unparseable_fallback(monkeypatch, tmp_path):
 
 
 def test_cast_directory_tiers(monkeypatch, tmp_path):
-    from grimoire.store import briefs
+    from grimoire.store import taglines, dossiers
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
+    croot = campaigns.campaign_root(cid)
 
     # present in this scene (full card)
     characters.create_character(wroot, "Aese", "main", _npc_card("Aese", description="present-desc"))
-    # appeared elsewhere in the campaign (paragraph) — needs a brief to be snapshotted
+    # appeared elsewhere in the campaign -> tier 2 paragraph from the campaign dossier
     characters.create_character(wroot, "Myval", "main", _npc_card("Myval", description="m"))
-    briefs.write_brief(wroot, "myval", "A raccoongirl rogue.", "Myval prowls the dusk road.",
-                       briefs.default_card_hash(wroot, "myval"))
-    # world-only with a brief and two versions (sentence + version list)
+    # world-only with a tagline and two versions -> tier 3 sentence + version list
     characters.create_character(wroot, "Akane", "main", _npc_card("Akane", description="a"))
     characters.create_version(wroot, "akane", "futa", _npc_card("Akane", description="a"))
-    briefs.write_brief(wroot, "akane", "An eager doggirl.", "Akane wants to please.",
-                       briefs.default_card_hash(wroot, "akane"))
-    # world-only WITHOUT a brief (must be skipped)
+    taglines.write(wroot, "akane", "An eager doggirl.")
+    # world-only WITHOUT a tagline (must be skipped)
     characters.create_character(wroot, "Ghost", "main", _npc_card("Ghost", description="g"))
 
     # Myval appears in a different scene -> roster, not in this scene's cast
@@ -318,14 +316,15 @@ def test_cast_directory_tiers(monkeypatch, tmp_path):
     ap.appear(cid, other, "characters", "myval", "main", "npc")
     # Aese appears in our scene
     ap.appear(cid, sid, "characters", "aese", "main", "npc")
+    dossiers.write(croot, "myval", "Myval prowls the dusk road.")
     scenes.append_message(cid, sid, "user", "hi")
 
     sys = context.build_messages(cid, sid)[0]["content"]
-    assert "present-desc" in sys                                  # tier 1 full card
-    assert "Myval: Myval prowls the dusk road." in sys           # tier 2 paragraph
-    assert "Akane: An eager doggirl. (available as: futa, main)" in sys  # tier 3 sentence + versions
-    assert "Ghost" not in sys                                     # un-briefed world char skipped
-    assert "Myval" not in sys.split("## Known to exist")[1]       # roster char not in tier 3
+    assert "present-desc" in sys                                         # tier 1 full card
+    assert "Myval: Myval prowls the dusk road." in sys                   # tier 2 dossier
+    assert "Akane: An eager doggirl. (available as: futa, main)" in sys  # tier 3 tagline + versions
+    assert "Ghost" not in sys                                            # no tagline -> skipped
+    assert "Myval" not in sys.split("## Known to exist")[1]              # roster char not in tier 3
 
 
 def test_cast_directory_absent_when_no_briefs(monkeypatch, tmp_path):
