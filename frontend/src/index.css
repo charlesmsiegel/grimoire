@@ -72,15 +72,35 @@ body::before {
   border-bottom: var(--rw2) solid var(--rule); padding-bottom: 6px;
   margin: 26px 0 10px;
 }
-.topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 16px; background: var(--surface);
-  border-bottom: 1px solid var(--muted);
-  font-family: var(--fd);
+/* ---- chrome top bar ---- */
+.topbar { display: flex; align-items: stretch; background: var(--chrome); flex: none; }
+.topbar .brand {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--fd); font-weight: 900; font-size: 24px; letter-spacing: 0.03em;
+  padding: 13px 22px; color: var(--chrome-text); text-decoration: none;
+  border-right: var(--rw) solid var(--chrome-text); text-shadow: var(--glow);
+  text-transform: uppercase;
 }
-.topbar a { color: var(--accent); text-decoration: none; }
-.topbar nav { display: flex; gap: 16px; }
-.layout { display: flex; height: calc(100vh - 49px); }
+.topbar .brand img { display: block; }
+.topbar nav { display: flex; }
+.topbar .nav-btn {
+  display: flex; align-items: center; padding: 0 20px;
+  font-family: var(--fm); font-weight: 700; font-size: 12px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--chrome-text); text-decoration: none;
+  border-right: var(--rw) solid var(--chrome-text);
+}
+.topbar .nav-btn.active { background: var(--accent); color: var(--on-accent); }
+.topbar-right {
+  margin-left: auto; display: flex; align-items: center; gap: 14px; padding: 0 18px;
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--chrome-muted);
+}
+.topbar-right .dot { color: var(--accent); }
+.topbar-right .divider { width: 1px; align-self: stretch; margin: 10px 0; background: var(--chrome-rule); }
+.topbar-right .config-link { color: var(--chrome-muted); text-decoration: none; }
+.topbar-right .config-link.active { color: var(--chrome-text); text-decoration: underline; }
+
+.layout { display: flex; flex: 1; min-height: 0; }
 .sidebar { width: 240px; border-right: 1px solid var(--muted); padding: 12px; overflow-y: auto; }
 .sidebar button {
   display: block; width: 100%; text-align: left; margin-bottom: 6px;
