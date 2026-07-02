@@ -55,6 +55,7 @@ export default function App() {
         <Route path="/" element={<CampaignsView />} />
         <Route path="/campaigns/new" element={<CampaignWizard keySet={keySet} />} />
         <Route path="/campaigns/:cid" element={<CampaignView keySet={keySet} />} />
+        <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
         <Route path="/worlds" element={<WorldsView />} />
         <Route path="/worlds/:wid" element={<WorldView />} />
         <Route path="/config" element={<ConfigView />} />

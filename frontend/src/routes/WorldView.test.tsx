@@ -5,6 +5,7 @@ import WorldView from "./WorldView";
 vi.mock("../api/client", () => ({
   api: {
     getWorld: vi.fn(),
+    getCampaign: vi.fn(),
     listCharacters: vi.fn(),
     listPCs: vi.fn(),
     listTags: vi.fn(),
@@ -17,6 +18,7 @@ import { api } from "../api/client";
 beforeEach(() => {
   vi.clearAllMocks();
   (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Drowned Realm" }, body: "", counts: {} });
+  (api.getCampaign as any).mockResolvedValue({ meta: { id: "c1", name: "Ashes of the Verdigris Crown", world: "w" } });
   (api.listCharacters as any).mockResolvedValue([]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listTags as any).mockResolvedValue({});
@@ -47,6 +49,22 @@ test("switching to the PCs tab renders the PC editor", async () => {
   fireEvent.click(screen.getByRole("button", { name: "PCs" }));
   await waitFor(() => expect(api.listPCs).toHaveBeenCalledWith("w"));
   expect(screen.getByRole("button", { name: /new pc/i })).toBeInTheDocument();
+});
+
+test("world-copy mode shows the fork banner, campaign back link, and campaign entity scope", async () => {
+  render(
+    <MemoryRouter initialEntries={["/campaigns/c1/world"]}>
+      <Routes>
+        <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await screen.findByText(/ashes of the verdigris crown \/ world copy/i);
+  expect(screen.getByText(/campaign copy/i)).toBeInTheDocument();
+  // entity tabs read from the campaign fork, not the source world
+  fireEvent.click(screen.getByRole("button", { name: "Locations" }));
+  await waitFor(() =>
+    expect(api.listEntities).toHaveBeenCalledWith({ kind: "campaign", id: "c1" }, "locations"));
 });
 
 test("the Lore tab hosts the lorebook importer", async () => {
