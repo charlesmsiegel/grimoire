@@ -21,9 +21,6 @@ const astral: Theme = {
     "--fm": "'Space Mono',monospace",
     "--fx": "radial-gradient(1px 1px at 20% 30%,rgba(120,200,220,.5),transparent),radial-gradient(1px 1px at 70% 20%,rgba(200,120,220,.4),transparent),radial-gradient(1px 1px at 45% 70%,rgba(120,200,220,.35),transparent),radial-gradient(1px 1px at 85% 60%,rgba(160,160,240,.4),transparent),radial-gradient(90% 60% at 50% -5%,rgba(90,120,200,.14),transparent 70%)",
     "--glow": "0 0 12px rgba(79,214,208,.45)",
-    // compat aliases — removed in the cleanup task once no CSS references them
-    "--fg": "var(--ink)", "--font-display": "var(--fd)",
-    "--font-body": "var(--fb)", "--mono": "var(--fm)", "--radius": "0px",
   },
 };
 export default astral;

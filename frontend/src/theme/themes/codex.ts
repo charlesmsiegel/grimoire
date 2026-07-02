@@ -20,9 +20,6 @@ const codex: Theme = {
     "--fb": "'Newsreader Variable','Newsreader',Georgia,serif",
     "--fm": "'JetBrains Mono',monospace",
     "--fx": "none", "--glow": "none",
-    // compat aliases — removed in the cleanup task once no CSS references them
-    "--fg": "var(--ink)", "--font-display": "var(--fd)",
-    "--font-body": "var(--fb)", "--mono": "var(--fm)", "--radius": "0px",
   },
 };
 export default codex;

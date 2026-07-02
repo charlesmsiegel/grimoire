@@ -32,6 +32,14 @@ describe("theme tokens", () => {
     }
   });
 
+  it("carries no legacy token aliases", () => {
+    for (const t of themeList) {
+      for (const legacy of ["--fg", "--font-display", "--font-body", "--radius", "--mono"]) {
+        expect(t.tokens[legacy], `${t.name} still defines ${legacy}`).toBeUndefined();
+      }
+    }
+  });
+
   it("codex is the hard-edged reference", () => {
     const codex = resolveTheme("codex").tokens;
     expect(codex["--accent"]).toBe("#c0392b");
